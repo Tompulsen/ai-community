@@ -1,0 +1,59 @@
+name: ai-community
+services:
+  web:
+    image: ai-community:20261104
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:13000:3000"
+    environment:
+      NODE_OPTIONS: --max-old-space-size=768
+    volumes:
+      - ./private/config:/misskey/.config:ro
+      - uploads:/misskey/files
+    networks: [database, outbound]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    env_file: ./private/database.env
+    volumes:
+      - postgres:/var/lib/postgresql
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes"]
+    restart: unless-stopped
+    volumes: [redis:/data]
+    networks: [database]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  postgres:
+  redis:
+  uploads:
+networks:
+  database:
+    internal: true
+  outbound:

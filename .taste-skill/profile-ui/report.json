@@ -1,0 +1,1494 @@
+{
+ "url": "http://127.0.0.1:5188/community/profile?role=member&scenario=populated",
+ "at": "2026-11-04T07:09:35.103Z",
+ "allow": [],
+ "viewports": [
+  {
+   "width": 1440,
+   "height": 900,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.52
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "page": {
+     "height": 900,
+     "screens": 1,
+     "words": 211,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 0,
+     "sections": 4,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 28,
+     "vw": 1.9,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 422,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "示例创作者",
+     "words": 1,
+     "lines": 1,
+     "size": 28,
+     "font": "Microsoft YaHei"
+    },
+    "headings": [
+     {
+      "text": "示",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 52,
+      "vw": 3.6,
+      "font": "Microsoft YaHei",
+      "weight": 600,
+      "tracking": 0,
+      "leading": 1.6,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.1,
+      "top": 258,
+      "tag": "div",
+      "kind": "heading"
+     },
+     {
+      "text": "示例创作者",
+      "words": 1,
+      "chars": 5,
+      "lines": 1,
+      "size": 28,
+      "vw": 1.9,
+      "font": "Microsoft YaHei",
+      "weight": 700,
+      "tracking": 0,
+      "leading": 1.4,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.74,
+      "top": 422,
+      "tag": "h1",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 2,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": 1,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "Microsoft YaHei",
+       "share": 1,
+       "mono": false
+      }
+     ],
+     "familyCount": 1,
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      28,
+      52
+     ],
+     "sizeCount": 8,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 52,
+      "vw": 3.6,
+      "font": "Microsoft YaHei",
+      "text": "示"
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.08,
+     "centerShare": 0.02,
+     "smallText": 2
+    },
+    "eyebrows": [
+     {
+      "text": "编辑个人资料",
+      "above": "示例创作者",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": true,
+      "size": 14,
+      "top": 338
+     }
+    ],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#ffffff",
+     "bodyBgHsl": {
+      "h": 0,
+      "s": 0,
+      "l": 1
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#f9f9f9",
+       "top": 36,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 0.98
+       }
+      },
+      {
+       "color": "#ffffff",
+       "top": 60,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#676767",
+       "share": 0.97
+      },
+      {
+       "color": "#254a36",
+       "share": 0.03
+      },
+      {
+       "color": "#ffffff",
+       "share": 0
+      }
+     ],
+     "button": {
+      "bg": "#e9ede9",
+      "hsl": {
+       "h": 120,
+       "s": 0.1,
+       "l": 0.92
+      },
+      "fg": "#676767"
+     },
+     "lowContrast": []
+    },
+    "buttons": {
+     "count": 4,
+     "inHero": 4,
+     "radius": "pill",
+     "height": 48,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "投稿作品",
+      "编辑个人资料",
+      "更多资料",
+      "全部作品"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 0,
+     "hairlineSamples": [],
+     "outlinedBoxes": 0,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 14,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": [
+      {
+       "count": 12,
+       "iconTopped": true,
+       "rounded": true,
+       "top": 806
+      }
+     ]
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 1,
+     "fixed": false,
+     "height": 864,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "pageH": 900,
+    "margins": {
+     "left": 28,
+     "right": 32
+    },
+    "sections": [
+     {
+      "sel": "section._root_1qtnm_2",
+      "tag": "section",
+      "top": 60,
+      "height": 581,
+      "words": 12,
+      "media": 0,
+      "middle": 475,
+      "heading": {
+       "text": "示例创作者",
+       "size": 28,
+       "tag": "h1"
+      },
+      "left": 314,
+      "right": 84,
+      "textLeft": 314,
+      "textRight": 84,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section._feed_14mna_40",
+      "tag": "section",
+      "top": 721,
+      "height": 3475,
+      "words": 10,
+      "media": 0,
+      "middle": 222,
+      "heading": {
+       "text": "光线与城市：一次 AI 镜头实验",
+       "size": 17,
+       "tag": "h3"
+      },
+      "left": 290,
+      "right": 40,
+      "textLeft": 290,
+      "textRight": 50,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     },
+     {
+      "sel": "footer._communityFooter_14mna_55",
+      "tag": "footer",
+      "top": 4196,
+      "height": 149,
+      "words": 0,
+      "media": 0,
+      "middle": 0,
+      "heading": null,
+      "left": null,
+      "right": null,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "示例创作者",
+      "size": 28,
+      "top": 422,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 290,
+      "n": 1
+     },
+     {
+      "x": 314,
+      "n": 1
+     },
+     {
+      "x": 366,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 3,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0.21,
+    "voidBox": {
+     "x": 240,
+     "y": 120,
+     "w": 900,
+     "h": 300
+    }
+   },
+   "app": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "dark": false,
+    "ground": "#ffffff",
+    "sidebar": {
+     "w": 250,
+     "tag": "nav",
+     "links": 8,
+     "share": 0.17
+    },
+    "topbar": {
+     "h": 36
+    },
+    "canvas": {
+     "left": 40,
+     "right": 40
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 28,
+     "vw": 1.9,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 422,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 0,
+    "layout": {
+     "panels": 1,
+     "firstScreen": 1,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 27,
+     "radii": [
+      [
+       16,
+       25
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       50,
+       1
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 0,
+     "leftAligned": 0,
+     "figures": 0,
+     "tabularShare": null,
+     "kpiMax": null
+    },
+    "rows": null,
+    "chartHues": 0,
+    "placeholders": [],
+    "type": {
+     "under13": 0.06,
+     "tiny": 0,
+     "tinySamples": [],
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      28
+     ]
+    },
+    "title": {
+     "text": "示例创作者",
+     "size": 28,
+     "top": 422
+    },
+    "colourShare": 0
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 768,
+   "height": 1024,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.48
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "page": {
+     "height": 1024,
+     "screens": 1,
+     "words": 212,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 0,
+     "sections": 4,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 23,
+     "vw": 3,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 276,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "示例创作者",
+     "words": 1,
+     "lines": 1,
+     "size": 23,
+     "font": "Microsoft YaHei"
+    },
+    "headings": [
+     {
+      "text": "示",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 36,
+      "vw": 4.7,
+      "font": "Microsoft YaHei",
+      "weight": 600,
+      "tracking": 0,
+      "leading": 1.6,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "center",
+      "widthRatio": 0.14,
+      "top": 160,
+      "tag": "div",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 1,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "Microsoft YaHei",
+       "share": 1,
+       "mono": false
+      }
+     ],
+     "familyCount": 1,
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      23,
+      36
+     ],
+     "sizeCount": 8,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 36,
+      "vw": 4.7,
+      "font": "Microsoft YaHei",
+      "text": "示"
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.08,
+     "centerShare": 0.02,
+     "smallText": 2
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#ffffff",
+     "bodyBgHsl": {
+      "h": 0,
+      "s": 0,
+      "l": 1
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#ffffff",
+       "top": 36,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      },
+      {
+       "color": "#f9f9f9",
+       "top": 36,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 0.98
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#676767",
+       "share": 0.97
+      },
+      {
+       "color": "#254a36",
+       "share": 0.03
+      },
+      {
+       "color": "#ffffff",
+       "share": 0
+      }
+     ],
+     "button": {
+      "bg": "#f9f9f9",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 0.98
+      },
+      "fg": "#676767"
+     },
+     "lowContrast": []
+    },
+    "buttons": {
+     "count": 16,
+     "inHero": 5,
+     "radius": 16,
+     "height": 72,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "投稿作品",
+      "编辑个人资料",
+      "更多资料",
+      "全部作品",
+      "作品附件"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 0,
+     "hairlineSamples": [],
+     "outlinedBoxes": 0,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 14,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": [
+      {
+       "count": 12,
+       "iconTopped": true,
+       "rounded": true,
+       "top": 732
+      }
+     ]
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 1,
+     "fixed": false,
+     "height": 988,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "pageH": 1024,
+    "margins": {
+     "left": 28,
+     "right": 12
+    },
+    "sections": [
+     {
+      "sel": "section._root_1qtnm_2",
+      "tag": "section",
+      "top": 48,
+      "height": 429,
+      "words": 12,
+      "media": 0,
+      "middle": 13,
+      "heading": {
+       "text": "示例创作者",
+       "size": 23,
+       "tag": "h1"
+      },
+      "left": 282,
+      "right": 46,
+      "textLeft": 282,
+      "textRight": 46,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div._toolbar_14mna_41",
+      "tag": "div",
+      "top": 605,
+      "height": 128,
+      "words": 3,
+      "media": 0,
+      "middle": 0,
+      "heading": {
+       "text": "最新作品",
+       "size": 16,
+       "tag": "h2"
+      },
+      "left": 266,
+      "right": 16,
+      "textLeft": 266,
+      "textRight": 26,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     },
+     {
+      "sel": "div._works_14mna_64",
+      "tag": "div",
+      "top": 732,
+      "height": 3800,
+      "words": 9,
+      "media": 0,
+      "middle": 0,
+      "heading": {
+       "text": "光线与城市：一次 AI 镜头实验",
+       "size": 16,
+       "tag": "h3"
+      },
+      "left": 334,
+      "right": 28,
+      "textLeft": 334,
+      "textRight": 28,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     },
+     {
+      "sel": "footer._communityFooter_14mna_55",
+      "tag": "footer",
+      "top": 4532,
+      "height": 168,
+      "words": 0,
+      "media": 0,
+      "middle": 0,
+      "heading": null,
+      "left": null,
+      "right": null,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "示例创作者",
+      "size": 23,
+      "top": 276,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 266,
+      "n": 1
+     },
+     {
+      "x": 282,
+      "n": 1
+     },
+     {
+      "x": 334,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 3,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0,
+    "voidBox": null
+   },
+   "app": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "dark": false,
+    "ground": "#ffffff",
+    "sidebar": {
+     "w": 250,
+     "tag": "nav",
+     "links": 8,
+     "share": 0.33
+    },
+    "topbar": {
+     "h": 36
+    },
+    "canvas": {
+     "left": 16,
+     "right": 16
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 23,
+     "vw": 3,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 276,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 0,
+    "layout": {
+     "panels": 1,
+     "firstScreen": 1,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 26,
+     "radii": [
+      [
+       16,
+       25
+      ],
+      [
+       0,
+       1
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 0,
+     "leftAligned": 0,
+     "figures": 0,
+     "tabularShare": null,
+     "kpiMax": null
+    },
+    "rows": null,
+    "chartHues": 0,
+    "placeholders": [],
+    "type": {
+     "under13": 0.11,
+     "tiny": 0,
+     "tinySamples": [],
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      23
+     ]
+    },
+    "title": {
+     "text": "示例创作者",
+     "size": 23,
+     "top": 276
+    },
+    "colourShare": 0
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 390,
+   "height": 844,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.56
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "page": {
+     "height": 844,
+     "screens": 1,
+     "words": 201,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 0,
+     "sections": 4,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 23,
+     "vw": 5.9,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 374,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "示例创作者",
+     "words": 1,
+     "lines": 1,
+     "size": 23,
+     "font": "Microsoft YaHei"
+    },
+    "headings": [
+     {
+      "text": "示",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 36,
+      "vw": 9.2,
+      "font": "Microsoft YaHei",
+      "weight": 600,
+      "tracking": 0,
+      "leading": 1.6,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.27,
+      "top": 258,
+      "tag": "div",
+      "kind": "heading"
+     },
+     {
+      "text": "示例创作者",
+      "words": 1,
+      "chars": 5,
+      "lines": 1,
+      "size": 23,
+      "vw": 5.9,
+      "font": "Microsoft YaHei",
+      "weight": 700,
+      "tracking": 0,
+      "leading": 1.4,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "center",
+      "widthRatio": 0.84,
+      "top": 374,
+      "tag": "h1",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 2,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": 1,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "Microsoft YaHei",
+       "share": 1,
+       "mono": false
+      }
+     ],
+     "familyCount": 1,
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      18,
+      23,
+      36
+     ],
+     "sizeCount": 7,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 36,
+      "vw": 9.2,
+      "font": "Microsoft YaHei",
+      "text": "示"
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.08,
+     "centerShare": 0.02,
+     "smallText": 1
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#ffffff",
+     "bodyBgHsl": {
+      "h": 0,
+      "s": 0,
+      "l": 1
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#f9f9f9",
+       "top": 134,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 0.98
+       }
+      },
+      {
+       "color": "#ffffff",
+       "top": 146,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#676767",
+       "share": 0.97
+      },
+      {
+       "color": "#254a36",
+       "share": 0.03
+      }
+     ],
+     "button": {
+      "bg": "#f9f9f9",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 0.98
+      },
+      "fg": "#676767"
+     },
+     "lowContrast": []
+    },
+    "buttons": {
+     "count": 15,
+     "inHero": 3,
+     "radius": 16,
+     "height": 72,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "编辑个人资料",
+      "更多资料",
+      "全部作品"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 0,
+     "hairlineSamples": [],
+     "outlinedBoxes": 0,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 14,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 4,
+     "fixed": false,
+     "height": 60,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "pageH": 844,
+    "margins": {
+     "left": 12,
+     "right": 12
+    },
+    "sections": [
+     {
+      "sel": "section._root_1qtnm_2",
+      "tag": "section",
+      "top": 146,
+      "height": 454,
+      "words": 12,
+      "media": 0,
+      "middle": 0,
+      "heading": {
+       "text": "示例创作者",
+       "size": 23,
+       "tag": "h1"
+      },
+      "left": 32,
+      "right": 39,
+      "textLeft": 32,
+      "textRight": 39,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div._toolbar_14mna_41",
+      "tag": "div",
+      "top": 728,
+      "height": 128,
+      "words": 3,
+      "media": 0,
+      "middle": 0,
+      "heading": {
+       "text": "最新作品",
+       "size": 16,
+       "tag": "h2"
+      },
+      "left": 16,
+      "right": 16,
+      "textLeft": 16,
+      "textRight": 26,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     },
+     {
+      "sel": "div._works_14mna_64",
+      "tag": "div",
+      "top": 855,
+      "height": 3800,
+      "words": 0,
+      "media": 0,
+      "middle": 0,
+      "heading": null,
+      "left": null,
+      "right": null,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     },
+     {
+      "sel": "footer._communityFooter_14mna_55",
+      "tag": "footer",
+      "top": 4655,
+      "height": 168,
+      "words": 0,
+      "media": 0,
+      "middle": 0,
+      "heading": null,
+      "left": null,
+      "right": null,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": true,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "示例创作者",
+      "size": 23,
+      "top": 374,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 16,
+      "n": 1
+     },
+     {
+      "x": 32,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 2,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0,
+    "voidBox": null
+   },
+   "app": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "dark": false,
+    "ground": "#ffffff",
+    "sidebar": null,
+    "topbar": {
+     "h": 74
+    },
+    "canvas": {
+     "left": 16,
+     "right": 16
+    },
+    "hero": {
+     "text": "示例创作者",
+     "words": 1,
+     "chars": 5,
+     "lines": 1,
+     "size": 23,
+     "vw": 5.9,
+     "font": "Microsoft YaHei",
+     "weight": 700,
+     "tracking": 0,
+     "leading": 1.4,
+     "top": 374,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 0,
+    "layout": {
+     "panels": 13,
+     "firstScreen": 1,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 25,
+     "radii": [
+      [
+       16,
+       25
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 0,
+     "leftAligned": 0,
+     "figures": 0,
+     "tabularShare": null,
+     "kpiMax": null
+    },
+    "rows": null,
+    "chartHues": 0,
+    "placeholders": [],
+    "type": {
+     "under13": 0.12,
+     "tiny": 0,
+     "tinySamples": [],
+     "sizes": [
+      12,
+      13,
+      14,
+      16,
+      23
+     ]
+    },
+    "title": {
+     "text": "示例创作者",
+     "size": 23,
+     "top": 374
+    },
+    "colourShare": 0
+   },
+   "consoleErrors": []
+  }
+ ],
+ "findings": [],
+ "images": [
+  {
+   "viewport": "desktop",
+   "width": 1440,
+   "fold": "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\desktop-fold.jpg",
+   "pages": [
+    "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\desktop-page-01.jpg"
+   ],
+   "film": []
+  },
+  {
+   "viewport": "tablet",
+   "width": 768,
+   "fold": "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\tablet-fold.jpg",
+   "pages": [
+    "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\tablet-page-01.jpg"
+   ],
+   "film": []
+  },
+  {
+   "viewport": "mobile",
+   "width": 390,
+   "fold": "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\mobile-fold.jpg",
+   "pages": [
+    "D:\\ip\\新社区汇总平台\\misskey-develop\\misskey-develop\\.taste-skill\\profile-ui\\mobile-page-01.jpg"
+   ],
+   "film": []
+  }
+ ]
+}
