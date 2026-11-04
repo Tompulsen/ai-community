@@ -36,6 +36,8 @@ import { onActivated, onMounted, onUnmounted, provide, watch, ref, computed } fr
 import type { SuperMenuDef } from '@/components/MkSuperMenu.vue';
 import type { PageMetadata } from '@/page.js';
 import { i18n } from '@/i18n.js';
+import { homeText } from '@/pages/home/copy.js';
+import { creationText } from '@/utility/creation-pages.js';
 import MkSuperMenu from '@/components/MkSuperMenu.vue';
 import MkInfo from '@/components/MkInfo.vue';
 import { instance } from '@/instance.js';
@@ -196,8 +198,13 @@ const menuDef = computed<SuperMenuDef[]>(() => [{
 		to: '/admin/branding',
 		active: currentPage.value?.route.name === 'branding',
 	}, {
+		icon: 'ti ti-home-edit',
+		text: homeText.settings,
+		to: '/admin/homepage',
+		active: currentPage.value?.route.name === 'homepage',
+	}, {
 		icon: 'ti ti-link',
-		text: i18n.ts._creationLinks.settings,
+		text: creationText.settings,
 		to: '/admin/creation-links',
 		active: currentPage.value?.route.name === 'creation-links',
 	}, {

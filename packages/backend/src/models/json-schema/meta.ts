@@ -441,5 +441,10 @@ export const packedMetaClientOptionsSchema = {
 			enum: ['embed', 'newTab'],
 			optional: true, nullable: false,
 		},
+		homeShowcaseMode: {
+			type: 'string',
+			enum: ['custom', 'popular'],
+			optional: true, nullable: false,
+		},
 	},
 } as const;

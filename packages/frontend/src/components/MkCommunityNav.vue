@@ -15,16 +15,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed } from 'vue';
 import { useRouter } from '@/router.js';
 import { i18n } from '@/i18n.js';
-import { creationPages } from '@/utility/creation-pages.js';
+import { creationText, creationPages } from '@/utility/creation-pages.js';
 
 const router = useRouter();
 const navigationItems = [
-	{ key: 'community', title: i18n.ts._creationLinks.community, icon: 'ti ti-users', to: '/' },
+	{ key: 'community', title: creationText.community, icon: 'ti ti-users', to: '/community' },
 	...creationPages.map(item => ({ ...item, to: `/create/${item.key}` })),
 ];
 const activeItem = computed(() => {
 	const current = router.currentRef.value;
-	if (current.route.path === '/') return 'community';
+	if (current.route.path === '/community') return 'community';
 	if (current.route.path === '/community/:module' && ['video', 'image', 'resource', 'text', 'code', 'skill', 'knowledge'].includes(String(current.props.get('module')))) return 'community';
 	return current.route.path === '/create/:kind' ? current.props.get('kind') : null;
 });

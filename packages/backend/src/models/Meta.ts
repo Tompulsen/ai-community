@@ -760,6 +760,7 @@ export class MiMeta {
 		creationImageMode?: 'embed' | 'newTab';
 		creationVideoUrl?: string | null;
 		creationVideoMode?: 'embed' | 'newTab';
+		homeShowcaseMode?: 'custom' | 'popular';
 	};
 }
 

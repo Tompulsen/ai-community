@@ -42,7 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { nextTick, normalizeClass, onMounted, onUnmounted, provide, watch, ref, useTemplateRef, computed } from 'vue';
+import { nextTick, normalizeClass, onBeforeUnmount, onMounted, onUnmounted, provide, watch, ref, useTemplateRef, computed } from 'vue';
 import type { Keymap } from '@/utility/hotkey.js';
 import * as os from '@/os.js';
 import { isTouchUsing } from '@/utility/touch.js';
@@ -338,13 +338,22 @@ onMounted(() => {
 			}
 		} else {
 			releaseFocusTrap?.();
+			releaseFocusTrap = null;
 			focusParent(props.returnFocusTo ?? props.anchorElement, true, false);
 		}
 	}, { immediate: true });
 
 	nextTick(() => {
-		alignObserver.observe(content.value!);
+		if (content.value) alignObserver.observe(content.value);
 	});
+});
+
+onBeforeUnmount(() => {
+	// A route change can dispose the popup without calling close(). Release while
+	// the element still has parents so the surrounding page does not remain inert.
+	releaseFocusTrap?.();
+	releaseFocusTrap = null;
+	if (props.anchorElement) props.anchorElement.style.pointerEvents = 'auto';
 });
 
 onUnmounted(() => {

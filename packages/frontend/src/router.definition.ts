@@ -24,6 +24,9 @@ function chatPage(...args: Parameters<typeof page>) {
 export const ROUTE_DEF = [{
 	name: 'index',
 	path: '/',
+	component: page(() => import('@/pages/home.vue')),
+}, {
+	path: '/community',
 	component: page(() => import('@/pages/community.vue')),
 }, {
 	path: '/community/:module',
@@ -483,6 +486,10 @@ export const ROUTE_DEF = [{
 		path: '/creation-links',
 		name: 'creation-links',
 		component: $i?.isAdmin ? page(() => import('@/pages/admin/creation-links.vue')) : page(() => import('@/pages/not-found.vue')),
+	}, {
+		path: '/homepage',
+		name: 'homepage',
+		component: $i?.isAdmin ? page(() => import('@/pages/admin/homepage.vue')) : page(() => import('@/pages/not-found.vue')),
 	}, {
 		path: '/moderation',
 		name: 'moderation',

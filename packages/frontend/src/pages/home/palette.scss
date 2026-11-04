@@ -1,0 +1,18 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+// User-selected playful homepage palette. Admin and community keep the active Misskey theme.
+@mixin home {
+	--home-font: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+	--home-cream: #fff8dc;
+	--home-paper: #fffdf2;
+	--home-ink: #292333;
+	--home-muted: #655c69;
+	--home-accent: #7050dc;
+	--home-purple: #a18afa;
+	--home-coral: #ff826b;
+	--home-yellow: #ffe270;
+	--home-lime: #c2ef86;
+}

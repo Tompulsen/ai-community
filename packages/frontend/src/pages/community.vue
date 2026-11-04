@@ -29,15 +29,25 @@ const activeSection = computed(() => {
 });
 const router = useRouter();
 const composeRequest = ref(0);
+
 function reopenComposer() {
 	if ((props.section ?? props.module) === 'compose') composeRequest.value++;
 }
+
 router.on('same', reopenComposer);
 onActivated(reopenComposer);
 onBeforeUnmount(() => router.off('same', reopenComposer));
 const gateway = createCommunityGateway({
 	apiUrl,
 	getToken: () => $i?.token,
+	uploadFiles: files => new Promise<CommunityFile[]>((resolve, reject) => {
+		let dispose: (() => void) | undefined;
+		let uploaded: CommunityFile[] = [];
+		os.popupAsyncWithDialog(import('@/components/MkUploaderDialog.vue').then(module => module.default), { files, multiple: true }, {
+			done: selected => { uploaded = selected ?? []; },
+			closed: () => { dispose?.(); resolve(uploaded); },
+		}).then(dialog => { dispose = dialog.dispose; }, reject);
+	}),
 	chooseFiles: () => new Promise<CommunityFile[]>((resolve, reject) => {
 		let dispose: (() => void) | undefined;
 		let selection: CommunityFile[] = [];
@@ -47,13 +57,17 @@ const gateway = createCommunityGateway({
 		}).then(dialog => { dispose = dialog.dispose; }, reject);
 	}),
 });
+
 function navigate(path: string) { router.push(path); }
+
 function login() {
 	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkSigninDialog.vue')), { autoSet: true }, { closed: () => dispose() });
 }
+
 function signup() {
 	const { dispose } = os.popup(defineAsyncComponent(() => import('@/components/MkSignupDialog.vue')), { autoSet: true }, { closed: () => dispose() });
 }
+
 definePage(() => ({
 	title: communitySections.find(entry => entry.id === activeSection.value)?.title ?? communityText.brand,
 	icon: 'ti ti-sparkles',

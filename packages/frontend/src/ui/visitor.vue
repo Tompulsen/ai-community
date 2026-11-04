@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div :class="$style.root">
-	<aside :class="$style.side">
+	<aside v-if="!isHomepage" :class="$style.side">
 		<MkA to="/" :class="$style.brand">{{ i18n.ts._aiCommunity.title }}</MkA>
 		<MkCommunityNav :compact="narrow"/>
 		<div :class="$style.accountLinks">
@@ -14,18 +14,18 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</aside>
 	<div :class="$style.main">
-		<header :class="$style.mobileHeader">
+		<header v-if="!isHomepage" :class="$style.mobileHeader">
 			<MkA to="/">{{ i18n.ts._aiCommunity.title }}</MkA>
 			<MkButton @click="signin">{{ i18n.ts.login }}</MkButton>
 		</header>
-		<div :class="$style.content"><RouterView/></div>
+		<div :class="$style.content"><RouterView :class="{ [$style.homeContent]: isHomepage }"/></div>
 	</div>
 </div>
 <XCommon/>
 </template>
 
 <script lang="ts" setup>
-import { onBeforeUnmount, provide, ref } from 'vue';
+import { computed, onBeforeUnmount, provide, ref } from 'vue';
 import { instanceName } from '@@/js/config.js';
 import XCommon from './_common_/common.vue';
 import type { PageMetadata } from '@/page.js';
@@ -39,6 +39,7 @@ import MkCommunityNav from '@/components/MkCommunityNav.vue';
 import * as os from '@/os.js';
 
 const viewport = window.matchMedia('(max-width: 700px)');
+const isHomepage = computed(() => mainRouter.currentRoute.value.name === 'index');
 const narrow = ref(viewport.matches);
 const updateViewport = () => { narrow.value = viewport.matches; };
 viewport.addEventListener('change', updateViewport);
@@ -69,6 +70,7 @@ async function signup() {
 .accountLinks { display: grid; gap: 12px; padding: 24px; }
 .main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .content { flex: 1; min-height: 0; overflow-y: auto; }
+.homeContent { overflow-y: auto; }
 .mobileHeader { display: none; }
 @media (max-width: 700px) {
 	.side { flex-basis: 76px; width: 76px; }

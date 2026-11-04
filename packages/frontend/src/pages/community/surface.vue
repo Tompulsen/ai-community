@@ -5,9 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <main ref="surfaceRoot" :class="$style.root">
-	<div :class="$style.canvas">
+	<div :class="[$style.canvas, { [$style.communityCanvas]: currentCategory }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
-		<header v-else :class="$style.heading">
+		<header v-else-if="!isCommunity" :class="$style.heading">
 			<div><h1>{{ title }}</h1><p v-if="!isCommunity">{{ description }}</p></div>
 			<div :class="$style.headerActions">
 		<div :class="$style.account">
@@ -30,11 +30,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</a>
 		</nav>
 		<p v-if="notice" role="status" :class="$style.notice">{{ notice }}</p>
-		<Teleport to="body">
-			<div v-if="composerOpen && signedIn" ref="modalLayer" :class="$style.modalLayer" @click.self="closeComposer" @keydown="onComposerKeydown">
+		<Teleport defer to="#misskey-popup-container">
+			<div v-if="composerOpen && signedIn" ref="modalLayer" :class="$style.modalLayer" :style="{ zIndex: composerZIndex }" @click.self="closeComposer" @keydown="onComposerKeydown">
 				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="t.publish" :class="$style.composer" tabindex="-1">
 					<header :class="$style.composerHeader">
-						<button type="button" :class="$style.quiet" :aria-label="t.close" :disabled="submitting || choosing" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
+						<button type="button" :class="$style.quiet" :aria-label="t.close" :disabled="submitting || choosing || emojiOpen" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
 						<span v-if="hasDraft" :class="$style.draftHint">{{ t.draftHint }}</span>
 					</header>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
@@ -42,24 +42,28 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<div :class="$style.composerAvatar"><slot name="composerAvatar"><i class="ti ti-pencil" aria-hidden="true"></i></slot></div>
 							<div :class="$style.writingArea">
 								<input ref="titleInput" v-model="draft.title" :class="$style.titleInput" :aria-label="t.title" maxlength="100" :placeholder="t.title" :disabled="submitting" required/>
-								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting"></textarea>
+								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
-						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || choosing"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span :class="$style.publishHint">{{ t.approvalVisibility }}</span></div>
-						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || choosing" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
+						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span :class="$style.publishHint">{{ t.approvalVisibility }}</span></div>
+						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
 						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields"><label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting"/></label></div>
 						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting"/>{{ t.rights }}</label>
 						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p>
 						<footer :class="$style.composerFooter">
 							<div :class="$style.composerTools">
 								<div :class="$style.iconTools" role="group" :aria-label="t.composerTools">
-									<button type="button" :class="$style.iconButton" :aria-label="choosing ? t.choosing : t.chooseFiles" :title="t.chooseFiles + ' · ' + t.categoryFileHints[draft.category]" :disabled="submitting || choosing || files.length >= 16" @click="chooseFiles"><i class="ti ti-photo" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.insertCode" :title="t.insertCode" :disabled="submitting || choosing" @click="insertCode"><i class="ti ti-code" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.addSource" :title="t.addSource" :disabled="submitting || choosing" @click="openSource"><i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || choosing" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
+									<button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.iconButton" :aria-label="tool.label" :title="tool.label" :disabled="submitting || choosing || emojiOpen || files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.existingFiles" :title="t.existingFiles" :disabled="submitting || choosing || emojiOpen || files.length >= 16" @click="chooseFiles"><i class="ti ti-folder" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.emoji" :title="t.emoji" :disabled="submitting || choosing || emojiOpen" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.insertCode" :title="t.insertCode" :disabled="submitting || choosing || emojiOpen" @click="insertCode"><i class="ti ti-code" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.addSource" :title="t.addSource" :disabled="submitting || choosing || emojiOpen" @click="openSource"><i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || choosing || emojiOpen" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
 								</div>
-								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || choosing">{{ submitting ? t.submitting : t.submit }}</button>
+								<input ref="uploadInput" type="file" :accept="uploadAccept" multiple hidden @change="uploadSelected"/>
+								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || choosing || emojiOpen">{{ submitting ? t.submitting : t.submit }}</button>
 							</div>
+							<p :class="$style.uploadHint">{{ choosing ? t.choosing : t.uploadHint }}</p>
 						</footer>
 					</form>
 				</section>
@@ -100,7 +104,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
 							<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, work.status === 'rejected' ? $style.rejected : null]">{{ t[work.status] }}</span></div>
 							<h3><a v-if="work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
-							<p :class="$style.excerpt">{{ work.text }}</p>
+							<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
+							<ul v-if="isCommunity && work.category === 'resource' && work.files.length" :class="$style.resourceFiles"><li v-for="file in work.files" :key="file.id"><a v-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer"><i class="ti ti-file-download" aria-hidden="true"></i>{{ file.name }}</a></li></ul>
 							<a v-if="isCommunity && work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" :class="[$style.cover, { [$style.coverEmpty]: !coverUrl(work) }]" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)">
 							<img v-if="coverUrl(work)" :src="coverUrl(work)" :alt="work.title" loading="lazy"/>
 							<template v-else><i :class="categoryIcon(work.category)" aria-hidden="true"></i><span>{{ work.files.some(f => f.isSensitive) ? t.sensitive : work.category === 'resource' ? t.textWork : t.noCover }}</span></template>
@@ -109,7 +114,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
 							<a v-if="work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" :class="$style.discuss" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
 							<details v-if="!isCommunity" :class="$style.details">
-								<summary>{{ t.detail }}</summary><p :class="$style.fullText">{{ work.text }}</p>
+								<summary>{{ t.detail }}</summary><p :class="$style.fullText"><Mfm :text="work.text" :plain="true"/></p>
 								<p v-if="work.model">{{ t.model }}：{{ work.model }}</p>
 								<p v-if="work.license">{{ t.licenseLabel }}：{{ work.license }}</p>
 								<a v-if="safeWebUrl(work.sourceUrl)" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.sourceLabel }}：{{ work.sourceUrl }}</a>
@@ -152,6 +157,8 @@ import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySecti
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import { communityComposeEvent } from './compose.js';
 import { focusTrap } from '@/utility/focus-trap.js';
+import { claimZIndex } from '@/os.js';
+import { emojiPicker } from '@/utility/emoji-picker.js';
 
 const props = defineProps<{ section: string; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
@@ -170,6 +177,16 @@ const detailsId = useId();
 const surfaceRoot = ref<HTMLElement>();
 const modalLayer = ref<HTMLElement>();
 const composerPanel = ref<HTMLElement>();
+const composerZIndex = ref(0);
+const emojiOpen = ref(false);
+const uploadInput = ref<HTMLInputElement>();
+const uploadAccept = ref('');
+const uploadKind = ref<CommunityCategory>('resource');
+const uploadTools = [
+	{ kind: 'image', label: t.uploadImages, icon: 'ti ti-photo' },
+	{ kind: 'video', label: t.uploadVideos, icon: 'ti ti-video' },
+	{ kind: 'resource', label: t.uploadDocuments, icon: 'ti ti-file-upload' },
+] as const;
 let releaseFocus: (() => void) | undefined;
 let returnFocus: HTMLElement | undefined;
 const query = ref('');
@@ -203,14 +220,17 @@ const emptyHint = computed(() => activeQuery.value ? t.emptySearchHint : isProfi
 const categoryTitle = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.title;
 const categoryIcon = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.icon;
 const formatDate = (date: string) => new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+
 function coverUrl(work: CommunityWork) {
 	if (work.files.some(file => file.isSensitive)) return undefined;
 	const file = work.files.find(item => item.type.startsWith('image/') || item.type.startsWith('video/'));
 	return file ? safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined) : undefined;
 }
+
 function errorText(error: unknown) {
 	return error instanceof Error && Object.values(t).includes(error.message as never) ? error.message : t.networkError;
 }
+
 async function load(append = false) {
 	if (disposed) return;
 	controller?.abort();
@@ -239,22 +259,27 @@ async function load(append = false) {
 		if (current === requestId && !disposed) loading.value = false;
 	}
 }
+
 function search() { activeQuery.value = query.value.trim(); void load(); }
+
 async function openComposer() {
 	if (!props.signedIn) { emit('login'); return; }
 	if (currentCategory.value && !hasDraft.value) draft.category = currentCategory.value.id;
-	if (!composerOpen.value) returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+	if (!composerOpen.value) returnFocus = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
+	composerZIndex.value = claimZIndex('low');
 	composerOpen.value = true;
 	await nextTick();
 	contentInput.value?.focus();
 }
+
 async function openSource() {
 	detailsOpen.value = true;
 	await nextTick();
 	sourceInput.value?.focus();
 }
+
 async function insertCode() {
-	if (submitting.value || choosing.value) return;
+	if (submitting.value || choosing.value || emojiOpen.value) return;
 	const start = contentInput.value?.selectionStart ?? draft.text.length;
 	const end = contentInput.value?.selectionEnd ?? start;
 	const snippet = '\n```\n' + draft.text.slice(start, end) + '\n```\n';
@@ -266,25 +291,28 @@ async function insertCode() {
 	contentInput.value?.focus();
 	contentInput.value?.setSelectionRange(start + 5, start + 5 + end - start);
 }
+
 function closeComposer() {
-	if (submitting.value || choosing.value) return;
+	if (submitting.value || choosing.value || emojiOpen.value) return;
 	composerOpen.value = false;
 }
+
 function handleComposeRequest(event: Event) {
 	// Only the visible community surface handles a global compose request.
 	if (event.defaultPrevented || isProfile.value || !surfaceRoot.value?.isConnected || !surfaceRoot.value.getClientRects().length) return;
 	event.preventDefault();
 	void openComposer();
 }
+
 function onComposerKeydown(event: KeyboardEvent) {
-	if (choosing.value) return;
+	if (choosing.value || emojiOpen.value) return;
 	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeComposer(); }
 	if (event.key !== 'Tab' || !composerPanel.value) return;
 	const controls = [...composerPanel.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
 	const first = controls[0], last = controls[controls.length - 1];
-	if (event.shiftKey && (document.activeElement === first || document.activeElement === composerPanel.value)) { event.preventDefault(); last?.focus(); }
-	else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+	if (event.shiftKey && (window.document.activeElement === first || window.document.activeElement === composerPanel.value)) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && window.document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }
+
 // Release while the teleported node is still attached; acquire after it renders.
 watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 	if (!open || !signedIn) {
@@ -297,6 +325,7 @@ watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 }, { flush: 'post' });
 onMounted(() => window.addEventListener(communityComposeEvent, handleComposeRequest));
 onDeactivated(() => { composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
+
 async function chooseFiles(event: MouseEvent) {
 	const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
 	choosing.value = true; formError.value = '';
@@ -306,15 +335,58 @@ async function chooseFiles(event: MouseEvent) {
 		const merged = [...files.value, ...selected.filter(file => !files.value.some(item => item.id === file.id))];
 		if (merged.length > 16) { formError.value = t.tooManyFiles; return; }
 		files.value = merged;
-	} catch (error) { formError.value = errorText(error); }
-	finally {
+	} catch (error) { formError.value = errorText(error); } finally {
 		choosing.value = false;
 		await nextTick();
 		if (!disposed && composerOpen.value) (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : titleInput.value)?.focus();
 	}
 }
+
+async function openUpload(kind: CommunityCategory) {
+	if (submitting.value || choosing.value || emojiOpen.value) return;
+	uploadKind.value = kind;
+	uploadAccept.value = kind === 'image' ? 'image/*' : kind === 'video' ? 'video/*' : '.pdf,.txt,.md,.markdown,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json,.yaml,.yml,.zip,.7z,.tar,.gz,.skill';
+	await nextTick();
+	uploadInput.value?.click();
+}
+
+async function uploadSelected(event: Event) {
+	const input = event.target as HTMLInputElement;
+	const selected = Array.from(input.files ?? []);
+	input.value = '';
+	if (!selected.length || submitting.value || choosing.value) return;
+	if (files.value.length + selected.length > 16) { formError.value = t.tooManyFiles; return; }
+	choosing.value = true; formError.value = '';
+	try {
+		if (!props.gateway.uploadFiles) throw new Error(t.serviceUnavailable);
+		const uploaded = await props.gateway.uploadFiles(selected);
+		if (disposed || !composerOpen.value) return;
+		if (!files.value.length && uploaded.length) draft.category = uploadKind.value;
+		const merged = [...files.value, ...uploaded.filter(file => !files.value.some(item => item.id === file.id))];
+		if (merged.length > 16) { formError.value = t.tooManyFiles; return; }
+		files.value = merged;
+	} catch (error) { if (!disposed) formError.value = errorText(error); } finally { choosing.value = false; await nextTick(); if (!disposed && composerOpen.value) contentInput.value?.focus(); }
+}
+
+function insertEmoji(event: MouseEvent) {
+	const anchor = event.currentTarget;
+	if (!(anchor instanceof HTMLElement) || submitting.value || choosing.value || emojiOpen.value) return;
+	let start = contentInput.value?.selectionStart ?? draft.text.length;
+	let end = contentInput.value?.selectionEnd ?? start;
+	emojiOpen.value = true;
+	emojiPicker.show(anchor, emoji => {
+		if (disposed || !composerOpen.value) return;
+		const value = draft.text.slice(0, start) + emoji + draft.text.slice(end);
+		if (value.length > 2500) { formError.value = t.emojiLimit; return; }
+		draft.text = value; formError.value = ''; start += emoji.length; end = start;
+	}, () => {
+		emojiOpen.value = false;
+		void nextTick(() => { if (!disposed && composerOpen.value) { contentInput.value?.focus(); contentInput.value?.setSelectionRange(start, end); } });
+	});
+}
+
 async function submit() {
-	if (submitting.value || choosing.value) return;
+	if (submitting.value || choosing.value || emojiOpen.value) return;
 	formError.value = '';
 	if (!props.signedIn) { emit('login'); return; }
 	if (!draft.title.trim()) { formError.value = t.titleRequired; return; }
@@ -339,9 +411,9 @@ async function submit() {
 		files.value = []; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
 		if (props.section === 'mine') await load();
-	} catch (error) { if (!disposed) formError.value = errorText(error); }
-	finally { submitting.value = false; }
+	} catch (error) { if (!disposed) formError.value = errorText(error); } finally { submitting.value = false; }
 }
+
 async function review(work: CommunityWork, decision: 'approve' | 'reject') {
 	if (reviewingId.value || !props.moderator) return;
 	reviewErrors[work.id] = '';
@@ -355,9 +427,9 @@ async function review(work: CommunityWork, decision: 'approve' | 'reject') {
 		if (result.id !== work.id || result.status !== (decision === 'approve' ? 'approved' : 'rejected')) throw new Error(t.invalidResponse);
 		notice.value = t.reviewed;
 		await load();
-	} catch (error) { if (!disposed && props.section === 'review') reviewErrors[work.id] = errorText(error); }
-	finally { reviewingId.value = ''; }
+	} catch (error) { if (!disposed && props.section === 'review') reviewErrors[work.id] = errorText(error); } finally { reviewingId.value = ''; }
 }
+
 watch(() => props.section, () => {
 	query.value = ''; activeQuery.value = ''; notice.value = ''; composerOpen.value = false;
 	status.value = props.section === 'review' ? 'pending' : 'all';
@@ -380,6 +452,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 :is(.root, .modalLayer) h1, :is(.root, .modalLayer) h2, :is(.root, .modalLayer) h3, :is(.root, .modalLayer) p { margin: 0; }
 .account { display: flex; align-items: center; gap: 12px; }
 .canvas { width: 100%; min-height: 100%; padding: 24px 32px; }
+.canvas.communityCanvas { padding-top: 0; }
 .headerActions { display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
 .heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 8px 20px; }
 .heading h1 { font-size: 24px; font-weight: 700; letter-spacing: -.03em; }
@@ -509,7 +582,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
  .search input { font-size: 16px; }
 }
 
-.modalLayer { position: fixed; inset: 0; z-index: 1000000; overflow-y: auto; overscroll-behavior: contain; padding: max(24px, 6vh) 20px 24px; background: rgb(0 0 0 / .35); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
+.modalLayer { position: fixed; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: max(24px, 6vh) 20px 24px; background: rgb(0 0 0 / .35); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
 .composer { width: min(100%, 640px); margin: 0 auto; padding: 10px 20px 12px; border-radius: 16px; background: var(--MI_THEME-panel); }
 .composerHeader { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .composerHeader > button { width: 44px; height: 44px; padding: 0; font-size: 22px; }
@@ -530,7 +603,11 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .composer .error, .composer .fileList { margin-left: 56px; }
 .composerFooter { border-top: 1px solid var(--MI_THEME-divider); padding-top: 8px; }
 .composerTools { display: flex; align-items: center; gap: 12px; }
-.iconTools { display: flex; align-items: center; gap: 2px; }
+.iconTools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.uploadHint { font-size: 12px; margin-top: 10px !important; color: var(--MI_THEME-fg); }
+.resourceFiles { list-style: none; margin: 12px 0; padding: 0; }
+.resourceFiles a { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
+.resourceFiles a:hover { text-decoration: underline; }
 .iconButton { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; padding: 0; background: transparent; border: 0; border-radius: 50%; color: var(--MI_THEME-fg); font-size: 23px !important; }
 .iconButton:hover { background: var(--MI_THEME-buttonBg); }
 .iconButton[aria-expanded='true'] { background: var(--MI_THEME-buttonBg); }

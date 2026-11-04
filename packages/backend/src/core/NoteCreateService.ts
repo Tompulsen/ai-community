@@ -5,7 +5,7 @@
 
 import { setImmediate } from 'node:timers/promises';
 import * as mfm from 'mfm-js';
-import { In, DataSource, IsNull, LessThan } from 'typeorm';
+import { In, DataSource, IsNull, LessThan, type EntityManager } from 'typeorm';
 import * as Redis from 'ioredis';
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { extractMentions } from '@/misc/extract-mentions.js';
@@ -190,6 +190,9 @@ type Option = {
 	url?: string | null;
 	app?: MiApp | null;
 };
+
+/** Internal callers must run the deferred callbacks only after committing. */
+export type NoteCreationTransaction = { manager: EntityManager; afterCommit: (() => void)[]; };
 
 @Injectable()
 export class NoteCreateService implements OnApplicationShutdown {
@@ -446,7 +449,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 		host: MiUser['host'];
 		isBot: MiUser['isBot'];
 		isCat: MiUser['isCat'];
-	}, data: Option, silent = false): Promise<MiNote> {
+	}, data: Option, silent = false, transaction?: NoteCreationTransaction): Promise<MiNote> {
+		if (transaction && !transaction.manager.queryRunner?.isTransactionActive) throw new Error('Note creation requires an active transaction');
 		// チャンネル外にリプライしたら対象のスコープに合わせる
 		// (クライアントサイドでやっても良い処理だと思うけどとりあえずサーバーサイドで)
 		if (data.reply && data.channel && data.reply.channelId !== data.channel.id) {
@@ -633,18 +637,22 @@ export class NoteCreateService implements OnApplicationShutdown {
 			throw new IdentifiableError('9f466dab-c856-48cd-9e65-ff90ff750580', 'Note contains too many mentions');
 		}
 
-		const note = await this.insertNote(user, data, tags, emojis, mentionedUsers);
+		const note = await this.insertNote(user, data, tags, emojis, mentionedUsers, transaction?.manager);
 
-		setImmediate('post created', { signal: this.#shutdownController.signal }).then(
-			() => this.postNoteCreated(note, user, data, silent, tags!, mentionedUsers!),
-			() => { /* aborted, ignore this */ },
-		);
+		const publish = () => {
+			void setImmediate('post created', { signal: this.#shutdownController.signal }).then(
+				() => this.postNoteCreated(note, user, data, silent, tags!, mentionedUsers!),
+				() => { /* aborted, ignore this */ },
+			);
+		};
+		if (transaction) transaction.afterCommit.push(publish);
+		else publish();
 
 		return note;
 	}
 
 	@bindThis
-	private async insertNote(user: { id: MiUser['id']; host: MiUser['host']; }, data: Option, tags: string[], emojis: string[], mentionedUsers: MinimumUser[]) {
+	private async insertNote(user: { id: MiUser['id']; host: MiUser['host']; }, data: Option, tags: string[], emojis: string[], mentionedUsers: MinimumUser[], manager?: EntityManager) {
 		const insert = new MiNote({
 			id: this.idService.gen(data.createdAt?.getTime()),
 			fileIds: data.files ? data.files.map(file => file.id) : [],
@@ -706,7 +714,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		try {
 			if (insert.hasPoll) {
 				// Start transaction
-				await this.db.transaction(async transactionalEntityManager => {
+				const insertWithPoll = async (transactionalEntityManager: EntityManager) => {
 					await transactionalEntityManager.insert(MiNote, insert);
 
 					const poll = new MiPoll({
@@ -722,9 +730,11 @@ export class NoteCreateService implements OnApplicationShutdown {
 					});
 
 					await transactionalEntityManager.insert(MiPoll, poll);
-				});
+				};
+				if (manager) await insertWithPoll(manager);
+				else await this.db.transaction(insertWithPoll);
 			} else {
-				await this.notesRepository.insert(insert);
+				await (manager?.getRepository(MiNote) ?? this.notesRepository).insert(insert);
 			}
 
 			return {

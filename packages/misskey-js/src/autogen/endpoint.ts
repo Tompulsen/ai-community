@@ -1,4 +1,15 @@
 import type {
+	CommunityFeaturedResponse,
+	CommunityWorksRequest,
+	CommunityWorksResponse,
+	CommunitySubmissionsCreateRequest,
+	CommunitySubmissionsCreateResponse,
+	CommunitySubmissionsMineRequest,
+	CommunitySubmissionsMineResponse,
+	AdminCommunitySubmissionsRequest,
+	AdminCommunitySubmissionsResponse,
+	AdminCommunityReviewRequest,
+	AdminCommunityReviewResponse,
 	EmptyRequest,
 	EmptyResponse,
 	AdminAbuseReportNotificationRecipientCreateRequest,
@@ -1106,6 +1117,18 @@ export type Endpoints = {
 	'users/update-memo': { req: UsersUpdateMemoRequest; res: EmptyResponse };
 	'v2/admin/emoji/list': { req: V2AdminEmojiListRequest; res: V2AdminEmojiListResponse };
 	'verify-email': { req: VerifyEmailRequest; res: EmptyResponse };
+
+	'community/works': { req: CommunityWorksRequest; res: CommunityWorksResponse };
+
+	'community/submissions/create': { req: CommunitySubmissionsCreateRequest; res: CommunitySubmissionsCreateResponse };
+
+	'community/submissions/mine': { req: CommunitySubmissionsMineRequest; res: CommunitySubmissionsMineResponse };
+
+	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
+
+	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
+
+	'community/featured': { req: EmptyRequest; res: CommunityFeaturedResponse };
 };
 
 /**

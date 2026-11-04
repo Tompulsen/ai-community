@@ -450,3 +450,10 @@ export * as 'chat/read-all' from './endpoints/chat/read-all.js';
 export * as 'v2/admin/emoji/list' from './endpoints/v2/admin/emoji/list.js';
 
 export * as 'admin/community/notes' from './endpoints/admin/community/notes.js';
+
+export * as 'community/featured' from './endpoints/community/featured.js';
+export * as 'community/works' from './endpoints/community/works.js';
+export * as 'community/submissions/mine' from './endpoints/community/submissions/mine.js';
+export * as 'admin/community/submissions' from './endpoints/admin/community/submissions.js';
+export * as 'community/submissions/create' from './endpoints/community/submissions/create.js';
+export * as 'admin/community/review' from './endpoints/admin/community/review.js';

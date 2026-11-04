@@ -6,13 +6,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <PageWithHeader :tabs="[]">
 	<div class="_spacer" style="--MI_SPACER-w: 100%; --MI_SPACER-min: 16px; --MI_SPACER-max: 32px;">
-		<SearchMarker path="/admin/creation-links" :label="i18n.ts._creationLinks.settings" :keywords="['creation', 'text', 'image', 'video', 'url']" icon="ti ti-link">
+		<SearchMarker path="/admin/creation-links" :label="creationText.settings" :keywords="['creation', 'text', 'image', 'video', 'url']" icon="ti ti-link">
 			<div class="_gaps_m" data-testid="admin-creation-settings" :aria-busy="loading || saving">
-				<p :class="$style.description">{{ i18n.ts._creationLinks.description }}</p>
-				<p v-if="!$i?.isAdmin" role="alert">{{ i18n.ts._creationLinks.adminOnly }}</p>
+				<p :class="$style.description">{{ creationText.description }}</p>
+				<p v-if="!$i?.isAdmin" role="alert">{{ creationText.adminOnly }}</p>
 				<MkLoading v-else-if="loading"/>
 				<div v-else-if="loadFailed" class="_gaps_s" role="alert">
-					<p>{{ i18n.ts._creationLinks.loadError }}</p>
+					<p>{{ creationText.loadError }}</p>
 					<MkButton @click="load">{{ i18n.ts.retry }}</MkButton>
 				</div>
 				<template v-else-if="loaded">
@@ -20,20 +20,20 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<h2 :id="`creation-${item.key}-heading`" :class="$style.heading"><i :class="item.icon" aria-hidden="true"></i> {{ item.title }}</h2>
 						<label>
 							<MkInput v-model="item.url" type="url" :disabled="saving" :spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="https://" :data-testid="`creation-url-${item.key}`">
-								<template #label>{{ i18n.ts._creationLinks.url }}</template>
+								<template #label>{{ creationText.url }}</template>
 								<template #prefix><i class="ti ti-link" aria-hidden="true"></i></template>
 							</MkInput>
 						</label>
-						<p v-if="isInvalid(item.url)" :class="$style.error" role="alert" :data-testid="`creation-error-${item.key}`">{{ i18n.ts._creationLinks.invalidUrl }}</p>
-						<p v-else :class="$style.description">{{ i18n.ts._creationLinks.urlHint }}</p>
-						<MkSelect v-model="item.mode" :items="modeOptions" :disabled="saving" :data-testid="`creation-mode-${item.key}`" role="group" :aria-label="i18n.ts._creationLinks.mode">
-							<template #label>{{ i18n.ts._creationLinks.mode }}</template>
-							<template #caption>{{ i18n.ts._creationLinks.modeHint }}</template>
+						<p v-if="isInvalid(item.url)" :class="$style.error" role="alert" :data-testid="`creation-error-${item.key}`">{{ creationText.invalidUrl }}</p>
+						<p v-else :class="$style.description">{{ creationText.urlHint }}</p>
+						<MkSelect v-model="item.mode" :items="modeOptions" :disabled="saving" :data-testid="`creation-mode-${item.key}`" role="group" :aria-label="creationText.mode">
+							<template #label>{{ creationText.mode }}</template>
+							<template #caption>{{ creationText.modeHint }}</template>
 						</MkSelect>
-						<MkA :to="`/create/${item.key}`" class="_link">{{ i18n.ts._creationLinks.preview }} <i class="ti ti-arrow-right" aria-hidden="true"></i></MkA>
+						<MkA :to="`/create/${item.key}`" class="_link">{{ creationText.preview }} <i class="ti ti-arrow-right" aria-hidden="true"></i></MkA>
 					</section>
-					<p v-if="saveFailed" role="alert" :class="$style.error">{{ i18n.ts._creationLinks.saveError }}</p>
-					<p v-if="saved" role="status" data-testid="creation-saved">{{ i18n.ts._creationLinks.saved }}</p>
+					<p v-if="saveFailed" role="alert" :class="$style.error">{{ creationText.saveError }}</p>
+					<p v-if="saved" role="status" data-testid="creation-saved">{{ creationText.saved }}</p>
 					<MkButton primary :wait="saving" :disabled="saving || hasInvalidUrl" data-testid="creation-save" @click="save"><i class="ti ti-check" aria-hidden="true"></i> {{ i18n.ts.save }}</MkButton>
 				</template>
 			</div>
@@ -49,7 +49,7 @@ import { url as siteUrl } from '@@/js/config.js';
 import MkInput from '@/components/MkInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import MkButton from '@/components/MkButton.vue';
-import { creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
+import { creationText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
 import type { CreationMode } from '@/utility/creation-pages.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { fetchInstance, instance } from '@/instance.js';
@@ -59,8 +59,8 @@ import { definePage } from '@/page.js';
 
 const editors = ref(creationPages.map(item => ({ ...item, url: '', mode: 'embed' as CreationMode })));
 const modeOptions = [
-	{ value: 'embed' as const, label: i18n.ts._creationLinks.embed },
-	{ value: 'newTab' as const, label: i18n.ts._creationLinks.newTab },
+	{ value: 'embed' as const, label: creationText.embed },
+	{ value: 'newTab' as const, label: creationText.newTab },
 ];
 const loading = ref(false);
 const loaded = ref(false);
@@ -115,7 +115,7 @@ async function save() {
 }
 
 onMounted(load);
-definePage(() => ({ title: i18n.ts._creationLinks.settings, icon: 'ti ti-link' }));
+definePage(() => ({ title: creationText.settings, icon: 'ti ti-link' }));
 </script>
 
 <style lang="scss" module>

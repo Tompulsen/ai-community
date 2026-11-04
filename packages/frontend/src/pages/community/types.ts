@@ -42,6 +42,7 @@ export interface CommunityGateway {
 	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: 'pending'; submittedAt: string; }>;
 	review: (input: CommunityReviewInput) => Promise<CommunityWork>;
 	chooseFiles: (event: MouseEvent) => Promise<CommunityFile[]>;
+	uploadFiles?: (files: File[]) => Promise<CommunityFile[]>;
 }
 
 /** Public profile fields only; hidden social counts remain absent. */

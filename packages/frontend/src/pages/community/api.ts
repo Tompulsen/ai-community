@@ -36,6 +36,7 @@ export function createCommunityGateway(options: {
 	apiUrl: string;
 	getToken: () => string | undefined;
 	chooseFiles: CommunityGateway['chooseFiles'];
+	uploadFiles?: CommunityGateway['uploadFiles'];
 	fetch?: typeof fetch;
 }): CommunityGateway {
 	async function request(endpoint: string, data: object, signal?: AbortSignal): Promise<unknown> {
@@ -43,28 +44,30 @@ export function createCommunityGateway(options: {
 		const abort = () => controller.abort();
 		if (signal?.aborted) controller.abort();
 		signal?.addEventListener('abort', abort, { once: true });
-		const timeout = setTimeout(abort, 20000);
+		const timeout = window.setTimeout(abort, 20000);
 		try {
 			const token = options.getToken();
-			const response = await (options.fetch ?? fetch)(`${options.apiUrl}/${endpoint}`, {
+			const response = await (options.fetch ?? window.fetch)(`${options.apiUrl}/${endpoint}`, {
 				method: 'POST', credentials: 'omit', cache: 'no-store',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ ...data, ...(token ? { i: token } : {}) }), signal: controller.signal,
 			});
-			if ([404, 501, 503].includes(response.status)) throw new Error(t.serviceUnavailable);
-			if (response.status === 401) throw new Error(t.loginError);
-			if (response.status === 403) throw new Error(t.permissionError);
-			if (response.status === 409) throw new Error(t.conflictError);
-			if (!response.ok) throw new Error(t.networkError);
+			if (!response.ok) {
+				const body = await response.json().catch(() => null);
+				const messages: Record<string, string> = { COMMUNITY_INVALID_FILES: t.invalidFiles, COMMUNITY_INVALID_CONTENT: t.invalidContent, COMMUNITY_AUTHOR_UNAVAILABLE: t.authorUnavailable, COMMUNITY_CANNOT_PUBLISH: t.cannotPublish, COMMUNITY_NOT_FOUND: t.notFound, RATE_LIMIT_EXCEEDED: t.rateLimited };
+				const fallback = response.status === 401 ? t.loginError : response.status === 403 ? t.permissionError : response.status === 409 ? t.conflictError : [404, 501, 503].includes(response.status) ? t.serviceUnavailable : t.networkError;
+				throw new Error(messages[body?.error?.code] ?? fallback);
+			}
 			try { return await response.json(); } catch { throw new Error(t.invalidResponse); }
 		} catch (error) {
 			if (controller.signal.aborted && !signal?.aborted) throw new Error(t.networkError);
 			throw error;
 		} finally {
-			clearTimeout(timeout);
+			window.clearTimeout(timeout);
 			signal?.removeEventListener('abort', abort);
 		}
 	}
+
 	return {
 		async list(section, query, signal) {
 			if (section === 'profile' && (!isId(query.authorId) || (query.category != null && !['video', 'image', 'resource'].includes(query.category)))) throw new Error(t.invalidResponse);
@@ -87,5 +90,6 @@ export function createCommunityGateway(options: {
 			return result;
 		},
 		chooseFiles: options.chooseFiles,
+		uploadFiles: options.uploadFiles,
 	};
 }

@@ -668,3 +668,16 @@ export type UsersUpdateMemoRequest = operations['users___update-memo']['requestB
 export type V2AdminEmojiListRequest = operations['v2___admin___emoji___list']['requestBody']['content']['application/json'];
 export type V2AdminEmojiListResponse = operations['v2___admin___emoji___list']['responses']['200']['content']['application/json'];
 export type VerifyEmailRequest = operations['verify-email']['requestBody']['content']['application/json'];
+
+export type CommunityWorksRequest = operations['community___works']['requestBody']['content']['application/json'];
+export type CommunityWorksResponse = operations['community___works']['responses']['200']['content']['application/json'];
+export type CommunitySubmissionsCreateRequest = operations['community___submissions___create']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsCreateResponse = operations['community___submissions___create']['responses']['200']['content']['application/json'];
+export type CommunitySubmissionsMineRequest = operations['community___submissions___mine']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsMineResponse = operations['community___submissions___mine']['responses']['200']['content']['application/json'];
+export type AdminCommunitySubmissionsRequest = operations['admin___community___submissions']['requestBody']['content']['application/json'];
+export type AdminCommunitySubmissionsResponse = operations['admin___community___submissions']['responses']['200']['content']['application/json'];
+export type AdminCommunityReviewRequest = operations['admin___community___review']['requestBody']['content']['application/json'];
+export type AdminCommunityReviewResponse = operations['admin___community___review']['responses']['200']['content']['application/json'];
+
+export type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];

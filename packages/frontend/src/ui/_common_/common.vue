@@ -57,13 +57,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 </Transition>
 
-<component
-	:is="popup.component"
-	v-for="popup in popups"
-	:key="popup.id"
-	v-bind="popup.props"
-	v-on="popup.events"
-/>
+<!-- Keep teleported editors and native dialogs in the same stacking context. -->
+<div id="misskey-popup-container" style="display: contents;">
+	<component
+		:is="popup.component"
+		v-for="popup in popups"
+		:key="popup.id"
+		v-bind="popup.props"
+		v-on="popup.events"
+	/>
+</div>
 
 <component
 	:is="prefer.s.animation ? TransitionGroup : 'div'"

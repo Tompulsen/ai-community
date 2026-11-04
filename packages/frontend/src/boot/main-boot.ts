@@ -41,6 +41,8 @@ export async function mainBoot() {
 		if (uiStyle === 'deck' && prefer.s['deck.useSimpleUiForNonRootPages'] && window.location.pathname !== '/') uiStyle = 'zen';
 
 		if (searchParams.has('ui')) uiStyle = searchParams.get('ui');
+		// The public homepage is shared by all visitors, including accounts using Deck.
+		if (window.location.pathname === '/') uiStyle = $i ? 'universal' : 'visitor';
 
 		let rootComponent: Component;
 		switch (uiStyle) {

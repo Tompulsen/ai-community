@@ -90,6 +90,7 @@ export const paramDef = {
 				creationImageMode: { type: 'string', enum: ['embed', 'newTab'] },
 				creationVideoUrl: { type: 'string', nullable: true, maxLength: 2048 },
 				creationVideoMode: { type: 'string', enum: ['embed', 'newTab'] },
+				homeShowcaseMode: { type: 'string', enum: ['custom', 'popular'] },
 			},
 		},
 		cacheRemoteFiles: { type: 'boolean' },
