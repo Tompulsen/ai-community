@@ -5,17 +5,40 @@
 - 访问地址：<https://zaiduyu.top>。
 - 服务器：`210.126.232.192`，部署目录 `/opt/ai-community`。
 - 私有仓库：`Tompulsen/ai-community`，分支 `main`。
-- 已部署应用提交：`b6e70fc60e8bd2a027124007bce8841b6ed5c74e`。
-- 已拉取镜像：`ghcr.io/tompulsen/ai-community:sha-b6e70fc60e8bd2a027124007bce8841b6ed5c74e`。
-- 镜像摘要：`sha256:0c17db69c7054a6e7fafc7c93182a1dea7182f04867cad09387bffb041603d30`。
-- GitHub 构建工作流 `41815455846` 成功，服务器镜像的 OCI revision 与上述应用提交一致。
+- 已部署应用提交：`00605627f40c51572f3b9ecf953538e0623398a3`。
+- 已拉取镜像：`ghcr.io/tompulsen/ai-community:sha-00605627f40c51572f3b9ecf953538e0623398a3`。
+- 镜像摘要：`sha256:c5542650700dccd27ec84382b481da162918e93e35b9c5bc4d09fac7632f05de`。
+- GitHub 构建工作流 `41850748115` 成功，服务器镜像的 OCI revision 与上述应用提交一致。
 - Docker Compose 的应用、PostgreSQL 18、Redis 7 三个容器均为 healthy；数据库和 Redis 未发布公网端口，应用仅绑定 `127.0.0.1:13000`。
 
 根域 A 记录已指向该服务器，Cloudflare 代理已开启；保留原有 `full` TLS 模式。
 源站使用 Origin CA 证书和独立 Nginx 配置，Nginx 配置检查通过。
 公网首页、`/healthz` 和 `/source/ai-community.tar.gz` 均返回 HTTP 200。
 下载的源码归档对应上述运行中的应用提交，已排除生产凭据。
-本次收尾仅更新部署文档，不更换已验收的应用镜像；后续文档提交号与应用镜像提交号可不同。
+本次已更新上述应用镜像。收尾文档单独提交，不重复构建镜像；公开源码归档仍对应上述运行应用提交。
+
+## 当前界面功能
+
+- 侧栏统一为“社区”，其下依次为“文本制作 / 图片制作 / 视频制作”；社区内部作品分类保留。
+- 独立网盘导航已取消，旧的网盘、文件和文件夹地址返回社区；附件上传及选择弹窗保留。
+- 管理员通过“控制面板 → 制作页面链接”（`/admin/creation-links`）分别设置三个 HTTPS 网址与打开方式。
+- 正式网址按用户要求暂时留空，已直接查询数据库确认三项均为 null。保存后制作页在整个工作区内打开，也可选择新窗口方式。
+- 制作页始终保留新窗口入口。需要独立登录或禁止内嵌的外部工具可使用新窗口方式；未配置时不加载 iframe。
+- 前后端拒绝非 HTTPS、含账号密码、本站同源及超长链接。仅管理员可写入，普通用户和匿名用户均不能修改。
+- 使用既有 `meta.clientOptions` JSONB 保存六个可选字段，保留原品牌配置，无新数据库列或迁移。
+- 上轮 Logo 上传、网盘选图、预览、保存与恢复默认已上线；工作区默认全宽，手机保留必要边距。本轮再次确认 Logo 上传按钮和文件选择弹窗可用。
+
+## 本轮验收
+
+- GitHub 完整 Docker 构建和镜像发布成功，服务器拉取精确 SHA 镜像并通过健康检查。
+- 四个变更 Vue 页面的模板、TypeScript 转译、SCSS、文案引用通过。
+- 32 个前后端真实 URL 校验用例通过；真实 update-meta 处理函数的局部合并、清空、非法链接原子拒绝通过。
+- 新增/修改的五个后端文件以及 SDK 类型文件，定向 ESLint 均通过。
+- 生产 OpenAPI 生成成功，请求与响应均包含六个可选字段，已同步 SDK 类型。
+- 真实管理员界面保存三个网址及打开方式、刷新持久化、清空、保留品牌配置通过；真实 API 的非法 URL、非法打开方式、匿名与普通账号权限拒绝通过。
+- 桌面与手机空态、工作区宽高、内嵌显示、新窗口无 opener、切换后销毁旧 iframe、拒绝内嵌时保留打开入口通过。外站使用测试浏览器内拦截的受控页面验证；尚未验证用户将来填写的第三方服务。
+- 最终浏览器检查无页面运行错误。验收时的临时普通账户已从数据库删除，三项正式 URL 为空；管理员现有 Logo 保留。
+- 变更前备份：`/opt/ai-community-backups/creation-links-20261104T145013Z`，含数据库、Compose、镜像版本与源码。
 
 ## 邮箱账户
 
@@ -38,6 +61,9 @@
 
 ## 开发检查限制
 
+- 本轮完整 SDK 重生成命令因本机缺少 `tsx` / `esbuild` 未完成。已最小同步对应类型，并使用生产镜像生成 OpenAPI 验证新增字段；不将该检查表述为完整 SDK 构建通过。
+- 本轮生产定向后端和 SDK ESLint 通过；前端 ESLint 仍受下述缺少解析器影响。数据库检查仍只报告下述已有默认值差异，没有新增 DDL。
+
 - 数据库 schema 差异检查尚不为零：仅报告 `meta.proxyRemoteFiles` 默认值为 false，而模型声明为 true。该差异来自原有配置迁移与模型默认值，不涉及本次邮箱索引；本次未修改旧迁移或切换此业务设置。
 - 定向后端 ESLint 在将检查进程堆上限提高到 1536 MB 后执行完成；六个生产认证源文件没有错误，`packages/backend/test/utils.ts` 的 448、658 行各有一处 `no-async-promise-executor` 错误，整体命令退出码为 1。
 - 生产镜像缺少 `vue-eslint-parser`，前端 ESLint 无法运行；不能将上述组件编译检查视为 ESLint 通过。
@@ -55,7 +81,7 @@ docker compose --env-file deploy/private/release.env -f deploy/compose.yml logs 
 更新前备份数据库和当前镜像版本，再拉取已经构建成功的提交标签。保留命名卷，勿执行 `down -v`。
 数据库及部署配置备份位于 `/opt/ai-community-backups`。
 临时 GHCR 令牌、临时 Docker 登录目录和容器内管理员初始化文件已清理。
-构建用的临时 2 GB swap 已移除，原有系统 swap 保留；收尾时磁盘约有 8.1 GB 可用，三项服务仍健康。
+构建用的临时 2 GB swap 已移除，原有系统 swap 保留；本轮更新后磁盘约有 7.0 GB 可用，三项服务仍健康。
 生产密码、数据库配置、管理员初始化凭据、Cloudflare 令牌和 TLS 私钥均未提交。
 
 ## 尚未完成的业务
@@ -64,5 +90,5 @@ docker compose --env-file deploy/private/release.env -f deploy/compose.yml logs 
 `community/submissions/create`、`community/submissions/mine`、
 `admin/community/submissions`、`admin/community/review`。
 首页因此显示“社区审核服务尚未接通，当前无法读取作品或提交审核”。
-本次完成部署与账户系统，不代表上述业务流程已完成。
+本次导航、制作链接配置、Logo 与账户系统更新不代表上述业务 API 已完成。
 详见根目录 `BACKEND-COMMUNITY-HANDOFF.md` 和 `COMMUNITY_API_CONTRACT.md`。
