@@ -133,7 +133,7 @@ definePage(() => ({ title: i18n.ts._aiCommunity.review, icon: 'ti ti-shield-chec
 </script>
 
 <style lang="scss" module>
-.root { max-width: 900px; margin: auto; padding: 24px; }
+.root { width: 100%; box-sizing: border-box; padding: 24px; }
 .root h1 { font-size: 24px; margin: 0; }
 .root h2 { font-size: 18px; margin: 0; }
 .root p { line-height: 1.8; }

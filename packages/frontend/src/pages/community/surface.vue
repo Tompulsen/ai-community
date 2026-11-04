@@ -475,7 +475,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .reviewForm { display: grid; gap: 15px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--MI_THEME-divider); }
 .reviewActions { display: flex; gap: 10px; flex-wrap: wrap; }
 .loadMore { margin-top: 22px; width: 100%; }
-.reserved { max-width: 760px; padding: 40px; background: var(--MI_THEME-panel); border-radius: var(--MI-radius); }
+.reserved { width: 100%; padding: 40px; background: var(--MI_THEME-panel); border-radius: var(--MI-radius); }
 .reserved > i { font-size: 30px; }
 .reserved h2 { font-size: 24px; margin-top: 16px; }
 .reserved p { margin-top: 12px; max-width: 55ch; }

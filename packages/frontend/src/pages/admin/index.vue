@@ -10,6 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<div class="lxpfedzu _gaps">
 				<div class="banner">
 					<img :src="instance.iconUrl || '/favicon.ico'" alt="" class="icon"/>
+					<MkA to="/admin/branding" class="brandEdit _link" data-testid="admin-edit-logo"><i class="ti ti-photo-edit" aria-hidden="true"></i> {{ i18n.ts._communityBranding.edit }}</MkA>
 				</div>
 
 				<div class="_gaps_s">
@@ -368,7 +369,18 @@ definePage(() => INFO.value);
 					display: block;
 					margin: auto;
 					height: 42px;
+					max-width: 100%;
+					object-fit: contain;
 					border-radius: 8px;
+				}
+
+				> .brandEdit {
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 6px;
+					min-height: 44px;
+					margin-top: 8px;
 				}
 			}
 		}

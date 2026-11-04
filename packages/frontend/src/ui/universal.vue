@@ -8,9 +8,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<XTitlebar v-if="prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
 
 	<div :class="$style.nonTitlebarArea">
-		<XSidebar v-if="!isMobile" :class="$style.sidebar" :showWidgetButton="!showWidgetsSide" @widgetButtonClick="widgetsShowing = true"/>
+		<XSidebar v-if="!isMobile" :class="$style.sidebar" :showWidgetButton="true" @widgetButtonClick="widgetsShowing = true"/>
 
-		<div :class="[$style.contents, !isMobile && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
+		<div data-testid="community-workspace" :class="[$style.contents, !isMobile && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
 			<div>
 				<XReloadSuggestion v-if="shouldSuggestReload"/>
 				<XPreferenceRestore v-if="shouldSuggestRestoreBackup"/>
@@ -22,10 +22,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<RouterView v-else :class="$style.content"/>
 			<XMobileFooterMenu v-if="isMobile" ref="navFooter" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
 		</div>
-
-		<div v-if="showWidgetsSide && !pageMetadata?.needWideArea" :class="$style.widgets">
-			<XWidgets/>
-		</div>
 	</div>
 
 	<XCommon v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
@@ -33,7 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { defineAsyncComponent, provide, onMounted, computed, ref } from 'vue';
+import { defineAsyncComponent, provide, computed, ref } from 'vue';
 import { instanceName } from '@@/js/config.js';
 import { isLink } from '@@/js/is-link.js';
 import XCommon from './_common_/common.vue';
@@ -57,18 +53,14 @@ import { shouldSuggestRestoreBackup } from '@/preferences/utility.js';
 import { DI } from '@/di.js';
 import { shouldSuggestReload } from '@/utility/reload-suggest.js';
 
-const XWidgets = defineAsyncComponent(() => import('./_common_/widgets.vue'));
 const XStatusBars = defineAsyncComponent(() => import('@/ui/_common_/statusbars.vue'));
 const XAnnouncements = defineAsyncComponent(() => import('@/ui/_common_/announcements.vue'));
 
 const isRoot = computed(() => mainRouter.currentRoute.value.name === 'index');
 
-const DESKTOP_THRESHOLD = 1100;
 const MOBILE_THRESHOLD = 500;
 
 // デスクトップでウィンドウを狭くしたときモバイルUIが表示されて欲しいことはあるので deviceKind === 'desktop' の判定は行わない
-const showWidgetsSide = window.innerWidth >= DESKTOP_THRESHOLD;
-
 const isMobile = ref(deviceKind === 'smartphone' || window.innerWidth <= MOBILE_THRESHOLD);
 window.addEventListener('resize', () => {
 	isMobile.value = deviceKind === 'smartphone' || window.innerWidth <= MOBILE_THRESHOLD;
@@ -125,8 +117,6 @@ function onContextmenu(ev: PointerEvent) {
 </script>
 
 <style lang="scss" module>
-$widgets-hide-threshold: 1090px;
-
 .root {
 	height: 100dvh;
 	overflow: clip;
@@ -163,6 +153,11 @@ $widgets-hide-threshold: 1090px;
 .content {
 	flex: 1;
 	min-height: 0;
+
+	// Fill the page workspace while retaining each page's responsive gutters.
+	:global(._spacer) {
+		--MI_SPACER-w: 100% !important;
+	}
 }
 
 .statusbars {
@@ -171,17 +166,4 @@ $widgets-hide-threshold: 1090px;
 	left: 0;
 }
 
-.widgets {
-	width: 350px;
-	height: 100%;
-	box-sizing: border-box;
-	overflow: auto;
-	padding: var(--MI-margin) var(--MI-margin) calc(var(--MI-margin) + env(safe-area-inset-bottom, 0px));
-	border-left: solid 0.5px var(--MI_THEME-divider);
-	background: var(--MI_THEME-bg);
-
-	@media (max-width: $widgets-hide-threshold) {
-		display: none;
-	}
-}
 </style>
