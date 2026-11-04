@@ -196,6 +196,11 @@ const menuDef = computed<SuperMenuDef[]>(() => [{
 		to: '/admin/branding',
 		active: currentPage.value?.route.name === 'branding',
 	}, {
+		icon: 'ti ti-link',
+		text: i18n.ts._creationLinks.settings,
+		to: '/admin/creation-links',
+		active: currentPage.value?.route.name === 'creation-links',
+	}, {
 		icon: 'ti ti-shield',
 		text: i18n.ts.moderation,
 		to: '/admin/moderation',

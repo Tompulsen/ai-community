@@ -29,6 +29,9 @@ export const ROUTE_DEF = [{
 	path: '/community/:module',
 	component: page(() => import('@/pages/community.vue')),
 }, {
+	path: '/create/:kind',
+	component: page(() => import('@/pages/creation.vue')),
+}, {
 	path: '/welcome',
 	component: page(() => import('@/pages/welcome.vue')),
 }, {
@@ -477,6 +480,10 @@ export const ROUTE_DEF = [{
 		name: 'branding',
 		component: page(() => import('@/pages/admin/branding.vue')),
 	}, {
+		path: '/creation-links',
+		name: 'creation-links',
+		component: $i?.isAdmin ? page(() => import('@/pages/admin/creation-links.vue')) : page(() => import('@/pages/not-found.vue')),
+	}, {
 		path: '/moderation',
 		name: 'moderation',
 		component: page(() => import('@/pages/admin/moderation.vue')),
@@ -534,16 +541,13 @@ export const ROUTE_DEF = [{
 	loginRequired: true,
 }, {
 	path: '/my/drive/folder/:folder',
-	component: page(() => import('@/pages/drive.vue')),
-	loginRequired: true,
+	redirect: '/',
 }, {
 	path: '/my/drive',
-	component: page(() => import('@/pages/drive.vue')),
-	loginRequired: true,
+	redirect: '/',
 }, {
 	path: '/my/drive/file/:fileId',
-	component: page(() => import('@/pages/drive.file.vue')),
-	loginRequired: true,
+	redirect: '/',
 }, {
 	path: '/my/follow-requests',
 	component: page(() => import('@/pages/follow-requests.vue')),

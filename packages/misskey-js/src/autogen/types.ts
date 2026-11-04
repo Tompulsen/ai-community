@@ -5592,6 +5592,15 @@ export type components = {
             entrancePageStyle: 'classic' | 'simple';
             showTimelineForVisitor: boolean;
             showActivitiesForVisitor: boolean;
+            creationTextUrl?: string | null;
+            /** @enum {string} */
+            creationTextMode?: 'embed' | 'newTab';
+            creationImageUrl?: string | null;
+            /** @enum {string} */
+            creationImageMode?: 'embed' | 'newTab';
+            creationVideoUrl?: string | null;
+            /** @enum {string} */
+            creationVideoMode?: 'embed' | 'newTab';
         };
         UserWebhook: {
             /** Format: id */
@@ -12985,6 +12994,15 @@ export interface operations {
                         entrancePageStyle?: 'classic' | 'simple';
                         showTimelineForVisitor?: boolean;
                         showActivitiesForVisitor?: boolean;
+                        creationTextUrl?: string | null;
+                        /** @enum {string} */
+                        creationTextMode?: 'embed' | 'newTab';
+                        creationImageUrl?: string | null;
+                        /** @enum {string} */
+                        creationImageMode?: 'embed' | 'newTab';
+                        creationVideoUrl?: string | null;
+                        /** @enum {string} */
+                        creationVideoMode?: 'embed' | 'newTab';
                     };
                     cacheRemoteFiles?: boolean;
                     cacheRemoteSensitiveFiles?: boolean;

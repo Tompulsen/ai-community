@@ -4,8 +4,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<nav :class="[$style.root, { [$style.compact]: compact, [$style.horizontal]: horizontal }]" :aria-label="i18n.ts._aiCommunity.navigation">
-	<MkA v-for="item in communityModules" :key="item.key" :to="`/community/${item.key}`" :class="[$style.link, { [$style.active]: activeModule === item.key }]" :aria-current="activeModule === item.key ? 'page' : undefined" :title="item.title" :aria-label="item.title">
+<nav :class="[$style.root, { [$style.compact]: compact, [$style.horizontal]: horizontal }]" :aria-label="i18n.ts._aiCommunity.navigation" data-testid="community-navigation">
+	<MkA v-for="item in navigationItems" :key="item.key" :to="item.to" :class="[$style.link, { [$style.active]: activeItem === item.key }]" :aria-current="activeItem === item.key ? 'page' : undefined" :title="item.title" :aria-label="item.title">
 		<i :class="item.icon" aria-hidden="true"></i><span :class="$style.label">{{ item.title }}</span>
 	</MkA>
 </nav>
@@ -15,12 +15,18 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed } from 'vue';
 import { useRouter } from '@/router.js';
 import { i18n } from '@/i18n.js';
-import { communityModules } from '@/utility/ai-community.js';
+import { creationPages } from '@/utility/creation-pages.js';
 
 const router = useRouter();
-const activeModule = computed(() => {
+const navigationItems = [
+	{ key: 'community', title: i18n.ts._creationLinks.community, icon: 'ti ti-users', to: '/' },
+	...creationPages.map(item => ({ ...item, to: `/create/${item.key}` })),
+];
+const activeItem = computed(() => {
 	const current = router.currentRef.value;
-	return current.route.path === '/' ? 'video' : current.route.path === '/community/:module' ? current.props.get('module') : null;
+	if (current.route.path === '/') return 'community';
+	if (current.route.path === '/community/:module' && ['video', 'image', 'resource', 'text', 'code', 'skill', 'knowledge'].includes(String(current.props.get('module')))) return 'community';
+	return current.route.path === '/create/:kind' ? current.props.get('kind') : null;
 });
 
 defineProps<{

@@ -414,5 +414,32 @@ export const packedMetaClientOptionsSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		creationTextUrl: {
+			type: 'string',
+			optional: true, nullable: true,
+		},
+		creationTextMode: {
+			type: 'string',
+			enum: ['embed', 'newTab'],
+			optional: true, nullable: false,
+		},
+		creationImageUrl: {
+			type: 'string',
+			optional: true, nullable: true,
+		},
+		creationImageMode: {
+			type: 'string',
+			enum: ['embed', 'newTab'],
+			optional: true, nullable: false,
+		},
+		creationVideoUrl: {
+			type: 'string',
+			optional: true, nullable: true,
+		},
+		creationVideoMode: {
+			type: 'string',
+			enum: ['embed', 'newTab'],
+			optional: true, nullable: false,
+		},
 	},
 } as const;

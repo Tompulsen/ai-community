@@ -42,12 +42,6 @@ export const navbarItemDef = reactive<{
 		}),
 		to: '/my/notifications',
 	},
-	drive: {
-		title: i18n.ts.drive,
-		icon: 'ti ti-cloud',
-		show: computed(() => $i != null),
-		to: '/my/drive',
-	},
 	followRequests: {
 		title: i18n.ts.followRequests,
 		icon: 'ti ti-user-plus',

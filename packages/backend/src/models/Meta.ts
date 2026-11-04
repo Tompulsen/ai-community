@@ -754,6 +754,12 @@ export class MiMeta {
 		entrancePageStyle: 'classic' | 'simple';
 		showTimelineForVisitor: boolean;
 		showActivitiesForVisitor: boolean;
+		creationTextUrl?: string | null;
+		creationTextMode?: 'embed' | 'newTab';
+		creationImageUrl?: string | null;
+		creationImageMode?: 'embed' | 'newTab';
+		creationVideoUrl?: string | null;
+		creationVideoMode?: 'embed' | 'newTab';
 	};
 }
 

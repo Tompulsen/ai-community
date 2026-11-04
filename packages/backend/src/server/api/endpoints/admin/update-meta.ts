@@ -5,6 +5,9 @@
 
 import { Injectable, Inject } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
+import type { Config } from '@/config.js';
+import { normalizeCreationUrl } from '@/misc/creation-url.js';
+import { ApiError } from '@/server/api/error.js';
 import type { MiMeta } from '@/models/Meta.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
@@ -16,6 +19,13 @@ export const meta = {
 	requireCredential: true,
 	requireAdmin: true,
 	kind: 'write:admin:meta',
+	errors: {
+		invalidCreationUrl: {
+			message: 'Creation URLs must be external HTTPS URLs without credentials.',
+			code: 'INVALID_CREATION_URL',
+			id: 'a62bd7f5-98fd-4d43-890d-922a6d057f1b',
+		},
+	},
 } as const;
 
 export const paramDef = {
@@ -74,6 +84,12 @@ export const paramDef = {
 				entrancePageStyle: { type: 'string', nullable: false, enum: ['classic', 'simple'] },
 				showTimelineForVisitor: { type: 'boolean', nullable: false },
 				showActivitiesForVisitor: { type: 'boolean', nullable: false },
+				creationTextUrl: { type: 'string', nullable: true, maxLength: 2048 },
+				creationTextMode: { type: 'string', enum: ['embed', 'newTab'] },
+				creationImageUrl: { type: 'string', nullable: true, maxLength: 2048 },
+				creationImageMode: { type: 'string', enum: ['embed', 'newTab'] },
+				creationVideoUrl: { type: 'string', nullable: true, maxLength: 2048 },
+				creationVideoMode: { type: 'string', enum: ['embed', 'newTab'] },
 			},
 		},
 		cacheRemoteFiles: { type: 'boolean' },
@@ -235,6 +251,9 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.config)
+		private config: Config,
+
 		@Inject(DI.meta)
 		private serverSettings: MiMeta,
 
@@ -350,6 +369,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			if (ps.clientOptions !== undefined) {
+				for (const key of ['creationTextUrl', 'creationImageUrl', 'creationVideoUrl'] as const) {
+					const value = ps.clientOptions[key];
+					if (value == null) continue;
+					const normalized = normalizeCreationUrl(value, this.config.url);
+					if (normalized == null) throw new ApiError(meta.errors.invalidCreationUrl);
+					ps.clientOptions[key] = normalized;
+				}
 				set.clientOptions = {
 					...this.serverSettings.clientOptions,
 					...ps.clientOptions,

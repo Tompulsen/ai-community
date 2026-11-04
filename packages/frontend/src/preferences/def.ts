@@ -189,7 +189,6 @@ export const PREF_DEF = definePreferences({
 		default: [
 			'notifications',
 			'clips',
-			'drive',
 			'followRequests',
 			'chat',
 			'-',
