@@ -99,7 +99,9 @@ async function renderChart() {
 				borderWidth: 0,
 				borderRadius: 3,
 				backgroundColor(c: any) {
-					const v = c.dataset.data[c.dataIndex] as unknown as typeof data[0];
+					const v = c.dataset.data[c.dataIndex] as typeof data[number] | undefined;
+					// Chart.js also resolves dataset styles without a data element.
+					if (v == null) return alpha(color, 0);
 					const value = v.v;
 					const m = max(v.y);
 					if (m === 0) {
