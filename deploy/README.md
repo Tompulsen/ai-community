@@ -4,6 +4,8 @@
 
 采用现有 Misskey/Vue 后端与账户系统，Docker Compose 运行应用、PostgreSQL 18 和 Redis 7。参考本地 Supabase 的数据库及容器服务分工，没有另建第二套身份系统。数据库、Redis 不发布公网端口；应用绑定 `127.0.0.1:13000`，由服务器已有 Nginx 反向代理。
 
+`main` 分支的应用或部署代码更新会触发 `Build community container`，构建并发布私有镜像 `ghcr.io/tompulsen/ai-community`。镜像提供 `latest` 和 `sha-<完整提交号>` 标签。生产更新应先确认对应工作流成功，再使用提交标签，避免更新过程中版本改变。源码仓库及容器包保持私有。
+
 ## 邮箱账户
 
 - 注册需要用户名、邮箱、密码；邮箱去除首尾空格并统一为小写。
@@ -17,17 +19,24 @@
 
 在可信本机执行 `python deploy/prepare.py --admin-file <管理员文件绝对路径>`，生成 `deploy/private`。凭据不输出到终端，该目录已从 Git、Docker 构建和公开源码包排除。已有配置不会被覆盖。
 
+配置始终使用 LF 换行，支持在 Windows 生成后上传 Linux。Compose 使用固定内部端口的健康检查，避免依赖脚本对配置文件的文本解析。
+
 服务器上的路径为 `/opt/ai-community`。配置文件目录授权给容器 UID/GID 991，其他凭据仅 root 可读。执行：
 
 ```sh
+export COMMUNITY_IMAGE=ghcr.io/tompulsen/ai-community:sha-<完整提交号>
+# 首次拉取私有镜像前，通过标准输入使用有包读取权限的令牌登录 ghcr.io。
+printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u Tompulsen --password-stdin
 docker compose -f deploy/compose.yml config --quiet
-docker compose -f deploy/compose.yml build web
+docker compose -f deploy/compose.yml pull
 docker compose -f deploy/compose.yml run --rm --no-deps --user root --entrypoint sh web -c 'mkdir -p /misskey/files && chown 991:991 /misskey/files'
-docker compose -f deploy/compose.yml up -d --wait
+docker compose -f deploy/compose.yml up -d --no-build --wait
 docker compose -f deploy/compose.yml cp deploy/private/bootstrap.json web:/tmp/community-bootstrap.json
 docker compose -f deploy/compose.yml exec -T --user root web node deploy/bootstrap.mjs /tmp/community-bootstrap.json
 docker compose -f deploy/compose.yml exec -T --user root web rm /tmp/community-bootstrap.json
 ```
+
+也可在有足够资源的环境运行 `docker compose -f deploy/compose.yml build web` 自行构建。更新前备份数据库和当前使用的镜像提交号；首次执行需要完成管理员初始化，现有部署可直接运行拉取与启动命令。
 
 应用启动自动运行迁移。`UniqueCommunityEmail` 迁移遇到历史重复邮箱会停止，不自动删除或合并账户；需人工处理冲突后再迁移。
 

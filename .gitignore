@@ -92,3 +92,7 @@ vite.config.local-dev.ts.timestamp-*
 .community-preview/
 .community-validation/
 **/*.bak*
+
+# Python deployment helper cache
+__pycache__/
+*.py[cod]

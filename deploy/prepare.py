@@ -21,7 +21,7 @@ if not re.fullmatch(r'[A-Za-z0-9_]{1,20}', username) or not password:
     raise SystemExit('Administrator file must contain a valid username and password.')
 db_password = secrets.token_hex(32)
 setup_password = secrets.token_hex(32)
-(private / 'database.env').write_text(f'POSTGRES_DB=community\nPOSTGRES_USER=community\nPOSTGRES_PASSWORD={db_password}\n', encoding='utf-8')
+(private / 'database.env').write_text(f'POSTGRES_DB=community\nPOSTGRES_USER=community\nPOSTGRES_PASSWORD={db_password}\n', encoding='utf-8', newline='\n')
 (config / 'default.yml').write_text(f'''url: https://{args.domain}/
 port: 3000
 setupPassword: {setup_password}
@@ -42,8 +42,8 @@ fulltextSearch:
   provider: sqlLike
 clusterLimit: 1
 maxFileSize: 52428800
-''', encoding='utf-8')
-(private / 'bootstrap.json').write_text(json.dumps({'username': username, 'password': password, 'setupPassword': setup_password}, ensure_ascii=False), encoding='utf-8')
+''', encoding='utf-8', newline='\n')
+(private / 'bootstrap.json').write_text(json.dumps({'username': username, 'password': password, 'setupPassword': setup_password}, ensure_ascii=False), encoding='utf-8', newline='\n')
 for file in private.rglob('*'):
     if file.is_file():
         os.chmod(file, 0o600)
