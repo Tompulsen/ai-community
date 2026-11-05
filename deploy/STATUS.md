@@ -2,19 +2,51 @@
 
 ## 当前生产版本
 
-- 访问地址：<https://zaiduyu.top>。
-- 服务器：`210.126.232.192`；项目目录 `/opt/ai-community`。
+- 访问地址：<https://zaiduyu.top>；服务器 `210.126.232.192`，项目目录 `/opt/ai-community`。
 - GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
-- 已部署应用提交：`1ad46d9f007da67e362e626eaa5651e32e559589`。
-- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-1ad46d9f007da67e362e626eaa5651e32e559589`。
-- 镜像摘要：`sha256:2cdb58955902c5920d43b537eb33375a5bd6fdb87fbd97958b0f1a445378465a`。
-- GitHub Docker 构建运行：`41973775798`，成功；服务器拉取后的 OCI revision 与应用提交一致。
-- 应用、PostgreSQL、Redis 三个容器均为 healthy；更新仅替换 web，应用继续绑定 `127.0.0.1:13000`，数据库与 Redis 不公开宿主机端口。
-- 站内源码下载设置已指向 `/source/ai-community.tar.gz?v=1ad46d9f007da67e362e626eaa5651e32e559589`，SHA-256：`ae833e1b148f312e9fbb0f4c5d37069e3e8a1a1f520a1b00d6a51c6f404b6f85`；服务器文件及该公网版本地址均已核对。
+- 已部署应用提交：`aed53b32e22bc6088214272621ad5e924dc28c38`。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-aed53b32e22bc6088214272621ad5e924dc28c38`。
+- 镜像摘要：`sha256:635309e77405a369a41ff95c7b0d5c670b0b97178d2b7f6a3cb17750211cba84`。
+- GitHub 完整 Docker 构建运行：`42021343459`，成功；镜像 OCI revision 与应用提交一致。
+- 应用、PostgreSQL、Redis 三个容器均为 healthy；本次仅替换 web，应用继续绑定 `127.0.0.1:13000`。
+- 站内源码地址：`https://zaiduyu.top/source/ai-community.tar.gz?v=aed53b32e22bc6088214272621ad5e924dc28c38`，SHA-256：`e0208b049e5ee3d5801ad333d8c84cc33fcc5e57c643b23bf994919c119e12ab`。服务器归档与公网下载均已校验。
 
-本记录可在部署后以纯文档提交更新；不要求为文档提交重复构建应用镜像。
+部署后的纯文档记录可以独立提交，无需为记录提交重复构建镜像。
 
-## 本次社区作品流与完整导航（2026-11-05）
+## 本次作品编辑删除与账户体验（2026-11-05）
+
+- 作者可从个人主页作品栏及“我的投稿”编辑、删除自己的作品，包括已发布作品；编辑继续使用原 Note，保留点赞、评论、转发和浏览记录。
+- 先审后发时，已公开作品的修改保存为私有待审稿，审核期间公开原版；先发后审时，公开作品的修改即时生效并进入审核。未公开、被驳回或下架作品的修改仍需审核。
+- 服务端校验作者身份、附件所有权及版本，通过事务处理更新和删除。删除前需确认，保留原始上传文件；失败留稿，编辑稿与新投稿草稿隔离，并同步相关页面缓存。
+- 邮箱或用户名与密码同屏输入、一次请求登录；支持自动填充、Enter 提交、密码显示、登录注册互切、内联错误和防重复提交。注册校验防止迟到响应覆盖，注册成功但本地 session 建立失败可重试登录，避免重复创建账号。
+- 保留既有规则确认、邀请码、CAPTCHA、TOTP、备用码和 Passkey；当前邮箱＋密码注册流程不强制邮件验证，邮件服务待后续配置。
+- 新增 `CommunityWorkEditing1793857663138` 迁移已在生产执行，`community_submission.pendingRevision` 的 JSONB 字段存在。
+
+- 修复首页条件动态导入导致登录弹窗 CSS 漏载：登录与注册各自使用独立 loader，保留请求取消、迟到响应、弹窗销毁与错误处理。生产镜像中的两个样式预加载依赖均已验证。
+
+### 验证与边界
+
+- PASS：此前本地作品编辑后端 18 组、前端编辑/删除/草稿隔离 19 组，认证浏览器 33 组、真实 accounts.login 隔离检查 5 组，定向类型、SDK、变更文件 lint、SPDX、locale safety 及独立评审；详细报告位于外层 `.community-validation/work-edit/REPORT.md` 与 `auth-experience/REPORT.md`。
+- PASS：GitHub 完整生产构建、固定 SHA 拉取、镜像 revision、备份 dump 可读取、新迁移及字段存在、源码归档哈希、三个容器健康。
+- PASS：线上 29 项检查，覆盖公开社区、账号密码同屏、自动填充、密码显示、规则确认和邮箱注册表单、中英手机登录布局、真实管理员 Enter 登录且没有预查账号、本人投稿接口、未登录编辑读取被拒、编辑/删除入口、原内容载入、桌面/手机编辑布局、删除确认取消、个人主页编辑入口、公开源码一致。无页面异常或横向溢出。
+- PASS：额外六组全新浏览器检查：首页登录及注册切换，覆盖 1440px、390px、320px 和中英文，核实不透明面板、登录面板 440px 最大宽度、居中及视口内可达。原版在该检查下可稳定复现失败，新版全部通过；已实看截图。当前站点 disableRegistration=true，首页独立注册按钮按既有配置隐藏；注册检查通过登录弹窗切换执行，邀请注册策略未改。独立注册 loader 的 CSS 依赖另由生产镜像产物校验。
+- BASELINE：生产 check-migrations 仅报告 `meta.proxyRemoteFiles` 默认值 true/false 的两条既有差异，无本轮实体差异；未更改既有默认值。
+- 边界：生产未注册测试账号，未保存或删除用户真实作品，未发布评论、点赞、转发或审核决定；已确认样本作品版本、标题及正文未变。实际保存/删除及错误恢复由本地隔离验证覆盖。真实邮件、第三方验证码与硬件 Passkey 不属于本次生产验收范围。
+- 来源下载仅更新 repositoryUrl 为带本次 SHA 参数的地址，其余 clientOptions 与站点名称读回一致。无须改动 Cloudflare 缓存或白名单。
+- 外部视频制作站的 CSP 嵌入限制不属于本次部署改动，制作链接仍为管理员原配置；可新窗口访问，内嵌需目标站允许社区来源。
+
+生产记录与截图：`.community-validation/auth-css-production/checks.json`、`dialog-checks.json`、`signin-desktop.png`、`signin-mobile.png`、`signin-mobile-en.png`、`signup-mobile.png`、`editor-desktop.png`、`editor-mobile.png`、`profile-works-desktop.png`。
+
+### 备份与恢复
+
+- 功能升级备份目录：`/opt/ai-community-backups/work-auth-20261105T111636Z`；数据库、上传、私有配置、Compose、旧镜像引用与源码均保留，dump 已用 pg_restore --list 校验。
+- 升级前镜像：`ghcr.io/tompulsen/ai-community:sha-1ad46d9f007da67e362e626eaa5651e32e559589`，已保留。新增可空 JSONB 字段与旧应用兼容，健康失败回滚恢复旧 release.env 和 web 容器；本次未触发回滚。
+- 样式修复备份目录：`/opt/ai-community-backups/auth-css-20261105T114327Z`，补发前镜像 `ghcr.io/tompulsen/ai-community:sha-7a3946008c92b4094a7b72fcf9ef35f0b347daea` 也保留。
+- 临时镜像拉取凭据已删除，原有数据库与上传卷继续使用。
+
+更新说明候选：作者可编辑删除自己的社区作品，并优化邮箱/用户名登录、注册校验与失败恢复体验。
+
+## 上一轮社区作品流与完整导航（2026-11-05）
 
 - 保留原有完整左侧导航：社区、三个制作入口、个人主页、AI 工作台、我的投稿、作品审核、时间线、通知及原生功能。修复三个社区模块同时高亮，只有当前模块高亮，审核入口继续按管理权限显示。
 - 社区默认展示全部公开作品，分区放在“最新作品”旁；公开搜索词与 URL 同步，跨分类及缓存页面恢复后保持一致，管理列表搜索不进入公开分类。线上首次验收发现的路由重建丢失搜索问题已修复并补充真实路由验证。
