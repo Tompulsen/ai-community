@@ -51,7 +51,10 @@ export class MiCommunitySubmission {
 	public fileIds: string[];
 
 	@Column('varchar', { length: 16, default: 'pending' })
-	public status: 'pending' | 'approved' | 'rejected';
+	public status: 'pending' | 'published' | 'approved' | 'rejected' | 'removed';
+
+	@Column('varchar', { length: 16, default: 'before' })
+	public publicationMode: 'before' | 'after';
 
 	@Column('integer', { default: 0 })
 	public version: number;
@@ -72,7 +75,7 @@ export class MiCommunitySubmission {
 	@Column({ ...id(), nullable: true })
 	public approvedNoteId: string | null;
 
-	@ManyToOne(() => MiNote, { onDelete: 'CASCADE' })
+	@ManyToOne(() => MiNote, { onDelete: 'SET NULL' })
 	@JoinColumn({ name: 'approvedNoteId', foreignKeyConstraintName: 'FK_community_submission_note' })
 	public approvedNote: MiNote | null;
 }

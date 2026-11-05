@@ -16,7 +16,7 @@ export const meta = {
 
 export const paramDef = {
 	type: 'object',
-	properties: { ...communityListProperties, status: { type: 'string', enum: ['all', 'pending', 'approved', 'rejected'], default: 'all' } },
+	properties: { ...communityListProperties, status: { type: 'string', enum: ['all', 'pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'], default: 'all' } },
 	required: [],
 } as const;
 

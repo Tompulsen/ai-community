@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import type { CommunityFile, CommunityGateway, CommunityPage, CommunityWork } from './types.js';
+import type { CommunityFile, CommunityGateway, CommunityPage, CommunityWork, SubmissionStatus } from './types.js';
 import { communityText as t } from './copy.js';
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -14,14 +14,14 @@ export function isCommunityWork(value: unknown): value is CommunityWork {
 	if (!isObject(value) || !isObject(value.author)) return false;
 	return isId(value.id) && Number.isInteger(value.version) && Number(value.version) >= 0
 		&& ['video', 'image', 'resource'].includes(String(value.category))
-		&& ['pending', 'approved', 'rejected'].includes(String(value.status))
+		&& ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'].includes(String(value.status))
 		&& ['title', 'text', 'model', 'sourceUrl', 'license', 'submittedAt'].every(key => typeof value[key] === 'string')
 		&& Number.isFinite(Date.parse(value.submittedAt as string))
 		&& Array.isArray(value.files) && value.files.every(isFile)
 		&& isId(value.author.id) && typeof value.author.name === 'string' && typeof value.author.username === 'string'
 		&& (value.rejectionReason === null || typeof value.rejectionReason === 'string')
 		&& (value.approvedNoteId === null || isId(value.approvedNoteId))
-		&& (value.status !== 'approved' || isId(value.approvedNoteId))
+		&& (!['approved', 'published'].includes(String(value.status)) || isId(value.approvedNoteId))
 		&& Number.isInteger(value.repliesCount) && Number(value.repliesCount) >= 0;
 }
 
@@ -76,13 +76,13 @@ export function createCommunityGateway(options: {
 				limit: 20, query: query.query, ...(query.cursor ? { untilId: query.cursor } : {}),
 				...(section === 'profile' ? { authorId: query.authorId, ...(query.category ? { category: query.category } : {}) } : section === 'mine' || section === 'review' ? { status: query.status } : { category: section }),
 			}, signal));
-			if (endpoint === 'community/works' && page.items.some(work => work.status !== 'approved' || (section === 'profile' ? work.author.id !== query.authorId || (query.category != null && work.category !== query.category) : work.category !== section))) throw new Error(t.invalidResponse);
+			if (endpoint === 'community/works' && page.items.some(work => !['approved', 'published'].includes(work.status) || (section === 'profile' ? work.author.id !== query.authorId || (query.category != null && work.category !== query.category) : work.category !== section))) throw new Error(t.invalidResponse);
 			return page;
 		},
 		async submit(input) {
 			const result = await request('community/submissions/create', input);
-			if (!isObject(result) || !isId(result.id) || result.status !== 'pending' || typeof result.submittedAt !== 'string' || !Number.isFinite(Date.parse(result.submittedAt))) throw new Error(t.invalidResponse);
-			return { id: result.id, status: 'pending', submittedAt: result.submittedAt };
+			if (!isObject(result) || !isId(result.id) || !['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'].includes(String(result.status)) || typeof result.submittedAt !== 'string' || !Number.isFinite(Date.parse(result.submittedAt))) throw new Error(t.invalidResponse);
+			return { id: result.id, status: result.status as SubmissionStatus, submittedAt: result.submittedAt };
 		},
 		async review(input) {
 			const result = await request('admin/community/review', input);

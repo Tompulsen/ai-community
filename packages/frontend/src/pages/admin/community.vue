@@ -5,148 +5,88 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <PageWithHeader :tabs="[]">
-	<div :class="$style.root" class="_gaps">
-		<h1>{{ i18n.ts._aiCommunity.review }}</h1>
-		<MkInfo>{{ i18n.ts._aiCommunity.reviewDescription }}</MkInfo>
-		<div class="_buttons">
-			<MkButton type="routerLink" to="/admin/users"><i class="ti ti-users" aria-hidden="true"></i> {{ i18n.ts.users }}</MkButton>
-			<MkButton type="routerLink" to="/admin/abuses">{{ i18n.ts.abuseReports }}</MkButton>
-		</div>
-		<div :class="$style.filters" role="group" :aria-label="i18n.ts._aiCommunity.navigation">
-			<button v-for="item in communityModules" :key="item.key" type="button" class="_button" :class="[$style.filter, { [$style.selected]: selected === item.key }]" :aria-pressed="selected === item.key" @click="selected = item.key">
-				<i :class="item.icon" aria-hidden="true"></i> {{ item.title }}
-			</button>
-		</div>
-		<MkLoading v-if="loading"/>
-		<div v-else-if="failed" role="alert" class="_gaps">
-			<p>{{ i18n.ts._aiCommunity.loadError }}</p>
-			<MkButton @click="loadChannel">{{ i18n.ts.retry }}</MkButton>
-		</div>
-		<div v-else-if="!channel" class="_gaps">
-			<h2>{{ i18n.ts._aiCommunity.notConfigured }}</h2>
-			<p>{{ i18n.ts._aiCommunity.setupDescription }}</p>
-			<code :class="$style.command">node scripts/setup-ai-community.mjs --url http://localhost:3000</code>
-			<MkButton @click="loadChannel">{{ i18n.ts.reload }}</MkButton>
-		</div>
-		<template v-else-if="paginator">
-			<div class="_buttons">
-				<MkButton @click="paginator.reload()">{{ i18n.ts.reload }}</MkButton>
-				<MkButton type="routerLink" :to="`/channels/${channel.id}/edit`">{{ i18n.ts._aiCommunity.channelSettings }}</MkButton>
-			</div>
-			<MkPagination :key="channel.id" :paginator="paginator">
-				<template #empty><p role="status">{{ i18n.ts._aiCommunity.noWorks }}</p></template>
-				<template #default="{ items }">
-					<div class="_gaps">
-						<article v-for="note in items" :key="note.id" :class="$style.work">
-							<div :class="$style.content">
-								<header :class="$style.author"><MkAvatar :user="note.user" style="width: 32px; height: 32px;"/><MkUserName :user="note.user"/><MkTime :time="note.createdAt"/></header>
-								<p v-if="note.cw">{{ note.cw }}</p>
-								<Mfm v-if="note.text" :text="note.text" :isNote="true"/>
-								<ul v-if="note.poll" :aria-label="i18n.ts.poll"><li v-for="(choice, index) in note.poll.choices" :key="index">{{ choice.text }}</li></ul>
-								<MkMediaList v-if="note.files && note.files.length" :mediaList="note.files" :user="note.user"/>
-								<MkA v-if="note.renoteId" :to="`/notes/${note.renoteId}`" class="_link">{{ i18n.ts._aiCommunity.openOriginal }}</MkA>
-							</div>
-							<div :class="$style.actions">
-								<MkA :to="`/notes/${note.id}`" class="_link">{{ i18n.ts._aiCommunity.openDiscussion }}</MkA>
-								<MkA :to="`/admin/user/${note.userId}`" class="_link">{{ i18n.ts._aiCommunity.manageAuthor }}</MkA>
-								<MkButton danger small :disabled="deleting !== null" @click="remove(note)">{{ i18n.ts._aiCommunity.removeWork }}</MkButton>
-							</div>
-						</article>
-					</div>
-				</template>
-			</MkPagination>
-		</template>
+	<div :class="$style.root" data-testid="admin-community">
+		<h1>{{ t.review }}</h1>
+		<section :class="$style.settings" :aria-label="t.settingsTitle" :aria-busy="loading || saving">
+			<h2>{{ t.settingsTitle }}</h2><p>{{ t.settingsHint }}</p>
+			<p v-if="!$i?.isAdmin">{{ t.modeAdminOnly }}</p>
+			<p v-else-if="loading" role="status">{{ t.modeLoading }}</p>
+			<div v-else-if="!loaded" role="alert"><p>{{ t.modeLoadFailed }}</p><MkButton @click="load">{{ t.modeRetry }}</MkButton></div>
+			<template v-else>
+				<fieldset :class="$style.modes" :disabled="saving">
+					<legend class="_srOnly">{{ t.settingsTitle }}</legend>
+					<label><input v-model="mode" type="radio" name="community-publication-mode" value="before"><span><strong>{{ t.beforeMode }}</strong><span>{{ t.beforeHint }}</span></span></label>
+					<label><input v-model="mode" type="radio" name="community-publication-mode" value="after"><span><strong>{{ t.afterMode }}</strong><span>{{ t.afterHint }}</span></span></label>
+				</fieldset>
+				<p :class="$style.hint">{{ t.modeScope }}</p>
+				<div :class="$style.actions"><MkButton primary :wait="saving" :disabled="saving || mode === savedMode" @click="save">{{ t.modeSave }}</MkButton><p v-if="saved" role="status">{{ t.modeSaved }}</p></div>
+				<p v-if="error" role="alert" :class="$style.error">{{ error }}</p>
+			</template>
+		</section>
+		<CommunitySurface section="review" embedded :publicationMode="savedMode" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="router.push($event)"/>
 	</div>
 </PageWithHeader>
 </template>
 
 <script lang="ts" setup>
-import { markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import type * as Misskey from 'misskey-js';
-import type { CommunityModule } from '@/utility/ai-community.js';
-import { communityModules, fetchCommunityChannels } from '@/utility/ai-community.js';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { apiUrl } from '@@/js/config.js';
+import CommunitySurface from '@/pages/community/surface.vue';
+import { createCommunityGateway } from '@/pages/community/api.js';
+import { moderationText as t } from '@/pages/community/moderation-copy.js';
 import MkButton from '@/components/MkButton.vue';
-import MkInfo from '@/components/MkInfo.vue';
-import MkMediaList from '@/components/MkMediaList.vue';
-import MkPagination from '@/components/MkPagination.vue';
-import { Paginator } from '@/utility/paginator.js';
+import { $i, iAmModerator } from '@/i.js';
+import { instance, fetchInstance } from '@/instance.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
-import { i18n } from '@/i18n.js';
-import { iAmModerator } from '@/i.js';
+import { useRouter } from '@/router.js';
 import { definePage } from '@/page.js';
-import * as os from '@/os.js';
 
-const selected = ref<CommunityModule>('video');
-const channel = shallowRef<Misskey.entities.Channel | null>(null);
-const paginator = shallowRef<Paginator<'admin/community/notes'> | null>(null);
-const loading = ref(false);
-const failed = ref(false);
-const deleting = ref<string | null>(null);
-let version = 0;
-let controller: AbortController | undefined;
+const router = useRouter();
+const mode = ref<'before' | 'after'>('before');
+const savedMode = ref<'before' | 'after'>('before');
+const loading = ref(false), loaded = ref(false), saving = ref(false), saved = ref(false);
+const error = ref('');
+let disposed = false;
+const gateway = createCommunityGateway({ apiUrl, getToken: () => $i?.token, chooseFiles: async () => [] });
+watch(mode, () => { saved.value = false; error.value = ''; });
 
-async function loadChannel() {
-	const currentVersion = ++version;
-	controller?.abort();
-	controller = new AbortController();
-	const signal = controller.signal;
-	channel.value = null;
-	paginator.value = null;
-	failed.value = false;
+async function load() {
+	if (!$i?.isAdmin || loading.value) return;
 	loading.value = true;
-	const key = selected.value;
 	try {
-		if (!iAmModerator) throw new Error('Access denied');
-		const channels = await fetchCommunityChannels(signal);
-		const channelId = channels[key];
-		if (!channelId) return;
-		const result = await misskeyApi('channels/show', { channelId }, undefined, signal);
-		if (currentVersion !== version) return;
-		channel.value = result;
-		paginator.value = markRaw(new Paginator('admin/community/notes', { limit: 20, params: { module: key } }));
-	} catch {
-		if (currentVersion === version && !signal.aborted) failed.value = true;
-	} finally {
-		if (currentVersion === version) loading.value = false;
-	}
+		const meta = await misskeyApi('admin/meta');
+		if (disposed) return;
+		mode.value = meta.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before';
+		savedMode.value = mode.value;
+		loaded.value = true;
+	} catch { loaded.value = false; } finally { loading.value = false; }
 }
 
-async function remove(note: Misskey.entities.Note) {
-	if (!iAmModerator || deleting.value) return;
-	deleting.value = note.id;
-	const currentPaginator = paginator.value;
+async function save() {
+	if (!$i?.isAdmin || !loaded.value || saving.value) return;
+	const value = mode.value;
+	saving.value = true; saved.value = false; error.value = '';
 	try {
-		const { canceled } = await os.confirm({ type: 'warning', title: i18n.ts._aiCommunity.removeWork, text: i18n.ts._aiCommunity.removeConfirm });
-		if (canceled) return;
-		await os.apiWithDialog('notes/delete', { noteId: note.id });
-		currentPaginator?.removeItem(note.id);
-	} catch {
-		// apiWithDialog already presents the server error; retain the work for retry.
-	} finally {
-		deleting.value = null;
-	}
+		await misskeyApi('admin/update-meta', { clientOptions: { communityPublicationMode: value } });
+		if (disposed) return;
+		savedMode.value = value;
+		instance.clientOptions.communityPublicationMode = value;
+		void fetchInstance(true).catch(() => {});
+		saved.value = true;
+	} catch { if (!disposed) error.value = t.modeSaveFailed; } finally { saving.value = false; }
 }
 
-watch(selected, loadChannel, { immediate: true });
-onBeforeUnmount(() => { version++; controller?.abort(); });
-definePage(() => ({ title: i18n.ts._aiCommunity.review, icon: 'ti ti-shield-check' }));
+onMounted(load);
+onBeforeUnmount(() => { disposed = true; });
+definePage(() => ({ title: t.review, icon: 'ti ti-shield-check' }));
 </script>
 
 <style lang="scss" module>
-.root { width: 100%; box-sizing: border-box; padding: 24px; }
-.root h1 { font-size: 24px; margin: 0; }
-.root h2 { font-size: 18px; margin: 0; }
-.root p { line-height: 1.8; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; }
-.filter { min-height: 44px; padding: 10px 14px; border-radius: var(--MI-radius); }
-.filter:hover { background: var(--MI_THEME-buttonHoverBg); }
-.filter:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: 2px; }
-.selected { background: var(--MI_THEME-buttonBg); font-weight: 700; }
-.work { min-width: 0; overflow: clip; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius); }
-.content { padding: 20px; overflow-wrap: anywhere; }
-.author { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
-.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px; border-top: 1px solid var(--MI_THEME-divider); }
-.actions > a { min-height: 44px; display: inline-flex; align-items: center; }
-.command { padding: 16px; background: var(--MI_THEME-panel); overflow-wrap: anywhere; white-space: pre-wrap; }
-@media (max-width: 600px) { .root { padding: 16px; } }
+.root { width: 100%; min-width: 0; box-sizing: border-box; padding: 24px 32px 48px; h1 { margin: 0 0 24px; font-size: 24px; } }
+.settings { margin-bottom: 16px; padding-bottom: 24px; border-bottom: 1px solid var(--MI_THEME-divider); h2 { margin: 0 0 8px; font-size: 18px; } p { margin: 8px 0; line-height: 1.7; overflow-wrap: anywhere; } }
+.modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; margin: 20px 0 12px; border: 0; label { display: flex; gap: 12px; padding: 16px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; cursor: pointer; } label:has(input:checked) { border-color: var(--MI_THEME-accent); background: var(--MI_THEME-accentedBg); } label:focus-within { outline: 2px solid var(--MI_THEME-focus); outline-offset: 3px; } input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--MI_THEME-accent); margin-top: 3px; } strong { display: block; margin-bottom: 6px; } span { line-height: 1.6; } }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; > button { min-height: 44px; } }
+.hint { font-size: 13px; }
+.error { color: var(--MI_THEME-error); }
+@media (max-width: 650px) { .root { padding: 20px 16px 32px; } .modes { grid-template-columns: minmax(0, 1fr); } }
 </style>

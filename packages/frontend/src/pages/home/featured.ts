@@ -24,7 +24,7 @@ export async function loadFeaturedWork(signal: AbortSignal): Promise<CommunityWo
 		});
 		if (!response.ok) throw new Error('featured-unavailable');
 		const page = parseCommunityPage(await response.json());
-		if (page.items.length > 1 || page.nextCursor !== null || page.items.some(work => work.status !== 'approved' || !work.approvedNoteId)) throw new Error('featured-invalid');
+		if (page.items.length > 1 || page.nextCursor !== null || page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId)) throw new Error('featured-invalid');
 		return page.items[0] ?? null;
 	} finally {
 		window.clearTimeout(timeout);

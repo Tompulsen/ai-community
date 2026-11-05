@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <XSetup v-if="instance.requireSetup"/>
-<CommunitySurface v-else :section="activeSection" :compose="(props.section ?? props.module) === 'compose'" :composeRequest="composeRequest" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate" @login="login" @signup="signup"><template #composerAvatar><MkAvatar v-if="$i" :user="$i" :link="false" :preview="false" style="width: 100%; height: 100%;"/></template></CommunitySurface>
+<CommunitySurface v-else :section="activeSection" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :compose="(props.section ?? props.module) === 'compose'" :composeRequest="composeRequest" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate" @login="login" @signup="signup"><template #composerAvatar><MkAvatar v-if="$i" :user="$i" :link="false" :preview="false" style="width: 100%; height: 100%;"/></template></CommunitySurface>
 </template>
 
 <script setup lang="ts">

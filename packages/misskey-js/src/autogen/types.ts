@@ -5651,22 +5651,23 @@ export type components = {
         MetaDetailed: components['schemas']['MetaLite'] & components['schemas']['MetaDetailedOnly'];
         MetaClientOptions: {
             /** @enum {string} */
-            entrancePageStyle: 'classic' | 'simple';
+            entrancePageStyle: "classic" | "simple";
             showTimelineForVisitor: boolean;
             showActivitiesForVisitor: boolean;
             creationTextUrl?: string | null;
             /** @enum {string} */
-            creationTextMode?: 'embed' | 'newTab';
+            creationTextMode?: "embed" | "newTab";
             creationImageUrl?: string | null;
             /** @enum {string} */
-            creationImageMode?: 'embed' | 'newTab';
+            creationImageMode?: "embed" | "newTab";
             creationVideoUrl?: string | null;
             /** @enum {string} */
-            creationVideoMode?: 'embed' | 'newTab';
-
+            creationVideoMode?: "embed" | "newTab";
+            /** @enum {string} */
+            communityPublicationMode?: "before" | "after";
             /** @enum {string} */
             homeShowcaseMode?: "custom" | "popular";
-};
+        };
         UserWebhook: {
             /** Format: id */
             id: string;
@@ -13027,10 +13028,10 @@ export interface operations {
             };
         };
     };
-    'admin___update-meta': {
+    "admin___update-meta": {
         requestBody: {
             content: {
-                'application/json': {
+                "application/json": {
                     disableRegistration?: boolean | null;
                     pinnedUsers?: string[] | null;
                     hiddenTags?: string[] | null;
@@ -13056,22 +13057,23 @@ export interface operations {
                     defaultDarkTheme?: string | null;
                     clientOptions?: {
                         /** @enum {string} */
-                        entrancePageStyle?: 'classic' | 'simple';
+                        entrancePageStyle?: "classic" | "simple";
                         showTimelineForVisitor?: boolean;
                         showActivitiesForVisitor?: boolean;
                         creationTextUrl?: string | null;
                         /** @enum {string} */
-                        creationTextMode?: 'embed' | 'newTab';
+                        creationTextMode?: "embed" | "newTab";
                         creationImageUrl?: string | null;
                         /** @enum {string} */
-                        creationImageMode?: 'embed' | 'newTab';
+                        creationImageMode?: "embed" | "newTab";
                         creationVideoUrl?: string | null;
                         /** @enum {string} */
-                        creationVideoMode?: 'embed' | 'newTab';
-
+                        creationVideoMode?: "embed" | "newTab";
+                        /** @enum {string} */
+                        communityPublicationMode?: "before" | "after";
                         /** @enum {string} */
                         homeShowcaseMode?: "custom" | "popular";
-};
+                    };
                     cacheRemoteFiles?: boolean;
                     cacheRemoteSensitiveFiles?: boolean;
                     emailRequiredForSignup?: boolean;
@@ -13091,9 +13093,9 @@ export interface operations {
                     enableTestcaptcha?: boolean;
                     googleAnalyticsMeasurementId?: string | null;
                     /** @enum {string} */
-                    sensitiveMediaDetection?: 'none' | 'all' | 'local' | 'remote';
+                    sensitiveMediaDetection?: "none" | "all" | "local" | "remote";
                     /** @enum {string} */
-                    sensitiveMediaDetectionSensitivity?: 'medium' | 'low' | 'high' | 'veryLow' | 'veryHigh';
+                    sensitiveMediaDetectionSensitivity?: "medium" | "low" | "high" | "veryLow" | "veryHigh";
                     setSensitiveFlagAutomatically?: boolean;
                     enableSensitiveMediaDetectionForVideos?: boolean;
                     sensitiveMediaDetectionApiUrl?: string | null;
@@ -13171,7 +13173,7 @@ export interface operations {
                     urlPreviewSummaryProxyUrl?: string | null;
                     urlPreviewSensitiveList?: string[] | null;
                     /** @enum {string} */
-                    federation?: 'all' | 'none' | 'specified';
+                    federation?: "all" | "none" | "specified";
                     federationHosts?: string[];
                     deliverSuspendedSoftware?: {
                         software: string;
@@ -13179,7 +13181,7 @@ export interface operations {
                     }[];
                     singleUserMode?: boolean;
                     /** @enum {string} */
-                    ugcVisibilityForVisitor?: 'all' | 'local' | 'none';
+                    ugcVisibilityForVisitor?: "all" | "local" | "none";
                     proxyRemoteFiles?: boolean;
                     signToActivityPubGet?: boolean;
                     allowExternalApRedirect?: boolean;
@@ -13203,7 +13205,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Authentication error */
@@ -13212,7 +13214,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Forbidden error */
@@ -13221,7 +13223,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description I'm Ai */
@@ -13230,7 +13232,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Internal server error */
@@ -13239,7 +13241,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
@@ -37376,7 +37378,6 @@ export interface operations {
             };
         };
     };
-
     community___works: {
         requestBody: {
             content: {
@@ -37419,7 +37420,7 @@ export interface operations {
                                 username: string;
                             };
                             /** @enum {string} */
-                            status: "pending" | "approved" | "rejected";
+                            status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                             /** Format: date-time */
                             submittedAt: string;
                             rejectionReason: string | null;
@@ -37486,7 +37487,6 @@ export interface operations {
             };
         };
     };
-
     community___submissions___create: {
         requestBody: {
             content: {
@@ -37518,7 +37518,7 @@ export interface operations {
                     "application/json": {
                         id: string;
                         /** @enum {string} */
-                        status: "pending";
+                        status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                         /** Format: date-time */
                         submittedAt: string;
                     };
@@ -37580,7 +37580,6 @@ export interface operations {
             };
         };
     };
-
     community___submissions___mine: {
         requestBody: {
             content: {
@@ -37595,7 +37594,7 @@ export interface operations {
                      * @default all
                      * @enum {string}
                      */
-                    status?: "all" | "pending" | "approved" | "rejected";
+                    status?: "all" | "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                 };
             };
         };
@@ -37624,7 +37623,7 @@ export interface operations {
                                 username: string;
                             };
                             /** @enum {string} */
-                            status: "pending" | "approved" | "rejected";
+                            status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                             /** Format: date-time */
                             submittedAt: string;
                             rejectionReason: string | null;
@@ -37682,7 +37681,6 @@ export interface operations {
             };
         };
     };
-
     admin___community___submissions: {
         requestBody: {
             content: {
@@ -37694,10 +37692,10 @@ export interface operations {
                     /** @default  */
                     query?: string;
                     /**
-                     * @default pending
+                     * @default unreviewed
                      * @enum {string}
                      */
-                    status?: "all" | "pending" | "approved" | "rejected";
+                    status?: "unreviewed" | "all" | "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                 };
             };
         };
@@ -37726,7 +37724,7 @@ export interface operations {
                                 username: string;
                             };
                             /** @enum {string} */
-                            status: "pending" | "approved" | "rejected";
+                            status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                             /** Format: date-time */
                             submittedAt: string;
                             rejectionReason: string | null;
@@ -37784,7 +37782,6 @@ export interface operations {
             };
         };
     };
-
     admin___community___review: {
         requestBody: {
             content: {
@@ -37793,7 +37790,7 @@ export interface operations {
                     submissionId: string;
                     version: number;
                     /** @enum {string} */
-                    decision: "approve" | "reject";
+                    decision: "approve" | "reject" | "remove";
                     reason?: string;
                 };
             };
@@ -37822,7 +37819,7 @@ export interface operations {
                             username: string;
                         };
                         /** @enum {string} */
-                        status: "pending" | "approved" | "rejected";
+                        status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                         /** Format: date-time */
                         submittedAt: string;
                         rejectionReason: string | null;
@@ -37887,7 +37884,6 @@ export interface operations {
             };
         };
     };
-
     community___featured: {
         responses: {
             /** @description OK (with results) */
@@ -37914,7 +37910,7 @@ export interface operations {
                                 username: string;
                             };
                             /** @enum {string} */
-                            status: "pending" | "approved" | "rejected";
+                            status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
                             /** Format: date-time */
                             submittedAt: string;
                             rejectionReason: string | null;

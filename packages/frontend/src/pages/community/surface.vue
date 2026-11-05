@@ -4,10 +4,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="$style.root">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.embedded]: embedded }]">
 	<div :class="[$style.canvas, { [$style.communityCanvas]: currentCategory }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
-		<header v-else-if="!isCommunity" :class="$style.heading">
+		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
 			<div><h1>{{ title }}</h1><p v-if="!isCommunity">{{ description }}</p></div>
 			<div :class="$style.headerActions">
 		<div :class="$style.account">
@@ -24,12 +24,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<button type="button" :aria-pressed="profileCategory === 'all'" @click="profileCategory = 'all'">{{ t.allWorks }}</button>
 			<button v-for="entry in communitySections" :key="entry.id" type="button" :aria-pressed="profileCategory === entry.id" @click="profileCategory = entry.id">{{ entry.title }}</button>
 		</nav>
-		<nav v-else :class="$style.tabs" :aria-label="t.community">
+		<nav v-else-if="!embedded" :class="$style.tabs" :aria-label="t.community">
 			<a v-for="entry in communitySections" :key="entry.id" :href="entry.path" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', entry.path)">
 				{{ entry.title }}
 			</a>
 		</nav>
-		<p v-if="notice" role="status" :class="$style.notice">{{ notice }}</p>
+		<p v-if="notice" role="status" :class="$style.notice">{{ notice }} <a v-if="signedIn && section !== 'review'" href="/community/mine" @click.prevent="emit('navigate', '/community/mine')">{{ t.viewMine }}</a></p>
 		<Teleport defer to="#misskey-popup-container">
 			<div v-if="composerOpen && signedIn" ref="modalLayer" :class="$style.modalLayer" :style="{ zIndex: composerZIndex }" @click.self="closeComposer" @keydown="onComposerKeydown">
 				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="t.publish" :class="$style.composer" tabindex="-1">
@@ -45,7 +45,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
-						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span :class="$style.publishHint">{{ t.approvalVisibility }}</span></div>
+						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
 						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
 						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields"><label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting"/></label></div>
 						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting"/>{{ t.rights }}</label>
@@ -61,7 +61,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || choosing || emojiOpen" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
 								</div>
 								<input ref="uploadInput" type="file" :accept="uploadAccept" multiple hidden @change="uploadSelected"/>
-								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || choosing || emojiOpen">{{ submitting ? t.submitting : t.submit }}</button>
+								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || choosing || emojiOpen">{{ submitting ? t.submitting : publicationMode === 'after' ? t.submitPublic : t.submit }}</button>
 							</div>
 							<p :class="$style.uploadHint">{{ choosing ? t.choosing : t.uploadHint }}</p>
 						</footer>
@@ -88,7 +88,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<button type="button" :class="$style.quiet" :disabled="loading" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i>{{ t.refresh }}</button>
 				</div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
-					<label>{{ t.all }}<select v-model="status"><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option></select></label>
+					<label>{{ t.all }}<select v-model="status"><option v-if="section === 'review'" value="unreviewed">{{ t.unreviewed }}</option><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="published">{{ t.published }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option><option value="removed">{{ t.removed }}</option><option value="withdrawn">{{ t.withdrawn }}</option></select></label>
 				</div>
 				<div v-if="loading && !items.length" :class="$style.empty" role="status"><i class="ti ti-loader" aria-hidden="true"></i><p>{{ t.loading }}</p></div>
 				<div v-else-if="loadError && !items.length" :class="$style.empty" role="alert"><i class="ti ti-cloud-off" aria-hidden="true"></i><h2>{{ t.loadError }}</h2><p>{{ loadError }}</p><button type="button" :class="$style.secondary" @click="load()">{{ t.retry }}</button></div>
@@ -102,7 +102,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 						<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 							<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
-							<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, work.status === 'rejected' ? $style.rejected : null]">{{ t[work.status] }}</span></div>
+							<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ t[work.status] }}</span></div>
 							<h3><a v-if="work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
 							<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
 							<ul v-if="isCommunity && work.category === 'resource' && work.files.length" :class="$style.resourceFiles"><li v-for="file in work.files" :key="file.id"><a v-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer"><i class="ti ti-file-download" aria-hidden="true"></i>{{ file.name }}</a></li></ul>
@@ -124,11 +124,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 									<a v-else-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer">{{ file.name }}</a>
 								</div>
 							</details>
-							<form v-if="section === 'review' && moderator && work.status === 'pending'" :class="$style.reviewForm" @submit.prevent="review(work, 'approve')">
+							<form v-if="section === 'review' && moderator && ['pending', 'published', 'approved'].includes(work.status)" :class="$style.reviewForm" @submit.prevent="review(work, 'approve')">
 								<label :class="$style.check"><input v-model="reviewChecks[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ t.reviewConfirm }}</label>
 								<label>{{ t.reason }}<textarea v-model="reviewReasons[work.id]" rows="2" maxlength="1000" :placeholder="t.reasonPlaceholder" :disabled="!!reviewingId"></textarea></label>
 								<p v-if="reviewErrors[work.id]" role="alert" :class="$style.error">{{ reviewErrors[work.id] }}</p>
-								<div :class="$style.reviewActions"><button type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : t.approve }}</button><button type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ t.reject }}</button></div>
+								<div :class="$style.reviewActions"><button v-if="work.status !== 'approved'" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending'" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ t.reject }}</button><button v-else type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
 							</form>
 						</div>
 					</article>
@@ -136,14 +136,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
 			</section>
-			<footer :class="$style.communityFooter">
+			<footer v-if="!embedded" :class="$style.communityFooter">
 				<details :class="$style.guide">
 					<summary>{{ t.process }}<span>{{ t.approvedOnly }}</span></summary>
 					<div :class="$style.guideContent"><section><h2>{{ t.process }}</h2><ol><li v-for="step in t.processItems" :key="step">{{ step }}</li></ol></section><section><h2>{{ t.guidelines }}</h2><ul><li v-for="item in t.guideItems" :key="item">{{ item }}</li></ul></section></div>
 				</details>
 				<nav :class="$style.footerLinks" :aria-label="t.workspace">
 					<a href="/community/ai" @click.prevent="emit('navigate', '/community/ai')">{{ t.ai }} · {{ t.reserved }}</a>
-					<template v-if="moderator"><a href="/community/review" @click.prevent="emit('navigate', '/community/review')">{{ t.review }}</a><a href="/admin/users" @click.prevent="emit('navigate', '/admin/users')">{{ t.users }}</a><a href="/admin/abuses" @click.prevent="emit('navigate', '/admin/abuses')">{{ t.reports }}</a></template>
+					<a v-if="signedIn" href="/community/mine" @click.prevent="emit('navigate', '/community/mine')">{{ t.mine }}</a><template v-if="moderator"><a href="/community/review" @click.prevent="emit('navigate', '/community/review')">{{ t.review }}</a><a href="/admin/users" @click.prevent="emit('navigate', '/admin/users')">{{ t.users }}</a><a href="/admin/abuses" @click.prevent="emit('navigate', '/admin/abuses')">{{ t.reports }}</a></template>
 				</nav>
 			</footer>
 		</div>
@@ -157,10 +157,10 @@ import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySecti
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import { communityComposeEvent } from './compose.js';
 import { focusTrap } from '@/utility/focus-trap.js';
-import { claimZIndex } from '@/os.js';
+import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 
-const props = defineProps<{ section: string; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const props = defineProps<{ section: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
@@ -191,7 +191,7 @@ let releaseFocus: (() => void) | undefined;
 let returnFocus: HTMLElement | undefined;
 const query = ref('');
 const activeQuery = ref('');
-const status = ref<SubmissionStatus | 'all'>(props.section === 'review' ? 'pending' : 'all');
+const status = ref<SubmissionStatus | 'all' | 'unreviewed'>(props.section === 'review' ? 'unreviewed' : 'all');
 const items = ref<CommunityWork[]>([]);
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
@@ -250,7 +250,7 @@ async function load(append = false) {
 		const page = await props.gateway.list(props.section as CommunitySection, { query: activeQuery.value, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
 		if (current !== requestId || disposed) return;
 		// Fail closed: a malformed public response cannot expose pending content.
-		if (isCommunity.value && page.items.some(work => work.status !== 'approved' || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : work.category !== props.section))) throw new Error(t.invalidResponse);
+		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : work.category !== props.section))) throw new Error(t.invalidResponse);
 		items.value = append ? [...items.value, ...page.items.filter(work => !items.value.some(existing => existing.id === work.id))] : page.items;
 		nextCursor.value = page.nextCursor;
 	} catch (error) {
@@ -299,7 +299,7 @@ function closeComposer() {
 
 function handleComposeRequest(event: Event) {
 	// Only the visible community surface handles a global compose request.
-	if (event.defaultPrevented || isProfile.value || !surfaceRoot.value?.isConnected || !surfaceRoot.value.getClientRects().length) return;
+	if (props.embedded || event.defaultPrevented || isProfile.value || !surfaceRoot.value?.isConnected || !surfaceRoot.value.getClientRects().length) return;
 	event.preventDefault();
 	void openComposer();
 }
@@ -404,35 +404,38 @@ async function submit() {
 			submissionKey = crypto.randomUUID();
 		}
 		const result = await props.gateway.submit({ ...input, idempotencyKey: submissionKey });
-		if (result.status !== 'pending') throw new Error(t.invalidResponse);
 		if (disposed) return;
-		notice.value = t.submitted;
+		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? t.submittedPublic : t.submittedExisting;
 		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
 		files.value = []; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
-		if (props.section === 'mine') await load();
+		if (props.section === 'mine' || ['published', 'approved'].includes(result.status)) await load();
 	} catch (error) { if (!disposed) formError.value = errorText(error); } finally { submitting.value = false; }
 }
 
-async function review(work: CommunityWork, decision: 'approve' | 'reject') {
+async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'remove') {
 	if (reviewingId.value || !props.moderator) return;
 	reviewErrors[work.id] = '';
 	if (!reviewChecks[work.id]) { reviewErrors[work.id] = t.reviewConfirmRequired; return; }
 	const reason = reviewReasons[work.id]?.trim();
-	if (decision === 'reject' && !reason) { reviewErrors[work.id] = t.reasonRequired; return; }
+	if (decision !== 'approve' && !reason) { reviewErrors[work.id] = t.reasonRequired; return; }
 	reviewingId.value = work.id;
 	try {
-		const result = await props.gateway.review({ submissionId: work.id, version: work.version, decision, ...(decision === 'reject' ? { reason } : {}) });
+		if (decision === 'remove') {
+			const { canceled } = await confirm({ type: 'warning', title: t.removeConfirmTitle, text: t.removeConfirmText });
+			if (canceled || disposed) return;
+		}
+		const result = await props.gateway.review({ submissionId: work.id, version: work.version, decision, ...(decision !== 'approve' ? { reason } : {}) });
 		if (disposed || props.section !== 'review') return;
-		if (result.id !== work.id || result.status !== (decision === 'approve' ? 'approved' : 'rejected')) throw new Error(t.invalidResponse);
-		notice.value = t.reviewed;
+		if (result.id !== work.id || result.status !== (decision === 'approve' ? 'approved' : decision === 'remove' ? 'removed' : 'rejected')) throw new Error(t.invalidResponse);
+		notice.value = decision === 'remove' ? t.removedNotice : t.reviewed;
 		await load();
 	} catch (error) { if (!disposed && props.section === 'review') reviewErrors[work.id] = errorText(error); } finally { reviewingId.value = ''; }
 }
 
 watch(() => props.section, () => {
 	query.value = ''; activeQuery.value = ''; notice.value = ''; composerOpen.value = false;
-	status.value = props.section === 'review' ? 'pending' : 'all';
+	status.value = props.section === 'review' ? 'unreviewed' : 'all';
 });
 watch(() => props.profileAuthorId, () => { profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
 watch([() => props.section, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
@@ -441,6 +444,10 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 </script>
 
 <style lang="scss" module>
+.embedded.root { height: auto; overflow: visible; }
+.embedded .canvas { padding: 0; min-height: 0; }
+.danger { color: var(--MI_THEME-error); border: 1px solid currentColor; }
+.notice a { text-decoration: underline; font-weight: 600; }
 .root { color: var(--MI_THEME-fg); background: var(--MI_THEME-bg); min-width: 0; overflow-y: auto; scroll-padding-block-start: 72px; height: 100%; container-type: inline-size; font-size: 14px; line-height: 1.6; --community-gap: 24px; }
 :is(.root, .modalLayer) * { box-sizing: border-box; }
 :is(.root, .modalLayer) a { color: inherit; text-decoration: none; text-underline-offset: 4px; }

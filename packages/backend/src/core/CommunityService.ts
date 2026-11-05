@@ -13,6 +13,8 @@ import { MiNote } from '@/models/Note.js';
 import { MiUser } from '@/models/User.js';
 import { MiFollowing } from '@/models/Following.js';
 import { MiBlocking } from '@/models/Blocking.js';
+import { MiAnnouncement } from '@/models/Announcement.js';
+import { MiModerationLog } from '@/models/ModerationLog.js';
 import type { MiMeta } from '@/models/Meta.js';
 import { shouldHideNoteByTime } from '@/misc/should-hide-note-by-time.js';
 import { ApiError } from '@/server/api/error.js';
@@ -20,13 +22,16 @@ import { communityErrors } from '@/server/api/community-schema.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { IdService } from './IdService.js';
 import { NoteCreateService } from './NoteCreateService.js';
+import { NoteDeleteService } from './NoteDeleteService.js';
+import { GlobalEventService } from './GlobalEventService.js';
+import { AnnouncementEntityService } from './entities/AnnouncementEntityService.js';
 import { RoleService } from './RoleService.js';
 import { DriveFileEntityService } from './entities/DriveFileEntityService.js';
 
 type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
 type SubmissionInput = { idempotencyKey: string; category: Category; title: string; text: string; model: string; sourceUrl: string; license: string; fileIds: string[]; };
-type ListInput = { limit: number; untilId?: string; query: string; category?: Category; authorId?: string; status?: Status | 'all'; };
+type ListInput = { limit: number; untilId?: string; query: string; category?: Category; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
 
 @Injectable()
 export class CommunityService {
@@ -37,6 +42,9 @@ export class CommunityService {
 		private roleService: RoleService,
 		private driveFileEntityService: DriveFileEntityService,
 		@Inject(DI.meta) private meta: MiMeta,
+		private noteDeleteService: NoteDeleteService,
+		private globalEventService: GlobalEventService,
+		private announcementEntityService: AnnouncementEntityService,
 	) {}
 
 	private async files(manager: EntityManager, authorId: string, fileIds: string[], category: Category) {
@@ -65,18 +73,47 @@ export class CommunityService {
 		const existing = await repository.findOneBy({ authorId, idempotencyKey });
 		if (existing) {
 			if (existing.payloadHash !== payloadHash) throw new ApiError(communityErrors.conflict);
-			return { id: existing.id, status: 'pending' as const, submittedAt: existing.submittedAt.toISOString() };
+			return this.receipt(existing);
 		}
+		const afterCommit: (() => void)[] = [];
+		const publicationMode = this.meta.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before';
 		const submission = await this.db.transaction(async manager => {
 			await this.author(manager, authorId);
 			await this.files(manager, authorId, normalized.fileIds, normalized.category);
 			const repo = manager.getRepository(MiCommunitySubmission);
-			await repo.createQueryBuilder().insert().values({ ...normalized, id: this.idService.gen(), authorId, idempotencyKey, payloadHash, submittedAt: new Date(), status: 'pending', version: 0 }).orIgnore().execute();
-			const result = await repo.findOneByOrFail({ authorId, idempotencyKey });
+			const id = this.idService.gen();
+			await repo.createQueryBuilder().insert().values({ ...normalized, id, authorId, idempotencyKey, payloadHash, publicationMode, submittedAt: new Date(), status: 'pending', version: 0 }).orIgnore().execute();
+			const result = await repo.createQueryBuilder('submission').setLock('pessimistic_write').where({ authorId, idempotencyKey }).getOneOrFail();
 			if (result.payloadHash !== payloadHash) throw new ApiError(communityErrors.conflict);
+			// Only the transaction that inserted this row may publish it. Retries return its current state.
+			if (result.id === id && publicationMode === 'after') {
+				await this.publish(result, manager, afterCommit);
+				result.status = 'published';
+				await repo.save(result);
+			}
 			return result;
 		});
-		return { id: submission.id, status: 'pending' as const, submittedAt: submission.submittedAt.toISOString() };
+		for (const publish of afterCommit) publish();
+		return this.receipt(submission);
+	}
+
+	private async receipt(row: MiCommunitySubmission) {
+		const visibleStatus = ['approved', 'published'].includes(row.status) && (!row.approvedNoteId || !await this.db.getRepository(MiNote).existsBy({ id: row.approvedNoteId })) ? 'withdrawn' as const : row.status;
+		return { id: row.id, status: visibleStatus, submittedAt: row.submittedAt.toISOString() };
+	}
+
+	private async publish(submission: MiCommunitySubmission, manager: EntityManager, afterCommit: (() => void)[]) {
+		const author = await this.author(manager, submission.authorId);
+		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
+		const text = [submission.title, submission.text, submission.model && `模型 / 工具：${submission.model}`, submission.sourceUrl && `来源：${submission.sourceUrl}`, submission.license && `授权：${submission.license}`].filter(Boolean).join('\n\n');
+		try {
+			const note = await this.noteCreateService.create(author, { text, files, visibility: 'public', localOnly: true }, false, { manager, afterCommit });
+			if (note.visibility !== 'public') throw new ApiError(communityErrors.cannotPublish);
+			submission.approvedNoteId = note.id;
+		} catch (error) {
+			if (error instanceof IdentifiableError) throw new ApiError(communityErrors.cannotPublish);
+			throw error;
+		}
 	}
 
 	public async list(scope: 'public' | 'mine' | 'review', options: ListInput, viewerId?: string) {
@@ -87,7 +124,12 @@ export class CommunityService {
 			.innerJoinAndSelect('submission.author', 'author').leftJoinAndSelect('submission.approvedNote', 'note');
 		if (scope !== 'public') {
 			query.where(scope === 'mine' ? 'submission.authorId = :viewerId' : '1 = 1', { viewerId });
-			if (options.status && options.status !== 'all') query.andWhere('submission.status = :status', { status: options.status });
+			if (options.status === 'unreviewed') query.andWhere("(submission.status = 'pending' OR (submission.status = 'published' AND note.id IS NOT NULL))");
+			else if (options.status === 'withdrawn') query.andWhere("submission.status IN ('approved', 'published') AND note.id IS NULL");
+			else if (options.status && options.status !== 'all') {
+				query.andWhere('submission.status = :status', { status: options.status });
+				if (['approved', 'published'].includes(options.status)) query.andWhere('note.id IS NOT NULL');
+			}
 		}
 		if (options.category) query.andWhere('submission.category = :category', { category: options.category });
 		if (options.authorId) query.andWhere('submission.authorId = :authorId', { authorId: options.authorId });
@@ -114,7 +156,7 @@ export class CommunityService {
 	private publicQuery(viewerId?: string) {
 		const query = this.db.getRepository(MiCommunitySubmission).createQueryBuilder('submission')
 			.innerJoinAndSelect('submission.author', 'author').leftJoinAndSelect('submission.approvedNote', 'note')
-			.where('submission.status = :approved', { approved: 'approved' })
+			.where('submission.status IN (:...publicStatuses)', { publicStatuses: ['approved', 'published'] })
 			.andWhere('note.id IS NOT NULL AND note.visibility = :visibility', { visibility: 'public' })
 			.andWhere('author.isSuspended = FALSE AND author.isDeleted = FALSE');
 		if (!viewerId) query.andWhere('author.requireSigninToViewContents = FALSE');
@@ -149,38 +191,54 @@ export class CommunityService {
 		return true;
 	}
 
-	public async review(reviewerId: string, input: { submissionId: string; version: number; decision: 'approve' | 'reject'; reason?: string; }) {
+	public async review(reviewerId: string, input: { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; }) {
 		if (!(await this.roleService.isModerator({ id: reviewerId }))) throw new ApiError(communityErrors.forbidden);
-		if (input.decision === 'reject' && !input.reason?.trim()) throw new ApiError(communityErrors.invalidContent);
+		if (input.decision !== 'approve' && !input.reason?.trim()) throw new ApiError(communityErrors.invalidContent);
 		const afterCommit: (() => void)[] = [];
 		const result = await this.db.transaction(async manager => {
 			const repo = manager.getRepository(MiCommunitySubmission);
 			const submission = await repo.createQueryBuilder('submission').setLock('pessimistic_write').where('submission.id = :id', { id: input.submissionId }).getOne();
 			if (!submission) throw new ApiError(communityErrors.notFound);
-			if (submission.status !== 'pending' || submission.version !== input.version) throw new ApiError(communityErrors.conflict);
+			const allowed = input.decision === 'approve' ? ['pending', 'published'] : input.decision === 'reject' ? ['pending'] : ['published', 'approved'];
+			if (!allowed.includes(submission.status) || submission.version !== input.version) throw new ApiError(communityErrors.conflict);
+			const note = submission.approvedNoteId ? await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: submission.approvedNoteId }).setLock('pessimistic_write').getOne() : null;
+			if (submission.status !== 'pending' && !note) throw new ApiError(communityErrors.conflict);
 			if (input.decision === 'approve') {
-				const author = await this.author(manager, submission.authorId);
-				const files = await this.files(manager, author.id, submission.fileIds, submission.category);
-				const text = [submission.title, submission.text, submission.model && `模型 / 工具：${submission.model}`, submission.sourceUrl && `来源：${submission.sourceUrl}`, submission.license && `授权：${submission.license}`].filter(Boolean).join('\n\n');
-				try {
-					const note = await this.noteCreateService.create(author, { text, files, visibility: 'public', localOnly: true }, false, { manager, afterCommit });
-					if (note.visibility !== 'public') throw new ApiError(communityErrors.cannotPublish);
-					submission.approvedNoteId = note.id;
-				} catch (error) {
-					if (error instanceof IdentifiableError) throw new ApiError(communityErrors.cannotPublish);
-					throw error;
-				}
+				if (submission.status === 'pending') await this.publish(submission, manager, afterCommit);
+			} else if (input.decision === 'remove' && note) {
+				const author = await manager.getRepository(MiUser).findOneByOrFail({ id: submission.authorId });
+				await this.noteDeleteService.deleteLocalInTransaction(author, note, { manager, afterCommit });
+				await manager.getRepository(MiModerationLog).insert({ id: this.idService.gen(), userId: reviewerId, type: 'deleteNote', info: {
+					noteId: note.id, noteUserId: author.id, noteUserUsername: author.username, noteUserHost: author.host,
+					note, communitySubmissionId: submission.id, reason: input.reason!.trim(),
+				} });
+				submission.approvedNoteId = null;
 			}
-			submission.status = input.decision === 'approve' ? 'approved' : 'rejected';
-			submission.rejectionReason = input.decision === 'reject' ? input.reason!.trim() : null;
+			submission.status = input.decision === 'approve' ? 'approved' : input.decision === 'remove' ? 'removed' : 'rejected';
+			submission.rejectionReason = input.decision !== 'approve' ? input.reason!.trim() : null;
 			submission.version++;
 			submission.reviewedAt = new Date();
 			submission.reviewedById = reviewerId;
 			await repo.save(submission);
+			if (input.decision !== 'approve') await this.notifyAuthor(submission, manager, afterCommit);
 			return submission;
 		});
 		for (const publish of afterCommit) publish();
 		return this.pack(result);
+	}
+
+	private async notifyAuthor(row: MiCommunitySubmission, manager: EntityManager, afterCommit: (() => void)[]) {
+		// A private, durable notice survives disconnects and disabled app notifications.
+		const announcement = manager.getRepository(MiAnnouncement).create({
+			id: this.idService.gen(), updatedAt: null, userId: row.authorId,
+			title: row.status === 'removed' ? '作品违规，已下架 / Work removed' : '作品审核未通过 / Submission rejected',
+			text: `《${row.title}》\n${row.rejectionReason}\n\n请在“我的投稿”查看审核反馈。 / View feedback in My submissions.`,
+			imageUrl: null, icon: 'warning', display: 'banner', needConfirmationToRead: true,
+			isActive: true, autoArchiveAt: null, forExistingUsers: false, silence: false,
+		});
+		await manager.getRepository(MiAnnouncement).insert(announcement);
+		const packed = await this.announcementEntityService.pack({ ...announcement, isRead: false }, { id: row.authorId });
+		afterCommit.push(() => this.globalEventService.publishMainStream(row.authorId, 'announcementCreated', { announcement: packed }));
 	}
 
 	private async pack(row: MiCommunitySubmission) {
@@ -190,7 +248,7 @@ export class CommunityService {
 		return {
 			id: row.id, version: row.version, category: row.category, title: row.title, text: row.text, model: row.model, sourceUrl: row.sourceUrl, license: row.license,
 			files: await Promise.all(row.fileIds.flatMap(id => { const file = files.find(f => f.id === id); return file ? [this.driveFileEntityService.pack(file)] : []; })),
-			author: { id: author.id, name: author.name ?? '', username: author.username }, status: row.status, submittedAt: row.submittedAt.toISOString(),
+			author: { id: author.id, name: author.name ?? '', username: author.username }, status: ['approved', 'published'].includes(row.status) && !note ? 'withdrawn' as const : row.status, submittedAt: row.submittedAt.toISOString(),
 			rejectionReason: row.rejectionReason, approvedNoteId: row.approvedNoteId, repliesCount: note?.repliesCount ?? 0,
 		};
 	}

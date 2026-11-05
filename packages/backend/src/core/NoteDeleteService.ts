@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Brackets, In, IsNull, Not } from 'typeorm';
+import { Brackets, In, IsNull, Not, type EntityManager } from 'typeorm';
 import { Injectable, Inject } from '@nestjs/common';
 import type { MiUser, MiLocalUser, MiRemoteUser } from '@/models/User.js';
 import type { MiNote, IMentionedRemoteUsers } from '@/models/Note.js';
@@ -54,6 +54,22 @@ export class NoteDeleteService {
 		private perUserNotesChart: PerUserNotesChart,
 		private instanceChart: InstanceChart,
 	) {}
+
+	/** Delete a local original community note atomically with its moderation decision. */
+	public async deleteLocalInTransaction(user: MiUser, note: MiNote, transaction: { manager: EntityManager; afterCommit: (() => void)[]; }) {
+		if (!transaction.manager.queryRunner?.isTransactionActive || !note.localOnly || note.userHost != null || note.replyId || note.renoteId || note.userId !== user.id) {
+			throw new Error('Community removal requires an active transaction and a local original note');
+		}
+		const deleted = await transaction.manager.getRepository(this.notesRepository.target).delete({ id: note.id, userId: user.id });
+		if (!deleted.affected) return;
+		const deletedAt = new Date();
+		transaction.afterCommit.push(() => {
+			this.globalEventService.publishNoteStream(note, 'deleted', { deletedAt });
+			this.searchService.unindexNote(note);
+			this.notesChart.update(note, false);
+			this.perUserNotesChart.update(user, note, false);
+		});
+	}
 
 	/**
 	 * 投稿を削除します。

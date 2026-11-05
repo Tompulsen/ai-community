@@ -11,7 +11,7 @@ import { communityErrors } from '@/server/api/community-schema.js';
 export const meta = {
 	tags: ['community'], requireCredential: true, prohibitMoved: true, kind: 'write:notes', limit: { duration: 3600000, max: 100 },
 	errors: communityErrors,
-	res: { type: 'object', optional: false, nullable: false, properties: { id: { type: 'string', optional: false, nullable: false }, status: { type: 'string', enum: ['pending'], optional: false, nullable: false }, submittedAt: { type: 'string', format: 'date-time', optional: false, nullable: false } } },
+	res: { type: 'object', optional: false, nullable: false, properties: { id: { type: 'string', optional: false, nullable: false }, status: { type: 'string', enum: ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'], optional: false, nullable: false }, submittedAt: { type: 'string', format: 'date-time', optional: false, nullable: false } } },
 } as const;
 
 export const paramDef = {

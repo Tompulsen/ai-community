@@ -23,7 +23,7 @@ export const communityWorkSchema = {
 		title: string, text: string, model: string, sourceUrl: string, license: string,
 		files: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },
 		author: { type: 'object', optional: false, nullable: false, properties: { id: string, name: string, username: string } },
-		status: { ...string, enum: ['pending', 'approved', 'rejected'] },
+		status: { ...string, enum: ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'] },
 		submittedAt: { ...string, format: 'date-time' }, rejectionReason: nullableString, approvedNoteId: nullableString,
 		repliesCount: { type: 'integer', optional: false, nullable: false },
 	},

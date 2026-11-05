@@ -441,6 +441,9 @@ export const packedMetaClientOptionsSchema = {
 			enum: ['embed', 'newTab'],
 			optional: true, nullable: false,
 		},
+		communityPublicationMode: {
+			type: 'string', enum: ['before', 'after'], optional: true, nullable: false,
+		},
 		homeShowcaseMode: {
 			type: 'string',
 			enum: ['custom', 'popular'],
