@@ -29,6 +29,9 @@ export const ROUTE_DEF = [{
 	path: '/community',
 	component: page(() => import('@/pages/community.vue')),
 }, {
+	path: '/community/work/:submissionId',
+	component: page(() => import('@/pages/community/work-detail.vue')),
+}, {
 	path: '/community/:module',
 	component: page(() => import('@/pages/community.vue')),
 }, {

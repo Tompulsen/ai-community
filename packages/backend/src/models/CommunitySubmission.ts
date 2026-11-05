@@ -57,6 +57,9 @@ export class MiCommunitySubmission {
 	public publicationMode: 'before' | 'after';
 
 	@Column('integer', { default: 0 })
+	public viewsCount: number;
+
+	@Column('integer', { default: 0 })
 	public version: number;
 
 	@Column('timestamp with time zone')

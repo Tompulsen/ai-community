@@ -1,4 +1,8 @@
 import type {
+	CommunityWorksShowRequest,
+	CommunityWorksShowResponse,
+	CommunityWorksViewRequest,
+	CommunityWorksViewResponse,
 	CommunityFeaturedResponse,
 	CommunityWorksRequest,
 	CommunityWorksResponse,
@@ -1129,6 +1133,10 @@ export type Endpoints = {
 	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
 
 	'community/featured': { req: EmptyRequest; res: CommunityFeaturedResponse };
+
+	'community/works/show': { req: CommunityWorksShowRequest; res: CommunityWorksShowResponse };
+
+	'community/works/view': { req: CommunityWorksViewRequest; res: CommunityWorksViewResponse };
 };
 
 /**

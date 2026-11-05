@@ -4057,6 +4057,26 @@ export type paths = {
          */
         post: operations["community___featured"];
     };
+
+    "/community/works/show": {
+        /**
+         * community/works/show
+         * @description No description provided.
+         *
+         *     **Credential required**: *No*
+         */
+        post: operations["community___works___show"];
+    };
+
+    "/community/works/view": {
+        /**
+         * community/works/view
+         * @description No description provided.
+         *
+         *     **Credential required**: *No*
+         */
+        post: operations["community___works___view"];
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -37426,6 +37446,9 @@ export interface operations {
                             rejectionReason: string | null;
                             approvedNoteId: string | null;
                             repliesCount: number;
+                            likesCount: number;
+                            renotesCount: number;
+                            viewsCount: number;
                         }[];
                         nextCursor: string | null;
                     };
@@ -37629,6 +37652,9 @@ export interface operations {
                             rejectionReason: string | null;
                             approvedNoteId: string | null;
                             repliesCount: number;
+                            likesCount: number;
+                            renotesCount: number;
+                            viewsCount: number;
                         }[];
                         nextCursor: string | null;
                     };
@@ -37730,6 +37756,9 @@ export interface operations {
                             rejectionReason: string | null;
                             approvedNoteId: string | null;
                             repliesCount: number;
+                            likesCount: number;
+                            renotesCount: number;
+                            viewsCount: number;
                         }[];
                         nextCursor: string | null;
                     };
@@ -37825,6 +37854,9 @@ export interface operations {
                         rejectionReason: string | null;
                         approvedNoteId: string | null;
                         repliesCount: number;
+                        likesCount: number;
+                        renotesCount: number;
+                        viewsCount: number;
                     };
                 };
             };
@@ -37916,8 +37948,191 @@ export interface operations {
                             rejectionReason: string | null;
                             approvedNoteId: string | null;
                             repliesCount: number;
+                            likesCount: number;
+                            renotesCount: number;
+                            viewsCount: number;
                         }[];
                         nextCursor: string | null;
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+
+    community___works___show: {
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: misskey:id */
+                    submissionId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        version: number;
+                        /** @enum {string} */
+                        category: "video" | "image" | "resource";
+                        title: string;
+                        text: string;
+                        model: string;
+                        sourceUrl: string;
+                        license: string;
+                        files: components["schemas"]["DriveFile"][];
+                        author: {
+                            id: string;
+                            name: string;
+                            username: string;
+                        };
+                        /** @enum {string} */
+                        status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
+                        /** Format: date-time */
+                        submittedAt: string;
+                        rejectionReason: string | null;
+                        approvedNoteId: string | null;
+                        repliesCount: number;
+                        likesCount: number;
+                        renotesCount: number;
+                        viewsCount: number;
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+
+    community___works___view: {
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: misskey:id */
+                    submissionId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        viewsCount: number;
                     };
                 };
             };

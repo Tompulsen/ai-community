@@ -4,6 +4,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type * as Redis from 'ioredis';
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource, In, type EntityManager } from 'typeorm';
 import { DI } from '@/di-symbols.js';
@@ -25,6 +26,7 @@ import { NoteCreateService } from './NoteCreateService.js';
 import { NoteDeleteService } from './NoteDeleteService.js';
 import { GlobalEventService } from './GlobalEventService.js';
 import { AnnouncementEntityService } from './entities/AnnouncementEntityService.js';
+import { ReactionsBufferingService } from './ReactionsBufferingService.js';
 import { RoleService } from './RoleService.js';
 import { DriveFileEntityService } from './entities/DriveFileEntityService.js';
 
@@ -45,6 +47,8 @@ export class CommunityService {
 		private noteDeleteService: NoteDeleteService,
 		private globalEventService: GlobalEventService,
 		private announcementEntityService: AnnouncementEntityService,
+		@Inject(DI.redis) private redis: Redis.Redis,
+		private reactionsBufferingService: ReactionsBufferingService,
 	) {}
 
 	private async files(manager: EntityManager, authorId: string, fileIds: string[], category: Category) {
@@ -150,7 +154,37 @@ export class CommunityService {
 			}
 			if (candidates.length < 50) { exhausted = true; break; }
 		}
-		return { items: await Promise.all(rows.slice(0, options.limit).map(row => this.pack(row))), nextCursor: rows.length > options.limit ? rows[options.limit - 1].id : exhausted ? null : scannedCursor };
+		const selected = rows.slice(0, options.limit);
+		const buffered = this.meta.enableReactionsBuffering ? await this.reactionsBufferingService.getMany(selected.flatMap(row => row.approvedNoteId ? [row.approvedNoteId] : [])) : new Map();
+		return { items: await Promise.all(selected.map(row => this.pack(row, buffered.get(row.approvedNoteId!)?.deltas ?? {}))), nextCursor: rows.length > options.limit ? rows[options.limit - 1].id : exhausted ? null : scannedCursor };
+	}
+
+public async show(submissionId: string, viewerId?: string) {
+		return this.pack(await this.publicWork(submissionId, viewerId));
+	}
+
+	private async publicWork(submissionId: string, viewerId?: string) {
+		if (!viewerId && this.meta.ugcVisibilityForVisitor === 'none') throw new ApiError(communityErrors.notFound);
+		const row = await this.publicQuery(viewerId).andWhere('submission.id = :submissionId', { submissionId }).getOne();
+		if (!row || !await this.visible(row, viewerId)) throw new ApiError(communityErrors.notFound);
+		return row;
+	}
+
+	public async recordView(submissionId: string, viewerId?: string, ip?: string | null) {
+		const row = await this.publicWork(submissionId, viewerId);
+		// Use server-owned identity, never a browser-supplied visitor id. No raw IP is stored.
+		const identity = viewerId ? 'user:' + viewerId : ip ? 'ip:' + ip : null;
+		if (!identity) return { viewsCount: row.viewsCount };
+		const key = 'community:view:' + submissionId + ':' + createHash('sha256').update(identity).digest('hex');
+		if (await this.redis.set(key, '1', 'EX', 1800, 'NX')) {
+			const result = await this.db.getRepository(MiCommunitySubmission).createQueryBuilder().update()
+				.set({ viewsCount: () => 'LEAST("viewsCount"::bigint + 1, 2147483647)' })
+				.where('id = :id AND status IN (:...statuses) AND "approvedNoteId" = :noteId', { id: row.id, statuses: ['approved', 'published'], noteId: row.approvedNoteId })
+				.returning(['viewsCount']).execute();
+			if (!result.affected) throw new ApiError(communityErrors.notFound);
+			return { viewsCount: result.raw[0].viewsCount as number };
+		}
+		return { viewsCount: row.viewsCount };
 	}
 
 	private publicQuery(viewerId?: string) {
@@ -241,15 +275,18 @@ export class CommunityService {
 		afterCommit.push(() => this.globalEventService.publishMainStream(row.authorId, 'announcementCreated', { announcement: packed }));
 	}
 
-	private async pack(row: MiCommunitySubmission) {
+	private async pack(row: MiCommunitySubmission, deltas?: Record<string, number>) {
 		const author = row.author ?? await this.db.getRepository(MiUser).findOneByOrFail({ id: row.authorId });
 		const note = row.approvedNote ?? (row.approvedNoteId ? await this.db.getRepository(MiNote).findOneBy({ id: row.approvedNoteId }) : null);
 		const files = row.fileIds.length ? await this.db.getRepository(MiDriveFile).findBy({ id: In(row.fileIds), userId: row.authorId }) : [];
+		const buffered = deltas ?? (note && this.meta.enableReactionsBuffering ? (await this.reactionsBufferingService.get(note.id)).deltas : {});
+		const reactions = this.reactionsBufferingService.mergeReactions(note?.reactions ?? {}, buffered);
+		const likesCount = Object.entries(reactions).reduce((sum, [key, count]) => sum + (key.replaceAll('\uFE0F', '') === '❤' ? count : 0), 0);
 		return {
 			id: row.id, version: row.version, category: row.category, title: row.title, text: row.text, model: row.model, sourceUrl: row.sourceUrl, license: row.license,
 			files: await Promise.all(row.fileIds.flatMap(id => { const file = files.find(f => f.id === id); return file ? [this.driveFileEntityService.pack(file)] : []; })),
 			author: { id: author.id, name: author.name ?? '', username: author.username }, status: ['approved', 'published'].includes(row.status) && !note ? 'withdrawn' as const : row.status, submittedAt: row.submittedAt.toISOString(),
-			rejectionReason: row.rejectionReason, approvedNoteId: row.approvedNoteId, repliesCount: note?.repliesCount ?? 0,
+			rejectionReason: row.rejectionReason, approvedNoteId: row.approvedNoteId, repliesCount: note?.repliesCount ?? 0, likesCount, renotesCount: note?.renoteCount ?? 0, viewsCount: row.viewsCount,
 		};
 	}
 }

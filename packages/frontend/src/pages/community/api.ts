@@ -22,6 +22,7 @@ export function isCommunityWork(value: unknown): value is CommunityWork {
 		&& (value.rejectionReason === null || typeof value.rejectionReason === 'string')
 		&& (value.approvedNoteId === null || isId(value.approvedNoteId))
 		&& (!['approved', 'published'].includes(String(value.status)) || isId(value.approvedNoteId))
+		&& ['likesCount', 'renotesCount', 'viewsCount'].every(key => value[key] == null || (Number.isInteger(value[key]) && Number(value[key]) >= 0))
 		&& Number.isInteger(value.repliesCount) && Number(value.repliesCount) >= 0;
 }
 

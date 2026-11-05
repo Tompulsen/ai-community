@@ -26,6 +26,9 @@ export const communityWorkSchema = {
 		status: { ...string, enum: ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'] },
 		submittedAt: { ...string, format: 'date-time' }, rejectionReason: nullableString, approvedNoteId: nullableString,
 		repliesCount: { type: 'integer', optional: false, nullable: false },
+		likesCount: { type: 'integer', optional: false, nullable: false },
+		renotesCount: { type: 'integer', optional: false, nullable: false },
+		viewsCount: { type: 'integer', optional: false, nullable: false },
 	},
 } as const;
 export const communityPageSchema = {

@@ -1,0 +1,42 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+import { homeLanguage } from '@/pages/home/copy.js';
+
+const zh = {
+	comment: '评论', repost: '转发', reposted: '已转发', like: '点赞', liked: '已点赞', views: '浏览', share: '复制作品链接',
+	viewHint: '实际浏览次数，同一访客短时间内重复浏览会去重。',
+	commentPlaceholder: '聊聊这个作品…', send: '发送评论', sending: '正在发送…', sent: '评论已发布',
+	comments: '作品评论', emptyComments: '还没有评论，来聊聊你的想法。', loadMore: '加载更多评论', refresh: '刷新评论',
+	loading: '正在加载作品…', failed: '作品加载失败，请重试。', unavailable: '作品已下架、不存在或暂时无法查看。', retry: '重试',
+	commentFailed: '评论发送失败，输入已保留。', uncertain: '尚未确认是否发送成功。请先刷新查看，避免重复发送。', retrySend: '确认后重新发送',
+	retryWarning: '请先确认评论列表中没有刚才的内容，再重新发送。', commentsFailed: '评论未能加载，请重试。',
+	interactionFailed: '操作未能完成，请刷新后重试。', repostFailed: '转发失败，请重试。', repostUncertain: '暂未确认转发结果，请先到个人主页查看，避免重复转发。',
+	replaceReaction: '该作品已有你的其他表情。要替换为点赞吗？', login: '登录后参与', loginHint: '登录后即可点赞、转发和评论作品。',
+	remix: '制作同款', remixText: '进入文本制作', remixImage: '进入图片制作', remixVideo: '进入视频制作',
+	prompt: '作品内容 / 提示词', copyPrompt: '复制提示词', copied: '已复制', copyFailed: '复制失败，可选择文字手动复制。',
+	back: '返回社区', preview: '作品预览', previous: '上一张', next: '下一张', attachments: '作品附件',
+	sensitive: '该附件被标记为敏感内容', reveal: '显示附件', noPreview: '暂无可预览的媒体', source: '来源', license: '授权',
+	attachmentComment: '包含附件的评论', viewComment: '查看评论详情', shareFailed: '复制失败，请使用下面的作品链接。',
+};
+const en: typeof zh = {
+	comment: 'Comment', repost: 'Repost', reposted: 'Reposted', like: 'Like', liked: 'Liked', views: 'Views', share: 'Copy work link',
+	viewHint: 'Recorded views. Repeat visits by the same viewer within a short period count once.',
+	commentPlaceholder: 'Share your thoughts…', send: 'Post comment', sending: 'Posting…', sent: 'Comment posted',
+	comments: 'Comments', emptyComments: 'No comments yet. Share your thoughts.', loadMore: 'Load more comments', refresh: 'Refresh comments',
+	loading: 'Loading work…', failed: 'Could not load this work. Please retry.', unavailable: 'This work was removed, does not exist, or is unavailable.', retry: 'Retry',
+	commentFailed: 'Could not post your comment. Your draft is still here.', uncertain: 'Delivery is unconfirmed. Refresh the comments before trying again to avoid duplicates.', retrySend: 'Retry after checking',
+	retryWarning: 'Make sure your comment is not already in the list before posting it again.', commentsFailed: 'Could not load comments. Please retry.',
+	interactionFailed: 'Could not complete the action. Refresh and try again.', repostFailed: 'Could not repost. Please retry.', repostUncertain: 'Repost delivery is unconfirmed. Check your profile before trying again.',
+	replaceReaction: 'You already reacted with another emoji. Replace it with a like?', login: 'Sign in to join in', loginHint: 'Sign in to like, repost, and comment on this work.',
+	remix: 'Make your own', remixText: 'Open text studio', remixImage: 'Open image studio', remixVideo: 'Open video studio',
+	prompt: 'Work details / Prompt', copyPrompt: 'Copy prompt', copied: 'Copied', copyFailed: 'Could not copy. Select the text to copy it manually.',
+	back: 'Back to community', preview: 'Work preview', previous: 'Previous media', next: 'Next media', attachments: 'Attachments',
+	sensitive: 'This attachment is marked as sensitive', reveal: 'Show attachment', noPreview: 'No media preview available', source: 'Source', license: 'License',
+	attachmentComment: 'Comment with attachments', viewComment: 'View comment', shareFailed: 'Could not copy. Use the work link below.',
+};
+export const workText = homeLanguage === 'en-US' ? en : zh;
+export const workPath = (id: string) => `/community/work/${id}`;
+export const studioPath = (category: string) => `/create/${category === 'resource' ? 'text' : category}`;

@@ -98,21 +98,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<button v-if="section === 'mine'" type="button" :class="$style.secondary" @click="openComposer">{{ t.publish }}</button>
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
-					<article v-for="work in items" :key="work.id" :class="$style.work">
+					<template v-for="work in items" :key="work.id">
+					<WorkCard v-if="isCommunity" :work="work"/>
+					<article v-else :class="$style.work">
 
 						<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 							<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
 							<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ t[work.status] }}</span></div>
-							<h3><a v-if="work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
+							<h3><a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" @click.prevent="emit('navigate', `/community/work/${work.id}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
 							<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
-							<ul v-if="isCommunity && work.category === 'resource' && work.files.length" :class="$style.resourceFiles"><li v-for="file in work.files" :key="file.id"><a v-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer"><i class="ti ti-file-download" aria-hidden="true"></i>{{ file.name }}</a></li></ul>
-							<a v-if="isCommunity && work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" :class="[$style.cover, { [$style.coverEmpty]: !coverUrl(work) }]" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)">
-							<img v-if="coverUrl(work)" :src="coverUrl(work)" :alt="work.title" loading="lazy"/>
-							<template v-else><i :class="categoryIcon(work.category)" aria-hidden="true"></i><span>{{ work.files.some(f => f.isSensitive) ? t.sensitive : work.category === 'resource' ? t.textWork : t.noCover }}</span></template>
-							<span v-if="work.category === 'video' && coverUrl(work)" :class="$style.play"><i class="ti ti-player-play-filled" aria-hidden="true"></i></span>
-						</a>
 							<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
-							<a v-if="work.approvedNoteId" :href="`/notes/${work.approvedNoteId}`" :class="$style.discuss" @click.prevent="emit('navigate', `/notes/${work.approvedNoteId}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
+							<a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" :class="$style.discuss" @click.prevent="emit('navigate', `/community/work/${work.id}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
 							<details v-if="!isCommunity" :class="$style.details">
 								<summary>{{ t.detail }}</summary><p :class="$style.fullText"><Mfm :text="work.text" :plain="true"/></p>
 								<p v-if="work.model">{{ t.model }}：{{ work.model }}</p>
@@ -132,6 +128,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 							</form>
 						</div>
 					</article>
+					</template>
 				</div>
 				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
@@ -155,6 +152,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, nextTick, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
 import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
+import WorkCard from './work-card.vue';
 import { communityComposeEvent } from './compose.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
@@ -220,12 +218,6 @@ const emptyHint = computed(() => activeQuery.value ? t.emptySearchHint : isProfi
 const categoryTitle = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.title;
 const categoryIcon = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.icon;
 const formatDate = (date: string) => new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-
-function coverUrl(work: CommunityWork) {
-	if (work.files.some(file => file.isSensitive)) return undefined;
-	const file = work.files.find(item => item.type.startsWith('image/') || item.type.startsWith('video/'));
-	return file ? safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined) : undefined;
-}
 
 function errorText(error: unknown) {
 	return error instanceof Error && Object.values(t).includes(error.message as never) ? error.message : t.networkError;

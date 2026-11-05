@@ -681,3 +681,11 @@ export type AdminCommunityReviewRequest = operations['admin___community___review
 export type AdminCommunityReviewResponse = operations['admin___community___review']['responses']['200']['content']['application/json'];
 
 export type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];
+
+export type CommunityWorksShowRequest = operations['community___works___show']['requestBody']['content']['application/json'];
+
+export type CommunityWorksShowResponse = operations['community___works___show']['responses']['200']['content']['application/json'];
+
+export type CommunityWorksViewRequest = operations['community___works___view']['requestBody']['content']['application/json'];
+
+export type CommunityWorksViewResponse = operations['community___works___view']['responses']['200']['content']['application/json'];

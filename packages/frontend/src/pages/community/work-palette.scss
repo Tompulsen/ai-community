@@ -1,0 +1,10 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+// A neutral theater surface keeps uploaded artwork true to its original colors.
+@mixin stage {
+	--work-stage: #101112;
+	--work-stage-fg: #f5f5f5;
+}

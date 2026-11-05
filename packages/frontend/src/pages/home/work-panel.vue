@@ -72,7 +72,7 @@ const router = useRouter();
 const { state, note, comments, commentsFailed, refreshing, myReaction, liked, otherReaction, likes, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, toggleLike, sendComment } = useWorkInteractions(() => props.work.approvedNoteId);
 const categoryLabel = computed(() => props.work.category === 'video' ? homeText.popularVideo : props.work.category === 'image' ? homeText.popularImage : homeText.popularResource);
 const categoryIcon = computed(() => props.work.category === 'video' ? 'ti ti-video' : props.work.category === 'image' ? 'ti ti-photo' : 'ti ti-file-text');
-const notePath = computed(() => `/notes/${props.work.approvedNoteId}`);
+const notePath = computed(() => `/community/work/${props.work.id}`);
 const creationPath = computed(() => `/create/${props.work.category === 'resource' ? 'text' : props.work.category}`);
 const mediaFailed = ref(false);
 const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');

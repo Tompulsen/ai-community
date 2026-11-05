@@ -23,6 +23,9 @@ export type CommunityWork = {
 	rejectionReason: string | null;
 	approvedNoteId: string | null;
 	repliesCount: number;
+	likesCount?: number;
+	renotesCount?: number;
+	viewsCount?: number;
 };
 export type CommunitySubmissionInput = {
 	idempotencyKey: string;
