@@ -5,16 +5,41 @@
 - 访问地址：<https://zaiduyu.top>。
 - 服务器：`210.126.232.192`；项目目录 `/opt/ai-community`。
 - GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
-- 已部署应用提交：`5da7f01201bff52a8c3f7c6d5d70ec7c0231d00b`。
-- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-5da7f01201bff52a8c3f7c6d5d70ec7c0231d00b`。
-- 镜像摘要：`sha256:6c9a84c931e9365ef75a9d1f5a4b896bccc41113e5143dc3e824771b6af8fc9c`。
-- GitHub Docker 构建运行：`41948106704`，成功；服务器拉取后的 OCI revision 与应用提交一致。
+- 已部署应用提交：`49e90b4b3d22ba13cb5bab6646effea965e131e2`。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-49e90b4b3d22ba13cb5bab6646effea965e131e2`。
+- 镜像摘要：`sha256:e2c6a1c97d1785e9f0db88cb6a3436b08fd1ea78b80d960be74f5109f9b88d59`。
+- GitHub Docker 构建运行：`41956714315`，成功；服务器拉取后的 OCI revision 与应用提交一致。
 - 应用、PostgreSQL、Redis 三个容器均为 healthy。数据库与 Redis 不发布宿主机端口，应用仍绑定 `127.0.0.1:13000`。
-- 生产源码下载 `/source/ai-community.tar.gz` 对应上述应用提交；SHA-256 为 `0e87346715de4c72c49ae70f73b44d5d7401c34de0998d29cd29d2f45dfaac8a`，已核对上传归档和服务器归档哈希。
+- 生产源码下载 `/source/ai-community.tar.gz` 对应上述应用提交；SHA-256 为 `84a13982f8e4bd7ec6ba7320da60d05ddffe71f4220f96898784f51308e06b59`，已核对上传归档和服务器归档哈希。
 
 本记录可在部署后以纯文档提交更新；不要求为文档提交重复构建应用镜像。提供给用户的源码归档对应实际运行的应用版本。
 
-## 本次审核修复（2026-11-05）
+## 本次作品互动与详情改版（2026-11-05）
+
+- 社区作品卡片增加快速评论、原生转发、爱心点赞与真实浏览计数；评论草稿和转发结果状态可在站内路由往返中保留。
+- 新作品页 /community/work/:submissionId 在桌面采用左侧作品、右侧信息与评论布局，手机改为上下排列。图片完整展示、GIF 保留动效、视频手动播放，多附件可切换，敏感媒体须主动展开。
+- 作品信息下方的“制作同款”进入对应文本、图片或视频制作模块，继续使用管理员配置的网址及既有登录要求；另提供复制提示词，不假设第三方工具能够自动填充。
+- 新增 CommunityWorkViews1793844969747 迁移与作品 show/view 接口，复用既有公开范围、作者隐私、关注时间和拉黑过滤。浏览计数从本轮上线开始统计；页面可见且预览进入视口满一秒才上报，同一账号或匿名请求 IP 在三十分钟内通过 Redis 原子键去重，数据库原子累加。
+- 中文、英文文案同步；普通点赞、评论和转发继续调用原生 Note 接口，生产内容审核设置不变。
+
+### 本轮验证与边界
+
+- PASS：七组真实业务服务、TypeORM/PGlite 后端验证，覆盖权限、迁移 up/down、浏览去重及上限、缓冲点赞。
+- PASS：二十项真实 Vue SFC、CSS、交互逻辑与 API 适配器的 Chromium 隔离检查，覆盖快速评论、失败草稿、分页、转发结果不确定、KeepAlive 状态同步、游客登录、中英文及 320px 长标题；无 pageerror。
+- PASS：变更组件和共享逻辑针对生成 SDK 的定向类型检查，变更文件 ESLint、SPDX、locale safety、git diff --check；独立交叉评审无阻断项。
+- PASS：GitHub 完整 Docker 镜像构建、服务器固定 SHA 拉取、OCI revision、源码归档 SHA-256、应用/PostgreSQL/Redis 三个容器健康。新增浏览计数迁移已在生产执行。
+- PASS：线上真实公开作品《小狗自拍》的卡片、媒体解码、桌面左右布局、游客互动登录门控、制作同款及登录后制作入口、管理员登录、评论输入框、真实 Redis 同账号浏览去重、390px 中英文手机界面；无横向溢出或 pageerror。
+- BASELINE：生产 check-migrations 仍仅报告 meta.proxyRemoteFiles 默认值 false/true 的两条既有差异，无本轮新实体差异。
+- SKIPPED：本机完整依赖安装因 EACCES 失败，未宣称完整本地构建或全仓测试通过；完整生产构建由 GitHub Docker 流水线验证。
+- 边界：线上只进行了正常浏览及登录，没有对用户作品发布评论、点赞、转发或执行审核决策。互动写入使用隔离服务验证；隔离 Redis 使用原子 fake，生产另验证真实 Redis 去重，但未进行多 PostgreSQL 连接并发压力测试。
+
+本地验证报告：.community-validation/work-interactions-review/backend-results.json、frontend-results.json；生产验收与截图：.community-validation/work-interactions-production/checks.json、community-desktop.png、work-detail-desktop.png、work-detail-mobile.png、work-detail-mobile-en.png。
+
+### 本轮备份与恢复
+
+备份目录：/opt/ai-community-backups/interactions-20261105T023901Z。已备份数据库、上传文件、私有配置、Compose、旧镜像引用及源码；数据库 dump 已用 pg_restore --list 校验。升级前镜像为 sha-5da7f01201bff52a8c3f7c6d5d70ec7c0231d00b，保留在服务器。健康检查失败可恢复旧镜像；本轮健康启动成功，未回滚。临时镜像拉取凭据已删除。
+
+## 上一轮审核修复（2026-11-05）
 
 用户的《小狗自拍》已保存为 pending，未丢失。根因是投稿系统固定先审后发，而管理员菜单仍打开旧频道审核页；旧页面不能查询 community_submission，错误显示初始化提示。
 
@@ -56,7 +81,7 @@
 
 已通过真实管理员登录，在后台保存 `homeShowcaseMode=popular`，并验证原来的展示图片和三个制作链接未被覆盖。上线时 `/api/community/featured` 返回 0 件符合条件的作品；首页按设计显示已保存图片或默认视觉。待社区作品审核通过后，热门窗口自动展示三个互动模块。没有向生产社区发布演示作品、评论或虚构互动数据。
 
-## 备份与恢复
+## 上一轮审核部署备份与恢复
 
 本轮备份目录：`/opt/ai-community-backups/moderation-20261105T011750Z`（目录时间为 UTC，对应北京时间 2026-11-05）。
 
