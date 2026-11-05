@@ -82,7 +82,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
 					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
 					<nav v-if="isPublicFeed" :class="$style.feedFilters" :aria-label="ft.filters">
-						<a v-for="entry in feedSections" :key="entry.id" :href="entry.path" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', entry.path)">{{ entry.title }}</a>
+						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.title }}</a>
 					</nav>
 					<form v-if="!isPublicFeed" :class="$style.search" role="search" @submit.prevent="search">
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
@@ -152,7 +152,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
 import DiscoverySidebar from './discovery-sidebar.vue';
@@ -163,7 +163,7 @@ import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 
-const props = defineProps<{ section: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const props = defineProps<{ section: string; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
@@ -197,8 +197,9 @@ const uploadTools = [
 ] as const;
 let releaseFocus: (() => void) | undefined;
 let returnFocus: HTMLElement | undefined;
-const query = ref('');
-const activeQuery = ref('');
+const initialPublicQuery = () => isPublicFeed.value ? (props.initialQuery ?? '').trim().slice(0, 200) : '';
+const query = ref(initialPublicQuery());
+const activeQuery = ref(initialPublicQuery());
 const status = ref<SubmissionStatus | 'all' | 'unreviewed'>(props.section === 'review' ? 'unreviewed' : 'all');
 const items = ref<CommunityWork[]>([]);
 const nextCursor = ref<string | null>(null);
@@ -262,7 +263,20 @@ async function load(append = false) {
 	}
 }
 
-function search() { activeQuery.value = query.value.trim(); void load(); }
+function feedPath(path: string, value = activeQuery.value) {
+	return value ? `${path}?${new URLSearchParams({ q: value })}` : path;
+}
+
+function search() {
+	const nextQuery = query.value.trim().slice(0, 200);
+	if (isPublicFeed.value && nextQuery !== initialPublicQuery()) {
+		const path = feedSections.find(entry => entry.id === props.section)?.path ?? '/community';
+		emit('navigate', feedPath(path, nextQuery));
+		return;
+	}
+	activeQuery.value = nextQuery;
+	void load();
+}
 
 function clearSearch() { query.value = ''; search(); }
 
@@ -443,8 +457,16 @@ watch(() => props.section, (_section, previousSection) => {
 	status.value = props.section === 'review' ? 'unreviewed' : 'all';
 });
 watch(() => props.profileAuthorId, () => { profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
-watch([() => props.section, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
+watch(() => props.initialQuery, () => { if (isPublicFeed.value) query.value = activeQuery.value = initialPublicQuery(); });
+watch([() => props.section, () => props.initialQuery, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
 watch([() => props.compose, () => props.signedIn, () => props.composeRequest], () => { if (props.compose && props.signedIn) void openComposer(); }, { immediate: true });
+onActivated(() => {
+	if (!isPublicFeed.value) return;
+	const restored = initialPublicQuery();
+	const changed = activeQuery.value !== restored;
+	query.value = activeQuery.value = restored;
+	if (changed) void load();
+});
 onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handleComposeRequest); releaseFocus?.(); disposed = true; controller?.abort(); requestId++; });
 </script>
 
