@@ -38,7 +38,7 @@ export const homeTextEn: HomeCopy = {
 	creationSettings: 'Configure the text, image and video destinations in Creation links.',
 	editCreation: 'Configure creation links',
 	showcaseMode: 'Showcase content', customMode: 'Custom image / animation', popularMode: 'Popular community work',
-	popularHint: 'Automatically show approved public work with the most reactions, comments and reposts combined. Newer work wins a tie.',
+	popularHint: 'Automatically show public work with the most reactions, comments and reposts combined. Newer work wins a tie.',
 	popularFallback: 'If no eligible work is available or loading fails, your saved image or default artwork is shown.',
 	popularLoading: 'Loading popular community work…', popularEmpty: 'No eligible public work yet. The homepage will use your saved image.',
 	popularFailed: 'Popular work could not load. Try again; the homepage will use your saved image in the meantime.',

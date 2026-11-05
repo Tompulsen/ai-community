@@ -40,7 +40,7 @@ const homeTextZh = {
 	creationSettings: '文本、图片、视频的目标网址仍在“制作页面链接”中配置。',
 	editCreation: '配置制作页面链接',
 	showcaseMode: '展示内容', customMode: '自定义图片 / 动图', popularMode: '社区热门作品',
-	popularHint: '自动展示点赞、评论和转发总数最高的已审核公开作品；热度相同时优先展示较新的作品。',
+	popularHint: '自动展示点赞、评论和转发总数最高的公开作品；热度相同时优先展示较新的作品。',
 	popularFallback: '暂无符合条件的作品或读取失败时，使用已保存的展示图或默认视觉。',
 	popularLoading: '正在读取社区热门作品…', popularEmpty: '暂时没有可展示的公开作品，首页将使用原来的展示图。',
 	popularFailed: '热门作品暂时无法读取。可以重试，首页会自动使用原来的展示图。',
