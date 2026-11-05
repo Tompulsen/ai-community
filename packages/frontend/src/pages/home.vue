@@ -97,7 +97,7 @@ async function openAccount(kind: 'signin' | 'signup') {
 	const request = ++accountRequest;
 	openingAccount.value = true;
 	try {
-		const component = await (kind === 'signin' ? import('@/components/MkSigninDialog.vue') : import('@/components/MkSignupDialog.vue'));
+		const component = await accountDialogLoaders[kind]();
 		if (request !== accountRequest) return;
 		const { dispose } = await os.popupAsyncWithDialog(Promise.resolve(component.default), { autoSet: true }, {
 			closed: () => { dispose(); if (request === accountRequest) { openingAccount.value = false; disposeAccount = undefined; } },
@@ -110,6 +110,12 @@ async function openAccount(kind: 'signin' | 'signup') {
 		await os.alert({ type: 'error', text: homeText.loginError });
 	}
 }
+
+// Keep each import in its own loader so production preloads include that dialog's CSS.
+const accountDialogLoaders = {
+	signin: () => import('@/components/MkSigninDialog.vue'),
+	signup: () => import('@/components/MkSignupDialog.vue'),
+};
 
 function closeAccount() { accountRequest++; disposeAccount?.(); disposeAccount = undefined; openingAccount.value = false; }
 
