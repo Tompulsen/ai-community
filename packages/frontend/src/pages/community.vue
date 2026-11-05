@@ -24,8 +24,8 @@ import * as os from '@/os.js';
 
 const props = defineProps<{ section?: string; module?: string; }>();
 const activeSection = computed(() => {
-	const section = props.section ?? props.module ?? 'video';
-	return ['text', 'code', 'skill', 'knowledge', 'compose'].includes(section) ? 'resource' : section;
+	const section = props.section ?? props.module ?? 'all';
+	return section === 'compose' ? 'all' : ['text', 'code', 'skill', 'knowledge'].includes(section) ? 'resource' : section;
 });
 const router = useRouter();
 const composeRequest = ref(0);

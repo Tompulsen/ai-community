@@ -75,9 +75,9 @@ export function createCommunityGateway(options: {
 			const endpoint = section === 'review' ? 'admin/community/submissions' : section === 'mine' ? 'community/submissions/mine' : 'community/works';
 			const page = parseCommunityPage(await request(endpoint, {
 				limit: 20, query: query.query, ...(query.cursor ? { untilId: query.cursor } : {}),
-				...(section === 'profile' ? { authorId: query.authorId, ...(query.category ? { category: query.category } : {}) } : section === 'mine' || section === 'review' ? { status: query.status } : { category: section }),
+				...(section === 'profile' ? { authorId: query.authorId, ...(query.category ? { category: query.category } : {}) } : section === 'mine' || section === 'review' ? { status: query.status } : section === 'all' ? {} : { category: section }),
 			}, signal));
-			if (endpoint === 'community/works' && page.items.some(work => !['approved', 'published'].includes(work.status) || (section === 'profile' ? work.author.id !== query.authorId || (query.category != null && work.category !== query.category) : work.category !== section))) throw new Error(t.invalidResponse);
+			if (endpoint === 'community/works' && page.items.some(work => !['approved', 'published'].includes(work.status) || (section === 'profile' ? work.author.id !== query.authorId || (query.category != null && work.category !== query.category) : section !== 'all' && work.category !== section))) throw new Error(t.invalidResponse);
 			return page;
 		},
 		async submit(input) {

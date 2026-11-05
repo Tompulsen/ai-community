@@ -5,26 +5,25 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <main ref="surfaceRoot" :class="[$style.root, { [$style.embedded]: embedded }]">
-	<div :class="[$style.canvas, { [$style.communityCanvas]: currentCategory }]">
+	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
 			<div><h1>{{ title }}</h1><p v-if="!isCommunity">{{ description }}</p></div>
 			<div :class="$style.headerActions">
-		<div :class="$style.account">
-			<template v-if="!signedIn">
-				<button type="button" :class="$style.quiet" @click="emit('login')">{{ t.login }}</button>
-				<button type="button" :class="$style.secondary" :title="registrationClosed ? t.signupClosed : undefined" @click="emit('signup')">{{ t.signup }}</button>
-			</template>
-			<a v-else href="/community/mine" :class="$style.quiet" @click.prevent="emit('navigate', '/community/mine')">{{ t.mine }}</a>
-		</div>
-
+				<div :class="$style.account">
+					<template v-if="!signedIn">
+						<button type="button" :class="$style.quiet" @click="emit('login')">{{ t.login }}</button>
+						<button type="button" :class="$style.secondary" :title="registrationClosed ? t.signupClosed : undefined" @click="emit('signup')">{{ t.signup }}</button>
+					</template>
+					<a v-else href="/community/mine" :class="$style.quiet" @click.prevent="emit('navigate', '/community/mine')">{{ t.mine }}</a>
+				</div>
 			</div>
 		</header>
 		<nav v-if="isProfile" :class="[$style.tabs, $style.profileTabs]" :aria-label="t.profileWorks">
 			<button type="button" :aria-pressed="profileCategory === 'all'" @click="profileCategory = 'all'">{{ t.allWorks }}</button>
 			<button v-for="entry in communitySections" :key="entry.id" type="button" :aria-pressed="profileCategory === entry.id" @click="profileCategory = entry.id">{{ entry.title }}</button>
 		</nav>
-		<nav v-else-if="!embedded" :class="$style.tabs" :aria-label="t.community">
+		<nav v-else-if="!embedded && !isPublicFeed" :class="$style.tabs" :aria-label="t.community">
 			<a v-for="entry in communitySections" :key="entry.id" :href="entry.path" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', entry.path)">
 				{{ entry.title }}
 			</a>
@@ -72,62 +71,66 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-if="section === 'ai'" :class="$style.reserved">
 			<i class="ti ti-sparkles" aria-hidden="true"></i><h2>{{ t.aiTitle }}</h2><p>{{ t.aiHint }}</p>
 			<ul><li v-for="item in t.aiItems" :key="item"><span>{{ item }}</span><span :class="$style.muted">{{ t.reserved }}</span></li></ul>
-			<a href="/community/video" :class="$style.secondary" @click.prevent="emit('navigate', '/community/video')">{{ t.aiBack }}</a>
+			<a href="/community" :class="$style.secondary" @click.prevent="emit('navigate', '/community')">{{ t.aiBack }}</a>
 		</section>
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
-		<div v-else :class="$style.columns">
+		<div v-else :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed }]">
+			<DiscoverySidebar v-if="isPublicFeed" v-model:query="query" :class="$style.discovery" @search="search" @navigate="emit('navigate', $event)" @login="emit('login')"/>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
-				<div :class="$style.toolbar">
-					<h2>{{ isCommunity ? t.latest : title }}</h2>
-				<form :class="$style.search" role="search" @submit.prevent="search">
-					<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
-					<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
-				</form>
-					<button type="button" :class="$style.quiet" :disabled="loading" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i>{{ t.refresh }}</button>
+				<div :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
+					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
+					<nav v-if="isPublicFeed" :class="$style.feedFilters" :aria-label="ft.filters">
+						<a v-for="entry in feedSections" :key="entry.id" :href="entry.path" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', entry.path)">{{ entry.title }}</a>
+					</nav>
+					<form v-if="!isPublicFeed" :class="$style.search" role="search" @submit.prevent="search">
+						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
+						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
+					</form>
+					<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span v-if="!isPublicFeed">{{ t.refresh }}</span></button>
 				</div>
+				<div v-if="isPublicFeed && activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
 					<label>{{ t.all }}<select v-model="status"><option v-if="section === 'review'" value="unreviewed">{{ t.unreviewed }}</option><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="published">{{ t.published }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option><option value="removed">{{ t.removed }}</option><option value="withdrawn">{{ t.withdrawn }}</option></select></label>
 				</div>
 				<div v-if="loading && !items.length" :class="$style.empty" role="status"><i class="ti ti-loader" aria-hidden="true"></i><p>{{ t.loading }}</p></div>
 				<div v-else-if="loadError && !items.length" :class="$style.empty" role="alert"><i class="ti ti-cloud-off" aria-hidden="true"></i><h2>{{ t.loadError }}</h2><p>{{ loadError }}</p><button type="button" :class="$style.secondary" @click="load()">{{ t.retry }}</button></div>
 				<div v-else-if="!items.length" :class="$style.empty">
-					<i :class="isCommunity ? currentCategory?.icon : 'ti ti-inbox'" aria-hidden="true"></i>
+					<i :class="isCommunity ? currentCategory?.icon ?? 'ti ti-layout-grid' : 'ti ti-inbox'" aria-hidden="true"></i>
 					<h2>{{ emptyTitle }}</h2><p>{{ emptyHint }}</p>
 					<button v-if="section === 'mine'" type="button" :class="$style.secondary" @click="openComposer">{{ t.publish }}</button>
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-					<WorkCard v-if="isCommunity" :work="work"/>
-					<article v-else :class="$style.work">
-
-						<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
-							<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
-							<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ t[work.status] }}</span></div>
-							<h3><a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" @click.prevent="emit('navigate', `/community/work/${work.id}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
-							<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
-							<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
-							<a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" :class="$style.discuss" @click.prevent="emit('navigate', `/community/work/${work.id}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
-							<details v-if="!isCommunity" :class="$style.details">
-								<summary>{{ t.detail }}</summary><p :class="$style.fullText"><Mfm :text="work.text" :plain="true"/></p>
-								<p v-if="work.model">{{ t.model }}：{{ work.model }}</p>
-								<p v-if="work.license">{{ t.licenseLabel }}：{{ work.license }}</p>
-								<a v-if="safeWebUrl(work.sourceUrl)" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.sourceLabel }}：{{ work.sourceUrl }}</a>
-								<div v-for="file in work.files" :key="file.id" :class="$style.reviewMedia">
-									<video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls preload="none" :aria-label="file.name"></video>
-									<img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" :alt="file.name" loading="lazy"/>
-									<a v-else-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer">{{ file.name }}</a>
-								</div>
-							</details>
-							<form v-if="section === 'review' && moderator && ['pending', 'published', 'approved'].includes(work.status)" :class="$style.reviewForm" @submit.prevent="review(work, 'approve')">
-								<label :class="$style.check"><input v-model="reviewChecks[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ t.reviewConfirm }}</label>
-								<label>{{ t.reason }}<textarea v-model="reviewReasons[work.id]" rows="2" maxlength="1000" :placeholder="t.reasonPlaceholder" :disabled="!!reviewingId"></textarea></label>
-								<p v-if="reviewErrors[work.id]" role="alert" :class="$style.error">{{ reviewErrors[work.id] }}</p>
-								<div :class="$style.reviewActions"><button v-if="work.status !== 'approved'" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending'" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ t.reject }}</button><button v-else type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
-							</form>
-						</div>
-					</article>
+						<WorkCard v-if="isCommunity" :work="work"/>
+						<article v-else :class="$style.work">
+							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
+								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
+								<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ t[work.status] }}</span></div>
+								<h3><a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" @click.prevent="emit('navigate', `/community/work/${work.id}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
+								<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
+								<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
+								<a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" :class="$style.discuss" @click.prevent="emit('navigate', `/community/work/${work.id}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
+								<details v-if="!isCommunity" :class="$style.details">
+									<summary>{{ t.detail }}</summary><p :class="$style.fullText"><Mfm :text="work.text" :plain="true"/></p>
+									<p v-if="work.model">{{ t.model }}：{{ work.model }}</p>
+									<p v-if="work.license">{{ t.licenseLabel }}：{{ work.license }}</p>
+									<a v-if="safeWebUrl(work.sourceUrl)" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.sourceLabel }}：{{ work.sourceUrl }}</a>
+									<div v-for="file in work.files" :key="file.id" :class="$style.reviewMedia">
+										<video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls preload="none" :aria-label="file.name"></video>
+										<img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" :alt="file.name" loading="lazy"/>
+										<a v-else-if="safeWebUrl(file.url)" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer">{{ file.name }}</a>
+									</div>
+								</details>
+								<form v-if="section === 'review' && moderator && ['pending', 'published', 'approved'].includes(work.status)" :class="$style.reviewForm" @submit.prevent="review(work, 'approve')">
+									<label :class="$style.check"><input v-model="reviewChecks[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ t.reviewConfirm }}</label>
+									<label>{{ t.reason }}<textarea v-model="reviewReasons[work.id]" rows="2" maxlength="1000" :placeholder="t.reasonPlaceholder" :disabled="!!reviewingId"></textarea></label>
+									<p v-if="reviewErrors[work.id]" role="alert" :class="$style.error">{{ reviewErrors[work.id] }}</p>
+									<div :class="$style.reviewActions"><button v-if="work.status !== 'approved'" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending'" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ t.reject }}</button><button v-else type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
+								</form>
+							</div>
+						</article>
 					</template>
 				</div>
 				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
@@ -150,10 +153,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
-import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
+import DiscoverySidebar from './discovery-sidebar.vue';
+import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
+import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
@@ -162,11 +167,16 @@ const props = defineProps<{ section: string; embedded?: boolean; publicationMode
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
+const isPublicFeed = computed(() => !props.embedded && (props.section === 'all' || !!currentCategory.value));
 const profileCategory = ref<CommunityCategory | 'all'>('all');
-const isCommunity = computed(() => !!currentCategory.value || isProfile.value);
+const isCommunity = computed(() => props.section === 'all' || !!currentCategory.value || isProfile.value);
 const validSection = computed(() => isCommunity.value || ['mine', 'review', 'ai'].includes(props.section));
-const title = computed(() => currentCategory.value?.title ?? (validSection.value ? t[props.section as 'mine' | 'review' | 'ai' | 'profile'] : t.unknown));
-const description = computed(() => validSection.value ? t.descriptions[props.section as CommunitySection] : t.unknownHint);
+const title = computed(() => props.section === 'all' ? t.community : currentCategory.value?.title ?? (validSection.value ? t[props.section as 'mine' | 'review' | 'ai' | 'profile'] : t.unknown));
+const description = computed(() => props.section === 'all' ? '' : validSection.value ? t.descriptions[props.section as Exclude<CommunitySection, 'all'>] : t.unknownHint);
+const feedSections = [
+	{ id: 'all', title: ft.all, path: '/community' },
+	...communitySections.map(entry => ({ ...entry, title: ft[entry.id] })),
+];
 const titleInput = ref<HTMLInputElement>();
 const contentInput = ref<HTMLTextAreaElement>();
 const sourceInput = ref<HTMLInputElement>();
@@ -242,7 +252,7 @@ async function load(append = false) {
 		const page = await props.gateway.list(props.section as CommunitySection, { query: activeQuery.value, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
 		if (current !== requestId || disposed) return;
 		// Fail closed: a malformed public response cannot expose pending content.
-		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : work.category !== props.section))) throw new Error(t.invalidResponse);
+		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : props.section !== 'all' && work.category !== props.section))) throw new Error(t.invalidResponse);
 		items.value = append ? [...items.value, ...page.items.filter(work => !items.value.some(existing => existing.id === work.id))] : page.items;
 		nextCursor.value = page.nextCursor;
 	} catch (error) {
@@ -253,6 +263,8 @@ async function load(append = false) {
 }
 
 function search() { activeQuery.value = query.value.trim(); void load(); }
+
+function clearSearch() { query.value = ''; search(); }
 
 async function openComposer() {
 	if (!props.signedIn) { emit('login'); return; }
@@ -425,8 +437,9 @@ async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'rem
 	} catch (error) { if (!disposed && props.section === 'review') reviewErrors[work.id] = errorText(error); } finally { reviewingId.value = ''; }
 }
 
-watch(() => props.section, () => {
-	query.value = ''; activeQuery.value = ''; notice.value = ''; composerOpen.value = false;
+watch(() => props.section, (_section, previousSection) => {
+	if (!isPublicFeed.value || !['all', 'video', 'image', 'resource'].includes(previousSection)) { query.value = ''; activeQuery.value = ''; }
+	notice.value = ''; composerOpen.value = false;
 	status.value = props.section === 'review' ? 'unreviewed' : 'all';
 });
 watch(() => props.profileAuthorId, () => { profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
@@ -451,7 +464,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 :is(.root, .modalLayer) h1, :is(.root, .modalLayer) h2, :is(.root, .modalLayer) h3, :is(.root, .modalLayer) p { margin: 0; }
 .account { display: flex; align-items: center; gap: 12px; }
 .canvas { width: 100%; min-height: 100%; padding: 24px 32px; }
-.canvas.communityCanvas { padding-top: 0; }
+.canvas.communityCanvas { padding-top: 16px; }
 .headerActions { display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
 .heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 8px 20px; }
 .heading h1 { font-size: 24px; font-weight: 700; letter-spacing: -.03em; }
@@ -473,11 +486,24 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .tabs a[aria-current], .profileTabs button[aria-pressed='true'] { font-weight: 700; color: var(--MI_THEME-fg); background: var(--MI_THEME-panel); }
 .profileTabs button { border: 0; background: transparent; color: var(--MI_THEME-fg); }
 .columns { display: grid; grid-template-columns: minmax(0, 1fr); }
+.withDiscovery { grid-template-columns: minmax(0, 1fr) clamp(280px, 26%, 360px); column-gap: var(--community-gap); align-items: start; }
+.withDiscovery .feed { grid-column: 1; grid-row: 1; }
+.discovery { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
+.withDiscovery .communityFooter { grid-column: 1; }
 .feed { min-width: 0; }
 .toolbar, .sectionTitle { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
 .toolbar h2, .sectionTitle h2 { font-size: 16px; font-weight: 600; }
 .toolbar { padding: 20px 8px; gap: 12px; }
 .toolbar h2 { white-space: nowrap; }
+.feedToolbar { padding: 0 4px 16px; min-height: 68px; gap: 16px; flex-wrap: wrap; }
+.feedToolbar h1 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.feedFilters { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.feedFilters a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+.feedFilters a:hover { background: var(--MI_THEME-buttonBg); }
+.feedFilters a[aria-current] { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-weight: 700; }
+.feedToolbar .refresh { margin-left: auto; width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+.searchSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.searchSummary span { min-width: 0; }
 .search { display: flex; gap: 8px; margin-left: auto; width: min(100%, 320px); }
 .searchField { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding-left: 13px; background: var(--MI_THEME-panel); border: 1px solid transparent; border-radius: 999px; }
 .searchField input { width: 100%; min-width: 0; border: 0 !important; background: transparent !important; }
@@ -528,7 +554,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .form { display: grid; gap: 16px; }
 .fields { display: grid; grid-template-columns: 1fr 2fr; gap: 18px; }
 .form label, .reviewForm > label { display: grid; gap: 7px; font-weight: 500; min-width: 0; }
-:is(.root, .modalLayer) input:not([type='checkbox']), :is(.root, .modalLayer) select, :is(.root, .modalLayer) textarea { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding: 10px 12px; width: 100%; min-width: 0; caret-color: var(--MI_THEME-accent); }
+:is(.root, .modalLayer) input:not([type='checkbox'], [type='range']), :is(.root, .modalLayer) select, :is(.root, .modalLayer) textarea { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding: 10px 12px; width: 100%; min-width: 0; caret-color: var(--MI_THEME-accent); }
 :is(.root, .modalLayer) input::placeholder, :is(.root, .modalLayer) textarea::placeholder { color: var(--MI_THEME-fg); opacity: 1; }
 :is(.root, .modalLayer) textarea { resize: vertical; line-height: 1.65; }
 .form .check, .reviewForm .check { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
@@ -553,6 +579,16 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .reserved p { margin-top: 12px; max-width: 55ch; }
 .reserved ul { padding: 0; list-style: none; margin-block: 28px; }
 .reserved li { display: flex; justify-content: space-between; gap: 20px; padding-block: 14px; border-bottom: 1px solid var(--MI_THEME-divider); }
+@container (max-width: 1100px) {
+ .feedToolbar { gap: 4px 12px; }
+ .feedFilters { order: 3; width: 100%; }
+}
+@container (max-width: 900px) {
+ .withDiscovery { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+ .discovery { position: static; grid-column: 1; grid-row: 1; }
+ .withDiscovery .feed { grid-row: 2; }
+ .withDiscovery .communityFooter { grid-row: 3; }
+}
 @container (max-width: 600px) {
  .profileTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); position: static; }
  .canvas { padding: 12px; }
@@ -564,6 +600,10 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
  .tabs a { padding: 10px 4px; font-size: 12px; min-height: 44px; }
  .toolbar { padding: 12px 4px; flex-wrap: wrap; }
  .toolbar h2 { flex: 1; }
+ .feedToolbar { padding: 0 2px 12px; }
+ .feedToolbar h1 { font-size: 18px; }
+ .feedFilters { gap: 2px; }
+ .feedFilters a { padding-inline: 10px; font-size: 12px; }
  .search { order: 3; width: 100%; }
  .fields, .guideContent { grid-template-columns: 1fr; }
  .reserved, .workBody { padding: 20px 16px; }

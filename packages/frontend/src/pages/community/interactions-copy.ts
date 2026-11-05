@@ -6,9 +6,15 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	playVideo: '播放视频', pauseVideo: '暂停视频', muteVideo: '关闭声音', unmuteVideo: '开启声音', mutedPreview: '静音预览',
+	videoProgress: '视频播放进度', videoFullscreen: '全屏播放', videoDetail: '查看作品详情', videoLoading: '视频加载中…',
+	videoFailed: '视频暂时无法播放', videoPlayBlocked: '播放未能开始，请点击播放重试。', videoFullscreenFailed: '无法进入全屏，可在作品详情中播放。',
 	comment: '评论', repost: '转发', reposted: '已转发', like: '点赞', liked: '已点赞', views: '浏览', share: '复制作品链接',
 	viewHint: '实际浏览次数，同一访客短时间内重复浏览会去重。',
 	commentPlaceholder: '聊聊这个作品…', send: '发送评论', sending: '正在发送…', sent: '评论已发布',
+	commentShortcut: 'Ctrl / ⌘ + Enter 发送，Enter 换行', commentTooLong: '评论超出字数限制，请缩短后发送。', closeComments: '收起评论',
+	updatingLike: '正在更新点赞…', unliked: '已取消点赞', reposting: '正在转发作品…', repostSuccess: '已转发到你的个人动态。', loadingComments: '正在加载评论…',
+	refreshingInteraction: '正在刷新互动状态…',
 	comments: '作品评论', emptyComments: '还没有评论，来聊聊你的想法。', loadMore: '加载更多评论', refresh: '刷新评论',
 	loading: '正在加载作品…', failed: '作品加载失败，请重试。', unavailable: '作品已下架、不存在或暂时无法查看。', retry: '重试',
 	commentFailed: '评论发送失败，输入已保留。', uncertain: '尚未确认是否发送成功。请先刷新查看，避免重复发送。', retrySend: '确认后重新发送',
@@ -22,9 +28,15 @@ const zh = {
 	attachmentComment: '包含附件的评论', viewComment: '查看评论详情', shareFailed: '复制失败，请使用下面的作品链接。',
 };
 const en: typeof zh = {
+	playVideo: 'Play video', pauseVideo: 'Pause video', muteVideo: 'Mute', unmuteVideo: 'Turn sound on', mutedPreview: 'Muted preview',
+	videoProgress: 'Video progress', videoFullscreen: 'Fullscreen', videoDetail: 'View work details', videoLoading: 'Loading video…',
+	videoFailed: 'Video is unavailable', videoPlayBlocked: 'Playback did not start. Press play to try again.', videoFullscreenFailed: 'Fullscreen is unavailable. Open the work details to watch.',
 	comment: 'Comment', repost: 'Repost', reposted: 'Reposted', like: 'Like', liked: 'Liked', views: 'Views', share: 'Copy work link',
 	viewHint: 'Recorded views. Repeat visits by the same viewer within a short period count once.',
 	commentPlaceholder: 'Share your thoughts…', send: 'Post comment', sending: 'Posting…', sent: 'Comment posted',
+	commentShortcut: 'Ctrl / ⌘ + Enter to post; Enter for a new line', commentTooLong: 'Your comment is too long. Shorten it before posting.', closeComments: 'Collapse comments',
+	updatingLike: 'Updating like…', unliked: 'Like removed', reposting: 'Reposting work…', repostSuccess: 'Reposted to your profile.', loadingComments: 'Loading comments…',
+	refreshingInteraction: 'Refreshing interaction status…',
 	comments: 'Comments', emptyComments: 'No comments yet. Share your thoughts.', loadMore: 'Load more comments', refresh: 'Refresh comments',
 	loading: 'Loading work…', failed: 'Could not load this work. Please retry.', unavailable: 'This work was removed, does not exist, or is unavailable.', retry: 'Retry',
 	commentFailed: 'Could not post your comment. Your draft is still here.', uncertain: 'Delivery is unconfirmed. Refresh the comments before trying again to avoid duplicates.', retrySend: 'Retry after checking',

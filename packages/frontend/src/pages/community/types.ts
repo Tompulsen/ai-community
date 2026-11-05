@@ -4,7 +4,7 @@
  */
 
 export type CommunityCategory = 'video' | 'image' | 'resource';
-export type CommunitySection = CommunityCategory | 'mine' | 'review' | 'ai' | 'profile';
+export type CommunitySection = CommunityCategory | 'all' | 'mine' | 'review' | 'ai' | 'profile';
 export type SubmissionStatus = 'pending' | 'published' | 'approved' | 'rejected' | 'removed' | 'withdrawn';
 export type CommunityFile = { id: string; name: string; type: string; url: string; thumbnailUrl?: string | null; isSensitive?: boolean; };
 export type CommunityWork = {

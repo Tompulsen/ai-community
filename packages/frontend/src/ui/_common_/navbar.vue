@@ -21,9 +21,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div :class="$style.middle">
 			<MkCommunityNav :compact="iconOnly"/>
 			<MkA v-if="$i" :class="$style.item" :activeClass="$style.active" :to="`/@${$i.username}`" :aria-label="communityText.profile"><i :class="$style.itemIcon" class="ti ti-user ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.profile }}</span></MkA>
-			<MkA v-tooltip.noDelay.right="communityText.ai" :class="$style.item" :activeClass="$style.active" to="/community/ai" :aria-label="communityText.ai"><i :class="$style.itemIcon" class="ti ti-sparkles ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.ai }}</span></MkA>
-			<MkA v-tooltip.noDelay.right="communityText.mine" :class="$style.item" :activeClass="$style.active" to="/community/mine" :aria-label="communityText.mine"><i :class="$style.itemIcon" class="ti ti-folders ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.mine }}</span></MkA>
-			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="communityText.review" :class="$style.item" :activeClass="$style.active" to="/community/review" :aria-label="communityText.review"><i :class="$style.itemIcon" class="ti ti-shield-check ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.review }}</span></MkA>
+			<MkA v-tooltip.noDelay.right="communityText.ai" :class="[$style.item, { [$style.active]: activeCommunityModule === 'ai' }]" to="/community/ai" :aria-label="communityText.ai" :aria-current="activeCommunityModule === 'ai' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-sparkles ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.ai }}</span></MkA>
+			<MkA v-tooltip.noDelay.right="communityText.mine" :class="[$style.item, { [$style.active]: activeCommunityModule === 'mine' }]" to="/community/mine" :aria-label="communityText.mine" :aria-current="activeCommunityModule === 'mine' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-folders ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.mine }}</span></MkA>
+			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="communityText.review" :class="[$style.item, { [$style.active]: activeCommunityModule === 'review' }]" to="/community/review" :aria-label="communityText.review" :aria-current="activeCommunityModule === 'review' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-shield-check ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.review }}</span></MkA>
 			<div :class="$style.divider"></div>
 			<MkA v-tooltip.noDelay.right="i18n.ts.timeline" :class="$style.item" :activeClass="$style.active" to="/timeline" exact>
 				<i :class="$style.itemIcon" class="ti ti-home ti-fw" style="view-transition-name: navbar-homeIcon;"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
@@ -127,6 +127,10 @@ import { communityText } from '@/pages/community/copy.js';
 import { requestCommunityComposer } from '@/pages/community/compose.js';
 
 const router = useRouter();
+const activeCommunityModule = computed(() => {
+	const current = router.currentRef.value;
+	return current.route.path === '/community/:module' ? current.props.get('module') : null;
+});
 
 const props = defineProps<{
 	showWidgetButton?: boolean;

@@ -36,6 +36,7 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 	const commentLimit = options.commentLimit ?? 2;
 	const repostState = ref<'idle' | 'sending' | 'sent' | 'rejected' | 'uncertain'>('idle');
 	const refreshing = ref(false);
+	const refreshingComments = ref(false);
 	const myReaction = ref<string | null | undefined>(undefined);
 	const reactionBusy = ref(false);
 	const reactionFailed = ref(false);
@@ -43,8 +44,10 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 	const commentState = ref<'idle' | 'sending' | 'sent' | 'rejected' | 'uncertain'>('idle');
 	const controllers = new Set<AbortController>();
 	let readController: AbortController | undefined;
+	let noteReadController: AbortController | undefined;
 	let generation = 0;
 	let readGeneration = 0;
+	let noteGeneration = 0;
 	let draftKey = '';
 	let restoringDraft = false;
 	const liked = computed(() => isHeart(myReaction.value));
@@ -73,24 +76,27 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 		const current = context();
 		if (!current.id || !active.value) return;
 		const ticket = ++readGeneration;
+		const noteTicket = ++noteGeneration;
+		noteReadController?.abort();
 		readController?.abort();
 		const controller = new AbortController();
 		readController = controller;
 		const timer = window.setTimeout(() => controller.abort(), 12000);
 		const valid = () => current.valid() && ticket === readGeneration;
 		refreshing.value = true;
+		refreshingComments.value = options.loadComments?.() !== false;
 		try {
 			// The homepage always checks guest visibility; community views honor the signed-in viewer.
 			const publicNote = await misskeyApi('notes/show', { noteId: current.id }, options.publicOnly === false ? undefined : null, controller.signal);
 			if (!valid()) return;
 			if (publicNote.id !== current.id || !isPublic(publicNote)) {
-				note.value = null; comments.value = []; state.value = 'unavailable'; return;
+				if (noteTicket === noteGeneration) markUnavailable();
+				return;
 			}
-			note.value = publicNote;
-			state.value = 'ready';
+			if (noteTicket === noteGeneration) { note.value = publicNote; state.value = 'ready'; }
 			const [replies, personal] = await Promise.allSettled([
 				options.loadComments?.() === false ? Promise.resolve(null) : misskeyApi('notes/replies', { noteId: current.id, limit: Math.max(12, commentLimit) }, options.publicOnly === false ? undefined : null, controller.signal),
-				$i ? misskeyApi('notes/show', { noteId: current.id }, undefined, controller.signal) : Promise.resolve(null),
+				$i ? options.publicOnly === false ? Promise.resolve(publicNote) : misskeyApi('notes/show', { noteId: current.id }, undefined, controller.signal) : Promise.resolve(null),
 			]);
 			if (!valid()) return;
 			commentsFailed.value = replies.status === 'rejected';
@@ -99,20 +105,57 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 				commentCursor = replies.value.at(-1)?.id;
 				commentsMore.value = commentLimit > 2 && replies.value.length === Math.max(12, commentLimit);
 			}
-			myReaction.value = personal.status === 'fulfilled' ? personal.value?.myReaction ?? null : undefined;
+			if (noteTicket === noteGeneration) myReaction.value = personal.status === 'fulfilled' ? personal.value?.myReaction ?? null : undefined;
 		} catch (error) {
 			if (!valid()) return;
+			if (refreshingComments.value) commentsFailed.value = true;
+			if (noteTicket !== noteGeneration) return;
 			note.value = null; comments.value = []; myReaction.value = undefined;
 			state.value = errorCode(error) === 'NO_SUCH_NOTE' ? 'unavailable' : 'error';
 		} finally {
 			window.clearTimeout(timer);
-			if (valid()) refreshing.value = false;
+			if (valid()) { refreshing.value = false; refreshingComments.value = false; }
 		}
+	}
+
+	function markUnavailable() {
+		readGeneration++; readController?.abort();
+		note.value = null; comments.value = []; myReaction.value = undefined;
+		state.value = 'unavailable'; commentsMore.value = false; commentCursor = undefined;
+		refreshing.value = false; refreshingComments.value = false;
+	}
+
+	// Reaction/repost checks must not reset loaded comments or cancel a pending comment page.
+	async function refreshNote(): Promise<boolean> {
+		const current = context();
+		if (!current.id || !active.value) return false;
+		const ticket = ++noteGeneration;
+		noteReadController?.abort();
+		const controller = new AbortController(); noteReadController = controller;
+		const timer = window.setTimeout(() => controller.abort(), 12000);
+		const valid = () => current.valid() && ticket === noteGeneration;
+		try {
+			const publicNote = await misskeyApi('notes/show', { noteId: current.id }, options.publicOnly === false ? undefined : null, controller.signal);
+			if (!valid()) return false;
+			if (publicNote.id !== current.id || !isPublic(publicNote)) { markUnavailable(); return false; }
+			note.value = publicNote; state.value = 'ready';
+			const personal = !$i ? null : options.publicOnly === false ? publicNote : await misskeyApi('notes/show', { noteId: current.id }, undefined, controller.signal);
+			if (!valid()) return false;
+			myReaction.value = personal?.myReaction ?? null;
+			return true;
+		} catch (error) {
+			if (valid()) {
+				myReaction.value = undefined;
+				if (errorCode(error) === 'NO_SUCH_NOTE') markUnavailable();
+				else if (!note.value) state.value = 'error';
+			}
+			return false;
+		} finally { window.clearTimeout(timer); }
 	}
 
 	async function toggleLike() {
 		const current = context();
-		if (!active.value || !$i || !current.id || state.value !== 'ready' || busy.value || refreshing.value || myReaction.value === undefined) return;
+		if (!active.value || !$i || !current.id || state.value !== 'ready' || busy.value || myReaction.value === undefined) return;
 		reactionBusy.value = true;
 		reactionFailed.value = false;
 		try {
@@ -120,7 +163,10 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 			else await write(signal => misskeyApi('notes/reactions/create', { noteId: current.id!, reaction: '❤️' }, undefined, signal));
 		} catch { if (current.valid()) reactionFailed.value = true; } finally {
 			// Never invent a successful count, including duplicate / stale reaction errors.
-			if (current.valid()) { await refresh(); if (current.valid()) reactionBusy.value = false; }
+			if (current.valid()) {
+				const verified = await refreshNote();
+				if (current.valid()) { if (!verified) reactionFailed.value = true; reactionBusy.value = false; }
+			}
 		}
 	}
 
@@ -180,15 +226,15 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 			const rejected = error != null && typeof error === 'object' && 'kind' in error && error.kind === 'client';
 			if (rejected) savedReposts.delete(key);
 			if (current.valid()) repostState.value = rejected ? 'rejected' : 'uncertain';
-		} finally { if (current.valid()) await refresh(); }
+		} finally { if (current.valid()) await refreshNote(); }
 	}
 
 	function reset() {
-		generation++; readGeneration++; readController?.abort();
+		generation++; readGeneration++; noteGeneration++; readController?.abort(); noteReadController?.abort();
 		for (const controller of controllers) controller.abort();
 		controllers.clear();
 		note.value = null; comments.value = []; myReaction.value = undefined;
-		state.value = 'loading'; refreshing.value = false; commentsFailed.value = false;
+		state.value = 'loading'; refreshing.value = false; refreshingComments.value = false; commentsFailed.value = false;
 		reactionBusy.value = false; reactionFailed.value = false; repostState.value = 'idle';
 		commentsMore.value = false; loadingComments.value = false; commentCursor = undefined;
 		draft.value = ''; commentState.value = 'idle';
@@ -226,15 +272,15 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 		}
 	});
 	onDeactivated(() => {
-		saveDraft(); active.value = false; generation++; readGeneration++; readController?.abort();
+		saveDraft(); active.value = false; generation++; readGeneration++; noteGeneration++; readController?.abort(); noteReadController?.abort();
 		for (const controller of controllers) controller.abort();
 		if (commentState.value === 'sending') commentState.value = 'uncertain';
 		if (repostState.value === 'sending') repostState.value = 'uncertain';
 		loadingComments.value = false;
-		reactionBusy.value = false; refreshing.value = false;
+		reactionBusy.value = false; refreshing.value = false; refreshingComments.value = false;
 	});
 	onBeforeUnmount(() => { saveDraft(); active.value = false; restoringDraft = true; reset(); });
 	watch(draft, () => { if (commentState.value === 'sent' || commentState.value === 'rejected') commentState.value = 'idle'; }, { flush: 'sync' });
 
-	return { repost, repostState, loadMoreComments, commentsMore, loadingComments, state, note, comments, commentsFailed, refreshing, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, toggleLike, sendComment };
+	return { repost, repostState, loadMoreComments, commentsMore, loadingComments, state, note, comments, commentsFailed, refreshing, refreshingComments, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, refreshNote, toggleLike, sendComment };
 }
