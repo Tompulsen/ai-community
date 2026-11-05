@@ -11,10 +11,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 	@close="onClose"
 	@closed="emit('closed')"
 >
-	<template #header>{{ i18n.ts.signup }}</template>
+	<template #header>{{ signingIn ? i18n.ts.login : i18n.ts.signup }}</template>
 
 	<div style="overflow-x: clip;">
+		<div v-if="signingIn" class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 32px;">
+			<MkSignin :autoSet="autoSet" @login="dialog?.close()" @busy="busy = $event"/>
+		</div>
 		<Transition
+			v-else
 			mode="out-in"
 			:enterActiveClass="$style.transition_x_enterActive"
 			:leaveActiveClass="$style.transition_x_leaveActive"
@@ -25,9 +29,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<XServerRules @done="isAcceptedServerRule = true" @cancel="onClose"/>
 			</template>
 			<template v-else>
-				<XSignup :autoSet="autoSet" @signup="onSignup" @signupEmailPending="onSignupEmailPending"/>
+				<XSignup :autoSet="autoSet" @signup="onSignup" @signupEmailPending="onSignupEmailPending" @busy="busy = $event"/>
 			</template>
 		</Transition>
+		<div v-if="autoSet" :class="$style.switchMode">
+			<span>{{ signingIn ? authText.noAccount : authText.haveAccount }}</span>
+			<button type="button" class="_textButton" :disabled="busy" data-testid="auth-switch" @click="signingIn = !signingIn">{{ signingIn ? authText.goSignup : authText.goSignin }}</button>
+		</div>
 	</div>
 </MkModalWindow>
 </template>
@@ -39,6 +47,8 @@ import XSignup from '@/components/MkSignupDialog.form.vue';
 import XServerRules from '@/components/MkSignupDialog.rules.vue';
 import MkModalWindow from '@/components/MkModalWindow.vue';
 import { i18n } from '@/i18n.js';
+import MkSignin from '@/components/MkSignin.vue';
+import { authText } from '@/utility/auth-copy.js';
 
 const props = withDefaults(defineProps<{
 	autoSet?: boolean;
@@ -55,8 +65,11 @@ const emit = defineEmits<{
 const dialog = useTemplateRef('dialog');
 
 const isAcceptedServerRule = ref(false);
+const signingIn = ref(false);
+const busy = ref(false);
 
 function onClose() {
+	if (busy.value) return;
 	emit('cancelled');
 	dialog.value?.close();
 }
@@ -72,6 +85,15 @@ function onSignupEmailPending() {
 </script>
 
 <style lang="scss" module>
+.switchMode {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	align-items: center;
+	gap: 8px;
+	padding: 0 24px 24px;
+	button { min-height: 44px; font-weight: bold; }
+}
 .transition_x_enterActive,
 .transition_x_leaveActive {
 	transition: opacity 0.3s cubic-bezier(0,0,.35,1), transform 0.3s cubic-bezier(0,0,.35,1);
@@ -83,5 +105,8 @@ function onSignupEmailPending() {
 .transition_x_leaveTo {
 	opacity: 0;
 	transform: translateX(-50px);
+}
+@media (prefers-reduced-motion: reduce) {
+	.transition_x_enterActive, .transition_x_leaveActive { transition: none; }
 }
 </style>

@@ -8,6 +8,8 @@ import { id } from './util/id.js';
 import { MiUser } from './User.js';
 import { MiNote } from './Note.js';
 
+export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'>;
+
 @Entity('community_submission')
 @Index('IDX_community_submission_author_key', ['authorId', 'idempotencyKey'], { unique: true })
 @Index('IDX_community_submission_status_category_id', ['status', 'category', 'id'])
@@ -61,6 +63,10 @@ export class MiCommunitySubmission {
 
 	@Column('integer', { default: 0 })
 	public version: number;
+
+	/** A private edit awaiting moderation; the published columns remain unchanged. */
+	@Column('jsonb', { nullable: true })
+	public pendingRevision: CommunityRevision | null;
 
 	@Column('timestamp with time zone')
 	public submittedAt: Date;

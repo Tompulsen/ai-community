@@ -6,8 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <div :class="$style.wrapper" data-testid="signin-page-input">
 	<div :class="$style.root">
-		<div :class="$style.avatar">
-			<i class="ti ti-user"></i>
+		<div :class="$style.intro">
+			<h2>{{ authText.signinTitle }}</h2>
+			<p>{{ authText.signinHint }}</p>
 		</div>
 
 		<!-- ログイン画面メッセージ -->
@@ -30,21 +31,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 		</div>
 
-		<!-- username入力 -->
-		<form class="_gaps_s" @submit.prevent="emit('usernameSubmitted', username)">
-			<MkInput v-model="username" :placeholder="i18n.ts._communityAuth.identifier" type="text" :spellcheck="false" autocomplete="username webauthn" autofocus required data-testid="signin-username">
-				<template #label>{{ i18n.ts._communityAuth.identifier }}</template>
-				<template #prefix><i class="ti ti-user" aria-hidden="true"></i></template>
-			</MkInput>
-			<MkButton type="submit" large primary rounded style="margin: 0 auto;" data-testid="signin-page-input-continue">{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
-		</form>
+		<XPassword ref="passwordForm" :user="null" :needCaptcha="needCaptcha" :waiting="waiting" embedded @passwordSubmitted="onPasswordSubmitted">
+			<template #identifier>
+				<MkInput ref="identifierInput" v-model="username" name="username" :placeholder="authText.identifier" type="text" pattern=".*\S.*" :spellcheck="false" autocapitalize="none" autocomplete="username webauthn" :disabled="waiting" autofocus required large data-testid="signin-username">
+					<template #label>{{ authText.identifier }}</template>
+					<template #prefix><i class="ti ti-user" aria-hidden="true"></i></template>
+				</MkInput>
+			</template>
+		</XPassword>
 
 		<!-- パスワードレスログイン -->
-		<div :class="$style.orHr">
+		<div v-if="supportsPasskey" :class="$style.orHr">
 			<p :class="$style.orMsg">{{ i18n.ts.or }}</p>
 		</div>
-		<div>
-			<MkButton type="submit" style="margin: auto auto;" large rounded primary gradate @click="emit('passkeyClick', $event)">
+		<div v-if="supportsPasskey">
+			<MkButton type="button" full large rounded :disabled="waiting" @click="emit('passkeyClick')">
 				<i class="ti ti-device-usb" style="font-size: medium;"></i>{{ i18n.ts.signinWithPasskey }}
 			</MkButton>
 		</div>
@@ -53,7 +54,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, useTemplateRef } from 'vue';
+import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 
 import { query, extractDomain } from '@@/js/url.js';
 import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
@@ -63,11 +65,16 @@ import * as os from '@/os.js';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkInfo from '@/components/MkInfo.vue';
+import XPassword from '@/components/MkSignin.password.vue';
+import type { PwResponse } from '@/components/MkSignin.password.vue';
+import { authText } from '@/utility/auth-copy.js';
 
 const props = withDefaults(defineProps<{
 	message?: string,
 	openOnRemote?: OpenOnRemoteOptions,
 	initialUsername?: string;
+	needCaptcha?: boolean;
+	waiting?: boolean;
 }>(), {
 	message: '',
 	openOnRemote: undefined,
@@ -75,11 +82,25 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-	(ev: 'usernameSubmitted', v: string): void;
-	(ev: 'passkeyClick', v: PointerEvent): void;
+	(ev: 'credentialsSubmitted', v: PwResponse & { identifier: string }): void;
+	(ev: 'passkeyClick'): void;
 }>();
 
 const username = ref(props.initialUsername ?? '');
+const supportsPasskey = browserSupportsWebAuthn();
+const passwordForm = useTemplateRef('passwordForm');
+const identifierInput = useTemplateRef('identifierInput');
+
+function onPasswordSubmitted(value: PwResponse) {
+	if (!username.value.trim() || props.waiting) return;
+	emit('credentialsSubmitted', { ...value, identifier: username.value.trim() });
+}
+
+defineExpose({
+	resetCaptcha: () => passwordForm.value?.resetCaptcha(),
+	clearPassword: () => passwordForm.value?.clearPassword(),
+	focus: () => identifierInput.value?.focus(),
+});
 
 //#region Open on remote
 function openRemote(options: OpenOnRemoteOptions, targetHost?: string): void {
@@ -151,23 +172,16 @@ async function specifyHostAndOpenRemote(options: OpenOnRemoteOptions): Promise<v
 	display: flex;
 	align-items: center;
 	width: 100%;
-	min-height: 336px;
+	min-height: 0;
 
 	> .root {
 		width: 100%;
 	}
 }
 
-.avatar {
-	margin: 0 auto;
-	background-color: color-mix(in srgb, var(--MI_THEME-fg), transparent 85%);
-	color: color-mix(in srgb, var(--MI_THEME-fg), transparent 25%);
-	text-align: center;
-	height: 64px;
-	width: 64px;
-	font-size: 24px;
-	line-height: 64px;
-	border-radius: 50%;
+.intro {
+	h2 { margin: 0; font-size: 1.6em; line-height: 1.3; }
+	p { margin: 10px 0 0; color: var(--MI_THEME-fgTransparentWeak); line-height: 1.6; }
 }
 
 .instanceManualSelectButton {

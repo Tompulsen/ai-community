@@ -79,8 +79,6 @@ export async function signIn(page: Page, baseUrl: string, username: string, pass
 	await page.getByTestId('signin').click();
 	await page.getByTestId('signin-page-input').waitFor({ state: 'visible', timeout: 10_000 });
 	await locateMkInput(page, 'signin-username').fill(username);
-	await page.keyboard.press('Enter');
-	await page.getByTestId('signin-page-password').waitFor({ state: 'visible', timeout: 10_000 });
 	await locateMkInput(page, 'signin-password').fill(password);
 	const signinResponse = waitApiResponse(page, '/api/signin-flow');
 	await page.keyboard.press('Enter');
@@ -99,6 +97,7 @@ export async function signupThroughUi(
 	options: {
 		username: string;
 		password: string;
+		email?: string;
 		invitationCode?: string;
 	},
 ): Promise<void> {
@@ -106,6 +105,7 @@ export async function signupThroughUi(
 	await acceptSignupRules(page);
 
 	await locateMkInput(page, 'signup-username').fill(options.username);
+	await locateMkInput(page, 'signup-email').fill(options.email ?? `${options.username}@example.com`);
 	await locateMkInput(page, 'signup-password').fill(options.password);
 	await locateMkInput(page, 'signup-password-retype').fill(options.password);
 	await locateMkInput(page, 'signup-invitation-code').fill(options.invitationCode ?? DEFAULT_INVITATION_CODE);

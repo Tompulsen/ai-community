@@ -26,13 +26,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import type { CommunityWork } from './types.js';
 import WorkMedia from './work-media.vue';
 import WorkEngagement from './work-engagement.vue';
 import { workText as t, studioPath } from './interactions-copy.js';
 import { safeWebUrl } from './copy.js';
 import { useWorkView } from './use-work-view.js';
+import { communityUpdates, getCommunityUpdateVersion } from './updates.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { definePage } from '@/page.js';
 import * as os from '@/os.js';
@@ -46,15 +47,18 @@ const copyFailed = ref(false);
 const views = useWorkView(root, () => work.value);
 const backPath = computed(() => `/community/${work.value?.category === 'resource' ? 'knowledge' : work.value?.category ?? 'image'}`);
 let controller: AbortController | undefined;
+let loadedVersion = getCommunityUpdateVersion();
+let active = true;
 
 async function load() {
+	const version = getCommunityUpdateVersion();
 	controller?.abort();
 	const current = new AbortController(); controller = current;
 	work.value = null; failed.value = false; unavailable.value = false; copyFailed.value = false;
 	const timeout = window.setTimeout(() => current.abort(), 15000);
 	try {
 		const result = await misskeyApi('community/works/show', { submissionId: props.submissionId }, undefined, current.signal);
-		if (controller === current) work.value = result;
+		if (controller === current) { work.value = result; loadedVersion = version; }
 	} catch (error) {
 		if (controller !== current) return;
 		failed.value = true;
@@ -65,6 +69,9 @@ async function load() {
 async function copyPrompt() { try { await navigator.clipboard.writeText(work.value?.text ?? ''); os.toast(t.copied); copyFailed.value = false; } catch { copyFailed.value = true; } }
 
 watch(() => props.submissionId, load, { immediate: true });
+watch(communityUpdates, () => { if (active) void load(); });
+onActivated(() => { active = true; if (loadedVersion !== getCommunityUpdateVersion()) void load(); });
+onDeactivated(() => { active = false; });
 onBeforeUnmount(() => { controller?.abort(); controller = undefined; });
 definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', needWideArea: true }));
 </script>

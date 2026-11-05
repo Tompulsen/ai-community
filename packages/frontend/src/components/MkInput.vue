@@ -5,15 +5,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div class="_selectable">
-	<div :class="$style.label" @click="focus"><slot name="label"></slot></div>
+	<label :for="id" :class="$style.label"><slot name="label"></slot></label>
 	<div :class="[$style.input, { [$style.inline]: inline, [$style.disabled]: disabled, [$style.focused]: focused }]">
 		<div ref="prefixEl" :class="$style.prefix"><slot name="prefix"></slot></div>
 		<input
+			:id="id"
 			ref="inputEl"
 			v-model="v"
 			v-adaptive-border
+			:name="name"
 			:class="$style.inputCore"
-			:type="type"
+			:type="withPasswordToggle && type === 'password' && passwordVisible ? 'text' : type"
 			:disabled="disabled"
 			:required="required"
 			:readonly="readonly"
@@ -24,7 +26,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			:spellcheck="spellcheck"
 			:inputmode="inputmode"
 			:step="step"
-			:list="id"
+			:list="datalist ? `${id}-list` : undefined"
+			:aria-describedby="$slots.caption ? `${id}-caption` : undefined"
 			:min="min"
 			:max="max"
 			@focus="focused = true"
@@ -32,12 +35,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 			@keydown="onKeydown($event)"
 			@input="onInput"
 		>
-		<datalist v-if="datalist" :id="id">
+		<datalist v-if="datalist" :id="`${id}-list`">
 			<option v-for="data in datalist" :key="data" :value="data"></option>
 		</datalist>
-		<div ref="suffixEl" :class="$style.suffix"><slot name="suffix"></slot></div>
+		<div ref="suffixEl" :class="$style.suffix">
+			<slot name="suffix"></slot>
+			<button v-if="withPasswordToggle && type === 'password'" type="button" class="_button" :class="$style.passwordToggle" :disabled="disabled" :aria-label="passwordVisible ? authText.hidePassword : authText.showPassword" :aria-pressed="passwordVisible" @click="passwordVisible = !passwordVisible">
+				<i :class="passwordVisible ? 'ti ti-eye-off' : 'ti ti-eye'" aria-hidden="true"></i>
+			</button>
+		</div>
 	</div>
-	<div :class="$style.caption"><slot name="caption"></slot></div>
+	<div :id="`${id}-caption`" :class="$style.caption"><slot name="caption"></slot></div>
 
 	<MkButton v-if="manualSave && changed" primary :class="$style.save" @click="updated"><i class="ti ti-check"></i> {{ i18n.ts.save }}</MkButton>
 </div>
@@ -60,9 +68,12 @@ import MkButton from '@/components/MkButton.vue';
 import { i18n } from '@/i18n.js';
 import { Autocomplete } from '@/utility/autocomplete.js';
 import { genId } from '@/utility/id.js';
+import { authText } from '@/utility/auth-copy.js';
 
 const props = defineProps<{
 	modelValue: ModelValueType<T> | null;
+	name?: string;
+	withPasswordToggle?: boolean;
 	type?: T;
 	required?: boolean;
 	readonly?: boolean;
@@ -99,6 +110,7 @@ const { modelValue } = toRefs(props);
 const v = ref<ModelValueType<T> | null>(modelValue.value);
 const id = genId();
 const focused = ref(false);
+const passwordVisible = ref(false);
 const changed = ref(false);
 const invalid = ref(false);
 const filled = computed(() => v.value !== '' && v.value != null);
@@ -210,6 +222,7 @@ defineExpose({
 
 <style lang="scss" module>
 .label {
+	display: block;
 	font-size: 0.85em;
 	padding: 0 0 8px 0;
 	user-select: none;
@@ -313,5 +326,15 @@ defineExpose({
 }
 .save {
 	margin: 8px 0 0 0;
+}
+
+.passwordToggle {
+	pointer-events: auto;
+	display: grid;
+	place-items: center;
+	min-width: 36px;
+	height: 100%;
+	color: var(--MI_THEME-fg);
+	&:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
 }
 </style>

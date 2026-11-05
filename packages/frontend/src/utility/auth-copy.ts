@@ -1,0 +1,64 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+import { lang } from '@@/js/config.js';
+
+const zh = {
+	signinTitle: '欢迎回来', signinHint: '登录后继续创作、分享和交流。',
+	identifier: '邮箱或用户名', password: '密码', signin: '登录', signingIn: '正在登录…',
+	signupTitle: '加入创作社区', signupHint: '创建账号，保存灵感，分享你的作品。',
+	signup: '创建账号', signingUp: '正在创建账号…',
+	noAccount: '还没有账号？', haveAccount: '已有账号？', goSignup: '注册账号', goSignin: '去登录',
+	showPassword: '显示密码', hidePassword: '隐藏密码', backToSignin: '返回账号密码登录',
+	invalidCredentials: '邮箱、用户名或密码不正确，请检查后重试。',
+	networkError: '连接失败，请检查网络后重试。已填写的内容仍然保留。',
+	serviceError: '暂时无法完成请求，请稍后重试。',
+	captchaError: '验证未通过或已过期，请重新完成验证。',
+	verificationRetry: '登录未完成，请检查账号信息并重新完成验证码后重试。',
+	checking: '正在检查账号信息…', checkFailed: '暂时无法检查，请重试。', retryCheck: '重新检查',
+	usernameHint: '1–20 位字母、数字或下划线，注册后不可更改。',
+	emailInfo: '邮箱用于登录，用户名用于社区展示。',
+	emailUnverified: '当前无需验证邮箱；邮件找回密码尚未启用。',
+	passwordHint: '建议使用较长且不易猜到的密码。',
+	signupError: '暂时无法注册，请稍后重试。若刚才已提交成功，可尝试登录。',
+	usernameUsed: '这个用户名已被使用，请换一个。',
+	emailUsed: '这个邮箱已注册，可直接登录或找回密码。',
+	emailInvalid: '邮箱不可用，请检查地址后重试。',
+	invitationInvalid: '邀请码无效或已使用，请检查后重试。',
+	registrationClosed: '当前需要邀请码才能注册。',
+	invalidSignup: '请检查用户名、邮箱和密码后重试。',
+	accountCreated: '账号已创建，登录未完成。请点击下方按钮重试登录，无需重新注册。',
+	retrySignin: '继续登录', passkeyCancelled: '未完成通行密钥验证，可重试或返回账号密码登录。',
+};
+
+const en: Record<keyof typeof zh, string> = {
+	signinTitle: 'Welcome back', signinHint: 'Sign in to create, share and connect.',
+	identifier: 'Email or username', password: 'Password', signin: 'Sign in', signingIn: 'Signing in…',
+	signupTitle: 'Join the creative community', signupHint: 'Create an account to save ideas and share your work.',
+	signup: 'Create account', signingUp: 'Creating your account…',
+	noAccount: 'New here?', haveAccount: 'Already have an account?', goSignup: 'Create an account', goSignin: 'Sign in',
+	showPassword: 'Show password', hidePassword: 'Hide password', backToSignin: 'Back to password sign-in',
+	invalidCredentials: 'Your email, username or password is incorrect. Check them and try again.',
+	networkError: 'Connection failed. Check your connection and retry. Your input has been kept.',
+	serviceError: 'This request could not be completed. Please try again later.',
+	captchaError: 'Verification failed or expired. Please complete it again.',
+	verificationRetry: 'Sign-in did not finish. Check your account details and complete verification again.',
+	checking: 'Checking your account details…', checkFailed: 'Could not check availability. Please retry.', retryCheck: 'Check again',
+	usernameHint: '1–20 letters, numbers or underscores. This cannot be changed later.',
+	emailInfo: 'Use your email to sign in. Your username identifies you in the community.',
+	emailUnverified: 'Email verification is not required. Email password recovery is not available yet.',
+	passwordHint: 'Use a long password that is hard to guess.',
+	signupError: 'Could not complete registration. Please retry later, or try signing in if your account was already created.',
+	usernameUsed: 'This username is taken. Please choose another.',
+	emailUsed: 'This email is already registered. Sign in or reset your password.',
+	emailInvalid: 'This email is unavailable. Check the address and try again.',
+	invitationInvalid: 'The invitation code is invalid or already used. Please check it.',
+	registrationClosed: 'An invitation code is required to register.',
+	invalidSignup: 'Check your username, email and password and try again.',
+	accountCreated: 'Your account was created, but sign-in did not finish. Retry below without registering again.',
+	retrySignin: 'Continue to sign in', passkeyCancelled: 'Passkey verification was not completed. Retry or return to password sign-in.',
+};
+
+export const authText = lang.startsWith('en') ? en : zh;

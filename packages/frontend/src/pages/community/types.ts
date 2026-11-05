@@ -10,6 +10,7 @@ export type CommunityFile = { id: string; name: string; type: string; url: strin
 export type CommunityWork = {
 	id: string;
 	version: number;
+	revisionPending?: boolean;
 	category: CommunityCategory;
 	title: string;
 	text: string;
@@ -38,11 +39,15 @@ export type CommunitySubmissionInput = {
 	fileIds: string[];
 };
 export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; };
+export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
 export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };
 
 export interface CommunityGateway {
 	list: (section: CommunitySection, options: { query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; }, signal: AbortSignal) => Promise<CommunityPage>;
 	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: SubmissionStatus; submittedAt: string; }>;
+	show: (submissionId: string, signal?: AbortSignal) => Promise<CommunityWork>;
+	update: (input: CommunityUpdateInput) => Promise<CommunityWork>;
+	delete: (input: { submissionId: string; version: number; }) => Promise<void>;
 	review: (input: CommunityReviewInput) => Promise<CommunityWork>;
 	chooseFiles: (event: MouseEvent) => Promise<CommunityFile[]>;
 	uploadFiles?: (files: File[]) => Promise<CommunityFile[]>;

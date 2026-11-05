@@ -689,3 +689,13 @@ export type CommunityWorksShowResponse = operations['community___works___show'][
 export type CommunityWorksViewRequest = operations['community___works___view']['requestBody']['content']['application/json'];
 
 export type CommunityWorksViewResponse = operations['community___works___view']['responses']['200']['content']['application/json'];
+
+export type CommunitySubmissionsShowRequest = operations['community___submissions___show']['requestBody']['content']['application/json'];
+
+export type CommunitySubmissionsShowResponse = operations['community___submissions___show']['responses']['200']['content']['application/json'];
+
+export type CommunitySubmissionsUpdateRequest = operations['community___submissions___update']['requestBody']['content']['application/json'];
+
+export type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
+
+export type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];

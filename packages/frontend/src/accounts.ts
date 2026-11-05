@@ -171,27 +171,28 @@ export async function login(token: AccountWithToken['token'], redirect?: string)
 		closed: () => dispose(),
 	});
 
-	const me = await fetchAccount(token, undefined, true).catch(reason => {
+	try {
+		const me = await fetchAccount(token, undefined, true);
+		miLocalStorage.setItem('account', JSON.stringify({
+			...me,
+			token,
+		}));
+		await addAccount(host, me, token);
+
+		if (redirect) {
+			// 他のタブは再読み込みするだけ
+			reloadChannel.postMessage(null);
+			// このページはredirectで指定された先に移動
+			window.location.href = redirect;
+			return;
+		}
+
+		unisonReload();
+	} catch (reason) {
+		// Storage failures must also release the global waiting dialog for a retry.
 		showing.value = false;
 		throw reason;
-	});
-
-	miLocalStorage.setItem('account', JSON.stringify({
-		...me,
-		token,
-	}));
-
-	await addAccount(host, me, token);
-
-	if (redirect) {
-		// 他のタブは再読み込みするだけ
-		reloadChannel.postMessage(null);
-		// このページはredirectで指定された先に移動
-		window.location.href = redirect;
-		return;
 	}
-
-	unisonReload();
 }
 
 export async function switchAccount(host: string, id: string) {

@@ -4,10 +4,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div :class="$style.wrapper" data-testid="signin-page-password">
+<div :class="[$style.wrapper, { [$style.embedded]: embedded }]" data-testid="signin-page-password">
 	<div class="_gaps" :class="$style.root">
-		<div :class="$style.avatar" :style="{ backgroundImage: user ? `url('${user.avatarUrl}')` : undefined }"></div>
-		<div :class="$style.welcomeBackMessage">
+		<div v-if="!embedded" :class="$style.avatar" :style="{ backgroundImage: user ? `url('${user.avatarUrl}')` : undefined }"></div>
+		<div v-if="!embedded" :class="$style.welcomeBackMessage">
 			<I18n v-if="user" :src="i18n.ts.welcomeBackWithName" tag="span">
 				<template #name><Mfm :text="user.name ?? user.username" :plain="true"/></template>
 			</I18n>
@@ -15,17 +15,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 
 		<!-- password入力 -->
-		<form class="_gaps_s" @submit.prevent="onSubmit">
+		<form class="_gaps_m" :aria-busy="waiting" @submit.prevent="onSubmit">
+			<slot name="identifier">
 			<!-- ブラウザ オートコンプリート用 -->
 			<input type="hidden" name="username" autocomplete="username" :value="identifier ?? user?.username">
+			</slot>
 
-			<MkInput v-model="password" :placeholder="i18n.ts.password" type="password" autocomplete="current-password webauthn" :withPasswordToggle="true" required autofocus data-testid="signin-password">
+			<MkInput v-model="password" name="password" :placeholder="i18n.ts.password" type="password" autocomplete="current-password" :withPasswordToggle="true" :disabled="waiting" required :autofocus="!embedded" large data-testid="signin-password">
 				<template #label>{{ i18n.ts.password }}</template>
 				<template #prefix><i class="ti ti-lock"></i></template>
-				<template #caption><button class="_textButton" type="button" @click="resetPassword">{{ i18n.ts.forgotPassword }}</button></template>
+					<template #caption><button class="_textButton" type="button" :disabled="waiting" @click="resetPassword">{{ i18n.ts.forgotPassword }}</button></template>
 			</MkInput>
 
-			<div v-if="needCaptcha">
+			<div v-if="needCaptcha && captchaEnabled" :class="$style.captcha">
 				<MkCaptcha v-if="instance.enableHcaptcha" ref="hcaptcha" v-model="hCaptchaResponse" provider="hcaptcha" :sitekey="instance.hcaptchaSiteKey"/>
 				<MkCaptcha v-if="instance.enableMcaptcha" ref="mcaptcha" v-model="mCaptchaResponse" provider="mcaptcha" :sitekey="instance.mcaptchaSiteKey" :instanceUrl="instance.mcaptchaInstanceUrl"/>
 				<MkCaptcha v-if="instance.enableRecaptcha" ref="recaptcha" v-model="reCaptchaResponse" provider="recaptcha" :sitekey="instance.recaptchaSiteKey"/>
@@ -33,7 +35,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkCaptcha v-if="instance.enableTestcaptcha" ref="testcaptcha" v-model="testcaptchaResponse" provider="testcaptcha" :sitekey="null"/>
 			</div>
 
-			<MkButton type="submit" :disabled="needCaptcha && captchaFailed" large primary rounded style="margin: 0 auto;" data-testid="signin-page-password-continue">{{ i18n.ts.continue }} <i class="ti ti-arrow-right"></i></MkButton>
+			<MkButton type="submit" :disabled="waiting || (needCaptcha && captchaFailed)" large primary rounded full data-testid="signin-page-password-continue">
+				<MkLoading v-if="waiting" :em="true" :colored="false"/>
+				{{ waiting ? authText.signingIn : authText.signin }}
+			</MkButton>
 		</form>
 	</div>
 </div>
@@ -53,12 +58,13 @@ export type PwResponse = {
 </script>
 
 <script setup lang="ts">
-import { ref, computed, useTemplateRef, defineAsyncComponent } from 'vue';
+import { ref, computed, useTemplateRef, defineAsyncComponent, onBeforeUnmount } from 'vue';
 import * as Misskey from 'misskey-js';
 
 import { instance } from '@/instance.js';
 import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
+import { authText } from '@/utility/auth-copy.js';
 
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
@@ -68,6 +74,8 @@ const props = defineProps<{
 	user: Misskey.entities.UserDetailed | null;
 	identifier?: string;
 	needCaptcha: boolean;
+	embedded?: boolean;
+	waiting?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -87,6 +95,7 @@ const mCaptchaResponse = ref<string | null>(null);
 const reCaptchaResponse = ref<string | null>(null);
 const turnstileResponse = ref<string | null>(null);
 const testcaptchaResponse = ref<string | null>(null);
+const captchaEnabled = computed(() => instance.enableHcaptcha || instance.enableMcaptcha || instance.enableRecaptcha || instance.enableTurnstile || instance.enableTestcaptcha);
 
 const captchaFailed = computed((): boolean => {
 	return (
@@ -105,6 +114,7 @@ function resetPassword(): void {
 }
 
 function onSubmit() {
+	if (props.waiting || (props.needCaptcha && captchaFailed.value) || !password.value) return;
 	emit('passwordSubmitted', {
 		password: password.value,
 		captcha: {
@@ -118,6 +128,7 @@ function onSubmit() {
 }
 
 function resetCaptcha() {
+	hCaptchaResponse.value = mCaptchaResponse.value = reCaptchaResponse.value = turnstileResponse.value = testcaptchaResponse.value = null;
 	hCaptcha.value?.reset();
 	mCaptcha.value?.reset();
 	reCaptcha.value?.reset();
@@ -127,7 +138,10 @@ function resetCaptcha() {
 
 defineExpose({
 	resetCaptcha,
+	clearPassword: () => { password.value = ''; },
 });
+
+onBeforeUnmount(() => { password.value = ''; });
 </script>
 
 <style lang="scss" module>
@@ -141,6 +155,9 @@ defineExpose({
 		width: 100%;
 	}
 }
+
+.embedded { min-height: 0; }
+.captcha { max-width: 100%; overflow-x: auto; }
 
 .avatar {
 	margin: 0 auto 0 auto;

@@ -67,13 +67,14 @@ test.describe('After setup instance', () => {
 
 		test.expect(await page.getByTestId('signup-submit').isDisabled()).toBeTruthy();
 		await locateMkInput(page, 'signup-username').fill('alice');
+		await locateMkInput(page, 'signup-email').fill('alice@example.com');
 		test.expect(await page.getByTestId('signup-submit').isDisabled()).toBeTruthy();
 		await locateMkInput(page, 'signup-password').fill('alice1234');
 		test.expect(await page.getByTestId('signup-submit').isDisabled()).toBeTruthy();
 		await locateMkInput(page, 'signup-password-retype').fill('alice1234');
 		test.expect(await page.getByTestId('signup-submit').isDisabled()).toBeTruthy();
 		await locateMkInput(page, 'signup-invitation-code').fill('test-invitation-code');
-		test.expect(await page.getByTestId('signup-submit').isDisabled()).toBeFalsy();
+		await test.expect(page.getByTestId('signup-submit')).toBeEnabled();
 
 		const signupResponse = waitApiResponse(page, '/api/signup');
 		await page.getByTestId('signup-submit').click();
@@ -121,10 +122,6 @@ test.describe('After user signup', () => {
 
 		await page.getByTestId('signin-page-input').waitFor({ state: 'visible', timeout: 10000 });
 		await locateMkInput(page, 'signin-username').fill('alice');
-		// Enterキーで続行できるかどうかの確認も兼ねる
-		await page.keyboard.press('Enter');
-
-		await page.getByTestId('signin-page-password').waitFor({ state: 'visible', timeout: 10000 });
 		await locateMkInput(page, 'signin-password').fill('alice1234');
 
 		const signinResponse = waitApiResponse(page, '/api/signin-flow');
@@ -147,6 +144,7 @@ test.describe('After user signup', () => {
 
 		await page.getByTestId('signin-page-input').waitFor({ state: 'visible', timeout: 10000 });
 		await locateMkInput(page, 'signin-username').fill('alice');
+		await locateMkInput(page, 'signin-password').fill('alice1234');
 		await page.keyboard.press('Enter');
 
 		await page.getByText('This account has been suspended due to').waitFor({ timeout: 10000 });

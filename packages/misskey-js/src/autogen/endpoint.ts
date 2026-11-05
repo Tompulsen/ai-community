@@ -1,4 +1,9 @@
 import type {
+	CommunitySubmissionsDeleteRequest,
+	CommunitySubmissionsShowRequest,
+	CommunitySubmissionsShowResponse,
+	CommunitySubmissionsUpdateRequest,
+	CommunitySubmissionsUpdateResponse,
 	CommunityWorksShowRequest,
 	CommunityWorksShowResponse,
 	CommunityWorksViewRequest,
@@ -1121,22 +1126,18 @@ export type Endpoints = {
 	'users/update-memo': { req: UsersUpdateMemoRequest; res: EmptyResponse };
 	'v2/admin/emoji/list': { req: V2AdminEmojiListRequest; res: V2AdminEmojiListResponse };
 	'verify-email': { req: VerifyEmailRequest; res: EmptyResponse };
-
 	'community/works': { req: CommunityWorksRequest; res: CommunityWorksResponse };
-
 	'community/submissions/create': { req: CommunitySubmissionsCreateRequest; res: CommunitySubmissionsCreateResponse };
-
 	'community/submissions/mine': { req: CommunitySubmissionsMineRequest; res: CommunitySubmissionsMineResponse };
-
 	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
-
 	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
-
 	'community/featured': { req: EmptyRequest; res: CommunityFeaturedResponse };
-
 	'community/works/show': { req: CommunityWorksShowRequest; res: CommunityWorksShowResponse };
 
 	'community/works/view': { req: CommunityWorksViewRequest; res: CommunityWorksViewResponse };
+	'community/submissions/show': { req: CommunitySubmissionsShowRequest; res: CommunitySubmissionsShowResponse };
+	'community/submissions/update': { req: CommunitySubmissionsUpdateRequest; res: CommunitySubmissionsUpdateResponse };
+	'community/submissions/delete': { req: CommunitySubmissionsDeleteRequest; res: EmptyResponse };
 };
 
 /**

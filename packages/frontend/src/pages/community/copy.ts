@@ -4,6 +4,7 @@
  */
 
 import { moderationText } from './moderation-copy.js';
+import { editText } from './edit-copy.js';
 
 // Project-owned Chinese copy, isolated from upstream Crowdin-managed locale files.
 const communityBaseText = {
@@ -73,7 +74,7 @@ const communityBaseText = {
 	detail: '作品内容', reviewAuthor: '投稿人', sourceLabel: '来源', licenseLabel: '授权',
 	previewNotice: '组件预览 · 示例数据与操作仅用于验证，不会提交到真实社区',
 } as const;
-export const communityText = { ...communityBaseText, ...moderationText };
+export const communityText = { ...communityBaseText, ...moderationText, ...editText };
 
 export const communitySections = [
 	{ id: 'video', title: communityText.video, icon: 'ti ti-movie', path: '/community/video' },

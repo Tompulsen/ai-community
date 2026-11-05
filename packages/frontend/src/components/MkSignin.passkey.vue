@@ -12,6 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 			<div :class="$style.passkeyDescription">{{ i18n.ts.useSecurityKey }}</div>
 		</div>
+		<p v-if="cancelled" role="status" :class="$style.notice">{{ authText.passkeyCancelled }}</p>
 
 		<MkButton large primary rounded :disabled="queryingKey" style="margin: 0 auto;" @click="queryKey">{{ i18n.ts.retry }}</MkButton>
 
@@ -21,10 +22,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { startAuthentication } from '@simplewebauthn/browser';
 
 import { i18n } from '@/i18n.js';
+import { authText } from '@/utility/auth-copy.js';
 
 import MkButton from '@/components/MkButton.vue';
 
@@ -41,27 +43,30 @@ const emit = defineEmits<{
 }>();
 
 const queryingKey = ref(true);
+const cancelled = ref(false);
+let active = true;
 
 async function queryKey() {
 	queryingKey.value = true;
-	await startAuthentication({ optionsJSON: props.credentialRequest })
-		.catch(() => {
-			return Promise.reject(null);
-		})
-		.then((credential) => {
-			emit('done', credential);
-		})
-		.finally(() => {
-			queryingKey.value = false;
-		});
+	cancelled.value = false;
+	try {
+		const credential = await startAuthentication({ optionsJSON: props.credentialRequest });
+		if (active) emit('done', credential);
+	} catch {
+		if (active) cancelled.value = true;
+	} finally {
+		queryingKey.value = false;
+	}
 }
 
 onMounted(() => {
 	queryKey();
 });
+onBeforeUnmount(() => { active = false; });
 </script>
 
 <style lang="scss" module>
+.notice { margin: 0; line-height: 1.6; text-align: center; }
 .wrapper {
 	display: flex;
 	align-items: center;

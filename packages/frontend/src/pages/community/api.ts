@@ -13,6 +13,7 @@ const isFile = (file: unknown): file is CommunityFile => isObject(file) && isId(
 export function isCommunityWork(value: unknown): value is CommunityWork {
 	if (!isObject(value) || !isObject(value.author)) return false;
 	return isId(value.id) && Number.isInteger(value.version) && Number(value.version) >= 0
+		&& (value.revisionPending === undefined || typeof value.revisionPending === 'boolean')
 		&& ['video', 'image', 'resource'].includes(String(value.category))
 		&& ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'].includes(String(value.status))
 		&& ['title', 'text', 'model', 'sourceUrl', 'license', 'submittedAt'].every(key => typeof value[key] === 'string')
@@ -59,6 +60,7 @@ export function createCommunityGateway(options: {
 				const fallback = response.status === 401 ? t.loginError : response.status === 403 ? t.permissionError : response.status === 409 ? t.conflictError : [404, 501, 503].includes(response.status) ? t.serviceUnavailable : t.networkError;
 				throw new Error(messages[body?.error?.code] ?? fallback);
 			}
+			if (response.status === 204) return undefined;
 			try { return await response.json(); } catch { throw new Error(t.invalidResponse); }
 		} catch (error) {
 			if (controller.signal.aborted && !signal?.aborted) throw new Error(t.networkError);
@@ -91,6 +93,19 @@ export function createCommunityGateway(options: {
 			return result;
 		},
 		chooseFiles: options.chooseFiles,
+		async show(submissionId, signal) {
+			const result = await request('community/submissions/show', { submissionId }, signal);
+			if (!isCommunityWork(result) || result.id !== submissionId) throw new Error(t.invalidResponse);
+			return result;
+		},
+		async update(input) {
+			const result = await request('community/submissions/update', input);
+			if (!isCommunityWork(result) || result.id !== input.submissionId) throw new Error(t.invalidResponse);
+			return result;
+		},
+		async delete(input) {
+			await request('community/submissions/delete', input);
+		},
 		uploadFiles: options.uploadFiles,
 	};
 }

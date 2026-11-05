@@ -28,39 +28,41 @@ SPDX-License-Identifier: AGPL-3.0-only
 				{{ entry.title }}
 			</a>
 		</nav>
-		<p v-if="notice" role="status" :class="$style.notice">{{ notice }} <a v-if="signedIn && section !== 'review'" href="/community/mine" @click.prevent="emit('navigate', '/community/mine')">{{ t.viewMine }}</a></p>
+		<p v-if="notice" ref="noticeElement" role="status" tabindex="-1" :class="$style.notice">{{ notice }} <a v-if="signedIn && section !== 'review'" href="/community/mine" @click.prevent="emit('navigate', '/community/mine')">{{ t.viewMine }}</a></p>
+		<p v-if="editError" role="alert" :class="$style.error">{{ editError }}</p>
 		<Teleport defer to="#misskey-popup-container">
 			<div v-if="composerOpen && signedIn" ref="modalLayer" :class="$style.modalLayer" :style="{ zIndex: composerZIndex }" @click.self="closeComposer" @keydown="onComposerKeydown">
-				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="t.publish" :class="$style.composer" tabindex="-1">
+				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="editing ? t.editWork : t.publish" :class="$style.composer" tabindex="-1">
 					<header :class="$style.composerHeader">
-						<button type="button" :class="$style.quiet" :aria-label="t.close" :disabled="submitting || choosing || emojiOpen" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
-						<span v-if="hasDraft" :class="$style.draftHint">{{ t.draftHint }}</span>
+						<button type="button" :class="$style.quiet" :aria-label="editing ? t.closeEditor : t.close" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
+						<h2 v-if="editing" :class="$style.editorTitle">{{ t.editWork }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
 					</header>
+					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
 						<div :class="$style.editorRow">
 							<div :class="$style.composerAvatar"><slot name="composerAvatar"><i class="ti ti-pencil" aria-hidden="true"></i></slot></div>
 							<div :class="$style.writingArea">
-								<input ref="titleInput" v-model="draft.title" :class="$style.titleInput" :aria-label="t.title" maxlength="100" :placeholder="t.title" :disabled="submitting" required/>
-								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting" :readonly="emojiOpen"></textarea>
+								<input ref="titleInput" v-model="draft.title" :class="$style.titleInput" :aria-label="t.title" maxlength="100" :placeholder="t.title" :disabled="submitting || !!openingId" required/>
+								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
-						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
-						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
-						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields"><label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting"/></label></div>
-						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting"/>{{ t.rights }}</label>
-						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p>
+						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
+						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || !!openingId || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
+						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields"><label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label></div>
+						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting || !!openingId"/>{{ t.rights }}</label>
+						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p><button v-if="editConflict" type="button" :class="$style.secondary" :disabled="submitting || !!openingId" @click="reloadEditor">{{ t.reloadEditor }}</button>
 						<footer :class="$style.composerFooter">
 							<div :class="$style.composerTools">
 								<div :class="$style.iconTools" role="group" :aria-label="t.composerTools">
-									<button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.iconButton" :aria-label="tool.label" :title="tool.label" :disabled="submitting || choosing || emojiOpen || files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.existingFiles" :title="t.existingFiles" :disabled="submitting || choosing || emojiOpen || files.length >= 16" @click="chooseFiles"><i class="ti ti-folder" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.emoji" :title="t.emoji" :disabled="submitting || choosing || emojiOpen" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.insertCode" :title="t.insertCode" :disabled="submitting || choosing || emojiOpen" @click="insertCode"><i class="ti ti-code" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.addSource" :title="t.addSource" :disabled="submitting || choosing || emojiOpen" @click="openSource"><i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || choosing || emojiOpen" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
+									<button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.iconButton" :aria-label="tool.label" :title="tool.label" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.existingFiles" :title="t.existingFiles" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="chooseFiles"><i class="ti ti-folder" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.emoji" :title="t.emoji" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.insertCode" :title="t.insertCode" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="insertCode"><i class="ti ti-code" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.addSource" :title="t.addSource" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="openSource"><i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
+									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
 								</div>
 								<input ref="uploadInput" type="file" :accept="uploadAccept" multiple hidden @change="uploadSelected"/>
-								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || choosing || emojiOpen">{{ submitting ? t.submitting : publicationMode === 'after' ? t.submitPublic : t.submit }}</button>
+								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer || !!openingId || !!editing && (!editChanged || editConflict)">{{ editing ? submitting ? t.savingChanges : editNeedsReview ? t.saveForReview : t.saveChanges : submitting ? t.submitting : publicationMode === 'after' ? t.submitPublic : t.submit }}</button>
 							</div>
 							<p :class="$style.uploadHint">{{ choosing ? t.choosing : t.uploadHint }}</p>
 						</footer>
@@ -103,11 +105,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work"/>
+						<WorkCard v-if="isCommunity" :work="work"><template v-if="canEdit(work)" #actions><div :class="$style.workActions"><button type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
-								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time></header>
-								<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ t[work.status] }}</span></div>
+								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canEdit(work)" :class="$style.workActions"><button type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
+								<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ work.revisionPending ? t.revisionPending : t[work.status] }}</span></div>
 								<h3><a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" @click.prevent="emit('navigate', `/community/work/${work.id}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
 								<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
 								<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
@@ -127,7 +129,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 									<label :class="$style.check"><input v-model="reviewChecks[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ t.reviewConfirm }}</label>
 									<label>{{ t.reason }}<textarea v-model="reviewReasons[work.id]" rows="2" maxlength="1000" :placeholder="t.reasonPlaceholder" :disabled="!!reviewingId"></textarea></label>
 									<p v-if="reviewErrors[work.id]" role="alert" :class="$style.error">{{ reviewErrors[work.id] }}</p>
-									<div :class="$style.reviewActions"><button v-if="work.status !== 'approved'" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending'" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ t.reject }}</button><button v-else type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
+									<div :class="$style.reviewActions"><button v-if="work.status !== 'approved' || work.revisionPending" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.revisionPending ? t.approveEdit : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending' || work.revisionPending" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ work.revisionPending ? t.rejectEdit : t.reject }}</button><button v-if="['published', 'approved'].includes(work.status)" type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
 								</form>
 							</div>
 						</article>
@@ -158,12 +160,13 @@ import WorkCard from './work-card.vue';
 import DiscoverySidebar from './discovery-sidebar.vue';
 import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
+import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
 import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 
-const props = defineProps<{ section: string; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const props = defineProps<{ section: string; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
@@ -206,14 +209,28 @@ const nextCursor = ref<string | null>(null);
 const loading = ref(false);
 const loadError = ref('');
 const notice = ref('');
+const noticeElement = ref<HTMLElement>();
 const composerOpen = ref(false);
 const submitting = ref(false);
 const choosing = ref(false);
 const formError = ref('');
 const files = ref<CommunityFile[]>([]);
 const rights = ref(false);
+const editing = ref<CommunityWork | null>(null);
+const openingId = ref('');
+const deletingId = ref('');
+const editError = ref('');
+const editConflict = ref(false);
+const closingComposer = ref(false);
+let editRead: AbortController | undefined;
+let editBaseline = '';
+let newDraft: { content: typeof draft; files: CommunityFile[]; rights: boolean; details: boolean; } | undefined;
 const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', model: '', sourceUrl: '', license: '' });
 const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
+const canEdit = (work: CommunityWork) => props.signedIn && work.author.id === props.viewerId && (isProfile.value || props.section === 'mine');
+const editChanged = computed(() => !!editing.value && JSON.stringify(composerInput()) !== editBaseline);
+const editNeedsReview = computed(() => !!editing.value && (editing.value.revisionPending || !['approved', 'published'].includes(editing.value.status) || props.publicationMode !== 'after'));
+const editHint = computed(() => editing.value && !['approved', 'published'].includes(editing.value.status) ? t.editPrivateHint : editNeedsReview.value ? t.editReviewHint : t.editPublicHint);
 const reviewChecks = reactive<Record<string, boolean>>({});
 const reviewReasons = reactive<Record<string, string>>({});
 const reviewErrors = reactive<Record<string, string>>({});
@@ -223,6 +240,8 @@ let requestId = 0;
 let disposed = false;
 let submissionFingerprint = '';
 let submissionKey = '';
+let loadedVersion = getCommunityUpdateVersion();
+let active = true;
 
 const emptyTitle = computed(() => activeQuery.value ? t.emptySearch : isProfile.value ? t.profileEmpty : props.section === 'mine' ? t.emptyMine : props.section === 'review' ? t.emptyReview : t.empty);
 const emptyHint = computed(() => activeQuery.value ? t.emptySearchHint : isProfile.value ? t.profileEmptyHint : props.section === 'mine' ? t.emptyMineHint : props.section === 'review' ? t.emptyReviewHint : t.emptyHint);
@@ -235,6 +254,7 @@ function errorText(error: unknown) {
 }
 
 async function load(append = false) {
+	const version = getCommunityUpdateVersion();
 	if (disposed) return;
 	controller?.abort();
 	const current = ++requestId;
@@ -255,7 +275,7 @@ async function load(append = false) {
 		// Fail closed: a malformed public response cannot expose pending content.
 		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : props.section !== 'all' && work.category !== props.section))) throw new Error(t.invalidResponse);
 		items.value = append ? [...items.value, ...page.items.filter(work => !items.value.some(existing => existing.id === work.id))] : page.items;
-		nextCursor.value = page.nextCursor;
+		nextCursor.value = page.nextCursor; loadedVersion = version;
 	} catch (error) {
 		if (current === requestId && !disposed && !(error instanceof Error && error.name === 'AbortError')) loadError.value = errorText(error);
 	} finally {
@@ -282,12 +302,68 @@ function clearSearch() { query.value = ''; search(); }
 
 async function openComposer() {
 	if (!props.signedIn) { emit('login'); return; }
+	if (editing.value) { await closeComposer(); if (editing.value) return; }
 	if (currentCategory.value && !hasDraft.value) draft.category = currentCategory.value.id;
 	if (!composerOpen.value) returnFocus = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
 	composerZIndex.value = claimZIndex('low');
 	composerOpen.value = true;
 	await nextTick();
 	contentInput.value?.focus();
+}
+
+function composerInput() {
+	return { ...draft, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id) };
+}
+
+function restoreNewDraft() {
+	editing.value = null; editBaseline = ''; editConflict.value = false; formError.value = '';
+	if (newDraft) {
+		Object.assign(draft, newDraft.content); files.value = newDraft.files; rights.value = newDraft.rights; detailsOpen.value = newDraft.details;
+		newDraft = undefined;
+	}
+}
+
+async function openEditor(work: CommunityWork, reload = false) {
+	if (!canEdit(work) || openingId.value || deletingId.value || submitting.value) return;
+	if (!reload && editing.value?.id === work.id && editChanged.value) {
+		composerOpen.value = true; composerZIndex.value = claimZIndex('low'); await nextTick(); titleInput.value?.focus(); return;
+	}
+	if (!reload && editing.value) { await closeComposer(); if (editing.value) return; }
+	if (!composerOpen.value) returnFocus = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
+	editRead?.abort();
+	const read = editRead = new AbortController();
+	let opened = false;
+	openingId.value = work.id; editError.value = '';
+	try {
+		const latest = await props.gateway.show(work.id, read.signal);
+		if (disposed || read.signal.aborted || !canEdit(latest)) return;
+		if (!editing.value) newDraft = { content: { ...draft }, files: [...files.value], rights: rights.value, details: detailsOpen.value };
+		editing.value = latest;
+		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license });
+		files.value = latest.files.map(file => ({ ...file })); rights.value = false; detailsOpen.value = true;
+		editBaseline = JSON.stringify(composerInput()); editConflict.value = false; formError.value = '';
+		composerZIndex.value = claimZIndex('low'); composerOpen.value = true; opened = true;
+	} catch (error) {
+		if (!disposed && !read.signal.aborted) {
+			if (reload) formError.value = errorText(error); else editError.value = errorText(error);
+		}
+	} finally {
+		if (editRead === read) {
+			openingId.value = '';
+			await nextTick();
+			if (!disposed && !read.signal.aborted) {
+				if (opened && composerOpen.value) titleInput.value?.focus();
+				else if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+			}
+		}
+	}
+}
+
+async function reloadEditor() {
+	if (!editing.value || openingId.value || submitting.value) return;
+	const work = editing.value;
+	const { canceled } = await confirm({ type: 'warning', title: t.reloadEditTitle, text: t.reloadEditText });
+	if (!canceled && !disposed && editing.value === work) await openEditor(work, true);
 }
 
 async function openSource() {
@@ -310,9 +386,17 @@ async function insertCode() {
 	contentInput.value?.setSelectionRange(start + 5, start + 5 + end - start);
 }
 
-function closeComposer() {
-	if (submitting.value || choosing.value || emojiOpen.value) return;
+async function closeComposer() {
+	if (submitting.value || choosing.value || emojiOpen.value || openingId.value || closingComposer.value) return;
+	if (editing.value && editChanged.value) {
+		closingComposer.value = true;
+		try {
+			const { canceled } = await confirm({ type: 'warning', title: t.discardEditTitle, text: t.discardEditText });
+			if (canceled || disposed) return;
+		} finally { closingComposer.value = false; }
+	}
 	composerOpen.value = false;
+	if (editing.value) restoreNewDraft();
 }
 
 function handleComposeRequest(event: Event) {
@@ -324,7 +408,7 @@ function handleComposeRequest(event: Event) {
 
 function onComposerKeydown(event: KeyboardEvent) {
 	if (choosing.value || emojiOpen.value) return;
-	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeComposer(); }
+	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void closeComposer(); }
 	if (event.key !== 'Tab' || !composerPanel.value) return;
 	const controls = [...composerPanel.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
 	const first = controls[0], last = controls[controls.length - 1];
@@ -342,7 +426,7 @@ watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 	if (open && signedIn && modalLayer.value && !releaseFocus) releaseFocus = focusTrap(modalLayer.value).release;
 }, { flush: 'post' });
 onMounted(() => window.addEventListener(communityComposeEvent, handleComposeRequest));
-onDeactivated(() => { composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
+onDeactivated(() => { active = false; editRead?.abort(); composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
 
 async function chooseFiles(event: MouseEvent) {
 	const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
@@ -404,31 +488,70 @@ function insertEmoji(event: MouseEvent) {
 }
 
 async function submit() {
-	if (submitting.value || choosing.value || emojiOpen.value) return;
+	if (submitting.value || choosing.value || emojiOpen.value || closingComposer.value || openingId.value || (editing.value && (!editChanged.value || editConflict.value))) return;
 	formError.value = '';
 	if (!props.signedIn) { emit('login'); return; }
 	if (!draft.title.trim()) { formError.value = t.titleRequired; return; }
 	if (!draft.text.trim() && !files.value.length) { formError.value = t.contentRequired; return; }
 	if (draft.category === 'video' && !files.value.some(file => file.type.startsWith('video/'))) { formError.value = t.videoRequired; return; }
 	if (draft.category === 'image' && !files.value.some(file => file.type.startsWith('image/'))) { formError.value = t.imageRequired; return; }
-	if (draft.sourceUrl.trim() && !safeWebUrl(draft.sourceUrl.trim())) { formError.value = t.invalidUrl; return; }
+	if (draft.sourceUrl.trim() && (!safeWebUrl(draft.sourceUrl.trim()) || new URL(draft.sourceUrl.trim()).username || new URL(draft.sourceUrl.trim()).password)) { formError.value = t.invalidUrl; return; }
 	if (!rights.value) { formError.value = t.rightsRequired; return; }
 	submitting.value = true;
 	try {
-		const input = { ...draft, title: draft.title.trim(), text: draft.text.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id) };
+		const input = composerInput();
+		if (editing.value) {
+			const work = editing.value;
+			const result = await props.gateway.update({ ...input, submissionId: work.id, version: work.version });
+			if (result.id !== work.id || result.author.id !== work.author.id) throw new Error(t.invalidResponse);
+			markCommunityUpdated();
+			if (disposed) return;
+			notice.value = result.revisionPending ? t.editSubmitted : result.status === 'pending' ? t.editResubmitted : t.editSaved;
+			composerOpen.value = false; restoreNewDraft();
+			await load();
+			await nextTick();
+			(surfaceRoot.value?.querySelector<HTMLButtonElement>(`button[data-edit-work="${work.id}"]`) ?? noticeElement.value)?.focus({ preventScroll: true });
+			return;
+		}
 		const fingerprint = JSON.stringify(input);
 		if (fingerprint !== submissionFingerprint || !submissionKey) {
 			submissionFingerprint = fingerprint;
 			submissionKey = crypto.randomUUID();
 		}
 		const result = await props.gateway.submit({ ...input, idempotencyKey: submissionKey });
+		markCommunityUpdated();
 		if (disposed) return;
 		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? t.submittedPublic : t.submittedExisting;
 		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
 		files.value = []; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
 		if (props.section === 'mine' || ['published', 'approved'].includes(result.status)) await load();
-	} catch (error) { if (!disposed) formError.value = errorText(error); } finally { submitting.value = false; }
+	} catch (error) {
+		if (!disposed) {
+			editConflict.value = !!editing.value && error instanceof Error && error.message === t.conflictError;
+			formError.value = editConflict.value ? t.editConflict : errorText(error);
+		}
+	} finally { submitting.value = false; }
+}
+
+async function deleteWork(work: CommunityWork) {
+	if (!canEdit(work) || deletingId.value || openingId.value || submitting.value) return;
+	const trigger = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
+	deletingId.value = work.id; editError.value = '';
+	try {
+		const { canceled } = await confirm({ type: 'warning', title: t.deleteWorkTitle, text: work.title + '\n\n' + t.deleteWorkConfirm });
+		if (canceled || disposed || !canEdit(work)) return;
+		await props.gateway.delete({ submissionId: work.id, version: work.version });
+		markCommunityUpdated();
+		if (disposed) return;
+		if (editing.value?.id === work.id) { composerOpen.value = false; restoreNewDraft(); }
+		notice.value = t.workDeleted;
+		await load(); await nextTick(); noticeElement.value?.focus({ preventScroll: true });
+	} catch (error) { if (!disposed) editError.value = errorText(error); } finally {
+		deletingId.value = '';
+		await nextTick();
+		if (!disposed && trigger?.isConnected) trigger.focus({ preventScroll: true });
+	}
 }
 
 async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'remove') {
@@ -444,8 +567,9 @@ async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'rem
 			if (canceled || disposed) return;
 		}
 		const result = await props.gateway.review({ submissionId: work.id, version: work.version, decision, ...(decision !== 'approve' ? { reason } : {}) });
+		if (result.id !== work.id || result.revisionPending || result.status !== (decision === 'approve' ? 'approved' : decision === 'remove' ? 'removed' : work.revisionPending ? work.status : 'rejected')) throw new Error(t.invalidResponse);
+		markCommunityUpdated();
 		if (disposed || props.section !== 'review') return;
-		if (result.id !== work.id || result.status !== (decision === 'approve' ? 'approved' : decision === 'remove' ? 'removed' : 'rejected')) throw new Error(t.invalidResponse);
 		notice.value = decision === 'remove' ? t.removedNotice : t.reviewed;
 		await load();
 	} catch (error) { if (!disposed && props.section === 'review') reviewErrors[work.id] = errorText(error); } finally { reviewingId.value = ''; }
@@ -453,21 +577,25 @@ async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'rem
 
 watch(() => props.section, (_section, previousSection) => {
 	if (!isPublicFeed.value || !['all', 'video', 'image', 'resource'].includes(previousSection)) { query.value = ''; activeQuery.value = ''; }
-	notice.value = ''; composerOpen.value = false;
+	notice.value = ''; editError.value = ''; editRead?.abort(); composerOpen.value = false;
 	status.value = props.section === 'review' ? 'unreviewed' : 'all';
 });
-watch(() => props.profileAuthorId, () => { profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
+watch(() => props.profileAuthorId, () => { editRead?.abort(); composerOpen.value = false; profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
+watch(() => props.viewerId, () => { editRead?.abort(); composerOpen.value = false; if (editing.value) restoreNewDraft(); });
 watch(() => props.initialQuery, () => { if (isPublicFeed.value) query.value = activeQuery.value = initialPublicQuery(); });
 watch([() => props.section, () => props.initialQuery, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
 watch([() => props.compose, () => props.signedIn, () => props.composeRequest], () => { if (props.compose && props.signedIn) void openComposer(); }, { immediate: true });
+watch(communityUpdates, () => { if (active && !submitting.value && !deletingId.value && !reviewingId.value) void load(); });
 onActivated(() => {
-	if (!isPublicFeed.value) return;
+	active = true;
+	const stale = loadedVersion !== getCommunityUpdateVersion();
+	if (!isPublicFeed.value) { if (stale) void load(); return; }
 	const restored = initialPublicQuery();
 	const changed = activeQuery.value !== restored;
 	query.value = activeQuery.value = restored;
-	if (changed) void load();
+	if (changed || stale) void load();
 });
-onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handleComposeRequest); releaseFocus?.(); disposed = true; controller?.abort(); requestId++; });
+onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityComposeEvent, handleComposeRequest); releaseFocus?.(); disposed = true; controller?.abort(); requestId++; });
 </script>
 
 <style lang="scss" module>
@@ -563,7 +691,7 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .workMeta { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-bottom: 10px; }
 .work h3 { font-size: 17px; line-height: 1.5; overflow-wrap: anywhere; }
 .excerpt { max-width: 75ch; margin-top: 8px !important; color: var(--MI_THEME-fg); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
-.author { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 13px; }
+.author { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 13px; }
 .avatar { display: grid; place-items: center; width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%; background: var(--MI_THEME-buttonBg); font-size: 18px; font-weight: 700; }
 .identity { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .identity strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -571,6 +699,9 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .author time { margin-left: auto; flex-shrink: 0; }
 .discuss { display: flex; gap: 8px; align-items: center; margin-top: 12px; min-height: 36px; font-size: 13px; }
 .discuss span { margin-left: auto; font-variant-numeric: tabular-nums; }
+.workActions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.deleteAction { color: var(--MI_THEME-fg); i { color: var(--MI_THEME-error); } }
+.editAction { flex-shrink: 0; font-size: 13px !important; min-height: 40px; padding: 8px 12px; }
 .status { background: var(--MI_THEME-buttonBg); padding: 2px 8px; border-radius: 5px; }
 .rejected { color: var(--MI_THEME-error); }
 .form { display: grid; gap: 16px; }
@@ -646,6 +777,8 @@ onBeforeUnmount(() => { window.removeEventListener(communityComposeEvent, handle
 .modalLayer { position: fixed; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: max(24px, 6vh) 20px 24px; background: rgb(0 0 0 / .35); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
 .composer { width: min(100%, 640px); margin: 0 auto; padding: 10px 20px 12px; border-radius: 16px; background: var(--MI_THEME-panel); }
 .composerHeader { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.editorTitle { font-size: 17px; margin: 0; }
+.editHint { margin: -6px 0 18px !important; padding: 12px 14px; border-radius: 8px; background: var(--MI_THEME-buttonBg); font-size: 13px; }
 .composerHeader > button { width: 44px; height: 44px; padding: 0; font-size: 22px; }
 .draftHint { margin-left: auto; font-size: 12px; }
 .composer .form { gap: 12px; }

@@ -18,7 +18,7 @@ const nullableString = { ...string, nullable: true } as const;
 export const communityWorkSchema = {
 	type: 'object', optional: false, nullable: false,
 	properties: {
-		id: string, version: { type: 'integer', optional: false, nullable: false },
+		id: string, revisionPending: { type: 'boolean', optional: false, nullable: false }, version: { type: 'integer', optional: false, nullable: false },
 		category: { ...string, enum: ['video', 'image', 'resource'] },
 		title: string, text: string, model: string, sourceUrl: string, license: string,
 		files: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },

@@ -4,69 +4,41 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div :class="$style.signinRoot">
-	<Transition
-		mode="out-in"
-		:enterActiveClass="$style.transition_enterActive"
-		:leaveActiveClass="$style.transition_leaveActive"
-		:enterFromClass="$style.transition_enterFrom"
-		:leaveToClass="$style.transition_leaveTo"
-
-		:inert="waiting"
-	>
-		<!-- 1. 外部サーバーへの転送・username入力・パスキー -->
+<div :class="$style.signinRoot" :aria-busy="waiting">
+	<div v-if="errorMessage" role="alert" :class="$style.error" data-testid="signin-error">{{ errorMessage }}</div>
+	<div :inert="waiting">
 		<XInput
-			v-if="page === 'input'"
-			key="input"
+			v-show="page === 'input'"
+			ref="inputPageEl"
 			:message="message"
 			:openOnRemote="openOnRemote"
 			:initialUsername="initialUsername"
-
-			@usernameSubmitted="onUsernameSubmitted"
+			:needCaptcha="needCaptcha"
+			:waiting="waiting"
+			@credentialsSubmitted="onCredentialsSubmitted"
 			@passkeyClick="onPasskeyLogin"
 		/>
-
-		<!-- 2. パスワード入力 -->
-		<XPassword
-			v-else-if="page === 'password'"
-			key="password"
-			ref="passwordPageEl"
-
-			:user="userInfo"
-			:identifier="identifier"
-			:needCaptcha="needCaptcha"
-
-			@passwordSubmitted="onPasswordSubmitted"
-		/>
-
-		<!-- 3. ワンタイムパスワード -->
-		<XTotp
-			v-else-if="page === 'totp'"
-			key="totp"
-
-			@totpSubmitted="onTotpSubmitted"
-		/>
-
-		<!-- 4. パスキー -->
-		<XPasskey
-			v-else-if="page === 'passkey'"
-			key="passkey"
-
-			:credentialRequest="credentialRequest!"
-			:isPerformingPasswordlessLogin="doingPasskeyFromInputPage"
-
-			@done="onPasskeyDone"
-			@useTotp="onUseTotp"
-		/>
-	</Transition>
-	<div v-if="waiting" :class="$style.waitingRoot">
+		<template v-if="page !== 'input'">
+			<button type="button" class="_textButton" :class="$style.back" @click="backToInput"><i class="ti ti-arrow-left" aria-hidden="true"></i> {{ authText.backToSignin }}</button>
+			<XTotp v-if="page === 'totp'" @totpSubmitted="onTotpSubmitted"/>
+			<XPasskey
+				v-else-if="page === 'passkey' && credentialRequest"
+				:credentialRequest="credentialRequest"
+				:isPerformingPasswordlessLogin="doingPasskeyFromInputPage"
+				@done="onPasskeyDone"
+				@useTotp="onUseTotp"
+			/>
+		</template>
+	</div>
+	<div v-if="waiting && page !== 'input'" role="status" :class="$style.waitingRoot">
 		<MkLoading/>
+		<span>{{ authText.signingIn }}</span>
 	</div>
 </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef } from 'vue';
+import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialRequestOptionsJSON, AuthenticationResponseJSON } from '@simplewebauthn/browser';
@@ -75,22 +47,22 @@ import type { PwResponse } from '@/components/MkSignin.password.vue';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { showSuspendedDialog } from '@/utility/show-suspended-dialog.js';
 import { i18n } from '@/i18n.js';
-import * as os from '@/os.js';
-
+import { instance } from '@/instance.js';
+import { authText } from '@/utility/auth-copy.js';
 import XInput from '@/components/MkSignin.input.vue';
-import XPassword from '@/components/MkSignin.password.vue';
 import XTotp from '@/components/MkSignin.totp.vue';
 import XPasskey from '@/components/MkSignin.passkey.vue';
 import { login } from '@/accounts.js';
 
 const emit = defineEmits<{
 	(ev: 'login', v: Misskey.entities.SigninFlowResponse & { finished: true }): void;
+	(ev: 'busy', value: boolean): void;
 }>();
 
 const props = withDefaults(defineProps<{
 	autoSet?: boolean;
-	message?: string,
-	openOnRemote?: OpenOnRemoteOptions,
+	message?: string;
+	openOnRemote?: OpenOnRemoteOptions;
 	initialUsername?: string;
 }>(), {
 	autoSet: false,
@@ -99,160 +71,124 @@ const props = withDefaults(defineProps<{
 	initialUsername: undefined,
 });
 
-const page = ref<'input' | 'password' | 'totp' | 'passkey'>('input');
+const page = ref<'input' | 'totp' | 'passkey'>('input');
 const waiting = ref(false);
-
-const passwordPageEl = useTemplateRef('passwordPageEl');
-const needCaptcha = ref(false);
-
-const userInfo = ref<null | Misskey.entities.UserDetailed>(null);
+const errorMessage = ref('');
+const inputPageEl = useTemplateRef('inputPageEl');
+// A password request validates CAPTCHA immediately, without another challenge response.
+const needCaptcha = ref(true);
 const password = ref('');
 const identifier = ref('');
-
-//#region Passkey Passwordless
 const credentialRequest = shallowRef<PublicKeyCredentialRequestOptionsJSON | null>(null);
 const passkeyContext = ref('');
 const doingPasskeyFromInputPage = ref(false);
+let active = true;
 
-function onPasskeyLogin(): void {
-	if (browserSupportsWebAuthn()) {
-		doingPasskeyFromInputPage.value = true;
-		waiting.value = true;
-		misskeyApi('signin-with-passkey', {})
-			.then((res) => {
-				passkeyContext.value = res.context ?? '';
-				credentialRequest.value = res.option;
+watch(waiting, value => emit('busy', value), { flush: 'sync' });
 
-				page.value = 'passkey';
-				waiting.value = false;
-			})
-			.catch(onSigninApiError);
+async function onPasskeyLogin(): Promise<void> {
+	if (waiting.value || !browserSupportsWebAuthn()) return;
+	waiting.value = true;
+	errorMessage.value = '';
+	doingPasskeyFromInputPage.value = true;
+	password.value = '';
+	inputPageEl.value?.clearPassword();
+	try {
+		const res = await misskeyApi('signin-with-passkey', {});
+		if (!active) return;
+		passkeyContext.value = res.context ?? '';
+		credentialRequest.value = res.option;
+		page.value = 'passkey';
+	} catch (err) {
+		onSigninApiError(err);
+	} finally {
+		waiting.value = false;
 	}
 }
 
-function onPasskeyDone(credential: AuthenticationResponseJSON): void {
+async function onPasskeyDone(credential: AuthenticationResponseJSON): Promise<void> {
+	if (!active || waiting.value || page.value !== 'passkey') return;
+	if (!doingPasskeyFromInputPage.value) {
+		await tryLogin({ username: identifier.value, password: password.value, credential });
+		return;
+	}
 	waiting.value = true;
-
-	if (doingPasskeyFromInputPage.value) {
-		misskeyApi('signin-with-passkey', {
-			credential: credential,
-			context: passkeyContext.value,
-		}).then((res) => {
-			if (res.signinResponse == null) {
-				onSigninApiError();
-				return;
-			}
-			emit('login', res.signinResponse);
-			onLoginSucceeded(res.signinResponse);
-		}).catch(onSigninApiError);
-	} else if (identifier.value !== '') {
-		tryLogin({
-			username: identifier.value,
-			password: password.value,
-			credential: credential,
-		});
+	errorMessage.value = '';
+	try {
+		const res = await misskeyApi('signin-with-passkey', { credential, context: passkeyContext.value });
+		if (!active) return;
+		if (!res.signinResponse) throw new Error('Missing sign-in response');
+		await onLoginSucceeded(res.signinResponse);
+	} catch (err) {
+		onSigninApiError(err);
+	} finally {
+		waiting.value = false;
 	}
 }
 
 function onUseTotp(): void {
+	errorMessage.value = '';
 	page.value = 'totp';
 }
-//#endregion
 
-async function onUsernameSubmitted(username: string) {
-	waiting.value = true;
+async function backToInput(): Promise<void> {
+	if (waiting.value) return;
+	page.value = 'input';
+	doingPasskeyFromInputPage.value = false;
+	credentialRequest.value = null;
+	passkeyContext.value = '';
+	password.value = '';
+	errorMessage.value = '';
+	inputPageEl.value?.clearPassword();
+	inputPageEl.value?.resetCaptcha();
+	await nextTick();
+	inputPageEl.value?.focus();
+}
 
-	identifier.value = username.trim();
-	// Email identifiers remain private until authentication succeeds.
-	userInfo.value = identifier.value.includes('@') ? null : await misskeyApi('users/show', {
-		username: identifier.value,
-	}).catch(() => null);
-
+async function onCredentialsSubmitted(value: PwResponse & { identifier: string }): Promise<void> {
+	if (waiting.value) return;
+	identifier.value = value.identifier;
+	password.value = value.password;
+	doingPasskeyFromInputPage.value = false;
 	await tryLogin({
 		username: identifier.value,
+		password: password.value,
+		'hcaptcha-response': value.captcha.hCaptchaResponse,
+		'm-captcha-response': value.captcha.mCaptchaResponse,
+		'g-recaptcha-response': value.captcha.reCaptchaResponse,
+		'turnstile-response': value.captcha.turnstileResponse,
+		'testcaptcha-response': value.captcha.testcaptchaResponse,
 	});
 }
 
-async function onPasswordSubmitted(pw: PwResponse) {
-	waiting.value = true;
-	password.value = pw.password;
-
-	if (identifier.value === '') {
-		await os.alert({
-			type: 'error',
-			title: i18n.ts.noSuchUser,
-			text: i18n.ts.signinFailed,
-		});
-		waiting.value = false;
-		return;
-	} else {
-		await tryLogin({
-			username: identifier.value,
-			password: pw.password,
-			'hcaptcha-response': pw.captcha.hCaptchaResponse,
-			'm-captcha-response': pw.captcha.mCaptchaResponse,
-			'g-recaptcha-response': pw.captcha.reCaptchaResponse,
-			'turnstile-response': pw.captcha.turnstileResponse,
-			'testcaptcha-response': pw.captcha.testcaptchaResponse,
-		});
-	}
+async function onTotpSubmitted(token: string): Promise<void> {
+	if (waiting.value || !identifier.value || !password.value) return;
+	await tryLogin({ username: identifier.value, password: password.value, token });
 }
 
-async function onTotpSubmitted(token: string) {
+async function tryLogin(request: Misskey.entities.SigninFlowRequest): Promise<void> {
+	if (waiting.value) return;
 	waiting.value = true;
-
-	if (identifier.value === '') {
-		await os.alert({
-			type: 'error',
-			title: i18n.ts.noSuchUser,
-			text: i18n.ts.signinFailed,
-		});
-		waiting.value = false;
-		return;
-	} else {
-		await tryLogin({
-			username: identifier.value,
-			password: password.value,
-			token,
-		});
-	}
-}
-
-async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promise<Misskey.entities.SigninFlowResponse> {
-	const _req = {
-		username: req.username ?? identifier.value,
-		...req,
-	};
-
-	function assertIsSigninFlowRequest(x: Partial<Misskey.entities.SigninFlowRequest>): x is Misskey.entities.SigninFlowRequest {
-		return x.username != null;
-	}
-
-	if (!assertIsSigninFlowRequest(_req)) {
-		throw new Error('Invalid request');
-	}
-
-	return await misskeyApi('signin-flow', _req).then(async (res) => {
+	errorMessage.value = '';
+	try {
+		const res = await misskeyApi('signin-flow', request);
+		if (!active) return;
 		if (res.finished) {
-			emit('login', res);
 			await onLoginSucceeded(res);
 		} else {
 			switch (res.next) {
-				case 'captcha': {
+				case 'captcha':
 					needCaptcha.value = true;
-					page.value = 'password';
+					page.value = 'input';
 					break;
-				}
-				case 'password': {
+				case 'password':
 					needCaptcha.value = false;
-					page.value = 'password';
+					page.value = 'input';
 					break;
-				}
-				case 'totp': {
+				case 'totp':
 					page.value = 'totp';
 					break;
-				}
-				case 'passkey': {
+				case 'passkey':
 					if (browserSupportsWebAuthn()) {
 						credentialRequest.value = res.authRequest;
 						page.value = 'passkey';
@@ -260,161 +196,97 @@ async function tryLogin(req: Partial<Misskey.entities.SigninFlowRequest>): Promi
 						page.value = 'totp';
 					}
 					break;
-				}
 			}
-
-			if (doingPasskeyFromInputPage.value === true) {
-				doingPasskeyFromInputPage.value = false;
-				page.value = 'input';
-				password.value = '';
-			}
-			passwordPageEl.value?.resetCaptcha();
-			nextTick(() => {
-				waiting.value = false;
-			});
 		}
-		return res;
-	}).catch((err) => {
+	} catch (err) {
 		onSigninApiError(err);
-		return Promise.reject(err);
-	});
-}
-
-async function onLoginSucceeded(res: Misskey.entities.SigninFlowResponse & { finished: true }) {
-	if (props.autoSet) {
-		await login(res.i);
+	} finally {
+		inputPageEl.value?.resetCaptcha();
+		waiting.value = false;
 	}
 }
 
-function onSigninApiError(err?: any): void {
-	const id = err?.id ?? null;
+async function onLoginSucceeded(res: Misskey.entities.SigninFlowResponse & { finished: true }): Promise<void> {
+	if (!active) return;
+	// Keep the dialog available if establishing the local session fails.
+	if (props.autoSet) await login(res.i);
+	if (!active) return;
+	password.value = '';
+	inputPageEl.value?.clearPassword();
+	emit('login', res);
+}
 
-	switch (id) {
-		case '6cc579cc-885d-43d8-95c2-b8c7fc963280': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.noSuchUser,
-			});
+function onSigninApiError(error: unknown): void {
+	if (!active) return;
+	const err = error as { id?: string; code?: string; message?: string } | undefined;
+	switch (err?.id) {
+		case '6cc579cc-885d-43d8-95c2-b8c7fc963280':
+		case '932c904e-9460-45b7-9ce6-7ed33be7eb2c':
+			errorMessage.value = authText.invalidCredentials;
 			break;
-		}
-		case '932c904e-9460-45b7-9ce6-7ed33be7eb2c': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.incorrectPassword,
-			});
-			break;
-		}
-		case 'e03a5f46-d309-4865-9b69-56282d94e1eb': {
+		case 'e03a5f46-d309-4865-9b69-56282d94e1eb':
 			showSuspendedDialog();
 			break;
-		}
-		case '22d05606-fbcf-421a-a2db-b32610dcfd1b': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.rateLimitExceeded,
-			});
+		case '22d05606-fbcf-421a-a2db-b32610dcfd1b':
+			errorMessage.value = i18n.ts.rateLimitExceeded;
 			break;
-		}
-		case 'cdf1235b-ac71-46d4-a3a6-84ccce48df6f': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.incorrectTotp,
-			});
+		case 'cdf1235b-ac71-46d4-a3a6-84ccce48df6f':
+			errorMessage.value = i18n.ts.incorrectTotp;
 			break;
-		}
-		case '36b96a7d-b547-412d-aeed-2d611cdc8cdc': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.unknownWebAuthnKey,
-			});
+		case '36b96a7d-b547-412d-aeed-2d611cdc8cdc':
+			errorMessage.value = i18n.ts.unknownWebAuthnKey;
 			break;
-		}
-		case '93b86c4b-72f9-40eb-9815-798928603d1e': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.passkeyVerificationFailed,
-			});
+		case '93b86c4b-72f9-40eb-9815-798928603d1e':
+		case 'b18c89a7-5b5e-4cec-bb5b-0419f332d430':
+			errorMessage.value = i18n.ts.passkeyVerificationFailed;
 			break;
-		}
-		case 'b18c89a7-5b5e-4cec-bb5b-0419f332d430': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.passkeyVerificationFailed,
-			});
+		case '2d84773e-f7b7-4d0b-8f72-bb69b584c912':
+			errorMessage.value = i18n.ts.passkeyVerificationSucceededButPasswordlessLoginDisabled;
 			break;
-		}
-		case '2d84773e-f7b7-4d0b-8f72-bb69b584c912': {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: i18n.ts.passkeyVerificationSucceededButPasswordlessLoginDisabled,
-			});
-			break;
-		}
 		default: {
-			console.error(err);
-			os.alert({
-				type: 'error',
-				title: i18n.ts.loginFailed,
-				text: JSON.stringify(err),
-			});
+			const captchaEnabled = instance.enableHcaptcha || instance.enableMcaptcha || instance.enableRecaptcha || instance.enableTurnstile || instance.enableTestcaptcha;
+			// Fastify may expose only "Bad Request" through misskeyApi. Do not invent a cause.
+			errorMessage.value = /captcha/i.test(typeof error === 'string' ? error : `${err?.code ?? ''} ${err?.message ?? ''}`) ? authText.captchaError :
+				error === 'Bad Request' && needCaptcha.value && captchaEnabled ? authText.verificationRetry :
+				error instanceof TypeError ? authText.networkError : authText.serviceError;
+			break;
 		}
 	}
-
-	if (doingPasskeyFromInputPage.value === true) {
+	if (doingPasskeyFromInputPage.value) {
 		doingPasskeyFromInputPage.value = false;
 		page.value = 'input';
 		password.value = '';
+		credentialRequest.value = null;
+		passkeyContext.value = '';
 	}
-	passwordPageEl.value?.resetCaptcha();
-	nextTick(() => {
-		waiting.value = false;
-	});
 }
 
 onBeforeUnmount(() => {
+	active = false;
 	password.value = '';
-	needCaptcha.value = false;
-	userInfo.value = null;
+	passkeyContext.value = '';
+	credentialRequest.value = null;
 });
 </script>
 
 <style lang="scss" module>
-.transition_enterActive,
-.transition_leaveActive {
-	transition: opacity 0.3s cubic-bezier(0,0,.35,1), transform 0.3s cubic-bezier(0,0,.35,1);
+.signinRoot { position: relative; }
+.error {
+	margin-bottom: 20px;
+	padding: 12px 14px;
+	border: 1px solid var(--MI_THEME-error);
+	border-radius: 8px;
+	color: var(--MI_THEME-error);
+	line-height: 1.6;
+	overflow-wrap: anywhere;
 }
-.transition_enterFrom {
-	opacity: 0;
-	transform: translateX(50px);
-}
-.transition_leaveTo {
-	opacity: 0;
-	transform: translateX(-50px);
-}
-
-.signinRoot {
-	overflow-x: hidden;
-	overflow-x: clip;
-
-	position: relative;
-}
-
+.back { min-height: 44px; text-align: start; }
 .waitingRoot {
 	position: absolute;
-	top: 0;
-	left: 0;
-	width: 100%;
-	height: 100%;
-	background-color: color-mix(in srgb, var(--MI_THEME-panel), transparent 50%);
+	inset: 0;
+	background-color: color-mix(in srgb, var(--MI_THEME-panel), transparent 15%);
 	display: flex;
+	gap: 12px;
 	justify-content: center;
 	align-items: center;
 	z-index: 1;

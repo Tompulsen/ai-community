@@ -48,7 +48,7 @@ import { DB_MAX_NOTE_TEXT_LENGTH } from '@/const.js';
 import { RoleService } from '@/core/RoleService.js';
 import { SearchService } from '@/core/SearchService.js';
 import { FeaturedService } from '@/core/FeaturedService.js';
-import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
+import { FanoutTimelineService, type FanoutTimelineName } from '@/core/FanoutTimelineService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { UserBlockingService } from '@/core/UserBlockingService.js';
 import { isReply } from '@/misc/is-reply.js';
@@ -649,6 +649,65 @@ export class NoteCreateService implements OnApplicationShutdown {
 		else publish();
 
 		return note;
+	}
+
+	/** Edit a community-owned local original without replacing its interaction identity. */
+	public async updateLocalInTransaction(user: MiUser, note: MiNote, rawText: string, files: MiDriveFile[], transaction: NoteCreationTransaction) {
+		if (!transaction.manager.queryRunner?.isTransactionActive || !note.localOnly || note.userHost != null || note.replyId || note.renoteId || note.channelId || note.hasPoll || note.userId !== user.id || note.visibility !== 'public') {
+			throw new Error('Community editing requires a locked local public original and an active transaction');
+		}
+		const text = rawText.slice(0, DB_MAX_NOTE_TEXT_LENGTH).trim();
+		const policies = await this.roleService.getUserPolicies(user.id);
+		if (!policies.canPublicNote || this.checkProhibitedWordsContain({ text }) ||
+			(this.meta.sensitiveWords.length > 0 && this.utilityService.isKeyWordIncluded([text, ...extractUrlsForKeyWordCheck(text)].join('\n'), this.meta.sensitiveWords))) {
+			throw new IdentifiableError('227b771d-2365-4cbf-a72e-e9e8901459ed', 'Edited community note cannot be public');
+		}
+		const tokens = mfm.parse(text);
+		const mentionedUsers = await this.extractMentionedUsers(user, tokens);
+		if (mentionedUsers.length > policies.mentionLimit) throw new IdentifiableError('9f466dab-c856-48cd-9e65-ff90ff750580', 'Note contains too many mentions');
+		const profiles = mentionedUsers.length ? await this.userProfilesRepository.findBy({ userId: In(mentionedUsers.map(mentioned => mentioned.id)) }) : [];
+		const content = {
+			text, fileIds: files.map(file => file.id), attachedFileTypes: files.map(file => file.type),
+			tags: extractHashtags(tokens).filter(tag => Array.from(tag).length <= 128).slice(0, 32).map(normalizeTag),
+			emojis: this.utilityService.isMediaSilencedHost(this.meta.mediaSilencedHosts, user.host) ? [] : extractCustomEmojisFromMfm(tokens),
+			mentions: mentionedUsers.map(mentioned => mentioned.id),
+			mentionedRemoteUsers: JSON.stringify(mentionedUsers.filter(mentioned => mentioned.host != null).map(mentioned => ({
+				uri: mentioned.uri, username: mentioned.username, host: mentioned.host,
+				url: profiles.find(profile => profile.userId === mentioned.id)?.url ?? undefined,
+			}))),
+		};
+		await transaction.manager.getRepository(MiNote).update({ id: note.id, userId: user.id }, content);
+		const filesChanged = !!note.fileIds.length !== !!content.fileIds.length;
+		const updated = { ...note, ...content };
+		transaction.afterCommit.push(() => {
+			this.globalEventService.publishNoteStream(updated, 'updated', { text, cw: note.cw });
+			// Timeline caches store IDs, not text. Only their file-membership filters can change.
+			void this.searchService.indexNote(updated);
+			void this.hashtagService.updateHashtags(user, content.tags);
+			if (filesChanged && this.meta.enableFanoutTimeline) void this.refreshCommunityFileTimelines(updated);
+		});
+	}
+
+	private async refreshCommunityFileTimelines(note: MiNote) {
+		const [current, followers, memberships] = await Promise.all([
+			this.notesRepository.findOneBy({ id: note.id }),
+			this.followingsRepository.find({ where: { followeeId: note.userId, followerHost: IsNull(), isFollowerHibernated: false }, select: { followerId: true } }),
+			this.userListMembershipsRepository.find({ where: { userId: note.userId }, select: { userListId: true } }),
+		]);
+		const timelines: [FanoutTimelineName, number][] = [
+			['localTimelineWithFiles', 500], [`userTimelineWithFiles:${note.userId}`, this.meta.perLocalUserUserTimelineCacheMax / 2],
+			...Array.from(new Set([note.userId, ...followers.map(follower => follower.followerId)])).map(userId => [`homeTimelineWithFiles:${userId}` as const, this.meta.perUserHomeTimelineCacheMax / 2] as [FanoutTimelineName, number]),
+			...memberships.map(membership => [`userListTimelineWithFiles:${membership.userListId}` as const, this.meta.perUserListTimelineCacheMax / 2] as [FanoutTimelineName, number]),
+		];
+		const remove = this.redisForTimelines.pipeline();
+		for (const [name] of timelines) remove.lrem('list:' + name, 0, note.id);
+		await remove.exec();
+		if (current?.fileIds.length) {
+			// push() handles old IDs outside its pipeline; complete removals before adding.
+			const add = this.redisForTimelines.pipeline();
+			for (const [name, limit] of timelines) this.fanoutTimelineService.push(name, note.id, limit, add);
+			await add.exec();
+		}
 	}
 
 	@bindThis
