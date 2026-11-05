@@ -5,16 +5,44 @@
 - 访问地址：<https://zaiduyu.top>。
 - 服务器：`210.126.232.192`；项目目录 `/opt/ai-community`。
 - GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
-- 已部署应用提交：`a807eea41ed135aa76db37ea65cfe2a25e0a2777`。
-- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-a807eea41ed135aa76db37ea65cfe2a25e0a2777`。
-- 镜像摘要：`sha256:5597059e5d90f0a317c5679c0713401b2f645db7f546e9aaeaf84cbd57309cca`。
-- GitHub Docker 构建运行：`41888936578`，成功；服务器拉取后的 OCI revision 与应用提交一致。
+- 已部署应用提交：`5da7f01201bff52a8c3f7c6d5d70ec7c0231d00b`。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-5da7f01201bff52a8c3f7c6d5d70ec7c0231d00b`。
+- 镜像摘要：`sha256:6c9a84c931e9365ef75a9d1f5a4b896bccc41113e5143dc3e824771b6af8fc9c`。
+- GitHub Docker 构建运行：`41948106704`，成功；服务器拉取后的 OCI revision 与应用提交一致。
 - 应用、PostgreSQL、Redis 三个容器均为 healthy。数据库与 Redis 不发布宿主机端口，应用仍绑定 `127.0.0.1:13000`。
-- 生产源码下载 `/source/ai-community.tar.gz` 对应上述应用提交；SHA-256 为 `6596acb575b9f9acf91f3ab340e52adb8dae689e02475d9af6000c971871f1c0`，已从公网下载核对。
+- 生产源码下载 `/source/ai-community.tar.gz` 对应上述应用提交；SHA-256 为 `0e87346715de4c72c49ae70f73b44d5d7401c34de0998d29cd29d2f45dfaac8a`，已核对上传归档和服务器归档哈希。
 
 本记录可在部署后以纯文档提交更新；不要求为文档提交重复构建应用镜像。提供给用户的源码归档对应实际运行的应用版本。
 
-## 本次上线内容
+## 本次审核修复（2026-11-05）
+
+用户的《小狗自拍》已保存为 pending，未丢失。根因是投稿系统固定先审后发，而管理员菜单仍打开旧频道审核页；旧页面不能查询 community_submission，错误显示初始化提示。
+
+- 管理后台 /admin/community 已接入真实投稿列表，默认“待处理”同时包含未公开待审和已公开待审作品。
+- 管理员可保存“先审后发”或“先发后审”；默认并已保存为 before（先审后发）。切换只影响新投稿，既有 pending 不会自动公开。
+- 先发后审创建 published 状态和公开 Note；随后审核通过不重新创建 Note，保留互动。幂等重试返回实际状态。
+- 管理员可填写原因并确认违规下架。投稿状态、原 Note 删除、私有作者公告、删除审计在同一事务保存，外部事件仅在提交后发送。作者可在“我的投稿”查看下架记录和原因，在线收到原生私有公告事件，离线后重登仍可读取公告。
+- 新迁移 CommunityModeration1793840812106 保存投稿时的发布模式，Note 外键改为 SET NULL，避免删除作品时连带丢失投稿历史；普通删除显示“作品已删除”。未修改历史迁移。
+- 模式设置和新增审核状态支持中英；社区公共列表及热门作品可展示按先发后审模式公开的作品，未公开 pending 始终排除。
+
+线上使用真实管理员账号确认《小狗自拍》可在审核列表和“我的投稿”查看，媒体可预览；作品仍保持 pending，未代替管理员批准、驳回或下架。
+
+### 本轮验证
+
+- PASS：10 组真实业务服务、实体、迁移和 TypeORM/PGlite 验证，包括两模式、切换不改旧稿、幂等冲突、权限、审核不重复建 Note、下架通知与审计、处理中途失败全部回滚，以及普通删除保留投稿；迁移 down/up 后目标实体 pending DDL 为 0。
+- PASS：真实 Vue 组件的 Chromium 隔离验证：设置保存成功/失败、待处理筛选、下架必填原因与核对、取消不提交、409 保留反馈、下架状态筛选；320px 无横向溢出。
+- PASS：后台和投稿组件脚本、API 适配器与重新生成的 SDK 定向类型检查；变更文件 ESLint、SPDX、locale safety 和 git diff --check。
+- PASS：GitHub 最新固定 SHA 镜像构建、服务器拉取、OCI revision、三容器健康、源代码归档校验。
+- PASS：线上原生管理员登录、匿名审核接口拒绝访问、审核设置保存且其他设置不变、真实投稿可见、pending 不进入公共列表、媒体详情、390px 手机和英文设置；浏览器无 pageerror。
+- BASELINE：生产 check-migrations 仅报告既有 meta.proxyRemoteFiles 默认值 false/true 差异，无新增审核实体差异；未更改该既有默认值。
+- SKIPPED：本地全量 SDK 构建因工作区缺少 tsx/依赖而失败，使用项目原生 OpenAPI 转换器与 SDK 生成器定向更新现有操作和 MetaClientOptions；完整 Docker 构建已通过。
+- 边界：没有对用户真实作品执行审核写入。下架及通知持久性在隔离数据库验证，通知客户端真实 WebSocket 送达、真正多数据库连接并发和全量测试套件未执行。
+
+本地验证记录位于工作区外层 .community-validation/moderation-review-checks.json、frontend-moderation-review/verification-results.json、moderation-production/checks.json；生产截图位于 moderation-production。
+
+更新说明候选：修复管理员审核入口，支持可切换的发布模式及带原因通知的违规下架。
+
+## 保留的首页与社区功能
 
 官网首页采用用户指定的 playful 风格，支持中文与英文。顶部三个入口为文本、图片、视频制作，游客须先登录本站账号；社区入口保持公开浏览。管理员可配置首页图片 / 原始动图或社区热门作品，保留既有制作链接和项目 Logo。
 
@@ -24,17 +52,17 @@
 
 同时发布此前已完成、待上线的社区投稿与审核、图片 / 视频 / 文档 / Skill 上传、原生表情选择及登录弹窗焦点修复。新增 `CommunitySubmission1793808005308` 迁移，已在生产数据库执行。
 
-## 生产展示设置
+## 首页展示设置（上轮记录）
 
 已通过真实管理员登录，在后台保存 `homeShowcaseMode=popular`，并验证原来的展示图片和三个制作链接未被覆盖。上线时 `/api/community/featured` 返回 0 件符合条件的作品；首页按设计显示已保存图片或默认视觉。待社区作品审核通过后，热门窗口自动展示三个互动模块。没有向生产社区发布演示作品、评论或虚构互动数据。
 
 ## 备份与恢复
 
-备份目录：`/opt/ai-community-backups/home-showcase-20261104T184217Z`（目录时间为 UTC，对应北京时间 2026-11-05）。
+本轮备份目录：`/opt/ai-community-backups/moderation-20261105T011750Z`（目录时间为 UTC，对应北京时间 2026-11-05）。
 
-已备份数据库、上传文件、私有配置、Compose、旧镜像引用和旧源码。数据库为 PostgreSQL 自定义格式，已用 `pg_restore --list` 验证可读取。旧镜像为 `sha-00605627f40c51572f3b9ecf953538e0623398a3`，保留在服务器。更新使用固定 SHA 镜像，启动失败时自动恢复旧引用；本次启动成功，未执行回滚。私有镜像拉取使用临时凭据目录，完成后已删除。
+已备份数据库、上传文件、私有配置、Compose、旧镜像引用和旧源码。数据库为 PostgreSQL 自定义格式，已用 `pg_restore --list` 验证可读取。本轮升级前镜像为 `sha-a807eea41ed135aa76db37ea65cfe2a25e0a2777`，保留在服务器。更新使用固定 SHA 镜像，启动失败时自动恢复旧引用；本次启动成功，未执行回滚。私有镜像拉取使用临时凭据目录，完成后已删除。
 
-## 验证结果
+## 上一轮首页验证记录
 
 - PASS：GitHub 完整 Docker 构建、服务器镜像拉取、版本核对及三个容器健康检查。
 - PASS：新增社区投稿迁移已执行，`community_submission` 存在；没有该实体相关的剩余 DDL。
