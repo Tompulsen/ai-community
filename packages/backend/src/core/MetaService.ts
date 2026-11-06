@@ -14,6 +14,8 @@ import type { GlobalEvents } from '@/core/GlobalEventService.js';
 import { FeaturedService } from '@/core/FeaturedService.js';
 import type { OnApplicationShutdown } from '@nestjs/common';
 
+export type MetaUpdate = Omit<Partial<MiMeta>, 'clientOptions'> & { clientOptions?: Partial<MiMeta['clientOptions']> };
+
 @Injectable()
 export class MetaService implements OnApplicationShutdown {
 	private cache: MiMeta | undefined;
@@ -99,7 +101,7 @@ export class MetaService implements OnApplicationShutdown {
 	}
 
 	@bindThis
-	public async update(data: Partial<MiMeta>): Promise<MiMeta> {
+	public async update(data: MetaUpdate): Promise<MiMeta> {
 		let before: MiMeta | undefined;
 
 		const updated = await this.db.transaction(async transactionalEntityManager => {
@@ -112,7 +114,14 @@ export class MetaService implements OnApplicationShutdown {
 			before = metas[0];
 
 			if (before) {
-				await transactionalEntityManager.update(MiMeta, before.id, data);
+				// Merge the submitted keys against the current row, never a cached snapshot.
+				const values = data.clientOptions === undefined ? data : {
+					...data,
+					clientOptions: () => 'COALESCE("clientOptions", \'{}\'::jsonb) || CAST(:clientOptionsPatch AS jsonb)',
+				};
+				await transactionalEntityManager.createQueryBuilder().update(MiMeta).set(values)
+					.where('id = :metaId', { metaId: before.id })
+					.setParameters({ clientOptionsPatch: JSON.stringify(data.clientOptions) }).execute();
 			} else {
 				await transactionalEntityManager.save(MiMeta, {
 					...data,

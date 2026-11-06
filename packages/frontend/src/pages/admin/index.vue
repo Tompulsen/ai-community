@@ -37,6 +37,7 @@ import type { SuperMenuDef } from '@/components/MkSuperMenu.vue';
 import type { PageMetadata } from '@/page.js';
 import { i18n } from '@/i18n.js';
 import { homeText } from '@/pages/home/copy.js';
+import { adText } from '@/pages/community/ads.js';
 import { creationText } from '@/utility/creation-pages.js';
 import MkSuperMenu from '@/components/MkSuperMenu.vue';
 import MkInfo from '@/components/MkInfo.vue';
@@ -202,6 +203,11 @@ const menuDef = computed<SuperMenuDef[]>(() => [{
 		text: homeText.settings,
 		to: '/admin/homepage',
 		active: currentPage.value?.route.name === 'homepage',
+	}, {
+		icon: 'ti ti-ad',
+		text: adText.settings,
+		to: '/admin/community-ads',
+		active: currentPage.value?.route.name === 'community-ads',
 	}, {
 		icon: 'ti ti-link',
 		text: creationText.settings,

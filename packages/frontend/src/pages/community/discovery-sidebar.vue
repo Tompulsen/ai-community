@@ -42,14 +42,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<p v-else :class="$style.message">{{ t.noCreators }}</p>
 		</section>
 	</div>
+	<CommunitySidebarAds/>
 </aside>
 </template>
 
 <script setup lang="ts">
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, useId } from 'vue';
-import type { entities } from 'misskey-js';
 import { feedText as t } from './feed-copy.js';
+import CommunitySidebarAds from './sidebar-ads.vue';
 import { isDiscoverableCreator, loadDiscoveryAnnouncements, loadDiscoveryCreators, readCreatorFollow, requestCreatorFollow } from './discovery-data.js';
+import type { entities } from 'misskey-js';
 import { homeLanguage } from '@/pages/home/copy.js';
 import { $i } from '@/i.js';
 import { prefer } from '@/preferences.js';

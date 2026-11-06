@@ -5690,6 +5690,30 @@ export type components = {
         };
         MetaDetailed: components['schemas']['MetaLite'] & components['schemas']['MetaDetailedOnly'];
         MetaClientOptions: {
+            communityAd1?: {
+                enabled: boolean;
+                title: string;
+                imageUrl: string;
+                linkUrl: string;
+            } | null;
+            communityAd2?: {
+                enabled: boolean;
+                title: string;
+                imageUrl: string;
+                linkUrl: string;
+            } | null;
+            communityAd3?: {
+                enabled: boolean;
+                title: string;
+                imageUrl: string;
+                linkUrl: string;
+            } | null;
+            communityAd4?: {
+                enabled: boolean;
+                title: string;
+                imageUrl: string;
+                linkUrl: string;
+            } | null;
             /** @enum {string} */
             entrancePageStyle: "classic" | "simple";
             showTimelineForVisitor: boolean;
@@ -13096,6 +13120,30 @@ export interface operations {
                     defaultLightTheme?: string | null;
                     defaultDarkTheme?: string | null;
                     clientOptions?: {
+                        communityAd1?: {
+                            enabled: boolean;
+                            title: string;
+                            imageUrl: string;
+                            linkUrl: string;
+                        } | null;
+                        communityAd2?: {
+                            enabled: boolean;
+                            title: string;
+                            imageUrl: string;
+                            linkUrl: string;
+                        } | null;
+                        communityAd3?: {
+                            enabled: boolean;
+                            title: string;
+                            imageUrl: string;
+                            linkUrl: string;
+                        } | null;
+                        communityAd4?: {
+                            enabled: boolean;
+                            title: string;
+                            imageUrl: string;
+                            linkUrl: string;
+                        } | null;
                         /** @enum {string} */
                         entrancePageStyle?: "classic" | "simple";
                         showTimelineForVisitor?: boolean;

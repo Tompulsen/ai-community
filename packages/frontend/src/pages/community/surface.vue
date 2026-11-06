@@ -656,6 +656,9 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .withDiscovery { grid-template-columns: minmax(0, 1fr) clamp(280px, 26%, 360px); column-gap: var(--community-gap); align-items: start; }
 .withDiscovery .feed { grid-column: 1; grid-row: 1; }
 .discovery { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
+.discovery:not(.drawerLayer) .drawerPanel { display: flex; flex-direction: column; max-height: calc(100dvh - 96px); }
+.discovery:not(.drawerLayer) .drawerHeading { flex-shrink: 0; }
+.discovery:not(.drawerLayer) .drawerBody { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--MI_THEME-divider) transparent; padding: 4px; margin: -4px; }
 .drawerHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; margin-bottom: 12px; color: var(--MI_THEME-fg); font-size: 13px; font-weight: 600; span { display: inline-flex; align-items: center; gap: 8px; } button { width: 44px; height: 44px; padding: 0; } i { font-size: 18px; } }
 .drawerBody { min-height: 0; min-width: 0; }
 .discoveryToggle { min-height: 44px; gap: 8px; font-size: 12px !important; i { font-size: 18px; } }

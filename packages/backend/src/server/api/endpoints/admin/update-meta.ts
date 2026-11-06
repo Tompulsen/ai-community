@@ -7,11 +7,13 @@ import { Injectable, Inject } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
 import type { Config } from '@/config.js';
 import { normalizeCreationUrl } from '@/misc/creation-url.js';
+import { communityAdKeys, communityAdParam, normalizeCommunityAd } from '@/misc/community-ads.js';
 import { ApiError } from '@/server/api/error.js';
 import type { MiMeta } from '@/models/Meta.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { MetaService } from '@/core/MetaService.js';
+import type { MetaUpdate } from '@/core/MetaService.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -20,6 +22,11 @@ export const meta = {
 	requireAdmin: true,
 	kind: 'write:admin:meta',
 	errors: {
+		invalidCommunityAd: {
+			message: 'A published advertisement needs a title, an HTTPS image and an HTTP(S) destination without credentials.',
+			code: 'INVALID_COMMUNITY_AD',
+			id: 'a312a43c-91a7-44be-993f-f7fe792f1c52',
+		},
 		invalidCreationUrl: {
 			message: 'Creation URLs must be external HTTPS URLs without credentials.',
 			code: 'INVALID_CREATION_URL',
@@ -79,8 +86,12 @@ export const paramDef = {
 		defaultLightTheme: { type: 'string', nullable: true },
 		defaultDarkTheme: { type: 'string', nullable: true },
 		clientOptions: {
-			type: 'object', nullable: false,
+			type: 'object', nullable: false, additionalProperties: false,
 			properties: {
+				communityAd1: communityAdParam,
+				communityAd2: communityAdParam,
+				communityAd3: communityAdParam,
+				communityAd4: communityAdParam,
 				entrancePageStyle: { type: 'string', nullable: false, enum: ['classic', 'simple'] },
 				showTimelineForVisitor: { type: 'boolean', nullable: false },
 				showActivitiesForVisitor: { type: 'boolean', nullable: false },
@@ -211,7 +222,7 @@ export const paramDef = {
 			type: 'array', nullable: true,
 			items: {
 				type: 'string',
-			}
+			},
 		},
 		federation: {
 			type: 'string',
@@ -263,7 +274,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private moderationLogService: ModerationLogService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const set = {} as Partial<MiMeta>;
+			const set: MetaUpdate = {};
 
 			if (typeof ps.disableRegistration === 'boolean') {
 				set.disableRegistration = ps.disableRegistration;
@@ -371,6 +382,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			if (ps.clientOptions !== undefined) {
+				for (const key of communityAdKeys) {
+					const value = ps.clientOptions[key];
+					if (value == null) continue;
+					const normalized = normalizeCommunityAd(value, this.config.url);
+					if (!normalized) throw new ApiError(meta.errors.invalidCommunityAd);
+					ps.clientOptions[key] = normalized;
+				}
 				for (const key of ['creationTextUrl', 'creationImageUrl', 'creationVideoUrl'] as const) {
 					const value = ps.clientOptions[key];
 					if (value == null) continue;
@@ -378,10 +396,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					if (normalized == null) throw new ApiError(meta.errors.invalidCreationUrl);
 					ps.clientOptions[key] = normalized;
 				}
-				set.clientOptions = {
-					...this.serverSettings.clientOptions,
-					...ps.clientOptions,
-				};
+				set.clientOptions = ps.clientOptions;
 			}
 
 			if (ps.cacheRemoteFiles !== undefined) {

@@ -488,6 +488,10 @@ export const ROUTE_DEF = [{
 		name: 'branding',
 		component: page(() => import('@/pages/admin/branding.vue')),
 	}, {
+		path: '/community-ads',
+		name: 'community-ads',
+		component: $i?.isAdmin ? page(() => import('@/pages/admin/community-ads.vue')) : page(() => import('@/pages/not-found.vue')),
+	}, {
 		path: '/creation-links',
 		name: 'creation-links',
 		component: $i?.isAdmin ? page(() => import('@/pages/admin/creation-links.vue')) : page(() => import('@/pages/not-found.vue')),

@@ -397,10 +397,24 @@ export const packedMetaDetailedSchema = {
 	],
 } as const;
 
+const communityAdSchema = {
+	type: 'object', optional: true, nullable: true,
+	properties: {
+		enabled: { type: 'boolean', optional: false, nullable: false },
+		title: { type: 'string', optional: false, nullable: false },
+		imageUrl: { type: 'string', optional: false, nullable: false },
+		linkUrl: { type: 'string', optional: false, nullable: false },
+	},
+} as const;
+
 export const packedMetaClientOptionsSchema = {
 	type: 'object',
 	optional: false, nullable: false,
 	properties: {
+		communityAd1: communityAdSchema,
+		communityAd2: communityAdSchema,
+		communityAd3: communityAdSchema,
+		communityAd4: communityAdSchema,
 		entrancePageStyle: {
 			type: 'string',
 			enum: ['classic', 'simple'],

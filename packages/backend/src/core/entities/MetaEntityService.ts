@@ -15,6 +15,7 @@ import { SystemAccountService } from '@/core/SystemAccountService.js';
 import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { DEFAULT_POLICIES } from '@/core/RoleService.js';
+import { publicCommunityClientOptions } from '@/misc/community-ads.js';
 
 @Injectable()
 export class MetaEntityService {
@@ -109,7 +110,7 @@ export class MetaEntityService {
 			maxNoteTextLength: MAX_NOTE_TEXT_LENGTH,
 			defaultLightTheme,
 			defaultDarkTheme,
-			clientOptions: instance.clientOptions,
+			clientOptions: publicCommunityClientOptions(instance.clientOptions, this.config.url),
 			ads: ads.map(ad => ({
 				id: ad.id,
 				url: ad.url,
