@@ -1,6 +1,41 @@
 # 部署验证记录（2026-11-06）
 
-## 当前生产版本
+## 当前生产版本：社区四宫格广告位
+
+- 站点：<https://zaiduyu.top>；服务器 `210.126.232.192`，应用目录 `/opt/ai-community`。
+- 已部署应用提交：`aee9597c43110d7d7eb9f5686dda16f05f3be8d3`，私有仓库 `Tompulsen/ai-community` 的 `main` 分支。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-aee9597c43110d7d7eb9f5686dda16f05f3be8d3`；摘要 `sha256:aecfcec83957a599b85594298e80d29a053a1aae69712c7b0cdffc0ea820f172`。
+- GitHub 完整 Docker 构建 `42221282519` 成功；服务器镜像 revision 一致，应用、PostgreSQL、Redis 均 healthy。
+
+### 使用方式
+
+- 社区右侧搜索、公告、优质分享者下方新增固定 2×2 广告区，顺序为左上、右上、左下、右下。空槽保留中性“广告位待上架”占位。
+- 管理员进入“管理后台 → 社区广告位”（`/admin/community-ads`），每格分别填写标题、上传或选择图片、填写跳转链接，开启“上架此广告”并保存。关闭开关并保存即可下架。
+- 支持 PNG、JPEG、WebP、GIF、APNG，最大 20 MB；保留上传原始动图。链接在新窗口打开。
+- 只向公开配置提供已上架且有效的广告；采用现有 JSONB 配置和管理员权限，单槽保存通过数据库原子合并保留其他配置。
+- 保留桌面收起侧栏和手机抽屉。侧栏变长时可滚动到全部四格，支持中英文、主题和减少动态效果设置。
+- 本次没有添加真实广告素材，等待管理员配置；未发布示例广告。
+
+### 验证
+
+- PASS：16 个变动 Vue/TS 文件的项目 ESLint、SPDX、locale safety、diff check；API 使用项目原生 OpenAPI/SDK 生成器更新并通过严格契约类型检查。
+- PASS：新增广告和既有制作网址单元断言共 25 项，使用 Node test 适配器执行仓库原始测试（本地 Vitest 安装不完整）；8 组后端验证涵盖实际 API 权限拒绝、输入验证、公开过滤及真实 TypeORM SQL 在 PGlite 上的保存行为。PGlite 事务经单连接排队，未声称执行多连接并发压力测试。
+- PASS：9 组实际 Vue 浏览器功能测试，3 组实际社区布局测试（1440/390/320px）；上传、取消、失败、上架、下架、错误恢复、双语、深色、焦点与抽屉均验证。前后端独立复核通过。
+- PASS：线上 14 项检查，包含真实管理员登录、4 个生产编辑器、匿名权限拒绝、无效广告写入被拒且配置不变、公开草稿过滤、桌面及手机布局、中英文后台、源码归档校验。
+- 线上现有公开作品 2 份；未新增作品、评论、点赞、关注或上传测试图片。仅更新本次公开源码版本链接。
+- BASELINE：生产 `check-migrations` 检出既有 `meta.proxyRemoteFiles` 默认值 true/false 差异；已核对上一部署与本次实体声明一致。本次只扩展既有 JSONB 数据类型，没有新增数据库列或执行修复 DDL。
+- 公开对应源码：`https://zaiduyu.top/source/ai-community.tar.gz?v=aee9597c43110d7d7eb9f5686dda16f05f3be8d3`；SHA-256 `eb9ef73f55005b99b042cd754924f34f33a92927b404482630c5b9ef0873f5f7`。
+
+### 备份与回滚
+
+- 本次备份：`/opt/ai-community-backups/sidebar-ads-20261106T125316Z`，包含可读取的数据库 dump、附件卷、私有配置、Compose、旧镜像引用和旧源码。
+- 上一应用提交：`bc2f5ee925609660d46a9f798d5f3a4592f39efb`。健康检查失败会恢复旧 release.env 并回滚 web；本次未触发。
+- 临时镜像拉取凭据已删除。完整报告和截图位于工作区 `.community-validation/sidebar-ads-production/`。
+
+更新说明候选：新增管理员可独立上架的社区四宫格图片广告位，并完善侧栏长内容展示。
+
+---
+## 上一轮作品互动生产版本
 
 - 访问地址：<https://zaiduyu.top>；服务器 `210.126.232.192`，项目目录 `/opt/ai-community`。
 - GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
