@@ -15,12 +15,14 @@ export const meta = {
 } as const;
 
 export const paramDef = {
-	type: 'object', properties: {}, required: [],
+	type: 'object',
+	properties: { category: { type: 'string', enum: ['resource', 'image', 'video'] } },
+	required: [],
 } as const;
 
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(private service: CommunityService) {
-		super(meta, paramDef, async () => service.featured());
+		super(meta, paramDef, async (ps) => service.featured(ps.category));
 	}
 }

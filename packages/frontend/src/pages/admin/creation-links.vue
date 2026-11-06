@@ -28,8 +28,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p v-else :class="$style.description">{{ creationText.urlHint }}</p>
 						<MkSelect v-model="item.mode" :items="modeOptions" :disabled="saving" :data-testid="`creation-mode-${item.key}`" role="group" :aria-label="creationText.mode">
 							<template #label>{{ creationText.mode }}</template>
-							<template #caption>{{ creationText.modeHint }}</template>
+							<template #caption>{{ embedText.modeHint }}</template>
 						</MkSelect>
+						<div v-if="item.mode === 'embed'" :class="$style.embedGuide" :data-testid="`creation-embed-guide-${item.key}`">
+							<h3>{{ embedText.setupTitle }}</h3><p>{{ embedText.setupHint }}</p>
+							<div :class="$style.allowedOrigin"><code :aria-label="embedText.originLabel">{{ siteOrigin }}</code><MkButton small @click="copyOrigin(item.key)">{{ copiedOrigin === item.key ? embedText.copied : embedText.copyOrigin }}</MkButton></div>
+							<p v-if="copyFailed === item.key" role="alert">{{ embedText.copyFailed }}</p><p>{{ embedText.sessionHint }}</p>
+						</div>
 						<MkA :to="`/create/${item.key}`" class="_link">{{ creationText.preview }} <i class="ti ti-arrow-right" aria-hidden="true"></i></MkA>
 					</section>
 					<p v-if="saveFailed" role="alert" :class="$style.error">{{ creationText.saveError }}</p>
@@ -49,7 +54,7 @@ import { url as siteUrl } from '@@/js/config.js';
 import MkInput from '@/components/MkInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import MkButton from '@/components/MkButton.vue';
-import { creationText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
+import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
 import type { CreationMode } from '@/utility/creation-pages.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { fetchInstance, instance } from '@/instance.js';
@@ -68,10 +73,19 @@ const loadFailed = ref(false);
 const saving = ref(false);
 const saveFailed = ref(false);
 const saved = ref(false);
+const siteOrigin = new URL(siteUrl).origin;
+const copiedOrigin = ref('');
+const copyFailed = ref('');
 const isInvalid = (value: string) => value.trim() !== '' && normalizeCreationUrl(value, siteUrl) == null;
 const hasInvalidUrl = computed(() => editors.value.some(item => isInvalid(item.url)));
 
 watch(editors, () => { saved.value = false; }, { deep: true });
+
+async function copyOrigin(key: string) {
+	copiedOrigin.value = '';
+	copyFailed.value = '';
+	try { await navigator.clipboard.writeText(siteOrigin); copiedOrigin.value = key; } catch { copyFailed.value = key; }
+}
 
 async function load() {
 	if (!$i?.isAdmin || loading.value) return;
@@ -127,6 +141,8 @@ definePage(() => ({ title: creationText.settings, icon: 'ti ti-link' }));
 .heading { margin: 0; font-size: 1.1em; }
 .description { margin: 0; color: var(--MI_THEME-fg); line-height: 1.7; overflow-wrap: anywhere; }
 .error { margin: 0; color: var(--MI_THEME-error); line-height: 1.6; }
+.embedGuide { padding: 16px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius-small, 8px); background: var(--MI_THEME-bg); h3 { margin: 0 0 8px; font-size: 14px; } p { margin: 8px 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; } }
+.allowedOrigin { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-block: 8px; code { user-select: text; overflow-wrap: anywhere; } }
 @media (max-width: 600px) {
 	.editor { padding: 16px; }
 }

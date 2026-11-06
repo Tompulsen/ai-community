@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="[$style.root, { [$style.embedded]: embedded }]">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]">
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
@@ -78,8 +78,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
-		<div v-else :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed }]">
-			<DiscoverySidebar v-if="isPublicFeed" v-model:query="query" :class="$style.discovery" @search="search" @navigate="emit('navigate', $event)" @login="emit('login')"/>
+		<div v-else :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
+			<Teleport to="body" :disabled="!discoveryCompact">
+				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
+					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
+						<header :class="$style.drawerHeading"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ ft.sidebar }}</span><button type="button" :class="$style.quiet" :aria-label="ft.closeSidebar" :title="ft.closeSidebar" data-testid="close-discovery" @click="closeDiscovery"><i :class="discoveryCompact ? 'ti ti-x' : 'ti ti-chevron-right'" aria-hidden="true"></i></button></header>
+						<div :class="$style.drawerBody"><DiscoverySidebar v-model:query="query" @search="search" @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
+					</div>
+				</div>
+			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
 				<div :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
 					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
@@ -91,6 +98,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
 					<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span v-if="!isPublicFeed">{{ t.refresh }}</span></button>
+					<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.secondary, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ discoveryCompact ? ft.explore : discoveryOpen ? ft.closeSidebar : ft.openSidebar }}</button>
 				</div>
 				<div v-if="isPublicFeed && activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
@@ -161,10 +169,12 @@ import DiscoverySidebar from './discovery-sidebar.vue';
 import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
 import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
+import { useDiscoveryDrawer } from './use-discovery-drawer.js';
 import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
+import { prefer } from '@/preferences.js';
 
 const props = defineProps<{ section: string; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
@@ -186,6 +196,7 @@ const sourceInput = ref<HTMLInputElement>();
 const detailsOpen = ref(false);
 const detailsId = useId();
 const surfaceRoot = ref<HTMLElement>();
+const { discoveryId, discoveryLayer, discoveryPanel, discoveryToggle, discoveryCompact, discoveryOpen, discoveryZIndex, closeDiscovery, toggleDiscovery, discoveryKeydown } = useDiscoveryDrawer(surfaceRoot, () => isPublicFeed.value);
 const modalLayer = ref<HTMLElement>();
 const composerPanel = ref<HTMLElement>();
 const composerZIndex = ref(0);
@@ -288,6 +299,7 @@ function feedPath(path: string, value = activeQuery.value) {
 }
 
 function search() {
+	if (discoveryCompact.value && discoveryOpen.value) closeDiscovery();
 	const nextQuery = query.value.trim().slice(0, 200);
 	if (isPublicFeed.value && nextQuery !== initialPublicQuery()) {
 		const path = feedSections.find(entry => entry.id === props.section)?.path ?? '/community';
@@ -299,6 +311,10 @@ function search() {
 }
 
 function clearSearch() { query.value = ''; search(); }
+
+function navigateDiscovery(path: string) { if (discoveryCompact.value) closeDiscovery(); emit('navigate', path); }
+
+function loginFromDiscovery() { if (discoveryCompact.value) closeDiscovery(); emit('login'); }
 
 async function openComposer() {
 	if (!props.signedIn) { emit('login'); return; }
@@ -604,6 +620,7 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .danger { color: var(--MI_THEME-error); border: 1px solid currentColor; }
 .notice a { text-decoration: underline; font-weight: 600; }
 .root { color: var(--MI_THEME-fg); background: var(--MI_THEME-bg); min-width: 0; overflow-y: auto; scroll-padding-block-start: 72px; height: 100%; container-type: inline-size; font-size: 14px; line-height: 1.6; --community-gap: 28px; }
+.root.discoveryLocked { overflow: hidden; }
 :is(.root, .modalLayer) * { box-sizing: border-box; }
 :is(.root, .modalLayer) a { color: inherit; text-decoration: none; text-underline-offset: 4px; }
 :is(.root, .modalLayer) button, :is(.root, .modalLayer) input, :is(.root, .modalLayer) select, :is(.root, .modalLayer) textarea { font: inherit; }
@@ -639,6 +656,18 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .withDiscovery { grid-template-columns: minmax(0, 1fr) clamp(280px, 26%, 360px); column-gap: var(--community-gap); align-items: start; }
 .withDiscovery .feed { grid-column: 1; grid-row: 1; }
 .discovery { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
+.drawerHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; margin-bottom: 12px; color: var(--MI_THEME-fg); font-size: 13px; font-weight: 600; span { display: inline-flex; align-items: center; gap: 8px; } button { width: 44px; height: 44px; padding: 0; } i { font-size: 18px; } }
+.drawerBody { min-height: 0; min-width: 0; }
+.discoveryToggle { min-height: 44px; gap: 8px; font-size: 12px !important; i { font-size: 18px; } }
+.drawerLayer { position: fixed; inset: 0; background: rgb(0 0 0 / .32); color: var(--MI_THEME-fg); font: 14px/1.6 var(--community-font, sans-serif); }
+.drawerLayer, .drawerLayer * { box-sizing: border-box; }
+.drawerLayer :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
+.drawerLayer .drawerPanel { position: absolute; inset: 0 0 0 auto; display: flex; flex-direction: column; width: min(380px, calc(100% - 24px)); height: 100%; background: var(--MI_THEME-bg); border-left: 1px solid var(--MI_THEME-divider); box-shadow: -12px 0 40px rgb(0 0 0 / .1); animation: discoveryEnter 180ms var(--community-ease, ease-out); }
+.drawerLayer .drawerHeading { flex: 0 0 auto; margin: 0; padding: max(12px, env(safe-area-inset-top)) 16px 12px; border-bottom: 1px solid var(--MI_THEME-divider); font-size: 14px; }
+.drawerLayer .drawerBody { flex: 1; padding: 16px 16px max(16px, env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; container-type: inline-size; }
+.drawerLayer[data-motion='false'] .drawerPanel { animation: none; }
+@keyframes discoveryEnter { from { transform: translateX(32px); opacity: .65; } to { transform: translateX(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .drawerLayer .drawerPanel { animation: none; } }
 .withDiscovery .communityFooter { grid-column: 1; }
 .feed { min-width: 0; }
 .toolbar, .sectionTitle { display: flex; justify-content: space-between; gap: 16px; align-items: center; }

@@ -255,7 +255,7 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 		commentState.value = saved?.uncertain ? 'uncertain' : 'idle';
 		restoringDraft = false;
 		repostState.value = savedReposts.get(draftKey) ?? 'idle';
-		if (options.immediate !== false) void refresh();
+		if (options.immediate !== false || options.loadComments?.() === true) void refresh();
 	}, { immediate: true });
 	watch(() => options.loadComments?.(), value => { if (value) void refresh(); });
 	watch([draft, commentState], saveDraft, { flush: 'sync' });
@@ -268,7 +268,7 @@ export function useWorkInteractions(getNoteId: () => string | null, options: { p
 			commentState.value = saved?.uncertain ? 'uncertain' : 'idle';
 			restoringDraft = false;
 			repostState.value = savedReposts.get(draftKey) ?? 'idle';
-			void refresh();
+			if (options.immediate !== false || options.loadComments?.() !== false) void refresh();
 		}
 	});
 	onDeactivated(() => {

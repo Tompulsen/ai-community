@@ -2,6 +2,10 @@
 
 Galaxy / Uiverse.io — `Buttons/0x-Sarthak_hungry-penguin-30.html`, author 0x-Sarthak. The primary action adapts the directional hover/press feedback to Misskey theme variables; the original purple treatment and decorative expansion are not used.
 
+2026-11-06 motion refinement: the homepage primary action further adapts this component's directional fill and arrow movement. The fill uses a bounded transform, with a fixed click target, keyboard feedback and reduced-motion support. Colors and iconography come from this project.
+
+The local LeiBox `stacked-metadata` catalogue was studied for same-node expansion, interruption and lifecycle behavior. This project uses its existing Vue components and CSS transitions to express those interaction concepts; no LeiBox engine, spring implementation, sample artwork or restricted component source is included.
+
 MIT License
 
 Copyright (c) 2023 Uiverse.io

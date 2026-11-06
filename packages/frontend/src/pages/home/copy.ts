@@ -48,6 +48,11 @@ const homeTextZh = {
 	popularTitle: '社区正在热议', popularBadge: '热门', popularBadgeMore: '作品',
 	viewWork: '查看作品', popularImage: '图片作品', popularVideo: '视频作品', popularResource: '文档 / Skill',
 	comments: '评论', refreshPopular: '刷新热门预览',
+	featuredCategories: '按类别看热门作品', featuredText: '文本', featuredImage: '图片', featuredVideo: '视频',
+	featuredTextLabel: '查看热门文本作品', featuredImageLabel: '查看热门图片作品', featuredVideoLabel: '查看热门视频作品',
+	featuredNote: '点击图层，发现这一类的热门作品', featuredBack: '返回展示',
+	featuredLoading: '正在寻找这类作品中的热门…', featuredEmpty: '这一类还没有可展示的公开作品。',
+	featuredFailed: '暂时无法读取这类作品，请重试。', featuredBrowse: '逛逛社区',
 
 	workPreview: '作品展示', workPrompt: '内容 / 提示词', workDiscussion: '作品与评论',
 	workUnavailable: '这件作品暂时无法公开展示。', workLoadFailed: '作品暂时无法读取，请稍后重试。',

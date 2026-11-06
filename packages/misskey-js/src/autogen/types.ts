@@ -37941,6 +37941,14 @@ export interface operations {
         };
     };
     community___featured: {
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    category?: "resource" | "image" | "video";
+                };
+            };
+        };
         responses: {
             /** @description OK (with results) */
             200: {

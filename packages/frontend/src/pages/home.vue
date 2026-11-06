@@ -5,11 +5,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <XSetup v-if="instance.requireSetup"/>
-<div v-else :class="$style.home" class="_selectable" :lang="homeLanguage" data-testid="project-home">
+<div v-else :class="$style.home" class="_selectable" :lang="homeLanguage" :data-motion="prefer.s.animation && !reduceMotion" data-testid="project-home">
 	<header :class="$style.header">
 		<MkA to="/" :class="$style.brand" :aria-label="brandName"><img :src="logoUrl" alt=""/><span>{{ brandName }}</span></MkA>
 		<nav :class="$style.navigation" :aria-label="homeText.navigation">
-			<MkA v-for="item in creationPages" :key="item.key" :to="`/create/${item.key}`" :class="$style.navLink" :data-testid="`home-create-${item.key}`"><i :class="item.icon" aria-hidden="true"></i>{{ item.title }}</MkA>
+			<MkA v-for="item in creationPages" :key="item.key" :to="`/create/${item.key}`" :class="[$style.navLink, { [$style.navPreview]: activeCreation === item.key }]" :data-testid="`home-create-${item.key}`" @pointerenter="hoveredCreation = item.key" @pointerleave="hoveredCreation = null" @focus="focusedCreation = item.key" @blur="focusedCreation = null"><i :class="item.icon" aria-hidden="true"></i><span>{{ item.title }}</span></MkA>
 		</nav>
 		<div :class="$style.account">
 			<select :value="languageSelection" :class="$style.language" :aria-label="homeText.language" data-testid="home-language" @change="changeLanguage">
@@ -32,12 +32,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<h1>{{ homeText.title }}<br><span>{{ homeText.titleAccent }}</span></h1>
 			<p :class="$style.description">{{ homeText.description }}<br>{{ homeText.descriptionMore }}</p>
 			<div :class="$style.community">
-				<MkA to="/community" :class="$style.communityButton" data-testid="home-community">{{ homeText.community }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA>
+				<MkA to="/community" :class="$style.communityButton" data-testid="home-community"><span :class="$style.buttonLabel">{{ homeText.community }}</span><span :class="$style.buttonArrow" aria-hidden="true"><i class="ti ti-arrow-up-right"></i><i class="ti ti-arrow-up-right"></i></span></MkA>
 				<span :class="$style.communityHint"><i class="ti ti-door-enter" aria-hidden="true"></i>{{ homeText.communityHint }}</span>
 			</div>
 			<p :class="$style.communityDetail">{{ homeText.communityDetail }}</p>
 		</section>
-		<HomeShowcase :imageUrl="displayImageUrl" :logoUrl="logoUrl" :mode="instance.clientOptions.homeShowcaseMode"/>
+		<HomeShowcase :imageUrl="displayImageUrl" :logoUrl="logoUrl" :mode="instance.clientOptions.homeShowcaseMode" :activeKind="activeCreation" rememberSelection/>
 	</main>
 	<footer :class="$style.footer"><span>{{ homeText.footer }}</span><span>{{ homeText.footerNote }}</span></footer>
 </div>
@@ -69,6 +69,9 @@ const updateMotion = () => { reduceMotion.value = motionPreference.matches; };
 motionPreference.addEventListener('change', updateMotion);
 const displayImageUrl = computed(() => imageUrl.value && (prefer.s.disableShowingAnimatedImages || reduceMotion.value) ? getStaticImageUrl(imageUrl.value) : imageUrl.value);
 const openingAccount = ref(false);
+const hoveredCreation = ref<string | null>(null);
+const focusedCreation = ref<string | null>(null);
+const activeCreation = computed(() => focusedCreation.value ?? hoveredCreation.value);
 let refreshing = false;
 let accountRequest = 0;
 let disposeAccount: (() => void) | undefined;
@@ -117,7 +120,7 @@ const accountDialogLoaders = {
 	signup: () => import('@/components/MkSignupDialog.vue'),
 };
 
-function closeAccount() { accountRequest++; disposeAccount?.(); disposeAccount = undefined; openingAccount.value = false; }
+function closeAccount() { accountRequest++; disposeAccount?.(); disposeAccount = undefined; openingAccount.value = false; hoveredCreation.value = null; focusedCreation.value = null; }
 
 onMounted(refresh);
 onActivated(refresh);
@@ -161,5 +164,33 @@ definePage(() => ({ title: brandName.value, icon: 'ti ti-home', needWideArea: tr
 	.navigation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	.navLink { min-width: 0; padding: 4px; white-space: normal; text-align: center; line-height: 1.45; > i { display: none; } }
 }
-@media (prefers-reduced-motion: reduce) { .navLink, .home .signup, .communityButton, .communityButton i { transition: none; transform: none; } }
+.navLink {
+	position: relative;
+	> i { transition: transform 260ms var(--community-ease, ease-out); }
+	&::after { content: ''; position: absolute; height: 2px; inset: auto 14px 3px; background: var(--home-accent); transform: scaleX(0); transform-origin: left; transition: transform 260ms var(--community-ease, ease-out); }
+	&.navPreview, &:focus-visible { color: var(--home-accent); background: var(--home-lime); &::after { transform: scaleX(1); } > i { transform: translateY(-2px) rotate(-6deg); } }
+	&:active { transform: translateY(1px); }
+}
+// Galaxy's directional action, adapted to a fixed hit target and transform-only fill.
+.communityButton {
+	position: relative; isolation: isolate; overflow: hidden; gap: 18px; padding: 8px 8px 8px 22px;
+	&::before { content: ''; position: absolute; z-index: -1; inset: 0; background: var(--home-ink); transform: scaleX(0); transform-origin: right; transition: transform 360ms var(--community-ease, ease-out); }
+	&:hover, &:focus-visible { background: var(--home-accent); &::before { transform: scaleX(1); } }
+	&:active { transform: scale(.98); }
+}
+.buttonLabel { position: relative; }
+.buttonArrow { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 7px; overflow: hidden; background: color-mix(in srgb, var(--home-paper) 16%, transparent); }
+.buttonArrow i { position: absolute; transition: transform 360ms var(--community-ease, ease-out); &:last-child { transform: translate(-30px, 30px); } }
+.communityButton:is(:hover, :focus-visible) .buttonArrow i { transform: translate(30px, -30px); &:last-child { transform: translate(0, 0); } }
+@media (max-width: 480px) { .buttonArrow { width: 34px; height: 34px; } .language { width: 78px; } }
+.home[data-motion='true'] .intro h1 { animation: introReveal 620ms var(--community-ease, ease-out) both; }
+.home[data-motion='true'] .description { animation: introReveal 620ms 80ms var(--community-ease, ease-out) both; }
+@keyframes introReveal { from { opacity: .65; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@mixin quietMotion {
+	.intro h1, .description { animation: none !important; }
+	.navLink, .navLink > i, .navLink::after, .home .signup, .communityButton, .communityButton::before, .communityButton i { transition: none; }
+	.navLink > i, .navLink:active, .communityButton:active { transform: none; }
+}
+.home[data-motion='false'] { @include quietMotion; }
+@media (prefers-reduced-motion: reduce) { .home { @include quietMotion; } }
 </style>

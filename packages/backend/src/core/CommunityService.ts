@@ -287,12 +287,14 @@ export class CommunityService {
 	}
 
 	/** One universally public work, ranked by reactions + replies + renotes. */
-	public async featured() {
+	public async featured(category?: Category) {
 		if (this.meta.ugcVisibilityForVisitor === 'none') return { items: [], nextCursor: null };
 		const heat = 'note."repliesCount"::bigint + note."renoteCount"::bigint + COALESCE((SELECT SUM(reaction.value::bigint) FROM jsonb_each_text(note.reactions) AS reaction), 0)';
 		// One ordered query avoids mixing score ordering with the chronological list cursor.
 		// These are only many-to-one joins; limit avoids TypeORM's DISTINCT pagination wrapper.
-		const candidates = await this.publicQuery().addSelect(heat, 'community_heat')
+		const query = this.publicQuery();
+		if (category) query.andWhere('submission.category = :category', { category });
+		const candidates = await query.addSelect(heat, 'community_heat')
 			.orderBy('community_heat', 'DESC').addOrderBy('submission.id', 'DESC').limit(500).getMany();
 		for (const candidate of candidates) {
 			// Always use the visitor view, including when an administrator calls this endpoint.

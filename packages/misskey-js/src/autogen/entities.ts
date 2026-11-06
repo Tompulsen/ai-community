@@ -699,3 +699,4 @@ export type CommunitySubmissionsUpdateRequest = operations['community___submissi
 export type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
 
 export type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];
+export type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];

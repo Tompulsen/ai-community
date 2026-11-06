@@ -28,6 +28,34 @@ export const creationPages = [
 
 export type CreationMode = 'embed' | 'newTab';
 
+const embedZh = {
+	workspace: '站内工作区', reload: '重新载入', help: '页面打不开？', closeHelp: '收起说明',
+	loading: '正在载入制作页面…', slowTitle: '连接时间较长', failedTitle: '暂时无法载入页面',
+	waitHint: '页面仍未显示时，可以重新载入，或在新窗口继续使用。', continuePreview: '继续查看内嵌页面',
+	helpTitle: '页面空白或提示“拒绝连接”？',
+	helpHint: '目标网站需要允许在本站内展示。若仍无法使用，可先在新窗口打开；目标网站可能还需要单独登录。',
+	adminHint: '请在目标网站的响应配置中允许以下本站来源，再重新载入。',
+	modeHint: '站内展示需要目标网站允许嵌入，并兼容浏览器的跨站登录与存储规则；选择此模式不会自动修改目标网站。',
+	setupTitle: '配置站内嵌入许可',
+	setupHint: '在目标网站现有的 Content-Security-Policy 响应头中，把下方来源加入 frame-ancestors。保留原有来源和其他指令，并检查服务器与 CDN 是否重复设置了限制。',
+	originLabel: '需要允许嵌入的本站来源', copyOrigin: '复制本站来源', copied: '已复制', copyFailed: '复制失败，请选中下方来源手动复制。',
+	sessionHint: '社区账户和目标网站账户相互独立；站内嵌入不会传递社区的密码或登录令牌。',
+};
+const embedEn: typeof embedZh = {
+	workspace: 'Embedded workspace', reload: 'Reload page', help: 'Page not opening?', closeHelp: 'Hide help',
+	loading: 'Loading the creation page…', slowTitle: 'This is taking longer than expected', failedTitle: 'The page could not load',
+	waitHint: 'If the page is still missing, reload it or continue in a new window.', continuePreview: 'Continue viewing the embedded page',
+	helpTitle: 'Blank page or a refused connection?',
+	helpHint: 'The destination must allow this site to embed it. You can also open it in a new window. The destination may require its own sign-in.',
+	adminHint: 'Allow the following site origin in the destination’s response configuration, then reload.',
+	modeHint: 'Embedding requires permission from the destination and compatibility with cross-site sign-in and storage rules. This setting does not change the destination’s configuration.',
+	setupTitle: 'Allow embedded access',
+	setupHint: 'Add the origin below to frame-ancestors in the destination’s existing Content-Security-Policy response header. Preserve existing origins and other directives, and check for additional restrictions from the server or CDN.',
+	originLabel: 'Site origin to allow', copyOrigin: 'Copy site origin', copied: 'Copied', copyFailed: 'Could not copy. Select the origin below and copy it manually.',
+	sessionHint: 'Community and destination accounts are separate. Embedding does not forward community passwords or sign-in tokens.',
+};
+export const creationEmbedText = homeLanguage === 'en-US' ? embedEn : embedZh;
+
 // Keep the browser check consistent with backend/misc/creation-url.ts.
 export function normalizeCreationUrl(value: string, siteUrl: string): string | null {
 	const trimmed = value.trim();

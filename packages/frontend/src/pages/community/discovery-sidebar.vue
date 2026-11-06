@@ -16,8 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<button type="submit" class="_button" :class="$style.searchButton">{{ t.searchAction }}</button>
 		</form>
 	</section>
-	<button type="button" class="_button" :class="$style.disclosure" :aria-expanded="expanded" :aria-controls="discoveryId" @click="expanded = !expanded"><span>{{ expanded ? t.hideDiscovery : t.showDiscovery }}</span><i :class="expanded ? 'ti ti-chevron-up' : 'ti ti-chevron-down'" aria-hidden="true"></i></button>
-	<div :id="discoveryId" :class="[$style.sections, { [$style.expanded]: expanded }]">
+	<div :class="$style.sections">
 		<section :class="$style.module" :aria-labelledby="announcementsId" :aria-busy="announcementsLoading">
 			<header :class="$style.heading"><h2 :id="announcementsId">{{ t.announcements }}</h2><a href="/announcements" @click.prevent="emit('navigate', '/announcements')">{{ t.allAnnouncements }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></a></header>
 			<p v-if="announcementsLoading && !announcements.length" :class="$style.message" role="status">{{ t.loading }}</p>
@@ -59,10 +58,8 @@ import { confirm } from '@/os.js';
 const query = defineModel<string>('query', { required: true });
 const emit = defineEmits<{ (event: 'search'): void; (event: 'navigate', path: string): void; (event: 'login'): void; }>();
 const searchId = useId();
-const discoveryId = useId();
 const announcementsId = useId();
 const creatorsId = useId();
-const expanded = ref(false);
 const announcements = ref<entities.Announcement[]>([]);
 const creators = ref<entities.UserDetailed[]>([]);
 const announcementsLoading = ref(false);
@@ -219,8 +216,9 @@ onActivated(() => {
 .module h2 { margin: 0; font-size: 15px; line-height: 1.5; font-weight: 700; }
 .search { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .searchField { min-width: 0; display: flex; align-items: center; gap: 8px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding-left: 12px; background: var(--MI_THEME-bg); }
-.searchField:focus-within { border-color: var(--MI_THEME-accent); }
+.searchField:focus-within { border-color: var(--MI_THEME-accent); outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; }
 .sidebar .searchField input { min-width: 0; flex: 1; width: 100%; min-height: 44px; padding: 10px 0; border: 0; border-radius: 12px; background: transparent; color: var(--MI_THEME-fg); font: inherit; caret-color: var(--MI_THEME-accent); }
+.sidebar .searchField input:focus-visible { outline: none; }
 .searchField input::-webkit-search-cancel-button { display: none; }
 .searchField input::placeholder { color: var(--MI_THEME-fg); opacity: 1; }
 .sidebar .clear { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 10px; padding: 0; background: transparent; color: var(--MI_THEME-fg); }
@@ -259,18 +257,12 @@ onActivated(() => {
 .sidebar .followButton[aria-busy='true'] { cursor: wait; }
 .sidebar .followed { background: transparent; border-color: transparent; }
 .followError { margin: 8px 0 0; color: var(--MI_THEME-error); font-size: 12px; }
-.sidebar .disclosure { display: none; }
 @container (max-width: 900px) {
 	.sidebar { gap: 12px; }
-	.sidebar .disclosure { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 8px 14px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border-radius: 12px; font: inherit; font-size: 13px; }
-	.sections { display: none; }
-	.sections.expanded { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-	.search { flex-direction: row; }
-	.searchField { flex: 1; }
+	.sections { gap: 12px; }
 }
 @container (max-width: 600px) {
 	.module { padding: 16px; }
-	.sections.expanded { display: flex; }
 	.sidebar .searchField input { font-size: 16px; }
 	.search { gap: 8px; }
 	.sidebar .searchButton { padding-inline: 12px; }

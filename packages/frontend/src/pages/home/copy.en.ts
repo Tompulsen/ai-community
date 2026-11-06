@@ -46,6 +46,11 @@ export const homeTextEn: HomeCopy = {
 	popularTitle: 'The community is talking', popularBadge: 'Popular', popularBadgeMore: 'work',
 	viewWork: 'View work', popularImage: 'Image', popularVideo: 'Video', popularResource: 'Document / Skill',
 	comments: 'comments', refreshPopular: 'Refresh popular preview',
+	featuredCategories: 'Popular work by category', featuredText: 'Text', featuredImage: 'Images', featuredVideo: 'Video',
+	featuredTextLabel: 'View popular text work', featuredImageLabel: 'View popular image work', featuredVideoLabel: 'View popular video work',
+	featuredNote: 'Pick a layer. Discover what’s popular.', featuredBack: 'Back to showcase',
+	featuredLoading: 'Finding popular work in this category…', featuredEmpty: 'No public work to show in this category yet.',
+	featuredFailed: 'Could not load this category. Please try again.', featuredBrowse: 'Explore the community',
 
 	workPreview: 'Work preview', workPrompt: 'Content / prompt', workDiscussion: 'Work and discussion',
 	workUnavailable: 'This work is no longer publicly available.', workLoadFailed: 'This work could not load. Please try again.',

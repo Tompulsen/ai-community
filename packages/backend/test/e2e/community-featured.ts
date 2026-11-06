@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, test } from 'vitest';
 import { MiNote } from '@/models/Note.js';
 import { MiUser } from '@/models/User.js';
+import { MiCommunitySubmission } from '@/models/CommunitySubmission.js';
 import { api, initTestDb, signup } from '../utils.js';
 import type { Repository } from 'typeorm';
 import type * as misskey from 'misskey-js';
@@ -19,15 +20,17 @@ describe('Community homepage selection', () => {
 	let author: misskey.entities.SignupResponse;
 	let notes: Repository<MiNote>;
 	let users: Repository<MiUser>;
+	let submissions: Repository<MiCommunitySubmission>;
 	beforeAll(async () => {
 		const db = await initTestDb(true);
 		notes = db.getRepository(MiNote);
 		users = db.getRepository(MiUser);
+		submissions = db.getRepository(MiCommunitySubmission);
 		root = await signup({ username: 'root' });
 		author = await signup({ username: 'featured_author' });
 	}, 120000);
 
-	test('ranks interaction totals and keeps the visitor view for administrators', async () => {
+	test('ranks per category and keeps the visitor view for administrators', async () => {
 		const approve = async (title: string) => {
 			const submission = await api('community/submissions/create', { idempotencyKey: randomUUID(), category: 'resource', title, text: 'Public example' }, author);
 			assert.strictEqual(submission.status, 200);
@@ -48,8 +51,28 @@ describe('Community homepage selection', () => {
 		assert.strictEqual((await api('community/featured', {})).body.items[0].id, newer.id);
 		await notes.update(newer.approvedNoteId!, { visibility: 'followers' });
 		assert.strictEqual((await api('community/featured', {})).body.items[0].id, older.id);
+		const image = await approve('Popular image');
+		const newerImage = await approve('Newer image');
+		const video = await approve('Video');
+		// Set the fixture categories directly; this test exercises selection, not uploads.
+		await submissions.update(image.id, { category: 'image' });
+		await submissions.update(newerImage.id, { category: 'image' });
+		await submissions.update(video.id, { category: 'video' });
+		await notes.update(image.approvedNoteId!, { reactions: { '👍': 8 }, repliesCount: 2 });
+		assert.strictEqual((await api('community/featured', { category: 'resource' })).body.items[0].id, older.id);
+		assert.strictEqual((await api('community/featured', { category: 'image' })).body.items[0].id, image.id);
+		assert.strictEqual((await api('community/featured', { category: 'video' })).body.items[0].id, video.id);
+		await notes.update(newerImage.approvedNoteId!, { renoteCount: 10 });
+		assert.strictEqual((await api('community/featured', { category: 'image' })).body.items[0].id, newerImage.id);
+		await submissions.update(newerImage.id, { status: 'removed' });
+		assert.strictEqual((await api('community/featured', { category: 'image' })).body.items[0].id, image.id);
+		await submissions.update(image.id, { status: 'pending' });
+		assert.deepStrictEqual((await api('community/featured', { category: 'image' })).body.items, []);
+		// @ts-expect-error The endpoint must reject unsupported categories at runtime.
+		assert.strictEqual((await api('community/featured', { category: 'text' })).status, 400);
 		await users.update(author.id, { requireSigninToViewContents: true });
 		assert.deepStrictEqual((await api('community/featured', {}, root)).body.items, []);
 		assert.deepStrictEqual((await api('community/featured', {}, author)).body.items, []);
+		assert.deepStrictEqual((await api('community/featured', { category: 'video' }, root)).body.items, []);
 	});
 });

@@ -4,11 +4,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div :class="$style.root" data-testid="work-engagement">
-	<div :class="$style.actions">
-		<button type="button" class="_button" :class="{ [$style.active]: showComments }" :title="!discussion && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
-		<button type="button" class="_button" :class="{ [$style.active]: repostState === 'sent' }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
-		<button type="button" class="_button" :class="{ [$style.liked]: liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
+<div ref="root" :class="[$style.root, { [$style.previewLayout]: previewComments }]" :data-motion="prefer.s.animation" data-testid="work-engagement">
+	<div :class="$style.main" data-testid="work-main">
+	<slot></slot>
+	<div :class="$style.actions" data-testid="work-actions">
+		<button type="button" class="_button" :class="{ [$style.active]: showComments }" :title="!discussion && !previewComments && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
+		<button type="button" class="_button" :class="{ [$style.active]: repostState === 'sent', [$style.reposted]: repostConfirmed }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
+		<button type="button" class="_button" :class="{ [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
 		<span :class="$style.views" :title="t.viewHint" :aria-label="`${t.views} ${viewsCount ?? work.viewsCount ?? '—'}`"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>{{ format(viewsCount ?? work.viewsCount) }}</span></span>
 		<button type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
 	</div>
@@ -19,24 +21,37 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<p v-if="!working && (repostState === 'rejected' || repostState === 'uncertain')" :class="$style.feedback" role="status">{{ repostState === 'uncertain' ? t.repostUncertain : t.repostFailed }}</p>
 	<p v-if="shareFailed" :class="$style.feedback" role="alert">{{ t.shareFailed }} <MkA :to="workPath(work.id)">{{ work.title }}</MkA></p>
 	<slot name="afterActions"></slot>
-	<section v-if="showComments" :class="$style.discussion" :aria-label="t.comments" :aria-busy="refreshingComments || loadingComments">
-		<header v-if="discussion" :class="$style.commentHeading"><h2>{{ t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button></header>
-		<form v-if="$i" :class="$style.composer" @submit.prevent="submitComment">
-			<label><textarea ref="input" v-model="draft" :placeholder="t.commentPlaceholder" :aria-label="t.comment" :readonly="commentState === 'sending'" rows="2" data-testid="work-comment-input" @keydown="onCommentKeydown"></textarea></label>
+	</div>
+	<Transition :css="prefer.s.animation" :enterActiveClass="$style.discussionEnter" :enterFromClass="$style.discussionFrom">
+	<section v-if="showComments || previewComments" :class="[$style.discussion, { [$style.previewDiscussion]: previewComments }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion">
+		<header v-if="discussion || previewComments" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button></header>
+		<template v-for="part in previewComments ? ['comments', 'composer'] : ['composer', 'comments']" :key="part">
+		<div v-if="part === 'composer'" :class="$style.commentEntry">
+		<button v-if="previewComments && !showComments && $i" type="button" class="_button" :class="$style.commentPrompt" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.writeComment }}<i class="ti ti-pencil" aria-hidden="true"></i></button>
+		<form v-else-if="$i" :class="$style.composer" @submit.prevent="submitComment">
+			<label><textarea :ref="el => { input = (el as HTMLTextAreaElement | null) ?? undefined; }" v-model="draft" :placeholder="t.commentPlaceholder" :aria-label="t.comment" :readonly="commentState === 'sending'" rows="2" data-testid="work-comment-input" @keydown="onCommentKeydown"></textarea></label>
 			<div :class="$style.send"><span v-if="draftLength" :class="{ [$style.error]: draftLength > maxLength }">{{ draftLength }} / {{ maxLength }}</span><button type="submit" class="_button" :disabled="!canSubmitComment" data-testid="work-send-comment">{{ commentState === 'sending' ? t.sending : t.send }}</button></div>
 			<p :class="$style.keyboardHint">{{ t.commentShortcut }}</p>
 		</form>
-		<button v-else ref="signin" type="button" class="_button" :class="$style.signin" @click="requestLogin">{{ t.login }}</button>
+		<button v-else :ref="el => { signin = (el as HTMLButtonElement | null) ?? undefined; }" type="button" class="_button" :class="$style.signin" @click="requestLogin">{{ t.login }}</button>
 		<p v-if="draftLength > maxLength" :class="[$style.feedback, $style.error]" role="alert">{{ t.commentTooLong }}</p>
 		<p v-if="commentState === 'sent'" :class="$style.feedback" role="status">{{ t.sent }}</p>
 		<p v-if="commentState === 'rejected' || commentState === 'uncertain'" :class="$style.feedback" role="alert">{{ commentState === 'uncertain' ? t.uncertain : t.commentFailed }} <button v-if="commentState === 'uncertain'" type="button" class="_button" @click="acknowledgeRetry">{{ t.retrySend }}</button></p>
+		</div>
+		<template v-else>
 		<p v-if="state === 'loading' || (refreshingComments && !comments.length)" :class="$style.feedback" role="status">{{ state === 'loading' ? t.loading : t.loadingComments }}</p>
 		<p v-else-if="state === 'error' || state === 'unavailable'" :class="$style.feedback" role="alert">{{ state === 'unavailable' ? t.unavailable : t.failed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="commentsFailed" :class="$style.feedback" role="alert">{{ t.commentsFailed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
-		<ul v-if="comments.length" :class="$style.comments"><li v-for="reply in comments" :key="reply.id"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
-		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ t.emptyComments }}</p>
-		<button v-if="commentsMore" type="button" class="_button" :class="$style.more" :disabled="loadingComments || refreshing" @click="loadMoreComments">{{ loadingComments ? t.loadingComments : t.loadMore }}</button>
+		<div v-if="comments.length" :ref="el => { viewport = (el as HTMLElement | null) ?? undefined; }" :class="{ [$style.previewViewport]: previewComments }" data-testid="comment-viewport">
+		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
+		</div>
+		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
+		<div v-if="previewComments" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
+		<button v-else-if="commentsMore" type="button" class="_button" :class="$style.more" :disabled="loadingComments || refreshing" @click="loadMoreComments">{{ loadingComments ? t.loadingComments : t.loadMore }}</button>
+		</template>
+		</template>
 	</section>
+	</Transition>
 </div>
 </template>
 
@@ -44,15 +59,45 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import type { CommunityWork } from './types.js';
 import { workText as t, workPath } from './interactions-copy.js';
+import { useCommentPreview } from './use-comment-preview.js';
 import { useWorkInteractions } from '@/pages/home/use-work-interactions.js';
 import { $i } from '@/i.js';
 import * as os from '@/os.js';
+import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ work: CommunityWork; discussion?: boolean; viewsCount?: number }>();
+const props = defineProps<{ work: CommunityWork; discussion?: boolean; previewComments?: boolean; viewsCount?: number }>();
 const showComments = ref(!!props.discussion);
+const previewVisible = ref(false);
 const input = ref<HTMLTextAreaElement>();
 const signin = ref<HTMLButtonElement>();
-const { state, note, comments, commentsFailed, commentsMore, loadingComments, loadMoreComments, refreshing, refreshingComments, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, refreshNote, toggleLike, sendComment, repost, repostState } = useWorkInteractions(() => props.work.approvedNoteId, { immediate: !!props.discussion, publicOnly: false, loadComments: () => showComments.value, commentLimit: 20 });
+const { state, note, comments, commentsFailed, commentsMore, loadingComments, loadMoreComments, refreshing, refreshingComments, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, refreshNote, toggleLike, sendComment, repost, repostState } = useWorkInteractions(() => props.work.approvedNoteId, { immediate: !!props.discussion, publicOnly: false, loadComments: () => showComments.value || (props.previewComments === true && previewVisible.value), commentLimit: 20 });
+const { root, viewport, list, footer, inView, visibleCount, schedule } = useCommentPreview(() => !!props.previewComments, () => comments.value, fillPreview);
+watch(inView, value => { previewVisible.value = value; });
+let emptyPages = 0;
+let fillingPreview = false;
+let previewVersion = 0;
+watch(refreshingComments, value => { if (value) { emptyPages = 0; previewVersion++; } else schedule(); });
+watch([commentsMore, loadingComments, showComments, refreshing, inView], () => {
+	if (!comments.value.length) void fillPreview();
+	schedule();
+}, { flush: 'post' });
+
+async function fillPreview() {
+	if (!inView.value || !commentsMore.value || refreshing.value || loadingComments.value || fillingPreview || commentsFailed.value || emptyPages >= 3) return;
+	const current = props.work.approvedNoteId;
+	const version = previewVersion;
+	const before = comments.value.length;
+	fillingPreview = true;
+	try {
+		await loadMoreComments();
+		// Stop after consecutive pages containing no eligible comments, not after a fixed number of previews.
+		if (current === props.work.approvedNoteId && version === previewVersion) emptyPages = comments.value.length === before ? emptyPages + 1 : 0;
+	} finally { fillingPreview = false; }
+	await nextTick();
+	if (!comments.value.length) void fillPreview();
+	schedule();
+}
+
 const activeAction = ref<'like' | 'repost' | 'refresh' | null>(null);
 const working = computed(() => activeAction.value !== null);
 const canSubmitComment = computed(() => canComment.value && !working.value);
@@ -60,6 +105,7 @@ const reactionFeedback = ref('');
 const actionFailed = ref(false);
 const shareFailed = ref(false);
 const shareState = ref<'idle' | 'copying' | 'copied'>('idle');
+const repostConfirmed = ref(false);
 let shareGeneration = 0;
 let shareTimer: number | undefined;
 const likeCount = computed(() => note.value ? likes.value : props.work.likesCount);
@@ -85,7 +131,7 @@ async function requestLogin() {
 	} catch { actionFailed.value = true; loginOpening = false; }
 }
 
-function clearFeedback() { actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; }
+function clearFeedback() { actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; repostConfirmed.value = false; }
 
 function deactivate() { active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
 
@@ -95,7 +141,7 @@ onBeforeUnmount(deactivate);
 watch(() => props.work.approvedNoteId, clearFeedback);
 
 async function openComment() {
-	if (!props.discussion && showComments.value) { showComments.value = false; return; }
+	if (!props.discussion && !props.previewComments && showComments.value) { showComments.value = false; return; }
 	showComments.value = true;
 	await nextTick();
 	(input.value ?? signin.value)?.focus();
@@ -139,7 +185,7 @@ async function onLike() {
 	});
 }
 
-async function onRepost() { await action('repost', repost); }
+async function onRepost() { await action('repost', async valid => { await repost(); if (valid() && repostState.value === 'sent') repostConfirmed.value = true; }); }
 
 async function retryInteraction() { await action('refresh'); }
 
@@ -191,7 +237,44 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .replyHeader { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; strong { font-size: 13px; } time { font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); } }
 .attachment { display: inline-block; margin-top: 8px; color: var(--MI_THEME-accent); }
 .empty { padding: 20px 0; margin: 0; color: var(--MI_THEME-fgTransparentWeak); font-size: 13px; }
+.main { min-width: 0; }
+.previewLayout .main { display: flex; flex-direction: column; }
+.previewLayout .actions { margin-top: auto; }
+.previewDiscussion { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--MI_THEME-divider); }
+.previewDiscussion .commentHeading { flex: 0 0 auto; gap: 4px; margin: 0; h2 { font-size: 14px; } }
+.previewDiscussion .commentEntry { flex: 0 0 auto; }
+.previewDiscussion .composer { margin: 8px 0 0; padding: 10px; textarea { min-height: 52px; max-height: 120px; } }
+.previewDiscussion .signin { margin: 8px 0 0; }
+.previewDiscussion .keyboardHint { font-size: 11px; }
+.commentPrompt { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 8px; background: var(--MI_THEME-input); text-align: left; color: var(--MI_THEME-fgTransparentWeak); i:last-child { margin-left: auto; } &:hover { border-color: var(--MI_THEME-accent); color: var(--MI_THEME-fg); } }
+.previewViewport { position: relative; min-width: 0; max-height: clamp(180px, 34svh, 360px); overflow: clip; }
+.previewViewport .comments li { padding: 12px 0; gap: 8px; }
+.previewViewport .reply p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 13px; }
+.previewViewport .replyHeader { gap: 2px 8px; a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } time { flex-shrink: 0; font-size: 11px; } }
+.previewViewport .attachment { font-size: 12px; }
+.hiddenComment { visibility: hidden; }
+.previewFooter { flex: 0 0 auto; a { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; padding-block: 8px; color: var(--MI_THEME-accent); font-size: 12px; font-weight: 600; } a:hover { text-decoration: underline; } }
+@container (min-width: 760px) {
+	.previewLayout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 30%); gap: 24px; align-items: stretch; }
+	.previewDiscussion { margin-top: 0; padding: 0 0 0 20px; border-top: 0; border-left: 1px solid var(--MI_THEME-divider); }
+	.previewViewport { flex: 1 1 0; height: 0; min-height: 80px; max-height: none; .comments { position: absolute; inset: 0 0 auto; } }
+	.previewDiscussion .empty { flex: 1; }
+}
 @media (max-width: 360px) { .actions { gap: 0; font-size: 12px; } .actions > button, .views { gap: 4px; padding: 0 4px; } }
-@media (prefers-reduced-motion: reduce) { .actions > button { transition: none; } .actions .copied i { animation: none; } }
+.actions > button { position: relative; transition: background-color 160ms, color 160ms, transform 180ms var(--community-ease, ease-out); > i { transition: transform 220ms var(--community-ease, ease-out); } &:hover:not(:disabled) > i, &:focus-visible:not(:disabled) > i { transform: translateY(-2px); } &:active:not(:disabled) { transform: scale(.94); } }
+.actions .liked { background: color-mix(in srgb, var(--MI_THEME-love) 8%, transparent); }
+.actions .likeConfirmed > i { animation: likeConfirm 400ms var(--community-ease, ease-out); }
+.actions .likeConfirmed::after { content: ''; position: absolute; inset: 5px; border: 1px solid var(--MI_THEME-love); border-radius: inherit; pointer-events: none; animation: likeRipple 420ms var(--community-ease, ease-out) both; }
+.actions .reposted > i { animation: repostConfirm 380ms var(--community-ease, ease-out); }
+.discussionEnter { transition: opacity 180ms ease, transform 240ms var(--community-ease, ease-out); }
+.discussionFrom { opacity: .4; transform: translateY(-7px); }
+.composer { transition: border-color 180ms; &:focus-within { border-color: var(--MI_THEME-accent); outline-color: var(--MI_THEME-accent); } }
+.send button { transition: transform 180ms var(--community-ease, ease-out), background-color 180ms; &:active:not(:disabled) { transform: scale(.96); } }
+@keyframes likeConfirm { 0% { transform: scale(.7); } 45% { transform: scale(1.22); } 100% { transform: scale(1); } }
+@keyframes likeRipple { from { opacity: .6; transform: scale(.7); } to { opacity: 0; transform: scale(1.2); } }
+@keyframes repostConfirm { from { transform: rotate(-90deg) scale(.8); } to { transform: rotate(0) scale(1); } }
+@mixin quietMotion { .actions > button, .actions > button > i, .actions > button::after, .discussion, .composer, .send button { animation: none; transition: none; transform: none !important; } .actions .likeConfirmed::after { display: none; } .discussionFrom { opacity: 1; } }
+.root[data-motion='false'] { @include quietMotion; }
+@media (prefers-reduced-motion: reduce) { .root { @include quietMotion; } }
 @media (hover: none) { .keyboardHint { display: none; } }
 </style>

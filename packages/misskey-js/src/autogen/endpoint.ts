@@ -8,6 +8,7 @@ import type {
 	CommunityWorksShowResponse,
 	CommunityWorksViewRequest,
 	CommunityWorksViewResponse,
+	CommunityFeaturedRequest,
 	CommunityFeaturedResponse,
 	CommunityWorksRequest,
 	CommunityWorksResponse,
@@ -1131,7 +1132,7 @@ export type Endpoints = {
 	'community/submissions/mine': { req: CommunitySubmissionsMineRequest; res: CommunitySubmissionsMineResponse };
 	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
 	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
-	'community/featured': { req: EmptyRequest; res: CommunityFeaturedResponse };
+	'community/featured': { req: CommunityFeaturedRequest; res: CommunityFeaturedResponse };
 	'community/works/show': { req: CommunityWorksShowRequest; res: CommunityWorksShowResponse };
 
 	'community/works/view': { req: CommunityWorksViewRequest; res: CommunityWorksViewResponse };
