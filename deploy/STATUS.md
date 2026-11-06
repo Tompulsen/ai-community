@@ -1,6 +1,45 @@
-# 部署验证记录（2026-11-06）
+# 部署验证记录（2026-11-07）
 
-## 当前生产版本：社区四宫格广告位
+## 当前生产版本：迁移至 1Panel 服务器及分类上传限制
+
+- 站点：<https://zaiduyu.top>；新服务器 `38.114.89.52`，Ubuntu 24.04、1Panel v2.4.2，应用目录 `/opt/ai-community`。
+- 已部署应用提交：`e35e867a7734003a08a746b440d27825b1dc7551`，公开仓库 `Tompulsen/ai-community` 的 `main` 分支。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-e35e867a7734003a08a746b440d27825b1dc7551`；摘要 `sha256:7778eb1af6cbd4bf831daa79464615725c6c11626f20774e03d7edfa03b5c4d7`。
+- GitHub 完整 Docker 构建 `42256174119` 成功；应用、PostgreSQL、Redis 均 healthy，运行镜像 revision 与上述应用提交一致。部署记录独立提交，不为纯文档更新重复构建应用。
+- 复用服务器现有 OpenResty，应用绑定 `127.0.0.1:13000`；站点配置 `/opt/1panel/www/conf.d/zaiduyu.top.conf`，站点文件 `/opt/1panel/www/sites/zaiduyu.top/`。现有 `ZY-*` 应用保持运行。
+- Cloudflare 仅将根域 A 记录改为新 IP，代理保持开启。响应头 `X-Community-Node: vm-20261107` 用于核对请求到达新节点。
+
+### 上传限制使用方式
+
+- 管理员进入“管理后台 → 上传限制”（`/admin/upload-limits`），分别设置图片、视频、音频、文档／代码／Skill、其他文件／压缩包的单文件大小。
+- 五类默认均为 20 MB，支持填写 1–10240 MB 的整数；实际允许值同时受服务器和账户限制约束。现有服务器总上限为 50 MB，页面展示生效上限。
+- 服务端在接收及暂存上传时执行限制，超限返回结构化 413，失败后清理临时文件。本功能不是累计存储配额或按时间清理的保留策略。
+- 配置使用既有 JSONB 数据，不新增数据库列或迁移文件。
+
+### 迁移及验收
+
+- 迁移前暂停并排空 10 个队列，停止旧 Web 和 Redis，再制作最终数据库、上传文件和 Redis AOF 快照。目标恢复后 10 个队列恢复原状态，未遗留演练用的禁用后台任务标志。
+- PASS：全部 118 张 public 数据库表的行数逐表一致；全部 13 个物理上传文件的大小及 SHA-256 一致，共 25,854,615 字节。保留 5 个用户、6 条网盘文件记录、2 份投稿及 7 条 Note。
+- PASS：目标演练验证管理员登录、分类配置保存、图片和 Skill 文档超限拒绝、允许的上传成功及临时文件清理。演练数据已由最终生产快照替换。
+- PASS：10 项公网验收，覆盖原管理员账号登录、两份作品与附件、上传限制页面及权限、中英文手机布局、Cloudflare/OpenResty WebSocket 和源码归档校验。浏览器无运行错误，未发布测试作品、评论或点赞。
+- PASS：目标本地 `/healthz` 与公网域名均返回 200，公网响应包含新节点标识。收尾时一次无显式 User-Agent 的服务器请求曾返回 403；随后带 User-Agent 的只读请求通过，未修改防护规则，未据此推断具体原因。
+- BASELINE：既有 `meta.proxyRemoteFiles` 默认值 true/false 差异未在本次修改。
+- 收尾仅更新两份部署文档；SPDX、locale safety、diff check 通过。BASELINE：本地 `check-shipping.mjs --base HEAD` 因缺少既有 `execa` 依赖未能运行，未重复安装全仓依赖；本轮应用完整构建及生产验收已通过。
+- 公开对应源码：`https://zaiduyu.top/source/ai-community.tar.gz?v=e35e867a7734003a08a746b440d27825b1dc7551`；SHA-256 `42726587dc7687d0fa0d81fea5ffda7f377dd4efd324e95ff34be3136ea4a29a`。仅更新站点源码版本链接，其他设置读回不变。
+
+### 备份与旧服务器状态
+
+- 新旧服务器均保留 `/opt/ai-community-backups/migration-vm-20261107`，含演练快照、最终数据库／上传／Redis／私有配置及原反向代理配置。
+- 最终归档 `final.tar.gz` 的 SHA-256：`bdc2adb665563d27767b92a745e157840bf093c31ec60fdd9e417a9c42ec9825`。目标另保留 DNS 切换前后记录、恢复核对结果和收尾健康检查记录。
+- 旧服务器 `210.126.232.192` 的社区 Web、Redis 保持停止，数据库及备份保留；旧 Nginx 入口通过校验 Origin CA 的 HTTPS 转发至新服务器，避免 DNS 缓存期间写入两份数据。
+- 新服务器已恢复队列和用户写入。若需无损回迁，必须先停止新写入并反向同步最新数据库、附件及 Redis；不能直接启动旧 Web 或仅改回 DNS。
+- 迁移临时 SSH、Cloudflare、镜像拉取和测试凭据副本已清理，原始用户凭据文件与运行所需私有配置保留。
+- 本地报告和截图：工作区 `.community-validation/migration-vm-20261107/`，以 `public-checks.json`、`loaded-pages.json` 及 `*-loaded.png` 为验收结果。
+
+更新说明候选：项目迁移至新服务器，保留现有账户与内容，并增加管理员可配置的分类上传大小及暂存限制。
+
+---
+## 上一轮生产版本：社区四宫格广告位（2026-11-06）
 
 - 站点：<https://zaiduyu.top>；服务器 `210.126.232.192`，应用目录 `/opt/ai-community`。
 - 已部署应用提交：`aee9597c43110d7d7eb9f5686dda16f05f3be8d3`，私有仓库 `Tompulsen/ai-community` 的 `main` 分支。

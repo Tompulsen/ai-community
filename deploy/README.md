@@ -1,17 +1,17 @@
 # AI 社区 Docker 部署
 
-目标：`https://zaiduyu.top`，服务器 `210.126.232.192`。
+目标：`https://zaiduyu.top`，服务器 `38.114.89.52`（Ubuntu 24.04、1Panel v2.4.2）。
 
-2026-11-04 已完成 Docker 镜像拉取部署、域名 HTTPS、账户系统、Logo 上传、全宽工作区及在线制作链接配置。运行版本、验收结果及尚未完成的检查见 [STATUS.md](STATUS.md)。
+2026-11-07 已完成服务器迁移、数据恢复、域名切换及分类上传限制部署。既有账户、作品、附件和站点配置保留；运行版本、验收结果及历史记录见 [STATUS.md](STATUS.md)。
 
-采用现有 Misskey/Vue 后端与账户系统，Docker Compose 运行应用、PostgreSQL 18 和 Redis 7。参考本地 Supabase 的数据库及容器服务分工，没有另建第二套身份系统。数据库、Redis 不发布公网端口；应用绑定 `127.0.0.1:13000`，由服务器已有 Nginx 反向代理。
+采用现有 Misskey/Vue 后端与账户系统，Docker Compose 运行应用、PostgreSQL 18 和 Redis 7。参考本地 Supabase 的数据库及容器服务分工，没有另建第二套身份系统。数据库、Redis 不发布公网端口；应用绑定 `127.0.0.1:13000`，复用 1Panel 服务器已有的 host-network OpenResty 反向代理，不新增 80/443 端口监听服务。
 
-`main` 分支的应用或部署代码更新会触发 `Build community container`，构建并发布私有镜像 `ghcr.io/tompulsen/ai-community`。镜像提供 `latest` 和 `sha-<完整提交号>` 标签。生产更新应先确认对应工作流成功，再使用提交标签，避免更新过程中版本改变。源码仓库及容器包保持私有。
+`main` 分支的应用或部署代码更新会触发 `Build community container`，构建并发布镜像 `ghcr.io/tompulsen/ai-community`。镜像提供 `latest` 和 `sha-<完整提交号>` 标签。生产更新应先确认对应工作流成功，再使用提交标签，避免更新过程中版本改变。源码仓库 `Tompulsen/ai-community` 已公开；容器包访问权限独立管理，需要认证时使用有包读取权限的凭据。
 
 ## 制作链接与 Logo
 
 使用管理员账号进入“控制面板 → 制作页面链接”（`/admin/creation-links`），分别填写文本、图片和视频制作的完整 HTTPS 地址，选择“在工作区内打开”或“在新窗口打开”，然后保存。
-三个网址按用户要求先留空；未配置时显示待配置页面。网址是公开配置，不应包含私密令牌或账号密码。需要登录或禁止被内嵌的网站选择新窗口方式。
+未配置时显示待配置页面；迁移保留现有网址配置。网址是公开配置，不应包含私密令牌或账号密码。目标站禁止被内嵌时，需由目标站允许社区来源，或选择新窗口方式。
 
 左侧保留一个“社区”入口，内部仍有作品分类；其下是三类制作入口。独立网盘界面已移除，旧网盘地址返回社区，上传和文件选择继续用于 Logo 与投稿附件。
 管理员点击“修改项目 Logo”或进入品牌设置，可上传 PNG/JPEG/WebP/GIF（最大 2 MB）、选择已上传图片、预览、保存或恢复默认。
@@ -58,9 +58,15 @@ docker compose --env-file deploy/private/release.env -f deploy/compose.yml exec 
 
 ## 域名和 HTTPS
 
-根域名已在实例健康检查、管理员和账户验收通过后，从 `154.9.252.197` 切换到本服务器并启用 Cloudflare 代理；其他子域记录保留。
+2026-11-07 根域名已在实例恢复核对和功能验收后，从 `210.126.232.192` 切换至 `38.114.89.52`，Cloudflare 代理保持开启；其他子域记录保留。
 
-`nginx.conf` 是目标配置。证书文件必须先存在，再安装此配置并执行 Nginx 配置检查和 reload。当前采用 Cloudflare Origin CA 证书，私钥仅保存在私有配置目录，公网 HTTPS 由 Cloudflare 边缘证书提供。根域记录必须保持代理开启；直连源站不属于公网证书信任路径。勿占用其他站点的 80/443 监听端口。源码下载路径应指向经排除凭据后的 `/opt/ai-community-source.tar.gz`。
+`nginx.conf` 是反向代理模板，不能不调整路径就覆盖当前生产配置。当前配置位于宿主机 `/opt/1panel/www/conf.d/zaiduyu.top.conf`；站点文件在 `/opt/1panel/www/sites/zaiduyu.top/`，在 OpenResty 容器中对应 `/www/sites/zaiduyu.top/`。
+
+证书文件必须先存在，再执行 OpenResty 配置检查和 reload。当前采用 Cloudflare Origin CA 证书，私钥仅保存在受限目录，公网 HTTPS 由 Cloudflare 边缘证书提供。根域记录必须保持代理开启；直连源站不属于公网证书信任路径。公开源码包排除凭据，宿主机路径为 `/opt/1panel/www/sites/zaiduyu.top/source/ai-community.tar.gz`。更新应用时同步对应源码包及站内带版本参数的源码链接。
+
+## 分类上传限制
+
+管理员在 `/admin/upload-limits` 分别设置图片、视频、音频、文档／代码／Skill、其他文件／压缩包的单文件上限。默认均为 20 MB，可填 1–10240 MB 的整数；实际值同时受服务器与账户上限约束。当前服务器总上限为 50 MB，页面显示生效值。接收及暂存过程中超限拒绝，失败时清理临时文件；不包含累计空间配额或保留时长设置。
 
 ## 数据和运维
 
@@ -71,12 +77,12 @@ umask 077
 docker compose --env-file deploy/private/release.env -f deploy/compose.yml exec -T db pg_dump -U community community > community-backup.sql
 ```
 
-数据库备份同时配套保存上传附件卷和私有配置。健康检查使用 `/healthz`，容器日志限制为每服务 3 个 10 MB 文件。
+数据库备份同时配套保存上传附件卷、Redis 数据和私有配置。迁移时先暂停并排空队列，再停止旧写入并生成最终一致性快照。健康检查使用 `/healthz`，容器日志限制为每服务 3 个 10 MB 文件。
+
+本次迁移备份在新旧服务器的 `/opt/ai-community-backups/migration-vm-20261107`；包括最终快照、原配置和恢复核对结果。旧服务器的 Web、Redis 保持停止，旧 Nginx 入口转发至新服务器，以兼容 DNS 缓存。新服务器已接收写入，回迁前必须停写并反向同步最新数据库、附件及 Redis，不能仅切回 DNS 或启动旧 Web。备份摘要和具体状态见 [STATUS.md](STATUS.md)。
 
 ## 当前验证范围
 
-本地已检查 4 个账户 Vue 组件的模板/TypeScript 转译/SCSS/文案引用，运行真实登录与注册处理函数的依赖隔离回归，覆盖邮箱规范化、匿名预检不查询账户、错误密码、用户名登录、MFA、缺失或非法密码以及未验证邮箱传递。可移植脚本为 `scripts/test-email-auth.mjs`。
+本次 GitHub 完整 Docker 构建成功，118 张 public 表逐表行数及 13 个物理附件的大小、SHA-256 均与最终快照一致。目标演练已验证分类限制保存、图片和 Skill 文档超限拒绝、合法上传及临时文件清理。
 
-GitHub 镜像构建、真实 PostgreSQL 邮箱索引迁移、线上 API、桌面注册和手机邮箱登录也已通过，SPDX 检查通过。数据库模型仍有一处 `proxyRemoteFiles` 默认值差异；定向后端 ESLint 仅在测试辅助文件报告两处错误，前端 ESLint 因生产镜像缺少开发依赖未运行，本机 shipping 检查仍受缺失 `execa` 限制。完整结果见 [STATUS.md](STATUS.md)。
-
-另有部署前基线问题：`BACKEND-COMMUNITY-HANDOFF.md` 记录社区页面的投稿/发布前审核接口未实现；此轮账户改造没有将模拟数据或组件预览当作生产后端。
+公网已验证原管理员登录、两份现有作品与附件、上传设置及权限、中英文桌面／手机页面、实时连接和公开源码哈希；三个社区容器健康，现有其他应用运行正常。数据库仍有既有 `proxyRemoteFiles` 默认值差异，本次未改动实体或迁移文件。历史检查边界及详细结果见 [STATUS.md](STATUS.md)。
