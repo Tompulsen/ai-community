@@ -5,6 +5,7 @@
 
 import * as fs from 'node:fs';
 import * as stream from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { Inject, Injectable } from '@nestjs/common';
 import chalk from 'chalk';
 import got, * as Got from 'got';
@@ -14,6 +15,7 @@ import type { Config } from '@/config.js';
 import { HttpRequestService } from '@/core/HttpRequestService.js';
 import { createTemp } from '@/misc/create-temp.js';
 import { StatusError } from '@/misc/status-error.js';
+import { UploadSizeLimitError } from '@/misc/upload-limits.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import type Logger from '@/logger.js';
 
@@ -34,14 +36,15 @@ export class DownloadService {
 	}
 
 	@bindThis
-	public async downloadUrl(url: string, path: string): Promise<{
+	public async downloadUrl(url: string, path: string, sizeLimit = this.config.maxFileSize): Promise<{
 		filename: string;
 	}> {
 		this.logger.info(`Downloading ${chalk.cyan(url)} to ${chalk.cyanBright(path)} ...`);
 
 		const timeout = 30 * 1000;
 		const operationTimeout = 60 * 1000;
-		const maxSize = this.config.maxFileSize;
+		const maxSize = Math.min(this.config.maxFileSize, sizeLimit);
+		let exceeded = false;
 
 		const urlObj = new URL(url);
 		let filename = urlObj.pathname.split('/').pop() ?? 'untitled';
@@ -87,8 +90,9 @@ export class DownloadService {
 			if (contentLength != null) {
 				const size = Number(contentLength);
 				if (size > maxSize) {
+					exceeded = true;
 					this.logger.warn(`maxSize exceeded (${size} > ${maxSize}) on response`);
-					req.destroy();
+					req.destroy(new UploadSizeLimitError({ category: null, limitBytes: maxSize }));
 				}
 			}
 
@@ -105,14 +109,28 @@ export class DownloadService {
 			}
 		}).on('downloadProgress', (progress: Got.Progress) => {
 			if (progress.transferred > maxSize) {
+				exceeded = true;
 				this.logger.warn(`maxSize exceeded (${progress.transferred} > ${maxSize}) on downloadProgress`);
-				req.destroy();
+				req.destroy(new UploadSizeLimitError({ category: null, limitBytes: maxSize }));
 			}
 		});
 
+		let received = 0;
+		const limiter = new Transform({
+			transform(chunk: Buffer, _encoding, done) {
+				received += chunk.length;
+				if (received > maxSize) {
+					exceeded = true;
+					done(new UploadSizeLimitError({ category: null, limitBytes: maxSize }));
+				} else {
+					done(null, chunk);
+				}
+			},
+		});
 		try {
-			await stream.pipeline(req, fs.createWriteStream(path));
+			await stream.pipeline(req, limiter, fs.createWriteStream(path));
 		} catch (e) {
+			if (exceeded) throw new UploadSizeLimitError({ category: null, limitBytes: maxSize });
 			if (e instanceof Got.HTTPError) {
 				throw new StatusError(`${e.response.statusCode} ${e.response.statusMessage}`, e.response.statusCode, e.response.statusMessage);
 			} else {

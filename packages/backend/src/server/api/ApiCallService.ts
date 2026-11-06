@@ -14,6 +14,7 @@ import type { MiAccessToken } from '@/models/AccessToken.js';
 import type Logger from '@/logger.js';
 import type { MiMeta, UserIpsRepository } from '@/models/_.js';
 import { createTemp } from '@/misc/create-temp.js';
+import { getUploadTempLimit, uploadSizeError } from '@/misc/upload-limits.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
 import { TelemetryService } from '@/core/telemetry/TelemetryService.js';
@@ -235,7 +236,10 @@ export class ApiCallService implements OnApplicationShutdown {
 		request: FastifyRequest<{ Body: Record<string, unknown>, Querystring: Record<string, unknown> }>,
 		reply: FastifyReply,
 	): Promise<void> {
-		const multipartData = await request.file().catch(() => {
+		const tempLimit = endpoint.name === 'drive/files/create'
+			? getUploadTempLimit(this.meta.clientOptions.uploadLimits, this.config.maxFileSize)
+			: this.config.maxFileSize;
+		const multipartData = await request.file({ limits: { fileSize: tempLimit }, throwFileSizeLimit: false }).catch(() => {
 			/* Fastify throws if the remote didn't send multipart data. Return 400 below. */
 		});
 		if (multipartData == null) {
@@ -248,19 +252,16 @@ export class ApiCallService implements OnApplicationShutdown {
 		try {
 			const multipartError = await writeMultipartFileToTemp(multipartData.file, path);
 
+			if (multipartData.file.truncated) {
+				this.#sendApiError(reply, new ApiError(uploadSizeError, { category: null, limitBytes: tempLimit }));
+				return;
+			}
+
 			// multipartを読み切れなかった場合
 			// クライアント起因なので400
 			if (multipartError != null) {
 				this.logger.debug(`Failed to read the multipart request body: ${multipartError.message}`);
 				reply.code(400);
-				reply.send();
-				return;
-			}
-
-			// ファイルサイズが制限を超えていた場合
-			// truncated はストリームを読み切ってからでないと機能しないため、書き出しより後にある必要がある
-			if (multipartData.file.truncated) {
-				reply.code(413);
 				reply.send();
 				return;
 			}

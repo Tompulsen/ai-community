@@ -46,6 +46,7 @@ export type Channels = {
 			meUpdated: (payload: UserDetailed) => void;
 			pageEvent: (payload: PageEvent) => void;
 			urlUploadFinished: (payload: { marker: string; file: DriveFile; }) => void;
+			urlUploadFailed: (payload: { marker?: string | null; code: string; limitBytes?: number; }) => void;
 			readAllNotifications: () => void;
 			unreadNotification: (payload: Notification) => void;
 			notificationFlushed: () => void;

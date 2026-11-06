@@ -16,6 +16,7 @@ import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { DEFAULT_POLICIES } from '@/core/RoleService.js';
 import { publicCommunityClientOptions } from '@/misc/community-ads.js';
+import { getUploadLimits } from '@/misc/upload-limits.js';
 
 @Injectable()
 export class MetaEntityService {
@@ -110,7 +111,7 @@ export class MetaEntityService {
 			maxNoteTextLength: MAX_NOTE_TEXT_LENGTH,
 			defaultLightTheme,
 			defaultDarkTheme,
-			clientOptions: publicCommunityClientOptions(instance.clientOptions, this.config.url),
+			clientOptions: { ...publicCommunityClientOptions(instance.clientOptions, this.config.url), uploadLimits: getUploadLimits(instance.clientOptions.uploadLimits) },
 			ads: ads.map(ad => ({
 				id: ad.id,
 				url: ad.url,

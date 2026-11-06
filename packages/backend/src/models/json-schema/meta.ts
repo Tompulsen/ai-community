@@ -411,6 +411,16 @@ export const packedMetaClientOptionsSchema = {
 	type: 'object',
 	optional: false, nullable: false,
 	properties: {
+		uploadLimits: {
+			type: 'object', optional: true, nullable: false,
+			properties: {
+				image: { type: 'integer', optional: false, nullable: false },
+				video: { type: 'integer', optional: false, nullable: false },
+				audio: { type: 'integer', optional: false, nullable: false },
+				document: { type: 'integer', optional: false, nullable: false },
+				other: { type: 'integer', optional: false, nullable: false },
+			},
+		},
 		communityAd1: communityAdSchema,
 		communityAd2: communityAdSchema,
 		communityAd3: communityAdSchema,

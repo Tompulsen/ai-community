@@ -5,6 +5,7 @@
 
 import { Entity, Column, PrimaryColumn, ManyToOne } from 'typeorm';
 import type { CommunityAd } from '@/misc/community-ads.js';
+import type { UploadLimits } from '@/misc/upload-limits.js';
 import { id } from './util/id.js';
 import { MiUser } from './User.js';
 
@@ -752,6 +753,7 @@ export class MiMeta {
 		default: { },
 	})
 	public clientOptions: {
+		uploadLimits?: UploadLimits;
 		communityAd1?: CommunityAd | null;
 		communityAd2?: CommunityAd | null;
 		communityAd3?: CommunityAd | null;

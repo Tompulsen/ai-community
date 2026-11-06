@@ -29,7 +29,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkButton style="margin: auto;" :iconOnly="true" rounded @click="chooseFile($event)"><i class="ti ti-plus"></i></MkButton>
 			</div>
 
-			<div>{{ i18n.tsx._uploader.maxFileSizeIsX({ x: $i.policies.maxFileSizeMb + 'MB' }) }}</div>
+			<div class="_gaps_s" data-testid="upload-limit-hint">
+				<div>{{ uploadText.hint }}</div>
+				<div v-for="kind in uploadKinds" :key="kind">{{ uploadText.labels[kind] }} · {{ effectiveUploadLimit(kind, $i.policies.maxFileSizeMb) / MiB }} MB</div>
+			</div>
 
 			<!-- クライアントで検出するMIME typeとサーバーで検出するMIME typeが異なる場合があり、混乱の元になるのでとりあえず隠しとく -->
 			<!-- https://github.com/misskey-dev/misskey/issues/16091 -->
@@ -61,6 +64,7 @@ import * as os from '@/os.js';
 import { ensureSignin } from '@/i.js';
 import { useUploader } from '@/composables/use-uploader.js';
 import MkUploaderItems from '@/components/MkUploaderItems.vue';
+import { effectiveUploadLimit, MiB, refreshUploadLimits, uploadKinds, uploadText } from '@/utility/upload-limits.js';
 
 const $i = ensureSignin();
 
@@ -89,6 +93,7 @@ const uploader = useUploader({
 
 onMounted(() => {
 	uploader.addFiles(props.files);
+	refreshUploadLimits().catch(() => { /* The upload request still validates on the server. */ });
 });
 
 const items = uploader.items;

@@ -66,6 +66,7 @@ export class FileInfoService {
 	@bindThis
 	public async getFileInfo(path: string, opts: {
 		fileName?: string | null;
+		validateSize?: (size: number, mime: string) => Promise<void>;
 		skipSensitiveDetection: boolean;
 		sensitiveThreshold?: number;
 		sensitiveThresholdForPorn?: number;
@@ -74,9 +75,10 @@ export class FileInfoService {
 		const warnings = [] as string[];
 
 		const size = await this.getFileSize(path);
-		const md5 = await this.calcHash(path);
-
 		let type = await this.detectType(path);
+		// Validate the detected type before image decoding, hashing or MIME fallback.
+		await opts.validateSize?.(size, type.mime);
+		const md5 = await this.calcHash(path);
 
 		if (type.mime === TYPE_OCTET_STREAM.mime && opts.fileName != null) {
 			const ext = opts.fileName.split('.').pop();

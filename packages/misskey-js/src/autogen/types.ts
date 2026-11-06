@@ -5690,6 +5690,13 @@ export type components = {
         };
         MetaDetailed: components['schemas']['MetaLite'] & components['schemas']['MetaDetailedOnly'];
         MetaClientOptions: {
+            uploadLimits?: {
+                image: number;
+                video: number;
+                audio: number;
+                document: number;
+                other: number;
+            };
             communityAd1?: {
                 enabled: boolean;
                 title: string;
@@ -13120,6 +13127,13 @@ export interface operations {
                     defaultLightTheme?: string | null;
                     defaultDarkTheme?: string | null;
                     clientOptions?: {
+                        uploadLimits?: {
+                            image: number;
+                            video: number;
+                            audio: number;
+                            document: number;
+                            other: number;
+                        };
                         communityAd1?: {
                             enabled: boolean;
                             title: string;

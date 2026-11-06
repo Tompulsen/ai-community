@@ -13,10 +13,10 @@ import { useStream } from '@/stream.js';
 import { i18n } from '@/i18n.js';
 import { prefer } from '@/preferences.js';
 import { $i } from '@/i.js';
-import { instance } from '@/instance.js';
 import { globalEvents } from '@/events.js';
 import { getProxiedImageUrl } from '@/utility/media-proxy.js';
 import { genId } from '@/utility/id.js';
+import { preflightUploadLimit, refreshUploadLimits, uploadLimitMessage, uploadText } from '@/utility/upload-limits.js';
 
 type UploadReturnType = {
 	filePromise: Promise<Misskey.entities.DriveFile>;
@@ -42,111 +42,127 @@ export function uploadFile(file: File | Blob, options: {
 
 	const filePromise = new Promise<Misskey.entities.DriveFile>((resolve, reject) => {
 		if ($i == null) return reject();
+		const account = $i;
+		signal.addEventListener('abort', () => reject(new UploadAbortedError()), { once: true });
+		// Refresh before a local rejection: an administrator may have raised the cap.
+		// If metadata is unavailable, the server remains the final authority.
+		const prepare = async () => {
+			const fresh = await refreshUploadLimits().then(() => true, () => false);
+			if (signal.aborted) throw new UploadAbortedError();
+			if ($i?.id !== account.id || $i.token !== account.token) throw new UploadAbortedError();
+			const filename = options.name ?? (file instanceof File ? file.name : 'untitled');
+			const { category, limitBytes } = preflightUploadLimit(file.type, filename, account.policies.maxFileSizeMb);
 
-		// こっち側で検出するMIME typeとサーバーで検出するMIME typeは異なる場合があるため、こっち側ではやらないことにする
-		// https://github.com/misskey-dev/misskey/issues/16091
-		//const allowedMimeTypes = $i.policies.uploadableFileTypes;
-		//const isAllowedMimeType = allowedMimeTypes.some(mimeType => {
-		//	if (mimeType === '*' || mimeType === '*/*') return true;
-		//	if (mimeType.endsWith('/*')) return file.type.startsWith(mimeType.slice(0, -1));
-		//	return file.type === mimeType;
-		//});
-		//if (!isAllowedMimeType) {
-		//	os.alert({
-		//		type: 'error',
-		//		title: i18n.ts.failedToUpload,
-		//		text: i18n.ts.cannotUploadBecauseUnallowedFileType,
-		//	});
-		//	return reject();
-		//}
+			// こっち側で検出するMIME typeとサーバーで検出するMIME typeは異なる場合があるため、こっち側ではやらないことにする
+			// https://github.com/misskey-dev/misskey/issues/16091
+			//const allowedMimeTypes = $i.policies.uploadableFileTypes;
+			//const isAllowedMimeType = allowedMimeTypes.some(mimeType => {
+			//	if (mimeType === '*' || mimeType === '*/*') return true;
+			//	if (mimeType.endsWith('/*')) return file.type.startsWith(mimeType.slice(0, -1));
+			//	return file.type === mimeType;
+			//});
+			//if (!isAllowedMimeType) {
+			//	os.alert({
+			//		type: 'error',
+			//		title: i18n.ts.failedToUpload,
+			//		text: i18n.ts.cannotUploadBecauseUnallowedFileType,
+			//	});
+			//	return reject();
+			//}
 
-		if ((file.size > instance.maxFileSize) || (file.size > ($i.policies.maxFileSizeMb * 1024 * 1024))) {
-			os.alert({
-				type: 'error',
-				title: i18n.ts.failedToUpload,
-				text: i18n.ts.cannotUploadBecauseExceedsFileSizeLimit,
-			});
-			return reject();
-		}
+			if (fresh && file.size > limitBytes) {
+				os.alert({
+					type: 'error',
+					title: i18n.ts.failedToUpload,
+					text: uploadLimitMessage(filename, limitBytes, category, file.size),
+				});
+				return reject();
+			}
 
-		signal.addEventListener('abort', () => {
-			reject(new UploadAbortedError());
-		}, { once: true });
-
-		xhr.open('POST', apiUrl + '/drive/files/create', true);
-		xhr.onload = ((ev: ProgressEvent<XMLHttpRequest>) => {
-			if (xhr.status !== 200 || ev.target == null || ev.target.response == null) {
-				if (xhr.status === 413) {
-					os.alert({
-						type: 'error',
-						title: i18n.ts.failedToUpload,
-						text: i18n.ts.cannotUploadBecauseExceedsFileSizeLimit,
-					});
-				} else if (ev.target?.response) {
-					const res = JSON.parse(ev.target.response);
-					if (res.error?.id === 'bec5bd69-fba3-43c9-b4fb-2894b66ad5d2') {
+			xhr.open('POST', apiUrl + '/drive/files/create', true);
+			xhr.onload = ((ev: ProgressEvent<XMLHttpRequest>) => {
+				if (xhr.status !== 200 || ev.target == null || ev.target.response == null) {
+					let errorInfo: { error?: { info?: { limitBytes?: number; category?: string }; id?: string; code?: string; message?: string } } | null = null;
+					try { errorInfo = JSON.parse(ev.target?.response ?? 'null'); } catch { /* A proxy may return an HTML error page. */ }
+					if (xhr.status === 413) {
 						os.alert({
 							type: 'error',
 							title: i18n.ts.failedToUpload,
-							text: i18n.ts.cannotUploadBecauseInappropriate,
+							text: typeof errorInfo?.error?.info?.limitBytes === 'number'
+								? uploadLimitMessage(filename, errorInfo.error.info.limitBytes, errorInfo.error.info.category, file.size)
+								: uploadText.serverRejected,
 						});
-					} else if (res.error?.id === 'd08dbc37-a6a9-463a-8c47-96c32ab5f064') {
-						os.alert({
-							type: 'error',
-							title: i18n.ts.failedToUpload,
-							text: i18n.ts.cannotUploadBecauseNoFreeSpace,
-						});
-					} else if (res.error?.id === '4becd248-7f2c-48c4-a9f0-75edc4f9a1ea') {
-						os.alert({
-							type: 'error',
-							title: i18n.ts.failedToUpload,
-							text: i18n.ts.cannotUploadBecauseUnallowedFileType,
-						});
+					} else if (errorInfo?.error) {
+						const res = errorInfo;
+						if (res.error?.id === 'bec5bd69-fba3-43c9-b4fb-2894b66ad5d2') {
+							os.alert({
+								type: 'error',
+								title: i18n.ts.failedToUpload,
+								text: i18n.ts.cannotUploadBecauseInappropriate,
+							});
+						} else if (res.error?.id === 'd08dbc37-a6a9-463a-8c47-96c32ab5f064') {
+							os.alert({
+								type: 'error',
+								title: i18n.ts.failedToUpload,
+								text: i18n.ts.cannotUploadBecauseNoFreeSpace,
+							});
+						} else if (res.error?.id === '4becd248-7f2c-48c4-a9f0-75edc4f9a1ea') {
+							os.alert({
+								type: 'error',
+								title: i18n.ts.failedToUpload,
+								text: i18n.ts.cannotUploadBecauseUnallowedFileType,
+							});
+						} else {
+							os.alert({
+								type: 'error',
+								title: i18n.ts.failedToUpload,
+								text: `${res.error?.message}\n${res.error?.code}\n${res.error?.id}`,
+							});
+						}
 					} else {
 						os.alert({
 							type: 'error',
 							title: i18n.ts.failedToUpload,
-							text: `${res.error?.message}\n${res.error?.code}\n${res.error?.id}`,
+							text: uploadText.failed,
 						});
 					}
-				} else {
-					os.alert({
-						type: 'error',
-						title: 'Failed to upload',
-						text: `${JSON.stringify(ev.target?.response)}, ${JSON.stringify(xhr.response)}`,
-					});
+
+					reject();
+					return;
 				}
 
-				reject();
-				return;
+				const driveFile = JSON.parse(ev.target.response);
+				globalEvents.emit('driveFileCreated', driveFile);
+				resolve(driveFile);
+			}) as (ev: ProgressEvent<EventTarget>) => void;
+			xhr.onerror = () => {
+				os.alert({ type: 'error', title: i18n.ts.failedToUpload, text: uploadText.failed });
+				reject(new Error('Upload connection failed'));
+			};
+
+			if (options.onProgress) {
+				xhr.upload.onprogress = ev => {
+					if (ev.lengthComputable && options.onProgress != null) {
+						options.onProgress({
+							total: ev.total,
+							loaded: ev.loaded,
+						});
+					}
+				};
 			}
 
-			const driveFile = JSON.parse(ev.target.response);
-			globalEvents.emit('driveFileCreated', driveFile);
-			resolve(driveFile);
-		}) as (ev: ProgressEvent<EventTarget>) => void;
+			const formData = new FormData();
+			formData.append('i', account.token);
+			formData.append('force', 'true');
+			formData.append('file', file);
+			formData.append('name', options.name ?? (file instanceof File ? file.name : 'untitled'));
+			formData.append('isSensitive', options.isSensitive ? 'true' : 'false');
+			if (options.caption != null) formData.append('comment', options.caption);
+			if (options.folderId) formData.append('folderId', options.folderId);
 
-		if (options.onProgress) {
-			xhr.upload.onprogress = ev => {
-				if (ev.lengthComputable && options.onProgress != null) {
-					options.onProgress({
-						total: ev.total,
-						loaded: ev.loaded,
-					});
-				}
-			};
-		}
-
-		const formData = new FormData();
-		formData.append('i', $i.token);
-		formData.append('force', 'true');
-		formData.append('file', file);
-		formData.append('name', options.name ?? (file instanceof File ? file.name : 'untitled'));
-		formData.append('isSensitive', options.isSensitive ? 'true' : 'false');
-		if (options.caption != null) formData.append('comment', options.caption);
-		if (options.folderId) formData.append('folderId', options.folderId);
-
-		xhr.send(formData);
+			xhr.send(formData);
+		};
+		prepare().catch(reject);
 	});
 
 	const abort = () => {
@@ -216,11 +232,21 @@ export function chooseFileFromUrl(): Promise<Misskey.entities.DriveFile> {
 					connection.dispose();
 				}
 			});
+			connection.on('urlUploadFailed', failure => {
+				if (failure.marker !== marker) return;
+				connection.dispose();
+				os.alert({ type: 'error', title: i18n.ts.failedToUpload, text: failure.limitBytes != null ? uploadLimitMessage('', failure.limitBytes) : uploadText.failed });
+				rej(new Error(failure.code));
+			});
 
 			misskeyApi('drive/files/upload-from-url', {
 				url: url,
 				folderId: prefer.s.uploadFolder,
 				marker,
+			}).catch(err => {
+				connection.dispose();
+				os.alert({ type: 'error', title: i18n.ts.failedToUpload, text: uploadText.failed });
+				rej(err);
 			});
 
 			os.alert({
@@ -247,7 +273,7 @@ function select(anchorElement: HTMLElement | EventTarget | null, label: string |
 		}, {
 			text: i18n.ts.fromUrl,
 			icon: 'ti ti-link',
-			action: () => chooseFileFromUrl().then(file => res([file])),
+			action: () => chooseFileFromUrl().then(file => res([file]), rej),
 		}], anchorElement);
 	});
 }

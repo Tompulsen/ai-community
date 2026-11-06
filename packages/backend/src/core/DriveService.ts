@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import sharp from 'sharp';
-import type { Sharp } from 'sharp';
 import { sharpBmp } from '@misskey-dev/sharp-read-bmp';
 import { In, IsNull } from 'typeorm';
 import { DeleteObjectCommandInput, PutObjectCommandInput, NoSuchKey } from '@aws-sdk/client-s3';
@@ -38,12 +37,14 @@ import { InternalStorageService } from '@/core/InternalStorageService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { FileInfoService } from '@/core/FileInfoService.js';
+import { getUploadTempLimit, validateUploadSize } from '@/misc/upload-limits.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
 import { correctFilename } from '@/misc/correct-filename.js';
 import { isMimeImage } from '@/misc/is-mime-image.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { UtilityService } from '@/core/UtilityService.js';
+import type { Sharp } from 'sharp';
 
 type AddFileArgs = {
 	/** User who wish to add file */
@@ -471,6 +472,9 @@ export class DriveService {
 
 		const info = await this.fileInfoService.getFileInfo(path, {
 			fileName: name,
+			validateSize: user && this.userEntityService.isLocalUser(user) && !isLink
+				? (size, mime) => validateUploadSize(path, size, mime, this.meta.clientOptions.uploadLimits, this.config.maxFileSize)
+				: undefined,
 			skipSensitiveDetection: skipNsfwCheck,
 			sensitiveThreshold: // 感度が高いほどしきい値は低くすることになる
 				this.meta.sensitiveMediaDetectionSensitivity === 'veryHigh' ? 0.1 :
@@ -893,7 +897,10 @@ export class DriveService {
 
 		try {
 			// write content at URL to temp file
-			const { filename: name } = await this.downloadService.downloadUrl(url, path);
+			const maxSize = user && this.userEntityService.isLocalUser(user) && !isLink
+				? getUploadTempLimit(this.meta.clientOptions.uploadLimits, this.config.maxFileSize)
+				: undefined;
+			const { filename: name } = await this.downloadService.downloadUrl(url, path, maxSize);
 
 			// If the comment is same as the name, skip comment
 			// (image.name is passed in when receiving attachment)

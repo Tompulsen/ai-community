@@ -492,6 +492,10 @@ export const ROUTE_DEF = [{
 		name: 'community-ads',
 		component: $i?.isAdmin ? page(() => import('@/pages/admin/community-ads.vue')) : page(() => import('@/pages/not-found.vue')),
 	}, {
+		path: '/upload-limits',
+		name: 'upload-limits',
+		component: $i?.isAdmin ? page(() => import('@/pages/admin/upload-limits.vue')) : page(() => import('@/pages/not-found.vue')),
+	}, {
 		path: '/creation-links',
 		name: 'creation-links',
 		component: $i?.isAdmin ? page(() => import('@/pages/admin/creation-links.vue')) : page(() => import('@/pages/not-found.vue')),

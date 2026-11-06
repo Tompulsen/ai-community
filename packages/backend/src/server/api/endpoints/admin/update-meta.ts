@@ -8,6 +8,7 @@ import { DI } from '@/di-symbols.js';
 import type { Config } from '@/config.js';
 import { normalizeCreationUrl } from '@/misc/creation-url.js';
 import { communityAdKeys, communityAdParam, normalizeCommunityAd } from '@/misc/community-ads.js';
+import { uploadLimitsParam } from '@/misc/upload-limits.js';
 import { ApiError } from '@/server/api/error.js';
 import type { MiMeta } from '@/models/Meta.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
@@ -88,6 +89,7 @@ export const paramDef = {
 		clientOptions: {
 			type: 'object', nullable: false, additionalProperties: false,
 			properties: {
+				uploadLimits: uploadLimitsParam,
 				communityAd1: communityAdParam,
 				communityAd2: communityAdParam,
 				communityAd3: communityAdParam,

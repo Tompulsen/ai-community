@@ -66,6 +66,11 @@ export interface MainEventTypes {
 		marker?: string | null;
 		file: Packed<'DriveFile'>;
 	};
+	urlUploadFailed: {
+		marker?: string | null;
+		code: string;
+		limitBytes?: number;
+	};
 	readAllNotifications: undefined;
 	notificationFlushed: undefined;
 	unreadNotification: Packed<'Notification'>;
