@@ -47,20 +47,20 @@ defineProps<{
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	min-height: 50px;
+	min-height: 46px;
 	padding: 8px 12px;
 	box-sizing: border-box;
-	border-radius: 999px;
+	border-radius: var(--community-radius-small, 8px);
 	color: var(--MI_THEME-fg);
-	font-size: 17px;
+	font-size: 14px;
 	line-height: 1.5;
 	text-decoration: none;
 	transition: background-color 150ms ease;
-	> i { flex-shrink: 0; font-size: 23px; }
+	> i { flex-shrink: 0; font-size: 20px; }
 	&:hover { background: var(--MI_THEME-buttonHoverBg); }
 	&:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: 2px; }
 }
-.active { color: var(--MI_THEME-fgHighlighted); font-weight: 700; }
+.active { color: var(--MI_THEME-accent); background: var(--MI_THEME-accentedBg); font-weight: 650; }
 .label { overflow-wrap: anywhere; }
 .compact {
 	.link { justify-content: center; padding: 12px; }

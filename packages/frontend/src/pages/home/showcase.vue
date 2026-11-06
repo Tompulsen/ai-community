@@ -14,8 +14,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<img :src="logoFailed ? '/favicon.ico' : logoUrl" alt="" :class="$style.mascot" @error="logoFailed = true"/>
 			<p>{{ homeText.artNote }}</p>
 		</div>
-		<div :class="$style.sticker" aria-hidden="true"><i class="ti ti-bulb"></i><strong>{{ homeText.sticker }}<br>{{ homeText.stickerMore }}</strong></div>
-		<i :class="$style.star" class="ti ti-asterisk" aria-hidden="true"></i>
 	</div>
 </div>
 </template>
@@ -58,33 +56,13 @@ watch(() => props.logoUrl, () => { logoFailed.value = false; });
 </script>
 
 <style lang="scss" module>
-.showcase {
-	container-type: inline-size;
-	position: relative;
-	width: 100%;
-	aspect-ratio: 1.19;
-	box-sizing: border-box;
-	border: 2px solid var(--home-ink);
-	border-radius: 24px;
-	background: var(--home-purple);
-	box-shadow: 9px 10px 0 var(--home-ink);
-	overflow: hidden;
-}
+.showcase { container-type: inline-size; position: relative; width: 100%; aspect-ratio: 1.19; box-sizing: border-box; border-radius: 16px; background: var(--home-stage); color: var(--home-stage-fg); overflow: hidden; }
 .customImage { display: block; width: 100%; height: 100%; object-fit: contain; }
-.art { position: relative; height: 100%; color: var(--home-ink); }
-.artHeading { display: flex; align-items: center; justify-content: space-between; padding: 6% 7%; font-size: clamp(14px, 3.5cqw, 24px); font-weight: 700; i { font-size: 1.3em; } }
-.poster {
-	position: absolute; left: 10%; top: 22%; width: 65%; height: 65%;
-	display: flex; flex-direction: column; align-items: center;
-	background: var(--home-paper); border: 2px solid var(--home-ink); border-radius: 8px;
-	box-shadow: 5px 6px 0 var(--home-ink); transform: rotate(-6deg);
-	p { margin: 0; padding: 0 8% 6%; font-size: clamp(10px, 2.5cqw, 15px); font-weight: 500; }
-}
-.posterTop { display: flex; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; padding: 6% 7%; border-bottom: 2px solid var(--home-ink); font-size: clamp(11px, 3.1cqw, 19px); font-weight: 700; }
-.mascot { min-height: 0; flex: 1; width: 70%; object-fit: contain; padding: 4%; box-sizing: border-box; }
-.sticker { position: absolute; right: 5%; top: 43%; width: 25%; aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3%; background: var(--home-lime); border: 2px solid var(--home-ink); border-radius: 50%; transform: rotate(12deg); box-shadow: 3px 4px 0 var(--home-ink); font-size: clamp(12px, 3.8cqw, 26px); text-align: center; line-height: 1.25; i { font-size: 1.1em; } }
-.star { position: absolute; top: 22%; right: 9%; color: var(--home-paper); font-size: clamp(32px, 12cqw, 72px); transform: rotate(12deg); }
+.art { position: relative; height: 100%; display: flex; flex-direction: column; }
+.artHeading { display: flex; align-items: center; justify-content: space-between; padding: 6%; font-size: clamp(13px, 3cqw, 19px); font-weight: 500; color: var(--home-stage-muted); i { font-size: 1.2em; color: var(--home-stage-accent); } }
+.poster { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 0 8% 8%; p { margin: 0; font-size: clamp(12px, 2.5cqw, 16px); color: var(--home-stage-muted); text-align: center; } }
+.posterTop { order: 1; display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; box-sizing: border-box; padding-top: 22px; border-top: 1px solid var(--home-stage-line); font-size: clamp(15px, 3.4cqw, 22px); font-weight: 500; }
+.mascot { display: block; width: 34%; height: 42%; max-height: 190px; min-height: 0; object-fit: contain; padding: 6%; box-sizing: content-box; background: var(--home-stage-panel); border-radius: 50%; }
 .popular { aspect-ratio: auto; }
-@media (max-width: 800px) { .showcase { border-radius: 18px; box-shadow: 6px 7px 0 var(--home-ink); } }
-@media (max-width: 480px) { .poster p { display: none; } }
+@media (max-width: 480px) { .showcase { border-radius: 12px; } .poster { gap: 16px; } .posterTop { padding-top: 16px; } }
 </style>

@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<button type="button" class="_button" :class="{ [$style.active]: repostState === 'sent' }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
 		<button type="button" class="_button" :class="{ [$style.liked]: liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
 		<span :class="$style.views" :title="t.viewHint" :aria-label="`${t.views} ${viewsCount ?? work.viewsCount ?? '—'}`"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>{{ format(viewsCount ?? work.viewsCount) }}</span></span>
-		<button type="button" class="_button" :aria-label="t.share" :title="t.share" @click="share"><i class="ti ti-share-2" aria-hidden="true"></i></button>
+		<button type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
 	</div>
 	<p v-if="working" :class="$style.feedback" role="status">{{ activeAction === 'like' ? t.updatingLike : activeAction === 'repost' ? t.reposting : t.refreshingInteraction }}</p>
 	<p v-else-if="reactionFeedback" :class="$style.feedback" role="status">{{ reactionFeedback }}</p>
@@ -59,6 +59,9 @@ const canSubmitComment = computed(() => canComment.value && !working.value);
 const reactionFeedback = ref('');
 const actionFailed = ref(false);
 const shareFailed = ref(false);
+const shareState = ref<'idle' | 'copying' | 'copied'>('idle');
+let shareGeneration = 0;
+let shareTimer: number | undefined;
 const likeCount = computed(() => note.value ? likes.value : props.work.likesCount);
 const replyCount = computed(() => note.value?.repliesCount ?? props.work.repliesCount);
 const repostCount = computed(() => note.value?.renoteCount ?? props.work.renotesCount);
@@ -82,7 +85,7 @@ async function requestLogin() {
 	} catch { actionFailed.value = true; loginOpening = false; }
 }
 
-function clearFeedback() { actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; }
+function clearFeedback() { actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; }
 
 function deactivate() { active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
 
@@ -141,8 +144,22 @@ async function onRepost() { await action('repost', repost); }
 async function retryInteraction() { await action('refresh'); }
 
 async function share() {
+	if (!active || shareState.value === 'copying') return;
+	const request = ++shareGeneration;
+	window.clearTimeout(shareTimer);
 	shareFailed.value = false;
-	try { await navigator.clipboard.writeText(new URL(workPath(props.work.id), window.location.origin).href); os.toast(t.copied); } catch { shareFailed.value = true; }
+	shareState.value = 'copying';
+	try {
+		await navigator.clipboard.writeText(new URL(workPath(props.work.id), window.location.origin).href);
+		if (!active || request !== shareGeneration) return;
+		shareState.value = 'copied';
+		os.toast(t.copied);
+		shareTimer = window.setTimeout(() => { shareState.value = 'idle'; }, 2200);
+	} catch {
+		if (!active || request !== shareGeneration) return;
+		shareState.value = 'idle';
+		shareFailed.value = true;
+	}
 }
 
 async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', text: t.retryWarning })).canceled) commentState.value = 'idle'; }
@@ -153,10 +170,13 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .root button, .root textarea { font: inherit; }
 .root :focus-visible { outline: 2px solid var(--MI_THEME-fg); outline-offset: 3px; }
 .actions { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 6px 0; color: var(--MI_THEME-fg); font-variant-numeric: tabular-nums; }
-.actions > button, .views { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 22px; padding: 0 8px; }
+.actions > button, .views { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 8px; padding: 0 8px; }
 .actions i { font-size: 20px; }
 .actions > button { transition: background-color .15s, color .15s; &:hover:not(:disabled) { background: var(--MI_THEME-buttonBg); } &:disabled { opacity: .6; cursor: default; } }
 .actions .liked { color: var(--MI_THEME-love); }
+.actions .copied { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); }
+.actions .copied i { animation: confirm .22s var(--community-ease, ease-out); }
+@keyframes confirm { from { transform: scale(.75); } to { transform: scale(1); } }
 .actions .active { color: var(--MI_THEME-fg); background: var(--MI_THEME-accentedBg); }
 .commentHeading { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 4px; h2 { font-size: 16px; margin: 0; } h2 span { margin-left: 6px; opacity: .7; font-weight: normal; } button { width: 44px; height: 44px; } }
 .composer { border: 1px solid var(--MI_THEME-inputBorder); border-radius: var(--MI-radius, 12px); padding: 12px; margin: 12px 0; &:focus-within { outline: 2px solid var(--MI_THEME-fg); outline-offset: 2px; } label { display: block; } textarea { box-sizing: border-box; display: block; width: 100%; resize: vertical; min-height: 72px; max-height: 180px; border: none; color: inherit; background: transparent; line-height: 1.65; &:focus-visible { outline: none; } } }
@@ -172,6 +192,6 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .attachment { display: inline-block; margin-top: 8px; color: var(--MI_THEME-accent); }
 .empty { padding: 20px 0; margin: 0; color: var(--MI_THEME-fgTransparentWeak); font-size: 13px; }
 @media (max-width: 360px) { .actions { gap: 0; font-size: 12px; } .actions > button, .views { gap: 4px; padding: 0 4px; } }
-@media (prefers-reduced-motion: reduce) { .actions > button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .actions > button { transition: none; } .actions .copied i { animation: none; } }
 @media (hover: none) { .keyboardHint { display: none; } }
 </style>

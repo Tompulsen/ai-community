@@ -37,17 +37,17 @@ const joinedDate = computed(() => Number.isFinite(Date.parse(props.profile.creat
 </script>
 
 <style lang="scss" module>
-.root { background: var(--MI_THEME-panel); border-radius: 16px; margin-bottom: 16px; }
-.cover { height: clamp(180px, 22cqw, 300px); background: var(--MI_THEME-buttonBg); border-radius: 16px 16px 0 0; overflow: hidden; }
+.root { background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: 12px; margin-bottom: 24px; }
+.cover { height: clamp(180px, 22cqw, 300px); background: var(--community-stage, var(--MI_THEME-buttonBg)); border-radius: 12px 12px 0 0; overflow: hidden; }
 .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .body { padding: 0 32px 24px; }
 .topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .avatar { width: 144px; height: 144px; border: 6px solid var(--MI_THEME-panel); border-radius: 50%; background: var(--MI_THEME-buttonBg); margin-top: -64px; position: relative; display: grid; place-items: center; flex-shrink: 0; font-size: 52px; font-weight: 600; overflow: hidden; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 .actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; padding-top: 16px; }
-.actions a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 20px; border-radius: 999px; background: var(--MI_THEME-buttonBg); font-weight: 600; }
+.actions a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 20px; border-radius: 8px; background: var(--MI_THEME-buttonBg); font-weight: 600; }
 .actions a:hover { background: var(--MI_THEME-buttonHoverBg); }
-.body h1 { font-size: 28px; line-height: 1.4; margin-top: 20px; overflow-wrap: anywhere; }
+.body h1 { font-size: 28px; font-weight: 650; letter-spacing: -.02em; line-height: 1.4; margin-top: 20px; overflow-wrap: anywhere; }
 .handle { margin-top: 4px !important; overflow-wrap: anywhere; }
 .bio { max-width: 75ch; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; margin-top: 20px; }
 .joined { margin-top: 16px !important; font-size: 13px; }

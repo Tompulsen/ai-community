@@ -1,0 +1,19 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and misskey-project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+// Shared interface tokens follow the selected Misskey theme, including dark mode.
+@mixin tokens {
+ --community-font: 'Community Inter', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+ --community-muted: color-mix(in srgb, var(--MI_THEME-fg) 78%, var(--MI_THEME-panel));
+ --community-radius: 12px;
+ --community-radius-small: 8px;
+ --community-ease: cubic-bezier(.16, 1, .3, 1);
+ --community-stage: #11151c;
+ --community-stage-panel: #1b222d;
+ --community-stage-line: #343f4f;
+ --community-stage-fg: #f4f6fb;
+ --community-stage-muted: #acb8c9;
+ --community-stage-accent: #a8c5ff;
+}

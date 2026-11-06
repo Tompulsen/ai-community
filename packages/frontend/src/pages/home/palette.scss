@@ -3,16 +3,22 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-// User-selected playful homepage palette. Admin and community keep the active Misskey theme.
 @mixin home {
-	--home-font: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
-	--home-cream: #fff8dc;
-	--home-paper: #fffdf2;
-	--home-ink: #292333;
-	--home-muted: #655c69;
-	--home-accent: #7050dc;
-	--home-purple: #a18afa;
-	--home-coral: #ff826b;
-	--home-yellow: #ffe270;
-	--home-lime: #c2ef86;
+ --home-font: var(--community-font, 'Microsoft YaHei UI', sans-serif);
+ --home-cream: #f7f9fc;
+ --home-paper: #ffffff;
+ --home-ink: #152235;
+ --home-muted: #5b687b;
+ --home-accent: #2859da;
+ --home-purple: #e8eefb;
+ --home-coral: #e8eefb;
+ --home-yellow: #f1f4f9;
+ --home-lime: #e5edff;
+ --home-line: #dce3ed;
+ --home-stage: #11151c;
+ --home-stage-panel: #1b222d;
+ --home-stage-line: #343f4f;
+ --home-stage-fg: #f4f6fb;
+ --home-stage-muted: #acb8c9;
+ --home-stage-accent: #a8c5ff;
 }

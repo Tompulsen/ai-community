@@ -180,7 +180,7 @@ async function specifyHostAndOpenRemote(options: OpenOnRemoteOptions): Promise<v
 }
 
 .intro {
-	h2 { margin: 0; font-size: 1.6em; line-height: 1.3; }
+	h2 { margin: 0; font-size: 1.75em; font-weight: 650; letter-spacing: -.025em; line-height: 1.3; }
 	p { margin: 10px 0 0; color: var(--MI_THEME-fgTransparentWeak); line-height: 1.6; }
 }
 

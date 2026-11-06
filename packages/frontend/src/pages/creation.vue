@@ -166,7 +166,8 @@ definePage(() => ({ title: definition.value?.title ?? i18n.ts.notFound, icon: de
 	justify-content: space-between;
 	flex-wrap: wrap;
 	gap: 12px;
-	padding: 12px 24px;
+	padding: 16px 24px;
+	border-bottom: 1px solid var(--MI_THEME-divider);
 	background: var(--MI_THEME-panel);
 }
 .hint { margin: 0; font-size: 0.85em; line-height: 1.6; }
@@ -182,9 +183,9 @@ definePage(() => ({ title: definition.value?.title ?? i18n.ts.notFound, icon: de
 	padding: 32px 16px;
 	box-sizing: border-box;
 	text-align: center;
-	h1 { margin: 0; font-size: 1.35em; }
+	h1 { margin: 0; font-size: clamp(24px, 3vw, 36px); font-weight: 650; letter-spacing: -.025em; }
 	p { margin: 0; line-height: 1.7; max-width: 36em; }
 }
-.emptyIcon { font-size: 40px; color: var(--MI_THEME-accent); }
+.emptyIcon { display: grid; place-items: center; width: 88px; height: 88px; margin-bottom: 8px; border-radius: 20px; background: var(--community-stage); color: var(--community-stage-accent); font-size: 34px; }
 @media (max-width: 600px) { .toolbar { padding: 12px 16px; } }
 </style>

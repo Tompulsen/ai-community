@@ -18,6 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkA to="/">{{ i18n.ts._aiCommunity.title }}</MkA>
 			<MkButton @click="signin">{{ i18n.ts.login }}</MkButton>
 		</header>
+		<MkCommunityNav v-if="!isHomepage" horizontal :class="$style.mobileNavigation"/>
 		<div :class="$style.content"><RouterView :class="{ [$style.homeContent]: isHomepage }"/></div>
 	</div>
 </div>
@@ -65,17 +66,18 @@ async function signup() {
 
 <style lang="scss" module>
 .root { display: flex; height: 100dvh; overflow: clip; }
-.side { flex: 0 0 250px; width: 250px; overflow-y: auto; background: var(--MI_THEME-navBg); border-right: 1px solid var(--MI_THEME-divider); }
-.brand { display: block; padding: 28px 24px 12px; font-size: 20px; font-weight: 700; }
+.side { flex: 0 0 224px; width: 224px; overflow-y: auto; background: var(--MI_THEME-navBg); border-right: 1px solid var(--MI_THEME-divider); }
+.brand { display: block; padding: 28px 24px 12px; font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .accountLinks { display: grid; gap: 12px; padding: 24px; }
 .main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .content { flex: 1; min-height: 0; overflow-y: auto; }
 .homeContent { overflow-y: auto; }
-.mobileHeader { display: none; }
+.mobileHeader, .mobileNavigation { display: none; }
 @media (max-width: 700px) {
-	.side { flex-basis: 76px; width: 76px; }
+	.side { display: none; }
 	.brand { padding: 20px 10px 8px; font-size: 14px; overflow-wrap: anywhere; }
 	.accountLinks { display: none; }
+	.mobileNavigation { display: flex; padding: 0 8px 8px; gap: 0; background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
 	.mobileHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; background: var(--MI_THEME-panel); }
 }
 </style>

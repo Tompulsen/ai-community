@@ -6,7 +6,18 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+@use './styles/community-design.scss';
+
+@font-face {
+ font-family: 'Community Inter';
+ src: url('../assets/fonts/InterVariable.woff2') format('woff2');
+ font-style: normal;
+ font-weight: 100 900;
+ font-display: swap;
+}
+
 :root {
+ @include community-design.tokens;
 	--MI-radius: 12px;
 	--MI-marginFull: 16px;
 	--MI-marginHalf: 10px;
@@ -25,7 +36,7 @@
 html {
 	overflow: auto;
 	overflow-wrap: break-word;
-	font-family: 'Hiragino Maru Gothic Pro', "BIZ UDGothic", Roboto, HelveticaNeue, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+	font-family: var(--community-font), 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
 	font-size: 14px;
 	line-height: 1.35;
 	text-size-adjust: 100%;

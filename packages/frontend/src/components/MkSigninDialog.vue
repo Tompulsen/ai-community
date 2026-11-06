@@ -91,7 +91,8 @@ function onSignup(res: Misskey.entities.SignupResponse) {
 	max-height: min(90dvh, 760px);
 	box-sizing: border-box;
 	background: var(--MI_THEME-panel);
-	border-radius: var(--MI-radius);
+	border-radius: 16px;
+	box-shadow: 0 24px 80px var(--MI_THEME-shadow);
 }
 
 .signup { max-width: 500px; }
@@ -110,13 +111,13 @@ function onSignup(res: Misskey.entities.SignupResponse) {
 	top: 0;
 	left: 0;
 	width: 100%;
-	height: 50px;
+	height: 56px;
 	box-sizing: border-box;
 	display: flex;
 	align-items: center;
 	font-weight: bold;
-	backdrop-filter: var(--MI-blur, blur(15px));
-	background: color(from var(--MI_THEME-bg) srgb r g b / 0.5);
+	border-bottom: 1px solid var(--MI_THEME-divider);
+	background: var(--MI_THEME-panel);
 	z-index: 1;
 }
 
@@ -133,7 +134,7 @@ function onSignup(res: Misskey.entities.SignupResponse) {
 }
 
 .content {
-	padding: 24px 28px 12px;
+	padding: 28px 28px 16px;
 	box-sizing: border-box;
 }
 

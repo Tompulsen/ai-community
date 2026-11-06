@@ -484,8 +484,8 @@ function menuEdit() {
 			left: 0;
 			right: 0;
 			bottom: 0;
-			border-radius: 999px;
-			background: linear-gradient(90deg, var(--MI_THEME-buttonGradateA), var(--MI_THEME-buttonGradateB));
+			border-radius: 10px;
+			background: var(--MI_THEME-accent);
 		}
 
 		&:focus-visible {
@@ -599,7 +599,7 @@ function menuEdit() {
 				left: 0;
 				right: 0;
 				bottom: 0;
-				border-radius: 999px;
+				border-radius: 10px;
 				background: var(--MI_THEME-accentedBg);
 			}
 		}
@@ -718,7 +718,7 @@ function menuEdit() {
 			width: 52px;
 			aspect-ratio: 1/1;
 			border-radius: 100%;
-			background: linear-gradient(90deg, var(--MI_THEME-buttonGradateA), var(--MI_THEME-buttonGradateB));
+			background: var(--MI_THEME-accent);
 		}
 
 		&:focus-visible {
@@ -809,7 +809,7 @@ function menuEdit() {
 				left: 0;
 				right: 0;
 				bottom: 0;
-				border-radius: 999px;
+				border-radius: 10px;
 				background: var(--MI_THEME-accentedBg);
 			}
 
