@@ -4,6 +4,46 @@
 
 - 访问地址：<https://zaiduyu.top>；服务器 `210.126.232.192`，项目目录 `/opt/ai-community`。
 - GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
+- 已部署应用提交：`bc2f5ee925609660d46a9f798d5f3a4592f39efb`。
+- 固定镜像：`ghcr.io/tompulsen/ai-community:sha-bc2f5ee925609660d46a9f798d5f3a4592f39efb`。
+- 镜像摘要：`sha256:a8d1214cffbf4d586a2a0e1d65ef289f9f128df2bbd59d0a621fd0f76805215d`。
+- GitHub 完整 Docker 构建运行：`42191824571`，成功。服务器拉取镜像的 revision 与应用提交一致。
+- 应用、PostgreSQL、Redis 均 healthy；仅更新 web，原数据库和附件卷继续使用。
+- 公开源码：`https://zaiduyu.top/source/ai-community.tar.gz?v=bc2f5ee925609660d46a9f798d5f3a4592f39efb`；公网下载哈希与提交归档一致：`43af64746a92da01d7ebf154c64fb057d6f55f1e1b153c462efa3816ac9c391f`。
+
+## 本轮作品互动、评论预览和制作页优化
+
+- 首页可按文本、图片、视频选择分类热门作品，保留管理员配置展示及登录后的点赞评论入口。
+- 社区作品右侧预览按可用空间显示评论；预览无内部滚动，完整讨论通过作品详情查看。
+- 搜索、公告与创作者侧栏可收起，桌面记住选择并扩展作品区；手机使用可关闭抽屉，支持 Esc 和焦点恢复。
+- 制作页改善目标自身来源和存储兼容性，新增仅重载 iframe、超时操作、双语故障说明及管理员嵌入配置提示。保留社区登录门槛。
+- 本次无数据库迁移变更。
+
+### 验证结果与边界
+
+- PASS：25 个本次 Vue/TS 文件的项目 ESLint、SPDX、locale safety、diff check；本地前几轮的分类数据库/SDK契约、43 项评论与抽屉验证及14项制作页验证已完成。
+- PASS：GitHub 完整 Docker 构建、镜像 revision、登录/注册弹窗 CSS 依赖、数据库 dump 可读取、上传附件备份、容器健康、公开源码哈希。
+- PASS：线上 29 项账户/作品编辑/公开源码检查、16 项新功能检查、6 组冷启动弹窗检查；另验证真实评论读取完成及抽屉动画结束后的不透明面板。桌面、390px、320px、中英文截图已实看。
+- 线上现有 1 份公开作品，评论接口正常返回空列表。未新增、删除或修改真实作品，未发布测试评论、点赞或转发；管理员作品版本和内容验证保持不变。
+- 仅将公开源码设置更新为本次版本地址；其他站点 clientOptions 和名称保持不变。
+- BASELINE：本地仓库交付总脚本触发 pnpm 补装既有不完整依赖并遇 EACCES，已停止；变动文件 ESLint 通过已有隔离工具链运行。完整发布构建在 GitHub 成功。
+- 待处理：`oc.zhangyuapi.com` 本次实测仍返回 `frame-ancestors 'self' https://zhangyuapi.com`，没有允许 `https://zaiduyu.top`。目标站内嵌仍受限；需用户提供其源码或服务器配置路径，不能把本次社区部署称为目标站已恢复。
+
+### 备份与回滚
+
+- 本次备份：`/opt/ai-community-backups/interactive-ui-20261106T085917Z`；包含数据库 dump、上传卷、私有配置、Compose、旧镜像引用及旧源码。
+- 上一应用提交：`a8a3950f6e81eb602978fe79f6a992fe9f0848bb`。健康失败自动恢复原 release.env 并回滚 web；本次未触发。
+- 本次临时镜像拉取凭据已在拉取后删除。
+
+更新说明候选：新增分类热门作品、评论预览及可收起社区侧栏，完善制作页加载与嵌入提示。
+
+本轮截图和完整检查记录位于工作区 `.community-validation/interactive-ui-production/`。
+
+---
+## 上一轮现代极简 UI 生产版本
+
+- 访问地址：<https://zaiduyu.top>；服务器 `210.126.232.192`，项目目录 `/opt/ai-community`。
+- GitHub 私有仓库：`Tompulsen/ai-community`，分支 `main`。
 - 已部署应用提交：`a8a3950f6e81eb602978fe79f6a992fe9f0848bb`。
 - 固定镜像：`ghcr.io/tompulsen/ai-community:sha-a8a3950f6e81eb602978fe79f6a992fe9f0848bb`。
 - 镜像摘要：`sha256:c49b41a699198641c2785ecfd887f7d7b1f93de4d1dc9fda9fbe815779be277c`。
