@@ -1,6 +1,24 @@
 # 部署验证记录（2026-11-07）
 
-## 当前生产版本：迁移至 1Panel 服务器及分类上传限制
+## 当前生产版本：明暗模式与私信优化（2026-11-07）
+
+- 站点：`https://zaiduyu.top`；新服务器 `38.114.89.52`，仅更新 `ai-community-web-1`。
+- 本轮 17 个文件提交：`4d7a497ab203dc6448893e4e407ec3374d1536b4`，已推送 main；GitHub 完整镜像构建 `42356206190` 成功。
+- **实际生产为复合版本**：以此前已上线、尚未合入 Git 的 SSO 镜像 `sha256:988e78df7fa46d2f9f8445c4b7cd815d9902b3963f9d2d12cf6b7487cf00a720` 的源码为基线，仅叠加上述 17 个文件。不能用纯 Git 提交镜像替换当前生产，否则会丢失既有 New API 登录功能。
+- 当前固定镜像：`community-appearance-chat:4d7a497-7b679ce0bb45`；镜像 ID `sha256:7b679ce0bb453ccafd303235df9a8fc06582101b843204ceccbffcc8ee2c87de`。
+- 实际构建源码：`/opt/ai-community-appearance-chat-4d7a497/source`。3277 个源码文件的哈希对比确认仅 17 个目标文件变化，SSO 源码和全部迁移保持不变；源码树 SHA-256 `f93e81da7d4233e5ed0e26ad8a2d9d9196e96f97f11135753e9ac9bbc882b9d7`。
+- 服务器完整 Docker 构建通过；切换前对容器、配置哈希及完整有效环境变量进行比较，保留现有账号登录与部署设置。Compose 当前直接固定 web 镜像，已同时更新该引用和 release.env。
+- PASS：9 项公网浏览器检查，覆盖 HTTPS/节点、原管理员登录及 SSO 入口、明亮/暗色即时切换、定时时间保存与刷新保留、无效时间拦截、实际私信历史与搜索接口、WebSocket、1440/390/320px 和英文布局。浏览器运行错误和失败 JS/CSS 请求均为 0。
+- PASS：公开复合源码包 SHA-256 `67a13bb78b5760c19279a5c93fec2fb8bd3fef9b3fb9f1b17eb269c8c7b1a343`；链接 `https://zaiduyu.top/source/ai-community.tar.gz?v=appearance-chat-4d7a497-f93e81da`。包内附 release.json、17 文件 overlay manifest 与源码验证结果；站点源码链接已更新，其他 clientOptions 不变。
+- 备份：`/opt/ai-community-appearance-chat-4d7a497/backup`，包含数据库归档及清单、上传文件、私有配置、Compose、release.env、原镜像引用和原公开源码。回退只恢复应用配置/镜像，不自动恢复旧数据库。
+- 先前尝试仅更新 release.env 时，校验发现 Compose 直接固定了旧镜像，自动恢复配置；未误报上线。后续已按固定镜像方式成功切换并核实实际镜像 ID。
+- 使用：设置 → 主题 → 界面模式，支持明亮、暗色、跟随系统、定时切换；默认 07:00 明亮、19:00 暗色，按设备本地时间。
+- 私信优化包括发送防重复、失败保留草稿、附件取消恢复、断线补拉及未读状态同步。本地 12 组真实组件测试通过；公网仅执行非发送检查，没有向真实用户发送测试消息，未完成生产双账号收发验收。
+- 本地报告、脚本与截图：`.community-validation/deploy-appearance-chat/`。旧服务器仅作为既有 SSH 中转使用，本轮没有部署旧服务器或改动其他业务容器。
+
+---
+
+## 上一生产版本：迁移至 1Panel 服务器及分类上传限制
 
 - 站点：<https://zaiduyu.top>；新服务器 `38.114.89.52`，Ubuntu 24.04、1Panel v2.4.2，应用目录 `/opt/ai-community`。
 - 已部署应用提交：`e35e867a7734003a08a746b440d27825b1dc7551`，公开仓库 `Tompulsen/ai-community` 的 `main` 分支。
