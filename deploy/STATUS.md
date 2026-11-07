@@ -4,7 +4,7 @@
 
 - 站点：`https://zaiduyu.top`；新服务器 `38.114.89.52`，仅更新 `ai-community-web-1`。
 - 本轮 17 个文件提交：`4d7a497ab203dc6448893e4e407ec3374d1536b4`，已推送 main；GitHub 完整镜像构建 `42356206190` 成功。
-- **实际生产为复合版本**：以此前已上线、尚未合入 Git 的 SSO 镜像 `sha256:988e78df7fa46d2f9f8445c4b7cd815d9902b3963f9d2d12cf6b7487cf00a720` 的源码为基线，仅叠加上述 17 个文件。不能用纯 Git 提交镜像替换当前生产，否则会丢失既有 New API 登录功能。
+- **实际生产为复合版本**：以此前已上线、构建时尚未合入 Git 的 SSO 镜像 `sha256:988e78df7fa46d2f9f8445c4b7cd815d9902b3963f9d2d12cf6b7487cf00a720` 的源码为基线，仅叠加上述 17 个文件。不能用纯 `4d7a497` 镜像替换此复合版本，否则会丢失既有 New API 登录功能。后续 main 已有并行账号治理及 SSO 保留提交；其发布属于独立变更，以对应记录为准。
 - 当前固定镜像：`community-appearance-chat:4d7a497-7b679ce0bb45`；镜像 ID `sha256:7b679ce0bb453ccafd303235df9a8fc06582101b843204ceccbffcc8ee2c87de`。
 - 实际构建源码：`/opt/ai-community-appearance-chat-4d7a497/source`。3277 个源码文件的哈希对比确认仅 17 个目标文件变化，SSO 源码和全部迁移保持不变；源码树 SHA-256 `f93e81da7d4233e5ed0e26ad8a2d9d9196e96f97f11135753e9ac9bbc882b9d7`。
 - 服务器完整 Docker 构建通过；切换前对容器、配置哈希及完整有效环境变量进行比较，保留现有账号登录与部署设置。Compose 当前直接固定 web 镜像，已同时更新该引用和 release.env。
