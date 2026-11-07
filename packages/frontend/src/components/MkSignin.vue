@@ -7,6 +7,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div :class="$style.signinRoot" :aria-busy="waiting">
 	<div v-if="errorMessage" role="alert" :class="$style.error" data-testid="signin-error">{{ errorMessage }}</div>
 	<div :inert="waiting">
+		<div v-if="newApiEnabled && page === 'input'" :class="$style.newApi">
+			<MkButton primary :disabled="waiting" :wait="waiting" data-testid="newapi-signin" @click="onNewApiSignin">{{ authText.newApiSignin }}</MkButton>
+			<p>{{ authText.newApiHint }}</p>
+		</div>
 		<XInput
 			v-show="page === 'input'"
 			ref="inputPageEl"
@@ -38,7 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import { browserSupportsWebAuthn } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialRequestOptionsJSON, AuthenticationResponseJSON } from '@simplewebauthn/browser';
@@ -53,6 +57,8 @@ import XInput from '@/components/MkSignin.input.vue';
 import XTotp from '@/components/MkSignin.totp.vue';
 import XPasskey from '@/components/MkSignin.passkey.vue';
 import { login } from '@/accounts.js';
+import MkButton from '@/components/MkButton.vue';
+import { newApiSigninConfig, startNewApiSignin } from '@/utility/newapi-signin.js';
 
 const emit = defineEmits<{
 	(ev: 'login', v: Misskey.entities.SigninFlowResponse & { finished: true }): void;
@@ -83,6 +89,23 @@ const credentialRequest = shallowRef<PublicKeyCredentialRequestOptionsJSON | nul
 const passkeyContext = ref('');
 const doingPasskeyFromInputPage = ref(false);
 let active = true;
+const newApiEnabled = ref(false);
+const newApiAbort = new AbortController();
+onMounted(async () => {
+	try {
+		const result = await newApiSigninConfig(newApiAbort.signal);
+		if (active) newApiEnabled.value = result.enabled;
+	} catch { /* Local sign-in remains available when external sign-in is disabled. */ }
+});
+
+async function onNewApiSignin(): Promise<void> {
+	if (waiting.value) return;
+	waiting.value = true;
+	errorMessage.value = '';
+	try { await startNewApiSignin(); } catch {
+		if (active) { errorMessage.value = authText.newApiFailed; waiting.value = false; }
+	}
+}
 
 watch(waiting, value => emit('busy', value), { flush: 'sync' });
 
@@ -262,6 +285,7 @@ function onSigninApiError(error: unknown): void {
 }
 
 onBeforeUnmount(() => {
+	newApiAbort.abort();
 	active = false;
 	password.value = '';
 	passkeyContext.value = '';
@@ -271,6 +295,7 @@ onBeforeUnmount(() => {
 
 <style lang="scss" module>
 .signinRoot { position: relative; }
+.newApi { display: grid; gap: 8px; margin-bottom: 24px; p { margin: 0; font-size: 13px; line-height: 1.6; } }
 .error {
 	margin-bottom: 20px;
 	padding: 12px 14px;

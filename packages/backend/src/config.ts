@@ -86,6 +86,8 @@ type Source = {
 	publishTarballInsteadOfProvideRepositoryUrl?: boolean;
 
 	setupPassword?: string;
+	/** Fixed, operator-managed identity provider. Disabled unless explicitly configured. */
+	newApiSso?: { issuer: string; studioOrigin?: string; studioSecret?: string; };
 
 	proxy?: string;
 	proxySmtp?: string;
@@ -134,6 +136,7 @@ type Source = {
 
 export type Config = {
 	url: string;
+	newApiSso?: Source['newApiSso'];
 	port: number;
 	socket: string | undefined;
 	trustProxy: NonNullable<FastifyServerOptions['trustProxy']>;
@@ -293,6 +296,7 @@ export function loadConfig(): Config {
 		publishTarballInsteadOfProvideRepositoryUrl: !!config.publishTarballInsteadOfProvideRepositoryUrl,
 		setupPassword: config.setupPassword,
 		url: url.origin,
+		newApiSso: config.newApiSso,
 		port: config.port ?? parseInt(process.env.PORT ?? '', 10),
 		socket: config.socket,
 		trustProxy: config.trustProxy ?? [

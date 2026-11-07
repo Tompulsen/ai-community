@@ -15,6 +15,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<p>{{ creationText.loadError }}</p>
 					<MkButton @click="load">{{ i18n.ts.retry }}</MkButton>
 				</div>
+				<section v-else-if="loaded && studioOrigin" class="_panel _gaps_m" :class="$style.editor">
+					<h2 :class="$style.heading">{{ authText.studioTitle }}</h2>
+					<p>{{ authText.studioManaged }}</p>
+					<p><code>{{ studioOrigin }}</code></p>
+					<MkA to="/create/text" class="_link">{{ creationText.preview }}</MkA>
+				</section>
 				<template v-else-if="loaded">
 					<section v-for="item in editors" :key="item.key" class="_panel _gaps_m" :class="$style.editor" :aria-labelledby="`creation-${item.key}-heading`" :data-testid="`creation-editor-${item.key}`">
 						<h2 :id="`creation-${item.key}-heading`" :class="$style.heading"><i :class="item.icon" aria-hidden="true"></i> {{ item.title }}</h2>
@@ -49,18 +55,20 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { computed, onMounted, ref, watch } from 'vue';
-import type * as Misskey from 'misskey-js';
 import { url as siteUrl } from '@@/js/config.js';
+import type * as Misskey from 'misskey-js';
+import type { CreationMode } from '@/utility/creation-pages.js';
 import MkInput from '@/components/MkInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import MkButton from '@/components/MkButton.vue';
 import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
-import type { CreationMode } from '@/utility/creation-pages.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { fetchInstance, instance } from '@/instance.js';
 import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
 import { definePage } from '@/page.js';
+import { authText } from '@/utility/auth-copy.js';
+import { newApiSigninConfig } from '@/utility/newapi-signin.js';
 
 const editors = ref(creationPages.map(item => ({ ...item, url: '', mode: 'embed' as CreationMode })));
 const modeOptions = [
@@ -73,6 +81,7 @@ const loadFailed = ref(false);
 const saving = ref(false);
 const saveFailed = ref(false);
 const saved = ref(false);
+const studioOrigin = ref('');
 const siteOrigin = new URL(siteUrl).origin;
 const copiedOrigin = ref('');
 const copyFailed = ref('');
@@ -92,7 +101,8 @@ async function load() {
 	loading.value = true;
 	loadFailed.value = false;
 	try {
-		const meta = await misskeyApi('admin/meta');
+		const [meta, sso] = await Promise.all([misskeyApi('admin/meta'), newApiSigninConfig()]);
+		studioOrigin.value = sso.studioOrigin ?? '';
 		for (const item of editors.value) {
 			item.url = meta.clientOptions[item.urlKey] ?? '';
 			item.mode = meta.clientOptions[item.modeKey] ?? 'embed';

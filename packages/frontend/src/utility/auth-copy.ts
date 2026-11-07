@@ -6,6 +6,12 @@
 import { lang } from '@@/js/config.js';
 
 const zh = {
+	newApiSignin: '使用 New API 账号登录', newApiHint: '已有 New API 账号？直接登录，首次自动建立社区账号。',
+	newApiWorking: '正在完成账号登录…', newApiFailed: '未能完成 New API 登录，请重新发起。',
+	newApiFactor: '请完成社区账号的两步验证', newApiRetry: '重新使用 New API 登录',
+	studioTitle: '进入你的制作空间', studioWorking: '正在连接你的账号…', studioHint: '文本、图片和视频制作使用对应 New API 账号的余额。',
+	studioAccountRequired: '请使用 New API 账号登录社区，再进入制作空间。现有社区账号和作品会保留。',
+	studioFailed: '暂时无法连接制作空间，请重试。', studioOpen: '进入制作空间', studioManaged: '三个制作入口已统一接入以下制作空间，并使用对应的 New API 账号。',
 	signinTitle: '欢迎回来', signinHint: '登录后继续创作、分享和交流。',
 	identifier: '邮箱或用户名', password: '密码', signin: '登录', signingIn: '正在登录…',
 	signupTitle: '加入创作社区', signupHint: '创建账号，保存灵感，分享你的作品。',
@@ -34,6 +40,12 @@ const zh = {
 };
 
 const en: Record<keyof typeof zh, string> = {
+	newApiSignin: 'Sign in with New API', newApiHint: 'Use your existing New API account. Your first sign-in creates a community profile.',
+	newApiWorking: 'Completing sign-in…', newApiFailed: 'New API sign-in did not complete. Please start again.',
+	newApiFactor: 'Complete community two-factor verification', newApiRetry: 'Retry New API sign-in',
+	studioTitle: 'Enter your creation studio', studioWorking: 'Connecting your account…', studioHint: 'Text, image and video generation use the balance of your linked New API account.',
+	studioAccountRequired: 'Sign in to the community with New API to continue. Your existing community account and work are preserved.',
+	studioFailed: 'Could not connect to the studio. Please retry.', studioOpen: 'Open creation studio', studioManaged: 'All three creation entries use this studio and the matching New API account.',
 	signinTitle: 'Welcome back', signinHint: 'Sign in to create, share and connect.',
 	identifier: 'Email or username', password: 'Password', signin: 'Sign in', signingIn: 'Signing in…',
 	signupTitle: 'Join the creative community', signupHint: 'Create an account to save ideas and share your work.',

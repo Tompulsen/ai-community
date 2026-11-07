@@ -70,6 +70,7 @@ import { MiUserListMembership } from '@/models/UserListMembership.js';
 import { MiUserNotePining } from '@/models/UserNotePining.js';
 import { MiUserPending } from '@/models/UserPending.js';
 import { MiUserProfile } from '@/models/UserProfile.js';
+import { MiExternalAccount } from '@/models/ExternalAccount.js';
 import { MiUserPublickey } from '@/models/UserPublickey.js';
 import { MiUserSecurityKey } from '@/models/UserSecurityKey.js';
 import { MiWebhook } from '@/models/Webhook.js';
@@ -180,6 +181,7 @@ class MyCustomLogger implements Logger {
 }
 
 export const entities = [
+	MiExternalAccount,
 	MiCommunitySubmission,
 	MiCommunityViolation,
 	MiAnnouncement,

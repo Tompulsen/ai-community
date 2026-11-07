@@ -21,7 +21,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkButton @click="refresh">{{ i18n.ts.retry }}</MkButton>
 		</div>
 		<template v-else-if="ready">
-			<div v-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
+			<div v-if="studioOrigin" :class="$style.empty" data-testid="creation-studio" :aria-busy="studioBusy">
+				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
+				<h1>{{ authText.studioTitle }}</h1>
+				<p v-if="studioBusy" role="status">{{ authText.studioWorking }}</p>
+				<p v-else-if="studioError" role="alert">{{ studioError === 'NEW_API_ACCOUNT_REQUIRED' ? authText.studioAccountRequired : authText.studioFailed }}</p>
+				<p v-else>{{ authText.studioHint }}</p>
+				<MkButton v-if="studioError === 'NEW_API_ACCOUNT_REQUIRED'" primary :disabled="studioBusy" @click="loginWithNewApi">{{ authText.newApiSignin }}</MkButton>
+				<MkButton v-else primary :disabled="studioBusy" @click="launchStudio">{{ authText.studioOpen }}</MkButton>
+				<MkA to="/community" class="_link">{{ homeText.community }}</MkA>
+			</div>
+			<div v-else-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
 				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
 				<h1>{{ creationText.notConfigured }}</h1>
 				<p>{{ creationText.emptyHint }}</p>
@@ -42,25 +52,25 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<p v-if="$i?.isAdmin">{{ embedText.adminHint }} <code>{{ siteOrigin }}</code></p>
 				</section>
 				<div v-if="active && mode === 'embed'" :class="$style.frameStage" data-testid="creation-frame-stage" :aria-busy="frameState === 'loading'">
-				<iframe
-					:key="`${definition.key}:${targetUrl}:${frameAttempt}`"
-					ref="frame"
-					:src="targetUrl"
-					:title="definition.title"
-					:class="$style.frame"
-					sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
-					allow="fullscreen"
-					referrerpolicy="no-referrer"
-					data-testid="creation-frame"
-					@load="frameLoaded"
-					@error="frameFailed"
-				></iframe>
-				<div v-if="frameState !== 'unconfirmed'" :class="$style.frameStatus" :role="frameState === 'error' ? 'alert' : 'status'" data-testid="creation-frame-status">
-					<MkLoading v-if="frameState === 'loading'"/>
-					<i v-else class="ti ti-browser-off" :class="$style.statusIcon" aria-hidden="true"></i>
-					<h2>{{ frameState === 'loading' ? embedText.loading : frameState === 'timeout' ? embedText.slowTitle : embedText.failedTitle }}</h2>
-					<template v-if="frameState !== 'loading'"><p>{{ embedText.waitHint }}</p><div :class="$style.actions"><MkButton primary @click="reloadFrame">{{ embedText.reload }}</MkButton><MkButton type="a" :href="targetUrl" target="_blank" rel="noopener noreferrer">{{ creationText.open }}</MkButton><MkButton @click="continueFrame">{{ embedText.continuePreview }}</MkButton></div></template>
-				</div>
+					<iframe
+						:key="`${definition.key}:${targetUrl}:${frameAttempt}`"
+						ref="frame"
+						:src="targetUrl"
+						:title="definition.title"
+						:class="$style.frame"
+						sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
+						allow="fullscreen"
+						referrerpolicy="no-referrer"
+						data-testid="creation-frame"
+						@load="frameLoaded"
+						@error="frameFailed"
+					></iframe>
+					<div v-if="frameState !== 'unconfirmed'" :class="$style.frameStatus" :role="frameState === 'error' ? 'alert' : 'status'" data-testid="creation-frame-status">
+						<MkLoading v-if="frameState === 'loading'"/>
+						<i v-else class="ti ti-browser-off" :class="$style.statusIcon" aria-hidden="true"></i>
+						<h2>{{ frameState === 'loading' ? embedText.loading : frameState === 'timeout' ? embedText.slowTitle : embedText.failedTitle }}</h2>
+						<template v-if="frameState !== 'loading'"><p>{{ embedText.waitHint }}</p><div :class="$style.actions"><MkButton primary @click="reloadFrame">{{ embedText.reload }}</MkButton><MkButton type="a" :href="targetUrl" target="_blank" rel="noopener noreferrer">{{ creationText.open }}</MkButton><MkButton @click="continueFrame">{{ embedText.continuePreview }}</MkButton></div></template>
+					</div>
 				</div>
 				<div v-else :class="$style.empty" data-testid="creation-external">
 					<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
@@ -84,6 +94,8 @@ import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
 import { definePage } from '@/page.js';
 import { homeText } from '@/pages/home/copy.js';
+import { authText } from '@/utility/auth-copy.js';
+import { newApiSigninConfig, newApiStudioUrl, startNewApiSignin } from '@/utility/newapi-signin.js';
 import * as os from '@/os.js';
 
 const props = defineProps<{ kind: string }>();
@@ -111,6 +123,32 @@ let generation = 0;
 const loginOpening = ref(false);
 let loginRequest = 0;
 let disposeLogin: (() => void) | undefined;
+const studioOrigin = ref('');
+const studioBusy = ref(false);
+const studioError = ref('');
+let studioAbort: AbortController | undefined;
+
+async function launchStudio() {
+	if (!$i || !definition.value || !active.value || studioBusy.value) return;
+	const current = generation;
+	const abort = new AbortController();
+	studioBusy.value = true;
+	studioError.value = '';
+	studioAbort = abort;
+	try {
+		const target = await newApiStudioUrl($i.token, definition.value.key, abort.signal);
+		if (active.value && current === generation && new URL(target).origin === studioOrigin.value) window.location.assign(target);
+	} catch (error) {
+		if (active.value && current === generation) studioError.value = error instanceof Error ? error.message : 'STUDIO_UNAVAILABLE';
+	} finally {
+		if (studioAbort === abort) { studioBusy.value = false; studioAbort = undefined; }
+	}
+}
+
+async function loginWithNewApi() {
+	studioBusy.value = true;
+	try { await startNewApiSignin(`/create/${props.kind}`); } catch { studioError.value = 'STUDIO_UNAVAILABLE'; studioBusy.value = false; }
+}
 
 function clearFrameTimer() { window.clearTimeout(frameTimer); frameTimer = undefined; }
 
@@ -176,12 +214,20 @@ async function refresh() {
 	if (!active.value || !definition.value) return;
 	if (!$i) { await requestLogin(); return; }
 	const current = ++generation;
+	studioAbort?.abort();
+	studioAbort = undefined;
+	studioBusy.value = false;
+	studioError.value = '';
 	loading.value = true;
 	ready.value = false;
 	failed.value = false;
 	try {
-		await fetchInstance(true);
-		if (current === generation) ready.value = true;
+		const [, sso] = await Promise.all([fetchInstance(true), newApiSigninConfig()]);
+		if (current === generation) {
+			studioOrigin.value = sso.studioOrigin ?? '';
+			ready.value = true;
+			if (studioOrigin.value) void launchStudio();
+		}
 	} catch {
 		if (current === generation) failed.value = true;
 	} finally {
@@ -196,6 +242,9 @@ function activate() {
 }
 
 function deactivate() {
+	studioAbort?.abort();
+	studioAbort = undefined;
+	studioBusy.value = false;
 	clearFrameTimer();
 	active.value = false;
 	ready.value = false;

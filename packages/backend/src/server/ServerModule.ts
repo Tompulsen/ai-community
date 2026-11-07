@@ -6,6 +6,7 @@
 import { Module } from '@nestjs/common';
 import { EndpointsModule } from '@/server/api/EndpointsModule.js';
 import { CoreModule } from '@/core/CoreModule.js';
+import MainStreamConnection from '@/server/api/stream/Connection.js';
 import { ApiCallService } from './api/ApiCallService.js';
 import { FileServerService } from './FileServerService.js';
 import { HealthServerService } from './HealthServerService.js';
@@ -19,6 +20,7 @@ import { ApiServerService } from './api/ApiServerService.js';
 import { AuthenticateService } from './api/AuthenticateService.js';
 import { RateLimiterService } from './api/RateLimiterService.js';
 import { SigninApiService } from './api/SigninApiService.js';
+import { NewApiSigninService } from './api/NewApiSigninService.js';
 import { SigninService } from './api/SigninService.js';
 import { SignupApiService } from './api/SignupApiService.js';
 import { StreamingApiServerService } from './api/StreamingApiServerService.js';
@@ -30,7 +32,6 @@ import { UrlPreviewService } from './web/UrlPreviewService.js';
 import { ClientLoggerService } from './web/ClientLoggerService.js';
 import { OAuth2ProviderService } from './oauth/OAuth2ProviderService.js';
 
-import MainStreamConnection from '@/server/api/stream/Connection.js';
 import { MainChannel } from './api/stream/channels/main.js';
 import { AdminChannel } from './api/stream/channels/admin.js';
 import { AntennaChannel } from './api/stream/channels/antenna.js';
@@ -78,6 +79,7 @@ import { SigninWithPasskeyApiService } from './api/SigninWithPasskeyApiService.j
 		AuthenticateService,
 		RateLimiterService,
 		SigninApiService,
+		NewApiSigninService,
 		SigninWithPasskeyApiService,
 		SigninService,
 		SignupApiService,

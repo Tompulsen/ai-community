@@ -22,6 +22,9 @@ function chatPage(...args: Parameters<typeof page>) {
 }
 
 export const ROUTE_DEF = [{
+	path: '/auth/newapi',
+	component: page(() => import('@/pages/newapi-signin.vue')),
+}, {
 	name: 'index',
 	path: '/',
 	component: page(() => import('@/pages/home.vue')),
