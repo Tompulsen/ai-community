@@ -1,6 +1,22 @@
 # 部署验证记录（2026-11-07）
 
-## 当前生产版本：明暗模式与私信优化（2026-11-07）
+## 当前生产版本：社区账号封禁与举报
+
+- 已部署：`https://zaiduyu.top`，服务器 `38.114.89.52`。应用提交 `1fdc95becc018e7094262b6f478827b79f9023f3`，镜像摘要 `sha256:e0ad0a725e3b6ad51c46f050456e26b588424e93e48d8b83e19b8f9ef95c5573`。
+- GitHub 完整 Docker 构建 `42356514769` 成功。生产应用、PostgreSQL、Redis healthy，原挂载、端口、网络和运行环境逐项一致。
+- 保留已上线的 New API 登录／制作接入，以及外观与私聊更新。SSO 源码来自当时运行镜像并核对 15 个文件哈希；并行发布的 32 个相关源码文件也已核对一致。
+- PASS：同一生产候选镜像在隔离 PostgreSQL／Redis 上执行原 e2e 用例的 4 组真实 HTTP 验收，涵盖多请求并发、封禁后的 API 拒绝、重复内容去重、评论可见性、权限和规则范围。使用轻量 Node 执行器及管理员创建测试账号适配，并非运行完整 Vitest 套件；未向生产写入测试内容或封禁真实用户。
+- PASS：隔离实例标准 `check_migrations_clean.js` 无待执行 DDL。生产已执行 `CommunityAccountModeration1794022723183`；生产检查仅检出原有 `meta.proxyRemoteFiles` 默认值 true/false 差异，本次未更改该列。
+- PASS：12 项公网验收，包含原管理员登录、规则默认值与非法值、举报入口／游客登录、用户计数、举报队列、320/390px 中英文页面及公开源码哈希；未捕获浏览器运行异常。
+- 生产保留 6 个用户、2 份作品和 1 个 SSO 身份映射；本次上线后违规记录为 0。只更新站内源码版本链接，原有社区设置保持不变。
+- 备份：`/opt/ai-community-backups/account-moderation-20261107T084026Z`，包含数据库 dump、上传附件、Redis、私有配置、旧镜像引用及两份源码。数据库归档可读取，备份 SHA-256 校验通过。
+- 上一镜像：`sha256:7b679ce0bb453ccafd303235df9a8fc06582101b843204ceccbffcc8ee2c87de`。首次切换发现既有 Compose 写死旧镜像，版本校验触发恢复；仅将 web 镜像字段恢复为既有环境变量方式后成功上线。失败尝试的备份另行保留。
+- 公开对应源码：`https://zaiduyu.top/source/ai-community.tar.gz?v=1fdc95becc018e7094262b6f478827b79f9023f3`，SHA-256 `d0cb89f5e52b8d7f54af85736271093ebaaad4604e1f6c3461938d11833c72de`。
+- 本地发布记录和截图：工作区 `.community-validation/account-moderation-release/`。
+
+---
+
+## 上一生产版本：明暗模式与私信优化（2026-11-07）
 
 - 站点：`https://zaiduyu.top`；新服务器 `38.114.89.52`，仅更新 `ai-community-web-1`。
 - 本轮 17 个文件提交：`4d7a497ab203dc6448893e4e407ec3374d1536b4`，已推送 main；GitHub 完整镜像构建 `42356206190` 成功。
