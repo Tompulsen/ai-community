@@ -8,6 +8,7 @@ import { hemisphere } from '@@/js/intl-const.js';
 import { DEFAULT_EMOJIS } from '@@/js/const.js';
 import { prefersReducedMotion } from '@@/js/config.js';
 import { definePreferences } from './manager.js';
+import { defaultThemeSchedule } from '@/utility/theme-schedule.js';
 import type { Theme } from '@@/js/theme.js';
 import type { SoundType } from '@/utility/sound.js';
 import type { Plugin } from '@/plugin.js';
@@ -166,6 +167,9 @@ export const PREF_DEF = definePreferences({
 	},
 	syncDeviceDarkMode: {
 		default: true,
+	},
+	themeSchedule: {
+		default: { ...defaultThemeSchedule },
 	},
 	defaultNoteVisibility: {
 		default: 'public' as (typeof Misskey.noteVisibilities)[number],

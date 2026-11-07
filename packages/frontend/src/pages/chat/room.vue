@@ -7,11 +7,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 <PageWithHeader v-model:tab="tab" :reversed="tab === 'chat'" :tabs="headerTabs" :actions="headerActions">
 	<div v-if="tab === 'chat'" class="_spacer" style="--MI_SPACER-w: 700px;">
 		<div class="_gaps">
+			<MkA to="/chat" :class="$style.back"><i class="ti ti-arrow-left" aria-hidden="true"></i> {{ t.back }}</MkA>
+			<div v-if="syncFailed" role="alert" class="_gaps_s"><span>{{ t.syncFailed }}</span><MkButton :wait="syncing" @click="refreshMessages">{{ t.retry }}</MkButton></div>
 			<div v-if="initializing">
 				<MkLoading/>
 			</div>
 
-			<MkResult v-else-if="fetchError != null" :type="fetchError"/>
+			<div v-else-if="fetchError != null" class="_gaps"><MkResult :type="fetchError"/><MkButton @click="initialize">{{ t.retry }}</MkButton></div>
 
 			<div v-else-if="messages.length === 0">
 				<div class="_gaps" style="text-align: center;">
@@ -30,6 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 			<div v-else ref="timelineEl" class="_gaps">
 				<div v-if="canFetchMore">
+					<p v-if="moreFailed" role="alert">{{ t.moreFailed }}</p>
 					<MkButton :class="$style.more" :wait="moreFetching" primary rounded @click="fetchMore">{{ i18n.ts.loadMore }}</MkButton>
 				</div>
 
@@ -78,11 +81,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<Transition name="fade">
 					<div v-show="showIndicator" :class="$style.new">
 						<button class="_buttonPrimary" :class="$style.newButton" @click="onIndicatorClick">
-							<i class="fas ti-fw fa-arrow-circle-down" :class="$style.newIcon"></i>{{ i18n.ts._chat.newMessage }}
+							<i class="ti ti-arrow-down" :class="$style.newIcon" aria-hidden="true"></i>{{ i18n.ts._chat.newMessage }}
 						</button>
 					</div>
 				</Transition>
-				<XForm v-if="initialized" :user="user" :room="room" :class="$style.form"/>
+				<XForm v-if="initialized" :user="user" :room="room" :class="$style.form" @sent="onMessage"/>
 			</div>
 		</div>
 	</template>
@@ -90,7 +93,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { ref, useTemplateRef, computed, onMounted, onBeforeUnmount, onDeactivated, onActivated } from 'vue';
+import { ref, useTemplateRef, computed, watch, onMounted, onBeforeUnmount, onDeactivated, onActivated } from 'vue';
 import * as Misskey from 'misskey-js';
 import { getScrollContainer } from '@@/js/scroll.js';
 import XMessage from './XMessage.vue';
@@ -98,6 +101,7 @@ import XForm from './room.form.vue';
 import XSearch from './room.search.vue';
 import XMembers from './room.members.vue';
 import XInfo from './room.info.vue';
+import { chatText as t } from './copy.js';
 import type { MenuItem } from '@/types/menu.js';
 import type { PageHeaderItem } from '@/types/page-header.js';
 import * as os from '@/os.js';
@@ -105,6 +109,7 @@ import { useStream } from '@/stream.js';
 import * as sound from '@/utility/sound.js';
 import { i18n } from '@/i18n.js';
 import { ensureSignin } from '@/i.js';
+import { updateCurrentAccount } from '@/accounts.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { definePage } from '@/page.js';
 import { prefer } from '@/preferences.js';
@@ -133,6 +138,13 @@ const initializing = ref(false);
 const initialized = ref(false);
 const fetchError = ref<'notFound' | 'error' | null>(null);
 const moreFetching = ref(false);
+const moreFailed = ref(false);
+const syncing = ref(false);
+const syncFailed = ref(false);
+const stream = useStream();
+let disposed = false;
+let syncCursor: string | undefined;
+let unreadTimer: number | undefined;
 const messages = ref<NormalizedChatMessage[]>([]);
 const canFetchMore = ref(false);
 const user = ref<Misskey.entities.UserDetailed | null>(null);
@@ -151,7 +163,8 @@ useMutationObserver(timelineEl, {
 	childList: true,
 	attributes: false,
 }, () => {
-	const scrollContainer = getScrollContainer(timelineEl.value)!;
+	const scrollContainer = timelineEl.value ? getScrollContainer(timelineEl.value) : null;
+	if (!scrollContainer) return;
 	// column-reverseなのでscrollTopは負になる
 	if (-scrollContainer.scrollTop < SCROLL_HEAD_THRESHOLD) {
 		scrollContainer.scrollTo({
@@ -180,7 +193,10 @@ function toFetchError(err: unknown): 'notFound' | 'error' {
 async function initialize() {
 	const LIMIT = 20;
 
-	if (initializing.value) return;
+	if (initializing.value || disposed) return;
+	connection.value?.dispose();
+	connection.value = null;
+	canFetchMore.value = false;
 
 	initializing.value = true;
 	initialized.value = false;
@@ -194,6 +210,8 @@ async function initialize() {
 			fetchError.value = toFetchError(err);
 			return null;
 		});
+
+		if (disposed) return;
 
 		if (result == null) {
 			initializing.value = false;
@@ -221,6 +239,8 @@ async function initialize() {
 			misskeyApi('chat/rooms/show', { roomId: props.roomId }),
 			misskeyApi('chat/messages/room-timeline', { roomId: props.roomId, limit: LIMIT }),
 		]);
+
+		if (disposed) return;
 
 		if (rResult.status === 'rejected') {
 			fetchError.value = toFetchError(rResult.reason);
@@ -277,54 +297,101 @@ async function initialize() {
 
 	initialized.value = true;
 	initializing.value = false;
+	syncCursor = messages.value[0]?.id;
+	void refreshMessages();
 }
 
 let isActivated = true;
 
 onActivated(() => {
 	isActivated = true;
+	if (initialized.value) void refreshMessages();
 });
 
 onDeactivated(() => {
 	isActivated = false;
 });
 
+function mergeMessages(incoming: (Misskey.entities.ChatMessageLite | Misskey.entities.ChatMessage)[]) {
+	const ids = new Set(messages.value.map(m => m.id));
+	for (const message of incoming) {
+		if (!ids.has(message.id)) {
+			messages.value.push(normalizeMessage(message));
+			ids.add(message.id);
+		}
+	}
+	messages.value.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id.localeCompare(a.id));
+}
+
+function isReading() {
+	return !disposed && initialized.value && isActivated && !window.document.hidden && tab.value === 'chat';
+}
+
+function markRead() {
+	if (!isReading() || !messages.value[0]) return;
+	connection.value?.send('read', { id: messages.value[0].id });
+	window.clearTimeout(unreadTimer);
+	unreadTimer = window.setTimeout(() => {
+		misskeyApi('i').then(me => {
+			if (!disposed && me.id === $i.id) updateCurrentAccount({ hasUnreadChatMessages: me.hasUnreadChatMessages });
+		}).catch(() => { /* History refresh will retry this optional badge update. */ });
+	}, 500);
+}
+
+async function refreshMessages() {
+	if (!isReading() || syncing.value) return;
+	syncing.value = true;
+	syncFailed.value = false;
+	let cursor = syncCursor;
+	try {
+		do {
+			const batch = props.userId
+				? await misskeyApi('chat/messages/user-timeline', { userId: props.userId, limit: 100, sinceId: cursor })
+				: await misskeyApi('chat/messages/room-timeline', { roomId: props.roomId!, limit: 100, sinceId: cursor });
+			if (disposed) return;
+			mergeMessages(batch);
+			if (batch.length > 0) {
+				// sinceId is ascending; a request without it returns the latest messages descending.
+				const next = cursor ? batch[batch.length - 1].id : batch[0].id;
+				syncCursor = next;
+				if (!cursor || batch.length < 100 || next === cursor) break;
+				cursor = next;
+			} else break;
+		} while (isReading());
+		markRead();
+	} catch {
+		if (!disposed) syncFailed.value = true;
+	} finally {
+		if (!disposed) syncing.value = false;
+	}
+}
+
 async function fetchMore() {
-	const LIMIT = 30;
-
+	if (moreFetching.value || !canFetchMore.value || !messages.value.length) return;
 	moreFetching.value = true;
-
-	const newMessages = props.userId ? await misskeyApi('chat/messages/user-timeline', {
-		userId: user.value!.id,
-		limit: LIMIT,
-		untilId: messages.value[messages.value.length - 1].id,
-	}) : await misskeyApi('chat/messages/room-timeline', {
-		roomId: room.value!.id,
-		limit: LIMIT,
-		untilId: messages.value[messages.value.length - 1].id,
-	});
-
-	messages.value.push(...newMessages.map(x => normalizeMessage(x)));
-
-	canFetchMore.value = newMessages.length === LIMIT;
-	moreFetching.value = false;
+	moreFailed.value = false;
+	try {
+		const untilId = messages.value[messages.value.length - 1].id;
+		const newMessages = props.userId
+			? await misskeyApi('chat/messages/user-timeline', { userId: props.userId, limit: 30, untilId })
+			: await misskeyApi('chat/messages/room-timeline', { roomId: props.roomId!, limit: 30, untilId });
+		if (disposed) return;
+		mergeMessages(newMessages);
+		canFetchMore.value = newMessages.length === 30;
+	} catch {
+		if (!disposed) moreFailed.value = true;
+	} finally {
+		if (!disposed) moreFetching.value = false;
+	}
 }
 
 function onMessage(message: Misskey.entities.ChatMessageLite) {
-	sound.playMisskeySfx('chatMessage');
-
-	messages.value.unshift(normalizeMessage(message));
-
-	// TODO: DOM的にバックグラウンドになっていないかどうかも考慮する
-	if (message.fromUserId !== $i.id && !window.document.hidden && isActivated) {
-		connection.value?.send('read', {
-			id: message.id,
-		});
-	}
-
-	if (message.fromUserId !== $i.id) {
-		//notifyNewMessage();
-	}
+	if (disposed || messages.value.some(m => m.id === message.id)) return;
+	if (message.fromUserId !== $i.id && isReading()) sound.playMisskeySfx('chatMessage');
+	const scroll = timelineEl.value ? getScrollContainer(timelineEl.value) : null;
+	if (scroll && -scroll.scrollTop >= SCROLL_HEAD_THRESHOLD) showIndicator.value = true;
+	mergeMessages([message]);
+	markRead();
 }
 
 function onDeleted(id: string) {
@@ -354,7 +421,8 @@ function onReact(ctx: Parameters<Misskey.Channels['chatUser']['events']['react']
 function onUnreact(ctx: Parameters<Misskey.Channels['chatUser']['events']['unreact']>[0] | Parameters<Misskey.Channels['chatRoom']['events']['unreact']>[0]) {
 	const message = messages.value.find(m => m.id === ctx.messageId);
 	if (message) {
-		const index = message.reactions.findIndex(r => r.reaction === ctx.reaction && r.user.id === ctx.user!.id);
+		const actor = ctx.user ?? (message.fromUserId === $i.id ? user.value : $i);
+		const index = message.reactions.findIndex(r => r.reaction === ctx.reaction && r.user.id === actor?.id);
 		if (index !== -1) {
 			message.reactions.splice(index, 1);
 		}
@@ -363,18 +431,17 @@ function onUnreact(ctx: Parameters<Misskey.Channels['chatUser']['events']['unrea
 
 function onIndicatorClick() {
 	showIndicator.value = false;
-}
-
-function notifyNewMessage() {
-	showIndicator.value = true;
+	const scroll = timelineEl.value ? getScrollContainer(timelineEl.value) : null;
+	scroll?.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 function onVisibilitychange() {
 	if (window.document.hidden) return;
-	// TODO
+	void refreshMessages();
 }
 
 onMounted(() => {
+	stream.on('_connected_', refreshMessages);
 	initialize();
 });
 
@@ -385,6 +452,9 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+	disposed = true;
+	window.clearTimeout(unreadTimer);
+	stream.off('_connected_', refreshMessages);
 	connection.value?.dispose();
 	window.document.removeEventListener('visibilitychange', onVisibilitychange);
 });
@@ -441,6 +511,7 @@ function showMenu(ev: PointerEvent) {
 }
 
 const tab = ref('chat');
+watch(tab, () => { if (tab.value === 'chat') void refreshMessages(); });
 
 const headerTabs = computed(() => room.value ? [{
 	key: 'chat',
@@ -468,10 +539,10 @@ const headerTabs = computed(() => room.value ? [{
 	icon: 'ti ti-search',
 }]);
 
-const headerActions = computed<PageHeaderItem[]>(() => [{
+const headerActions = computed<PageHeaderItem[]>(() => room.value ? [{
 	icon: 'ti ti-dots',
 	handler: showMenu,
-}]);
+}] : []);
 
 definePage(computed(() => {
 	if (initialized.value) {
@@ -514,8 +585,8 @@ definePage(computed(() => {
 	position: absolute;
 }
 
-.root {
-}
+.back { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
+.back:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; }
 
 .more {
 	margin: 0 auto;
@@ -523,7 +594,8 @@ definePage(computed(() => {
 
 .footer {
 	width: 100%;
-	padding-top: 8px;
+	padding: 8px 12px max(12px, env(safe-area-inset-bottom));
+	box-sizing: border-box;
 }
 
 .new {

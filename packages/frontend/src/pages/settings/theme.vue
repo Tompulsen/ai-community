@@ -10,34 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		@dragover.prevent.stop="onDragover"
 		@drop.prevent.stop="onDrop"
 	>
-		<div v-adaptive-border class="rfqxtzch _panel">
-			<div class="toggle">
-				<div class="toggleWrapper">
-					<div class="toggle" :class="store.r.darkMode.value ? 'checked' : null" @click="toggleDarkMode()">
-						<span class="before">{{ i18n.ts.light }}</span>
-						<span class="after">{{ i18n.ts.dark }}</span>
-						<span class="toggle__handler">
-							<span class="crater crater--1"></span>
-							<span class="crater crater--2"></span>
-							<span class="crater crater--3"></span>
-						</span>
-						<span class="star star--1"></span>
-						<span class="star star--2"></span>
-						<span class="star star--3"></span>
-						<span class="star star--4"></span>
-						<span class="star star--5"></span>
-						<span class="star star--6"></span>
-					</div>
-				</div>
-			</div>
-			<div class="sync">
-				<SearchMarker :keywords="['sync', 'device', 'dark', 'light', 'mode']">
-					<MkSwitch v-model="syncDeviceDarkMode">
-						<template #label><SearchLabel>{{ i18n.ts.syncDeviceDarkMode }}</SearchLabel></template>
-					</MkSwitch>
-				</SearchMarker>
-			</div>
-		</div>
+		<AppearanceSettings/>
 
 		<MkInfo v-if="isSafeMode" warn>{{ i18n.ts.themeIsDefaultBecauseSafeMode }}</MkInfo>
 
@@ -205,7 +178,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
+import AppearanceSettings from './appearance.vue';
 import JSON5 from 'json5';
 import defaultLightTheme from '@@/themes/l-light.json5';
 import defaultDarkTheme from '@@/themes/d-green-lime.json5';
@@ -220,7 +194,6 @@ import MkThemePreview from '@/components/MkThemePreview.vue';
 import MkInfo from '@/components/MkInfo.vue';
 import { handleThemeInstallError, installTheme, removeTheme } from '@/theme.js';
 import { getBuiltinThemes } from '@@/js/theme.js';
-import { isDeviceDarkmode } from '@/utility/is-device-darkmode.js';
 import { store } from '@/store.js';
 import { i18n } from '@/i18n.js';
 import { instance } from '@/instance.js';
@@ -271,30 +244,7 @@ const lightThemeId = computed({
 	},
 });
 
-const syncDeviceDarkMode = prefer.model('syncDeviceDarkMode');
 const themesCount = installedThemes.value.length;
-
-watch(syncDeviceDarkMode, () => {
-	if (syncDeviceDarkMode.value) {
-		store.set('darkMode', isDeviceDarkmode());
-	}
-});
-
-async function toggleDarkMode() {
-	const value = !store.r.darkMode.value;
-	if (syncDeviceDarkMode.value) {
-		const { canceled } = await os.confirm({
-			type: 'question',
-			text: i18n.tsx.switchDarkModeManuallyWhenSyncEnabledConfirm({ x: i18n.ts.syncDeviceDarkMode }),
-		});
-		if (canceled) return;
-
-		syncDeviceDarkMode.value = false;
-		store.set('darkMode', value);
-	} else {
-		store.set('darkMode', value);
-	}
-}
 
 const themesSyncEnabled = ref(prefer.isSyncEnabled('themes'));
 

@@ -4,6 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
+<div v-if="failed" role="alert" :class="$style.feedback"><p>{{ t.historyFailed }}</p><MkButton :wait="fetching" @click="fetchHistory">{{ t.retry }}</MkButton></div>
 <div v-if="history.length > 0" class="_gaps_s">
 	<MkA
 		v-for="item in history"
@@ -24,21 +25,24 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkAcct :class="$style.messageHeaderUsername" :user="item.other!"/>
 				<MkTime :time="item.message.createdAt" :class="$style.messageHeaderTime"/>
 			</header>
-			<div :class="$style.messageBodyText"><span v-if="item.isMe" :class="$style.youSaid">{{ i18n.ts.you }}:</span>{{ item.message.text }}</div>
+			<div :class="$style.messageBodyText"><span v-if="item.isMe" :class="$style.youSaid">{{ i18n.ts.you }}:</span>{{ item.message.text || (item.message.file ? t.attachmentPreview : '') }}</div>
 		</div>
 	</MkA>
 </div>
-<MkResult v-if="!initializing && history.length == 0" type="empty" :text="i18n.ts._chat.noHistory"/>
+<slot v-if="!initializing && !failed && history.length === 0" name="empty"><MkResult type="empty" :text="i18n.ts._chat.noHistory"/></slot>
 <MkLoading v-if="initializing"/>
 </template>
 
 <script lang="ts" setup>
-import { onActivated, onDeactivated, onMounted, ref } from 'vue';
+import { onActivated, onDeactivated, onMounted, onBeforeUnmount, ref } from 'vue';
 import * as Misskey from 'misskey-js';
 import { useInterval } from '@@/js/use-interval.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { i18n } from '@/i18n.js';
 import { ensureSignin } from '@/i.js';
+import MkButton from '@/components/MkButton.vue';
+import { chatText as t } from '@/pages/chat/copy.js';
+import { updateCurrentAccount } from '@/accounts.js';
 
 const $i = ensureSignin();
 
@@ -51,28 +55,40 @@ const history = ref<{
 
 const initializing = ref(true);
 const fetching = ref(false);
+const failed = ref(false);
+let disposed = false;
 
 async function fetchHistory() {
-	if (fetching.value) return;
+	if (fetching.value || disposed) return;
 
 	fetching.value = true;
 
-	const [userMessages, roomMessages] = await Promise.all([
-		misskeyApi('chat/history', { room: false }),
-		misskeyApi('chat/history', { room: true }),
-	]);
+	try {
+		const [userMessages, roomMessages, me] = await Promise.all([
+			misskeyApi('chat/history', { room: false }),
+			misskeyApi('chat/history', { room: true }),
+		misskeyApi('i').catch(() => null),
+		]);
+		if (disposed) return;
+		if (me?.id === $i.id) updateCurrentAccount({ hasUnreadChatMessages: me.hasUnreadChatMessages });
 
-	history.value = [...userMessages, ...roomMessages]
-		.toSorted((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-		.map(m => ({
-			id: m.id,
-			message: m,
-			other: (!('room' in m) || m.room == null) ? (m.fromUserId === $i.id ? m.toUser : m.fromUser) : null,
-			isMe: m.fromUserId === $i.id,
-		}));
-
-	fetching.value = false;
-	initializing.value = false;
+		history.value = [...userMessages, ...roomMessages]
+			.toSorted((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+			.map(m => ({
+				id: m.id,
+				message: m,
+				other: (!('room' in m) || m.room == null) ? (m.fromUserId === $i.id ? m.toUser : m.fromUser) : null,
+				isMe: m.fromUserId === $i.id,
+			}));
+		failed.value = false;
+	} catch {
+		if (!disposed) failed.value = true;
+	} finally {
+		if (!disposed) {
+			fetching.value = false;
+			initializing.value = false;
+		}
+	}
 }
 
 let isActivated = true;
@@ -87,7 +103,7 @@ onDeactivated(() => {
 
 useInterval(() => {
 	// TODO: DOM的にバックグラウンドになっていないかどうかも考慮する
-	if (isActivated) {
+	if (isActivated && !window.document.hidden) {
 		fetchHistory();
 	}
 }, 1000 * 10, {
@@ -102,9 +118,14 @@ onActivated(() => {
 onMounted(() => {
 	fetchHistory();
 });
+
+onBeforeUnmount(() => { disposed = true; });
 </script>
 
 <style lang="scss" module>
+.feedback { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.message:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; }
+.message:hover { background: var(--MI_THEME-buttonHoverBg); }
 .message {
 	position: relative;
 	display: flex;
@@ -197,6 +218,9 @@ onMounted(() => {
 	overflow: hidden;
 	overflow-wrap: break-word;
 	font-size: 1.1em;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
 }
 
 .youSaid {

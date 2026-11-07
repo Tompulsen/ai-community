@@ -14,6 +14,8 @@ import { lookup } from '@/utility/lookup.js';
 import * as os from '@/os.js';
 import { i18n } from '@/i18n.js';
 import { unisonReload } from '@/utility/unison-reload.js';
+import { getAppearanceMode, setAppearanceMode } from '@/utility/appearance.js';
+import { appearanceText } from '@/utility/appearance-copy.js';
 
 export const navbarItemDef = reactive<{
 	[key: string]: {
@@ -144,6 +146,34 @@ export const navbarItemDef = reactive<{
 		icon: 'ti ti-devices',
 		action: (ev) => {
 			os.popupMenu([{
+				type: 'label',
+				text: appearanceText.title,
+			}, {
+				text: appearanceText.light,
+				icon: 'ti ti-sun',
+				active: computed(() => getAppearanceMode() === 'light'),
+				action: () => setAppearanceMode('light'),
+			}, {
+				text: appearanceText.dark,
+				icon: 'ti ti-moon',
+				active: computed(() => getAppearanceMode() === 'dark'),
+				action: () => setAppearanceMode('dark'),
+			}, {
+				text: appearanceText.schedule,
+				icon: 'ti ti-clock',
+				active: computed(() => getAppearanceMode() === 'schedule'),
+				action: () => setAppearanceMode('schedule'),
+			}, {
+				text: appearanceText.system,
+				icon: 'ti ti-device-desktop',
+				active: computed(() => getAppearanceMode() === 'system'),
+				action: () => setAppearanceMode('system'),
+			}, {
+				type: 'link',
+				text: appearanceText.settings,
+				icon: 'ti ti-settings',
+				to: '/settings/theme',
+			}, { type: 'divider' }, {
 				text: i18n.ts.default,
 				active: ui === 'default' || ui === null,
 				action: () => {

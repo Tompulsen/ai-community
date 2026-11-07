@@ -14,7 +14,7 @@ import widgets from '@/widgets/index.js';
 import directives from '@/directives/index.js';
 import components from '@/components/index.js';
 import { themeManager } from '@/theme.js';
-import { isDeviceDarkmode } from '@/utility/is-device-darkmode.js';
+import { initializeAppearance } from '@/utility/appearance.js';
 import { i18n } from '@/i18n.js';
 import { refreshCurrentAccount, login } from '@/accounts.js';
 import { store } from '@/store.js';
@@ -143,15 +143,7 @@ export async function common(createVue: () => Promise<App<Element>>) {
 	//#endregion
 
 	//#region Sync dark mode
-	if (prefer.s.syncDeviceDarkMode) {
-		store.set('darkMode', isDeviceDarkmode());
-	}
-
-	window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (mql) => {
-		if (prefer.s.syncDeviceDarkMode) {
-			store.set('darkMode', mql.matches);
-		}
-	});
+	initializeAppearance();
 	//#endregion
 
 	if (!isSafeMode) {
@@ -165,6 +157,7 @@ export async function common(createVue: () => Promise<App<Element>>) {
 	// NOTE: この処理は必ずサーバーテーマ適用処理より後に来ること(二重発火を防ぐため)
 	// see: https://github.com/misskey-dev/misskey/issues/16562
 	watch(store.r.darkMode, (darkMode) => {
+		window.document.documentElement.dataset.colorScheme = darkMode ? 'dark' : 'light';
 		const theme = (() => {
 			if (darkMode) {
 				return isSafeMode ? defaultDarkTheme : (prefer.s.darkTheme ?? defaultDarkTheme);
@@ -175,8 +168,6 @@ export async function common(createVue: () => Promise<App<Element>>) {
 
 		themeManager.updateTheme(theme);
 	}, { immediate: true });
-
-	window.document.documentElement.dataset.colorScheme = store.s.darkMode ? 'dark' : 'light';
 
 	if (!isSafeMode) {
 		watch(prefer.r.darkTheme, (theme) => {

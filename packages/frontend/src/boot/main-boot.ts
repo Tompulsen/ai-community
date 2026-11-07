@@ -17,6 +17,7 @@ import * as sound from '@/utility/sound.js';
 import { $i } from '@/i.js';
 import { instance } from '@/instance.js';
 import { store } from '@/store.js';
+import { setAppearanceMode } from '@/utility/appearance.js';
 import { reactionPicker } from '@/utility/reaction-picker.js';
 import { miLocalStorage } from '@/local-storage.js';
 import { claimAchievement, claimedAchievements } from '@/utility/achievements.js';
@@ -373,20 +374,8 @@ export async function mainBoot() {
 			if ($i == null) return;
 			post();
 		},
-		'd': async () => {
-			const value = !store.s.darkMode;
-			if (prefer.s.syncDeviceDarkMode) {
-				const { canceled } = await confirm({
-					type: 'question',
-					text: i18n.tsx.switchDarkModeManuallyWhenSyncEnabledConfirm({ x: i18n.ts.syncDeviceDarkMode }),
-				});
-				if (canceled) return;
-
-				prefer.commit('syncDeviceDarkMode', false);
-				store.set('darkMode', value);
-			} else {
-				store.set('darkMode', value);
-			}
+		'd': () => {
+			setAppearanceMode(store.s.darkMode ? 'light' : 'dark');
 		},
 		's': () => {
 			mainRouter.push('/search');
