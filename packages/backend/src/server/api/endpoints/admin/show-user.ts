@@ -122,6 +122,8 @@ export const meta = {
 				type: 'boolean',
 				optional: false, nullable: false,
 			},
+			communityViolationCount: { type: 'integer', optional: false, nullable: false },
+			communityViolationBaseline: { type: 'integer', optional: false, nullable: false },
 			isSuspended: {
 				type: 'boolean',
 				optional: false, nullable: false,
@@ -248,6 +250,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				isModerator: isModerator,
 				isSilenced: isSilenced,
 				isSuspended: user.isSuspended,
+				communityViolationCount: user.communityViolationCount,
+				communityViolationBaseline: user.communityViolationBaseline,
 				isHibernated: user.isHibernated,
 				lastActiveDate: user.lastActiveDate ? user.lastActiveDate.toISOString() : null,
 				moderationNote: profile.moderationNote ?? '',

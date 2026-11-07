@@ -4097,6 +4097,16 @@ export type paths = {
          */
         post: operations["community___submissions___delete"];
     };
+
+    "/community/report": {
+        /**
+         * community/report
+         * @description No description provided.
+         *
+         *     **Credential required**: *Yes* / **Permission**: *write:report-abuse*
+         */
+        post: operations["community___report"];
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -5734,6 +5744,8 @@ export type components = {
             creationVideoUrl?: string | null;
             /** @enum {string} */
             creationVideoMode?: "embed" | "newTab";
+            communityAutoBanEnabled?: boolean;
+            communityViolationThreshold?: number;
             /** @enum {string} */
             communityPublicationMode?: "before" | "after";
             /** @enum {string} */
@@ -6220,10 +6232,10 @@ export interface operations {
             };
         };
     };
-    'admin___abuse-user-reports': {
+    "admin___abuse-user-reports": {
         requestBody: {
             content: {
-                'application/json': {
+                "application/json": {
                     /** @default 10 */
                     limit?: number;
                     /** Format: misskey:id */
@@ -6238,12 +6250,12 @@ export interface operations {
                      * @default combined
                      * @enum {string}
                      */
-                    reporterOrigin?: 'combined' | 'local' | 'remote';
+                    reporterOrigin?: "combined" | "local" | "remote";
                     /**
                      * @default combined
                      * @enum {string}
                      */
-                    targetUserOrigin?: 'combined' | 'local' | 'remote';
+                    targetUserOrigin?: "combined" | "local" | "remote";
                 };
             };
         };
@@ -6254,7 +6266,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': {
+                    "application/json": {
                         /**
                          * Format: id
                          * @example xxxxxxxxxx
@@ -6262,6 +6274,8 @@ export interface operations {
                         id: string;
                         /** Format: date-time */
                         createdAt: string;
+                        contentKey: string | null;
+                        contentSnapshot: string | null;
                         comment: string;
                         /** @example false */
                         resolved: boolean;
@@ -6271,12 +6285,12 @@ export interface operations {
                         targetUserId: string;
                         /** Format: id */
                         assigneeId: string | null;
-                        reporter: components['schemas']['UserDetailedNotMe'];
-                        targetUser: components['schemas']['UserDetailedNotMe'];
-                        assignee: components['schemas']['UserDetailedNotMe'] | null;
+                        reporter: components["schemas"]["UserDetailedNotMe"];
+                        targetUser: components["schemas"]["UserDetailedNotMe"];
+                        assignee: components["schemas"]["UserDetailedNotMe"] | null;
                         forwarded: boolean;
                         /** @enum {string|null} */
-                        resolvedAs: 'accept' | 'reject' | null;
+                        resolvedAs: "accept" | "reject" | null;
                         moderationNote: string;
                     }[];
                 };
@@ -6287,7 +6301,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Authentication error */
@@ -6296,7 +6310,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Forbidden error */
@@ -6305,7 +6319,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description I'm Ai */
@@ -6314,7 +6328,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Internal server error */
@@ -6323,7 +6337,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
@@ -11969,10 +11983,10 @@ export interface operations {
             };
         };
     };
-    'admin___show-user': {
+    "admin___show-user": {
         requestBody: {
             content: {
-                'application/json': {
+                "application/json": {
                     /** Format: misskey:id */
                     userId: string;
                 };
@@ -11985,7 +11999,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': {
+                    "application/json": {
                         email: string | null;
                         emailVerified: boolean;
                         followedMessage: string | null;
@@ -12002,167 +12016,169 @@ export interface operations {
                         notificationRecieveConfig: {
                             note?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             follow?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             mention?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             reply?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             renote?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             quote?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             reaction?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             pollEnded?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             scheduledNotePosted?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             scheduledNotePostFailed?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             receiveFollowRequest?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             followRequestAccepted?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             roleAssigned?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             chatRoomInvitationReceived?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             achievementEarned?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             app?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                             test?: {
                                 /** @enum {string} */
-                                type: 'all' | 'following' | 'follower' | 'mutualFollow' | 'followingOrFollower' | 'never';
+                                type: "all" | "following" | "follower" | "mutualFollow" | "followingOrFollower" | "never";
                             } | {
                                 /** @enum {string} */
-                                type: 'list';
+                                type: "list";
                                 /** Format: misskey:id */
                                 userListId: string;
                             };
                         };
                         isModerator: boolean;
                         isSilenced: boolean;
+                        communityViolationCount: number;
+                        communityViolationBaseline: number;
                         isSuspended: boolean;
                         isHibernated: boolean;
                         lastActiveDate: string | null;
                         moderationNote: string;
-                        signins: components['schemas']['Signin'][];
-                        policies: components['schemas']['RolePolicies'];
-                        roles: components['schemas']['Role'][];
+                        signins: components["schemas"]["Signin"][];
+                        policies: components["schemas"]["RolePolicies"];
+                        roles: components["schemas"]["Role"][];
                         roleAssigns: {
                             createdAt: string;
                             expiresAt: string | null;
@@ -12177,7 +12193,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Authentication error */
@@ -12186,7 +12202,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Forbidden error */
@@ -12195,7 +12211,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description I'm Ai */
@@ -12204,7 +12220,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Internal server error */
@@ -12213,7 +12229,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    'application/json': components['schemas']['Error'];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
@@ -13171,6 +13187,8 @@ export interface operations {
                         creationVideoUrl?: string | null;
                         /** @enum {string} */
                         creationVideoMode?: "embed" | "newTab";
+                        communityAutoBanEnabled?: boolean;
+                        communityViolationThreshold?: number;
                         /** @enum {string} */
                         communityPublicationMode?: "before" | "after";
                         /** @enum {string} */
@@ -37900,6 +37918,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @default false */
+                    recordViolation?: boolean;
                     /** Format: misskey:id */
                     submissionId: string;
                     version: number;
@@ -38512,6 +38532,82 @@ export interface operations {
                     /** Format: misskey:id */
                     submissionId: string;
                     version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (without any results) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+
+    community___report: {
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: misskey:id */
+                    submissionId: string;
+                    /** Format: misskey:id */
+                    noteId?: string;
+                    reason: string;
                 };
             };
         };

@@ -17,9 +17,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<template #footer>
 		<div class="_buttons">
 			<template v-if="!report.resolved">
-				<MkButton @click="resolve('accept')"><i class="ti ti-check" style="color: var(--MI_THEME-success)"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts._abuseUserReport.accept }})</MkButton>
-				<MkButton @click="resolve('reject')"><i class="ti ti-x" style="color: var(--MI_THEME-error)"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts._abuseUserReport.reject }})</MkButton>
-				<MkButton @click="resolve(null)"><i class="ti ti-slash"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts.other }})</MkButton>
+				<MkButton :disabled="resolving" @click="resolve('accept')"><i class="ti ti-check" style="color: var(--MI_THEME-success)"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts._abuseUserReport.accept }})</MkButton>
+				<MkButton :disabled="resolving" @click="resolve('reject')"><i class="ti ti-x" style="color: var(--MI_THEME-error)"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts._abuseUserReport.reject }})</MkButton>
+				<MkButton :disabled="resolving" @click="resolve(null)"><i class="ti ti-slash"></i> {{ i18n.ts._abuseUserReport.resolve }} ({{ i18n.ts.other }})</MkButton>
 			</template>
 			<template v-if="report.targetUser.host != null">
 				<MkButton :disabled="report.forwarded" primary @click="forward"><i class="ti ti-corner-up-right"></i> {{ i18n.ts._abuseUserReport.forward }}</MkButton>
@@ -45,6 +45,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<template #label>{{ i18n.ts.details }}</template>
 			<div class="_gaps_s">
 				<Mfm :text="report.comment" :linkNavigationBehavior="'window'"/>
+				<template v-if="report.contentSnapshot"><strong>{{ safety.snapshot }}</strong><p :class="$style.snapshot">{{ report.contentSnapshot }}</p><p>{{ safety.acceptHint }}</p></template>
 			</div>
 		</MkFolder>
 
@@ -78,6 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
+import { safetyText as safety } from '@/pages/community/safety-copy.js';
 import { provide, ref, watch } from 'vue';
 import * as Misskey from 'misskey-js';
 import MkButton from '@/components/MkButton.vue';
@@ -115,13 +117,22 @@ watch(moderationNote, async () => {
 	});
 });
 
-function resolve(resolvedAs: 'accept' | 'reject' | null) {
-	os.apiWithDialog('admin/resolve-abuse-user-report', {
-		reportId: props.report.id,
-		resolvedAs,
-	}).then(() => {
+const resolving = ref(false);
+
+async function resolve(resolvedAs: 'accept' | 'reject' | null) {
+	if (resolving.value) return;
+	resolving.value = true;
+	try {
+		if (resolvedAs === 'accept' && props.report.contentKey) {
+			const { canceled } = await os.confirm({ type: 'warning', title: safety.acceptTitle, text: safety.acceptHint });
+			if (canceled) return;
+		}
+		await os.apiWithDialog('admin/resolve-abuse-user-report', {
+			reportId: props.report.id,
+			resolvedAs,
+		});
 		emit('resolved', props.report.id);
-	});
+	} catch { /* apiWithDialog displays the failure. */ } finally { resolving.value = false; }
 }
 
 function forward() {
@@ -150,4 +161,5 @@ function showMenu(ev: PointerEvent) {
 </script>
 
 <style lang="scss" module>
+.snapshot { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; margin: 0; }
 </style>

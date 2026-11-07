@@ -4,10 +4,11 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { In } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
-import type { AbuseUserReportsRepository, MiAbuseUserReport, MiUser, UsersRepository } from '@/models/_.js';
+import { MiAbuseUserReport } from '@/models/AbuseUserReport.js';
+import { CommunityModerationService } from './CommunityModerationService.js';
+import type { AbuseUserReportsRepository, MiUser, UsersRepository } from '@/models/_.js';
 import { AbuseReportNotificationService } from '@/core/AbuseReportNotificationService.js';
 import { QueueService } from '@/core/QueueService.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
@@ -30,6 +31,7 @@ export class AbuseReportService {
 		private systemAccountService: SystemAccountService,
 		private apRendererService: ApRendererService,
 		private moderationLogService: ModerationLogService,
+		private communityModerationService: CommunityModerationService,
 	) {
 	}
 
@@ -49,6 +51,8 @@ export class AbuseReportService {
 		reporterId: MiAbuseUserReport['reporterId'],
 		reporterHost: MiAbuseUserReport['reporterHost'],
 		comment: string,
+		contentKey?: string,
+		contentSnapshot?: string,
 	}[]) {
 		const entities = params.map(param => {
 			return {
@@ -58,6 +62,8 @@ export class AbuseReportService {
 				reporterId: param.reporterId,
 				reporterHost: param.reporterHost,
 				comment: param.comment,
+				contentKey: param.contentKey ?? null,
+				contentSnapshot: param.contentSnapshot ?? null,
 			};
 		});
 
@@ -90,31 +96,32 @@ export class AbuseReportService {
 		}[],
 		moderator: MiUser,
 	) {
-		const paramsMap = new Map(params.map(it => [it.reportId, it]));
-		const reports = await this.abuseUserReportsRepository.findBy({
-			id: In(params.map(it => it.reportId)),
-		});
-
-		for (const report of reports) {
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			const ps = paramsMap.get(report.id)!;
-
-			await this.abuseUserReportsRepository.update(report.id, {
-				resolved: true,
-				assigneeId: moderator.id,
-				resolvedAs: ps.resolvedAs,
+		const changed: MiAbuseUserReport[] = [];
+		// Stable order avoids deadlocks for bulk resolutions; each decision is atomic.
+		for (const ps of [...params].sort((a, b) => a.reportId.localeCompare(b.reportId))) {
+			const afterCommit: (() => void)[] = [];
+			const resolved = await this.abuseUserReportsRepository.manager.transaction(async manager => {
+				const reports = manager.getRepository(MiAbuseUserReport);
+				const report = await reports.createQueryBuilder('report').setLock('pessimistic_write').where('report.id = :id', { id: ps.reportId }).getOne();
+				if (!report || report.resolved) return null;
+				if (ps.resolvedAs === 'accept' && report.contentKey) {
+					await this.communityModerationService.record(manager, afterCommit, {
+						userId: report.targetUserId, contentKey: report.contentKey, reason: report.comment, moderator,
+					});
+				}
+				report.resolved = true;
+				report.assigneeId = moderator.id;
+				report.resolvedAs = ps.resolvedAs;
+				await reports.save(report);
+				return report;
 			});
-
-			this.moderationLogService
-				.log(moderator, 'resolveAbuseReport', {
-					reportId: report.id,
-					report: report,
-					resolvedAs: ps.resolvedAs,
-				});
+			for (const effect of afterCommit) effect();
+			if (resolved) {
+				changed.push(resolved);
+				this.moderationLogService.log(moderator, 'resolveAbuseReport', { reportId: resolved.id, report: resolved, resolvedAs: ps.resolvedAs });
+			}
 		}
-
-		return this.abuseUserReportsRepository.findBy({ id: In(reports.map(it => it.id)) })
-			.then(reports => this.abuseReportNotificationService.notifySystemWebhook(reports, 'abuseReportResolved'));
+		if (changed.length) await this.abuseReportNotificationService.notifySystemWebhook(changed, 'abuseReportResolved');
 	}
 
 	@bindThis

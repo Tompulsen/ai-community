@@ -136,6 +136,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<form v-if="section === 'review' && moderator && ['pending', 'published', 'approved'].includes(work.status)" :class="$style.reviewForm" @submit.prevent="review(work, 'approve')">
 									<label :class="$style.check"><input v-model="reviewChecks[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ t.reviewConfirm }}</label>
 									<label>{{ t.reason }}<textarea v-model="reviewReasons[work.id]" rows="2" maxlength="1000" :placeholder="t.reasonPlaceholder" :disabled="!!reviewingId"></textarea></label>
+									<label v-if="work.status === 'pending' || work.revisionPending" :class="$style.check"><input v-model="reviewViolations[work.id]" type="checkbox" :disabled="!!reviewingId"/>{{ safety.countViolation }}</label><p>{{ safety.removeHint }}</p>
 									<p v-if="reviewErrors[work.id]" role="alert" :class="$style.error">{{ reviewErrors[work.id] }}</p>
 									<div :class="$style.reviewActions"><button v-if="work.status !== 'approved' || work.revisionPending" type="submit" :class="$style.primary" :disabled="!!reviewingId">{{ reviewingId === work.id ? t.reviewing : work.revisionPending ? t.approveEdit : work.status === 'published' ? t.confirmPublished : t.approve }}</button><button v-if="work.status === 'pending' || work.revisionPending" type="button" :class="$style.secondary" :disabled="!!reviewingId" @click="review(work, 'reject')">{{ work.revisionPending ? t.rejectEdit : t.reject }}</button><button v-if="['published', 'approved'].includes(work.status)" type="button" :class="[$style.secondary, $style.danger]" :disabled="!!reviewingId" @click="review(work, 'remove')">{{ reviewingId === work.id ? t.reviewing : t.remove }}</button></div>
 								</form>
@@ -162,6 +163,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
+import { safetyText as safety } from './safety-copy.js';
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
@@ -242,6 +244,7 @@ const canEdit = (work: CommunityWork) => props.signedIn && work.author.id === pr
 const editChanged = computed(() => !!editing.value && JSON.stringify(composerInput()) !== editBaseline);
 const editNeedsReview = computed(() => !!editing.value && (editing.value.revisionPending || !['approved', 'published'].includes(editing.value.status) || props.publicationMode !== 'after'));
 const editHint = computed(() => editing.value && !['approved', 'published'].includes(editing.value.status) ? t.editPrivateHint : editNeedsReview.value ? t.editReviewHint : t.editPublicHint);
+const reviewViolations = reactive<Record<string, boolean>>({});
 const reviewChecks = reactive<Record<string, boolean>>({});
 const reviewReasons = reactive<Record<string, string>>({});
 const reviewErrors = reactive<Record<string, string>>({});
@@ -277,6 +280,7 @@ async function load(append = false) {
 	loadError.value = '';
 	if (!append) {
 		items.value = []; nextCursor.value = null;
+		for (const id of Object.keys(reviewViolations)) delete reviewViolations[id];
 		for (const id of Object.keys(reviewChecks)) delete reviewChecks[id];
 		for (const id of Object.keys(reviewErrors)) delete reviewErrors[id];
 	}
@@ -578,11 +582,11 @@ async function review(work: CommunityWork, decision: 'approve' | 'reject' | 'rem
 	if (decision !== 'approve' && !reason) { reviewErrors[work.id] = t.reasonRequired; return; }
 	reviewingId.value = work.id;
 	try {
-		if (decision === 'remove') {
-			const { canceled } = await confirm({ type: 'warning', title: t.removeConfirmTitle, text: t.removeConfirmText });
+		if (decision === 'remove' || (decision === 'reject' && reviewViolations[work.id])) {
+			const { canceled } = await confirm({ type: 'warning', title: decision === 'remove' ? t.removeConfirmTitle : safety.acceptTitle, text: decision === 'remove' ? `${t.removeConfirmText} ${safety.acceptHint}` : safety.acceptHint });
 			if (canceled || disposed) return;
 		}
-		const result = await props.gateway.review({ submissionId: work.id, version: work.version, decision, ...(decision !== 'approve' ? { reason } : {}) });
+		const result = await props.gateway.review({ submissionId: work.id, version: work.version, decision, recordViolation: decision === 'reject' && !!reviewViolations[work.id], ...(decision !== 'approve' ? { reason } : {}) });
 		if (result.id !== work.id || result.revisionPending || result.status !== (decision === 'approve' ? 'approved' : decision === 'remove' ? 'removed' : work.revisionPending ? work.status : 'rejected')) throw new Error(t.invalidResponse);
 		markCommunityUpdated();
 		if (disposed || props.section !== 'review') return;

@@ -454,6 +454,7 @@ export * as 'admin/community/notes' from './endpoints/admin/community/notes.js';
 export * as 'community/featured' from './endpoints/community/featured.js';
 export * as 'community/works/show' from './endpoints/community/works/show.js';
 export * as 'community/works/view' from './endpoints/community/works/view.js';
+export * as 'community/report' from './endpoints/community/report.js';
 export * as 'community/works' from './endpoints/community/works.js';
 export * as 'community/submissions/show' from './endpoints/community/submissions/show.js';
 export * as 'community/submissions/update' from './endpoints/community/submissions/update.js';

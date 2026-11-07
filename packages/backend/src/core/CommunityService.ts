@@ -21,6 +21,7 @@ import { shouldHideNoteByTime } from '@/misc/should-hide-note-by-time.js';
 import { ApiError } from '@/server/api/error.js';
 import { communityErrors } from '@/server/api/community-schema.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { CommunityModerationService } from './CommunityModerationService.js';
 import { IdService } from './IdService.js';
 import { NoteCreateService } from './NoteCreateService.js';
 import { NoteDeleteService } from './NoteDeleteService.js';
@@ -50,6 +51,7 @@ export class CommunityService {
 		private announcementEntityService: AnnouncementEntityService,
 		@Inject(DI.redis) private redis: Redis.Redis,
 		private reactionsBufferingService: ReactionsBufferingService,
+		private communityModerationService: CommunityModerationService,
 	) {}
 
 	private async files(manager: EntityManager, authorId: string, fileIds: string[], category: Category) {
@@ -316,7 +318,7 @@ export class CommunityService {
 		return true;
 	}
 
-	public async review(reviewerId: string, input: { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; }) {
+	public async review(reviewerId: string, input: { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; }) {
 		if (!(await this.roleService.isModerator({ id: reviewerId }))) throw new ApiError(communityErrors.forbidden);
 		if (input.decision !== 'approve' && !input.reason?.trim()) throw new ApiError(communityErrors.invalidContent);
 		const afterCommit: (() => void)[] = [];
@@ -342,6 +344,12 @@ export class CommunityService {
 					note, communitySubmissionId: submission.id, reason: input.reason!.trim(),
 				} });
 				submission.approvedNoteId = null;
+			}
+			if (input.decision === 'remove' || (input.decision === 'reject' && input.recordViolation)) {
+				await this.communityModerationService.record(manager, afterCommit, {
+					userId: submission.authorId, contentKey: `work:${submission.id}`, reason: input.reason!.trim(),
+					moderator: await manager.getRepository(MiUser).findOneByOrFail({ id: reviewerId }),
+				});
 			}
 			// Rejecting an edit never removes the version that was already public.
 			if (!(reviewingRevision && input.decision === 'reject')) submission.status = input.decision === 'approve' ? 'approved' : input.decision === 'remove' ? 'removed' : 'rejected';

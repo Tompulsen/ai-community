@@ -17,7 +17,7 @@ export const meta = {
 
 export const paramDef = {
 	type: 'object',
-	properties: { submissionId: { type: 'string', format: 'misskey:id' }, version: { type: 'integer', minimum: 0 }, decision: { type: 'string', enum: ['approve', 'reject', 'remove'] }, reason: { type: 'string', maxLength: 1000 } },
+	properties: { recordViolation: { type: 'boolean', default: false }, submissionId: { type: 'string', format: 'misskey:id' }, version: { type: 'integer', minimum: 0 }, decision: { type: 'string', enum: ['approve', 'reject', 'remove'] }, reason: { type: 'string', maxLength: 1000 } },
 	required: ['submissionId', 'version', 'decision'],
 } as const;
 

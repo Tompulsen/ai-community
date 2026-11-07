@@ -13,6 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<button type="button" class="_button" :class="{ [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
 		<span :class="$style.views" :title="t.viewHint" :aria-label="`${t.views} ${viewsCount ?? work.viewsCount ?? '—'}`"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>{{ format(viewsCount ?? work.viewsCount) }}</span></span>
 		<button type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
+		<ReportButton :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
 	</div>
 	<p v-if="working" :class="$style.feedback" role="status">{{ activeAction === 'like' ? t.updatingLike : activeAction === 'repost' ? t.reposting : t.refreshingInteraction }}</p>
 	<p v-else-if="reactionFeedback" :class="$style.feedback" role="status">{{ reactionFeedback }}</p>
@@ -43,7 +44,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<p v-else-if="state === 'error' || state === 'unavailable'" :class="$style.feedback" role="alert">{{ state === 'unavailable' ? t.unavailable : t.failed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="commentsFailed" :class="$style.feedback" role="alert">{{ t.commentsFailed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<div v-if="comments.length" :ref="el => { viewport = (el as HTMLElement | null) ?? undefined; }" :class="{ [$style.previewViewport]: previewComments }" data-testid="comment-viewport">
-		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
+		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
 		</div>
 		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
 		<div v-if="previewComments" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
@@ -57,6 +58,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
+import ReportButton from './report-button.vue';
 import type { CommunityWork } from './types.js';
 import { workText as t, workPath } from './interactions-copy.js';
 import { useCommentPreview } from './use-comment-preview.js';
@@ -215,7 +217,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .root { min-width: 0; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
 .root button, .root textarea { font: inherit; }
 .root :focus-visible { outline: 2px solid var(--MI_THEME-fg); outline-offset: 3px; }
-.actions { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 6px 0; color: var(--MI_THEME-fg); font-variant-numeric: tabular-nums; }
+.actions { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 6px 0; color: var(--MI_THEME-fg); font-variant-numeric: tabular-nums; }
 .actions > button, .views { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 8px; padding: 0 8px; }
 .actions i { font-size: 20px; }
 .actions > button { transition: background-color .15s, color .15s; &:hover:not(:disabled) { background: var(--MI_THEME-buttonBg); } &:disabled { opacity: .6; cursor: default; } }

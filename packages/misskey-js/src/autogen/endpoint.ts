@@ -1,4 +1,5 @@
 import type {
+	CommunityReportRequest,
 	CommunitySubmissionsDeleteRequest,
 	CommunitySubmissionsShowRequest,
 	CommunitySubmissionsShowResponse,
@@ -1139,6 +1140,8 @@ export type Endpoints = {
 	'community/submissions/show': { req: CommunitySubmissionsShowRequest; res: CommunitySubmissionsShowResponse };
 	'community/submissions/update': { req: CommunitySubmissionsUpdateRequest; res: CommunitySubmissionsUpdateResponse };
 	'community/submissions/delete': { req: CommunitySubmissionsDeleteRequest; res: EmptyResponse };
+
+	'community/report': { req: CommunityReportRequest; res: EmptyResponse };
 };
 
 /**

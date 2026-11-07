@@ -41,6 +41,7 @@ import { InternalStorageService } from './InternalStorageService.js';
 import { MetaService } from './MetaService.js';
 import { MfmService } from './MfmService.js';
 import { ModerationLogService } from './ModerationLogService.js';
+import { CommunityModerationService } from './CommunityModerationService.js';
 import { CommunityService } from './CommunityService.js';
 import { NoteCreateService } from './NoteCreateService.js';
 import { NoteDeleteService } from './NoteDeleteService.js';
@@ -341,6 +342,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		MfmService,
 		ModerationLogService,
 		CommunityService,
+		CommunityModerationService,
 		NoteCreateService,
 		NoteDeleteService,
 		NotePiningService,
@@ -644,6 +646,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		MfmService,
 		ModerationLogService,
 		CommunityService,
+		CommunityModerationService,
 		NoteCreateService,
 		NoteDeleteService,
 		NotePiningService,

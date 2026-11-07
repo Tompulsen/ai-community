@@ -700,3 +700,5 @@ export type CommunitySubmissionsUpdateResponse = operations['community___submiss
 
 export type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];
 export type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
+
+export type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];

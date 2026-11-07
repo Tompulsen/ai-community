@@ -465,6 +465,8 @@ export const packedMetaClientOptionsSchema = {
 			enum: ['embed', 'newTab'],
 			optional: true, nullable: false,
 		},
+		communityAutoBanEnabled: { type: 'boolean', optional: true, nullable: false },
+		communityViolationThreshold: { type: 'integer', optional: true, nullable: false },
 		communityPublicationMode: {
 			type: 'string', enum: ['before', 'after'], optional: true, nullable: false,
 		},

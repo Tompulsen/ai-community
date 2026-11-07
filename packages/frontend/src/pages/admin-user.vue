@@ -94,7 +94,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 			<FormSection v-if="!isSystem">
 				<div class="_gaps">
-					<MkSwitch v-model="suspended" @update:modelValue="toggleSuspend">{{ i18n.ts.suspend }}</MkSwitch>
+					<p>{{ safety.activeCount }}: <strong>{{ info.communityViolationCount - info.communityViolationBaseline }}</strong> · {{ safety.totalCount }}: {{ info.communityViolationCount }}</p>
+					<p>{{ safety.unsuspendHint }}</p>
+					<MkSwitch v-model="suspended" :disabled="suspending" @update:modelValue="toggleSuspend">{{ i18n.ts.suspend }}</MkSwitch>
 
 					<div>
 						<MkButton v-if="user.host == null" inline style="margin-right: 8px;" @click="resetPassword"><i class="ti ti-key"></i> {{ i18n.ts.resetPassword }}</MkButton>
@@ -207,6 +209,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
+import { safetyText as safety } from '@/pages/community/safety-copy.js';
 import { computed, defineAsyncComponent, watch, ref, markRaw } from 'vue';
 import * as Misskey from 'misskey-js';
 import { url } from '@@/js/config.js';
@@ -359,17 +362,25 @@ async function unsetMfa() {
 	}
 }
 
+const suspending = ref(false);
+
 async function toggleSuspend(v: boolean) {
-	const confirm = await os.confirm({
-		type: 'warning',
-		text: v ? i18n.ts.suspendConfirm : i18n.ts.unsuspendConfirm,
-	});
-	if (confirm.canceled) {
-		suspended.value = !v;
-	} else {
-		await misskeyApi(v ? 'admin/suspend-user' : 'admin/unsuspend-user', { userId: user.value.id });
-		await refreshUser();
-	}
+	if (suspending.value) return;
+	suspending.value = true;
+	let updated = false;
+	try {
+		const confirm = await os.confirm({
+			type: 'warning',
+			text: v ? i18n.ts.suspendConfirm : `${i18n.ts.unsuspendConfirm} ${safety.unsuspendHint}`,
+		});
+		if (confirm.canceled) {
+			suspended.value = !v;
+		} else {
+			await misskeyApi(v ? 'admin/suspend-user' : 'admin/unsuspend-user', { userId: user.value.id });
+			updated = true;
+			await refreshUser();
+		}
+	} catch { suspended.value = updated ? v : !v; await os.alert({ type: 'error', text: updated ? safety.banRefreshFailed : safety.banFailed }); } finally { suspending.value = false; }
 }
 
 async function unsetUserAvatar() {

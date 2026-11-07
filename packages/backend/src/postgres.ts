@@ -41,6 +41,7 @@ import { MiMeta } from '@/models/Meta.js';
 import { MiModerationLog } from '@/models/ModerationLog.js';
 import { MiMuting } from '@/models/Muting.js';
 import { MiRenoteMuting } from '@/models/RenoteMuting.js';
+import { MiCommunityViolation } from '@/models/CommunityViolation.js';
 import { MiCommunitySubmission } from '@/models/CommunitySubmission.js';
 import { MiNote } from '@/models/Note.js';
 import { MiNoteFavorite } from '@/models/NoteFavorite.js';
@@ -180,6 +181,7 @@ class MyCustomLogger implements Logger {
 
 export const entities = [
 	MiCommunitySubmission,
+	MiCommunityViolation,
 	MiAnnouncement,
 	MiAnnouncementRead,
 	MiMeta,

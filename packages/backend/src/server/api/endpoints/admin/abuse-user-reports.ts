@@ -35,6 +35,8 @@ export const meta = {
 					nullable: false, optional: false,
 					format: 'date-time',
 				},
+				contentKey: { type: 'string', nullable: true, optional: false },
+				contentSnapshot: { type: 'string', nullable: true, optional: false },
 				comment: {
 					type: 'string',
 					nullable: false, optional: false,

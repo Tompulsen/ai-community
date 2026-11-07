@@ -65,6 +65,12 @@ export class MiAbuseUserReport {
 	})
 	public comment: string;
 
+	@Column('varchar', { length: 128, nullable: true })
+	public contentKey: string | null;
+
+	@Column('text', { nullable: true })
+	public contentSnapshot: string | null;
+
 	@Column('varchar', {
 		length: 8192, default: '',
 	})

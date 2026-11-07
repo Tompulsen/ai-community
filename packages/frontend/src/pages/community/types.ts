@@ -38,7 +38,7 @@ export type CommunitySubmissionInput = {
 	license: string;
 	fileIds: string[];
 };
-export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; };
+export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; };
 export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
 export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };
 

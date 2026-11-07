@@ -170,6 +170,13 @@ export class MiUser {
 	})
 	public isSuspended: boolean;
 
+	@Column('integer', { default: 0 })
+	public communityViolationCount: number;
+
+	/** Lifetime count at the last manual unsuspension. */
+	@Column('integer', { default: 0 })
+	public communityViolationBaseline: number;
+
 	@Column('boolean', {
 		default: false,
 		comment: 'Whether the User is locked.',

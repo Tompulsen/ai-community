@@ -4,7 +4,8 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { Not, IsNull } from 'typeorm';
+import { Not, IsNull, type EntityManager } from 'typeorm';
+import { MiUser as UserEntity } from '@/models/User.js';
 import type { FollowingsRepository, FollowRequestsRepository, UsersRepository } from '@/models/_.js';
 import type { MiUser } from '@/models/User.js';
 import { QueueService } from '@/core/QueueService.js';
@@ -38,37 +39,37 @@ export class UserSuspendService {
 
 	@bindThis
 	public async suspend(user: MiUser, moderator: MiUser): Promise<void> {
-		await this.usersRepository.update(user.id, {
-			isSuspended: true,
-		});
+		const afterCommit: (() => void)[] = [];
+		await this.usersRepository.manager.transaction(manager => this.suspendInTransaction(user, moderator, manager, afterCommit));
+		for (const effect of afterCommit) effect();
+	}
 
-		this.moderationLogService.log(moderator, 'suspend', {
-			userId: user.id,
-			userUsername: user.username,
-			userHost: user.host,
+	public async suspendInTransaction(user: MiUser, moderator: MiUser, manager: EntityManager, afterCommit: (() => void)[]): Promise<void> {
+		const users = manager.getRepository(UserEntity);
+		const current = await users.createQueryBuilder('user').setLock('pessimistic_write').where('user.id = :id', { id: user.id }).getOneOrFail();
+		if (current.isSuspended) return;
+		await users.update(user.id, { isSuspended: true });
+		afterCommit.push(() => {
+			this.moderationLogService.log(moderator, 'suspend', { userId: user.id, userUsername: user.username, userHost: user.host });
+			void (async () => {
+				await this.postSuspend(user).catch(() => {});
+				await this.unFollowAll(user).catch(() => {});
+			})();
 		});
-
-		(async () => {
-			await this.postSuspend(user).catch(_ => {});
-			await this.unFollowAll(user).catch(_ => {});
-		})();
 	}
 
 	@bindThis
 	public async unsuspend(user: MiUser, moderator: MiUser): Promise<void> {
-		await this.usersRepository.update(user.id, {
-			isSuspended: false,
+		const changed = await this.usersRepository.manager.transaction(async manager => {
+			const users = manager.getRepository(UserEntity);
+			const current = await users.createQueryBuilder('user').setLock('pessimistic_write').where('user.id = :id', { id: user.id }).getOneOrFail();
+			if (!current.isSuspended) return false;
+			await users.update(user.id, { isSuspended: false, communityViolationBaseline: current.communityViolationCount });
+			return true;
 		});
-
-		this.moderationLogService.log(moderator, 'unsuspend', {
-			userId: user.id,
-			userUsername: user.username,
-			userHost: user.host,
-		});
-
-		(async () => {
-			await this.postUnsuspend(user).catch(_ => {});
-		})();
+		if (!changed) return;
+		this.moderationLogService.log(moderator, 'unsuspend', { userId: user.id, userUsername: user.username, userHost: user.host });
+		await this.postUnsuspend(user).catch(() => {});
 	}
 
 	@bindThis
