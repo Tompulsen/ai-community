@@ -24,7 +24,7 @@
 			<progress v-if="share.phase.value === 'uploading'" :value="share.progress.value" max="100" :aria-label="shareText.uploading"></progress>
 			<div><MkButton v-if="share.phase.value === 'error'" primary @click="share.retry">{{ shareText.retry }}</MkButton><MkButton @click="share.cancel">{{ shareText.cancel }}</MkButton></div>
 		</div>
-		<div v-if="remixStatus" :class="$style.shareProgress" role="status"><span>{{ remixStatus }}</span><MkButton v-if="!remixSent" @click="sendRemix">{{ studioText.remixRetry }}</MkButton></div>
+		<div v-if="remixStatus" :class="$style.shareProgress" role="status" data-testid="studio-remix-progress"><span>{{ remixStatus }}</span><MkButton v-if="!remixSent" @click="sendRemix">{{ studioText.remixRetry }}</MkButton></div>
 		<div v-if="share.notice.value" :class="$style.shareProgress" role="status" data-testid="studio-share-success"><span>{{ share.notice.value }}</span><div><MkButton @click="router.push('/community/mine')">{{ shareText.viewMine }}</MkButton><MkButton @click="share.notice.value = ''">{{ shareText.close }}</MkButton></div></div>
 	</div>
 	<ShareComposer v-if="share.draft.value && props.active && $i" :key="attempt" section="all" embedded composerOnly compose :initialDraft="share.draft.value" :viewerId="$i.id" :signedIn="true" :moderator="false" :registrationClosed="true" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :gateway="shareGateway" @composerClosed="share.cancel" @submitted="share.published"/>
@@ -34,6 +34,7 @@
 <script setup lang="ts">
 import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { StudioRemix } from '@/utility/studio-remix.js';
+import { serializeStudioRemix } from '@/utility/studio-remix.js';
 import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
 import { $i } from '@/i.js';
@@ -48,14 +49,21 @@ import { useRouter } from '@/router.js';
 const props = defineProps<{ origin: string; kind: string; title: string; active: boolean; defaultModel?: string; remix?: StudioRemix }>();
 const emit = defineEmits<{ (event: 'identity', value: string): void }>();
 const remixStatus = ref('');
-let remixSent = '';
+const remixSent = ref('');
 let remixTimer: number | undefined;
 
 function sendRemix() {
-	if (!props.remix || status.value !== 'ready' || !props.active || !launch.value || !$i || remixSent === props.remix.requestId) return;
-	remixSent = props.remix.requestId; remixStatus.value = studioText.remixLoading;
-	frame.value?.contentWindow?.postMessage({ type: 'community-remix', context, attempt: attempt.value, subject: launch.value.subject, userId: $i.id, work: props.remix }, props.origin);
-	window.clearTimeout(remixTimer); remixTimer = window.setTimeout(() => { remixStatus.value = studioText.remixTimeout; remixSent = ''; }, 60000);
+	if (!props.remix || status.value !== 'ready' || !props.active || !launch.value || !$i || remixSent.value === props.remix.requestId) return;
+	const target = frame.value?.contentWindow;
+	if (!target) { remixStatus.value = studioText.remixFailed; return; }
+	remixSent.value = props.remix.requestId; remixStatus.value = studioText.remixLoading;
+	window.clearTimeout(remixTimer);
+	remixTimer = window.setTimeout(() => { remixStatus.value = studioText.remixTimeout; remixSent.value = ''; }, 60000);
+	try {
+		target.postMessage({ type: 'community-remix', context, attempt: attempt.value, subject: launch.value.subject, userId: $i.id, work: serializeStudioRemix(props.remix) }, props.origin);
+	} catch {
+		window.clearTimeout(remixTimer); remixSent.value = ''; remixStatus.value = studioText.remixFailed;
+	}
 }
 
 const frame = ref<HTMLIFrameElement>();
@@ -88,7 +96,7 @@ const baseGateway = createBrowserCommunityGateway();
 const shareGateway = { ...baseGateway, submit: (input: Parameters<typeof baseGateway.submit>[0]) => { share.assertCurrent(); return baseGateway.submit(input); } };
 
 function stop() {
-	window.clearTimeout(remixTimer); remixSent = ''; remixStatus.value = '';
+	window.clearTimeout(remixTimer); remixSent.value = ''; remixStatus.value = '';
 	share.stop();
 	emit('identity', '');
 	generation++;
@@ -166,7 +174,7 @@ function message(event: MessageEvent) {
 	const data = event.data;
 	if (data.status === 'remix-applied' || data.status === 'remix-error') {
 		if (status.value !== 'ready' || data.subject !== launch.value?.subject || data.userId !== $i?.id || data.requestId !== props.remix?.requestId) return;
-		window.clearTimeout(remixTimer); remixStatus.value = data.status === 'remix-applied' ? '' : (typeof data.message === 'string' ? data.message.slice(0, 240) : studioText.remixFailed); if (data.status === 'remix-error') remixSent = ''; return;
+		window.clearTimeout(remixTimer); remixStatus.value = data.status === 'remix-applied' ? '' : (typeof data.message === 'string' ? data.message.slice(0, 240) : studioText.remixFailed); if (data.status === 'remix-error') remixSent.value = ''; return;
 	}
 	if (typeof data.status === 'string' && data.status.startsWith('share-')) {
 		if (status.value === 'ready' && launch.value && data.subject === launch.value.subject && data.userId === launch.value.userId && data.userId === $i?.id) void share.receive(data);
