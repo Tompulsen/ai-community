@@ -37531,6 +37531,8 @@ export interface operations {
                     "application/json": {
                         items: {
                             /** @enum {string} */
+                            destination: "community" | "source-comment";
+                            /** @enum {string} */
                             sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
@@ -37631,6 +37633,12 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /**
+                     * @default community
+                     * @enum {string}
+                     */
+                    destination?: "community" | "source-comment";
+                    resultId?: string;
                     idempotencyKey: string;
                     generation?: {
                         prompt: string;
@@ -37758,6 +37766,8 @@ export interface operations {
                     "application/json": {
                         items: {
                             /** @enum {string} */
+                            destination: "community" | "source-comment";
+                            /** @enum {string} */
                             sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
@@ -37873,6 +37883,8 @@ export interface operations {
                     "application/json": {
                         items: {
                             /** @enum {string} */
+                            destination: "community" | "source-comment";
+                            /** @enum {string} */
                             sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
@@ -37983,6 +37995,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        destination: "community" | "source-comment";
                         /** @enum {string} */
                         sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
@@ -38097,6 +38111,8 @@ export interface operations {
                     "application/json": {
                         items: {
                             /** @enum {string} */
+                            destination: "community" | "source-comment";
+                            /** @enum {string} */
                             sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
@@ -38210,6 +38226,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        destination: "community" | "source-comment";
                         /** @enum {string} */
                         sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
@@ -38401,6 +38419,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @enum {string} */
+                        destination: "community" | "source-comment";
+                        /** @enum {string} */
                         sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         revisionPending: boolean;
@@ -38534,6 +38554,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        destination: "community" | "source-comment";
                         /** @enum {string} */
                         sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;

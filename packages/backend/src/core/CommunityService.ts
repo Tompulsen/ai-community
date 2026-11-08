@@ -34,7 +34,7 @@ import type * as Redis from 'ioredis';
 
 type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
-type SubmissionInput = CommunityRevision & { idempotencyKey: string; };
+type SubmissionInput = CommunityRevision & { idempotencyKey: string; destination?: MiCommunitySubmission['destination']; resultId?: string; };
 type UpdateInput = CommunityRevision & { submissionId: string; version: number; };
 type ListInput = { limit: number; untilId?: string; query: string; category?: Category; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
 
@@ -87,13 +87,17 @@ export class CommunityService {
 	}
 
 	public async submit(authorId: string, input: SubmissionInput) {
-		const { idempotencyKey, ...payload } = input;
+		const { destination = 'community', resultId, ...payload } = input;
+		if (destination === 'source-comment' && (!payload.generation?.sourceWorkId || !payload.generation.model.trim() || !resultId || !/^[a-zA-Z0-9_-]{1,128}$/.test(resultId))) throw new ApiError(communityErrors.invalidContent);
+		const idempotencyKey = destination === 'source-comment' ? 'source-comment-' + createHash('sha256').update(`${payload.generation!.sourceWorkId}:${resultId}`).digest('hex').slice(0, 48) : input.idempotencyKey;
 		const normalized = this.normalize(payload);
+		if (destination === 'source-comment') normalized.generation = { ...normalized.generation!, referenceFileIds: [], shareToSource: false };
+		const matches = (row: MiCommunitySubmission) => row.destination === destination && (destination === 'source-comment' ? row.generation?.sourceWorkId === normalized.generation?.sourceWorkId : row.payloadHash === payloadHash);
 		const payloadHash = createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 		const repository = this.db.getRepository(MiCommunitySubmission);
 		const existing = await repository.findOneBy({ authorId, idempotencyKey });
 		if (existing) {
-			if (existing.payloadHash !== payloadHash) throw new ApiError(communityErrors.conflict);
+			if (!matches(existing)) throw new ApiError(communityErrors.conflict);
 			return this.receipt(existing);
 		}
 		const afterCommit: (() => void)[] = [];
@@ -102,11 +106,12 @@ export class CommunityService {
 			await this.author(manager, authorId);
 			await this.files(manager, authorId, normalized.fileIds, normalized.category);
 			await this.references(manager, authorId, normalized);
+			if (destination === 'source-comment') await this.sourceReply(normalized.generation!.sourceWorkId!, authorId, manager);
 			const repo = manager.getRepository(MiCommunitySubmission);
 			const id = this.idService.gen();
-			await repo.createQueryBuilder().insert().values({ ...normalized, id, authorId, idempotencyKey, payloadHash, publicationMode, submittedAt: new Date(), status: 'pending', version: 0 }).orIgnore().execute();
+			await repo.createQueryBuilder().insert().values({ ...normalized, destination, id, authorId, idempotencyKey, payloadHash, publicationMode, submittedAt: new Date(), status: 'pending', version: 0 }).orIgnore().execute();
 			const result = await repo.createQueryBuilder('submission').setLock('pessimistic_write').where({ authorId, idempotencyKey }).getOneOrFail();
-			if (result.payloadHash !== payloadHash) throw new ApiError(communityErrors.conflict);
+			if (!matches(result)) throw new ApiError(communityErrors.conflict);
 			// Only the transaction that inserted this row may publish it. Retries return its current state.
 			if (result.id === id && publicationMode === 'after') {
 				await this.publish(result, manager, afterCommit);
@@ -136,8 +141,10 @@ export class CommunityService {
 			if (!submission) throw new ApiError(communityErrors.notFound);
 			if (submission.authorId !== authorId) throw new ApiError(communityErrors.forbidden);
 			if (submission.version !== input.version) throw new ApiError(communityErrors.conflict);
+			if (submission.destination === 'source-comment' && (submission.sourceCommentId || submission.status !== 'pending')) throw new ApiError(communityErrors.conflict);
 			const previous = submission.pendingRevision ?? submission;
 			const normalized = this.normalize({ ...input, generation: input.generation === undefined ? previous.generation ?? null : input.generation });
+			if (submission.destination === 'source-comment' && (!normalized.generation || !normalized.generation.model.trim() || normalized.generation.sourceWorkId !== submission.generation?.sourceWorkId || normalized.generation.referenceFileIds.length)) throw new ApiError(communityErrors.invalidContent);
 			await this.author(manager, authorId);
 			await this.files(manager, authorId, normalized.fileIds, normalized.category);
 			await this.references(manager, authorId, normalized);
@@ -181,9 +188,12 @@ export class CommunityService {
 			if (submission.version !== input.version) throw new ApiError(communityErrors.conflict);
 			const author = await this.author(manager, authorId);
 			const note = submission.approvedNoteId ? await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: submission.approvedNoteId }).setLock('pessimistic_write').getOne() : null;
-			if (note) await this.noteDeleteService.deleteLocalInTransaction(author, note, { manager, afterCommit });
+			if (note) await this.noteDeleteService.deleteLocalInTransaction(author, note, { manager, afterCommit }, submission.destination === 'source-comment' ? submission.sourceCommentId ?? undefined : undefined);
 			// Files remain in the author's drive because other posts may reference them.
-			await repo.delete({ id: submission.id, authorId });
+			if (submission.destination === 'source-comment') {
+				submission.status = 'removed'; submission.approvedNoteId = null; submission.version++;
+				await repo.save(submission); // Keep the result key so a deleted comment cannot be sent again.
+			} else await repo.delete({ id: submission.id, authorId });
 		});
 		for (const publish of afterCommit) publish();
 	}
@@ -215,10 +225,12 @@ export class CommunityService {
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
 		const text = this.noteText(submission);
 		try {
-			const note = await this.noteCreateService.create(author, { text, files, visibility: 'public', localOnly: true }, false, { manager, afterCommit });
+			const reply = submission.destination === 'source-comment' ? await this.sourceReply(submission.generation!.sourceWorkId!, author.id, manager) : undefined;
+			const note = await this.noteCreateService.create(author, { text, files, reply, visibility: 'public', localOnly: true }, false, { manager, afterCommit });
 			if (note.visibility !== 'public') throw new ApiError(communityErrors.cannotPublish);
 			submission.approvedNoteId = note.id;
-			await this.syncSourceComment(submission, note, author, manager, afterCommit);
+			if (submission.destination === 'source-comment') submission.sourceCommentId = note.id;
+			else await this.syncSourceComment(submission, note, author, manager, afterCommit);
 		} catch (error) {
 			if (error instanceof IdentifiableError) throw new ApiError(communityErrors.cannotPublish);
 			throw error;
@@ -227,8 +239,16 @@ export class CommunityService {
 
 	private sourceCommentStatus(row: MiCommunitySubmission) {
 		if (row.sourceCommentId) return 'shared' as const;
-		if (!row.generation?.shareToSource) return 'none' as const;
+		if (row.destination !== 'source-comment' && !row.generation?.shareToSource) return 'none' as const;
 		return row.status === 'pending' ? 'pending' as const : 'unavailable' as const;
+	}
+
+	private async sourceReply(sourceId: string, authorId: string, manager: EntityManager) {
+		const source = await this.publicQuery(authorId, manager).andWhere('submission.id = :sourceId', { sourceId }).getOne();
+		if (!source || source.author.requireSigninToViewContents || !await this.visible(source, undefined, manager) || !await this.visible(source, authorId, manager)) throw new ApiError(communityErrors.sourceUnavailable);
+		const reply = await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: source.approvedNoteId! }).setLock('pessimistic_read').getOne();
+		if (!reply || reply.visibility !== 'public') throw new ApiError(communityErrors.sourceUnavailable);
+		return reply;
 	}
 
 	/** Called only on first publication, under the submission's existing write lock. */
@@ -320,6 +340,7 @@ export class CommunityService {
 		const query = manager.getRepository(MiCommunitySubmission).createQueryBuilder('submission')
 			.innerJoinAndSelect('submission.author', 'author').leftJoinAndSelect('submission.approvedNote', 'note')
 			.where('submission.status IN (:...publicStatuses)', { publicStatuses: ['approved', 'published'] })
+			.andWhere('submission.destination = :destination', { destination: 'community' })
 			.andWhere('note.id IS NOT NULL AND note.visibility = :visibility', { visibility: 'public' })
 			.andWhere('author.isSuspended = FALSE AND author.isDeleted = FALSE');
 		if (!viewerId) query.andWhere('author.requireSigninToViewContents = FALSE');
@@ -376,7 +397,7 @@ export class CommunityService {
 				} else if (submission.status === 'pending') await this.publish(submission, manager, afterCommit);
 			} else if (input.decision === 'remove' && note) {
 				const author = await manager.getRepository(MiUser).findOneByOrFail({ id: submission.authorId });
-				await this.noteDeleteService.deleteLocalInTransaction(author, note, { manager, afterCommit });
+				await this.noteDeleteService.deleteLocalInTransaction(author, note, { manager, afterCommit }, submission.destination === 'source-comment' ? submission.sourceCommentId ?? undefined : undefined);
 				await manager.getRepository(MiModerationLog).insert({ id: this.idService.gen(), userId: reviewerId, type: 'deleteNote', info: {
 					noteId: note.id, noteUserId: author.id, noteUserUsername: author.username, noteUserHost: author.host,
 					note, communitySubmissionId: submission.id, reason: input.reason!.trim(),
@@ -429,7 +450,7 @@ export class CommunityService {
 		const reactions = this.reactionsBufferingService.mergeReactions(note?.reactions ?? {}, buffered);
 		const likesCount = Object.entries(reactions).reduce((sum, [key, count]) => sum + (key.replaceAll('\uFE0F', '') === '❤' ? count : 0), 0);
 		return {
-			id: row.id, version: row.version, category: content.category, title: content.title, text: content.text, model: content.model, sourceUrl: content.sourceUrl, license: content.license, revisionPending: includeRevision && !!row.pendingRevision,
+			id: row.id, destination: row.destination, version: row.version, category: content.category, title: content.title, text: content.text, model: content.model, sourceUrl: content.sourceUrl, license: content.license, revisionPending: includeRevision && !!row.pendingRevision,
 			generation: content.generation ?? null,
 			sourceCommentStatus: this.sourceCommentStatus(row),
 			referenceFiles: await Promise.all(referenceIds.flatMap(id => { const file = referenceFiles.find(f => f.id === id && f.type.startsWith('image/')); return file ? [this.driveFileEntityService.pack(file)] : []; })),

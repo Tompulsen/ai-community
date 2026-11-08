@@ -16,7 +16,7 @@ export const meta = {
 
 export const paramDef = {
 	type: 'object',
-	properties: { idempotencyKey: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-zA-Z0-9_-]+$' },
+	properties: { destination: { type: 'string', enum: ['community', 'source-comment'], default: 'community' }, resultId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[a-zA-Z0-9_-]+$' }, idempotencyKey: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-zA-Z0-9_-]+$' },
 															generation: { type: 'object', nullable: true, additionalProperties: false, properties: { prompt: { type: 'string', maxLength: 100000 }, model: { type: 'string', minLength: 1, maxLength: 100 }, referenceFileIds: { type: 'array', maxItems: 16, uniqueItems: true, items: { type: 'string', format: 'misskey:id' } }, sourceWorkId: { type: 'string', format: 'misskey:id' }, shareToSource: { type: 'boolean' } }, required: ['prompt', 'model', 'referenceFileIds'] },
 															category: { type: 'string', enum: ['video', 'image', 'resource'] },
 															title: { type: 'string', minLength: 1, maxLength: 100 }, text: { type: 'string', maxLength: 2500, default: '' },

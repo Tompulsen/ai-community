@@ -4,6 +4,7 @@
  */
 
 import type { CommunityFile, CommunityGateway, CommunityPage, CommunityWork, SourceCommentStatus, SubmissionStatus } from './types.js';
+import { studioShareText } from '@/utility/studio-share-copy.js';
 import { communityText as t } from './copy.js';
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -56,7 +57,7 @@ export function createCommunityGateway(options: {
 			});
 			if (!response.ok) {
 				const body = await response.json().catch(() => null);
-				const messages: Record<string, string> = { COMMUNITY_INVALID_FILES: t.invalidFiles, COMMUNITY_INVALID_CONTENT: t.invalidContent, COMMUNITY_AUTHOR_UNAVAILABLE: t.authorUnavailable, COMMUNITY_CANNOT_PUBLISH: t.cannotPublish, COMMUNITY_NOT_FOUND: t.notFound, RATE_LIMIT_EXCEEDED: t.rateLimited };
+				const messages: Record<string, string> = { COMMUNITY_SOURCE_UNAVAILABLE: studioShareText.sourceUnavailable, COMMUNITY_INVALID_FILES: t.invalidFiles, COMMUNITY_INVALID_CONTENT: t.invalidContent, COMMUNITY_AUTHOR_UNAVAILABLE: t.authorUnavailable, COMMUNITY_CANNOT_PUBLISH: t.cannotPublish, COMMUNITY_NOT_FOUND: t.notFound, RATE_LIMIT_EXCEEDED: t.rateLimited };
 				const fallback = response.status === 401 ? t.loginError : response.status === 403 ? t.permissionError : response.status === 409 ? t.conflictError : [404, 501, 503].includes(response.status) ? t.serviceUnavailable : t.networkError;
 				throw new Error(messages[body?.error?.code] ?? fallback);
 			}

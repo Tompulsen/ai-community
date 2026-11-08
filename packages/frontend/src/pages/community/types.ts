@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+export type CommunityDestination = 'community' | 'source-comment';
 export type CommunityCategory = 'video' | 'image' | 'resource';
 export type CommunitySection = CommunityCategory | 'all' | 'mine' | 'review' | 'ai' | 'profile';
 export type SubmissionStatus = 'pending' | 'published' | 'approved' | 'rejected' | 'removed' | 'withdrawn';
@@ -10,6 +11,7 @@ export type CommunityFile = { id: string; name: string; type: string; url: strin
 export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string; shareToSource?: boolean };
 export type SourceCommentStatus = 'none' | 'pending' | 'shared' | 'unavailable';
 export type CommunityWork = {
+	destination?: CommunityDestination;
 	sourceCommentStatus?: SourceCommentStatus;
 	generation?: CommunityGeneration | null;
 	referenceFiles?: CommunityFile[];
@@ -34,6 +36,8 @@ export type CommunityWork = {
 	viewsCount?: number;
 };
 export type CommunitySubmissionInput = {
+	destination?: CommunityDestination;
+	resultId?: string;
 	idempotencyKey: string;
 	generation?: CommunityGeneration | null;
 	category: CommunityCategory;
@@ -44,7 +48,7 @@ export type CommunitySubmissionInput = {
 	license: string;
 	fileIds: string[];
 };
-export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
+export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model' | 'destination' | 'resultId'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
 export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; };
 export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
 export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };

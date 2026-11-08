@@ -4,6 +4,7 @@
  */
 
 export const communityErrors = {
+	sourceUnavailable: { message: 'The original work is unavailable for comments.', code: 'COMMUNITY_SOURCE_UNAVAILABLE', id: 'ea9bb5df-b981-4908-9777-5517f2dcce56', httpStatusCode: 400 },
 	invalidFiles: { message: 'Invalid or unavailable community attachments.', code: 'COMMUNITY_INVALID_FILES', id: '6d79454d-1011-45fc-8580-3b9a86fb76fc', httpStatusCode: 400 },
 	invalidContent: { message: 'Invalid community content.', code: 'COMMUNITY_INVALID_CONTENT', id: '3f9e490d-3f0d-47b0-aab3-b6a64a487a8e', httpStatusCode: 400 },
 	authorUnavailable: { message: 'The author is unavailable.', code: 'COMMUNITY_AUTHOR_UNAVAILABLE', id: 'cd0c8e78-44e1-46ec-a898-632d195a03d2', httpStatusCode: 400 },
@@ -19,6 +20,7 @@ const nullableString = { ...string, nullable: true } as const;
 export const communityWorkSchema = {
 	type: 'object', optional: false, nullable: false,
 	properties: {
+		destination: { ...string, enum: ['community', 'source-comment'] },
 		sourceCommentStatus: sourceCommentStatusSchema,
 		id: string, revisionPending: { type: 'boolean', optional: false, nullable: false }, version: { type: 'integer', optional: false, nullable: false },
 		category: { ...string, enum: ['video', 'image', 'resource'] },

@@ -32,13 +32,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<p v-if="editError" role="alert" :class="$style.error">{{ editError }}</p>
 		<Teleport defer to="#misskey-popup-container">
 			<div v-if="composerOpen && signedIn" ref="modalLayer" :class="$style.modalLayer" :style="{ zIndex: composerZIndex }" @click.self="closeComposer" @keydown="onComposerKeydown">
-				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="editing ? t.editWork : t.publish" :class="$style.composer" tabindex="-1">
+				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="editing ? t.editWork : directComment ? shareText.directTitle : t.publish" :class="$style.composer" tabindex="-1">
 					<header :class="$style.composerHeader">
 						<button type="button" :class="$style.quiet" :aria-label="editing ? t.closeEditor : t.close" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
-						<h2 v-if="editing || composerOnly" :class="$style.editorTitle">{{ editing ? t.editWork : shareText.title }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
+						<h2 v-if="editing || composerOnly" :class="$style.editorTitle">{{ editing ? t.editWork : directComment ? shareText.directTitle : shareText.title }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
 					</header>
 					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
-					<p v-if="composerOnly" :class="$style.editHint">{{ shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
+					<p v-if="composerOnly" :class="$style.editHint">{{ directComment ? shareText.directHint : shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
 					<div v-if="composerOnly && files.length" :class="$style.sharePreview"><template v-for="file in files" :key="file.id"><video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls muted playsinline preload="metadata" :aria-label="file.name"></video><img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.thumbnailUrl || file.url)" :alt="file.name"/></template></div>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
 						<div :class="$style.editorRow">
@@ -48,26 +48,27 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<textarea ref="contentInput" v-model="draft.text" :aria-label="generationRecord ? shareText.caption : t.content" rows="5" maxlength="2500" :placeholder="(generationRecord ? shareText.caption : t.writePrompt) + '…'" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
-						<p v-if="generationRecord" :class="$style.editHint">{{ shareText.provenanceHint }}</p>
-						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
+						<p v-if="generationRecord" :class="$style.editHint">{{ directComment ? `${t.model} · ${generationRecord.model}` : shareText.provenanceHint }}</p>
+						<p v-if="directComment && generationRecord?.sourceWorkId" :class="$style.editHint" data-testid="direct-comment-source"><strong>{{ shareText.directLabel }}</strong> · <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a><br/>{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</p>
+						<div v-if="!directComment" :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
 						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || !!openingId || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
 						<section v-if="referenceFiles.length" :class="$style.referenceSection" :aria-label="shareText.references">
 							<h3>{{ shareText.references }} · {{ selectedReferences.length }} / {{ referenceFiles.length }}</h3>
 							<p>{{ shareText.referenceHint }}</p>
 							<div :class="$style.referenceGrid"><label v-for="file in referenceFiles" :key="file.id"><img :src="file.thumbnailUrl || file.url" :alt="file.name"/><span><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="submitting"/>{{ file.name }}</span></label></div>
 						</section>
-						<section v-if="generationRecord?.sourceWorkId && !editing" :class="$style.referenceSection" data-testid="source-comment-option">
+						<section v-if="generationRecord?.sourceWorkId && !editing && !directComment" :class="$style.referenceSection" data-testid="source-comment-option">
 							<label :class="$style.check"><input v-model="shareToSource" type="checkbox" :disabled="submitting || !!openingId"/>{{ shareText.shareToSource }}</label>
 							<p>{{ publicationMode === 'after' ? shareText.sourcePublicHint : shareText.sourceReviewHint }} <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a></p>
 						</section>
-						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields">
+						<div v-if="detailsOpen && !directComment" :id="detailsId" :class="$style.extraFields">
 							<label>{{ t.model }}<input v-model="draft.model" :readonly="!!generationRecord" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label>
 						</div>
 						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting || !!openingId"/>{{ t.rights }}</label>
 						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p><button v-if="editConflict" type="button" :class="$style.secondary" :disabled="submitting || !!openingId" @click="reloadEditor">{{ t.reloadEditor }}</button>
 						<footer :class="$style.composerFooter">
 							<div :class="$style.composerTools">
-								<div :class="$style.iconTools" role="group" :aria-label="t.composerTools">
+								<div v-if="!directComment" :class="$style.iconTools" role="group" :aria-label="t.composerTools">
 									<button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.iconButton" :aria-label="tool.label" :title="tool.label" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i></button>
 									<button type="button" :class="$style.iconButton" :aria-label="t.existingFiles" :title="t.existingFiles" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="chooseFiles"><i class="ti ti-folder" aria-hidden="true"></i></button>
 									<button type="button" :class="$style.iconButton" :aria-label="t.emoji" :title="t.emoji" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
@@ -76,9 +77,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 									<button type="button" :class="$style.iconButton" :aria-label="t.moreDetails" :title="t.moreDetails" :aria-expanded="detailsOpen" :aria-controls="detailsId" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="detailsOpen = !detailsOpen"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
 								</div>
 								<input ref="uploadInput" type="file" :accept="uploadAccept" multiple hidden @change="uploadSelected"/>
-								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer || !!openingId || !!editing && (!editChanged || editConflict)">{{ editing ? submitting ? t.savingChanges : editNeedsReview ? t.saveForReview : t.saveChanges : submitting ? t.submitting : publicationMode === 'after' ? t.submitPublic : t.submit }}</button>
+								<span v-if="draft.text" :class="$style.counter">{{ draft.text.length }}/2500</span><button type="submit" :class="$style.primary" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer || !!openingId || !!editing && (!editChanged || editConflict)">{{ editing ? submitting ? t.savingChanges : editNeedsReview ? t.saveForReview : t.saveChanges : submitting ? t.submitting : publicationMode === 'after' ? directComment ? shareText.directSend : t.submitPublic : t.submit }}</button>
 							</div>
-							<p :class="$style.uploadHint">{{ choosing ? t.choosing : t.uploadHint }}</p>
+							<p v-if="!directComment" :class="$style.uploadHint">{{ choosing ? t.choosing : t.uploadHint }}</p>
 						</footer>
 					</form>
 				</section>
@@ -127,15 +128,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work"><template v-if="canEdit(work)" #actions><div :class="$style.workActions"><button type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
+						<WorkCard v-if="isCommunity" :work="work"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
-								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canEdit(work)" :class="$style.workActions"><button type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
+								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
 								<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ work.revisionPending ? t.revisionPending : t[work.status] }}</span></div>
-								<h3><a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" @click.prevent="emit('navigate', `/community/work/${work.id}`)">{{ work.title }}</a><template v-else>{{ work.title }}</template></h3>
+								<h3><a v-if="work.approvedNoteId" :href="workLink(work)" @click.prevent="emit('navigate', workLink(work))">{{ work.title }}<span v-if="work.destination === 'source-comment'" :class="$style.draftHint"> · {{ shareText.directLabel }}</span></a><template v-else>{{ work.title }}<span v-if="work.destination === 'source-comment'" :class="$style.draftHint"> · {{ shareText.directLabel }}</span></template></h3>
 								<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
 								<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
-								<a v-if="work.approvedNoteId" :href="`/community/work/${work.id}`" :class="$style.discuss" @click.prevent="emit('navigate', `/community/work/${work.id}`)"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
+								<a v-if="work.destination === 'source-comment' && work.generation?.sourceWorkId" :href="`/community/work/${work.generation.sourceWorkId}`" :class="$style.discuss" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
+								<a v-if="work.approvedNoteId" :href="workLink(work)" :class="$style.discuss" @click.prevent="emit('navigate', workLink(work))"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.comments }}<span>{{ work.repliesCount }}</span></a>
 								<details v-if="!isCommunity" :class="$style.details">
 									<summary>{{ t.detail }}</summary><p :class="$style.fullText"><Mfm :text="work.text" :plain="true"/></p>
 									<p v-if="work.model">{{ t.model }}：{{ work.model }}</p>
@@ -269,7 +271,10 @@ if (props.composerOnly && props.initialDraft) {
 	detailsOpen.value = !!initial.model;
 }
 const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
-const canEdit = (work: CommunityWork) => props.signedIn && work.author.id === props.viewerId && (isProfile.value || props.section === 'mine');
+const directComment = computed(() => (editing.value?.destination ?? props.initialDraft?.destination) === 'source-comment');
+const workLink = (work: CommunityWork) => work.destination === 'source-comment' ? work.approvedNoteId ? `/notes/${work.approvedNoteId}` : `/community/work/${work.generation?.sourceWorkId}` : `/community/work/${work.id}`;
+const canEdit = (work: CommunityWork) => canManage(work) && (work.destination !== 'source-comment' || work.status === 'pending');
+const canManage = (work: CommunityWork) => props.signedIn && work.author.id === props.viewerId && (isProfile.value || props.section === 'mine');
 const editChanged = computed(() => !!editing.value && JSON.stringify(composerInput()) !== editBaseline);
 const editNeedsReview = computed(() => !!editing.value && (editing.value.revisionPending || !['approved', 'published'].includes(editing.value.status) || props.publicationMode !== 'after'));
 const editHint = computed(() => editing.value && !['approved', 'published'].includes(editing.value.status) ? t.editPrivateHint : editNeedsReview.value ? t.editReviewHint : t.editPublicHint);
@@ -361,7 +366,7 @@ async function openComposer() {
 }
 
 function composerInput() {
-	return { ...draft, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value } : null };
+	return { ...draft, destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value } : null };
 }
 
 function restoreNewDraft() {
@@ -572,8 +577,8 @@ async function submit() {
 		const result = await props.gateway.submit({ ...input, idempotencyKey: submissionKey });
 		markCommunityUpdated();
 		if (disposed) return;
-		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? t.submittedPublic : t.submittedExisting;
-		if (result.sourceCommentStatus && result.sourceCommentStatus !== 'none') notice.value += ' ' + shareText.sourceStatus[result.sourceCommentStatus];
+		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? directComment.value ? shareText.directSent : t.submittedPublic : t.submittedExisting;
+		if (!directComment.value && result.sourceCommentStatus && result.sourceCommentStatus !== 'none') notice.value += ' ' + shareText.sourceStatus[result.sourceCommentStatus];
 		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
 		files.value = []; referenceFiles.value = []; selectedReferences.value = []; generationRecord.value = null; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
@@ -588,12 +593,12 @@ async function submit() {
 }
 
 async function deleteWork(work: CommunityWork) {
-	if (!canEdit(work) || deletingId.value || openingId.value || submitting.value) return;
+	if (!canManage(work) || deletingId.value || openingId.value || submitting.value) return;
 	const trigger = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
 	deletingId.value = work.id; editError.value = '';
 	try {
 		const { canceled } = await confirm({ type: 'warning', title: t.deleteWorkTitle, text: work.title + '\n\n' + t.deleteWorkConfirm });
-		if (canceled || disposed || !canEdit(work)) return;
+		if (canceled || disposed || !canManage(work)) return;
 		await props.gateway.delete({ submissionId: work.id, version: work.version });
 		markCommunityUpdated();
 		if (disposed) return;

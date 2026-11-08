@@ -33,6 +33,9 @@ export class MiCommunitySubmission {
 	@Column('varchar', { length: 64 })
 	public payloadHash: string;
 
+	@Column('varchar', { length: 16, default: 'community' })
+	public destination: 'community' | 'source-comment';
+
 	@Column('varchar', { length: 16 })
 	public category: 'video' | 'image' | 'resource';
 

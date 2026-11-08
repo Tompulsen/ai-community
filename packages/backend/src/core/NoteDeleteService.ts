@@ -56,12 +56,13 @@ export class NoteDeleteService {
 	) {}
 
 	/** Delete a local original community note atomically with its moderation decision. */
-	public async deleteLocalInTransaction(user: MiUser, note: MiNote, transaction: { manager: EntityManager; afterCommit: (() => void)[]; }) {
-		if (!transaction.manager.queryRunner?.isTransactionActive || !note.localOnly || note.userHost != null || note.replyId || note.renoteId || note.userId !== user.id) {
+	public async deleteLocalInTransaction(user: MiUser, note: MiNote, transaction: { manager: EntityManager; afterCommit: (() => void)[]; }, sourceCommentId?: string) {
+		if (!transaction.manager.queryRunner?.isTransactionActive || !note.localOnly || note.userHost != null || (note.replyId && sourceCommentId !== note.id) || note.renoteId || note.userId !== user.id) {
 			throw new Error('Community removal requires an active transaction and a local original note');
 		}
 		const deleted = await transaction.manager.getRepository(this.notesRepository.target).delete({ id: note.id, userId: user.id });
 		if (!deleted.affected) return;
+		if (note.replyId) await transaction.manager.getRepository(this.notesRepository.target).decrement({ id: note.replyId }, 'repliesCount', 1);
 		const deletedAt = new Date();
 		transaction.afterCommit.push(() => {
 			this.globalEventService.publishNoteStream(note, 'deleted', { deletedAt });
