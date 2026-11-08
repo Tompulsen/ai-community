@@ -194,6 +194,7 @@ import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 import { prefer } from '@/preferences.js';
+import { useScrollPositionKeeper } from '@/composables/use-scroll-position-keeper.js';
 
 const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; (event: 'composerClosed'): void; (event: 'submitted', value: Awaited<ReturnType<CommunityGateway['submit']>>): void; }>();
@@ -215,6 +216,7 @@ const sourceInput = ref<HTMLInputElement>();
 const detailsOpen = ref(false);
 const detailsId = useId();
 const surfaceRoot = ref<HTMLElement>();
+useScrollPositionKeeper(surfaceRoot);
 const { discoveryId, discoveryLayer, discoveryPanel, discoveryToggle, discoveryCompact, discoveryOpen, discoveryZIndex, closeDiscovery, toggleDiscovery, discoveryKeydown } = useDiscoveryDrawer(surfaceRoot, () => isPublicFeed.value);
 const modalLayer = ref<HTMLElement>();
 const composerPanel = ref<HTMLElement>();

@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :class="$style.card" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="$style.card" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<WorkEngagement :work="work" :viewsCount="views" previewComments>
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><slot name="actions"></slot></header>
 		<div :class="$style.content">

@@ -4,26 +4,26 @@
  */
 
 import { throttle } from 'throttle-debounce';
-import { nextTick, onActivated, onDeactivated, watch } from 'vue';
+import { nextTick, onActivated, onBeforeUnmount, onDeactivated, watch } from 'vue';
 import type { Ref } from 'vue';
 
 // note render skippingがオンだとズレるため、遷移直前にスクロール範囲に表示されているdata-scroll-anchor要素を特定して、復元時に当該要素までスクロールするようにする
-
-// TODO: data-scroll-anchor がひとつも存在しない場合、または手動で useAnchor みたいなフラグをfalseで呼ばれた場合、単純にスクロール位置を使用する処理にフォールバックするようにする
 
 export function useScrollPositionKeeper(scrollContainerRef: Ref<HTMLElement | null | undefined>): void {
 	let anchorId: string | null = null;
 	// キャプチャ時のアンカー要素上端のコンテナ上端からの距離
 	let anchorContainerLocalY = 0;
-	let savedScrollTop = 0;
+	let savedScrollTop: number | null = null;
 	let ready = true;
+	let active = true;
+	let restoreTimer: number | undefined;
 
-	watch(scrollContainerRef, (el) => {
+	watch(scrollContainerRef, (el, _previous, onCleanup) => {
 		if (!el) return;
 
-		const captureAnchor = () => {
-			if (!el) return;
-			if (!ready) return;
+		const captureAnchor = (force = false) => {
+			if (!active || !el.isConnected || (!ready && !force)) return;
+			savedScrollTop = el.scrollTop;
 
 			if (el.scrollTop < 100) {
 				// 上部にいるときはanchorを参照するとズレの原因になるし位置復元するメリットも乏しいため設定しない
@@ -34,6 +34,7 @@ export function useScrollPositionKeeper(scrollContainerRef: Ref<HTMLElement | nu
 			const scrollContainerRect = el.getBoundingClientRect();
 			const viewPosition = scrollContainerRect.top + scrollContainerRect.height / 2;
 
+			anchorId = null;
 			const anchorEls = el.querySelectorAll<HTMLElement>('[data-scroll-anchor]');
 			for (let i = anchorEls.length - 1; i > -1; i--) { // 下から見た方が速い
 				const anchorEl = anchorEls[i];
@@ -51,20 +52,38 @@ export function useScrollPositionKeeper(scrollContainerRef: Ref<HTMLElement | nu
 		// ほんとはscrollイベントじゃなくてonBeforeDeactivatedでやりたい
 		// https://github.com/vuejs/vue/issues/9454
 		// https://github.com/vuejs/rfcs/pull/284
-		el.addEventListener('scroll', throttle(1000, captureAnchor), { passive: true });
+		const onScroll = throttle(1000, () => captureAnchor());
+		el.addEventListener('scroll', onScroll, { passive: true });
 		// スクロール後すぐにクリックするとthrottleによりanchorIdが古いまま残るため、
 		// pointerdownで遷移直前のアンカーを同期的に取得する
-		el.addEventListener('pointerdown', captureAnchor, { passive: true });
+		const onInteraction = () => {
+			window.clearTimeout(restoreTimer);
+			ready = true;
+			captureAnchor(true);
+		};
+		el.addEventListener('pointerdown', onInteraction, { passive: true });
+		el.addEventListener('keydown', onInteraction);
+		el.addEventListener('wheel', onInteraction, { passive: true });
+		onCleanup(() => {
+			onScroll.cancel();
+			el.removeEventListener('scroll', onScroll);
+			el.removeEventListener('pointerdown', onInteraction);
+			el.removeEventListener('keydown', onInteraction);
+			el.removeEventListener('wheel', onInteraction);
+		});
 	}, {
 		immediate: true,
 	});
 
 	const restore = () => {
-		if (!anchorId) return;
+		if (savedScrollTop == null) return;
 		const scrollContainer = scrollContainerRef.value;
 		if (!scrollContainer) return;
-		const scrollAnchorEl = scrollContainer.querySelector<HTMLElement>(`[data-scroll-anchor="${CSS.escape(anchorId)}"]`);
-		if (!scrollAnchorEl) return;
+		const scrollAnchorEl = anchorId ? scrollContainer.querySelector<HTMLElement>(`[data-scroll-anchor="${CSS.escape(anchorId)}"]`) : null;
+		if (!scrollAnchorEl) {
+			scrollContainer.scrollTop = savedScrollTop;
+			return;
+		}
 		const anchorRect = scrollAnchorEl.getBoundingClientRect();
 		// anchorContentY: コンテンツ先頭からのアンカー要素上端の距離（scrollTopに依存しない）
 		const anchorContentY = scrollContainer.scrollTop + anchorRect.top - scrollContainer.getBoundingClientRect().top;
@@ -73,27 +92,25 @@ export function useScrollPositionKeeper(scrollContainerRef: Ref<HTMLElement | nu
 	};
 
 	onDeactivated(() => {
-		const el = scrollContainerRef.value;
-		if (el) savedScrollTop = el.scrollTop;
+		// Capture before KeepAlive detaches the element; its scrollTop is already 0 here.
+		active = false;
 		ready = false;
+		window.clearTimeout(restoreTimer);
 	});
 
 	onActivated(() => {
+		active = true;
+		ready = false;
 		restore();
 		nextTick(() => {
+			if (!active) return;
 			restore();
-			window.setTimeout(() => {
+			restoreTimer = window.setTimeout(() => {
 				restore();
-
-				// anchor方式が失敗した場合（anchorIdがnullまたは要素が見つからない場合）の
-				// フォールバック
-				const el = scrollContainerRef.value;
-				if (el && el.scrollTop === 0 && savedScrollTop > 0) {
-					el.scrollTop = savedScrollTop;
-				}
 
 				ready = true;
 			}, 100);
 		});
 	});
+	onBeforeUnmount(() => { active = false; window.clearTimeout(restoreTimer); });
 }

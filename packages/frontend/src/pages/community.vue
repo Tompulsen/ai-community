@@ -13,6 +13,7 @@ import { computed, defineAsyncComponent, onActivated, onBeforeUnmount, ref } fro
 import CommunitySurface from './community/surface.vue';
 import { createBrowserCommunityGateway } from './community/browser-gateway.js';
 import { communityText, communitySections } from './community/copy.js';
+import { rememberCommunityWorkReturnPath } from './community/work-navigation.js';
 import XSetup from './welcome.setup.vue';
 import { $i, iAmModerator } from '@/i.js';
 import { instance } from '@/instance.js';
@@ -27,6 +28,10 @@ const activeSection = computed(() => {
 });
 const publicQuery = computed(() => ['all', 'video', 'image', 'resource'].includes(activeSection.value) ? props.initialQuery : undefined);
 const router = useRouter();
+const sourcePath = router.getCurrentFullPath();
+router.useListener('change', ({ beforeFullPath, fullPath }) => {
+	if (beforeFullPath === sourcePath) rememberCommunityWorkReturnPath(router, beforeFullPath, fullPath);
+});
 const composeRequest = ref(0);
 
 function reopenComposer() {
