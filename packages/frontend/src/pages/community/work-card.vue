@@ -52,8 +52,8 @@ watch(cover, () => { failed.value = false; });
 .card :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
 .author { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; time { margin-left: auto; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); white-space: nowrap; } }
 .avatar { flex-shrink: 0; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: var(--MI_THEME-buttonBg); font-size: 18px; font-weight: 600; }
-.identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; span { font-size: 13px; color: var(--MI_THEME-fgTransparentWeak); } }
-.content { margin-left: 0; min-width: 0; h3 { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 17px; line-height: 1.5; } }
+.identity { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; > a, > span { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } span { font-size: 13px; color: var(--MI_THEME-fgTransparentWeak); } }
+.content { margin-left: 0; min-width: 0; h3 { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 17px; line-height: 1.5; } h3 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; } }
 .excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; margin: 0 0 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .mediaLayout { display: grid; gap: 12px; min-width: 0; }
 .mainMedia { min-width: 0; }
@@ -68,5 +68,5 @@ watch(cover, () => { failed.value = false; });
 @media (hover: none) { .previewAction { opacity: 1; transform: none; } }
 .card[data-motion='false'] { &, .previewAction { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .card, .previewAction { transition: none; } }
-@container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } }
+@container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { flex-wrap: nowrap; gap: 8px; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
 </style>

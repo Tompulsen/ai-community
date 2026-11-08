@@ -77,7 +77,9 @@ async function signup() {
 	.side { display: none; }
 	.brand { padding: 20px 10px 8px; font-size: 14px; overflow-wrap: anywhere; }
 	.accountLinks { display: none; }
-	.mobileNavigation { display: flex; padding: 0 8px 8px; gap: 0; background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
+	.mobileNavigation { display: flex; padding: 0 8px 8px; gap: 4px; background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
+	.mobileHeader > a { min-width: 0; overflow-wrap: anywhere; }
+	.mobileHeader > button { flex-shrink: 0; min-height: 44px; }
 	.mobileHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; background: var(--MI_THEME-panel); }
 }
 </style>

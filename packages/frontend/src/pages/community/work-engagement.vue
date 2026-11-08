@@ -313,7 +313,13 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 	.previewViewport { flex: 1 1 0; height: 0; min-height: 80px; max-height: none; .comments { position: absolute; inset: 0 0 auto; } }
 	.previewDiscussion .empty { flex: 1; }
 }
-@media (max-width: 360px) { .actions { gap: 0; font-size: 12px; } .actions > button, .views { gap: 4px; padding: 0 4px; } }
+@container (max-width: 600px) {
+	.actions { column-gap: 0; font-size: 12px; }
+	.actions > button, .views { gap: 3px; padding-inline: 2px; }
+	.actions i { font-size: 18px; }
+	.actions > span:not(.views) > button:not(:disabled) { width: 44px; padding-inline: 0; }
+	.actions > span:not(.views) > button:not(:disabled) > span { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 .actions > button { position: relative; transition: background-color 160ms, color 160ms, transform 180ms var(--community-ease, ease-out); > i { transition: transform 220ms var(--community-ease, ease-out); } &:hover:not(:disabled) > i, &:focus-visible:not(:disabled) > i { transform: translateY(-2px); } &:active:not(:disabled) { transform: scale(.94); } }
 .actions .liked { background: color-mix(in srgb, var(--MI_THEME-love) 8%, transparent); }
 .actions .likeConfirmed > i { animation: likeConfirm 400ms var(--community-ease, ease-out); }

@@ -72,6 +72,12 @@ defineProps<{
 }
 .horizontal { flex-direction: row; flex-wrap: wrap; padding: 0; }
 .horizontal .link { font-size: 14px; min-height: 44px; }
+@media (max-width: 700px) {
+	.horizontal { flex-wrap: nowrap; gap: 4px; }
+	.horizontal .link { flex: 1; min-width: 0; flex-direction: column; justify-content: flex-start; gap: 4px; padding: 8px 2px; font-size: 12px; text-align: center; }
+	.horizontal .link > i { line-height: 1; }
+	.horizontal .label { line-height: 1.4; }
+}
 .horizontal.compact .link { height: 44px; padding: 8px 12px; }
 .root[data-motion='false'] .link, .root[data-motion='false'] .link > * { transition: none; transform: none; }
 @media (prefers-reduced-motion: reduce) { .link, .link > * { transition: none; transform: none !important; } }

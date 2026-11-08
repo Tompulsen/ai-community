@@ -674,7 +674,7 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 :is(.root, .modalLayer) button:disabled { cursor: not-allowed; opacity: .55; }
 :is(.root, .modalLayer) :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
 :is(.root, .modalLayer) ::selection { color: var(--MI_THEME-fgOnAccent); background: var(--MI_THEME-accent); }
-:is(.root, .modalLayer) h1, :is(.root, .modalLayer) h2, :is(.root, .modalLayer) h3, :is(.root, .modalLayer) p { margin: 0; }
+:where(.root, .modalLayer) :where(h1, h2, h3, p) { margin: 0; }
 .account { display: flex; align-items: center; gap: 12px; }
 .canvas { width: 100%; min-height: 100%; padding: 24px 32px; }
 .canvas.communityCanvas { padding-top: 28px; }
@@ -785,7 +785,7 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .form { display: grid; gap: 16px; }
 .fields { display: grid; grid-template-columns: 1fr 2fr; gap: 18px; }
 .form label, .reviewForm > label { display: grid; gap: 7px; font-weight: 500; min-width: 0; }
-:is(.root, .modalLayer) input:not([type='checkbox'], [type='range']), :is(.root, .modalLayer) select, :is(.root, .modalLayer) textarea { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding: 10px 12px; width: 100%; min-width: 0; caret-color: var(--MI_THEME-accent); }
+:where(.root, .modalLayer) :where(input:not([type='checkbox'], [type='range']), select, textarea) { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding: 10px 12px; width: 100%; min-width: 0; caret-color: var(--MI_THEME-accent); }
 :is(.root, .modalLayer) input::placeholder, :is(.root, .modalLayer) textarea::placeholder { color: var(--MI_THEME-fg); opacity: 1; }
 :is(.root, .modalLayer) textarea { resize: vertical; line-height: 1.65; }
 .form .check, .reviewForm .check { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
@@ -834,6 +834,7 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
  .feedToolbar { padding: 0 2px 12px; }
  .feedToolbar h1 { font-size: 18px; }
  .feedFilters { gap: 2px; }
+ .feedFilters a:last-child { min-width: 0; white-space: normal; text-align: center; }
  .feedFilters a { padding-inline: 10px; font-size: 12px; }
  .search { order: 3; width: 100%; }
  .fields, .guideContent { grid-template-columns: 1fr; }
