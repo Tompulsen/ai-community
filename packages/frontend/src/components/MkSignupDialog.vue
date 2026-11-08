@@ -17,8 +17,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-if="signingIn" class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 32px;">
 			<MkSignin :autoSet="autoSet" @login="dialog?.close()" @busy="busy = $event"/>
 		</div>
+		<MkNewApiAuth v-else signup class="_spacer" style="--MI_SPACER-min: 20px; --MI_SPACER-max: 32px;" @busy="busy = $event">
 		<Transition
-			v-else
 			mode="out-in"
 			:enterActiveClass="$style.transition_x_enterActive"
 			:leaveActiveClass="$style.transition_x_leaveActive"
@@ -32,6 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<XSignup :autoSet="autoSet" @signup="onSignup" @signupEmailPending="onSignupEmailPending" @busy="busy = $event"/>
 			</template>
 		</Transition>
+		</MkNewApiAuth>
 		<div v-if="autoSet" :class="$style.switchMode">
 			<span>{{ signingIn ? authText.noAccount : authText.haveAccount }}</span>
 			<button type="button" class="_textButton" :disabled="busy" data-testid="auth-switch" @click="signingIn = !signingIn">{{ signingIn ? authText.goSignup : authText.goSignin }}</button>
@@ -48,6 +49,7 @@ import XServerRules from '@/components/MkSignupDialog.rules.vue';
 import MkModalWindow from '@/components/MkModalWindow.vue';
 import { i18n } from '@/i18n.js';
 import MkSignin from '@/components/MkSignin.vue';
+import MkNewApiAuth from '@/components/MkNewApiAuth.vue';
 import { authText } from '@/utility/auth-copy.js';
 
 const props = withDefaults(defineProps<{

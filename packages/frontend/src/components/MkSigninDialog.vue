@@ -19,10 +19,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-if="!signupMode" :class="$style.content">
 			<MkSignin :autoSet="autoSet" :message="message" :openOnRemote="openOnRemote" :initialUsername="initialUsername" @login="onLogin" @busy="busy = $event"/>
 		</div>
-		<template v-else>
+		<MkNewApiAuth v-else signup :class="$style.content" @busy="busy = $event">
 			<XServerRules v-if="!acceptedRules" @done="acceptedRules = true" @cancel="signupMode = false"/>
 			<XSignup v-else :autoSet="autoSet" @signup="onSignup" @signupEmailPending="modal?.close()" @busy="busy = $event"/>
-		</template>
+		</MkNewApiAuth>
 		<div v-if="autoSet" :class="$style.switchMode">
 			<span>{{ signupMode ? authText.haveAccount : authText.noAccount }}</span>
 			<button type="button" class="_textButton" :disabled="busy" data-testid="auth-switch" @click="signupMode = !signupMode">{{ signupMode ? authText.goSignin : authText.goSignup }}</button>
@@ -36,6 +36,7 @@ import * as Misskey from 'misskey-js';
 import { useTemplateRef, ref } from 'vue';
 import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
 import MkSignin from '@/components/MkSignin.vue';
+import MkNewApiAuth from '@/components/MkNewApiAuth.vue';
 import MkModal from '@/components/MkModal.vue';
 import { i18n } from '@/i18n.js';
 import XSignup from '@/components/MkSignupDialog.form.vue';

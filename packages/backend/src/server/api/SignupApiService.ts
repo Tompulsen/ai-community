@@ -74,6 +74,9 @@ export class SignupApiService {
 	) {
 		const body = request.body;
 		if (process.env.NODE_ENV !== 'test' && this.meta.rootUserId == null) throw new FastifyReplyError(503, 'SETUP_REQUIRED');
+		// Public registrations use the configured identity provider. SSO provisioning
+		// and administrator-created accounts continue through SignupService directly.
+		if (this.config.newApiSso?.issuer) throw new FastifyReplyError(403, 'NEWAPI_REGISTRATION_REQUIRED');
 
 		// Verify *Captcha
 		// ただしテスト時はこの機構は障害となるため無効にする
@@ -338,6 +341,7 @@ export class SignupApiService {
 
 	@bindThis
 	public async signupPending(request: FastifyRequest<{ Body: { code: string; } }>, reply: FastifyReply) {
+		if (this.config.newApiSso?.issuer) throw new FastifyReplyError(403, 'NEWAPI_REGISTRATION_REQUIRED');
 		const body = request.body;
 
 		const code = body['code'];

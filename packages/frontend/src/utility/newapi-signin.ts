@@ -6,7 +6,13 @@
 export async function newApiSigninConfig(signal?: AbortSignal): Promise<{ enabled: boolean; issuer?: string; studioOrigin?: string; }> {
 	const response = await window.fetch('/api/newapi/config', { credentials: 'same-origin', cache: 'no-store', signal });
 	if (!response.ok) throw new Error('SSO_UNAVAILABLE');
-	return response.json();
+	const data = await response.json();
+	if (typeof data?.enabled !== 'boolean') throw new Error('SSO_CONFIG');
+	if (data.enabled) {
+		const issuer = new URL(data.issuer);
+		if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.pathname !== '/' || issuer.search || issuer.hash) throw new Error('SSO_CONFIG');
+	}
+	return data;
 }
 
 export async function newApiStudioUrl(token: string, kind: string, signal?: AbortSignal): Promise<string> {
@@ -21,15 +27,17 @@ export async function newApiStudioUrl(token: string, kind: string, signal?: Abor
 	return target.href;
 }
 
-export async function startNewApiSignin(returnTo = window.location.pathname): Promise<void> {
+export async function startNewApiSignin(returnTo = window.location.pathname + window.location.search, signal?: AbortSignal): Promise<void> {
+	const requestSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15000)]);
 	const response = await window.fetch('/api/newapi/start', {
-		method: 'POST', credentials: 'same-origin', cache: 'no-store',
+		method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: requestSignal,
 		headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnTo }),
 	});
 	if (!response.ok) throw new Error('SSO_UNAVAILABLE');
 	const { authorizationUrl } = await response.json();
 	const target = new URL(authorizationUrl);
 	if (target.protocol !== 'https:') throw new Error('SSO_UNAVAILABLE');
+	requestSignal.throwIfAborted();
 	window.location.assign(target.href);
 }
 

@@ -6,6 +6,13 @@
 import { lang } from '@@/js/config.js';
 
 const zh = {
+	newApiChecking: '正在连接账号服务…', newApiConfigFailed: '暂时无法连接账号服务，请重试。',
+	newApiUnifiedHint: '使用 New API 账号登录社区，继续创作、分享和交流。',
+	newApiAccountHint: '社区与制作空间使用同一 New API 账号，首次登录自动建立社区资料。',
+	newApiSignupTitle: '注册 New API 账号', newApiSignupHint: '在 New API 完成注册，再使用这个账号登录社区和制作空间。',
+	newApiSignup: '前往 New API 注册（新窗口）', newApiSignupReturn: '注册完成后，请回到此窗口继续登录。', newApiContinue: '已完成注册，继续登录',
+	newApiLegacyTitle: '已有独立社区账号？', newApiLegacyHint: '已有作品的老账号可先登录，再到制作空间绑定 New API 账号。',
+	newApiLegacySignin: '登录原社区账号', newApiBack: '返回 New API 登录',
 	newApiSignin: '使用 New API 账号登录', newApiHint: '已有 New API 账号？直接登录，首次自动建立社区账号。',
 	newApiWorking: '正在完成账号登录…', newApiFailed: '未能完成 New API 登录，请重新发起。',
 	newApiFactor: '请完成社区账号的两步验证', newApiRetry: '重新使用 New API 登录',
@@ -40,6 +47,13 @@ const zh = {
 };
 
 const en: Record<keyof typeof zh, string> = {
+	newApiChecking: 'Connecting to account services…', newApiConfigFailed: 'Account services are unavailable. Please retry.',
+	newApiUnifiedHint: 'Sign in to the community with New API to create, share and connect.',
+	newApiAccountHint: 'The community and studio use the same New API account. Your first sign-in creates your community profile.',
+	newApiSignupTitle: 'Create a New API account', newApiSignupHint: 'Register with New API, then use that account for the community and studio.',
+	newApiSignup: 'Register with New API (new window)', newApiSignupReturn: 'Return to this window after registration to continue signing in.', newApiContinue: 'Registration complete, sign in',
+	newApiLegacyTitle: 'Already have a separate community account?', newApiLegacyHint: 'Sign in to your existing account, then link New API from the studio to keep your work.',
+	newApiLegacySignin: 'Sign in to existing community account', newApiBack: 'Back to New API sign-in',
 	newApiSignin: 'Sign in with New API', newApiHint: 'Use your existing New API account. Your first sign-in creates a community profile.',
 	newApiWorking: 'Completing sign-in…', newApiFailed: 'New API sign-in did not complete. Please start again.',
 	newApiFactor: 'Complete community two-factor verification', newApiRetry: 'Retry New API sign-in',
