@@ -56,6 +56,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<p>{{ shareText.referenceHint }}</p>
 							<div :class="$style.referenceGrid"><label v-for="file in referenceFiles" :key="file.id"><img :src="file.thumbnailUrl || file.url" :alt="file.name"/><span><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="submitting"/>{{ file.name }}</span></label></div>
 						</section>
+						<section v-if="generationRecord?.sourceWorkId && !editing" :class="$style.referenceSection" data-testid="source-comment-option">
+							<label :class="$style.check"><input v-model="shareToSource" type="checkbox" :disabled="submitting || !!openingId"/>{{ shareText.shareToSource }}</label>
+							<p>{{ publicationMode === 'after' ? shareText.sourcePublicHint : shareText.sourceReviewHint }} <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a></p>
+						</section>
 						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields">
 							<label>{{ t.model }}<input v-model="draft.model" :readonly="!!generationRecord" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label>
 						</div>
@@ -242,6 +246,10 @@ const files = ref<CommunityFile[]>([]);
 const referenceFiles = ref<CommunityFile[]>([]);
 const selectedReferences = ref<string[]>([]);
 const generationRecord = ref<CommunityWork['generation']>(null);
+const shareToSource = computed({
+	get: () => generationRecord.value?.shareToSource === true,
+	set: (value: boolean) => { if (generationRecord.value) generationRecord.value = { ...generationRecord.value, shareToSource: value }; },
+});
 const rights = ref(false);
 const editing = ref<CommunityWork | null>(null);
 const openingId = ref('');
@@ -257,7 +265,7 @@ if (props.composerOnly && props.initialDraft) {
 	const initial = props.initialDraft;
 	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.text, model: initial.model });
 	files.value = initial.files.map(file => ({ ...file }));
-	referenceFiles.value = initial.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = initial.generation;
+	referenceFiles.value = initial.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = initial.generation ? { ...initial.generation, shareToSource: false } : null;
 	detailsOpen.value = !!initial.model;
 }
 const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
@@ -565,6 +573,7 @@ async function submit() {
 		markCommunityUpdated();
 		if (disposed) return;
 		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? t.submittedPublic : t.submittedExisting;
+		if (result.sourceCommentStatus && result.sourceCommentStatus !== 'none') notice.value += ' ' + shareText.sourceStatus[result.sourceCommentStatus];
 		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
 		files.value = []; referenceFiles.value = []; selectedReferences.value = []; generationRecord.value = null; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';

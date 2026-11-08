@@ -44,7 +44,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<p v-else-if="state === 'error' || state === 'unavailable'" :class="$style.feedback" role="alert">{{ state === 'unavailable' ? t.unavailable : t.failed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="commentsFailed" :class="$style.feedback" role="alert">{{ t.commentsFailed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<div v-if="comments.length" :ref="el => { viewport = (el as HTMLElement | null) ?? undefined; }" :class="{ [$style.previewViewport]: previewComments }" data-testid="comment-viewport">
-		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
+		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><MkA v-if="reply.files?.length" :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></li></ul>
 		</div>
 		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
 		<div v-if="previewComments" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
@@ -57,8 +57,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
+import { url } from '@@/js/config.js';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import ReportButton from './report-button.vue';
+import MkMediaList from '@/components/MkMediaList.vue';
+import MkNoteSimple from '@/components/MkNoteSimple.vue';
 import type { CommunityWork } from './types.js';
 import { workText as t, workPath } from './interactions-copy.js';
 import { useCommentPreview } from './use-comment-preview.js';
@@ -68,6 +71,16 @@ import * as os from '@/os.js';
 import { prefer } from '@/preferences.js';
 
 const props = defineProps<{ work: CommunityWork; discussion?: boolean; previewComments?: boolean; viewsCount?: number }>();
+
+function commentWorkPath(text: string | null) {
+	const lastLine = text?.split('\n').at(-1);
+	if (!lastLine) return null;
+	try {
+		const target = new URL(lastLine);
+		return target.origin === new URL(url).origin && /^\/community\/work\/[a-zA-Z0-9]+$/.test(target.pathname) ? target.pathname : null;
+	} catch { return null; }
+}
+
 const showComments = ref(!!props.discussion);
 const previewVisible = ref(false);
 const input = ref<HTMLTextAreaElement>();
@@ -214,6 +227,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 </script>
 
 <style lang="scss" module>
+.remixPreview { margin-block: 10px; max-width: 420px; min-width: 0; overflow: hidden; border: 1px solid var(--MI_THEME-divider); border-radius: 10px; padding: 8px; }
 .root { min-width: 0; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
 .root button, .root textarea { font: inherit; }
 .root :focus-visible { outline: 2px solid var(--MI_THEME-fg); outline-offset: 3px; }

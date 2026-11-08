@@ -14,14 +14,16 @@ export const communityErrors = {
 } as const;
 
 const string = { type: 'string', optional: false, nullable: false } as const;
+export const sourceCommentStatusSchema = { type: 'string', optional: false, nullable: false, enum: ['none', 'pending', 'shared', 'unavailable'] } as const;
 const nullableString = { ...string, nullable: true } as const;
 export const communityWorkSchema = {
 	type: 'object', optional: false, nullable: false,
 	properties: {
+		sourceCommentStatus: sourceCommentStatusSchema,
 		id: string, revisionPending: { type: 'boolean', optional: false, nullable: false }, version: { type: 'integer', optional: false, nullable: false },
 		category: { ...string, enum: ['video', 'image', 'resource'] },
 		title: string, text: string, model: string, sourceUrl: string, license: string,
-		generation: { type: 'object', optional: false, nullable: true, properties: { prompt: string, model: string, referenceFileIds: { type: 'array', optional: false, nullable: false, items: string }, sourceWorkId: { ...string, optional: true } } },
+		generation: { type: 'object', optional: false, nullable: true, properties: { prompt: string, model: string, referenceFileIds: { type: 'array', optional: false, nullable: false, items: string }, sourceWorkId: { ...string, optional: true }, shareToSource: { type: 'boolean', optional: true, nullable: false } } },
 		referenceFiles: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },
 		files: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },
 		author: { type: 'object', optional: false, nullable: false, properties: { id: string, name: string, username: string } },

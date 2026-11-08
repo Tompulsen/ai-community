@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import type { CommunityFile, CommunityGateway, CommunityPage, CommunityWork, SubmissionStatus } from './types.js';
+import type { CommunityFile, CommunityGateway, CommunityPage, CommunityWork, SourceCommentStatus, SubmissionStatus } from './types.js';
 import { communityText as t } from './copy.js';
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -85,7 +85,8 @@ export function createCommunityGateway(options: {
 		async submit(input) {
 			const result = await request('community/submissions/create', input);
 			if (!isObject(result) || !isId(result.id) || !['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'].includes(String(result.status)) || typeof result.submittedAt !== 'string' || !Number.isFinite(Date.parse(result.submittedAt))) throw new Error(t.invalidResponse);
-			return { id: result.id, status: result.status as SubmissionStatus, submittedAt: result.submittedAt };
+			if (result.sourceCommentStatus != null && !['none', 'pending', 'shared', 'unavailable'].includes(String(result.sourceCommentStatus))) throw new Error(t.invalidResponse);
+			return { id: result.id, status: result.status as SubmissionStatus, submittedAt: result.submittedAt, sourceCommentStatus: result.sourceCommentStatus as SourceCommentStatus | undefined };
 		},
 		async review(input) {
 			const result = await request('admin/community/review', input);

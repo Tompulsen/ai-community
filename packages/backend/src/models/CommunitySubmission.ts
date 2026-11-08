@@ -10,7 +10,7 @@ import { MiNote } from './Note.js';
 
 export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'> & { generation?: CommunityGeneration | null };
 
-export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string };
+export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string; shareToSource?: boolean };
 
 @Entity('community_submission')
 @Index('IDX_community_submission_author_key', ['authorId', 'idempotencyKey'], { unique: true })
@@ -56,6 +56,10 @@ export class MiCommunitySubmission {
 
 	@Column('jsonb', { nullable: true })
 	public generation: CommunityGeneration | null;
+
+	/** Retained after comment deletion so retries never repost it. */
+	@Column({ ...id(), nullable: true })
+	public sourceCommentId: string | null;
 
 	@Column('varchar', { length: 16, default: 'pending' })
 	public status: 'pending' | 'published' | 'approved' | 'rejected' | 'removed';

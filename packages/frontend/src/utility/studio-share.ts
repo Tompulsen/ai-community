@@ -113,6 +113,7 @@ export function useStudioShare(identity: () => Identity | undefined, send: (valu
 	function published(work: Awaited<ReturnType<CommunityGateway['submit']>>) {
 		if (!current()) { reset(); return; }
 		notice.value = work.status === 'pending' ? t.pending : ['published', 'approved'].includes(work.status) ? t.published : t.statusUpdated;
+		if (work.sourceCommentStatus && work.sourceCommentStatus !== 'none') notice.value += ' ' + t.sourceStatus[work.sourceCommentStatus];
 		finish(work.status);
 	}
 

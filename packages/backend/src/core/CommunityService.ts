@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource, In, type EntityManager } from 'typeorm';
+import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { MiCommunitySubmission, type CommunityRevision } from '@/models/CommunitySubmission.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
@@ -52,6 +53,7 @@ export class CommunityService {
 		@Inject(DI.redis) private redis: Redis.Redis,
 		private reactionsBufferingService: ReactionsBufferingService,
 		private communityModerationService: CommunityModerationService,
+		@Inject(DI.config) private config: Config,
 	) {}
 
 	private async files(manager: EntityManager, authorId: string, fileIds: string[], category: Category) {
@@ -76,7 +78,7 @@ export class CommunityService {
 	}
 
 	private normalize(payload: CommunityRevision): CommunityRevision {
-		const normalized = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds, ...(payload.generation ? { generation: { prompt: payload.generation.prompt, model: payload.generation.model.trim(), referenceFileIds: [...payload.generation.referenceFileIds], ...(payload.generation.sourceWorkId ? { sourceWorkId: payload.generation.sourceWorkId } : {}) } } : payload.generation === null ? { generation: null } : {}) };
+		const normalized = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds, ...(payload.generation ? { generation: { prompt: payload.generation.prompt, model: payload.generation.model.trim(), referenceFileIds: [...payload.generation.referenceFileIds], ...(payload.generation.sourceWorkId ? { sourceWorkId: payload.generation.sourceWorkId, ...(payload.generation.shareToSource === true ? { shareToSource: true } : {}) } : {}) } } : payload.generation === null ? { generation: null } : {}) };
 		if (!normalized.title || (!normalized.text && !normalized.fileIds.length)) throw new ApiError(communityErrors.invalidContent);
 		if (normalized.sourceUrl) {
 			try { const url = new URL(normalized.sourceUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); } catch { throw new ApiError(communityErrors.invalidContent); }
@@ -204,7 +206,7 @@ export class CommunityService {
 
 	private async receipt(row: MiCommunitySubmission) {
 		const visibleStatus = ['approved', 'published'].includes(row.status) && (!row.approvedNoteId || !await this.db.getRepository(MiNote).existsBy({ id: row.approvedNoteId })) ? 'withdrawn' as const : row.status;
-		return { id: row.id, status: visibleStatus, submittedAt: row.submittedAt.toISOString() };
+		return { id: row.id, status: visibleStatus, sourceCommentStatus: this.sourceCommentStatus(row), submittedAt: row.submittedAt.toISOString() };
 	}
 
 	private async publish(submission: MiCommunitySubmission, manager: EntityManager, afterCommit: (() => void)[]) {
@@ -216,10 +218,34 @@ export class CommunityService {
 			const note = await this.noteCreateService.create(author, { text, files, visibility: 'public', localOnly: true }, false, { manager, afterCommit });
 			if (note.visibility !== 'public') throw new ApiError(communityErrors.cannotPublish);
 			submission.approvedNoteId = note.id;
+			await this.syncSourceComment(submission, note, author, manager, afterCommit);
 		} catch (error) {
 			if (error instanceof IdentifiableError) throw new ApiError(communityErrors.cannotPublish);
 			throw error;
 		}
+	}
+
+	private sourceCommentStatus(row: MiCommunitySubmission) {
+		if (row.sourceCommentId) return 'shared' as const;
+		if (!row.generation?.shareToSource) return 'none' as const;
+		return row.status === 'pending' ? 'pending' as const : 'unavailable' as const;
+	}
+
+	/** Called only on first publication, under the submission's existing write lock. */
+	private async syncSourceComment(submission: MiCommunitySubmission, note: MiNote, author: MiUser, manager: EntityManager, afterCommit: (() => void)[]) {
+		const sourceId = submission.generation?.sourceWorkId;
+		if (!submission.generation?.shareToSource || !sourceId || sourceId === submission.id || submission.sourceCommentId) return;
+		const source = await this.publicQuery(author.id, manager).andWhere('submission.id = :sourceId', { sourceId }).getOne();
+		if (!source || source.author.requireSigninToViewContents || !await this.visible(source, undefined, manager) || !await this.visible(source, author.id, manager)) return;
+		// Lock the target note against deletion; recheck visibility after waiting for an edit.
+		const reply = await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: source.approvedNoteId! }).setLock('pessimistic_read').getOne();
+		if (!reply || reply.visibility !== 'public') return;
+		const comment = await this.noteCreateService.create(author, {
+			text: `我用同款提示词创作了新作品 / My remix\n${this.config.url}/community/work/${submission.id}`,
+			reply, renote: note, visibility: 'public', localOnly: true,
+		}, false, { manager, afterCommit });
+		if (comment.visibility !== 'public') throw new ApiError(communityErrors.cannotPublish);
+		submission.sourceCommentId = comment.id;
 	}
 
 	public async list(scope: 'public' | 'mine' | 'review', options: ListInput, viewerId?: string) {
@@ -290,8 +316,8 @@ export class CommunityService {
 		return { viewsCount: row.viewsCount };
 	}
 
-	private publicQuery(viewerId?: string) {
-		const query = this.db.getRepository(MiCommunitySubmission).createQueryBuilder('submission')
+	private publicQuery(viewerId?: string, manager = this.db.manager) {
+		const query = manager.getRepository(MiCommunitySubmission).createQueryBuilder('submission')
 			.innerJoinAndSelect('submission.author', 'author').leftJoinAndSelect('submission.approvedNote', 'note')
 			.where('submission.status IN (:...publicStatuses)', { publicStatuses: ['approved', 'published'] })
 			.andWhere('note.id IS NOT NULL AND note.visibility = :visibility', { visibility: 'public' })
@@ -317,15 +343,15 @@ export class CommunityService {
 		return { items: [], nextCursor: null };
 	}
 
-	private async visible(row: MiCommunitySubmission, viewerId?: string) {
+	private async visible(row: MiCommunitySubmission, viewerId?: string, manager = this.db.manager) {
 		if (viewerId === row.authorId) return true;
 		const createdAt = this.idService.parse(row.approvedNoteId!).date;
 		if (shouldHideNoteByTime(row.author.makeNotesHiddenBefore, createdAt)) return false;
-		if (viewerId && await this.db.getRepository(MiBlocking).exists({ where: [
+		if (viewerId && await manager.getRepository(MiBlocking).exists({ where: [
 			{ blockerId: row.authorId, blockeeId: viewerId }, { blockerId: viewerId, blockeeId: row.authorId },
 		] })) return false;
 		if (shouldHideNoteByTime(row.author.makeNotesFollowersOnlyBefore, createdAt)) {
-			return !!viewerId && await this.db.getRepository(MiFollowing).existsBy({ followerId: viewerId, followeeId: row.authorId });
+			return !!viewerId && await manager.getRepository(MiFollowing).existsBy({ followerId: viewerId, followeeId: row.authorId });
 		}
 		return true;
 	}
@@ -405,6 +431,7 @@ export class CommunityService {
 		return {
 			id: row.id, version: row.version, category: content.category, title: content.title, text: content.text, model: content.model, sourceUrl: content.sourceUrl, license: content.license, revisionPending: includeRevision && !!row.pendingRevision,
 			generation: content.generation ?? null,
+			sourceCommentStatus: this.sourceCommentStatus(row),
 			referenceFiles: await Promise.all(referenceIds.flatMap(id => { const file = referenceFiles.find(f => f.id === id && f.type.startsWith('image/')); return file ? [this.driveFileEntityService.pack(file)] : []; })),
 			files: await Promise.all(content.fileIds.flatMap(id => { const file = files.find(f => f.id === id); return file ? [this.driveFileEntityService.pack(file)] : []; })),
 			author: { id: author.id, name: author.name ?? '', username: author.username }, status: ['approved', 'published'].includes(row.status) && !note ? 'withdrawn' as const : row.status, submittedAt: row.submittedAt.toISOString(),

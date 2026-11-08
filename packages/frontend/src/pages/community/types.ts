@@ -7,8 +7,10 @@ export type CommunityCategory = 'video' | 'image' | 'resource';
 export type CommunitySection = CommunityCategory | 'all' | 'mine' | 'review' | 'ai' | 'profile';
 export type SubmissionStatus = 'pending' | 'published' | 'approved' | 'rejected' | 'removed' | 'withdrawn';
 export type CommunityFile = { id: string; name: string; type: string; url: string; thumbnailUrl?: string | null; isSensitive?: boolean; };
-export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string };
+export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string; shareToSource?: boolean };
+export type SourceCommentStatus = 'none' | 'pending' | 'shared' | 'unavailable';
 export type CommunityWork = {
+	sourceCommentStatus?: SourceCommentStatus;
 	generation?: CommunityGeneration | null;
 	referenceFiles?: CommunityFile[];
 	id: string;
@@ -49,7 +51,7 @@ export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null;
 
 export interface CommunityGateway {
 	list: (section: CommunitySection, options: { query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; }, signal: AbortSignal) => Promise<CommunityPage>;
-	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: SubmissionStatus; submittedAt: string; }>;
+	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: SubmissionStatus; submittedAt: string; sourceCommentStatus?: SourceCommentStatus; }>;
 	show: (submissionId: string, signal?: AbortSignal) => Promise<CommunityWork>;
 	update: (input: CommunityUpdateInput) => Promise<CommunityWork>;
 	delete: (input: { submissionId: string; version: number; }) => Promise<void>;

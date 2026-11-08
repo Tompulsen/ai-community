@@ -37530,6 +37530,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: {
+                            /** @enum {string} */
+                            sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
                             version: number;
@@ -37545,6 +37547,7 @@ export interface operations {
                                 model: string;
                                 referenceFileIds: string[];
                                 sourceWorkId?: string;
+                                shareToSource?: boolean;
                             } | null;
                             referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
@@ -37635,6 +37638,7 @@ export interface operations {
                         referenceFileIds: string[];
                         /** Format: misskey:id */
                         sourceWorkId?: string;
+                        shareToSource?: boolean;
                     } | null;
                     /** @enum {string} */
                     category: "video" | "image" | "resource";
@@ -37660,6 +37664,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         /** @enum {string} */
                         status: "pending" | "published" | "approved" | "rejected" | "removed" | "withdrawn";
@@ -37751,6 +37757,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: {
+                            /** @enum {string} */
+                            sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
                             version: number;
@@ -37766,6 +37774,7 @@ export interface operations {
                                 model: string;
                                 referenceFileIds: string[];
                                 sourceWorkId?: string;
+                                shareToSource?: boolean;
                             } | null;
                             referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
@@ -37863,6 +37872,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: {
+                            /** @enum {string} */
+                            sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
                             version: number;
@@ -37878,6 +37889,7 @@ export interface operations {
                                 model: string;
                                 referenceFileIds: string[];
                                 sourceWorkId?: string;
+                                shareToSource?: boolean;
                             } | null;
                             referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
@@ -37971,6 +37983,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         revisionPending: boolean;
                         version: number;
@@ -37986,6 +38000,7 @@ export interface operations {
                             model: string;
                             referenceFileIds: string[];
                             sourceWorkId?: string;
+                            shareToSource?: boolean;
                         } | null;
                         referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
@@ -38081,6 +38096,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: {
+                            /** @enum {string} */
+                            sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                             id: string;
                             revisionPending: boolean;
                             version: number;
@@ -38096,6 +38113,7 @@ export interface operations {
                                 model: string;
                                 referenceFileIds: string[];
                                 sourceWorkId?: string;
+                                shareToSource?: boolean;
                             } | null;
                             referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
@@ -38192,6 +38210,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         revisionPending: boolean;
                         version: number;
@@ -38207,6 +38227,7 @@ export interface operations {
                             model: string;
                             referenceFileIds: string[];
                             sourceWorkId?: string;
+                            shareToSource?: boolean;
                         } | null;
                         referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
@@ -38379,6 +38400,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         revisionPending: boolean;
                         version: number;
@@ -38394,6 +38417,7 @@ export interface operations {
                             model: string;
                             referenceFileIds: string[];
                             sourceWorkId?: string;
+                            shareToSource?: boolean;
                         } | null;
                         referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
@@ -38497,6 +38521,7 @@ export interface operations {
                         referenceFileIds: string[];
                         /** Format: misskey:id */
                         sourceWorkId?: string;
+                        shareToSource?: boolean;
                     } | null;
                 };
             };
@@ -38509,6 +38534,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        sourceCommentStatus: "none" | "pending" | "shared" | "unavailable";
                         id: string;
                         revisionPending: boolean;
                         version: number;
@@ -38524,6 +38551,7 @@ export interface operations {
                             model: string;
                             referenceFileIds: string[];
                             sourceWorkId?: string;
+                            shareToSource?: boolean;
                         } | null;
                         referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
