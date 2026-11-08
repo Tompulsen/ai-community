@@ -13,12 +13,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<details :class="$style.prompt"><summary>{{ t.prompt }}</summary><p>{{ work.generation?.prompt ?? work.text }}</p></details>
 			<template v-if="references.length">
 				<h3>{{ t.question }}</h3><p :class="$style.hint">{{ t.hint }}</p>
+				<p v-if="usingAttachments" :class="$style.hint" data-testid="remix-attachment-hint">{{ t.attachmentsHint }}</p>
 				<div :class="$style.tools"><span aria-live="polite">{{ t.selected }} {{ selected.length }} / {{ references.length }}</span><MkButton small @click="selected = references.map(file => file.id)">{{ t.all }}</MkButton><MkButton small :disabled="!selected.length" @click="selected = []">{{ t.none }}</MkButton></div>
 				<div :class="$style.grid">
 					<div v-for="(file, index) in references" :key="file.id" :class="[$style.reference, { [$style.selected]: selected.includes(file.id) }]">
 						<button v-if="file.isSensitive && !revealed.includes(file.id)" type="button" class="_button" :class="$style.reveal" @click="revealed.push(file.id)"><i class="ti ti-eye-off" aria-hidden="true"></i>{{ t.reveal }}</button>
-						<label v-else :for="`remix-reference-${file.id}`" :class="$style.image"><img v-if="!failed.includes(file.id)" :src="safeWebUrl(file.thumbnailUrl) || safeWebUrl(file.url)" :alt="t.reference + ' ' + (index + 1)" @error="failed.push(file.id)"/><span v-else>{{ t.previewFailed }}</span></label>
-						<label :class="$style.choice"><input :id="`remix-reference-${file.id}`" v-model="selected" type="checkbox" :value="file.id"/>{{ t.reference }} {{ index + 1 }}</label>
+						<label v-else :for="`remix-reference-${file.id}`" :class="$style.image"><img v-if="!failed.includes(file.id)" :src="safeWebUrl(file.thumbnailUrl) || safeWebUrl(file.url)" :alt="referenceLabel + ' ' + (index + 1)" @error="failed.push(file.id)"/><span v-else>{{ t.previewFailed }}</span></label>
+						<label :class="$style.choice"><input :id="`remix-reference-${file.id}`" v-model="selected" type="checkbox" :value="file.id"/>{{ referenceLabel }} {{ index + 1 }}</label>
 					</div>
 				</div>
 			</template>
@@ -41,11 +42,18 @@ import { safeWebUrl } from '@/pages/community/copy.js';
 const props = defineProps<{ submissionId: string }>();
 const emit = defineEmits<{ (event: 'apply', value: StudioRemix): void; (event: 'closed'): void }>();
 const t = homeLanguage === 'en-US'
-	? { title: 'Create a remix', loading: 'Loading the original prompt and references…', model: 'Original model', unknown: 'Not recorded', question: 'Include reference images?', prompt: 'View full prompt', selected: 'Selected', all: 'Select all', none: 'Clear', reference: 'Reference', reveal: 'Show sensitive image', hint: 'Select any images to include. Leave them unselected to import only the prompt. Nothing is generated automatically.', previewFailed: 'Preview unavailable', retry: 'Retry', cancel: 'Cancel', use: 'Import with references', promptOnly: 'Import prompt only', failed: 'This work could not be loaded. Please retry.' }
-	: { title: '制作同款', loading: '正在读取提示词和参考图…', model: '原作品模型', unknown: '未记录', question: '需要带入参考图吗？', prompt: '查看完整提示词', selected: '已选择', all: '全选', none: '清空', reference: '参考图', reveal: '显示敏感图片', hint: '点选需要的图片；不选择则只导入提示词。导入后由你确认生成。', previewFailed: '暂时无法预览', retry: '重试', cancel: '取消', use: '导入提示词和参考图', promptOnly: '仅导入提示词', failed: '无法读取这份作品，请重试。' };
+	? { title: 'Create a remix', loading: 'Loading the original prompt and references…', model: 'Original model', unknown: 'Not recorded', question: 'Include reference images?', prompt: 'View full prompt', selected: 'Selected', all: 'Select all', none: 'Clear', reference: 'Reference', attachment: 'Work image', attachmentsHint: 'No original reference images were recorded. You can select images attached to this work as references for your new creation.', reveal: 'Show sensitive image', hint: 'Select any images to include. Leave them unselected to import only the prompt. Nothing is generated automatically.', previewFailed: 'Preview unavailable', retry: 'Retry', cancel: 'Cancel', use: 'Import with references', promptOnly: 'Import prompt only', failed: 'This work could not be loaded. Please retry.' }
+	: { title: '制作同款', loading: '正在读取提示词和参考图…', model: '原作品模型', unknown: '未记录', question: '需要带入参考图吗？', prompt: '查看完整提示词', selected: '已选择', all: '全选', none: '清空', reference: '参考图', attachment: '作品图片', attachmentsHint: '此作品未单独记录原始参考图。你可以从作品附件中点选图片，作为本次制作的参考图。', reveal: '显示敏感图片', hint: '点选需要的图片；不选择则只导入提示词。导入后由你确认生成。', previewFailed: '暂时无法预览', retry: '重试', cancel: '取消', use: '导入提示词和参考图', promptOnly: '仅导入提示词', failed: '无法读取这份作品，请重试。' };
 const modal = ref<InstanceType<typeof MkModalWindow>>();
 const work = ref<CommunityWork>();
-const references = computed(() => (work.value?.referenceFiles ?? []).filter(file => file.type.startsWith('image/') && safeWebUrl(file.url)));
+const savedReferences = computed(() => (work.value?.referenceFiles ?? []).filter(file => file.type.startsWith('image/') && safeWebUrl(file.url)));
+// Older submissions store all images as attachments without reference provenance.
+// Offer those images for explicit selection, without relabelling the stored work.
+const usingAttachments = computed(() => savedReferences.value.length === 0);
+const references = computed(() => usingAttachments.value
+	? (work.value?.files ?? []).filter(file => file.type.startsWith('image/') && safeWebUrl(file.url))
+	: savedReferences.value);
+const referenceLabel = computed(() => usingAttachments.value ? t.attachment : t.reference);
 const windowHeight = computed(() => loading.value || !work.value ? 240 : Math.min(680, 370 + Math.ceil(references.value.length / 3) * 170));
 const selected = ref<string[]>([]), revealed = ref<string[]>([]), failed = ref<string[]>([]), loading = ref(true), error = ref(''), applied = ref(false);
 let controller: AbortController | undefined;
