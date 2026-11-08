@@ -4,11 +4,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div v-if="hasDisconnected && prefer.s.serverDisconnectedBehavior === 'quiet'" :class="$style.root" class="_panel _shadow" @click="resetDisconnected">
-	<div><i class="ti ti-alert-triangle"></i> {{ i18n.ts.disconnectedFromServer }}</div>
+<div v-if="hasDisconnected && prefer.s.serverDisconnectedBehavior === 'quiet'" :class="$style.root" class="_panel _shadow">
+	<div role="status"><i class="ti ti-alert-triangle" aria-hidden="true"></i> {{ i18n.ts.disconnectedFromServer }}</div>
 	<div :class="$style.command" class="_buttons">
 		<MkButton small primary @click="reload">{{ i18n.ts.reload }}</MkButton>
-		<MkButton small>{{ i18n.ts.doNothing }}</MkButton>
+		<MkButton small @click="resetDisconnected">{{ i18n.ts.doNothing }}</MkButton>
 	</div>
 </div>
 </template>
@@ -25,12 +25,20 @@ import { store } from '@/store.js';
 const zIndex = os.claimZIndex('high');
 
 const hasDisconnected = ref(false);
+let disconnectTimer: number | undefined;
 
 function onDisconnected() {
-	hasDisconnected.value = true;
+	if (disconnectTimer != null || hasDisconnected.value) return;
+	// Give automatic reconnection time to recover from a brief network interruption.
+	disconnectTimer = window.setTimeout(() => {
+		disconnectTimer = undefined;
+		hasDisconnected.value = true;
+	}, 5000);
 }
 
 function resetDisconnected() {
+	window.clearTimeout(disconnectTimer);
+	disconnectTimer = undefined;
 	hasDisconnected.value = false;
 }
 
@@ -39,10 +47,15 @@ function reload() {
 }
 
 if (store.s.realtimeMode) {
-	useStream().on('_disconnected_', onDisconnected);
+	const stream = useStream();
+	stream.on('_disconnected_', onDisconnected);
+	stream.on('_connected_', resetDisconnected);
+	if (stream.state === 'reconnecting') onDisconnected();
 
 	onUnmounted(() => {
-		useStream().off('_disconnected_', onDisconnected);
+		stream.off('_disconnected_', onDisconnected);
+		stream.off('_connected_', resetDisconnected);
+		resetDisconnected();
 	});
 }
 </script>
