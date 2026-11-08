@@ -42,6 +42,7 @@ export const ROUTE_DEF = [{
 }, {
 	path: '/create/:kind',
 	component: page(() => import('@/pages/creation.vue')),
+	query: { remix: 'remixId' },
 }, {
 	path: '/welcome',
 	component: page(() => import('@/pages/welcome.vue')),

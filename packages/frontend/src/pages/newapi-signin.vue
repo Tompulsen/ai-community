@@ -6,11 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <main :class="$style.root">
 	<section :class="$style.panel" :aria-busy="busy">
-		<h1>{{ requiresTotp ? authText.newApiFactor : authText.newApiSignin }}</h1>
+		<h1>{{ link ? studioText.confirmTitle : requiresTotp ? authText.newApiFactor : authText.newApiSignin }}</h1>
 		<p v-if="busy" role="status">{{ authText.newApiWorking }}</p>
 		<p v-if="error" role="alert">{{ error }}</p>
 		<XTotp v-if="requiresTotp && !busy" @totpSubmitted="finish"/>
-		<MkButton v-if="error" :disabled="busy" primary @click="retry">{{ authText.newApiRetry }}</MkButton>
+		<template v-if="link && !error"><p>{{ studioText.community }} · @{{ link.communityUsername }}</p><p>{{ studioText.newApi }} · {{ link.newApiUsername }} (#{{ link.subject }})</p><MkButton primary :disabled="busy" @click="finish(undefined, true)">{{ studioText.confirm }}</MkButton></template>
+		<MkButton v-if="error && !link && !$i" :disabled="busy" primary @click="retry">{{ authText.newApiRetry }}</MkButton>
 		<MkA to="/community">{{ homeText.community }}</MkA>
 	</section>
 </main>
@@ -25,26 +26,31 @@ import MkButton from '@/components/MkButton.vue';
 import XTotp from '@/components/MkSignin.totp.vue';
 import { homeText } from '@/pages/home/copy.js';
 import { definePage } from '@/page.js';
+import { $i } from '@/i.js';
+import { studioText } from '@/utility/studio-copy.js';
 
 const busy = ref(false);
 const error = ref('');
 const requiresTotp = ref(false);
+const link = ref<{ communityUsername: string; newApiUsername: string; subject: string; }>();
 const abort = new AbortController();
 
-async function finish(token?: string): Promise<void> {
+async function finish(token?: string, confirmLink = false): Promise<void> {
 	if (busy.value) return;
 	busy.value = true;
 	error.value = '';
 	try {
-		const response = await window.fetch('/api/newapi/finish', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }), signal: abort.signal });
+		const response = await window.fetch('/api/newapi/finish', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, i: $i?.token, confirmLink }), signal: abort.signal });
 		const data = await response.json();
 		if (!response.ok) throw new Error(data.error);
+		if (data.requiresLinkConfirmation) { link.value = data; return; }
+		if (data.linked === true) { window.location.assign(/^\/(community|create\/(text|image|video))$/.test(data.returnTo) ? data.returnTo : '/community'); return; }
 		if (data.requiresTotp) { requiresTotp.value = true; return; }
 		if (data.finished !== true || typeof data.i !== 'string') throw new Error('SSO_RESPONSE');
 		const returnTo = /^\/(community|create\/(text|image|video))$/.test(data.returnTo) ? data.returnTo : '/community';
 		await login(data.i, returnTo);
-	} catch {
-		if (!abort.signal.aborted) error.value = authText.newApiFailed;
+	} catch (err) {
+		if (!abort.signal.aborted) error.value = err instanceof Error && err.message === 'SSO_LINK_CONFLICT' ? studioText.conflict : authText.newApiFailed;
 	} finally { busy.value = false; }
 }
 

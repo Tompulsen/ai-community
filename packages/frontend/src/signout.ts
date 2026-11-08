@@ -11,11 +11,13 @@ import { unisonReload } from '@/utility/unison-reload.js';
 import { clear } from '@/utility/idb-proxy.js';
 import { $i } from '@/i.js';
 import { encodePushSubscriptionKey } from '@/utility/encode-push-subscription-key.js';
+import { revokeNewApiStudio } from '@/utility/newapi-signin.js';
 
 export async function signout() {
 	if (!$i) return;
 
 	waiting();
+	await revokeNewApiStudio($i.id, $i.token).catch(() => {});
 
 	if (store.s.enablePreferencesAutoCloudBackup) {
 		await cloudBackup();

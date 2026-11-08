@@ -17,10 +17,11 @@ export const meta = {
 export const paramDef = {
 	type: 'object',
 	properties: { idempotencyKey: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-zA-Z0-9_-]+$' },
-		category: { type: 'string', enum: ['video', 'image', 'resource'] },
-		title: { type: 'string', minLength: 1, maxLength: 100 }, text: { type: 'string', maxLength: 2500, default: '' },
-		model: { type: 'string', maxLength: 100, default: '' }, sourceUrl: { type: 'string', maxLength: 2000, default: '' }, license: { type: 'string', maxLength: 200, default: '' },
-		fileIds: { type: 'array', uniqueItems: true, maxItems: 16, default: [], items: { type: 'string', format: 'misskey:id' } } },
+															generation: { type: 'object', nullable: true, additionalProperties: false, properties: { prompt: { type: 'string', maxLength: 100000 }, model: { type: 'string', minLength: 1, maxLength: 100 }, referenceFileIds: { type: 'array', maxItems: 16, uniqueItems: true, items: { type: 'string', format: 'misskey:id' } }, sourceWorkId: { type: 'string', format: 'misskey:id' } }, required: ['prompt', 'model', 'referenceFileIds'] },
+															category: { type: 'string', enum: ['video', 'image', 'resource'] },
+															title: { type: 'string', minLength: 1, maxLength: 100 }, text: { type: 'string', maxLength: 2500, default: '' },
+															model: { type: 'string', maxLength: 100, default: '' }, sourceUrl: { type: 'string', maxLength: 2000, default: '' }, license: { type: 'string', maxLength: 200, default: '' },
+															fileIds: { type: 'array', uniqueItems: true, maxItems: 16, default: [], items: { type: 'string', format: 'misskey:id' } } },
 	required: ['idempotencyKey', 'category', 'title'],
 } as const;
 

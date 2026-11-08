@@ -22,10 +22,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</section>
 			<section :class="[$style.card, $style.promptCard]" :aria-label="homeText.workPrompt" data-testid="home-work-prompt">
 				<h2><i class="ti ti-sparkles" aria-hidden="true"></i> {{ homeText.workPrompt }}</h2>
-				<p :class="$style.prompt" tabindex="0">{{ work.text || homeText.noPrompt }}</p>
-				<button type="button" class="_button" :class="[$style.button, $style.remix]" :disabled="copying" data-testid="home-work-remix" @click="remix"><i class="ti ti-wand" aria-hidden="true"></i> {{ copying ? homeText.copying : homeText.remix }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
-				<small :class="$style.remixHint">{{ work.text ? homeText.remixHint : homeText.remixEmptyHint }}</small>
-				<div v-if="copyFailed" :class="$style.feedback" role="alert">{{ homeText.copyFailed }} <MkA :to="creationPath" :class="$style.textLink">{{ homeText.continueCreating }}</MkA></div>
+				<p :class="$style.prompt" tabindex="0">{{ work.generation?.prompt || work.text || homeText.noPrompt }}</p>
+				<button type="button" class="_button" :class="[$style.button, $style.remix]" data-testid="home-work-remix" @click="remix"><i class="ti ti-wand" aria-hidden="true"></i> {{ homeText.remix }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
+				<small :class="$style.remixHint">{{ shareText.remixHint }}</small>
 			</section>
 		</div>
 		<section :class="[$style.card, $style.discussion]" :aria-label="homeText.workDiscussion" data-testid="home-work-discussion">
@@ -61,6 +60,7 @@ import { homeText } from './copy.js';
 import { normalizeHomeImageUrl } from './image.js';
 import { useWorkInteractions } from './use-work-interactions.js';
 import type { CommunityWork } from '@/pages/community/types.js';
+import { studioShareText as shareText } from '@/utility/studio-share-copy.js';
 import { $i } from '@/i.js';
 import { prefer } from '@/preferences.js';
 import { getStaticImageUrl } from '@/utility/media-proxy.js';
@@ -86,27 +86,15 @@ const coverUrl = computed(() => {
 	const source = file ? normalizeHomeImageUrl(file.type.startsWith('image/') ? file.url : file.thumbnailUrl, siteUrl) : null;
 	return source && (reduceMotion.value || prefer.s.disableShowingAnimatedImages) ? getStaticImageUrl(source) : source;
 });
-const copying = ref(false);
-const copyFailed = ref(false);
 const openingLogin = ref(false);
 let active = true;
 let actionRequest = 0;
 let loginRequest = 0;
 let disposeLogin: (() => void) | undefined;
 
-async function remix() {
-	if (copying.value || state.value !== 'ready') return;
-	const ticket = ++actionRequest;
-	const path = creationPath.value;
-	copying.value = true; copyFailed.value = false;
-	try {
-		if (props.work.text) await navigator.clipboard.writeText(props.work.text);
-		if (!active || ticket !== actionRequest) return;
-		if (props.work.text) os.toast(homeText.promptCopied);
-		router.push(path);
-	} catch { if (active && ticket === actionRequest) copyFailed.value = true; } finally {
-		if (ticket === actionRequest) copying.value = false;
-	}
+function remix() {
+	if (state.value !== 'ready' || !active) return;
+	router.push(creationPath.value + '?remix=' + encodeURIComponent(props.work.id));
 }
 
 async function requestLogin() {
@@ -132,9 +120,9 @@ async function acknowledgeRetry() {
 	if (active && ticket === actionRequest && !result.canceled) commentState.value = 'idle';
 }
 
-function disposeActions() { active = false; actionRequest++; loginRequest++; disposeLogin?.(); disposeLogin = undefined; openingLogin.value = false; copying.value = false; }
+function disposeActions() { active = false; actionRequest++; loginRequest++; disposeLogin?.(); disposeLogin = undefined; openingLogin.value = false; }
 
-watch(() => props.work.id, () => { mediaFailed.value = false; copyFailed.value = false; actionRequest++; });
+watch(() => props.work.id, () => { mediaFailed.value = false; actionRequest++; });
 onActivated(() => { active = true; });
 onDeactivated(disposeActions);
 onBeforeUnmount(() => { disposeActions(); motionPreference.removeEventListener('change', updateMotion); });

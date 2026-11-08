@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<PageWithHeader :tabs="[]">
+<PageWithHeader :tabs="[]" :actions="studioActions">
 	<div :class="$style.workspace" data-testid="creation-workspace">
 		<div v-if="!definition" :class="$style.empty"><h1>{{ i18n.ts.notFound }}</h1></div>
 		<div v-else-if="!$i" :class="$style.empty" data-testid="creation-login-required">
@@ -21,16 +21,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkButton @click="refresh">{{ i18n.ts.retry }}</MkButton>
 		</div>
 		<template v-else-if="ready">
-			<div v-if="studioOrigin" :class="$style.empty" data-testid="creation-studio" :aria-busy="studioBusy">
-				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
-				<h1>{{ authText.studioTitle }}</h1>
-				<p v-if="studioBusy" role="status">{{ authText.studioWorking }}</p>
-				<p v-else-if="studioError" role="alert">{{ studioError === 'NEW_API_ACCOUNT_REQUIRED' ? authText.studioAccountRequired : authText.studioFailed }}</p>
-				<p v-else>{{ authText.studioHint }}</p>
-				<MkButton v-if="studioError === 'NEW_API_ACCOUNT_REQUIRED'" primary :disabled="studioBusy" @click="loginWithNewApi">{{ authText.newApiSignin }}</MkButton>
-				<MkButton v-else primary :disabled="studioBusy" @click="launchStudio">{{ authText.studioOpen }}</MkButton>
-				<MkA to="/community" class="_link">{{ homeText.community }}</MkA>
-			</div>
+			<MkStudioRemix v-if="remixOpen && remixId && active && studioOrigin" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
+			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="props.kind" :title="definition.title" :active="active" :remix="remix" @identity="studioIdentity = $event"/>
 			<div v-else-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
 				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
 				<h1>{{ creationText.notConfigured }}</h1>
@@ -87,6 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue';
 import { url as siteUrl } from '@@/js/config.js';
+import type { StudioRemix } from '@/utility/studio-remix.js';
 import MkButton from '@/components/MkButton.vue';
 import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
 import { fetchInstance, instance } from '@/instance.js';
@@ -94,11 +87,16 @@ import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
 import { definePage } from '@/page.js';
 import { homeText } from '@/pages/home/copy.js';
-import { authText } from '@/utility/auth-copy.js';
-import { newApiSigninConfig, newApiStudioUrl, startNewApiSignin } from '@/utility/newapi-signin.js';
+import MkStudioRemix from '@/components/MkStudioRemix.vue';
+import MkCommunityStudio from '@/components/MkCommunityStudio.vue';
+import { newApiSigninConfig } from '@/utility/newapi-signin.js';
+import { studioText } from '@/utility/studio-copy.js';
 import * as os from '@/os.js';
 
-const props = defineProps<{ kind: string }>();
+const props = defineProps<{ kind: string; remixId?: string }>();
+const remix = ref<StudioRemix>();
+const remixOpen = ref(!!props.remixId);
+watch(() => props.remixId, value => { remix.value = undefined; remixOpen.value = !!value; });
 const definition = computed(() => creationPages.find(item => item.key === props.kind));
 const targetUrl = computed(() => {
 	if (!$i) return null;
@@ -124,31 +122,9 @@ const loginOpening = ref(false);
 let loginRequest = 0;
 let disposeLogin: (() => void) | undefined;
 const studioOrigin = ref('');
-const studioBusy = ref(false);
-const studioError = ref('');
-let studioAbort: AbortController | undefined;
-
-async function launchStudio() {
-	if (!$i || !definition.value || !active.value || studioBusy.value) return;
-	const current = generation;
-	const abort = new AbortController();
-	studioBusy.value = true;
-	studioError.value = '';
-	studioAbort = abort;
-	try {
-		const target = await newApiStudioUrl($i.token, definition.value.key, abort.signal);
-		if (active.value && current === generation && new URL(target).origin === studioOrigin.value) window.location.assign(target);
-	} catch (error) {
-		if (active.value && current === generation) studioError.value = error instanceof Error ? error.message : 'STUDIO_UNAVAILABLE';
-	} finally {
-		if (studioAbort === abort) { studioBusy.value = false; studioAbort = undefined; }
-	}
-}
-
-async function loginWithNewApi() {
-	studioBusy.value = true;
-	try { await startNewApiSignin(`/create/${props.kind}`); } catch { studioError.value = 'STUDIO_UNAVAILABLE'; studioBusy.value = false; }
-}
+const studio = ref<InstanceType<typeof MkCommunityStudio>>();
+const studioIdentity = ref('');
+const studioActions = computed(() => studioOrigin.value && ready.value ? [{ icon: 'ti ti-refresh', text: studioText.refresh, handler: () => studio.value?.refresh() }] : []);
 
 function clearFrameTimer() { window.clearTimeout(frameTimer); frameTimer = undefined; }
 
@@ -214,19 +190,15 @@ async function refresh() {
 	if (!active.value || !definition.value) return;
 	if (!$i) { await requestLogin(); return; }
 	const current = ++generation;
-	studioAbort?.abort();
-	studioAbort = undefined;
-	studioBusy.value = false;
-	studioError.value = '';
 	loading.value = true;
 	ready.value = false;
+	studioIdentity.value = '';
 	failed.value = false;
 	try {
 		const [, sso] = await Promise.all([fetchInstance(true), newApiSigninConfig()]);
 		if (current === generation) {
 			studioOrigin.value = sso.studioOrigin ?? '';
 			ready.value = true;
-			if (studioOrigin.value) void launchStudio();
 		}
 	} catch {
 		if (current === generation) failed.value = true;
@@ -242,9 +214,6 @@ function activate() {
 }
 
 function deactivate() {
-	studioAbort?.abort();
-	studioAbort = undefined;
-	studioBusy.value = false;
 	clearFrameTimer();
 	active.value = false;
 	ready.value = false;
@@ -260,7 +229,7 @@ onActivated(activate);
 onDeactivated(deactivate);
 onBeforeUnmount(deactivate);
 watch(() => props.kind, refresh);
-definePage(() => ({ title: definition.value?.title ?? i18n.ts.notFound, icon: definition.value?.icon ?? 'ti ti-alert-triangle', needWideArea: true }));
+definePage(() => ({ title: definition.value?.title ?? i18n.ts.notFound, subtitle: studioIdentity.value, icon: definition.value?.icon ?? 'ti ti-alert-triangle', needWideArea: true }));
 </script>
 
 <style lang="scss" module>

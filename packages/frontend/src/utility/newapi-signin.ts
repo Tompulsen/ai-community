@@ -32,3 +32,41 @@ export async function startNewApiSignin(returnTo = window.location.pathname): Pr
 	if (target.protocol !== 'https:') throw new Error('SSO_UNAVAILABLE');
 	window.location.assign(target.href);
 }
+
+export function studioContext(userId: string, reset = false): string {
+	const key = `community-studio:${userId}`;
+	const existing = reset ? null : localStorage.getItem(key);
+	if (existing && /^[A-Za-z0-9_-]{43}$/.test(existing)) return existing;
+	const value = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+	localStorage.setItem(key, value);
+	return value;
+}
+
+export async function studioContextAction(token: string, context: string, action: 'renew' | 'revoke'): Promise<void> {
+	const response = await window.fetch('/api/newapi/studio/context', { method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: action === 'revoke', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ i: token, context, action }), signal: AbortSignal.timeout(5000) });
+	if (!response.ok) throw new Error('STUDIO_CONTEXT_EXPIRED');
+}
+
+export async function revokeNewApiStudio(userId: string, token: string): Promise<void> {
+	const context = localStorage.getItem(`community-studio:${userId}`);
+	window.dispatchEvent(new Event('community-studio-disconnect'));
+	localStorage.removeItem(`community-studio:${userId}`);
+	if (context) await studioContextAction(token, context, 'revoke');
+}
+
+export async function newApiStudioLaunch(token: string, kind: string, context: string, signal?: AbortSignal): Promise<{ code: string; origin: string; subject: string; userId: string; }> {
+	const response = await window.fetch('/api/newapi/studio/start', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ i: token, kind, context, returnTo: window.location.pathname + window.location.search }) });
+	const data = await response.json();
+	if (!response.ok) throw new Error(data.error ?? 'STUDIO_UNAVAILABLE');
+	if (!/^[A-Za-z0-9_-]{43}$/.test(data.code) || new URL(data.origin).protocol !== 'https:') throw new Error('STUDIO_UNAVAILABLE');
+	return data;
+}
+
+export async function startNewApiLink(token: string, password: string, factor: string, returnTo: string, signal?: AbortSignal): Promise<string> {
+	const response = await window.fetch('/api/newapi/start', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ link: true, i: token, password, token: factor, returnTo }) });
+	const data = await response.json();
+	if (!response.ok) throw new Error(data.error ?? 'SSO_LINK_AUTH');
+	const target = new URL(data.authorizationUrl);
+	if (target.protocol !== 'https:') throw new Error('SSO_UNAVAILABLE');
+	return target.href;
+}

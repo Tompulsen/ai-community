@@ -8,7 +8,9 @@ import { id } from './util/id.js';
 import { MiUser } from './User.js';
 import { MiNote } from './Note.js';
 
-export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'>;
+export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'> & { generation?: CommunityGeneration | null };
+
+export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string };
 
 @Entity('community_submission')
 @Index('IDX_community_submission_author_key', ['authorId', 'idempotencyKey'], { unique: true })
@@ -51,6 +53,9 @@ export class MiCommunitySubmission {
 
 	@Column({ ...id(), array: true, default: '{}' })
 	public fileIds: string[];
+
+	@Column('jsonb', { nullable: true })
+	public generation: CommunityGeneration | null;
 
 	@Column('varchar', { length: 16, default: 'pending' })
 	public status: 'pending' | 'published' | 'approved' | 'rejected' | 'removed';

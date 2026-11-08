@@ -16,6 +16,7 @@ import { prefer } from '@/preferences.js';
 import { store } from '@/store.js';
 import { $i } from '@/i.js';
 import { signout } from '@/signout.js';
+import { revokeNewApiStudio } from '@/utility/newapi-signin.js';
 
 type AccountWithToken = Misskey.entities.MeDetailed & { token: string };
 
@@ -173,6 +174,7 @@ export async function login(token: AccountWithToken['token'], redirect?: string)
 
 	try {
 		const me = await fetchAccount(token, undefined, true);
+		if ($i && $i.token !== token) await revokeNewApiStudio($i.id, $i.token).catch(() => {});
 		miLocalStorage.setItem('account', JSON.stringify({
 			...me,
 			token,

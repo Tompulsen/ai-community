@@ -20,7 +20,7 @@ export const paramDef = {
 		submissionId: { type: 'string', format: 'misskey:id' }, version: { type: 'integer', minimum: 0 },
 		category: createParamDef.properties.category, title: createParamDef.properties.title, text: createParamDef.properties.text,
 		model: createParamDef.properties.model, sourceUrl: createParamDef.properties.sourceUrl, license: createParamDef.properties.license,
-		fileIds: createParamDef.properties.fileIds,
+		fileIds: createParamDef.properties.fileIds, generation: createParamDef.properties.generation,
 	},
 	required: ['submissionId', 'version', 'category', 'title'],
 } as const;

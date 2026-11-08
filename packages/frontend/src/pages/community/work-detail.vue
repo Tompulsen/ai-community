@@ -12,13 +12,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<aside :class="$style.sidebar">
 			<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div></header>
 			<h1>{{ work.title }}</h1>
-			<section :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.text" :plain="true"/></p><button v-if="work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
-			<p v-if="work.model" :class="$style.meta">{{ work.model }}</p>
+			<section :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
+			<p v-if="work.model" :class="$style.meta">{{ work.generation?.model || work.model }}</p>
 			<p v-if="work.license" :class="$style.meta">{{ t.license }} · {{ work.license }}</p>
 			<a v-if="safeWebUrl(work.sourceUrl)" :class="$style.source" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.source }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
 			<time :class="$style.date" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleString() }}</time>
 			<WorkEngagement :key="work.id" :work="work" :viewsCount="views" discussion>
-				<template #afterActions><MkA :to="studioPath(work!.category)" :class="$style.remix" data-testid="work-remix"><i class="ti ti-wand" aria-hidden="true"></i><span><strong>{{ t.remix }}</strong><small>{{ work!.category === 'image' ? t.remixImage : work!.category === 'video' ? t.remixVideo : t.remixText }}</small></span><i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></template>
+				<template #afterActions><MkA :to="studioPath(work!.category) + '?remix=' + encodeURIComponent(work!.id)" :class="$style.remix" data-testid="work-remix"><i class="ti ti-wand" aria-hidden="true"></i><span><strong>{{ t.remix }}</strong><small>{{ work!.category === 'image' ? t.remixImage : work!.category === 'video' ? t.remixVideo : t.remixText }}</small></span><i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></template>
 			</WorkEngagement>
 		</aside>
 	</div>
@@ -27,13 +27,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
-import type { CommunityWork } from './types.js';
 import WorkMedia from './work-media.vue';
 import WorkEngagement from './work-engagement.vue';
 import { workText as t, studioPath } from './interactions-copy.js';
 import { safeWebUrl } from './copy.js';
 import { useWorkView } from './use-work-view.js';
 import { communityUpdates, getCommunityUpdateVersion } from './updates.js';
+import type { CommunityWork } from './types.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { definePage } from '@/page.js';
 import * as os from '@/os.js';
@@ -66,7 +66,7 @@ async function load() {
 	} finally { window.clearTimeout(timeout); }
 }
 
-async function copyPrompt() { try { await navigator.clipboard.writeText(work.value?.text ?? ''); os.toast(t.copied); copyFailed.value = false; } catch { copyFailed.value = true; } }
+async function copyPrompt() { try { await navigator.clipboard.writeText(work.value?.generation?.prompt ?? work.value?.text ?? ''); os.toast(t.copied); copyFailed.value = false; } catch { copyFailed.value = true; } }
 
 watch(() => props.submissionId, load, { immediate: true });
 watch(communityUpdates, () => { if (active) void load(); });

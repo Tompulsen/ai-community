@@ -7,7 +7,10 @@ export type CommunityCategory = 'video' | 'image' | 'resource';
 export type CommunitySection = CommunityCategory | 'all' | 'mine' | 'review' | 'ai' | 'profile';
 export type SubmissionStatus = 'pending' | 'published' | 'approved' | 'rejected' | 'removed' | 'withdrawn';
 export type CommunityFile = { id: string; name: string; type: string; url: string; thumbnailUrl?: string | null; isSensitive?: boolean; };
+export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string };
 export type CommunityWork = {
+	generation?: CommunityGeneration | null;
+	referenceFiles?: CommunityFile[];
 	id: string;
 	version: number;
 	revisionPending?: boolean;
@@ -30,6 +33,7 @@ export type CommunityWork = {
 };
 export type CommunitySubmissionInput = {
 	idempotencyKey: string;
+	generation?: CommunityGeneration | null;
 	category: CommunityCategory;
 	title: string;
 	text: string;
@@ -38,6 +42,7 @@ export type CommunitySubmissionInput = {
 	license: string;
 	fileIds: string[];
 };
+export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
 export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; };
 export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
 export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };
@@ -55,9 +60,9 @@ export interface CommunityGateway {
 
 /** Public profile fields only; hidden social counts remain absent. */
 export type CommunityProfile = {
- id: string; name: string; handle: string; description: string;
- avatarUrl?: string | null; bannerUrl?: string | null; createdAt: string;
- followingCount?: number; followersCount?: number;
- followingPath?: string; followersPath?: string; detailsPath?: string;
- isOwn: boolean;
+	id: string; name: string; handle: string; description: string;
+	avatarUrl?: string | null; bannerUrl?: string | null; createdAt: string;
+	followingCount?: number; followersCount?: number;
+	followingPath?: string; followersPath?: string; detailsPath?: string;
+	isOwn: boolean;
 };

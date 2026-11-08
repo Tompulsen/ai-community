@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="[$style.root, { [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]">
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
@@ -35,20 +35,30 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="editing ? t.editWork : t.publish" :class="$style.composer" tabindex="-1">
 					<header :class="$style.composerHeader">
 						<button type="button" :class="$style.quiet" :aria-label="editing ? t.closeEditor : t.close" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
-						<h2 v-if="editing" :class="$style.editorTitle">{{ t.editWork }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
+						<h2 v-if="editing || composerOnly" :class="$style.editorTitle">{{ editing ? t.editWork : shareText.title }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
 					</header>
 					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
+					<p v-if="composerOnly" :class="$style.editHint">{{ shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
+					<div v-if="composerOnly && files.length" :class="$style.sharePreview"><template v-for="file in files" :key="file.id"><video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls muted playsinline preload="metadata" :aria-label="file.name"></video><img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.thumbnailUrl || file.url)" :alt="file.name"/></template></div>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
 						<div :class="$style.editorRow">
 							<div :class="$style.composerAvatar"><slot name="composerAvatar"><i class="ti ti-pencil" aria-hidden="true"></i></slot></div>
 							<div :class="$style.writingArea">
 								<input ref="titleInput" v-model="draft.title" :class="$style.titleInput" :aria-label="t.title" maxlength="100" :placeholder="t.title" :disabled="submitting || !!openingId" required/>
-								<textarea ref="contentInput" v-model="draft.text" :aria-label="t.content" rows="5" maxlength="2500" :placeholder="t.writePrompt + '…'" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
+								<textarea ref="contentInput" v-model="draft.text" :aria-label="generationRecord ? shareText.caption : t.content" rows="5" maxlength="2500" :placeholder="(generationRecord ? shareText.caption : t.writePrompt) + '…'" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
+						<p v-if="generationRecord" :class="$style.editHint">{{ shareText.provenanceHint }}</p>
 						<div :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
 						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || !!openingId || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
-						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields"><label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label></div>
+						<section v-if="referenceFiles.length" :class="$style.referenceSection" :aria-label="shareText.references">
+							<h3>{{ shareText.references }} · {{ selectedReferences.length }} / {{ referenceFiles.length }}</h3>
+							<p>{{ shareText.referenceHint }}</p>
+							<div :class="$style.referenceGrid"><label v-for="file in referenceFiles" :key="file.id"><img :src="file.thumbnailUrl || file.url" :alt="file.name"/><span><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="submitting"/>{{ file.name }}</span></label></div>
+						</section>
+						<div v-if="detailsOpen" :id="detailsId" :class="$style.extraFields">
+							<label>{{ t.model }}<input v-model="draft.model" :readonly="!!generationRecord" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label>
+						</div>
 						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting || !!openingId"/>{{ t.rights }}</label>
 						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p><button v-if="editConflict" type="button" :class="$style.secondary" :disabled="submitting || !!openingId" @click="reloadEditor">{{ t.reloadEditor }}</button>
 						<footer :class="$style.composerFooter">
@@ -78,7 +88,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
-		<div v-else :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
+		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
 			<Teleport to="body" :disabled="!discoveryCompact">
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
 					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
@@ -163,8 +173,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { safetyText as safety } from './safety-copy.js';
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, onDeactivated, reactive, ref, useId, watch } from 'vue';
+import { safetyText as safety } from './safety-copy.js';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
 import DiscoverySidebar from './discovery-sidebar.vue';
@@ -172,14 +182,15 @@ import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
 import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
 import { useDiscoveryDrawer } from './use-discovery-drawer.js';
-import type { CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
+import type { CommunityComposerDraft, CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
+import { studioShareText as shareText } from '@/utility/studio-share-copy.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ section: string; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
-const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; }>();
+const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; (event: 'composerClosed'): void; (event: 'submitted', value: Awaited<ReturnType<CommunityGateway['submit']>>): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
 const isPublicFeed = computed(() => !props.embedded && (props.section === 'all' || !!currentCategory.value));
@@ -228,6 +239,9 @@ const submitting = ref(false);
 const choosing = ref(false);
 const formError = ref('');
 const files = ref<CommunityFile[]>([]);
+const referenceFiles = ref<CommunityFile[]>([]);
+const selectedReferences = ref<string[]>([]);
+const generationRecord = ref<CommunityWork['generation']>(null);
 const rights = ref(false);
 const editing = ref<CommunityWork | null>(null);
 const openingId = ref('');
@@ -237,8 +251,15 @@ const editConflict = ref(false);
 const closingComposer = ref(false);
 let editRead: AbortController | undefined;
 let editBaseline = '';
-let newDraft: { content: typeof draft; files: CommunityFile[]; rights: boolean; details: boolean; } | undefined;
+let newDraft: { content: typeof draft; files: CommunityFile[]; rights: boolean; details: boolean; references: CommunityFile[]; selected: string[]; generation: CommunityWork['generation']; } | undefined;
 const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', model: '', sourceUrl: '', license: '' });
+if (props.composerOnly && props.initialDraft) {
+	const initial = props.initialDraft;
+	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.text, model: initial.model });
+	files.value = initial.files.map(file => ({ ...file }));
+	referenceFiles.value = initial.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = initial.generation;
+	detailsOpen.value = !!initial.model;
+}
 const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
 const canEdit = (work: CommunityWork) => props.signedIn && work.author.id === props.viewerId && (isProfile.value || props.section === 'mine');
 const editChanged = computed(() => !!editing.value && JSON.stringify(composerInput()) !== editBaseline);
@@ -269,7 +290,7 @@ function errorText(error: unknown) {
 
 async function load(append = false) {
 	const version = getCommunityUpdateVersion();
-	if (disposed) return;
+	if (disposed || props.composerOnly) return;
 	controller?.abort();
 	const current = ++requestId;
 	if (!validSection.value || props.section === 'ai' || (props.section === 'mine' && !props.signedIn) || (props.section === 'review' && !props.moderator)) {
@@ -332,13 +353,13 @@ async function openComposer() {
 }
 
 function composerInput() {
-	return { ...draft, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id) };
+	return { ...draft, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value } : null };
 }
 
 function restoreNewDraft() {
 	editing.value = null; editBaseline = ''; editConflict.value = false; formError.value = '';
 	if (newDraft) {
-		Object.assign(draft, newDraft.content); files.value = newDraft.files; rights.value = newDraft.rights; detailsOpen.value = newDraft.details;
+		Object.assign(draft, newDraft.content); files.value = newDraft.files; rights.value = newDraft.rights; detailsOpen.value = newDraft.details; referenceFiles.value = newDraft.references; selectedReferences.value = newDraft.selected; generationRecord.value = newDraft.generation;
 		newDraft = undefined;
 	}
 }
@@ -357,8 +378,9 @@ async function openEditor(work: CommunityWork, reload = false) {
 	try {
 		const latest = await props.gateway.show(work.id, read.signal);
 		if (disposed || read.signal.aborted || !canEdit(latest)) return;
-		if (!editing.value) newDraft = { content: { ...draft }, files: [...files.value], rights: rights.value, details: detailsOpen.value };
+		if (!editing.value) newDraft = { content: { ...draft }, files: [...files.value], rights: rights.value, details: detailsOpen.value, references: [...referenceFiles.value], selected: [...selectedReferences.value], generation: generationRecord.value };
 		editing.value = latest;
+		referenceFiles.value = latest.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = latest.generation;
 		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license });
 		files.value = latest.files.map(file => ({ ...file })); rights.value = false; detailsOpen.value = true;
 		editBaseline = JSON.stringify(composerInput()); editConflict.value = false; formError.value = '';
@@ -408,15 +430,16 @@ async function insertCode() {
 
 async function closeComposer() {
 	if (submitting.value || choosing.value || emojiOpen.value || openingId.value || closingComposer.value) return;
-	if (editing.value && editChanged.value) {
+	if ((editing.value && editChanged.value) || (props.composerOnly && hasDraft.value)) {
 		closingComposer.value = true;
 		try {
-			const { canceled } = await confirm({ type: 'warning', title: t.discardEditTitle, text: t.discardEditText });
+			const { canceled } = await confirm({ type: 'warning', title: props.composerOnly ? shareText.discardTitle : t.discardEditTitle, text: props.composerOnly ? shareText.discardText : t.discardEditText });
 			if (canceled || disposed) return;
 		} finally { closingComposer.value = false; }
 	}
 	composerOpen.value = false;
 	if (editing.value) restoreNewDraft();
+	if (props.composerOnly) emit('composerClosed');
 }
 
 function handleComposeRequest(event: Event) {
@@ -445,7 +468,7 @@ watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 	if (open && signedIn && modalLayer.value && !releaseFocus) releaseFocus = focusTrap(modalLayer.value).release;
 }, { flush: 'post' });
-onMounted(() => window.addEventListener(communityComposeEvent, handleComposeRequest));
+onMounted(() => { if (!props.composerOnly) window.addEventListener(communityComposeEvent, handleComposeRequest); });
 onDeactivated(() => { active = false; editRead?.abort(); composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
 
 async function chooseFiles(event: MouseEvent) {
@@ -543,8 +566,9 @@ async function submit() {
 		if (disposed) return;
 		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? t.submittedPublic : t.submittedExisting;
 		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
-		files.value = []; rights.value = false; composerOpen.value = false;
+		files.value = []; referenceFiles.value = []; selectedReferences.value = []; generationRecord.value = null; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
+		emit('submitted', result);
 		if (props.section === 'mine' || ['published', 'approved'].includes(result.status)) await load();
 	} catch (error) {
 		if (!disposed) {
@@ -605,7 +629,7 @@ watch(() => props.viewerId, () => { editRead?.abort(); composerOpen.value = fals
 watch(() => props.initialQuery, () => { if (isPublicFeed.value) query.value = activeQuery.value = initialPublicQuery(); });
 watch([() => props.section, () => props.initialQuery, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
 watch([() => props.compose, () => props.signedIn, () => props.composeRequest], () => { if (props.compose && props.signedIn) void openComposer(); }, { immediate: true });
-watch(communityUpdates, () => { if (active && !submitting.value && !deletingId.value && !reviewingId.value) void load(); });
+watch(communityUpdates, () => { if (!props.composerOnly && active && !submitting.value && !deletingId.value && !reviewingId.value) void load(); });
 onActivated(() => {
 	active = true;
 	const stale = loadedVersion !== getCommunityUpdateVersion();
@@ -619,6 +643,10 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 </script>
 
 <style lang="scss" module>
+.composerOnly.root { height: 0; overflow: visible; }
+.composerOnly .canvas { padding: 0; min-height: 0; }
+.sharePreview { display: flex; gap: 12px; overflow-x: auto; max-height: 200px; padding: 0 20px 16px; }
+.sharePreview img, .sharePreview video { max-height: 180px; max-width: 100%; border-radius: 8px; object-fit: contain; background: var(--MI_THEME-bg); }
 .embedded.root { height: auto; overflow: visible; }
 .embedded .canvas { padding: 0; min-height: 0; }
 .danger { color: var(--MI_THEME-error); border: 1px solid currentColor; }
@@ -816,6 +844,8 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .editorTitle { font-size: 17px; margin: 0; }
 .editHint { margin: -6px 0 18px !important; padding: 12px 14px; border-radius: 8px; background: var(--MI_THEME-buttonBg); font-size: 13px; }
 .composerHeader > button { width: 44px; height: 44px; padding: 0; font-size: 22px; }
+.referenceSection { margin: 16px 0; h3 { margin: 0 0 8px; font-size: 16px; } p { line-height: 1.6; } }
+.referenceGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; label { min-width: 0; padding: 8px; border: 1px solid var(--MI_THEME-divider); border-radius: 12px; } img { width: 100%; height: 110px; object-fit: contain; } span { display: flex; align-items: center; gap: 8px; min-height: 44px; overflow-wrap: anywhere; } input { accent-color: var(--MI_THEME-accent); } }
 .draftHint { margin-left: auto; font-size: 12px; }
 .composer .form { gap: 12px; }
 .editorRow { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; }

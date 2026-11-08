@@ -37534,6 +37534,13 @@ export interface operations {
                             model: string;
                             sourceUrl: string;
                             license: string;
+                            generation: {
+                                prompt: string;
+                                model: string;
+                                referenceFileIds: string[];
+                                sourceWorkId?: string;
+                            } | null;
+                            referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
                             author: {
                                 id: string;
@@ -37616,6 +37623,13 @@ export interface operations {
             content: {
                 "application/json": {
                     idempotencyKey: string;
+                    generation?: {
+                        prompt: string;
+                        model: string;
+                        referenceFileIds: string[];
+                        /** Format: misskey:id */
+                        sourceWorkId?: string;
+                    } | null;
                     /** @enum {string} */
                     category: "video" | "image" | "resource";
                     title: string;
@@ -37741,6 +37755,13 @@ export interface operations {
                             model: string;
                             sourceUrl: string;
                             license: string;
+                            generation: {
+                                prompt: string;
+                                model: string;
+                                referenceFileIds: string[];
+                                sourceWorkId?: string;
+                            } | null;
+                            referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
                             author: {
                                 id: string;
@@ -37846,6 +37867,13 @@ export interface operations {
                             model: string;
                             sourceUrl: string;
                             license: string;
+                            generation: {
+                                prompt: string;
+                                model: string;
+                                referenceFileIds: string[];
+                                sourceWorkId?: string;
+                            } | null;
+                            referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
                             author: {
                                 id: string;
@@ -37947,6 +37975,13 @@ export interface operations {
                         model: string;
                         sourceUrl: string;
                         license: string;
+                        generation: {
+                            prompt: string;
+                            model: string;
+                            referenceFileIds: string[];
+                            sourceWorkId?: string;
+                        } | null;
+                        referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
                         author: {
                             id: string;
@@ -38050,6 +38085,13 @@ export interface operations {
                             model: string;
                             sourceUrl: string;
                             license: string;
+                            generation: {
+                                prompt: string;
+                                model: string;
+                                referenceFileIds: string[];
+                                sourceWorkId?: string;
+                            } | null;
+                            referenceFiles: components["schemas"]["DriveFile"][];
                             files: components["schemas"]["DriveFile"][];
                             author: {
                                 id: string;
@@ -38154,6 +38196,13 @@ export interface operations {
                         model: string;
                         sourceUrl: string;
                         license: string;
+                        generation: {
+                            prompt: string;
+                            model: string;
+                            referenceFileIds: string[];
+                            sourceWorkId?: string;
+                        } | null;
+                        referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
                         author: {
                             id: string;
@@ -38334,6 +38383,13 @@ export interface operations {
                         model: string;
                         sourceUrl: string;
                         license: string;
+                        generation: {
+                            prompt: string;
+                            model: string;
+                            referenceFileIds: string[];
+                            sourceWorkId?: string;
+                        } | null;
+                        referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
                         author: {
                             id: string;
@@ -38429,6 +38485,13 @@ export interface operations {
                     license?: string;
                     /** @default [] */
                     fileIds?: string[];
+                    generation?: {
+                        prompt: string;
+                        model: string;
+                        referenceFileIds: string[];
+                        /** Format: misskey:id */
+                        sourceWorkId?: string;
+                    } | null;
                 };
             };
         };
@@ -38450,6 +38513,13 @@ export interface operations {
                         model: string;
                         sourceUrl: string;
                         license: string;
+                        generation: {
+                            prompt: string;
+                            model: string;
+                            referenceFileIds: string[];
+                            sourceWorkId?: string;
+                        } | null;
+                        referenceFiles: components["schemas"]["DriveFile"][];
                         files: components["schemas"]["DriveFile"][];
                         author: {
                             id: string;

@@ -21,6 +21,8 @@ export const communityWorkSchema = {
 		id: string, revisionPending: { type: 'boolean', optional: false, nullable: false }, version: { type: 'integer', optional: false, nullable: false },
 		category: { ...string, enum: ['video', 'image', 'resource'] },
 		title: string, text: string, model: string, sourceUrl: string, license: string,
+		generation: { type: 'object', optional: false, nullable: true, properties: { prompt: string, model: string, referenceFileIds: { type: 'array', optional: false, nullable: false, items: string }, sourceWorkId: { ...string, optional: true } } },
+		referenceFiles: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },
 		files: { type: 'array', optional: false, nullable: false, items: { type: 'object', optional: false, nullable: false, ref: 'DriveFile' } },
 		author: { type: 'object', optional: false, nullable: false, properties: { id: string, name: string, username: string } },
 		status: { ...string, enum: ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'] },

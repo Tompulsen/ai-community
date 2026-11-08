@@ -4,7 +4,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import type * as Redis from 'ioredis';
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource, In, type EntityManager } from 'typeorm';
 import { DI } from '@/di-symbols.js';
@@ -30,6 +29,7 @@ import { AnnouncementEntityService } from './entities/AnnouncementEntityService.
 import { ReactionsBufferingService } from './ReactionsBufferingService.js';
 import { RoleService } from './RoleService.js';
 import { DriveFileEntityService } from './entities/DriveFileEntityService.js';
+import type * as Redis from 'ioredis';
 
 type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
@@ -62,6 +62,13 @@ export class CommunityService {
 		return fileIds.map(fileId => files.find(file => file.id === fileId)!);
 	}
 
+	private async references(manager: EntityManager, authorId: string, payload: CommunityRevision) {
+		const ids = payload.generation?.referenceFileIds ?? [];
+		if (!ids.length) return;
+		const files = await manager.getRepository(MiDriveFile).findBy({ id: In(ids), userId: authorId });
+		if (ids.length > 16 || new Set(ids).size !== ids.length || files.length !== ids.length || files.some(file => !file.type.startsWith('image/'))) throw new ApiError(communityErrors.invalidFiles);
+	}
+
 	private async author(manager: EntityManager, id: string) {
 		const user = await manager.getRepository(MiUser).findOneBy({ id });
 		if (!user || user.host !== null || user.isSuspended || user.isDeleted || user.movedToUri) throw new ApiError(communityErrors.authorUnavailable);
@@ -69,7 +76,7 @@ export class CommunityService {
 	}
 
 	private normalize(payload: CommunityRevision): CommunityRevision {
-		const normalized = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds };
+		const normalized = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds, ...(payload.generation ? { generation: { prompt: payload.generation.prompt, model: payload.generation.model.trim(), referenceFileIds: [...payload.generation.referenceFileIds], ...(payload.generation.sourceWorkId ? { sourceWorkId: payload.generation.sourceWorkId } : {}) } } : payload.generation === null ? { generation: null } : {}) };
 		if (!normalized.title || (!normalized.text && !normalized.fileIds.length)) throw new ApiError(communityErrors.invalidContent);
 		if (normalized.sourceUrl) {
 			try { const url = new URL(normalized.sourceUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); } catch { throw new ApiError(communityErrors.invalidContent); }
@@ -92,6 +99,7 @@ export class CommunityService {
 		const submission = await this.db.transaction(async manager => {
 			await this.author(manager, authorId);
 			await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			await this.references(manager, authorId, normalized);
 			const repo = manager.getRepository(MiCommunitySubmission);
 			const id = this.idService.gen();
 			await repo.createQueryBuilder().insert().values({ ...normalized, id, authorId, idempotencyKey, payloadHash, publicationMode, submittedAt: new Date(), status: 'pending', version: 0 }).orIgnore().execute();
@@ -119,7 +127,6 @@ export class CommunityService {
 	}
 
 	public async update(authorId: string, input: UpdateInput) {
-		const normalized = this.normalize(input);
 		const afterCommit: (() => void)[] = [];
 		const result = await this.db.transaction(async manager => {
 			const repo = manager.getRepository(MiCommunitySubmission);
@@ -127,8 +134,11 @@ export class CommunityService {
 			if (!submission) throw new ApiError(communityErrors.notFound);
 			if (submission.authorId !== authorId) throw new ApiError(communityErrors.forbidden);
 			if (submission.version !== input.version) throw new ApiError(communityErrors.conflict);
+			const previous = submission.pendingRevision ?? submission;
+			const normalized = this.normalize({ ...input, generation: input.generation === undefined ? previous.generation ?? null : input.generation });
 			await this.author(manager, authorId);
 			await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			await this.references(manager, authorId, normalized);
 			const note = submission.approvedNoteId ? await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: submission.approvedNoteId }).setLock('pessimistic_write').getOne() : null;
 			const isPublished = ['published', 'approved'].includes(submission.status) && !!note;
 			if (isPublished && (submission.pendingRevision || this.meta.clientOptions.communityPublicationMode !== 'after')) {
@@ -178,6 +188,7 @@ export class CommunityService {
 
 	private async updatePublished(submission: MiCommunitySubmission, note: MiNote, manager: EntityManager, afterCommit: (() => void)[]) {
 		const author = await this.author(manager, submission.authorId);
+		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
 		try {
 			await this.noteCreateService.updateLocalInTransaction(author, note, this.noteText(submission), files, { manager, afterCommit });
@@ -198,6 +209,7 @@ export class CommunityService {
 
 	private async publish(submission: MiCommunitySubmission, manager: EntityManager, afterCommit: (() => void)[]) {
 		const author = await this.author(manager, submission.authorId);
+		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
 		const text = this.noteText(submission);
 		try {
@@ -218,18 +230,18 @@ export class CommunityService {
 			.innerJoinAndSelect('submission.author', 'author').leftJoinAndSelect('submission.approvedNote', 'note');
 		if (scope !== 'public') {
 			query.where(scope === 'mine' ? 'submission.authorId = :viewerId' : '1 = 1', { viewerId });
-			if (options.status === 'unreviewed') query.andWhere("(submission.status = 'pending' OR (note.id IS NOT NULL AND (submission.status = 'published' OR submission.\"pendingRevision\" IS NOT NULL)))");
-			else if (options.status === 'pending') query.andWhere("(submission.status = 'pending' OR (submission.\"pendingRevision\" IS NOT NULL AND note.id IS NOT NULL))");
-			else if (options.status === 'withdrawn') query.andWhere("submission.status IN ('approved', 'published') AND note.id IS NULL");
+			if (options.status === 'unreviewed') query.andWhere('(submission.status = \'pending\' OR (note.id IS NOT NULL AND (submission.status = \'published\' OR submission."pendingRevision" IS NOT NULL)))');
+			else if (options.status === 'pending') query.andWhere('(submission.status = \'pending\' OR (submission."pendingRevision" IS NOT NULL AND note.id IS NOT NULL))');
+			else if (options.status === 'withdrawn') query.andWhere('submission.status IN (\'approved\', \'published\') AND note.id IS NULL');
 			else if (options.status && options.status !== 'all') {
 				query.andWhere('submission.status = :status', { status: options.status });
 				if (['approved', 'published'].includes(options.status)) query.andWhere('note.id IS NOT NULL');
 			}
 		}
-		if (options.category) query.andWhere(scope === 'public' ? 'submission.category = :category' : "COALESCE(submission.\"pendingRevision\"->>'category', submission.category) = :category", { category: options.category });
+		if (options.category) query.andWhere(scope === 'public' ? 'submission.category = :category' : 'COALESCE(submission."pendingRevision"->>\'category\', submission.category) = :category', { category: options.category });
 		if (options.authorId) query.andWhere('submission.authorId = :authorId', { authorId: options.authorId });
 		if (options.untilId) query.andWhere('submission.id < :cursor', { cursor: options.untilId });
-		if (options.query.trim()) query.andWhere(scope === 'public' ? '(submission.title ILIKE :query OR submission.text ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)' : "(COALESCE(submission.\"pendingRevision\"->>'title', submission.title) ILIKE :query OR COALESCE(submission.\"pendingRevision\"->>'text', submission.text) ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)", { query: `%${options.query.trim().replace(/[\\%_]/g, '\\$&')}%` });
+		if (options.query.trim()) query.andWhere(scope === 'public' ? '(submission.title ILIKE :query OR submission.text ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)' : '(COALESCE(submission."pendingRevision"->>\'title\', submission.title) ILIKE :query OR COALESCE(submission."pendingRevision"->>\'text\', submission.text) ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)', { query: `%${options.query.trim().replace(/[\\%_]/g, '\\$&')}%` });
 		const rows: MiCommunitySubmission[] = [];
 		let scannedCursor: string | null = null;
 		let exhausted = false;
@@ -385,11 +397,15 @@ export class CommunityService {
 		const author = row.author ?? await this.db.getRepository(MiUser).findOneByOrFail({ id: row.authorId });
 		const note = row.approvedNote ?? (row.approvedNoteId ? await this.db.getRepository(MiNote).findOneBy({ id: row.approvedNoteId }) : null);
 		const files = content.fileIds.length ? await this.db.getRepository(MiDriveFile).findBy({ id: In(content.fileIds), userId: row.authorId }) : [];
+		const referenceIds = content.generation?.referenceFileIds ?? [];
+		const referenceFiles = referenceIds.length ? await this.db.getRepository(MiDriveFile).findBy({ id: In(referenceIds), userId: row.authorId }) : [];
 		const buffered = deltas ?? (note && this.meta.enableReactionsBuffering ? (await this.reactionsBufferingService.get(note.id)).deltas : {});
 		const reactions = this.reactionsBufferingService.mergeReactions(note?.reactions ?? {}, buffered);
 		const likesCount = Object.entries(reactions).reduce((sum, [key, count]) => sum + (key.replaceAll('\uFE0F', '') === '❤' ? count : 0), 0);
 		return {
 			id: row.id, version: row.version, category: content.category, title: content.title, text: content.text, model: content.model, sourceUrl: content.sourceUrl, license: content.license, revisionPending: includeRevision && !!row.pendingRevision,
+			generation: content.generation ?? null,
+			referenceFiles: await Promise.all(referenceIds.flatMap(id => { const file = referenceFiles.find(f => f.id === id && f.type.startsWith('image/')); return file ? [this.driveFileEntityService.pack(file)] : []; })),
 			files: await Promise.all(content.fileIds.flatMap(id => { const file = files.find(f => f.id === id); return file ? [this.driveFileEntityService.pack(file)] : []; })),
 			author: { id: author.id, name: author.name ?? '', username: author.username }, status: ['approved', 'published'].includes(row.status) && !note ? 'withdrawn' as const : row.status, submittedAt: row.submittedAt.toISOString(),
 			rejectionReason: includeRevision ? row.rejectionReason : null, approvedNoteId: row.approvedNoteId, repliesCount: note?.repliesCount ?? 0, likesCount, renotesCount: note?.renoteCount ?? 0, viewsCount: row.viewsCount,
