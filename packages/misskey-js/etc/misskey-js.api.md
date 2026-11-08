@@ -152,6 +152,18 @@ type AdminCaptchaCurrentResponse = operations['admin___captcha___current']['resp
 type AdminCaptchaSaveRequest = operations['admin___captcha___save']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
+type AdminCommunityReviewRequest = operations['admin___community___review']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityReviewResponse = operations['admin___community___review']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunitySubmissionsRequest = operations['admin___community___submissions']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunitySubmissionsResponse = operations['admin___community___submissions']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type AdminDeleteAccountRequest = operations['admin___delete-account']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
@@ -672,6 +684,11 @@ export type Channels = {
             urlUploadFinished: (payload: {
                 marker: string;
                 file: DriveFile;
+            }) => void;
+            urlUploadFailed: (payload: {
+                marker?: string | null;
+                code: string;
+                limitBytes?: number;
             }) => void;
             readAllNotifications: () => void;
             unreadNotification: (payload: Notification_2) => void;
@@ -1282,6 +1299,60 @@ type ClipsUpdateRequest = operations['clips___update']['requestBody']['content']
 type ClipsUpdateResponse = operations['clips___update']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
+type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsCreateRequest = operations['community___submissions___create']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsCreateResponse = operations['community___submissions___create']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsMineRequest = operations['community___submissions___mine']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsMineResponse = operations['community___submissions___mine']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsShowRequest = operations['community___submissions___show']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsShowResponse = operations['community___submissions___show']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsUpdateRequest = operations['community___submissions___update']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksRequest = operations['community___works']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksResponse = operations['community___works']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksShowRequest = operations['community___works___show']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksShowResponse = operations['community___works___show']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksViewRequest = operations['community___works___view']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityWorksViewResponse = operations['community___works___view']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type DateString = string;
 
 // @public (undocumented)
@@ -1448,9 +1519,10 @@ type EndpointResponse = operations['endpoint']['responses']['200']['content']['a
 
 // Warning: (ae-forgotten-export) The symbol "Overwrite" needs to be exported by the entry point index.d.ts
 // Warning: (ae-forgotten-export) The symbol "Endpoints_2" needs to be exported by the entry point index.d.ts
+// Warning: (ae-forgotten-export) The symbol "CommunityEndpoints" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
-export type Endpoints = Overwrite<Endpoints_2, {
+export type Endpoints = Overwrite<Endpoints_2 & CommunityEndpoints, {
     'users/show': {
         req: UsersShowRequest;
         res: {
@@ -2209,6 +2281,28 @@ declare namespace entities {
         V2AdminEmojiListRequest,
         V2AdminEmojiListResponse,
         VerifyEmailRequest,
+        CommunityWorksRequest,
+        CommunityWorksResponse,
+        CommunitySubmissionsCreateRequest,
+        CommunitySubmissionsCreateResponse,
+        CommunitySubmissionsMineRequest,
+        CommunitySubmissionsMineResponse,
+        AdminCommunitySubmissionsRequest,
+        AdminCommunitySubmissionsResponse,
+        AdminCommunityReviewRequest,
+        AdminCommunityReviewResponse,
+        CommunityFeaturedResponse,
+        CommunityWorksShowRequest,
+        CommunityWorksShowResponse,
+        CommunityWorksViewRequest,
+        CommunityWorksViewResponse,
+        CommunitySubmissionsShowRequest,
+        CommunitySubmissionsShowResponse,
+        CommunitySubmissionsUpdateRequest,
+        CommunitySubmissionsUpdateResponse,
+        CommunitySubmissionsDeleteRequest,
+        CommunityFeaturedRequest,
+        CommunityReportRequest,
         Error_2 as Error,
         UserLite,
         UserDetailedNotMeOnly,
@@ -3781,8 +3875,8 @@ type VerifyEmailRequest = operations['verify-email']['requestBody']['content']['
 // Warnings were encountered during analysis:
 //
 // src/streaming.ts:57:3 - (ae-forgotten-export) The symbol "ReconnectingWebSocket" needs to be exported by the entry point index.d.ts
-// src/streaming.types.ts:236:4 - (ae-forgotten-export) The symbol "ReversiUpdateKey" needs to be exported by the entry point index.d.ts
-// src/streaming.types.ts:251:4 - (ae-forgotten-export) The symbol "ReversiUpdateSettings" needs to be exported by the entry point index.d.ts
+// src/streaming.types.ts:237:4 - (ae-forgotten-export) The symbol "ReversiUpdateKey" needs to be exported by the entry point index.d.ts
+// src/streaming.types.ts:252:4 - (ae-forgotten-export) The symbol "ReversiUpdateSettings" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
