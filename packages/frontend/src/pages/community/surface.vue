@@ -39,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</header>
 					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
 					<p v-if="composerOnly" :class="$style.editHint">{{ directComment ? shareText.directHint : shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
+					<p v-if="hasVideo && generationRecord" :class="$style.editHint">{{ shareText.videoCommunityOnly }}</p>
 					<div v-if="composerOnly && files.length" :class="$style.sharePreview"><template v-for="file in files" :key="file.id"><video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls muted playsinline preload="metadata" :aria-label="file.name"></video><img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.thumbnailUrl || file.url)" :alt="file.name"/></template></div>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
 						<div :class="$style.editorRow">
@@ -57,7 +58,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<p>{{ shareText.referenceHint }}</p>
 							<div :class="$style.referenceGrid"><label v-for="file in referenceFiles" :key="file.id"><img :src="file.thumbnailUrl || file.url" :alt="file.name"/><span><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="submitting"/>{{ file.name }}</span></label></div>
 						</section>
-						<section v-if="generationRecord?.sourceWorkId && !editing && !directComment" :class="$style.referenceSection" data-testid="source-comment-option">
+						<section v-if="generationRecord?.sourceWorkId && !editing && !directComment && !hasVideo" :class="$style.referenceSection" data-testid="source-comment-option">
 							<label :class="$style.check"><input v-model="shareToSource" type="checkbox" :disabled="submitting || !!openingId"/>{{ shareText.shareToSource }}</label>
 							<p>{{ publicationMode === 'after' ? shareText.sourcePublicHint : shareText.sourceReviewHint }} <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a></p>
 						</section>
@@ -273,6 +274,7 @@ if (props.composerOnly && props.initialDraft) {
 	detailsOpen.value = !!initial.model;
 }
 const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
+const hasVideo = computed(() => draft.category === 'video' || files.value.some(file => file.type.startsWith('video/')));
 const directComment = computed(() => (editing.value?.destination ?? props.initialDraft?.destination) === 'source-comment');
 const workLink = (work: CommunityWork) => work.destination === 'source-comment' ? work.approvedNoteId ? `/notes/${work.approvedNoteId}` : `/community/work/${work.generation?.sourceWorkId}` : `/community/work/${work.id}`;
 const canEdit = (work: CommunityWork) => canManage(work) && (work.destination !== 'source-comment' || work.status === 'pending');
@@ -368,7 +370,7 @@ async function openComposer() {
 }
 
 function composerInput() {
-	return { ...draft, destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value } : null };
+	return { ...draft, destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value, shareToSource: !hasVideo.value && !directComment.value && shareToSource.value } : null };
 }
 
 function restoreNewDraft() {
@@ -549,6 +551,7 @@ async function submit() {
 	if (submitting.value || choosing.value || emojiOpen.value || closingComposer.value || openingId.value || (editing.value && (!editChanged.value || editConflict.value))) return;
 	formError.value = '';
 	if (!props.signedIn) { emit('login'); return; }
+	if (directComment.value && hasVideo.value) { formError.value = shareText.videoCommunityOnly; return; }
 	if (!draft.title.trim()) { formError.value = t.titleRequired; return; }
 	if (!draft.text.trim() && !files.value.length) { formError.value = t.contentRequired; return; }
 	if (draft.category === 'video' && !files.value.some(file => file.type.startsWith('video/'))) { formError.value = t.videoRequired; return; }

@@ -53,6 +53,7 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { UserBlockingService } from '@/core/UserBlockingService.js';
 import { isReply } from '@/misc/is-reply.js';
 import { trackPromise } from '@/misc/promise-tracker.js';
+import { assertCommunityCommentMedia, assertCommunityVideoEdit, hasVideoAttachments, isCommunityReply } from '@/misc/community-comment-media.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CollapsedQueue } from '@/misc/collapsed-queue.js';
 import { CacheService } from '@/core/CacheService.js';
@@ -451,6 +452,13 @@ export class NoteCreateService implements OnApplicationShutdown {
 		isCat: MiUser['isCat'];
 	}, data: Option, silent = false, transaction?: NoteCreationTransaction): Promise<MiNote> {
 		if (transaction && !transaction.manager.queryRunner?.isTransactionActive) throw new Error('Note creation requires an active transaction');
+		if (!transaction && data.reply && data.renote && await isCommunityReply(this.db.manager, data.reply)) {
+			const afterCommit: (() => void)[] = [];
+			const note = await this.db.transaction(manager => this.create(user, data, silent, { manager, afterCommit }));
+			for (const publish of afterCommit) publish();
+			return note;
+		}
+		await assertCommunityCommentMedia(transaction?.manager ?? this.db.manager, data);
 		// チャンネル外にリプライしたら対象のスコープに合わせる
 		// (クライアントサイドでやっても良い処理だと思うけどとりあえずサーバーサイドで)
 		if (data.reply && data.channel && data.reply.channelId !== data.channel.id) {
@@ -656,6 +664,7 @@ export class NoteCreateService implements OnApplicationShutdown {
 		if (!transaction.manager.queryRunner?.isTransactionActive || !note.localOnly || note.userHost != null || note.replyId || note.renoteId || note.channelId || note.hasPoll || note.userId !== user.id || note.visibility !== 'public') {
 			throw new Error('Community editing requires a locked local public original and an active transaction');
 		}
+		if (hasVideoAttachments(files)) await assertCommunityVideoEdit(transaction.manager, note.id);
 		const text = rawText.slice(0, DB_MAX_NOTE_TEXT_LENGTH).trim();
 		const policies = await this.roleService.getUserPolicies(user.id);
 		if (!policies.canPublicNote || this.checkProhibitedWordsContain({ text }) ||

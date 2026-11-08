@@ -38,3 +38,15 @@ describe('direct result share protocol', () => {
 		expect(bridge.draft.value).toBeUndefined();
 	});
 });
+
+describe('video community destination', () => {
+	it('allows publishing video works but rejects direct comments and disguised video files', () => {
+		const video = { name: 'clip.mp4', blob: new Blob(['video'], { type: 'video/mp4' }) };
+		const image = { name: 'image.png', blob: new Blob(['image'], { type: 'image/png' }) };
+		expect(validateStudioWork({ ...work, destination: 'community', category: 'video', files: [video] })).toBe(true);
+		for (const category of ['video', 'resource', 'image']) {
+			expect(validateStudioWork({ ...work, category, files: [video, image] })).toBe(false);
+		}
+		expect(validateStudioWork({ ...work, category: 'image', files: [image] })).toBe(true);
+	});
+});

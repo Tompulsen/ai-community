@@ -6,6 +6,7 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 export const studioShareText = homeLanguage === 'en-US' ? {
+	videoCommunityOnly: 'Videos can be published to the community, but cannot be sent to comments.',
 	directTitle: 'Send to original comments', directHint: 'Confirm this generated result and its original work. The result will appear in the original’s comments.', directSend: 'Send comment', directSent: 'Sent to the original work’s comments.', directLabel: 'Original work comment', sourceUnavailable: 'The original work is unavailable or cannot receive this comment.',
 	shareToSource: 'Also share in the original work’s comments', viewSource: 'View original', sourcePublicHint: 'After publication, add a preview and link to your work in the original’s comments.', sourceReviewHint: 'After approval, add a preview and link to your work in the original’s comments.',
 	sourceStatus: { pending: 'The comment will be shared after approval.', shared: 'Also shared in the original work’s comments.', unavailable: 'The work was saved, but the original is unavailable for comment sharing.' },
@@ -18,6 +19,7 @@ export const studioShareText = homeLanguage === 'en-US' ? {
 	pending: 'Submitted for review. You can check its status in My works.', published: 'Published to the community.', viewMine: 'My works', close: 'Close',
 	statusUpdated: 'The work status has changed. Check My works for details.',
 } : {
+	videoCommunityOnly: '视频可发布到社区，不能发送至评论区。',
 	directTitle: '发送到源作品评论区', directHint: '请确认本次生成结果和对应源作品，发送后将在源作品评论区展示。', directSend: '发送评论', directSent: '已发送到源作品评论区。', directLabel: '源作品评论', sourceUnavailable: '源作品已不可用，或当前无法向它发送评论。',
 	shareToSource: '同时分享到原作品评论区', viewSource: '查看原作品', sourcePublicHint: '发布成功后，将作品预览和入口同步到原作品评论区。', sourceReviewHint: '审核通过后，将作品预览和入口同步到原作品评论区。',
 	sourceStatus: { pending: '审核通过后将同步到原作品评论区。', shared: '已同步到原作品评论区。', unavailable: '作品已保存，但原作品当前无法接收同步评论。' },

@@ -20,6 +20,7 @@ import type { MiMeta } from '@/models/Meta.js';
 import { shouldHideNoteByTime } from '@/misc/should-hide-note-by-time.js';
 import { ApiError } from '@/server/api/error.js';
 import { communityErrors } from '@/server/api/community-schema.js';
+import { assertCommunityVideoEdit, hasVideoAttachments } from '@/misc/community-comment-media.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CommunityModerationService } from './CommunityModerationService.js';
 import { IdService } from './IdService.js';
@@ -64,6 +65,12 @@ export class CommunityService {
 		return fileIds.map(fileId => files.find(file => file.id === fileId)!);
 	}
 
+	private async validateCommentMedia(manager: EntityManager, content: CommunityRevision, files: MiDriveFile[], destination: MiCommunitySubmission['destination'], noteId?: string | null) {
+		if (content.category !== 'video' && !hasVideoAttachments(files)) return;
+		if (destination === 'source-comment' || content.generation?.shareToSource) throw new ApiError(communityErrors.invalidFiles);
+		if (noteId) await assertCommunityVideoEdit(manager, noteId);
+	}
+
 	private async references(manager: EntityManager, authorId: string, payload: CommunityRevision) {
 		const ids = payload.generation?.referenceFileIds ?? [];
 		if (!ids.length) return;
@@ -104,7 +111,8 @@ export class CommunityService {
 		const publicationMode = this.meta.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before';
 		const submission = await this.db.transaction(async manager => {
 			await this.author(manager, authorId);
-			await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			const files = await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			await this.validateCommentMedia(manager, normalized, files, destination);
 			await this.references(manager, authorId, normalized);
 			if (destination === 'source-comment') await this.sourceReply(normalized.generation!.sourceWorkId!, authorId, manager);
 			const repo = manager.getRepository(MiCommunitySubmission);
@@ -146,7 +154,8 @@ export class CommunityService {
 			const normalized = this.normalize({ ...input, generation: input.generation === undefined ? previous.generation ?? null : input.generation });
 			if (submission.destination === 'source-comment' && (!normalized.generation || !normalized.generation.model.trim() || normalized.generation.sourceWorkId !== submission.generation?.sourceWorkId || normalized.generation.referenceFileIds.length)) throw new ApiError(communityErrors.invalidContent);
 			await this.author(manager, authorId);
-			await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			const files = await this.files(manager, authorId, normalized.fileIds, normalized.category);
+			await this.validateCommentMedia(manager, normalized, files, submission.destination, submission.approvedNoteId);
 			await this.references(manager, authorId, normalized);
 			const note = submission.approvedNoteId ? await manager.getRepository(MiNote).createQueryBuilder('note').where({ id: submission.approvedNoteId }).setLock('pessimistic_write').getOne() : null;
 			const isPublished = ['published', 'approved'].includes(submission.status) && !!note;
@@ -214,6 +223,7 @@ export class CommunityService {
 		const author = await this.author(manager, submission.authorId);
 		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
+		await this.validateCommentMedia(manager, submission, files, submission.destination, submission.approvedNoteId);
 		try {
 			await this.noteCreateService.updateLocalInTransaction(author, note, this.noteText(submission), files, { manager, afterCommit });
 		} catch (error) {
@@ -235,6 +245,7 @@ export class CommunityService {
 		const author = await this.author(manager, submission.authorId);
 		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
+		await this.validateCommentMedia(manager, submission, files, submission.destination, submission.approvedNoteId);
 		const text = this.noteText(submission);
 		try {
 			const reply = submission.destination === 'source-comment' ? await this.sourceReply(submission.generation!.sourceWorkId!, author.id, manager) : undefined;
