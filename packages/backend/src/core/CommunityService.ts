@@ -198,6 +198,18 @@ export class CommunityService {
 		for (const publish of afterCommit) publish();
 	}
 
+	/** Only the comment author or the owning community work author may remove a direct reply. */
+	public async deleteComment(actorId: string, input: { submissionId: string; noteId: string; }) {
+		const actor = await this.author(this.db.manager, actorId);
+		const submission = await this.db.getRepository(MiCommunitySubmission).findOneBy({ id: input.submissionId, destination: 'community' });
+		if (!submission?.approvedNoteId) throw new ApiError(communityErrors.notFound);
+		const comment = await this.db.getRepository(MiNote).findOneBy({ id: input.noteId });
+		if (!comment || comment.replyId !== submission.approvedNoteId) throw new ApiError(communityErrors.notFound);
+		if (actorId !== comment.userId && actorId !== submission.authorId) throw new ApiError(communityErrors.forbidden);
+		const author = await this.db.getRepository(MiUser).findOneByOrFail({ id: comment.userId });
+		await this.noteDeleteService.delete(author, comment, false, actor);
+	}
+
 	private async updatePublished(submission: MiCommunitySubmission, note: MiNote, manager: EntityManager, afterCommit: (() => void)[]) {
 		const author = await this.author(manager, submission.authorId);
 		await this.references(manager, author.id, submission);

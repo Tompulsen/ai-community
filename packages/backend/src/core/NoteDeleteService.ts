@@ -80,9 +80,15 @@ export class NoteDeleteService {
 	async delete(user: { id: MiUser['id']; uri: MiUser['uri']; host: MiUser['host']; isBot: MiUser['isBot']; }, note: MiNote, quiet = false, deleter?: MiUser) {
 		const deletedAt = new Date();
 
-		if (note.replyId) {
-			await this.notesRepository.decrement({ id: note.replyId }, 'repliesCount', 1);
-		}
+		// Only the successful delete may change counts or emit effects, including concurrent retries.
+		const removed = await this.notesRepository.manager.transaction(async manager => {
+			const notes = manager.getRepository(this.notesRepository.target);
+			const result = await notes.delete({ id: note.id, userId: user.id });
+			if (!result.affected) return false;
+			if (note.replyId) await notes.decrement({ id: note.replyId }, 'repliesCount', 1);
+			return true;
+		});
+		if (!removed) return;
 
 		if (!quiet) {
 			this.globalEventService.publishNoteStream(note, 'deleted', {
@@ -126,11 +132,6 @@ export class NoteDeleteService {
 		}
 
 		this.searchService.unindexNote(note);
-
-		await this.notesRepository.delete({
-			id: note.id,
-			userId: user.id,
-		});
 
 		if (deleter && (note.userId !== deleter.id)) {
 			const user = await this.usersRepository.findOneByOrFail({ id: note.userId });

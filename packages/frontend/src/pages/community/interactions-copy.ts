@@ -6,6 +6,7 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	deleteComment: '删除评论', deletingComment: '正在删除…', deleteCommentConfirm: '确认删除这条评论？评论及其附件展示将被移除，引用的社区作品和原始文件会保留。', commentDeleted: '评论已删除', deleteCommentFailed: '未能确认删除结果，请刷新评论后重试。',
 	playVideo: '播放视频', pauseVideo: '暂停视频', muteVideo: '关闭声音', unmuteVideo: '开启声音', mutedPreview: '静音预览',
 	videoProgress: '视频播放进度', videoFullscreen: '全屏播放', videoDetail: '查看作品详情', videoLoading: '视频加载中…',
 	videoFailed: '视频暂时无法播放', videoPlayBlocked: '播放未能开始，请点击播放重试。', videoFullscreenFailed: '无法进入全屏，可在作品详情中播放。',
@@ -29,6 +30,7 @@ const zh = {
 	attachmentComment: '包含附件的评论', viewComment: '查看评论详情', shareFailed: '复制失败，请使用下面的作品链接。',
 };
 const en: typeof zh = {
+	deleteComment: 'Delete comment', deletingComment: 'Deleting…', deleteCommentConfirm: 'Delete this comment and its attachment preview? Quoted community works and original files will be kept.', commentDeleted: 'Comment deleted', deleteCommentFailed: 'Deletion could not be confirmed. Refresh the comments before retrying.',
 	playVideo: 'Play video', pauseVideo: 'Pause video', muteVideo: 'Mute', unmuteVideo: 'Turn sound on', mutedPreview: 'Muted preview',
 	videoProgress: 'Video progress', videoFullscreen: 'Fullscreen', videoDetail: 'View work details', videoLoading: 'Loading video…',
 	videoFailed: 'Video is unavailable', videoPlayBlocked: 'Playback did not start. Press play to try again.', videoFullscreenFailed: 'Fullscreen is unavailable. Open the work details to watch.',

@@ -4107,6 +4107,16 @@ export type paths = {
          */
         post: operations["community___report"];
     };
+
+    "/community/comments/delete": {
+        /**
+         * community/comments/delete
+         * @description No description provided.
+         *
+         *     **Credential required**: *Yes* / **Permission**: *write:notes*
+         */
+        post: operations["community___comments___delete"];
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -38734,6 +38744,81 @@ export interface operations {
                     /** Format: misskey:id */
                     noteId?: string;
                     reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (without any results) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+
+    community___comments___delete: {
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: misskey:id */
+                    submissionId: string;
+                    /** Format: misskey:id */
+                    noteId: string;
                 };
             };
         };

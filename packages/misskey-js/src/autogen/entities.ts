@@ -702,3 +702,5 @@ export type CommunitySubmissionsDeleteRequest = operations['community___submissi
 export type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
 
 export type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];
+
+export type CommunityCommentsDeleteRequest = operations['community___comments___delete']['requestBody']['content']['application/json'];

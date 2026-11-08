@@ -43,8 +43,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<p v-if="state === 'loading' || (refreshingComments && !comments.length)" :class="$style.feedback" role="status">{{ state === 'loading' ? t.loading : t.loadingComments }}</p>
 		<p v-else-if="state === 'error' || state === 'unavailable'" :class="$style.feedback" role="alert">{{ state === 'unavailable' ? t.unavailable : t.failed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="commentsFailed" :class="$style.feedback" role="alert">{{ t.commentsFailed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
+		<p v-if="deleteNotice || deleteError" :ref="el => { deleteFeedback = (el as HTMLElement | null) ?? undefined; }" :class="$style.feedback" :role="deleteError ? 'alert' : 'status'" tabindex="-1">{{ deleteError || deleteNotice }}</p>
 		<div v-if="comments.length" :ref="el => { viewport = (el as HTMLElement | null) ?? undefined; }" :class="{ [$style.previewViewport]: previewComments }" data-testid="comment-viewport">
-		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text && reply.cw == null"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="!reply.isHidden && !reply.deletedAt && (reply.files?.length || reply.cw != null)" :class="$style.remixPreview" data-testid="comment-result-preview"><MkMediaList v-if="reply.files?.length && reply.cw == null" :mediaList="reply.files" :user="reply.user"/><MkNoteSimple v-else :note="reply"/><MkA :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></div></li></ul>
+		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><button v-if="canDeleteComment(reply)" type="button" class="_button" :class="$style.deleteComment" :disabled="!!deletingCommentId" :aria-label="t.deleteComment" data-testid="delete-work-comment" @click="removeComment(reply)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingCommentId === reply.id ? t.deletingComment : t.deleteComment }}</button><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text && reply.cw == null"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="!reply.isHidden && !reply.deletedAt && (reply.files?.length || reply.cw != null)" :class="$style.remixPreview" data-testid="comment-result-preview"><MkMediaList v-if="reply.files?.length && reply.cw == null" :mediaList="reply.files" :user="reply.user"/><MkNoteSimple v-else :note="reply"/><MkA :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></div></li></ul>
 		</div>
 		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
 		<div v-if="previewComments" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
@@ -66,6 +67,8 @@ import type { CommunityWork } from './types.js';
 import { workText as t, workPath } from './interactions-copy.js';
 import { useCommentPreview } from './use-comment-preview.js';
 import { useWorkInteractions } from '@/pages/home/use-work-interactions.js';
+import type { entities } from 'misskey-js';
+import { misskeyApi } from '@/utility/misskey-api.js';
 import { $i } from '@/i.js';
 import * as os from '@/os.js';
 import { prefer } from '@/preferences.js';
@@ -146,14 +149,47 @@ async function requestLogin() {
 	} catch { actionFailed.value = true; loginOpening = false; }
 }
 
-function clearFeedback() { actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; repostConfirmed.value = false; }
+function clearFeedback() { deleteGeneration++; deleteController?.abort(); deletingCommentId.value = ''; deleteNotice.value = ''; deleteError.value = ''; actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; repostConfirmed.value = false; }
 
 function deactivate() { active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
 
 onActivated(() => { active = true; });
 onDeactivated(deactivate);
 onBeforeUnmount(deactivate);
-watch(() => props.work.approvedNoteId, clearFeedback);
+watch([() => props.work.id, () => props.work.approvedNoteId, () => $i?.id], clearFeedback);
+
+const deletingCommentId = ref('');
+const deleteNotice = ref('');
+const deleteError = ref('');
+const deleteFeedback = ref<HTMLElement>();
+let deleteGeneration = 0;
+let deleteController: AbortController | undefined;
+const canDeleteComment = (reply: entities.Note) => !!$i && !!props.work.approvedNoteId && reply.replyId === props.work.approvedNoteId && ($i.id === reply.userId || $i.id === props.work.author.id);
+
+async function removeComment(reply: entities.Note) {
+	if (!active || deletingCommentId.value || !canDeleteComment(reply)) return;
+	const ticket = ++deleteGeneration, actorId = $i?.id, workId = props.work.id, noteId = props.work.approvedNoteId;
+	const valid = () => active && ticket === deleteGeneration && actorId === $i?.id && workId === props.work.id && noteId === props.work.approvedNoteId;
+	deletingCommentId.value = reply.id; deleteNotice.value = ''; deleteError.value = '';
+	let timer: number | undefined;
+	try {
+		const { canceled } = await os.confirm({ type: 'warning', title: t.deleteComment, text: t.deleteCommentConfirm });
+		if (canceled || !valid() || !canDeleteComment(reply)) return;
+		const controller = deleteController = new AbortController();
+		timer = window.setTimeout(() => controller.abort(), 15000);
+		await misskeyApi('community/comments/delete', { submissionId: workId, noteId: reply.id }, undefined, controller.signal);
+		if (!valid()) return;
+		comments.value = comments.value.filter(item => item.id !== reply.id);
+		deleteNotice.value = t.commentDeleted;
+		await refresh();
+		if (valid()) { await nextTick(); deleteFeedback.value?.focus({ preventScroll: true }); }
+	} catch {
+		if (valid()) { deleteError.value = t.deleteCommentFailed; await refresh(); }
+	} finally {
+		window.clearTimeout(timer);
+		if (valid()) { deletingCommentId.value = ''; deleteController = undefined; }
+	}
+}
 
 async function openComment() {
 	if (!props.discussion && !props.previewComments && showComments.value) { showComments.value = false; return; }
@@ -227,6 +263,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 </script>
 
 <style lang="scss" module>
+.deleteComment { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 4px 8px; color: var(--MI_THEME-error); font-size: .82em; white-space: nowrap; &:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; } &:disabled { opacity: .5; cursor: wait; } }
 .remixPreview { margin-block: 10px; max-width: 420px; min-width: 0; overflow: hidden; border: 1px solid var(--MI_THEME-divider); border-radius: 10px; padding: 8px; }
 .root { min-width: 0; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
 .root button, .root textarea { font: inherit; }

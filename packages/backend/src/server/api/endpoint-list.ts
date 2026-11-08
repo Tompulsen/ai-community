@@ -458,6 +458,7 @@ export * as 'community/report' from './endpoints/community/report.js';
 export * as 'community/works' from './endpoints/community/works.js';
 export * as 'community/submissions/show' from './endpoints/community/submissions/show.js';
 export * as 'community/submissions/update' from './endpoints/community/submissions/update.js';
+export * as 'community/comments/delete' from './endpoints/community/comments/delete.js';
 export * as 'community/submissions/delete' from './endpoints/community/submissions/delete.js';
 export * as 'community/submissions/mine' from './endpoints/community/submissions/mine.js';
 export * as 'admin/community/submissions' from './endpoints/admin/community/submissions.js';
