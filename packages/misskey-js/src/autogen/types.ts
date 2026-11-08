@@ -5735,6 +5735,9 @@ export type components = {
             entrancePageStyle: "classic" | "simple";
             showTimelineForVisitor: boolean;
             showActivitiesForVisitor: boolean;
+            creationTextModel?: string;
+            creationImageModel?: string;
+            creationVideoModel?: string;
             creationTextUrl?: string | null;
             /** @enum {string} */
             creationTextMode?: "embed" | "newTab";
@@ -13187,6 +13190,9 @@ export interface operations {
                         creationVideoUrl?: string | null;
                         /** @enum {string} */
                         creationVideoMode?: "embed" | "newTab";
+                        creationTextModel?: string;
+                        creationImageModel?: string;
+                        creationVideoModel?: string;
                         communityAutoBanEnabled?: boolean;
                         communityViolationThreshold?: number;
                         /** @enum {string} */

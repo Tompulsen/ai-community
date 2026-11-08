@@ -6,24 +6,31 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <article ref="root" :class="$style.card" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<WorkEngagement :work="work" :viewsCount="views" previewComments>
-	<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><slot name="actions"></slot></header>
-	<div :class="$style.content"><h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
-		<WorkVideo v-if="previewVideo" :workId="work.id" :title="work.title" :url="previewVideo.url" :poster="cover"/>
-		<MkA v-else-if="work.category !== 'resource' || cover" :to="workPath(work.id)" :class="$style.preview" :aria-label="`${t.preview}: ${work.title}`"><img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/><span v-else :class="$style.noPreview"><i :class="work.category === 'video' ? 'ti ti-video' : 'ti ti-photo'" aria-hidden="true"></i>{{ sensitive ? t.sensitive : t.noPreview }}</span><span :class="$style.previewAction" aria-hidden="true">{{ t.preview }}<i class="ti ti-arrow-up-right"></i></span></MkA>
-		<div v-if="work.category === 'resource' && work.files.length" :class="$style.files"><MkA :to="workPath(work.id)"><i class="ti ti-files" aria-hidden="true"></i> {{ t.attachments }} · {{ work.files.length }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
-	</div>
+		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><slot name="actions"></slot></header>
+		<div :class="$style.content">
+			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
+			<div :class="[$style.mediaLayout, { [$style.withMaterials]: work.files.length > 1 || work.referenceFiles?.length }]">
+				<div :class="$style.mainMedia">
+					<WorkVideo v-if="previewVideo" :workId="work.id" :title="work.title" :url="previewVideo.url" :poster="cover"/>
+					<MkA v-else-if="work.category !== 'resource' || cover" :to="workPath(work.id)" :class="$style.preview" :aria-label="`${t.preview}: ${work.title}`"><img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/><span v-else :class="$style.noPreview"><i :class="work.category === 'video' ? 'ti ti-video' : 'ti ti-photo'" aria-hidden="true"></i>{{ sensitive ? t.sensitive : t.noPreview }}</span><span :class="$style.previewAction" aria-hidden="true">{{ t.preview }}<i class="ti ti-arrow-up-right"></i></span></MkA>
+				</div>
+				<WorkMaterials :work="work"/>
+			</div>
+			<div v-if="work.category === 'resource' && work.files.length" :class="$style.files"><MkA :to="workPath(work.id)"><i class="ti ti-files" aria-hidden="true"></i> {{ t.attachments }} · {{ work.files.length }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
+		</div>
 	</WorkEngagement>
 </article>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { CommunityWork } from './types.js';
 import WorkEngagement from './work-engagement.vue';
 import WorkVideo from './work-video.vue';
+import WorkMaterials from './work-materials.vue';
 import { workText as t, workPath } from './interactions-copy.js';
 import { safeWebUrl } from './copy.js';
 import { useWorkView } from './use-work-view.js';
+import type { CommunityWork } from './types.js';
 import { prefer } from '@/preferences.js';
 
 const props = defineProps<{ work: CommunityWork }>();
@@ -48,6 +55,9 @@ watch(cover, () => { failed.value = false; });
 .identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; span { font-size: 13px; color: var(--MI_THEME-fgTransparentWeak); } }
 .content { margin-left: 0; min-width: 0; h3 { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 17px; line-height: 1.5; } }
 .excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; margin: 0 0 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.mediaLayout { display: grid; gap: 12px; min-width: 0; }
+.mainMedia { min-width: 0; }
+@container (min-width: 600px) { .withMaterials { grid-template-columns: minmax(0, 1fr) 148px; align-items: start; } }
 .preview { position: relative; display: flex; justify-content: center; align-items: center; width: 100%; aspect-ratio: 16 / 10; max-height: 560px; border-radius: 12px; overflow: hidden; background: var(--community-stage, var(--MI_THEME-bg)); color: var(--community-stage-fg, var(--MI_THEME-fg)); img { width: 100%; height: 100%; object-fit: contain; } }
 .noPreview { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px; i { font-size: 36px; } }
 .files { padding: 14px 0; a { display: inline-flex; gap: 8px; align-items: center; color: var(--MI_THEME-accent); } }

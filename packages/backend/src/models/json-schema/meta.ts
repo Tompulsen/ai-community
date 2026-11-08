@@ -438,6 +438,9 @@ export const packedMetaClientOptionsSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		creationTextModel: { type: 'string', optional: true, nullable: false },
+		creationImageModel: { type: 'string', optional: true, nullable: false },
+		creationVideoModel: { type: 'string', optional: true, nullable: false },
 		creationTextUrl: {
 			type: 'string',
 			optional: true, nullable: true,

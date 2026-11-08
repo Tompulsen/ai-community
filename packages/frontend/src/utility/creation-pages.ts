@@ -21,10 +21,20 @@ export const creationText = homeLanguage === 'en-US' ? {
 } : i18n.ts._creationLinks;
 
 export const creationPages = [
-	{ key: 'text', title: creationText.text, icon: 'ti ti-file-text', urlKey: 'creationTextUrl', modeKey: 'creationTextMode' },
-	{ key: 'image', title: creationText.image, icon: 'ti ti-photo', urlKey: 'creationImageUrl', modeKey: 'creationImageMode' },
-	{ key: 'video', title: creationText.video, icon: 'ti ti-video', urlKey: 'creationVideoUrl', modeKey: 'creationVideoMode' },
+	{ key: 'text', title: creationText.text, icon: 'ti ti-file-text', urlKey: 'creationTextUrl', modeKey: 'creationTextMode', modelKey: 'creationTextModel', defaultModel: 'gpt-6.1-sol' },
+	{ key: 'image', title: creationText.image, icon: 'ti ti-photo', urlKey: 'creationImageUrl', modeKey: 'creationImageMode', modelKey: 'creationImageModel', defaultModel: 'gpt-image-2.6' },
+	{ key: 'video', title: creationText.video, icon: 'ti ti-video', urlKey: 'creationVideoUrl', modeKey: 'creationVideoMode', modelKey: 'creationVideoModel', defaultModel: '' },
 ] as const;
+
+export const creationModelText = homeLanguage === 'en-US' ? {
+	title: 'Default creation models', label: 'Default model ID',
+	hint: 'Each entry opens a new chat. Remixes use the original work’s model first. Enter an exact model ID available to your users.',
+	empty: 'Leave empty to let users select a model', invalid: 'Use a model ID of up to 100 characters without spaces.', saved: 'Default models saved',
+} : {
+	title: '制作默认模型', label: '默认模型 ID',
+	hint: '进入制作页时自动新建聊天；制作同款优先采用原作品模型。请填写用户有权调用的准确模型 ID。',
+	empty: '留空时由用户手动选择模型', invalid: '模型 ID 最多 100 个字符，不能包含空白字符。', saved: '默认模型已保存',
+};
 
 export type CreationMode = 'embed' | 'newTab';
 

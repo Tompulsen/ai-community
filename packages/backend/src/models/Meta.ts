@@ -767,6 +767,9 @@ export class MiMeta {
 		creationImageMode?: 'embed' | 'newTab';
 		creationVideoUrl?: string | null;
 		creationVideoMode?: 'embed' | 'newTab';
+		creationTextModel?: string;
+		creationImageModel?: string;
+		creationVideoModel?: string;
 		homeShowcaseMode?: 'custom' | 'popular';
 		communityPublicationMode?: 'before' | 'after';
 		communityAutoBanEnabled?: boolean;

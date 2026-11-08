@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<template v-else-if="ready">
 			<MkStudioRemix v-if="remixOpen && remixId && active && studioOrigin" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
-			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="props.kind" :title="definition.title" :active="active" :remix="remix" @identity="studioIdentity = $event"/>
+			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="props.kind" :title="definition.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :remix="remix" @identity="studioIdentity = $event"/>
 			<div v-else-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
 				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
 				<h1>{{ creationText.notConfigured }}</h1>

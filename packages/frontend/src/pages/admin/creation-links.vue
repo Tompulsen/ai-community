@@ -47,6 +47,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<p v-if="saved" role="status" data-testid="creation-saved">{{ creationText.saved }}</p>
 					<MkButton primary :wait="saving" :disabled="saving || hasInvalidUrl" data-testid="creation-save" @click="save"><i class="ti ti-check" aria-hidden="true"></i> {{ i18n.ts.save }}</MkButton>
 				</template>
+				<section v-if="loaded" class="_panel _gaps_m" :class="$style.editor" data-testid="creation-models">
+					<h2 :class="$style.heading">{{ modelText.title }}</h2>
+					<p :class="$style.description">{{ modelText.hint }}</p>
+					<MkInput v-for="item in editors" :key="item.key" v-model="item.model" :disabled="savingModels" :spellcheck="false" autocapitalize="none" autocomplete="off" :placeholder="modelText.empty" :data-testid="`creation-model-${item.key}`">
+						<template #label>{{ item.title }} · {{ modelText.label }}</template>
+					</MkInput>
+					<p v-if="invalidModels" role="alert" :class="$style.error">{{ modelText.invalid }}</p>
+					<p v-if="modelsFailed" role="alert" :class="$style.error">{{ creationText.saveError }}</p>
+					<p v-if="modelsSaved" role="status">{{ modelText.saved }}</p>
+					<MkButton primary :wait="savingModels" :disabled="savingModels || invalidModels" data-testid="creation-model-save" @click="saveModels">{{ i18n.ts.save }}</MkButton>
+				</section>
 			</div>
 		</SearchMarker>
 	</div>
@@ -61,7 +72,7 @@ import type { CreationMode } from '@/utility/creation-pages.js';
 import MkInput from '@/components/MkInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import MkButton from '@/components/MkButton.vue';
-import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
+import { creationText, creationEmbedText as embedText, creationModelText as modelText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { fetchInstance, instance } from '@/instance.js';
 import { $i } from '@/i.js';
@@ -70,7 +81,9 @@ import { definePage } from '@/page.js';
 import { authText } from '@/utility/auth-copy.js';
 import { newApiSigninConfig } from '@/utility/newapi-signin.js';
 
-const editors = ref(creationPages.map(item => ({ ...item, url: '', mode: 'embed' as CreationMode })));
+const editors = ref(creationPages.map(item => ({ ...item, url: '', mode: 'embed' as CreationMode, model: item.defaultModel as string })));
+const savingModels = ref(false), modelsFailed = ref(false), modelsSaved = ref(false);
+const invalidModels = computed(() => editors.value.some(item => item.model.trim().length > 100 || /\s/u.test(item.model.trim())));
 const modeOptions = [
 	{ value: 'embed' as const, label: creationText.embed },
 	{ value: 'newTab' as const, label: creationText.newTab },
@@ -88,7 +101,7 @@ const copyFailed = ref('');
 const isInvalid = (value: string) => value.trim() !== '' && normalizeCreationUrl(value, siteUrl) == null;
 const hasInvalidUrl = computed(() => editors.value.some(item => isInvalid(item.url)));
 
-watch(editors, () => { saved.value = false; }, { deep: true });
+watch(editors, () => { saved.value = false; modelsSaved.value = false; }, { deep: true });
 
 async function copyOrigin(key: string) {
 	copiedOrigin.value = '';
@@ -106,6 +119,7 @@ async function load() {
 		for (const item of editors.value) {
 			item.url = meta.clientOptions[item.urlKey] ?? '';
 			item.mode = meta.clientOptions[item.modeKey] ?? 'embed';
+			item.model = meta.clientOptions[item.modelKey] ?? item.defaultModel;
 		}
 		loaded.value = true;
 	} catch {
@@ -136,6 +150,19 @@ async function save() {
 	} finally {
 		saving.value = false;
 	}
+}
+
+async function saveModels() {
+	if (!$i?.isAdmin || !loaded.value || savingModels.value || invalidModels.value) return;
+	savingModels.value = true; modelsFailed.value = false; modelsSaved.value = false;
+	const clientOptions: Partial<Misskey.entities.MetaClientOptions> = {};
+	for (const item of editors.value) clientOptions[item.modelKey] = item.model.trim();
+	try {
+		await misskeyApi('admin/update-meta', { clientOptions });
+		Object.assign(instance.clientOptions, clientOptions);
+		await fetchInstance(true).catch(() => {});
+		modelsSaved.value = true;
+	} catch { modelsFailed.value = true; } finally { savingModels.value = false; }
 }
 
 onMounted(load);
