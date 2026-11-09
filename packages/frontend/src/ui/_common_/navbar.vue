@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="communityText.review" :class="[$style.item, { [$style.active]: activeCommunityModule === 'review' }]" to="/community/review" :aria-label="communityText.review" :aria-current="activeCommunityModule === 'review' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-shield-check ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.review }}</span></MkA>
 			<div v-if="!iconOnly" :class="$style.groupLabel">{{ workbenchText.tools }}</div>
 			<div v-else :class="$style.divider"></div>
-			<MkA v-tooltip.noDelay.right="i18n.ts.timeline" :class="$style.item" :activeClass="$style.active" to="/timeline" exact>
+			<MkA v-tooltip.noDelay.right="i18n.ts.timeline" :class="$style.item" :activeClass="$style.active" to="/timeline" :aria-label="i18n.ts.timeline" exact>
 				<i :class="$style.itemIcon" class="ti ti-home ti-fw" style="view-transition-name: navbar-homeIcon;"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
 			</MkA>
 			<template v-for="item in prefer.r.menu.value">
@@ -35,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					:class="[$style.item]"
 					:activeClass="$style.active"
 					:to="navbarItemDef[item].to"
+					:aria-label="navbarItemDef[item].title"
 					v-on="navbarItemDef[item].action ? { click: navbarItemDef[item].action } : {}"
 				>
 					<i class="ti-fw" :class="[$style.itemIcon, navbarItemDef[item].icon]" :style="{ viewTransitionName: 'navbar-item-' + item }"></i><span :class="$style.itemText">{{ navbarItemDef[item].title }}</span>
@@ -45,14 +46,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</component>
 			</template>
 			<div :class="$style.divider"></div>
-			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="i18n.ts.controlPanel" :class="$style.item" :activeClass="$style.active" to="/admin">
+			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="i18n.ts.controlPanel" :class="$style.item" :activeClass="$style.active" to="/admin" :aria-label="i18n.ts.controlPanel">
 				<i :class="$style.itemIcon" class="ti ti-dashboard ti-fw" style="view-transition-name: navbar-controlPanel;"></i><span :class="$style.itemText">{{ i18n.ts.controlPanel }}</span>
 			</MkA>
-			<button class="_button" :class="$style.item" @click="more">
+			<button class="_button" :class="$style.item" :aria-label="i18n.ts.more" @click="more">
 				<i :class="$style.itemIcon" class="ti ti-grid-dots ti-fw" style="view-transition-name: navbar-more;"></i><span :class="$style.itemText">{{ i18n.ts.more }}</span>
 				<span v-if="otherMenuItemIndicated" :class="$style.itemIndicator" class="_blink"><i class="_indicatorCircle"></i></span>
 			</button>
-			<MkA v-tooltip.noDelay.right="i18n.ts.settings" :class="$style.item" :activeClass="$style.active" to="/settings">
+			<MkA v-tooltip.noDelay.right="i18n.ts.settings" :class="$style.item" :activeClass="$style.active" to="/settings" :aria-label="i18n.ts.settings">
 				<i :class="$style.itemIcon" class="ti ti-settings ti-fw" style="view-transition-name: navbar-settings;"></i><span :class="$style.itemText">{{ i18n.ts.settings }}</span>
 			</MkA>
 		</div>
@@ -65,7 +66,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<button v-tooltip.noDelay.right="communityText.publish" class="_button" :class="[$style.post]" data-testid="open-post-form" :aria-label="communityText.publish" @click="requestCommunityComposer(() => router.push('/community/compose'))">
 				<i class="ti ti-pencil ti-fw" :class="$style.postIcon" aria-hidden="true"></i><span :class="$style.postText">{{ communityText.publish }}</span>
 			</button>
-			<button v-if="$i != null" v-tooltip.noDelay.right="`${i18n.ts.account}: @${$i.username}`" class="_button" :class="[$style.account]" @click="openAccountMenu">
+			<button v-if="$i != null" v-tooltip.noDelay.right="`${i18n.ts.account}: @${$i.username}`" class="_button" :class="[$style.account]" :aria-label="`${i18n.ts.account}: @${$i.username}`" @click="openAccountMenu">
 				<MkAvatar :user="$i" :class="$style.avatar" style="view-transition-name: navbar-avatar;"/><MkAcct class="_nowrap" :class="$style.acct" :user="$i"/>
 			</button>
 		</div>
