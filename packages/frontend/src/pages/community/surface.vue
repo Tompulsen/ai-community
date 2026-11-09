@@ -107,7 +107,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
 					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
 						<header :class="$style.drawerHeading"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ ft.sidebar }}</span><button v-if="discoveryCompact" type="button" :class="$style.quiet" :aria-label="ft.closeSidebar" :title="ft.closeSidebar" data-testid="close-discovery" @click="closeDiscovery"><i :class="discoveryCompact ? 'ti ti-x' : 'ti ti-chevron-right'" aria-hidden="true"></i></button></header>
-						<div :class="$style.drawerBody"><DiscoverySidebar v-model:query="query" @search="search()" @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
+						<div :class="$style.drawerBody"><DiscoverySidebar @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
 					</div>
 				</div>
 			</Teleport>

@@ -21,7 +21,7 @@ const communityBaseText = {
 		review: '核对待审与已公开的作品，审核通过、驳回或违规下架。',
 		ai: '创作工具的下一站。这里将连接第三方 AI 服务。',
 	},
-	search: '搜索当前社区', searchPlaceholder: '搜索提示词、作品或标签', searchAction: '搜索',
+	search: '搜索当前社区', searchPlaceholder: '搜索作品、提示词、标签或创作者', searchAction: '搜索',
 	writePrompt: '分享你的最新创作', publish: '投稿作品', submit: '提交审核', submitting: '正在提交…', close: '关闭投稿弹窗',
 	login: '登录', signup: '注册账号', signupClosed: '注册受限，可使用邀请码注册',
 	loginTitle: '登录后，加入创作与交流', loginHint: '你可以先浏览已公开的作品。投稿和评论需要登录。',

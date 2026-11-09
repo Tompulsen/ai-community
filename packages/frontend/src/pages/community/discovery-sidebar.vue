@@ -5,17 +5,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <aside :class="$style.sidebar" :aria-label="t.sidebar" data-testid="community-discovery">
-	<section :class="$style.module">
-		<h2 :id="searchId">{{ t.search }}</h2>
-		<form :class="$style.search" role="search" :aria-labelledby="searchId" @submit.prevent="emit('search')">
-			<div :class="$style.searchField">
-				<i class="ti ti-search" aria-hidden="true"></i>
-				<input v-model="query" type="search" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/>
-				<button v-if="query" type="button" class="_button" :class="$style.clear" :aria-label="t.clearSearch" @click="clearSearch"><i class="ti ti-x" aria-hidden="true"></i></button>
-			</div>
-			<button type="submit" class="_button" :class="$style.searchButton">{{ t.searchAction }}</button>
-		</form>
-	</section>
 	<div :class="$style.sections">
 		<section :class="$style.module" :aria-labelledby="announcementsId" :aria-busy="announcementsLoading">
 			<header :class="$style.heading"><h2 :id="announcementsId">{{ t.announcements }}</h2><a href="/announcements" @click.prevent="emit('navigate', '/announcements')">{{ t.allAnnouncements }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></a></header>
@@ -57,9 +46,7 @@ import { $i } from '@/i.js';
 import { prefer } from '@/preferences.js';
 import { confirm } from '@/os.js';
 
-const query = defineModel<string>('query', { required: true });
-const emit = defineEmits<{ (event: 'search'): void; (event: 'navigate', path: string): void; (event: 'login'): void; }>();
-const searchId = useId();
+const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; }>();
 const announcementsId = useId();
 const creatorsId = useId();
 const announcements = ref<entities.Announcement[]>([]);
@@ -79,11 +66,6 @@ let suspended = false;
 
 const profilePath = (creator: entities.UserDetailed) => `/@${creator.username}`;
 const formatDate = (date: string) => new Date(date).toLocaleDateString(homeLanguage, { month: 'short', day: 'numeric' });
-
-function clearSearch() {
-	query.value = '';
-	emit('search');
-}
 
 async function loadAnnouncements() {
 	announcementsController?.abort();
@@ -216,18 +198,8 @@ onActivated(() => {
 .sidebar :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
 .module { min-width: 0; padding: 20px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius, 12px); background: var(--MI_THEME-panel); }
 .module h2 { margin: 0; font-size: 15px; line-height: 1.5; font-weight: 700; }
-.search { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
-.searchField { min-width: 0; display: flex; align-items: center; gap: 8px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 12px; padding-left: 12px; background: var(--MI_THEME-bg); }
-.searchField:focus-within { border-color: var(--MI_THEME-accent); outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; }
-.sidebar .searchField input { min-width: 0; flex: 1; width: 100%; min-height: 44px; padding: 10px 0; border: 0; border-radius: 12px; background: transparent; color: var(--MI_THEME-fg); font: inherit; caret-color: var(--MI_THEME-accent); }
-.sidebar .searchField input:focus-visible { outline: none; }
-.searchField input::-webkit-search-cancel-button { display: none; }
-.searchField input::placeholder { color: var(--MI_THEME-fg); opacity: 1; }
-.sidebar .clear { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 10px; padding: 0; background: transparent; color: var(--MI_THEME-fg); }
-.sidebar .searchButton, .sidebar .retry, .sidebar .followButton { display: inline-flex; justify-content: center; align-items: center; min-height: 44px; padding: 8px 14px; border-radius: 10px; background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); font: inherit; font-weight: 600; border: 1px solid transparent; }
-.sidebar .searchButton { background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); }
-.sidebar .searchButton:hover { background: var(--MI_THEME-accent); filter: brightness(.92); }
- .sidebar .retry:hover, .sidebar .followButton:not(:disabled):hover, .sidebar .clear:hover { background: var(--MI_THEME-buttonHoverBg); }
+.sidebar .retry, .sidebar .followButton { display: inline-flex; justify-content: center; align-items: center; min-height: 44px; padding: 8px 14px; border-radius: 10px; background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); font: inherit; font-weight: 600; border: 1px solid transparent; }
+.sidebar .retry:hover, .sidebar .followButton:not(:disabled):hover { background: var(--MI_THEME-buttonHoverBg); }
 .sections { display: flex; flex-direction: column; gap: 20px; }
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .heading > a { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; min-height: 44px; font-size: 12px; text-decoration: none; }
@@ -265,8 +237,5 @@ onActivated(() => {
 }
 @container (max-width: 600px) {
 	.module { padding: 16px; }
-	.sidebar .searchField input { font-size: 16px; }
-	.search { gap: 8px; }
-	.sidebar .searchButton { padding-inline: 12px; }
 }
 </style>

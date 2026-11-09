@@ -44,7 +44,7 @@ export function useDiscoveryDrawer(root: Ref<HTMLElement | undefined>, enabled: 
 		if (discoveryCompact.value) mobileOpen.value = true;
 		else desktopOpen.value = true;
 		await nextTick();
-		if (discoveryOpen.value) discoveryPanel.value?.querySelector<HTMLInputElement>('input[type="search"]')?.focus({ preventScroll: true });
+		if (discoveryOpen.value) discoveryPanel.value?.focus({ preventScroll: true });
 	}
 
 	function discoveryKeydown(event: KeyboardEvent) {
