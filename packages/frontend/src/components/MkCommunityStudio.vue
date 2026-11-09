@@ -46,7 +46,7 @@ import { createBrowserCommunityGateway } from '@/pages/community/browser-gateway
 import { instance } from '@/instance.js';
 import { useRouter } from '@/router.js';
 
-const props = defineProps<{ origin: string; kind: string; title: string; active: boolean; defaultModel?: string; remix?: StudioRemix }>();
+const props = defineProps<{ origin: string; kind: string; title: string; active: boolean; defaultModel?: string; defaultModels?: Record<string, string>; remix?: StudioRemix }>();
 const emit = defineEmits<{ (event: 'identity', value: string): void }>();
 const remixStatus = ref('');
 const remixSent = ref('');
@@ -130,7 +130,7 @@ function prepareFrame(nextContext: string, kind: string, origin: string) {
 function sendLaunch() {
 	if (!frameHello || launchSent || !launch.value || !props.active || !frame.value?.contentWindow) return;
 	launchSent = true;
-	frame.value.contentWindow.postMessage({ type: 'community-launch', context, attempt: attempt.value, code: launch.value.code, subject: launch.value.subject, userId: launch.value.userId, defaultModel: props.defaultModel }, props.origin);
+	frame.value.contentWindow.postMessage({ type: 'community-launch', context, attempt: attempt.value, code: launch.value.code, subject: launch.value.subject, userId: launch.value.userId, defaultModel: props.defaultModel, defaultModels: { ...props.defaultModels } }, props.origin);
 }
 
 async function connect() {

@@ -21,8 +21,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkButton @click="refresh">{{ i18n.ts.retry }}</MkButton>
 		</div>
 		<template v-else-if="ready">
+			<nav v-if="!studioOrigin" :class="$style.modules" :aria-label="workbenchText.modules">
+				<MkA v-for="item in creationPages" :key="item.key" :to="`/create/${item.key}`" :class="[$style.module, { [$style.selectedModule]: item.key === props.kind }]" :aria-current="item.key === props.kind ? 'page' : undefined"><i :class="item.icon" aria-hidden="true"></i>{{ item.title }}</MkA>
+			</nav>
 			<MkStudioRemix v-if="remixOpen && remixId && active && studioOrigin" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
-			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="props.kind" :title="definition.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :remix="remix" @identity="studioIdentity = $event"/>
+			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="definition.key" :title="workbenchText.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :defaultModels="defaultModels" :remix="remix" @identity="studioIdentity = $event"/>
 			<div v-else-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
 				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
 				<h1>{{ creationText.notConfigured }}</h1>
@@ -81,7 +84,7 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMoun
 import { url as siteUrl } from '@@/js/config.js';
 import type { StudioRemix } from '@/utility/studio-remix.js';
 import MkButton from '@/components/MkButton.vue';
-import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl } from '@/utility/creation-pages.js';
+import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl, workbenchText } from '@/utility/creation-pages.js';
 import { fetchInstance, instance } from '@/instance.js';
 import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
@@ -98,6 +101,7 @@ const remix = ref<StudioRemix>();
 const remixOpen = ref(!!props.remixId);
 watch(() => props.remixId, value => { remix.value = undefined; remixOpen.value = !!value; });
 const definition = computed(() => creationPages.find(item => item.key === props.kind));
+const defaultModels = computed(() => Object.fromEntries(creationPages.map(item => [item.key, instance.clientOptions?.[item.modelKey] ?? item.defaultModel])));
 const targetUrl = computed(() => {
 	if (!$i) return null;
 	const value = definition.value && instance.clientOptions?.[definition.value.urlKey];
@@ -229,10 +233,14 @@ onActivated(activate);
 onDeactivated(deactivate);
 onBeforeUnmount(deactivate);
 watch(() => props.kind, refresh);
-definePage(() => ({ title: definition.value?.title ?? i18n.ts.notFound, subtitle: studioIdentity.value, icon: definition.value?.icon ?? 'ti ti-alert-triangle', needWideArea: true }));
+definePage(() => ({ title: definition.value ? workbenchText.title : i18n.ts.notFound, subtitle: studioIdentity.value, icon: definition.value ? 'ti ti-sparkles' : 'ti ti-alert-triangle', needWideArea: true }));
 </script>
 
 <style lang="scss" module>
+.modules { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 16px; background: var(--MI_THEME-panel); }
+.module { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 14px; &:hover { text-decoration: none; background: var(--MI_THEME-buttonHoverBg); } &:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: -2px; } }
+.selectedModule { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); font-weight: 600; }
+
 .workspace {
 	display: flex;
 	flex-direction: column;

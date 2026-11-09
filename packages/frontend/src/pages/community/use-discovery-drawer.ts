@@ -27,6 +27,7 @@ export function useDiscoveryDrawer(root: Ref<HTMLElement | undefined>, enabled: 
 	const discoveryOpen = computed(() => active.value && enabled() && (discoveryCompact.value ? mobileOpen.value : desktopOpen.value));
 	let resize: ResizeObserver | undefined;
 	let releaseFocus: (() => void) | undefined;
+	let restoreToggleFocus = false;
 
 	watch(desktopOpen, value => {
 		try { window.localStorage.setItem(storageKey, String(value)); } catch { /* Storage is optional. */ }
@@ -58,9 +59,10 @@ export function useDiscoveryDrawer(root: Ref<HTMLElement | undefined>, enabled: 
 	watch([discoveryOpen, discoveryCompact], ([open, compact], previous) => {
 		if (!open || !compact) { releaseFocus?.(); releaseFocus = undefined; }
 		if (open && compact && !previous?.every(Boolean)) discoveryZIndex.value = claimZIndex('middle');
-		if (!open && discoveryLayer.value?.contains(window.document.activeElement)) discoveryToggle.value?.focus({ preventScroll: true });
+		if (!open && discoveryLayer.value?.contains(window.document.activeElement)) restoreToggleFocus = true;
 	}, { flush: 'sync' });
 	watch([discoveryOpen, discoveryCompact, discoveryLayer], ([open, compact]) => {
+		if (restoreToggleFocus) { restoreToggleFocus = false; if (active.value) discoveryToggle.value?.focus({ preventScroll: true }); }
 		if (open && compact && discoveryLayer.value && !releaseFocus) releaseFocus = focusTrap(discoveryLayer.value).release;
 	}, { flush: 'post' });
 	watch(discoveryCompact, () => { mobileOpen.value = false; });

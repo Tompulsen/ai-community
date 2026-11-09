@@ -16,18 +16,18 @@ import { computed } from 'vue';
 import { useRouter } from '@/router.js';
 import { i18n } from '@/i18n.js';
 import { prefer } from '@/preferences.js';
-import { creationText, creationPages } from '@/utility/creation-pages.js';
+import { creationText, workbenchText } from '@/utility/creation-pages.js';
 
 const router = useRouter();
 const navigationItems = [
 	{ key: 'community', title: creationText.community, icon: 'ti ti-users', to: '/community' },
-	...creationPages.map(item => ({ ...item, to: `/create/${item.key}` })),
+	{ key: 'workbench', title: workbenchText.title, icon: 'ti ti-sparkles', to: '/create/text' },
 ];
 const activeItem = computed(() => {
 	const current = router.currentRef.value;
 	if (current.route.path === '/community') return 'community';
 	if (current.route.path === '/community/:module' && ['video', 'image', 'resource', 'text', 'code', 'skill', 'knowledge'].includes(String(current.props.get('module')))) return 'community';
-	return current.route.path === '/create/:kind' ? current.props.get('kind') : null;
+	return current.route.path === '/create/:kind' || current.route.path === '/community/ai' ? 'workbench' : null;
 });
 
 defineProps<{
@@ -40,8 +40,8 @@ defineProps<{
 .root {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	padding: 12px;
+	gap: 4px;
+	padding: 0;
 	direction: ltr;
 }
 .link {
@@ -58,10 +58,9 @@ defineProps<{
 	text-decoration: none;
 	position: relative;
 	transition: background-color 180ms ease, color 180ms ease;
-	> i { flex-shrink: 0; font-size: 20px; transition: transform 280ms var(--community-ease, ease-out); }
-	> span { transition: transform 280ms var(--community-ease, ease-out); }
-	&:hover, &:focus-visible { background: var(--MI_THEME-buttonHoverBg); > i { transform: translateY(-2px) rotate(-7deg); } > span { transform: translateX(3px); } }
-	&:active { > i, > span { transform: translateY(1px); } }
+	> i { flex-shrink: 0; font-size: 20px; }
+	&:hover { background: var(--MI_THEME-buttonHoverBg); }
+	&:active { background: var(--MI_THEME-accentedBg); }
 	&:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: 2px; }
 }
 .active { color: var(--MI_THEME-accent); background: var(--MI_THEME-accentedBg); font-weight: 650; }

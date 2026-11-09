@@ -94,11 +94,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
-		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
+		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscoveryControl]: isPublicFeed && !discoveryCompact, [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
+			<div v-if="isPublicFeed && !discoveryCompact" :class="$style.discoveryRail">
+				<button ref="discoveryToggle" type="button" :class="$style.discoveryEdge" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-chevron-right' : 'ti ti-chevron-left'" aria-hidden="true"></i></button>
+			</div>
 			<Teleport to="body" :disabled="!discoveryCompact">
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
 					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
-						<header :class="$style.drawerHeading"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ ft.sidebar }}</span><button type="button" :class="$style.quiet" :aria-label="ft.closeSidebar" :title="ft.closeSidebar" data-testid="close-discovery" @click="closeDiscovery"><i :class="discoveryCompact ? 'ti ti-x' : 'ti ti-chevron-right'" aria-hidden="true"></i></button></header>
+						<header :class="$style.drawerHeading"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ ft.sidebar }}</span><button v-if="discoveryCompact" type="button" :class="$style.quiet" :aria-label="ft.closeSidebar" :title="ft.closeSidebar" data-testid="close-discovery" @click="closeDiscovery"><i :class="discoveryCompact ? 'ti ti-x' : 'ti ti-chevron-right'" aria-hidden="true"></i></button></header>
 						<div :class="$style.drawerBody"><DiscoverySidebar v-model:query="query" @search="search" @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
 					</div>
 				</div>
@@ -114,7 +117,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
 					<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span v-if="!isPublicFeed">{{ t.refresh }}</span></button>
-					<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.secondary, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ discoveryCompact ? ft.explore : discoveryOpen ? ft.closeSidebar : ft.openSidebar }}</button>
+					<button v-if="isPublicFeed && discoveryCompact" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i></button>
 				</div>
 				<div v-if="isPublicFeed && activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
@@ -170,7 +173,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<div :class="$style.guideContent"><section><h2>{{ t.process }}</h2><ol><li v-for="step in t.processItems" :key="step">{{ step }}</li></ol></section><section><h2>{{ t.guidelines }}</h2><ul><li v-for="item in t.guideItems" :key="item">{{ item }}</li></ul></section></div>
 				</details>
 				<nav :class="$style.footerLinks" :aria-label="t.workspace">
-					<a href="/community/ai" @click.prevent="emit('navigate', '/community/ai')">{{ t.ai }} · {{ t.reserved }}</a>
+					<a href="/community/ai" @click.prevent="emit('navigate', '/community/ai')">{{ t.ai }}</a>
 					<a v-if="signedIn" href="/community/mine" @click.prevent="emit('navigate', '/community/mine')">{{ t.mine }}</a><template v-if="moderator"><a href="/community/review" @click.prevent="emit('navigate', '/community/review')">{{ t.review }}</a><a href="/admin/users" @click.prevent="emit('navigate', '/admin/users')">{{ t.users }}</a><a href="/admin/abuses" @click.prevent="emit('navigate', '/admin/abuses')">{{ t.reports }}</a></template>
 				</nav>
 			</footer>
@@ -704,15 +707,19 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .tabs a[aria-current], .profileTabs button[aria-pressed='true'] { font-weight: 700; color: var(--MI_THEME-fg); background: var(--MI_THEME-panel); }
 .profileTabs button { border: 0; background: transparent; color: var(--MI_THEME-fg); }
 .columns { display: grid; grid-template-columns: minmax(0, 1fr); }
-.withDiscovery { grid-template-columns: minmax(0, 1fr) clamp(280px, 26%, 360px); column-gap: var(--community-gap); align-items: start; }
+.withDiscoveryControl { min-height: calc(100dvh - 128px); grid-template-columns: minmax(0, 1fr) 20px; column-gap: 16px; align-items: start; }
+.withDiscovery { grid-template-columns: minmax(0, 1fr) 20px clamp(280px, 26%, 360px); }
 .withDiscovery .feed { grid-column: 1; grid-row: 1; }
-.discovery { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
+.discovery { grid-column: 3; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
 .discovery:not(.drawerLayer) .drawerPanel { display: flex; flex-direction: column; max-height: calc(100dvh - 96px); }
 .discovery:not(.drawerLayer) .drawerHeading { flex-shrink: 0; }
 .discovery:not(.drawerLayer) .drawerBody { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--MI_THEME-divider) transparent; padding: 4px; margin: -4px; }
 .drawerHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; margin-bottom: 12px; color: var(--MI_THEME-fg); font-size: 13px; font-weight: 600; span { display: inline-flex; align-items: center; gap: 8px; } button { width: 44px; height: 44px; padding: 0; } i { font-size: 18px; } }
 .drawerBody { min-height: 0; min-width: 0; }
-.discoveryToggle { min-height: 44px; gap: 8px; font-size: 12px !important; i { font-size: 18px; } }
+.discoveryToggle { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; i { font-size: 18px; } }
+.discoveryRail { grid-column: 2; grid-row: 1; position: sticky; top: calc(100dvh - 160px); display: flex; justify-content: center; }
+.discoveryEdge { position: relative; display: grid; place-items: center; width: 20px; height: 52px; padding: 0; border: 0; border-radius: 10px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); transition: background-color 160ms ease, color 160ms ease; i { font-size: 14px; } &::after { content: ''; position: absolute; inset: 0 -12px; } &:hover { background: var(--MI_THEME-buttonHoverBg); color: var(--MI_THEME-accent); } &:focus-visible { outline-offset: 2px; } }
+@media (prefers-reduced-motion: reduce) { .discoveryEdge { transition: none; } }
 .drawerLayer { position: fixed; inset: 0; background: rgb(0 0 0 / .32); color: var(--MI_THEME-fg); font: 14px/1.6 var(--community-font, sans-serif); }
 .drawerLayer, .drawerLayer * { box-sizing: border-box; }
 .drawerLayer :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }

@@ -7,24 +7,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div :class="[$style.root, { [$style.iconOnly]: iconOnly }]">
 	<div :class="$style.body">
 		<div :class="$style.top">
-			<button v-tooltip.noDelay.right="instance.name ?? i18n.ts.instance" class="_button" :class="$style.instance" @click="openInstanceMenu">
-				<img :src="instance.iconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon" style="view-transition-name: navbar-serverIcon;"/>
+			<button v-tooltip.noDelay.right="instance.name ?? i18n.ts.instance" class="_button" :class="$style.instance" :aria-label="instance.name ?? i18n.ts.instance" @click="openInstanceMenu">
+				<img :src="instance.iconUrl || '/favicon.ico'" alt="" :class="$style.instanceIcon"/>
+				<span v-if="!iconOnly" :class="$style.instanceName">{{ instance.name ?? i18n.ts.instance }}</span>
 			</button>
-			<button v-if="!iconOnly" v-tooltip.noDelay.right="i18n.ts.realtimeMode" class="_button" :class="[$style.realtimeMode, store.r.realtimeMode.value ? $style.on : null]" @click="toggleRealtimeMode">
-				<i v-if="store.r.realtimeMode.value" class="ti ti-bolt ti-fw"></i>
-				<i v-else class="ti ti-bolt-off ti-fw"></i>
-			</button>
-			<button v-if="!iconOnly && showWidgetButton" v-tooltip.noDelay.right="i18n.ts.widgets" class="_button" :class="[$style.widget]" @click="() => emit('widgetButtonClick')">
-				<i class="ti ti-apps ti-fw"></i>
-			</button>
+			<button v-if="!forceIconOnly && !props.asDrawer" class="_button" :class="$style.collapse" :aria-label="iconOnly ? workbenchText.expand : workbenchText.collapse" :title="iconOnly ? workbenchText.expand : workbenchText.collapse" @click="toggleIconOnly"><i :class="iconOnly ? 'ti ti-layout-sidebar-left-expand' : 'ti ti-layout-sidebar-left-collapse'" aria-hidden="true"></i></button>
 		</div>
 		<div :class="$style.middle">
+			<div v-if="!iconOnly" :class="$style.groupLabel">{{ workbenchText.creation }}</div>
 			<MkCommunityNav :compact="iconOnly"/>
+			<div v-if="!iconOnly" :class="$style.groupLabel">{{ workbenchText.personal }}</div>
 			<MkA v-if="$i" :class="$style.item" :activeClass="$style.active" :to="`/@${$i.username}`" :aria-label="communityText.profile"><i :class="$style.itemIcon" class="ti ti-user ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.profile }}</span></MkA>
-			<MkA v-tooltip.noDelay.right="communityText.ai" :class="[$style.item, { [$style.active]: activeCommunityModule === 'ai' }]" to="/community/ai" :aria-label="communityText.ai" :aria-current="activeCommunityModule === 'ai' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-sparkles ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.ai }}</span></MkA>
 			<MkA v-tooltip.noDelay.right="communityText.mine" :class="[$style.item, { [$style.active]: activeCommunityModule === 'mine' }]" to="/community/mine" :aria-label="communityText.mine" :aria-current="activeCommunityModule === 'mine' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-folders ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.mine }}</span></MkA>
 			<MkA v-if="$i != null && ($i.isAdmin || $i.isModerator)" v-tooltip.noDelay.right="communityText.review" :class="[$style.item, { [$style.active]: activeCommunityModule === 'review' }]" to="/community/review" :aria-label="communityText.review" :aria-current="activeCommunityModule === 'review' ? 'page' : undefined"><i :class="$style.itemIcon" class="ti ti-shield-check ti-fw" aria-hidden="true"></i><span :class="$style.itemText">{{ communityText.review }}</span></MkA>
-			<div :class="$style.divider"></div>
+			<div v-if="!iconOnly" :class="$style.groupLabel">{{ workbenchText.tools }}</div>
+			<div v-else :class="$style.divider"></div>
 			<MkA v-tooltip.noDelay.right="i18n.ts.timeline" :class="$style.item" :activeClass="$style.active" to="/timeline" exact>
 				<i :class="$style.itemIcon" class="ti ti-home ti-fw" style="view-transition-name: navbar-homeIcon;"></i><span :class="$style.itemText">{{ i18n.ts.timeline }}</span>
 			</MkA>
@@ -60,13 +57,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</MkA>
 		</div>
 		<div :class="$style.bottom">
-			<button v-if="iconOnly && showWidgetButton" v-tooltip.noDelay.right="i18n.ts.widgets" class="_button" :class="[$style.widget]" @click="() => emit('widgetButtonClick')">
-				<i class="ti ti-apps ti-fw"></i>
-			</button>
-			<button v-if="iconOnly" v-tooltip.noDelay.right="i18n.ts.realtimeMode" class="_button" :class="[$style.realtimeMode, store.r.realtimeMode.value ? $style.on : null]" @click="toggleRealtimeMode">
-				<i v-if="store.r.realtimeMode.value" class="ti ti-bolt ti-fw"></i>
-				<i v-else class="ti ti-bolt-off ti-fw"></i>
-			</button>
+			<div :class="$style.utilities">
+				<button v-if="showWidgetButton" v-tooltip.noDelay.right="i18n.ts.widgets" class="_button" :class="$style.utility" :aria-label="i18n.ts.widgets" @click="() => emit('widgetButtonClick')"><i class="ti ti-apps" aria-hidden="true"></i></button>
+				<button v-tooltip.noDelay.right="i18n.ts.realtimeMode" class="_button" :class="[$style.utility, { [$style.on]: store.r.realtimeMode.value }]" :aria-label="i18n.ts.realtimeMode" @click="toggleRealtimeMode"><i :class="store.r.realtimeMode.value ? 'ti ti-bolt' : 'ti ti-bolt-off'" aria-hidden="true"></i></button>
+				<button v-if="prefer.r.showNavbarSubButtons.value" v-tooltip.noDelay.right="i18n.ts.settings" class="_button" :class="$style.utility" :aria-label="i18n.ts.settings" @click="menuEdit"><i class="ti ti-settings-2" aria-hidden="true"></i></button>
+			</div>
 			<button v-tooltip.noDelay.right="communityText.publish" class="_button" :class="[$style.post]" data-testid="open-post-form" :aria-label="communityText.publish" @click="requestCommunityComposer(() => router.push('/community/compose'))">
 				<i class="ti ti-pencil ti-fw" :class="$style.postIcon" aria-hidden="true"></i><span :class="$style.postText">{{ communityText.publish }}</span>
 			</button>
@@ -76,41 +71,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</div>
 
-	<!--
-	<svg viewBox="0 0 16 48" :class="$style.subButtonShape">
-		<g transform="matrix(0.333333,0,0,0.222222,0.000895785,13.3333)">
-			<path d="M23.935,-24C37.223,-24 47.995,-7.842 47.995,12.09C47.995,34.077 47.995,62.07 47.995,84.034C47.995,93.573 45.469,102.721 40.972,109.466C36.475,116.211 30.377,120 24.018,120L23.997,120C10.743,120 -0.003,136.118 -0.003,156C-0.003,156 -0.003,156 -0.003,156L-0.003,-60L-0.003,-59.901C-0.003,-50.379 2.519,-41.248 7.007,-34.515C11.496,-27.782 17.584,-24 23.931,-24C23.932,-24 23.934,-24 23.935,-24Z" style="fill:var(--MI_THEME-navBg);"/>
-		</g>
-	</svg>
-	-->
-
-	<div v-if="!forceIconOnly && prefer.r.showNavbarSubButtons.value" :class="$style.subButtons">
-		<div :class="$style.subButton">
-			<svg viewBox="0 0 16 64" :class="$style.subButtonShape">
-				<g transform="matrix(0.333333,0,0,0.222222,0.000895785,21.3333)">
-					<path d="M47.488,7.995C47.79,10.11 47.943,12.266 47.943,14.429C47.997,26.989 47.997,84 47.997,84C47.997,84 44.018,118.246 23.997,133.5C-0.374,152.07 -0.003,192 -0.003,192L-0.003,-96C-0.003,-96 0.151,-56.216 23.997,-37.5C40.861,-24.265 46.043,-1.243 47.488,7.995Z" style="fill:var(--MI_THEME-navBg);"/>
-				</g>
-			</svg>
-			<button class="_button" :class="$style.subButtonClickable" @click="menuEdit"><i :class="$style.subButtonIcon" class="ti ti-settings-2"></i></button>
-		</div>
-		<template v-if="!props.asDrawer">
-			<div :class="$style.subButtonGapFill"></div>
-			<div :class="$style.subButtonGapFillDivider"></div>
-			<div :class="$style.subButton">
-				<svg viewBox="0 0 16 64" :class="$style.subButtonShape">
-					<g transform="matrix(0.333333,0,0,0.222222,0.000895785,21.3333)">
-						<path d="M47.488,7.995C47.79,10.11 47.943,12.266 47.943,14.429C47.997,26.989 47.997,84 47.997,84C47.997,84 44.018,118.246 23.997,133.5C-0.374,152.07 -0.003,192 -0.003,192L-0.003,-96C-0.003,-96 0.151,-56.216 23.997,-37.5C40.861,-24.265 46.043,-1.243 47.488,7.995Z" style="fill:var(--MI_THEME-navBg);"/>
-					</g>
-				</svg>
-				<button class="_button" :class="$style.subButtonClickable" @click="toggleIconOnly"><i v-if="iconOnly" class="ti ti-chevron-right" :class="$style.subButtonIcon"></i><i v-else class="ti ti-chevron-left" :class="$style.subButtonIcon"></i></button>
-			</div>
-		</template>
-	</div>
 </div>
 </template>
 
 <script lang="ts" setup>
-import { computed, defineAsyncComponent, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { openInstanceMenu } from './common.js';
 import * as os from '@/os.js';
 import { navbarItemDef } from '@/navbar.js';
@@ -125,6 +90,7 @@ import { getAccountMenu } from '@/accounts.js';
 import { $i } from '@/i.js';
 import { communityText } from '@/pages/community/copy.js';
 import { requestCommunityComposer } from '@/pages/community/compose.js';
+import { workbenchText } from '@/utility/creation-pages.js';
 
 const router = useRouter();
 const activeCommunityModule = computed(() => {
@@ -159,6 +125,7 @@ function calcViewState() {
 }
 
 window.addEventListener('resize', calcViewState);
+onBeforeUnmount(() => window.removeEventListener('resize', calcViewState));
 
 watch(store.r.menuDisplay, () => {
 	calcViewState();
@@ -213,641 +180,55 @@ function menuEdit() {
 
 <style lang="scss" module>
 .root {
-	--nav-width: 250px;
-	--nav-icon-only-width: 80px;
-	--nav-bg-transparent: color(from var(--MI_THEME-navBg) srgb r g b / 0.5);
-
-	--subButtonWidth: 20px;
-
+	--nav-width: 232px;
+	--nav-icon-only-width: 72px;
 	flex: 0 0 var(--nav-width);
 	width: var(--nav-width);
+	min-height: 0;
 	box-sizing: border-box;
-}
-
-.body {
-	position: relative;
-	width: var(--nav-icon-only-width);
-	height: 100%;
-	box-sizing: border-box;
-	overflow: auto;
-	overflow-x: clip;
-	overscroll-behavior: contain;
 	background: var(--MI_THEME-navBg);
-	contain: strict;
-
-	/* 画面が縦に長い、設置している項目数が少ないなどの環境においても確実にbottomを最下部に表示するため */
-	display: flex;
-	flex-direction: column;
-
-	direction: rtl; /* スクロールバーを左に表示したいため */
+	color: var(--MI_THEME-navFg);
 }
-
-.top {
-	flex-shrink: 0;
-	direction: ltr;
-
-	/* 疑似progressive blur */
-	&::before {
-		position: absolute;
-		z-index: -1;
-		inset: 0;
-		content: "";
-		backdrop-filter: blur(8px);
-		mask-image: linear-gradient(
-			to top,
-			rgb(0 0 0 / 0%) 0%,
-			rgb(0 0 0 / 4.9%) 7.75%,
-			rgb(0 0 0 / 10.4%) 11.25%,
-			rgb(0 0 0 / 45%) 23.55%,
-			rgb(0 0 0 / 55%) 26.45%,
-			rgb(0 0 0 / 89.6%) 38.75%,
-			rgb(0 0 0 / 95.1%) 42.25%,
-			rgb(0 0 0 / 100%) 50%
-		);
-	}
-
-	&::after {
-		position: absolute;
-		z-index: -1;
-		inset: 0;
-		bottom: 25%;
-		content: "";
-		backdrop-filter: blur(16px);
-		mask-image: linear-gradient(
-			to top,
-			rgb(0 0 0 / 0%) 0%,
-			rgb(0 0 0 / 4.9%) 15.5%,
-			rgb(0 0 0 / 10.4%) 22.5%,
-			rgb(0 0 0 / 45%) 47.1%,
-			rgb(0 0 0 / 55%) 52.9%,
-			rgb(0 0 0 / 89.6%) 77.5%,
-			rgb(0 0 0 / 95.1%) 91.9%,
-			rgb(0 0 0 / 100%) 100%
-		);
-	}
+.body { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.top { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 72px; padding: 8px 12px; box-sizing: border-box; }
+.instance { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; min-height: 44px; text-align: left; border-radius: 8px; }
+.instanceIcon { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 8px; }
+.instanceName { font-size: 14px; line-height: 1.4; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collapse, .utility { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 44px; border-radius: 8px; color: var(--MI_THEME-navFg); }
+.collapse i, .utility i { font-size: 18px; }
+.middle { flex: 1; min-height: 0; padding: 0 12px 12px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--MI_THEME-divider) transparent; }
+.groupLabel { padding: 20px 12px 6px; color: color-mix(in srgb, var(--MI_THEME-navFg), var(--MI_THEME-navBg) 25%); font-size: 12px; line-height: 1.5; font-weight: 500; &:first-child { padding-top: 0; } }
+.item { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 8px 12px; box-sizing: border-box; border-radius: 8px; color: var(--MI_THEME-navFg); font-size: 14px; line-height: 1.5; text-align: left; transition: background-color 160ms ease, color 160ms ease; }
+.itemIcon { flex: 0 0 20px; width: 20px; font-size: 20px; }
+.itemText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item:hover, .instance:hover, .collapse:hover, .utility:hover, .account:hover { background: var(--MI_THEME-buttonHoverBg); text-decoration: none; }
+.active { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); font-weight: 650; }
+.itemIndicator { flex: 0 0 auto; margin-left: auto; color: var(--MI_THEME-navIndicator); font-size: 8px; &:has(.itemIndicateValueIcon) { animation: none; font-size: 11px; } }
+.itemIndicateValueIcon { font-variant-numeric: tabular-nums; }
+.divider { margin: 10px 12px; border-top: 1px solid var(--MI_THEME-divider); }
+.bottom { flex: 0 0 auto; padding: 0 12px 12px; background: var(--MI_THEME-navBg); }
+.utilities { display: flex; align-items: center; gap: 4px; border-top: 1px solid var(--MI_THEME-divider); padding-block: 4px; }
+.on { color: var(--MI_THEME-accent); }
+.post { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; box-sizing: border-box; border-radius: 8px; color: var(--MI_THEME-fgOnAccent); background: var(--MI_THEME-accent); font-size: 14px; font-weight: 650; &:hover { background: color-mix(in srgb, var(--MI_THEME-accent), var(--MI_THEME-fg) 12%); } }
+.postIcon { font-size: 18px; }
+.account { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px; margin-top: 6px; box-sizing: border-box; text-align: left; border-radius: 8px; }
+.avatar { flex: 0 0 auto; width: 30px; height: 30px; }
+.acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.item, .instance, .collapse, .utility, .post, .account { &:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: -2px; } }
+.post:focus-visible { outline-color: var(--MI_THEME-fgOnAccent); outline-offset: -4px; }
+.iconOnly {
+	flex-basis: var(--nav-icon-only-width); width: var(--nav-icon-only-width);
+	.top { flex-direction: column; min-height: 64px; padding: 8px 12px; }
+	.instance { justify-content: center; width: 48px; flex: none; }
+	.middle { padding-inline: 8px; }
+	.item { justify-content: center; min-height: 46px; padding: 12px; }
+	.itemText, .postText, .acct { display: none; }
+	.itemIndicator { position: absolute; top: 4px; right: 2px; }
+	.divider { margin-inline: 8px; }
+	.bottom { padding-inline: 8px; }
+	.utilities { justify-content: center; flex-wrap: wrap; gap: 0; }
+	.utility { width: 44px; }
+	.account { justify-content: center; }
 }
-
-.middle {
-	flex: 1;
-	direction: ltr;
-}
-
-.bottom {
-	flex-shrink: 0;
-	direction: ltr;
-
-	/* 疑似progressive blur */
-	&::before {
-		position: absolute;
-		z-index: -1;
-		inset: -30px 0 0 0;
-		content: "";
-		backdrop-filter: blur(8px);
-		mask-image: linear-gradient(
-			to bottom,
-			rgb(0 0 0 / 0%) 0%,
-			rgb(0 0 0 / 4.9%) 7.75%,
-			rgb(0 0 0 / 10.4%) 11.25%,
-			rgb(0 0 0 / 45%) 23.55%,
-			rgb(0 0 0 / 55%) 26.45%,
-			rgb(0 0 0 / 89.6%) 38.75%,
-			rgb(0 0 0 / 95.1%) 42.25%,
-			rgb(0 0 0 / 100%) 50%
-		);
-		pointer-events: none;
-	}
-
-	&::after {
-		position: absolute;
-		z-index: -1;
-		inset: 0;
-		top: 25%;
-		content: "";
-		backdrop-filter: blur(16px);
-		mask-image: linear-gradient(
-			to bottom,
-			rgb(0 0 0 / 0%) 0%,
-			rgb(0 0 0 / 4.9%) 15.5%,
-			rgb(0 0 0 / 10.4%) 22.5%,
-			rgb(0 0 0 / 45%) 47.1%,
-			rgb(0 0 0 / 55%) 52.9%,
-			rgb(0 0 0 / 89.6%) 77.5%,
-			rgb(0 0 0 / 95.1%) 91.9%,
-			rgb(0 0 0 / 100%) 100%
-		);
-	}
-}
-
-.subButtons {
-	position: fixed;
-	left: var(--nav-width);
-	bottom: 80px;
-	z-index: 1001;
-	box-sizing: border-box;
-}
-
-.subButton {
-	display: block;
-	position: relative;
-	z-index: 1002;
-	width: var(--subButtonWidth);
-	height: 50px;
-	box-sizing: border-box;
-	align-content: center;
-}
-
-.subButtonShape {
-	position: absolute;
-	z-index: -1;
-	top: 0;
-	bottom: 0;
-	left: 0;
-	margin: auto;
-	width: var(--subButtonWidth);
-	height: calc(var(--subButtonWidth) * 4);
-}
-
-.subButtonClickable {
-	position: absolute;
-	display: block;
-	max-width: unset;
-	width: 24px;
-	height: 42px;
-	top: 0;
-	bottom: 0;
-	left: -4px;
-	margin: auto;
-	font-size: 10px;
-
-	&:hover {
-		color: var(--MI_THEME-fgHighlighted);
-
-		.subButtonIcon {
-			opacity: 1;
-		}
-	}
-}
-
-.subButtonIcon {
-	margin-left: -4px;
-	opacity: 0.7;
-}
-
-.subButtonGapFill {
-	position: relative;
-	z-index: 1001;
-	width: var(--subButtonWidth);
-	height: 64px;
-	margin-top: -32px;
-	margin-bottom: -32px;
-	pointer-events: none;
-	background: var(--MI_THEME-navBg);
-}
-
-.subButtonGapFillDivider {
-	position: relative;
-	z-index: 1010;
-	margin-left: -2px;
-	width: 14px;
-	height: 1px;
-	background: var(--MI_THEME-divider);
-	pointer-events: none;
-}
-
-.root:not(.iconOnly) {
-	.body {
-		width: var(--nav-width);
-	}
-
-	.top {
-		--top-height: 80px;
-
-		position: sticky;
-		top: 0;
-		z-index: 1;
-		display: flex;
-		height: var(--top-height);
-		padding-left: 6px;
-	}
-
-	.instance {
-		position: relative;
-		width: var(--top-height);
-	}
-
-	.instanceIcon {
-		display: inline-block;
-		width: 38px;
-		aspect-ratio: 1;
-		border-radius: 8px;
-	}
-
-	.realtimeMode {
-		display: inline-block;
-		width: var(--top-height);
-		margin-left: auto;
-
-		&.on {
-			color: var(--MI_THEME-accent);
-		}
-	}
-
-	.widget {
-		display: inline-block;
-		width: var(--top-height);
-		margin-left: auto;
-	}
-
-	.bottom {
-		position: sticky;
-		bottom: 0;
-		padding-top: 20px;
-	}
-
-	.post {
-		position: relative;
-		display: block;
-		width: 100%;
-		height: 40px;
-		color: var(--MI_THEME-fgOnAccent);
-		font-weight: bold;
-		text-align: left;
-
-		&::before {
-			content: "";
-			display: block;
-			width: calc(100% - 38px);
-			height: 100%;
-			margin: auto;
-			position: absolute;
-			top: 0;
-			left: 0;
-			right: 0;
-			bottom: 0;
-			border-radius: 10px;
-			background: var(--MI_THEME-accent);
-		}
-
-		&:focus-visible {
-			outline: none;
-
-			&::before {
-				outline: 2px solid var(--MI_THEME-fgOnAccent);
-				outline-offset: -4px;
-			}
-		}
-
-		&:hover, &.active {
-			&::before {
-				background: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
-			}
-		}
-	}
-
-	.postIcon {
-		position: relative;
-		margin-left: 30px;
-		margin-right: 8px;
-		width: 32px;
-	}
-
-	.postText {
-		position: relative;
-	}
-
-	.account {
-		position: relative;
-		display: flex;
-		align-items: center;
-		padding: 20px 0 20px 30px;
-		width: 100%;
-		text-align: left;
-		box-sizing: border-box;
-		overflow: clip;
-
-		&:focus-visible {
-			outline: none;
-
-			> .avatar {
-				box-shadow: 0 0 0 4px var(--MI_THEME-focus);
-			}
-		}
-	}
-
-	.avatar {
-		display: block;
-		flex-shrink: 0;
-		position: relative;
-		width: 32px;
-		aspect-ratio: 1;
-		margin-right: 8px;
-	}
-
-	.acct {
-		display: block;
-		flex-shrink: 1;
-		padding-right: 8px;
-	}
-
-	.divider {
-		margin: 16px 16px;
-		border-top: solid 0.5px var(--MI_THEME-divider);
-	}
-
-	.item {
-		position: relative;
-		display: block;
-		padding-left: 30px;
-		line-height: 2.85rem;
-		text-overflow: ellipsis;
-		overflow: hidden;
-		white-space: nowrap;
-		width: 100%;
-		text-align: left;
-		box-sizing: border-box;
-		color: var(--MI_THEME-navFg);
-
-		&:hover {
-			text-decoration: none;
-			color: light-dark(hsl(from var(--MI_THEME-navFg) h s calc(l - 17)), hsl(from var(--MI_THEME-navFg) h s calc(l + 17)));
-		}
-
-		&.active {
-			color: var(--MI_THEME-navActive);
-		}
-
-		&:focus-visible {
-			outline: none;
-
-			&::before {
-				outline: 2px solid var(--MI_THEME-focus);
-				outline-offset: -2px;
-			}
-		}
-
-		&:hover, &.active, &:focus {
-			color: var(--MI_THEME-accent);
-
-			&::before {
-				content: "";
-				display: block;
-				width: calc(100% - 34px);
-				height: 100%;
-				margin: auto;
-				position: absolute;
-				top: 0;
-				left: 0;
-				right: 0;
-				bottom: 0;
-				border-radius: 10px;
-				background: var(--MI_THEME-accentedBg);
-			}
-		}
-	}
-
-	.itemIcon {
-		position: relative;
-		width: 32px;
-		margin-right: 8px;
-	}
-
-	.itemIndicator {
-		position: absolute;
-		top: 0;
-		left: 20px;
-		color: var(--MI_THEME-navIndicator);
-		font-size: 8px;
-
-		&:has(.itemIndicateValueIcon) {
-			animation: none;
-			left: auto;
-			right: 40px;
-			font-size: 10px;
-		}
-	}
-
-	.itemText {
-		position: relative;
-		font-size: 0.9em;
-	}
-
-	.subButtons {
-		left: var(--nav-width);
-	}
-}
-
-.root.iconOnly {
-	flex: 0 0 var(--nav-icon-only-width);
-	width: var(--nav-icon-only-width);
-
-	.body {
-		width: var(--nav-icon-only-width);
-	}
-
-	.top {
-		position: sticky;
-		top: 0;
-		z-index: 1;
-		padding: 20px 0;
-	}
-
-	.instance {
-		display: block;
-		text-align: center;
-		width: 100%;
-
-		&:focus-visible {
-			outline: none;
-
-			> .instanceIcon {
-				outline: 2px solid var(--MI_THEME-focus);
-				outline-offset: 2px;
-			}
-		}
-	}
-
-	.instanceIcon {
-		display: inline-block;
-		width: 30px;
-		aspect-ratio: 1;
-		border-radius: 8px;
-	}
-
-	.bottom {
-		position: sticky;
-		bottom: 0;
-		padding-top: 20px;
-	}
-
-	.widget {
-		display: block;
-		position: relative;
-		width: 100%;
-		height: 52px;
-		text-align: center;
-	}
-
-	.realtimeMode {
-		display: block;
-		position: relative;
-		width: 100%;
-		height: 52px;
-		text-align: center;
-
-		&.on {
-			color: var(--MI_THEME-accent);
-		}
-	}
-
-	.post {
-		display: block;
-		position: relative;
-		width: 100%;
-		height: 52px;
-		text-align: center;
-
-		&::before {
-			content: "";
-			display: block;
-			position: absolute;
-			top: 0;
-			left: 0;
-			right: 0;
-			bottom: 0;
-			margin: auto;
-			width: 52px;
-			aspect-ratio: 1/1;
-			border-radius: 100%;
-			background: var(--MI_THEME-accent);
-		}
-
-		&:focus-visible {
-			outline: none;
-
-			&::before {
-				outline: 2px solid var(--MI_THEME-fgOnAccent);
-				outline-offset: -4px;
-			}
-		}
-
-		&:hover, &.active {
-			&::before {
-				background: hsl(from var(--MI_THEME-accent) h s calc(l + 10));
-			}
-		}
-	}
-
-	.postIcon {
-		position: relative;
-		color: var(--MI_THEME-fgOnAccent);
-	}
-
-	.postText {
-		display: none;
-	}
-
-	.account {
-		display: block;
-		text-align: center;
-		padding: 20px 0;
-		width: 100%;
-		overflow: clip;
-
-		&:focus-visible {
-			outline: none;
-
-			> .avatar {
-				box-shadow: 0 0 0 4px var(--MI_THEME-focus);
-			}
-		}
-	}
-
-	.avatar {
-		display: inline-block;
-		width: 38px;
-		aspect-ratio: 1;
-	}
-
-	.acct {
-		display: none;
-	}
-
-	.divider {
-		margin: 8px auto;
-		width: calc(100% - 32px);
-		border-top: solid 0.5px var(--MI_THEME-divider);
-	}
-
-	.item {
-		display: block;
-		position: relative;
-		padding: 16px 0;
-		width: 100%;
-		text-align: center;
-
-		&:focus-visible {
-			outline: none;
-
-			&::before {
-				outline: 2px solid var(--MI_THEME-focus);
-				outline-offset: -2px;
-			}
-		}
-
-		&:hover, &.active, &:focus {
-			text-decoration: none;
-			color: var(--MI_THEME-accent);
-
-			&::before {
-				content: "";
-				display: block;
-				height: 100%;
-				aspect-ratio: 1;
-				margin: auto;
-				position: absolute;
-				top: 0;
-				left: 0;
-				right: 0;
-				bottom: 0;
-				border-radius: 10px;
-				background: var(--MI_THEME-accentedBg);
-			}
-
-			> .icon,
-			> .text {
-				opacity: 1;
-			}
-		}
-	}
-
-	.itemIcon {
-		display: block;
-		margin: 0 auto;
-		opacity: 0.7;
-	}
-
-	.itemText {
-		display: none;
-	}
-
-	.itemIndicator {
-		position: absolute;
-		top: 6px;
-		left: 24px;
-		color: var(--MI_THEME-navIndicator);
-		font-size: 8px;
-
-		&:has(.itemIndicateValueIcon) {
-			animation: none;
-			top: 4px;
-			left: auto;
-			right: 4px;
-			font-size: 10px;
-		}
-	}
-
-	.subButtons {
-		left: var(--nav-icon-only-width);
-	}
-}
+@media (prefers-reduced-motion: reduce) { .item { transition: none; } }
 </style>

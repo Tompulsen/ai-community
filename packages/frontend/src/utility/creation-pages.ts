@@ -20,6 +20,14 @@ export const creationText = homeLanguage === 'en-US' ? {
 	saved: 'Creation links saved', adminOnly: 'Only administrators can change creation links.', preview: 'Open the saved creation page',
 } : i18n.ts._creationLinks;
 
+export const workbenchText = homeLanguage === 'en-US' ? {
+	title: 'AI Workbench', creation: 'Create', personal: 'Your space', tools: 'Community tools',
+	modules: 'Creation modules', collapse: 'Collapse navigation', expand: 'Expand navigation',
+} : {
+	title: 'AI 工作台', creation: '创作', personal: '我的', tools: '社区工具',
+	modules: '制作栏', collapse: '收起导航', expand: '展开导航',
+};
+
 export const creationPages = [
 	{ key: 'text', title: creationText.text, icon: 'ti ti-file-text', urlKey: 'creationTextUrl', modeKey: 'creationTextMode', modelKey: 'creationTextModel', defaultModel: 'gpt-6.1-sol' },
 	{ key: 'image', title: creationText.image, icon: 'ti ti-photo', urlKey: 'creationImageUrl', modeKey: 'creationImageMode', modelKey: 'creationImageModel', defaultModel: 'gpt-image-2.6' },

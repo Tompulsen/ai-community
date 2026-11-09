@@ -36,6 +36,9 @@ export const ROUTE_DEF = [{
 	path: '/community/work/:submissionId',
 	component: page(() => import('@/pages/community/work-detail.vue')),
 }, {
+	path: '/community/ai',
+	redirect: '/create/text',
+}, {
 	path: '/community/:module',
 	component: page(() => import('@/pages/community.vue')),
 	query: { q: 'initialQuery' },
