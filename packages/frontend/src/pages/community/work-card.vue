@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><slot name="actions"></slot></header>
 		<div :class="$style.content">
 			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
+			<WorkTags :tags="work.tags"/>
 			<div :class="[$style.mediaLayout, { [$style.withMaterials]: work.files.length > 1 || work.referenceFiles?.length }]">
 				<div :class="$style.mainMedia">
 					<WorkVideo v-if="previewVideo" :workId="work.id" :title="work.title" :url="previewVideo.url" :poster="cover"/>
@@ -25,6 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import WorkEngagement from './work-engagement.vue';
+import WorkTags from './work-tags.vue';
 import WorkVideo from './work-video.vue';
 import WorkMaterials from './work-materials.vue';
 import { workText as t, workPath } from './interactions-copy.js';

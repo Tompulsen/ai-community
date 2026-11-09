@@ -8,7 +8,7 @@ import { id } from './util/id.js';
 import { MiUser } from './User.js';
 import { MiNote } from './Note.js';
 
-export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'> & { generation?: CommunityGeneration | null };
+export type CommunityRevision = Pick<MiCommunitySubmission, 'category' | 'title' | 'text' | 'model' | 'sourceUrl' | 'license' | 'fileIds'> & { generation?: CommunityGeneration | null; tagIds?: string[] };
 
 export type CommunityGeneration = { prompt: string; model: string; referenceFileIds: string[]; sourceWorkId?: string; shareToSource?: boolean };
 
@@ -56,6 +56,10 @@ export class MiCommunitySubmission {
 
 	@Column({ ...id(), array: true, default: '{}' })
 	public fileIds: string[];
+
+	@Index('IDX_community_submission_tag_ids', { synchronize: false })
+	@Column({ ...id(), array: true, default: '{}' })
+	public tagIds: string[];
 
 	@Column('jsonb', { nullable: true })
 	public generation: CommunityGeneration | null;

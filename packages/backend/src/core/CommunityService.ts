@@ -9,6 +9,9 @@ import { DataSource, In, type EntityManager } from 'typeorm';
 import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { MiCommunitySubmission, type CommunityRevision } from '@/models/CommunitySubmission.js';
+import { MiCommunityTag } from '@/models/CommunityTag.js';
+import { communityPayloadHash, normalizeCommunityTagIds, normalizeCommunityTagName } from '@/misc/community-tags.js';
+import { isDuplicateKeyValueError } from '@/misc/is-duplicate-key-value-error.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
 import { MiNote } from '@/models/Note.js';
 import { MiUser } from '@/models/User.js';
@@ -37,7 +40,7 @@ type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
 type SubmissionInput = CommunityRevision & { idempotencyKey: string; destination?: MiCommunitySubmission['destination']; resultId?: string; };
 type UpdateInput = CommunityRevision & { submissionId: string; version: number; };
-type ListInput = { limit: number; untilId?: string; query: string; category?: Category; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
+type ListInput = { limit: number; untilId?: string; query: string; category?: Category; tagIds?: string[]; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
 
 @Injectable()
 export class CommunityService {
@@ -56,6 +59,57 @@ export class CommunityService {
 		private communityModerationService: CommunityModerationService,
 		@Inject(DI.config) private config: Config,
 	) {}
+
+	public async listTags(category?: Category) {
+		const tags = await this.db.getRepository(MiCommunityTag).find({ where: { isDeleted: false, ...(category ? { category } : {}) }, order: { category: 'ASC', id: 'ASC' } });
+		return tags.map(({ id, category: scope, name }) => ({ id, category: scope, name }));
+	}
+
+	public async createTag(actorId: string, category: Category, value: string) {
+		if (!await this.roleService.isAdministrator({ id: actorId })) throw new ApiError(communityErrors.forbidden);
+		if (!['image', 'video', 'resource'].includes(category)) throw new ApiError(communityErrors.invalidTags);
+		const name = normalizeCommunityTagName(value);
+		try {
+			const tag = { id: this.idService.gen(), category, name, isDeleted: false };
+			await this.db.getRepository(MiCommunityTag).insert(tag);
+			return { id: tag.id, category: tag.category, name: tag.name };
+		} catch (error) {
+			if (isDuplicateKeyValueError(error)) throw new ApiError(communityErrors.tagConflict);
+			throw error;
+		}
+	}
+
+	public async updateTag(actorId: string, tagId: string, value: string) {
+		if (!await this.roleService.isAdministrator({ id: actorId })) throw new ApiError(communityErrors.forbidden);
+		const name = normalizeCommunityTagName(value);
+		try {
+			const result = await this.db.getRepository(MiCommunityTag).createQueryBuilder().update().set({ name })
+				.where({ id: tagId, isDeleted: false }).returning(['id', 'category', 'name']).execute();
+			if (!result.affected) throw new ApiError(communityErrors.tagNotFound);
+			return result.raw[0] as Pick<MiCommunityTag, 'id' | 'category' | 'name'>;
+		} catch (error) {
+			if (isDuplicateKeyValueError(error)) throw new ApiError(communityErrors.tagConflict);
+			throw error;
+		}
+	}
+
+	public async deleteTag(actorId: string, tagId: string) {
+		if (!await this.roleService.isAdministrator({ id: actorId })) throw new ApiError(communityErrors.forbidden);
+		const result = await this.db.getRepository(MiCommunityTag).update({ id: tagId }, { isDeleted: true });
+		if (!result.affected) throw new ApiError(communityErrors.tagNotFound);
+	}
+
+	/** Lock selected rows until submission/review commits; deletion cannot race validation. */
+	private async tags(manager: EntityManager, category: Category, tagIds: string[] = [], strict = false, lock = false) {
+		const ids = normalizeCommunityTagIds(tagIds);
+		if (!ids.length) return [];
+		const query = manager.getRepository(MiCommunityTag).createQueryBuilder('tag')
+			.where({ category, isDeleted: false }).andWhere('tag.id IN (:...tagIds)', { tagIds: ids }).orderBy('tag.id', 'ASC');
+		if (lock) query.setLock('pessimistic_read');
+		const tags = await query.getMany();
+		if (strict && tags.length !== ids.length) throw new ApiError(communityErrors.invalidTags);
+		return tags;
+	}
 
 	private async files(manager: EntityManager, authorId: string, fileIds: string[], category: Category) {
 		const files = fileIds.length ? await manager.getRepository(MiDriveFile).findBy({ id: In(fileIds), userId: authorId }) : [];
@@ -85,7 +139,7 @@ export class CommunityService {
 	}
 
 	private normalize(payload: CommunityRevision): CommunityRevision {
-		const normalized = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds, ...(payload.generation ? { generation: { prompt: payload.generation.prompt, model: payload.generation.model.trim(), referenceFileIds: [...payload.generation.referenceFileIds], ...(payload.generation.sourceWorkId ? { sourceWorkId: payload.generation.sourceWorkId, ...(payload.generation.shareToSource === true ? { shareToSource: true } : {}) } : {}) } } : payload.generation === null ? { generation: null } : {}) };
+		const normalized: CommunityRevision = { category: payload.category, title: payload.title.trim(), text: payload.text.trim(), model: payload.model.trim(), sourceUrl: payload.sourceUrl.trim(), license: payload.license.trim(), fileIds: payload.fileIds, ...(payload.generation ? { generation: { prompt: payload.generation.prompt, model: payload.generation.model.trim(), referenceFileIds: [...payload.generation.referenceFileIds], ...(payload.generation.sourceWorkId ? { sourceWorkId: payload.generation.sourceWorkId, ...(payload.generation.shareToSource === true ? { shareToSource: true } : {}) } : {}) } } : payload.generation === null ? { generation: null } : {}), ...(payload.tagIds !== undefined ? { tagIds: normalizeCommunityTagIds(payload.tagIds) } : {}) };
 		if (!normalized.title || (!normalized.text && !normalized.fileIds.length)) throw new ApiError(communityErrors.invalidContent);
 		if (normalized.sourceUrl) {
 			try { const url = new URL(normalized.sourceUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); } catch { throw new ApiError(communityErrors.invalidContent); }
@@ -100,7 +154,7 @@ export class CommunityService {
 		const normalized = this.normalize(payload);
 		if (destination === 'source-comment') normalized.generation = { ...normalized.generation!, referenceFileIds: [], shareToSource: false };
 		const matches = (row: MiCommunitySubmission) => row.destination === destination && (destination === 'source-comment' ? row.generation?.sourceWorkId === normalized.generation?.sourceWorkId : row.payloadHash === payloadHash);
-		const payloadHash = createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+		const payloadHash = communityPayloadHash(normalized);
 		const repository = this.db.getRepository(MiCommunitySubmission);
 		const existing = await repository.findOneBy({ authorId, idempotencyKey });
 		if (existing) {
@@ -111,6 +165,7 @@ export class CommunityService {
 		const publicationMode = this.meta.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before';
 		const submission = await this.db.transaction(async manager => {
 			await this.author(manager, authorId);
+			await this.tags(manager, normalized.category, normalized.tagIds, true, true);
 			const files = await this.files(manager, authorId, normalized.fileIds, normalized.category);
 			await this.validateCommentMedia(manager, normalized, files, destination);
 			await this.references(manager, authorId, normalized);
@@ -151,9 +206,11 @@ export class CommunityService {
 			if (submission.version !== input.version) throw new ApiError(communityErrors.conflict);
 			if (submission.destination === 'source-comment' && (submission.sourceCommentId || submission.status !== 'pending')) throw new ApiError(communityErrors.conflict);
 			const previous = submission.pendingRevision ?? submission;
-			const normalized = this.normalize({ ...input, generation: input.generation === undefined ? previous.generation ?? null : input.generation });
+			const tagIds = input.tagIds ?? (await this.tags(manager, input.category, previous.tagIds ?? submission.tagIds, false, true)).map(tag => tag.id);
+			const normalized = this.normalize({ ...input, tagIds, generation: input.generation === undefined ? previous.generation ?? null : input.generation });
 			if (submission.destination === 'source-comment' && (!normalized.generation || !normalized.generation.model.trim() || normalized.generation.sourceWorkId !== submission.generation?.sourceWorkId || normalized.generation.referenceFileIds.length)) throw new ApiError(communityErrors.invalidContent);
 			await this.author(manager, authorId);
+			await this.tags(manager, normalized.category, normalized.tagIds, true, true);
 			const files = await this.files(manager, authorId, normalized.fileIds, normalized.category);
 			await this.validateCommentMedia(manager, normalized, files, submission.destination, submission.approvedNoteId);
 			await this.references(manager, authorId, normalized);
@@ -220,6 +277,7 @@ export class CommunityService {
 	}
 
 	private async updatePublished(submission: MiCommunitySubmission, note: MiNote, manager: EntityManager, afterCommit: (() => void)[]) {
+		submission.tagIds = (await this.tags(manager, submission.category, submission.tagIds, false, true)).map(tag => tag.id);
 		const author = await this.author(manager, submission.authorId);
 		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
@@ -242,6 +300,7 @@ export class CommunityService {
 	}
 
 	private async publish(submission: MiCommunitySubmission, manager: EntityManager, afterCommit: (() => void)[]) {
+		submission.tagIds = (await this.tags(manager, submission.category, submission.tagIds, false, true)).map(tag => tag.id);
 		const author = await this.author(manager, submission.authorId);
 		await this.references(manager, author.id, submission);
 		const files = await this.files(manager, author.id, submission.fileIds, submission.category);
@@ -310,7 +369,21 @@ export class CommunityService {
 		if (options.category) query.andWhere(scope === 'public' ? 'submission.category = :category' : 'COALESCE(submission."pendingRevision"->>\'category\', submission.category) = :category', { category: options.category });
 		if (options.authorId) query.andWhere('submission.authorId = :authorId', { authorId: options.authorId });
 		if (options.untilId) query.andWhere('submission.id < :cursor', { cursor: options.untilId });
-		if (options.query.trim()) query.andWhere(scope === 'public' ? '(submission.title ILIKE :query OR submission.text ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)' : '(COALESCE(submission."pendingRevision"->>\'title\', submission.title) ILIKE :query OR COALESCE(submission."pendingRevision"->>\'text\', submission.text) ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query)', { query: `%${options.query.trim().replace(/[\\%_]/g, '\\$&')}%` });
+		const tagMembership = scope === 'public' ? 'tag.id = ANY(submission."tagIds")' : `(COALESCE(submission."pendingRevision"->'tagIds', to_jsonb(submission."tagIds")) ? tag.id)`;
+		const tagCategory = scope === 'public' ? 'submission.category' : `COALESCE(submission."pendingRevision"->>'category', submission.category)`;
+		const tagMatch = `SELECT 1 FROM community_tag tag WHERE tag."isDeleted" = false AND tag.category = ${tagCategory} AND ${tagMembership}`;
+		const tagIds = normalizeCommunityTagIds(options.tagIds);
+		if (tagIds.length) {
+			query.andWhere(`EXISTS (${tagMatch} AND tag.id IN (:...tagIds))`, { tagIds });
+			if (scope === 'public') query.andWhere('submission."tagIds" && ARRAY[:...tagIds]::varchar[]', { tagIds });
+		}
+		if (options.query.trim()) {
+			const title = scope === 'public' ? 'submission.title' : `COALESCE(submission."pendingRevision"->>'title', submission.title)`;
+			const body = scope === 'public' ? 'submission.text' : `COALESCE(submission."pendingRevision"->>'text', submission.text)`;
+			// An explicit null removes private provenance; legacy revisions may omit the field.
+			const prompt = scope === 'public' ? `submission.generation->>'prompt'` : `CASE WHEN submission."pendingRevision" ? 'generation' THEN submission."pendingRevision"->'generation'->>'prompt' ELSE submission.generation->>'prompt' END`;
+			query.andWhere(`(${title} ILIKE :query OR ${body} ILIKE :query OR (${prompt}) ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query OR EXISTS (${tagMatch} AND tag.name ILIKE :query))`, { query: `%${options.query.trim().replace(/[\\%_]/g, '\\$&')}%` });
+		}
 		const rows: MiCommunitySubmission[] = [];
 		let scannedCursor: string | null = null;
 		let exhausted = false;
@@ -464,6 +537,7 @@ export class CommunityService {
 
 	private async pack(row: MiCommunitySubmission, deltas?: Record<string, number>, includeRevision = false) {
 		const content = includeRevision && row.pendingRevision ? row.pendingRevision : row;
+		const tags = await this.tags(this.db.manager, content.category, content.tagIds ?? row.tagIds);
 		const author = row.author ?? await this.db.getRepository(MiUser).findOneByOrFail({ id: row.authorId });
 		const note = row.approvedNote ?? (row.approvedNoteId ? await this.db.getRepository(MiNote).findOneBy({ id: row.approvedNoteId }) : null);
 		const files = content.fileIds.length ? await this.db.getRepository(MiDriveFile).findBy({ id: In(content.fileIds), userId: row.authorId }) : [];
@@ -474,6 +548,7 @@ export class CommunityService {
 		const likesCount = Object.entries(reactions).reduce((sum, [key, count]) => sum + (key.replaceAll('\uFE0F', '') === '❤' ? count : 0), 0);
 		return {
 			id: row.id, destination: row.destination, version: row.version, category: content.category, title: content.title, text: content.text, model: content.model, sourceUrl: content.sourceUrl, license: content.license, revisionPending: includeRevision && !!row.pendingRevision,
+			tagIds: tags.map(tag => tag.id), tags: tags.map(({ id, category, name }) => ({ id, category, name })),
 			generation: content.generation ?? null,
 			sourceCommentStatus: this.sourceCommentStatus(row),
 			referenceFiles: await Promise.all(referenceIds.flatMap(id => { const file = referenceFiles.find(f => f.id === id && f.type.startsWith('image/')); return file ? [this.driveFileEntityService.pack(file)] : []; })),

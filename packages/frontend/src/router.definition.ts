@@ -31,7 +31,7 @@ export const ROUTE_DEF = [{
 }, {
 	path: '/community',
 	component: page(() => import('@/pages/community.vue')),
-	query: { q: 'initialQuery' },
+	query: { q: 'initialQuery', tags: 'initialTags' },
 }, {
 	path: '/community/work/:submissionId',
 	component: page(() => import('@/pages/community/work-detail.vue')),
@@ -41,7 +41,7 @@ export const ROUTE_DEF = [{
 }, {
 	path: '/community/:module',
 	component: page(() => import('@/pages/community.vue')),
-	query: { q: 'initialQuery' },
+	query: { q: 'initialQuery', tags: 'initialTags' },
 }, {
 	path: '/create/:kind',
 	component: page(() => import('@/pages/creation.vue')),

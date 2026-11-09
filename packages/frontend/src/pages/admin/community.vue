@@ -30,6 +30,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<p v-if="error" role="alert" :class="$style.error">{{ error }}</p>
 			</template>
 		</section>
+		<CommunityTags v-if="$i?.isAdmin"/>
 		<nav :class="$style.management"><MkA to="/admin/abuses"><i class="ti ti-flag" aria-hidden="true"></i> {{ safety.reports }}</MkA><MkA to="/admin/users"><i class="ti ti-users" aria-hidden="true"></i> {{ safety.users }}</MkA></nav>
 		<CommunitySurface section="review" embedded :publicationMode="savedMode" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="router.push($event)"/>
 	</div>
@@ -40,6 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { apiUrl } from '@@/js/config.js';
 import CommunitySurface from '@/pages/community/surface.vue';
+import CommunityTags from '@/pages/admin/community-tags.vue';
 import { createCommunityGateway } from '@/pages/community/api.js';
 import { moderationText as t } from '@/pages/community/moderation-copy.js';
 import { safetyText as safety } from '@/pages/community/safety-copy.js';

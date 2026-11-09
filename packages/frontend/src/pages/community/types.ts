@@ -5,6 +5,7 @@
 
 export type CommunityDestination = 'community' | 'source-comment';
 export type CommunityCategory = 'video' | 'image' | 'resource';
+export type CommunityTag = { id: string; category: CommunityCategory; name: string };
 export type CommunitySection = CommunityCategory | 'all' | 'mine' | 'review' | 'ai' | 'profile';
 export type SubmissionStatus = 'pending' | 'published' | 'approved' | 'rejected' | 'removed' | 'withdrawn';
 export type CommunityFile = { id: string; name: string; type: string; url: string; thumbnailUrl?: string | null; isSensitive?: boolean; properties?: { width?: number; height?: number }; };
@@ -19,6 +20,8 @@ export type CommunityWork = {
 	version: number;
 	revisionPending?: boolean;
 	category: CommunityCategory;
+	tagIds?: string[];
+	tags?: CommunityTag[];
 	title: string;
 	text: string;
 	model: string;
@@ -41,6 +44,7 @@ export type CommunitySubmissionInput = {
 	idempotencyKey: string;
 	generation?: CommunityGeneration | null;
 	category: CommunityCategory;
+	tagIds?: string[];
 	title: string;
 	text: string;
 	model: string;
@@ -48,13 +52,13 @@ export type CommunitySubmissionInput = {
 	license: string;
 	fileIds: string[];
 };
-export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model' | 'destination' | 'resultId'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
+export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model' | 'destination' | 'resultId' | 'tagIds'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
 export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; };
 export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
 export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };
 
 export interface CommunityGateway {
-	list: (section: CommunitySection, options: { query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; }, signal: AbortSignal) => Promise<CommunityPage>;
+	list: (section: CommunitySection, options: { query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; tagIds?: string[]; }, signal: AbortSignal) => Promise<CommunityPage>;
 	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: SubmissionStatus; submittedAt: string; sourceCommentStatus?: SourceCommentStatus; }>;
 	show: (submissionId: string, signal?: AbortSignal) => Promise<CommunityWork>;
 	update: (input: CommunityUpdateInput) => Promise<CommunityWork>;

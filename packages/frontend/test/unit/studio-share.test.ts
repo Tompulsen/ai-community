@@ -5,6 +5,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStudioShare, validateStudioWork } from '../../src/utility/studio-share.js';
+import { uploadFile } from '../../src/utility/drive.js';
 
 vi.mock('@/utility/upload-limits.js', () => ({ effectiveUploadLimit: () => 100000, refreshUploadLimits: async () => {} }));
 vi.mock('@/utility/drive.js', () => ({ uploadFile: vi.fn() }));
@@ -12,7 +13,7 @@ vi.mock('@/pages/home/copy.js', () => ({ homeLanguage: 'zh-CN' }));
 
 const work = { destination: 'source-comment', resultId: 'result-1', category: 'resource', title: '同款', text: '生成结果', model: 'model', generation: { prompt: '', model: 'model', sourceWorkId: 'source1' }, files: [] };
 const requestId = '11111111-1111-4111-8111-111111111111';
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('direct result share protocol', () => {
 	it('requires saved source and stable result, while allowing attachment-only prompts', () => {
@@ -48,5 +49,34 @@ describe('video community destination', () => {
 			expect(validateStudioWork({ ...work, category, files: [video, image] })).toBe(false);
 		}
 		expect(validateStudioWork({ ...work, category: 'image', files: [image] })).toBe(true);
+	});
+});
+
+describe('generated resource publication', () => {
+	it.each([false, true])('preserves the generated text without duplicating an existing Markdown attachment (%s)', async (existing) => {
+		vi.stubGlobal('window', { setTimeout, clearTimeout });
+		vi.mocked(uploadFile).mockImplementation((blob) => ({ abort: () => {}, filePromise: Promise.resolve({ id: 'saved', name: 'creation.md', type: 'text/markdown', url: 'https://example.com/creation.md', userId: 'user' }) }) as ReturnType<typeof uploadFile>);
+		const bridge = useStudioShare(() => ({ userId: 'user', subject: '1', token: 'test', context: 'ctx', attempt: 'attempt', accountLimitMb: 32 }), vi.fn());
+		const output = '# A reusable skill\nGenerated instructions';
+		const content = { ...work, destination: 'community', text: output, generation: { prompt: 'Write a reusable skill', model: 'model' }, files: existing ? [{ name: 'creation.md', blob: new Blob([output], { type: 'text/markdown' }) }] : [] };
+		await bridge.receive({ status: 'share-request', requestId });
+		await bridge.receive({ status: 'share-content', requestId, work: content });
+		expect(bridge.phase.value).toBe('editing');
+		expect(uploadFile).toHaveBeenCalledTimes(1);
+		expect(await vi.mocked(uploadFile).mock.calls[0][0].text()).toBe(output);
+		expect(bridge.draft.value?.files).toHaveLength(1);
+		expect(bridge.draft.value?.generation?.prompt).toBe('Write a reusable skill');
+		bridge.stop();
+	});
+
+	it('keeps direct text comments inline without creating an attachment', async () => {
+		vi.stubGlobal('window', { setTimeout, clearTimeout });
+		const bridge = useStudioShare(() => ({ userId: 'user', subject: '1', token: 'test', context: 'ctx', attempt: 'attempt', accountLimitMb: 32 }), vi.fn());
+		await bridge.receive({ status: 'share-request', requestId, destination: 'source-comment', resultId: work.resultId, sourceWorkId: 'source1' });
+		await bridge.receive({ status: 'share-content', requestId, work: { ...work, generation: { ...work.generation, prompt: 'A prompt' } } });
+		expect(bridge.draft.value?.text).toBe(work.text);
+		expect(bridge.draft.value?.files).toEqual([]);
+		expect(uploadFile).not.toHaveBeenCalled();
+		bridge.stop();
 	});
 });

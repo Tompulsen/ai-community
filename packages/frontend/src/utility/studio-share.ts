@@ -110,8 +110,14 @@ export function useStudioShare(identity: () => Identity | undefined, send: (valu
 			if (data.status !== 'share-content' || task.receiving || phase.value !== 'preparing') return;
 			task.receiving = true; window.clearTimeout(task.timer);
 			if (!validateStudioWork(data.work) || (data.work.destination ?? 'community') !== task.destination || task.destination === 'source-comment' && (data.work.resultId !== task.resultId || data.work.generation?.sourceWorkId !== task.sourceWorkId)) { finish('error', 'invalid'); return; }
-			if (!withinLimits(data.work, task.actor)) { finish('error', 'tooLarge'); return; }
-			task.content = data.work;
+			// Preserve generated text as an attachment before the description defaults to its prompt.
+			let work = data.work;
+			if (task.destination === 'community' && work.category === 'resource' && work.generation?.prompt.trim() && work.text.trim() && !work.files.some(file => file.role !== 'reference' && file.blob.type === 'text/markdown')) {
+				if (work.files.filter(file => file.role !== 'reference').length >= 16) { finish('error', 'invalid'); return; }
+				work = { ...work, files: [...work.files, { name: 'creation.md', blob: new Blob([work.text], { type: 'text/markdown' }) }] };
+			}
+			if (!withinLimits(work, task.actor)) { finish('error', 'tooLarge'); return; }
+			task.content = work;
 			await upload();
 		}
 	}

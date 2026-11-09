@@ -19,6 +19,8 @@ export function isCommunityWork(value: unknown): value is CommunityWork {
 		&& ['pending', 'published', 'approved', 'rejected', 'removed', 'withdrawn'].includes(String(value.status))
 		&& ['title', 'text', 'model', 'sourceUrl', 'license', 'submittedAt'].every(key => typeof value[key] === 'string')
 		&& Number.isFinite(Date.parse(value.submittedAt as string))
+		&& (value.tagIds === undefined || Array.isArray(value.tagIds) && value.tagIds.length <= 3 && value.tagIds.every(isId))
+		&& (value.tags === undefined || Array.isArray(value.tags) && value.tags.length <= 3 && value.tags.every(tag => isObject(tag) && isId(tag.id) && tag.category === value.category && typeof tag.name === 'string'))
 		&& Array.isArray(value.files) && value.files.every(isFile)
 		&& isId(value.author.id) && typeof value.author.name === 'string' && typeof value.author.username === 'string'
 		&& (value.rejectionReason === null || typeof value.rejectionReason === 'string')
@@ -57,7 +59,7 @@ export function createCommunityGateway(options: {
 			});
 			if (!response.ok) {
 				const body = await response.json().catch(() => null);
-				const messages: Record<string, string> = { COMMUNITY_SOURCE_UNAVAILABLE: studioShareText.sourceUnavailable, COMMUNITY_INVALID_FILES: t.invalidFiles, COMMUNITY_INVALID_CONTENT: t.invalidContent, COMMUNITY_AUTHOR_UNAVAILABLE: t.authorUnavailable, COMMUNITY_CANNOT_PUBLISH: t.cannotPublish, COMMUNITY_NOT_FOUND: t.notFound, RATE_LIMIT_EXCEEDED: t.rateLimited };
+				const messages: Record<string, string> = { COMMUNITY_SOURCE_UNAVAILABLE: studioShareText.sourceUnavailable, COMMUNITY_INVALID_FILES: t.invalidFiles, COMMUNITY_INVALID_CONTENT: t.invalidContent, COMMUNITY_INVALID_TAGS: t.invalidTags, COMMUNITY_AUTHOR_UNAVAILABLE: t.authorUnavailable, COMMUNITY_CANNOT_PUBLISH: t.cannotPublish, COMMUNITY_NOT_FOUND: t.notFound, RATE_LIMIT_EXCEEDED: t.rateLimited };
 				const fallback = response.status === 401 ? t.loginError : response.status === 403 ? t.permissionError : response.status === 409 ? t.conflictError : [404, 501, 503].includes(response.status) ? t.serviceUnavailable : t.networkError;
 				throw new Error(messages[body?.error?.code] ?? fallback);
 			}
@@ -77,7 +79,7 @@ export function createCommunityGateway(options: {
 			if (section === 'profile' && (!isId(query.authorId) || (query.category != null && !['video', 'image', 'resource'].includes(query.category)))) throw new Error(t.invalidResponse);
 			const endpoint = section === 'review' ? 'admin/community/submissions' : section === 'mine' ? 'community/submissions/mine' : 'community/works';
 			const page = parseCommunityPage(await request(endpoint, {
-				limit: 20, query: query.query, ...(query.cursor ? { untilId: query.cursor } : {}),
+				limit: 20, query: query.query, ...(endpoint === 'community/works' && query.tagIds?.length ? { tagIds: query.tagIds } : {}), ...(query.cursor ? { untilId: query.cursor } : {}),
 				...(section === 'profile' ? { authorId: query.authorId, ...(query.category ? { category: query.category } : {}) } : section === 'mine' || section === 'review' ? { status: query.status } : section === 'all' ? {} : { category: section }),
 			}, signal));
 			if (endpoint === 'community/works' && page.items.some(work => !['approved', 'published'].includes(work.status) || (section === 'profile' ? work.author.id !== query.authorId || (query.category != null && work.category !== query.category) : section !== 'all' && work.category !== section))) throw new Error(t.invalidResponse);

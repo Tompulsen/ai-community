@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <XSetup v-if="instance.requireSetup"/>
-<CommunitySurface v-else :section="activeSection" :initialQuery="publicQuery" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :compose="(props.section ?? props.module) === 'compose'" :composeRequest="composeRequest" :viewerId="$i?.id" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate" @login="login" @signup="signup"><template #composerAvatar><MkAvatar v-if="$i" :user="$i" :link="false" :preview="false" style="width: 100%; height: 100%;"/></template></CommunitySurface>
+<CommunitySurface v-else :section="activeSection" :initialQuery="publicQuery" :initialTags="props.initialTags" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :compose="(props.section ?? props.module) === 'compose'" :composeRequest="composeRequest" :viewerId="$i?.id" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate" @login="login" @signup="signup"><template #composerAvatar><MkAvatar v-if="$i" :user="$i" :link="false" :preview="false" style="width: 100%; height: 100%;"/></template></CommunitySurface>
 </template>
 
 <script setup lang="ts">
@@ -21,7 +21,7 @@ import { definePage } from '@/page.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
 
-const props = defineProps<{ section?: string; module?: string; initialQuery?: string; }>();
+const props = defineProps<{ section?: string; module?: string; initialQuery?: string; initialTags?: string; }>();
 const activeSection = computed(() => {
 	const section = props.section ?? props.module ?? 'all';
 	return section === 'compose' ? 'all' : ['text', 'code', 'skill', 'knowledge'].includes(section) ? 'resource' : section;

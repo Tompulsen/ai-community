@@ -12,6 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<aside :class="$style.sidebar">
 			<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div></header>
 			<h1>{{ work.title }}</h1>
+			<WorkTags :tags="work.tags"/>
 			<section :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
 			<p v-if="work.model" :class="$style.meta">{{ work.generation?.model || work.model }}</p>
 			<p v-if="work.license" :class="$style.meta">{{ t.license }} · {{ work.license }}</p>
@@ -29,6 +30,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import WorkMedia from './work-media.vue';
 import WorkEngagement from './work-engagement.vue';
+import WorkTags from './work-tags.vue';
 import { workText as t, studioPath } from './interactions-copy.js';
 import { safeWebUrl } from './copy.js';
 import { useWorkView } from './use-work-view.js';

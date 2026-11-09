@@ -40,6 +40,17 @@ export type AdminAvatarDecorationsListResponse = operations['admin___avatar-deco
 export type AdminAvatarDecorationsUpdateRequest = operations['admin___avatar-decorations___update']['requestBody']['content']['application/json'];
 export type AdminCaptchaCurrentResponse = operations['admin___captcha___current']['responses']['200']['content']['application/json'];
 export type AdminCaptchaSaveRequest = operations['admin___captcha___save']['requestBody']['content']['application/json'];
+export type AdminCommunityNotesRequest = operations['admin___community___notes']['requestBody']['content']['application/json'];
+export type AdminCommunityNotesResponse = operations['admin___community___notes']['responses']['200']['content']['application/json'];
+export type AdminCommunityReviewRequest = operations['admin___community___review']['requestBody']['content']['application/json'];
+export type AdminCommunityReviewResponse = operations['admin___community___review']['responses']['200']['content']['application/json'];
+export type AdminCommunitySubmissionsRequest = operations['admin___community___submissions']['requestBody']['content']['application/json'];
+export type AdminCommunitySubmissionsResponse = operations['admin___community___submissions']['responses']['200']['content']['application/json'];
+export type AdminCommunityTagsCreateRequest = operations['admin___community___tags___create']['requestBody']['content']['application/json'];
+export type AdminCommunityTagsCreateResponse = operations['admin___community___tags___create']['responses']['200']['content']['application/json'];
+export type AdminCommunityTagsDeleteRequest = operations['admin___community___tags___delete']['requestBody']['content']['application/json'];
+export type AdminCommunityTagsUpdateRequest = operations['admin___community___tags___update']['requestBody']['content']['application/json'];
+export type AdminCommunityTagsUpdateResponse = operations['admin___community___tags___update']['responses']['200']['content']['application/json'];
 export type AdminDeleteAccountRequest = operations['admin___delete-account']['requestBody']['content']['application/json'];
 export type AdminDeleteAllFilesOfAUserRequest = operations['admin___delete-all-files-of-a-user']['requestBody']['content']['application/json'];
 export type AdminDriveFilesRequest = operations['admin___drive___files']['requestBody']['content']['application/json'];
@@ -285,6 +296,27 @@ export type ClipsShowResponse = operations['clips___show']['responses']['200']['
 export type ClipsUnfavoriteRequest = operations['clips___unfavorite']['requestBody']['content']['application/json'];
 export type ClipsUpdateRequest = operations['clips___update']['requestBody']['content']['application/json'];
 export type ClipsUpdateResponse = operations['clips___update']['responses']['200']['content']['application/json'];
+export type CommunityCommentsDeleteRequest = operations['community___comments___delete']['requestBody']['content']['application/json'];
+export type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
+export type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];
+export type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsCreateRequest = operations['community___submissions___create']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsCreateResponse = operations['community___submissions___create']['responses']['200']['content']['application/json'];
+export type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsMineRequest = operations['community___submissions___mine']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsMineResponse = operations['community___submissions___mine']['responses']['200']['content']['application/json'];
+export type CommunitySubmissionsShowRequest = operations['community___submissions___show']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsShowResponse = operations['community___submissions___show']['responses']['200']['content']['application/json'];
+export type CommunitySubmissionsUpdateRequest = operations['community___submissions___update']['requestBody']['content']['application/json'];
+export type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
+export type CommunityTagsRequest = operations['community___tags']['requestBody']['content']['application/json'];
+export type CommunityTagsResponse = operations['community___tags']['responses']['200']['content']['application/json'];
+export type CommunityWorksRequest = operations['community___works']['requestBody']['content']['application/json'];
+export type CommunityWorksResponse = operations['community___works']['responses']['200']['content']['application/json'];
+export type CommunityWorksShowRequest = operations['community___works___show']['requestBody']['content']['application/json'];
+export type CommunityWorksShowResponse = operations['community___works___show']['responses']['200']['content']['application/json'];
+export type CommunityWorksViewRequest = operations['community___works___view']['requestBody']['content']['application/json'];
+export type CommunityWorksViewResponse = operations['community___works___view']['responses']['200']['content']['application/json'];
 export type DriveResponse = operations['drive']['responses']['200']['content']['application/json'];
 export type DriveFilesRequest = operations['drive___files']['requestBody']['content']['application/json'];
 export type DriveFilesResponse = operations['drive___files']['responses']['200']['content']['application/json'];
@@ -668,39 +700,3 @@ export type UsersUpdateMemoRequest = operations['users___update-memo']['requestB
 export type V2AdminEmojiListRequest = operations['v2___admin___emoji___list']['requestBody']['content']['application/json'];
 export type V2AdminEmojiListResponse = operations['v2___admin___emoji___list']['responses']['200']['content']['application/json'];
 export type VerifyEmailRequest = operations['verify-email']['requestBody']['content']['application/json'];
-
-export type CommunityWorksRequest = operations['community___works']['requestBody']['content']['application/json'];
-export type CommunityWorksResponse = operations['community___works']['responses']['200']['content']['application/json'];
-export type CommunitySubmissionsCreateRequest = operations['community___submissions___create']['requestBody']['content']['application/json'];
-export type CommunitySubmissionsCreateResponse = operations['community___submissions___create']['responses']['200']['content']['application/json'];
-export type CommunitySubmissionsMineRequest = operations['community___submissions___mine']['requestBody']['content']['application/json'];
-export type CommunitySubmissionsMineResponse = operations['community___submissions___mine']['responses']['200']['content']['application/json'];
-export type AdminCommunitySubmissionsRequest = operations['admin___community___submissions']['requestBody']['content']['application/json'];
-export type AdminCommunitySubmissionsResponse = operations['admin___community___submissions']['responses']['200']['content']['application/json'];
-export type AdminCommunityReviewRequest = operations['admin___community___review']['requestBody']['content']['application/json'];
-export type AdminCommunityReviewResponse = operations['admin___community___review']['responses']['200']['content']['application/json'];
-
-export type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];
-
-export type CommunityWorksShowRequest = operations['community___works___show']['requestBody']['content']['application/json'];
-
-export type CommunityWorksShowResponse = operations['community___works___show']['responses']['200']['content']['application/json'];
-
-export type CommunityWorksViewRequest = operations['community___works___view']['requestBody']['content']['application/json'];
-
-export type CommunityWorksViewResponse = operations['community___works___view']['responses']['200']['content']['application/json'];
-
-export type CommunitySubmissionsShowRequest = operations['community___submissions___show']['requestBody']['content']['application/json'];
-
-export type CommunitySubmissionsShowResponse = operations['community___submissions___show']['responses']['200']['content']['application/json'];
-
-export type CommunitySubmissionsUpdateRequest = operations['community___submissions___update']['requestBody']['content']['application/json'];
-
-export type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
-
-export type CommunitySubmissionsDeleteRequest = operations['community___submissions___delete']['requestBody']['content']['application/json'];
-export type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
-
-export type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];
-
-export type CommunityCommentsDeleteRequest = operations['community___comments___delete']['requestBody']['content']['application/json'];

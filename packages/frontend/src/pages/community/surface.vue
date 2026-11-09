@@ -45,13 +45,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<div :class="$style.editorRow">
 							<div :class="$style.composerAvatar"><slot name="composerAvatar"><i class="ti ti-pencil" aria-hidden="true"></i></slot></div>
 							<div :class="$style.writingArea">
-								<input ref="titleInput" v-model="draft.title" :class="$style.titleInput" :aria-label="t.title" maxlength="100" :placeholder="t.title" :disabled="submitting || !!openingId" required/>
-								<textarea ref="contentInput" v-model="draft.text" :aria-label="generationRecord ? shareText.caption : t.content" rows="5" maxlength="2500" :placeholder="(generationRecord ? shareText.caption : t.writePrompt) + '…'" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
+								<div v-if="!directComment" :class="$style.tagField">
+									<span :class="$style.fieldLabel">{{ t.tags }}<small>{{ draft.tagIds.length }} / 3</small></span>
+									<button ref="tagTrigger" type="button" :class="$style.tagTrigger" :disabled="submitting || !!openingId" aria-haspopup="dialog" :aria-expanded="tagPickerOpen" data-testid="choose-work-tags" @click="tagPickerOpen = true"><span v-if="!draft.tagIds.length">{{ t.chooseTags }}</span><span v-for="id in draft.tagIds" :key="id" :class="$style.tagChip"># {{ tagName(id) }}</span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+									<small :class="$style.fieldHint">{{ tagNotice || t.tagsHint }}</small>
+								</div>
+								<label :class="$style.fieldLabel" :for="descriptionId">{{ t.description }}</label>
+								<textarea :id="descriptionId" ref="contentInput" v-model="draft.text" :aria-label="t.description" rows="5" maxlength="2500" :placeholder="t.descriptionPlaceholder" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
+						<p v-if="promptExcerpt" :class="$style.editHint">{{ t.promptExcerpt }}</p>
 						<p v-if="generationRecord" :class="$style.editHint">{{ directComment ? `${t.model} · ${generationRecord.model}` : shareText.provenanceHint }}</p>
 						<p v-if="directComment && generationRecord?.sourceWorkId" :class="$style.editHint" data-testid="direct-comment-source"><strong>{{ shareText.directLabel }}</strong> · <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a><br/>{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</p>
-						<div v-if="!directComment" :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select v-model="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
+						<div v-if="!directComment" :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select :value="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen" @change="changeCategory(($event.target as HTMLSelectElement).value as CommunityCategory)"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
 						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || !!openingId || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
 						<section v-if="referenceFiles.length" :class="$style.referenceSection" :aria-label="shareText.references">
 							<h3>{{ shareText.references }} · {{ selectedReferences.length }} / {{ referenceFiles.length }}</h3>
@@ -86,6 +92,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</section>
 			</div>
 		</Teleport>
+		<CommunityTagPicker v-model="draft.tagIds" v-model:open="tagPickerOpen" :category="draft.category" :disabled="submitting" @loaded="rememberTags"/>
+		<CommunityTagPicker v-model="filterTagIds" :open="filterPickerOpen" :category="currentCategory?.id" mode="filter" @update:open="closeFilterPicker" @loaded="rememberTags"/>
 		<section v-if="section === 'ai'" :class="$style.reserved">
 			<i class="ti ti-sparkles" aria-hidden="true"></i><h2>{{ t.aiTitle }}</h2><p>{{ t.aiHint }}</p>
 			<ul><li v-for="item in t.aiItems" :key="item"><span>{{ item }}</span><span :class="$style.muted">{{ t.reserved }}</span></li></ul>
@@ -99,7 +107,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
 					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
 						<header :class="$style.drawerHeading"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>{{ ft.sidebar }}</span><button v-if="discoveryCompact" type="button" :class="$style.quiet" :aria-label="ft.closeSidebar" :title="ft.closeSidebar" data-testid="close-discovery" @click="closeDiscovery"><i :class="discoveryCompact ? 'ti ti-x' : 'ti ti-chevron-right'" aria-hidden="true"></i></button></header>
-						<div :class="$style.drawerBody"><DiscoverySidebar v-model:query="query" @search="search" @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
+						<div :class="$style.drawerBody"><DiscoverySidebar v-model:query="query" @search="search()" @navigate="navigateDiscovery" @login="loginFromDiscovery"/></div>
 					</div>
 				</div>
 			</Teleport>
@@ -109,7 +117,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<nav v-if="isPublicFeed" :class="$style.feedFilters" :aria-label="ft.filters">
 						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.title }}</a>
 					</nav>
-					<form v-if="!isPublicFeed" :class="$style.search" role="search" @submit.prevent="search">
+					<form v-if="!isPublicFeed" :class="$style.search" role="search" @submit.prevent="search()">
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
@@ -118,7 +126,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-layout-sidebar-right-collapse' : 'ti ti-layout-sidebar-right-expand'" aria-hidden="true"></i></button>
 					</div>
 				</div>
-				<div v-if="isPublicFeed && activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
+				<form v-if="isPublicFeed" :class="$style.publicSearch" role="search" @submit.prevent="search()">
+					<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" type="search" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
+					<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
+					<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>{{ t.tagFilter }}<span v-if="activeTagIds.length">{{ activeTagIds.length }}</span></button>
+				</form>
+				<div v-if="isPublicFeed && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
 					<label>{{ t.all }}<select v-model="status"><option v-if="section === 'review'" value="unreviewed">{{ t.unreviewed }}</option><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="published">{{ t.published }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option><option value="removed">{{ t.removed }}</option><option value="withdrawn">{{ t.withdrawn }}</option></select></label>
 				</div>
@@ -137,6 +150,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
 								<div v-if="!isCommunity" :class="$style.workMeta"><span>{{ categoryTitle(work.category) }}</span><span v-if="!isCommunity" :class="[$style.status, ['rejected', 'removed'].includes(work.status) ? $style.rejected : null]">{{ work.revisionPending ? t.revisionPending : t[work.status] }}</span></div>
 								<h3><a v-if="work.approvedNoteId" :href="workLink(work)" @click.prevent="emit('navigate', workLink(work))">{{ work.title }}<span v-if="work.destination === 'source-comment'" :class="$style.draftHint"> · {{ shareText.directLabel }}</span></a><template v-else>{{ work.title }}<span v-if="work.destination === 'source-comment'" :class="$style.draftHint"> · {{ shareText.directLabel }}</span></template></h3>
+								<WorkTags :tags="work.tags"/>
 								<p :class="$style.excerpt"><Mfm :text="work.text" :plain="true"/></p>
 								<p v-if="work.rejectionReason" :class="$style.error">{{ t.reason }}：{{ work.rejectionReason }}</p>
 								<a v-if="work.destination === 'source-comment' && work.generation?.sourceWorkId" :href="`/community/work/${work.generation.sourceWorkId}`" :class="$style.discuss" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
@@ -186,12 +200,16 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, onDeactiva
 import { safetyText as safety } from './safety-copy.js';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
+import WorkTags from './work-tags.vue';
+import CommunityTagPicker from './tag-picker.vue';
+import { loadCommunityTags, communityTagUpdates } from './tags.js';
+import { parseTagQuery } from './work-tags.js';
 import DiscoverySidebar from './discovery-sidebar.vue';
 import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
 import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
 import { useDiscoveryDrawer } from './use-discovery-drawer.js';
-import type { CommunityComposerDraft, CommunityCategory, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
+import type { CommunityComposerDraft, CommunityCategory, CommunityTag, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
 import { studioShareText as shareText } from '@/utility/studio-share-copy.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
@@ -199,7 +217,7 @@ import { emojiPicker } from '@/utility/emoji-picker.js';
 import { prefer } from '@/preferences.js';
 import { useScrollPositionKeeper } from '@/composables/use-scroll-position-keeper.js';
 
-const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; initialTags?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; (event: 'composerClosed'): void; (event: 'submitted', value: Awaited<ReturnType<CommunityGateway['submit']>>): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
@@ -213,7 +231,13 @@ const feedSections = [
 	{ id: 'all', title: ft.all, path: '/community' },
 	...communitySections.map(entry => ({ ...entry, title: ft[entry.id] })),
 ];
-const titleInput = ref<HTMLInputElement>();
+const tagTrigger = ref<HTMLButtonElement>();
+const descriptionId = useId();
+const tagPickerOpen = ref(false);
+const filterPickerOpen = ref(false);
+const tagNotice = ref('');
+const knownTags = ref<CommunityTag[]>([]);
+const promptExcerpt = ref(false);
 const contentInput = ref<HTMLTextAreaElement>();
 const sourceInput = ref<HTMLInputElement>();
 const detailsOpen = ref(false);
@@ -238,6 +262,9 @@ let returnFocus: HTMLElement | undefined;
 const initialPublicQuery = () => isPublicFeed.value ? (props.initialQuery ?? '').trim().slice(0, 200) : '';
 const query = ref(initialPublicQuery());
 const activeQuery = ref(initialPublicQuery());
+const initialPublicTags = () => isPublicFeed.value ? parseTagQuery(props.initialTags) : [];
+const activeTagIds = ref(initialPublicTags());
+const filterTagIds = ref([...activeTagIds.value]);
 const status = ref<SubmissionStatus | 'all' | 'unreviewed'>(props.section === 'review' ? 'unreviewed' : 'all');
 const items = ref<CommunityWork[]>([]);
 const nextCursor = ref<string | null>(null);
@@ -267,15 +294,16 @@ const closingComposer = ref(false);
 let editRead: AbortController | undefined;
 let editBaseline = '';
 let newDraft: { content: typeof draft; files: CommunityFile[]; rights: boolean; details: boolean; references: CommunityFile[]; selected: string[]; generation: CommunityWork['generation']; } | undefined;
-const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', model: '', sourceUrl: '', license: '' });
+const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
 if (props.composerOnly && props.initialDraft) {
 	const initial = props.initialDraft;
-	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.text, model: initial.model });
+	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.destination !== 'source-comment' && initial.generation?.prompt.trim() ? initial.generation.prompt.slice(0, 2500).replace(/[\uD800-\uDBFF]$/, '') : initial.text, model: initial.model, tagIds: [...(initial.tagIds ?? [])] });
+	promptExcerpt.value = initial.destination !== 'source-comment' && (initial.generation?.prompt.length ?? 0) > 2500;
 	files.value = initial.files.map(file => ({ ...file }));
 	referenceFiles.value = initial.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = initial.generation ? { ...initial.generation, shareToSource: false } : null;
 	detailsOpen.value = !!initial.model;
 }
-const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || files.value.length));
+const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || draft.tagIds.length || files.value.length));
 const hasVideo = computed(() => draft.category === 'video' || files.value.some(file => file.type.startsWith('video/')));
 const directComment = computed(() => (editing.value?.destination ?? props.initialDraft?.destination) === 'source-comment');
 const workLink = (work: CommunityWork) => work.destination === 'source-comment' ? work.approvedNoteId ? `/notes/${work.approvedNoteId}` : `/community/work/${work.generation?.sourceWorkId}` : `/community/work/${work.id}`;
@@ -297,8 +325,8 @@ let submissionKey = '';
 let loadedVersion = getCommunityUpdateVersion();
 let active = true;
 
-const emptyTitle = computed(() => activeQuery.value ? t.emptySearch : isProfile.value ? t.profileEmpty : props.section === 'mine' ? t.emptyMine : props.section === 'review' ? t.emptyReview : t.empty);
-const emptyHint = computed(() => activeQuery.value ? t.emptySearchHint : isProfile.value ? t.profileEmptyHint : props.section === 'mine' ? t.emptyMineHint : props.section === 'review' ? t.emptyReviewHint : t.emptyHint);
+const emptyTitle = computed(() => activeQuery.value || activeTagIds.value.length ? t.emptySearch : isProfile.value ? t.profileEmpty : props.section === 'mine' ? t.emptyMine : props.section === 'review' ? t.emptyReview : t.empty);
+const emptyHint = computed(() => activeQuery.value || activeTagIds.value.length ? t.emptySearchHint : isProfile.value ? t.profileEmptyHint : props.section === 'mine' ? t.emptyMineHint : props.section === 'review' ? t.emptyReviewHint : t.emptyHint);
 const categoryTitle = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.title;
 const categoryIcon = (category: CommunityCategory) => communitySections.find(entry => entry.id === category)?.icon;
 const formatDate = (date: string) => new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
@@ -325,7 +353,7 @@ async function load(append = false) {
 		for (const id of Object.keys(reviewErrors)) delete reviewErrors[id];
 	}
 	try {
-		const page = await props.gateway.list(props.section as CommunitySection, { query: activeQuery.value, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
+		const page = await props.gateway.list(props.section as CommunitySection, { query: activeQuery.value, tagIds: isPublicFeed.value ? activeTagIds.value : undefined, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
 		if (current !== requestId || disposed) return;
 		// Fail closed: a malformed public response cannot expose pending content.
 		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : props.section !== 'all' && work.category !== props.section))) throw new Error(t.invalidResponse);
@@ -338,23 +366,50 @@ async function load(append = false) {
 	}
 }
 
-function feedPath(path: string, value = activeQuery.value) {
-	return value ? `${path}?${new URLSearchParams({ q: value })}` : path;
+function rememberTags(tags: CommunityTag[]) {
+	const ids = new Set(tags.map(tag => tag.id));
+	knownTags.value = [...knownTags.value.filter(tag => !ids.has(tag.id)), ...tags];
 }
 
-function search() {
+function tagName(id: string) { return knownTags.value.find(tag => tag.id === id)?.name ?? t.unknownTag; }
+
+function changeCategory(category: CommunityCategory) {
+	if (draft.category === category) return;
+	draft.category = category;
+	if (draft.tagIds.length) tagNotice.value = t.tagsChanged;
+	draft.tagIds = [];
+}
+
+function feedPath(path: string, value = activeQuery.value, tags = path === (feedSections.find(entry => entry.id === props.section)?.path ?? '/community') ? activeTagIds.value : []) {
+	const params = new URLSearchParams();
+	if (value) params.set('q', value);
+	if (tags.length) params.set('tags', tags.join(','));
+	return params.size ? `${path}?${params}` : path;
+}
+
+function search(tags = activeTagIds.value) {
 	if (discoveryCompact.value && discoveryOpen.value) closeDiscovery();
 	const nextQuery = query.value.trim().slice(0, 200);
-	if (isPublicFeed.value && nextQuery !== initialPublicQuery()) {
+	if (isPublicFeed.value && (nextQuery !== initialPublicQuery() || tags.join(',') !== initialPublicTags().join(','))) {
 		const path = feedSections.find(entry => entry.id === props.section)?.path ?? '/community';
-		emit('navigate', feedPath(path, nextQuery));
+		emit('navigate', feedPath(path, nextQuery, tags));
 		return;
 	}
 	activeQuery.value = nextQuery;
+	activeTagIds.value = [...tags];
 	void load();
 }
 
-function clearSearch() { query.value = ''; search(); }
+function openFilterPicker() { filterTagIds.value = [...activeTagIds.value]; filterPickerOpen.value = true; }
+
+function closeFilterPicker(open: boolean) {
+	filterPickerOpen.value = open;
+	if (!open) search(filterTagIds.value);
+}
+
+function removeFilter(id: string) { search(activeTagIds.value.filter(tagId => tagId !== id)); }
+
+function clearSearch() { query.value = ''; search([]); }
 
 function navigateDiscovery(path: string) { if (discoveryCompact.value) closeDiscovery(); emit('navigate', path); }
 
@@ -372,7 +427,7 @@ async function openComposer() {
 }
 
 function composerInput() {
-	return { ...draft, destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: draft.title.trim(), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value, shareToSource: !hasVideo.value && !directComment.value && shareToSource.value } : null };
+	return { ...draft, tagIds: [...draft.tagIds].sort(), destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: (draft.title.trim() || draft.text.trim().split('\n')[0] || files.value[0]?.name || draft.tagIds.map(tagName).join(' · ') || t.publish).slice(0, 100).replace(/[\uD800-\uDBFF]$/, ''), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value, shareToSource: !hasVideo.value && !directComment.value && shareToSource.value } : null };
 }
 
 function restoreNewDraft() {
@@ -386,7 +441,7 @@ function restoreNewDraft() {
 async function openEditor(work: CommunityWork, reload = false) {
 	if (!canEdit(work) || openingId.value || deletingId.value || submitting.value) return;
 	if (!reload && editing.value?.id === work.id && editChanged.value) {
-		composerOpen.value = true; composerZIndex.value = claimZIndex('low'); await nextTick(); titleInput.value?.focus(); return;
+		composerOpen.value = true; composerZIndex.value = claimZIndex('low'); await nextTick(); contentInput.value?.focus(); return;
 	}
 	if (!reload && editing.value) { await closeComposer(); if (editing.value) return; }
 	if (!composerOpen.value) returnFocus = window.document.activeElement instanceof HTMLElement ? window.document.activeElement : undefined;
@@ -397,10 +452,11 @@ async function openEditor(work: CommunityWork, reload = false) {
 	try {
 		const latest = await props.gateway.show(work.id, read.signal);
 		if (disposed || read.signal.aborted || !canEdit(latest)) return;
-		if (!editing.value) newDraft = { content: { ...draft }, files: [...files.value], rights: rights.value, details: detailsOpen.value, references: [...referenceFiles.value], selected: [...selectedReferences.value], generation: generationRecord.value };
+		if (!editing.value) newDraft = { content: { ...draft, tagIds: [...draft.tagIds] }, files: [...files.value], rights: rights.value, details: detailsOpen.value, references: [...referenceFiles.value], selected: [...selectedReferences.value], generation: generationRecord.value };
 		editing.value = latest;
 		referenceFiles.value = latest.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = latest.generation;
-		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license });
+		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license, tagIds: [...(latest.tagIds ?? latest.tags?.map(tag => tag.id) ?? [])] });
+		rememberTags(latest.tags ?? []); tagNotice.value = ''; promptExcerpt.value = false;
 		files.value = latest.files.map(file => ({ ...file })); rights.value = false; detailsOpen.value = true;
 		editBaseline = JSON.stringify(composerInput()); editConflict.value = false; formError.value = '';
 		composerZIndex.value = claimZIndex('low'); composerOpen.value = true; opened = true;
@@ -413,7 +469,7 @@ async function openEditor(work: CommunityWork, reload = false) {
 			openingId.value = '';
 			await nextTick();
 			if (!disposed && !read.signal.aborted) {
-				if (opened && composerOpen.value) titleInput.value?.focus();
+				if (opened && composerOpen.value) contentInput.value?.focus();
 				else if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 			}
 		}
@@ -469,7 +525,7 @@ function handleComposeRequest(event: Event) {
 }
 
 function onComposerKeydown(event: KeyboardEvent) {
-	if (choosing.value || emojiOpen.value) return;
+	if (choosing.value || emojiOpen.value || tagPickerOpen.value || event.defaultPrevented) return;
 	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void closeComposer(); }
 	if (event.key !== 'Tab' || !composerPanel.value) return;
 	const controls = [...composerPanel.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
@@ -480,6 +536,7 @@ function onComposerKeydown(event: KeyboardEvent) {
 // Release while the teleported node is still attached; acquire after it renders.
 watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 	if (!open || !signedIn) {
+		tagPickerOpen.value = false;
 		releaseFocus?.(); releaseFocus = undefined;
 		if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 	}
@@ -488,7 +545,7 @@ watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 	if (open && signedIn && modalLayer.value && !releaseFocus) releaseFocus = focusTrap(modalLayer.value).release;
 }, { flush: 'post' });
 onMounted(() => { if (!props.composerOnly) window.addEventListener(communityComposeEvent, handleComposeRequest); });
-onDeactivated(() => { active = false; editRead?.abort(); composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
+onDeactivated(() => { active = false; tagPickerOpen.value = false; filterPickerOpen.value = false; editRead?.abort(); composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
 
 async function chooseFiles(event: MouseEvent) {
 	const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
@@ -502,7 +559,7 @@ async function chooseFiles(event: MouseEvent) {
 	} catch (error) { formError.value = errorText(error); } finally {
 		choosing.value = false;
 		await nextTick();
-		if (!disposed && composerOpen.value) (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : titleInput.value)?.focus();
+		if (!disposed && composerOpen.value) (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : contentInput.value)?.focus();
 	}
 }
 
@@ -525,7 +582,7 @@ async function uploadSelected(event: Event) {
 		if (!props.gateway.uploadFiles) throw new Error(t.serviceUnavailable);
 		const uploaded = await props.gateway.uploadFiles(selected);
 		if (disposed || !composerOpen.value) return;
-		if (!files.value.length && uploaded.length) draft.category = uploadKind.value;
+		if (!files.value.length && uploaded.length) changeCategory(uploadKind.value);
 		const merged = [...files.value, ...uploaded.filter(file => !files.value.some(item => item.id === file.id))];
 		if (merged.length > 16) { formError.value = t.tooManyFiles; return; }
 		files.value = merged;
@@ -554,7 +611,7 @@ async function submit() {
 	formError.value = '';
 	if (!props.signedIn) { emit('login'); return; }
 	if (directComment.value && hasVideo.value) { formError.value = shareText.videoCommunityOnly; return; }
-	if (!draft.title.trim()) { formError.value = t.titleRequired; return; }
+	if (!directComment.value && (draft.tagIds.length < 1 || draft.tagIds.length > 3)) { formError.value = t.tagRequired; tagTrigger.value?.focus(); return; }
 	if (!draft.text.trim() && !files.value.length) { formError.value = t.contentRequired; return; }
 	if (draft.category === 'video' && !files.value.some(file => file.type.startsWith('video/'))) { formError.value = t.videoRequired; return; }
 	if (draft.category === 'image' && !files.value.some(file => file.type.startsWith('image/'))) { formError.value = t.imageRequired; return; }
@@ -586,7 +643,8 @@ async function submit() {
 		if (disposed) return;
 		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? directComment.value ? shareText.directSent : t.submittedPublic : t.submittedExisting;
 		if (!directComment.value && result.sourceCommentStatus && result.sourceCommentStatus !== 'none') notice.value += ' ' + shareText.sourceStatus[result.sourceCommentStatus];
-		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '' });
+		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
+		tagNotice.value = ''; promptExcerpt.value = false;
 		files.value = []; referenceFiles.value = []; selectedReferences.value = []; generationRecord.value = null; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
 		emit('submitted', result);
@@ -647,8 +705,15 @@ watch(() => props.section, (_section, previousSection) => {
 });
 watch(() => props.profileAuthorId, () => { editRead?.abort(); composerOpen.value = false; profileCategory.value = 'all'; query.value = ''; activeQuery.value = ''; });
 watch(() => props.viewerId, () => { editRead?.abort(); composerOpen.value = false; if (editing.value) restoreNewDraft(); });
-watch(() => props.initialQuery, () => { if (isPublicFeed.value) query.value = activeQuery.value = initialPublicQuery(); });
-watch([() => props.section, () => props.initialQuery, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
+watch(() => draft.tagIds, ids => { if (ids.length) tagNotice.value = ''; });
+watch([() => props.initialQuery, () => props.initialTags, () => props.section], () => { query.value = activeQuery.value = initialPublicQuery(); activeTagIds.value = initialPublicTags(); filterPickerOpen.value = false; });
+watch([composerOpen, isPublicFeed, communityTagUpdates], async (_value, _previous, onCleanup) => {
+	if (!composerOpen.value && !isPublicFeed.value) return;
+	const request = new AbortController();
+	onCleanup(() => request.abort());
+	try { const tags = await loadCommunityTags(undefined, request.signal); if (!disposed && !request.signal.aborted) knownTags.value = tags; } catch { /* The picker provides an actionable retry state. */ }
+}, { immediate: true });
+watch([() => props.section, () => props.initialQuery, () => props.initialTags, () => props.signedIn, () => props.moderator, () => props.profileAuthorId, profileCategory, status], () => { void load(); }, { immediate: true });
 watch([() => props.compose, () => props.signedIn, () => props.composeRequest], () => { if (props.compose && props.signedIn) void openComposer(); }, { immediate: true });
 watch(communityUpdates, () => { if (!props.composerOnly && active && !submitting.value && !deletingId.value && !reviewingId.value) void load(); });
 onActivated(() => {
@@ -656,7 +721,9 @@ onActivated(() => {
 	const stale = loadedVersion !== getCommunityUpdateVersion();
 	if (!isPublicFeed.value) { if (stale) void load(); return; }
 	const restored = initialPublicQuery();
-	const changed = activeQuery.value !== restored;
+	const restoredTags = initialPublicTags();
+	const changed = activeQuery.value !== restored || activeTagIds.value.join(',') !== restoredTags.join(',');
+	activeTagIds.value = restoredTags;
 	query.value = activeQuery.value = restored;
 	if (changed || stale) void load();
 });
@@ -741,6 +808,14 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .feedToolbar .discoveryToggle[aria-expanded='true'] { color: var(--MI_THEME-accent); background: var(--MI_THEME-buttonBg); }
 .searchSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 12px; font-size: 13px; overflow-wrap: anywhere; }
 .searchSummary span { min-width: 0; }
+.publicSearch { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
+.publicSearch .searchField { border: 1px solid var(--MI_THEME-divider); border-radius: 10px; min-height: 44px; }
+.publicSearch input { min-height: 42px; }
+.filterButton { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex-shrink: 0; min-height: 44px; border: 1px solid var(--MI_THEME-divider); padding: 8px 12px; border-radius: 10px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); }
+.filterActive { color: var(--MI_THEME-accent); border-color: var(--MI_THEME-accent); }
+.selectedFilters { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.tagChip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 6px; background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); font-size: 12px; overflow-wrap: anywhere; border: 0; }
+button.tagChip { min-height: 44px; }
 .search { display: flex; gap: 8px; margin-left: auto; width: min(100%, 320px); }
 .searchField { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding-left: 13px; background: var(--MI_THEME-panel); border: 1px solid transparent; border-radius: 999px; }
 .searchField input { width: 100%; min-width: 0; border: 0 !important; background: transparent !important; }
@@ -876,8 +951,14 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .composerAvatar { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: var(--MI_THEME-buttonBg); font-size: 22px; }
 .composer .writingArea input, .composer .writingArea textarea { border: 0; border-bottom: 1px solid transparent; border-radius: 0; padding: 8px 0; background: transparent; }
 .composer .writingArea input:focus-visible, .composer .writingArea textarea:focus-visible { outline: none; border-bottom-color: var(--MI_THEME-accent); }
-.composer .writingArea .titleInput { font-size: 14px; font-weight: 400; }
-.composer .writingArea textarea { font-size: 21px; min-height: 170px; max-height: 50vh; line-height: 1.6; }
+.tagField { display: grid; gap: 8px; margin: 4px 0 22px; }
+.fieldLabel { display: flex !important; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; }
+.fieldLabel small, .fieldHint { font-size: 12px; font-weight: 400; color: var(--MI_THEME-fgTransparentWeak); }
+.tagTrigger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-height: 48px; padding: 8px 10px; border: 1px solid var(--MI_THEME-divider); border-radius: 8px; background: transparent; color: var(--MI_THEME-fg); text-align: left; }
+.tagTrigger > i:last-child { margin-left: auto; }
+.tagTrigger:hover { border-color: var(--MI_THEME-accent); }
+.tagTrigger .tagChip { padding: 3px 8px; }
+.composer .writingArea textarea { font-size: 16px; min-height: 150px; max-height: 50vh; line-height: 1.6; }
 .destinationRow { margin-left: 56px; display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
 .destinationSelect { display: inline-flex !important; align-items: center; gap: 5px !important; font-size: 13px; max-width: 100%; }
 .composer .destinationSelect select { width: auto; max-width: 100%; border: 0; padding: 8px 2px; background: transparent; min-height: 44px; font-weight: 600; }
@@ -903,8 +984,12 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
  .composerHeader { margin-bottom: 12px; }
  .editorRow { grid-template-columns: 36px minmax(0, 1fr); gap: 10px; }
  .composerAvatar { width: 36px; height: 36px; font-size: 18px; }
- .composer .writingArea .titleInput, .extraFields input { font-size: 16px; }
- .composer .writingArea textarea { font-size: 19px; }
+ .extraFields input { font-size: 16px; }
+ .composer .writingArea textarea { font-size: 16px; }
+ .publicSearch { flex-wrap: wrap; }
+ .publicSearch .searchField { flex-basis: calc(100% - 74px); }
+ .publicSearch input { font-size: 16px; }
+ .filterButton { margin-left: auto; }
  .destinationRow, .extraFields, .composer .check, .composer .error, .composer .fileList { margin-left: 0; }
  .destinationRow { gap: 0 12px; }
  .iconTools { gap: 0; }

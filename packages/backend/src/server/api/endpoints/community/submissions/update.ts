@@ -6,7 +6,7 @@
 import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { CommunityService } from '@/core/CommunityService.js';
-import { communityErrors, communityWorkSchema } from '@/server/api/community-schema.js';
+import { communityErrors, communityWorkSchema, communityTagIdsParam } from '@/server/api/community-schema.js';
 import { paramDef as createParamDef } from './create.js';
 
 export const meta = {
@@ -17,6 +17,7 @@ export const meta = {
 export const paramDef = {
 	type: 'object',
 	properties: {
+		tagIds: communityTagIdsParam,
 		submissionId: { type: 'string', format: 'misskey:id' }, version: { type: 'integer', minimum: 0 },
 		category: createParamDef.properties.category, title: createParamDef.properties.title, text: createParamDef.properties.text,
 		model: createParamDef.properties.model, sourceUrl: createParamDef.properties.sourceUrl, license: createParamDef.properties.license,

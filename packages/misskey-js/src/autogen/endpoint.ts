@@ -1,27 +1,4 @@
 import type {
-	CommunityCommentsDeleteRequest,
-	CommunityReportRequest,
-	CommunitySubmissionsDeleteRequest,
-	CommunitySubmissionsShowRequest,
-	CommunitySubmissionsShowResponse,
-	CommunitySubmissionsUpdateRequest,
-	CommunitySubmissionsUpdateResponse,
-	CommunityWorksShowRequest,
-	CommunityWorksShowResponse,
-	CommunityWorksViewRequest,
-	CommunityWorksViewResponse,
-	CommunityFeaturedRequest,
-	CommunityFeaturedResponse,
-	CommunityWorksRequest,
-	CommunityWorksResponse,
-	CommunitySubmissionsCreateRequest,
-	CommunitySubmissionsCreateResponse,
-	CommunitySubmissionsMineRequest,
-	CommunitySubmissionsMineResponse,
-	AdminCommunitySubmissionsRequest,
-	AdminCommunitySubmissionsResponse,
-	AdminCommunityReviewRequest,
-	AdminCommunityReviewResponse,
 	EmptyRequest,
 	EmptyResponse,
 	AdminAbuseReportNotificationRecipientCreateRequest,
@@ -60,6 +37,17 @@ import type {
 	AdminAvatarDecorationsUpdateRequest,
 	AdminCaptchaCurrentResponse,
 	AdminCaptchaSaveRequest,
+	AdminCommunityNotesRequest,
+	AdminCommunityNotesResponse,
+	AdminCommunityReviewRequest,
+	AdminCommunityReviewResponse,
+	AdminCommunitySubmissionsRequest,
+	AdminCommunitySubmissionsResponse,
+	AdminCommunityTagsCreateRequest,
+	AdminCommunityTagsCreateResponse,
+	AdminCommunityTagsDeleteRequest,
+	AdminCommunityTagsUpdateRequest,
+	AdminCommunityTagsUpdateResponse,
 	AdminDeleteAccountRequest,
 	AdminDeleteAllFilesOfAUserRequest,
 	AdminDriveFilesRequest,
@@ -305,6 +293,27 @@ import type {
 	ClipsUnfavoriteRequest,
 	ClipsUpdateRequest,
 	ClipsUpdateResponse,
+	CommunityCommentsDeleteRequest,
+	CommunityFeaturedRequest,
+	CommunityFeaturedResponse,
+	CommunityReportRequest,
+	CommunitySubmissionsCreateRequest,
+	CommunitySubmissionsCreateResponse,
+	CommunitySubmissionsDeleteRequest,
+	CommunitySubmissionsMineRequest,
+	CommunitySubmissionsMineResponse,
+	CommunitySubmissionsShowRequest,
+	CommunitySubmissionsShowResponse,
+	CommunitySubmissionsUpdateRequest,
+	CommunitySubmissionsUpdateResponse,
+	CommunityTagsRequest,
+	CommunityTagsResponse,
+	CommunityWorksRequest,
+	CommunityWorksResponse,
+	CommunityWorksShowRequest,
+	CommunityWorksShowResponse,
+	CommunityWorksViewRequest,
+	CommunityWorksViewResponse,
 	DriveResponse,
 	DriveFilesRequest,
 	DriveFilesResponse,
@@ -714,6 +723,12 @@ export type Endpoints = {
 	'admin/avatar-decorations/update': { req: AdminAvatarDecorationsUpdateRequest; res: EmptyResponse };
 	'admin/captcha/current': { req: EmptyRequest; res: AdminCaptchaCurrentResponse };
 	'admin/captcha/save': { req: AdminCaptchaSaveRequest; res: EmptyResponse };
+	'admin/community/notes': { req: AdminCommunityNotesRequest; res: AdminCommunityNotesResponse };
+	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
+	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
+	'admin/community/tags/create': { req: AdminCommunityTagsCreateRequest; res: AdminCommunityTagsCreateResponse };
+	'admin/community/tags/delete': { req: AdminCommunityTagsDeleteRequest; res: EmptyResponse };
+	'admin/community/tags/update': { req: AdminCommunityTagsUpdateRequest; res: AdminCommunityTagsUpdateResponse };
 	'admin/delete-account': { req: AdminDeleteAccountRequest; res: EmptyResponse };
 	'admin/delete-all-files-of-a-user': { req: AdminDeleteAllFilesOfAUserRequest; res: EmptyResponse };
 	'admin/drive/clean-remote-files': { req: EmptyRequest; res: EmptyResponse };
@@ -879,6 +894,18 @@ export type Endpoints = {
 	'clips/show': { req: ClipsShowRequest; res: ClipsShowResponse };
 	'clips/unfavorite': { req: ClipsUnfavoriteRequest; res: EmptyResponse };
 	'clips/update': { req: ClipsUpdateRequest; res: ClipsUpdateResponse };
+	'community/comments/delete': { req: CommunityCommentsDeleteRequest; res: EmptyResponse };
+	'community/featured': { req: CommunityFeaturedRequest; res: CommunityFeaturedResponse };
+	'community/report': { req: CommunityReportRequest; res: EmptyResponse };
+	'community/submissions/create': { req: CommunitySubmissionsCreateRequest; res: CommunitySubmissionsCreateResponse };
+	'community/submissions/delete': { req: CommunitySubmissionsDeleteRequest; res: EmptyResponse };
+	'community/submissions/mine': { req: CommunitySubmissionsMineRequest; res: CommunitySubmissionsMineResponse };
+	'community/submissions/show': { req: CommunitySubmissionsShowRequest; res: CommunitySubmissionsShowResponse };
+	'community/submissions/update': { req: CommunitySubmissionsUpdateRequest; res: CommunitySubmissionsUpdateResponse };
+	'community/tags': { req: CommunityTagsRequest; res: CommunityTagsResponse };
+	'community/works': { req: CommunityWorksRequest; res: CommunityWorksResponse };
+	'community/works/show': { req: CommunityWorksShowRequest; res: CommunityWorksShowResponse };
+	'community/works/view': { req: CommunityWorksViewRequest; res: CommunityWorksViewResponse };
 	'drive': { req: EmptyRequest; res: DriveResponse };
 	'drive/files': { req: DriveFilesRequest; res: DriveFilesResponse };
 	'drive/files/attached-chat-messages': { req: DriveFilesAttachedChatMessagesRequest; res: DriveFilesAttachedChatMessagesResponse };
@@ -1129,22 +1156,6 @@ export type Endpoints = {
 	'users/update-memo': { req: UsersUpdateMemoRequest; res: EmptyResponse };
 	'v2/admin/emoji/list': { req: V2AdminEmojiListRequest; res: V2AdminEmojiListResponse };
 	'verify-email': { req: VerifyEmailRequest; res: EmptyResponse };
-	'community/works': { req: CommunityWorksRequest; res: CommunityWorksResponse };
-	'community/submissions/create': { req: CommunitySubmissionsCreateRequest; res: CommunitySubmissionsCreateResponse };
-	'community/submissions/mine': { req: CommunitySubmissionsMineRequest; res: CommunitySubmissionsMineResponse };
-	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
-	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
-	'community/featured': { req: CommunityFeaturedRequest; res: CommunityFeaturedResponse };
-	'community/works/show': { req: CommunityWorksShowRequest; res: CommunityWorksShowResponse };
-
-	'community/works/view': { req: CommunityWorksViewRequest; res: CommunityWorksViewResponse };
-	'community/submissions/show': { req: CommunitySubmissionsShowRequest; res: CommunitySubmissionsShowResponse };
-	'community/submissions/update': { req: CommunitySubmissionsUpdateRequest; res: CommunitySubmissionsUpdateResponse };
-	'community/submissions/delete': { req: CommunitySubmissionsDeleteRequest; res: EmptyResponse };
-
-	'community/report': { req: CommunityReportRequest; res: EmptyResponse };
-
-	'community/comments/delete': { req: CommunityCommentsDeleteRequest; res: EmptyResponse };
 };
 
 /**
