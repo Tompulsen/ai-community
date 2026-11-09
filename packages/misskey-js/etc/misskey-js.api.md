@@ -152,6 +152,12 @@ type AdminCaptchaCurrentResponse = operations['admin___captcha___current']['resp
 type AdminCaptchaSaveRequest = operations['admin___captcha___save']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
+type AdminCommunityNotesRequest = operations['admin___community___notes']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityNotesResponse = operations['admin___community___notes']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type AdminCommunityReviewRequest = operations['admin___community___review']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
@@ -162,6 +168,21 @@ type AdminCommunitySubmissionsRequest = operations['admin___community___submissi
 
 // @public (undocumented)
 type AdminCommunitySubmissionsResponse = operations['admin___community___submissions']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityTagsCreateRequest = operations['admin___community___tags___create']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityTagsCreateResponse = operations['admin___community___tags___create']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityTagsDeleteRequest = operations['admin___community___tags___delete']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityTagsUpdateRequest = operations['admin___community___tags___update']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityTagsUpdateResponse = operations['admin___community___tags___update']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
 type AdminDeleteAccountRequest = operations['admin___delete-account']['requestBody']['content']['application/json'];
@@ -1299,6 +1320,9 @@ type ClipsUpdateRequest = operations['clips___update']['requestBody']['content']
 type ClipsUpdateResponse = operations['clips___update']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
+type CommunityCommentsDeleteRequest = operations['community___comments___delete']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
 type CommunityFeaturedRequest = operations['community___featured']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
@@ -1333,6 +1357,12 @@ type CommunitySubmissionsUpdateRequest = operations['community___submissions___u
 
 // @public (undocumented)
 type CommunitySubmissionsUpdateResponse = operations['community___submissions___update']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityTagsRequest = operations['community___tags']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityTagsResponse = operations['community___tags']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
 type CommunityWorksRequest = operations['community___works']['requestBody']['content']['application/json'];
@@ -1655,6 +1685,17 @@ declare namespace entities {
         AdminAvatarDecorationsUpdateRequest,
         AdminCaptchaCurrentResponse,
         AdminCaptchaSaveRequest,
+        AdminCommunityNotesRequest,
+        AdminCommunityNotesResponse,
+        AdminCommunityReviewRequest,
+        AdminCommunityReviewResponse,
+        AdminCommunitySubmissionsRequest,
+        AdminCommunitySubmissionsResponse,
+        AdminCommunityTagsCreateRequest,
+        AdminCommunityTagsCreateResponse,
+        AdminCommunityTagsDeleteRequest,
+        AdminCommunityTagsUpdateRequest,
+        AdminCommunityTagsUpdateResponse,
         AdminDeleteAccountRequest,
         AdminDeleteAllFilesOfAUserRequest,
         AdminDriveFilesRequest,
@@ -1900,6 +1941,27 @@ declare namespace entities {
         ClipsUnfavoriteRequest,
         ClipsUpdateRequest,
         ClipsUpdateResponse,
+        CommunityCommentsDeleteRequest,
+        CommunityFeaturedRequest,
+        CommunityFeaturedResponse,
+        CommunityReportRequest,
+        CommunitySubmissionsCreateRequest,
+        CommunitySubmissionsCreateResponse,
+        CommunitySubmissionsDeleteRequest,
+        CommunitySubmissionsMineRequest,
+        CommunitySubmissionsMineResponse,
+        CommunitySubmissionsShowRequest,
+        CommunitySubmissionsShowResponse,
+        CommunitySubmissionsUpdateRequest,
+        CommunitySubmissionsUpdateResponse,
+        CommunityTagsRequest,
+        CommunityTagsResponse,
+        CommunityWorksRequest,
+        CommunityWorksResponse,
+        CommunityWorksShowRequest,
+        CommunityWorksShowResponse,
+        CommunityWorksViewRequest,
+        CommunityWorksViewResponse,
         DriveResponse,
         DriveFilesRequest,
         DriveFilesResponse,
@@ -2281,28 +2343,6 @@ declare namespace entities {
         V2AdminEmojiListRequest,
         V2AdminEmojiListResponse,
         VerifyEmailRequest,
-        CommunityWorksRequest,
-        CommunityWorksResponse,
-        CommunitySubmissionsCreateRequest,
-        CommunitySubmissionsCreateResponse,
-        CommunitySubmissionsMineRequest,
-        CommunitySubmissionsMineResponse,
-        AdminCommunitySubmissionsRequest,
-        AdminCommunitySubmissionsResponse,
-        AdminCommunityReviewRequest,
-        AdminCommunityReviewResponse,
-        CommunityFeaturedResponse,
-        CommunityWorksShowRequest,
-        CommunityWorksShowResponse,
-        CommunityWorksViewRequest,
-        CommunityWorksViewResponse,
-        CommunitySubmissionsShowRequest,
-        CommunitySubmissionsShowResponse,
-        CommunitySubmissionsUpdateRequest,
-        CommunitySubmissionsUpdateResponse,
-        CommunitySubmissionsDeleteRequest,
-        CommunityFeaturedRequest,
-        CommunityReportRequest,
         Error_2 as Error,
         UserLite,
         UserDetailedNotMeOnly,
