@@ -24,8 +24,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<slot name="afterActions"></slot>
 	</div>
 	<Transition :css="prefer.s.animation" :enterActiveClass="$style.discussionEnter" :enterFromClass="$style.discussionFrom">
-	<section v-if="showComments || previewComments" :class="[$style.discussion, { [$style.previewDiscussion]: previewComments }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion">
-		<header v-if="discussion || previewComments" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button></header>
+	<section v-if="showComments || previewComments" :class="[$style.discussion, { [$style.previewDiscussion]: previewComments, [$style.withoutComments]: previewComments && !comments.length }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion">
+		<header v-if="discussion || previewComments" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :title="t.refresh" :aria-busy="refreshing" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button></header>
 		<template v-for="part in previewComments ? ['comments', 'composer'] : ['composer', 'comments']" :key="part">
 		<div v-if="part === 'composer'" :class="$style.commentEntry">
 		<button v-if="previewComments && !showComments && $i" type="button" class="_button" :class="$style.commentPrompt" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.writeComment }}<i class="ti ti-pencil" aria-hidden="true"></i></button>
@@ -48,8 +48,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><button v-if="canDeleteComment(reply)" type="button" class="_button" :class="$style.deleteComment" :disabled="!!deletingCommentId" :aria-label="t.deleteComment" data-testid="delete-work-comment" @click="removeComment(reply)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingCommentId === reply.id ? t.deletingComment : t.deleteComment }}</button><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text && reply.cw == null"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="!reply.isHidden && !reply.deletedAt && (reply.files?.length || reply.cw != null)" :class="$style.remixPreview" data-testid="comment-result-preview"><MkMediaList v-if="reply.files?.length && reply.cw == null" :mediaList="reply.files" :user="reply.user"/><MkNoteSimple v-else :note="reply"/><MkA :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></div></li></ul>
 		</div>
 		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
-		<div v-if="previewComments" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
-		<button v-else-if="commentsMore" type="button" class="_button" :class="$style.more" :disabled="loadingComments || refreshing" @click="loadMoreComments">{{ loadingComments ? t.loadingComments : t.loadMore }}</button>
+		<div v-if="previewComments && (replyCount || comments.length)" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
+		<button v-else-if="!previewComments && commentsMore" type="button" class="_button" :class="$style.more" :disabled="loadingComments || refreshing" @click="loadMoreComments">{{ loadingComments ? t.loadingComments : t.loadMore }}</button>
 		</template>
 		</template>
 	</section>
@@ -277,7 +277,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .actions .copied i { animation: confirm .22s var(--community-ease, ease-out); }
 @keyframes confirm { from { transform: scale(.75); } to { transform: scale(1); } }
 .actions .active { color: var(--MI_THEME-fg); background: var(--MI_THEME-accentedBg); }
-.commentHeading { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 4px; h2 { font-size: 16px; margin: 0; } h2 span { margin-left: 6px; opacity: .7; font-weight: normal; } button { width: 44px; height: 44px; } }
+.commentHeading { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; h2 { font-size: 16px; margin: 0; } h2 span { margin-left: 6px; opacity: .7; font-weight: normal; } button { flex-shrink: 0; width: 44px; height: 44px; border-radius: 8px; color: var(--MI_THEME-fgTransparentWeak); &:hover:not(:disabled) { background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); } &:disabled { opacity: .6; } } }
 .composer { border: 1px solid var(--MI_THEME-inputBorder); border-radius: var(--MI-radius, 12px); padding: 12px; margin: 12px 0; &:focus-within { outline: 2px solid var(--MI_THEME-fg); outline-offset: 2px; } label { display: block; } textarea { box-sizing: border-box; display: block; width: 100%; resize: vertical; min-height: 72px; max-height: 180px; border: none; color: inherit; background: transparent; line-height: 1.65; &:focus-visible { outline: none; } } }
 .send { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 12px; button { min-height: 44px; padding: 8px 16px; border-radius: 20px; color: var(--MI_THEME-panel); background: var(--MI_THEME-fg); font-weight: 600; } button:disabled { opacity: .45; cursor: not-allowed; } }
 .keyboardHint { margin: 8px 0 0; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); }
@@ -298,7 +298,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .previewDiscussion .commentEntry { flex: 0 0 auto; }
 .previewDiscussion .composer { margin: 8px 0 0; padding: 10px; textarea { min-height: 52px; max-height: 120px; } }
 .previewDiscussion .signin { margin: 8px 0 0; }
-.previewDiscussion .keyboardHint { font-size: 11px; }
+.previewDiscussion .keyboardHint { font-size: 12px; }
 .commentPrompt { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 8px; background: var(--MI_THEME-input); text-align: left; color: var(--MI_THEME-fgTransparentWeak); i:last-child { margin-left: auto; } &:hover { border-color: var(--MI_THEME-accent); color: var(--MI_THEME-fg); } }
 .previewViewport { position: relative; min-width: 0; max-height: clamp(180px, 34svh, 360px); overflow: clip; }
 .previewViewport .comments li { padding: 12px 0; gap: 8px; }
@@ -307,11 +307,11 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .previewViewport .attachment { font-size: 12px; }
 .hiddenComment { visibility: hidden; }
 .previewFooter { flex: 0 0 auto; a { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; padding-block: 8px; color: var(--MI_THEME-accent); font-size: 12px; font-weight: 600; } a:hover { text-decoration: underline; } }
-@container (min-width: 760px) {
-	.previewLayout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 30%); gap: 24px; align-items: stretch; }
+@container (min-width: 900px) {
+	.previewLayout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(260px, 28%, 320px); gap: 24px; align-items: stretch; }
 	.previewDiscussion { margin-top: 0; padding: 0 0 0 20px; border-top: 0; border-left: 1px solid var(--MI_THEME-divider); }
 	.previewViewport { flex: 1 1 0; height: 0; min-height: 80px; max-height: none; .comments { position: absolute; inset: 0 0 auto; } }
-	.previewDiscussion .empty { flex: 1; }
+	.previewDiscussion.withoutComments { align-self: start; }
 }
 @container (max-width: 600px) {
 	.actions { column-gap: 0; font-size: 12px; }

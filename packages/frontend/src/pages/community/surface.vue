@@ -94,10 +94,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
-		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscoveryControl]: isPublicFeed && !discoveryCompact, [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
-			<div v-if="isPublicFeed && !discoveryCompact" :class="$style.discoveryRail">
-				<button ref="discoveryToggle" type="button" :class="$style.discoveryEdge" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-chevron-right' : 'ti ti-chevron-left'" aria-hidden="true"></i></button>
-			</div>
+		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
 			<Teleport to="body" :disabled="!discoveryCompact">
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
 					<div ref="discoveryPanel" :class="$style.drawerPanel" tabindex="-1" @keydown="discoveryKeydown">
@@ -116,8 +113,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
-					<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span v-if="!isPublicFeed">{{ t.refresh }}</span></button>
-					<button v-if="isPublicFeed && discoveryCompact" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i></button>
+					<div :class="$style.feedTools">
+						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span>{{ isPublicFeed ? ft.refresh : t.refresh }}</span></button>
+						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-layout-sidebar-right-collapse' : 'ti ti-layout-sidebar-right-expand'" aria-hidden="true"></i></button>
+					</div>
 				</div>
 				<div v-if="isPublicFeed && activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
@@ -707,19 +706,15 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .tabs a[aria-current], .profileTabs button[aria-pressed='true'] { font-weight: 700; color: var(--MI_THEME-fg); background: var(--MI_THEME-panel); }
 .profileTabs button { border: 0; background: transparent; color: var(--MI_THEME-fg); }
 .columns { display: grid; grid-template-columns: minmax(0, 1fr); }
-.withDiscoveryControl { min-height: calc(100dvh - 128px); grid-template-columns: minmax(0, 1fr) 20px; column-gap: 16px; align-items: start; }
-.withDiscovery { grid-template-columns: minmax(0, 1fr) 20px clamp(280px, 26%, 360px); }
+.withDiscovery { grid-template-columns: minmax(0, 1fr) clamp(280px, 24%, 320px); column-gap: 24px; align-items: start; }
 .withDiscovery .feed { grid-column: 1; grid-row: 1; }
-.discovery { grid-column: 3; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
+.discovery { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 16px; min-width: 0; }
 .discovery:not(.drawerLayer) .drawerPanel { display: flex; flex-direction: column; max-height: calc(100dvh - 96px); }
 .discovery:not(.drawerLayer) .drawerHeading { flex-shrink: 0; }
 .discovery:not(.drawerLayer) .drawerBody { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--MI_THEME-divider) transparent; padding: 4px; margin: -4px; }
 .drawerHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; margin-bottom: 12px; color: var(--MI_THEME-fg); font-size: 13px; font-weight: 600; span { display: inline-flex; align-items: center; gap: 8px; } button { width: 44px; height: 44px; padding: 0; } i { font-size: 18px; } }
 .drawerBody { min-height: 0; min-width: 0; }
 .discoveryToggle { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; i { font-size: 18px; } }
-.discoveryRail { grid-column: 2; grid-row: 1; position: sticky; top: calc(100dvh - 160px); display: flex; justify-content: center; }
-.discoveryEdge { position: relative; display: grid; place-items: center; width: 20px; height: 52px; padding: 0; border: 0; border-radius: 10px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); transition: background-color 160ms ease, color 160ms ease; i { font-size: 14px; } &::after { content: ''; position: absolute; inset: 0 -12px; } &:hover { background: var(--MI_THEME-buttonHoverBg); color: var(--MI_THEME-accent); } &:focus-visible { outline-offset: 2px; } }
-@media (prefers-reduced-motion: reduce) { .discoveryEdge { transition: none; } }
 .drawerLayer { position: fixed; inset: 0; background: rgb(0 0 0 / .32); color: var(--MI_THEME-fg); font: 14px/1.6 var(--community-font, sans-serif); }
 .drawerLayer, .drawerLayer * { box-sizing: border-box; }
 .drawerLayer :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
@@ -735,13 +730,15 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .toolbar h2, .sectionTitle h2 { font-size: 16px; font-weight: 600; }
 .toolbar { padding: 20px 8px; gap: 12px; }
 .toolbar h2 { white-space: nowrap; }
-.feedToolbar { padding: 0 0 20px; min-height: 68px; gap: 16px; flex-wrap: wrap; }
+.feedToolbar { padding: 0 0 20px; min-height: 64px; gap: 12px 24px; flex-wrap: wrap; }
 .feedToolbar h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
 .feedFilters { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .feedFilters a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border-radius: 8px; font-size: 13px; white-space: nowrap; }
 .feedFilters a:hover { background: var(--MI_THEME-buttonBg); }
-.feedFilters a[aria-current] { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); font-weight: 650; }
-.feedToolbar .refresh { margin-left: auto; width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+.feedFilters a[aria-current] { background: var(--MI_THEME-panel); color: var(--MI_THEME-accent); font-weight: 650; }
+.feedTools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.feedToolbar .refresh { min-height: 44px; gap: 6px; padding: 0 10px; font-size: 12px; i { font-size: 16px; } }
+.feedToolbar .discoveryToggle[aria-expanded='true'] { color: var(--MI_THEME-accent); background: var(--MI_THEME-buttonBg); }
 .searchSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 12px; font-size: 13px; overflow-wrap: anywhere; }
 .searchSummary span { min-width: 0; }
 .search { display: flex; gap: 8px; margin-left: auto; width: min(100%, 320px); }
