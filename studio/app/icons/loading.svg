@@ -1,0 +1,44 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="16"
+  height="16"
+  viewBox="0 0 16 16"
+  fill="currentColor"
+  style="filter: none"
+>
+  <style>
+    @keyframes octopus-loading-opacity-pulse {
+      0%,
+      80%,
+      100% {
+        opacity: 0.4;
+      }
+      40% {
+        opacity: 1;
+      }
+    }
+    .octopus-loading-dot {
+      opacity: 0.6;
+      animation: octopus-loading-opacity-pulse 0.8s ease-in-out infinite;
+    }
+    .octopus-loading-dot:nth-of-type(1) {
+      animation-delay: -0.4s;
+    }
+    .octopus-loading-dot:nth-of-type(2) {
+      animation-delay: -0.2s;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body:not([data-motion="full"]) .octopus-loading-dot {
+        animation: none;
+        opacity: 0.6;
+      }
+    }
+    [class~="reduce-motion"] .octopus-loading-dot {
+      animation: none;
+      opacity: 0.6;
+    }
+  </style>
+  <circle class="octopus-loading-dot" cx="4" cy="8" r="1.926" />
+  <circle class="octopus-loading-dot" cx="8" cy="8" r="1.2736" />
+  <circle class="octopus-loading-dot" cx="12" cy="8" r="1.926" />
+</svg>

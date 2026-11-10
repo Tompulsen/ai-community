@@ -1,0 +1,526 @@
+diff --git a/service/core.py b/service/core.py
+--- a/service/core.py
++++ b/service/core.py
+@@ -26,6 +26,7 @@
+ PUBLIC = os.getenv("PUBLIC_BASE_URL", "https://api.zhangyuapi.com").rstrip("/")
+ TTL = int(os.getenv("IMAGE_TTL_SECONDS", "43200"))
+ MAX_IMAGE = int(os.getenv("MAX_IMAGE_BYTES", str(20 * 1024**2)))
++MAX_RESULTS = 10
+ QUOTA = int(os.getenv("CACHE_QUOTA_BYTES", str(5 * 1024**3)))
+ MIN_FREE = int(os.getenv("MIN_FREE_BYTES", str(6 * 1024**3)))
+ MAX_QUEUE = int(os.getenv("MAX_QUEUED_TASKS", "100"))
+@@ -98,6 +99,10 @@
+             c.execute("ALTER TABLE jobs ADD COLUMN sync_mode INTEGER NOT NULL DEFAULT 0")
+         if "upload_id" not in {row[1] for row in c.execute("PRAGMA table_info(jobs)")}:
+             c.execute("ALTER TABLE jobs ADD COLUMN upload_id TEXT")
++        if "actual_n" not in {row[1] for row in c.execute("PRAGMA table_info(jobs)")}:
++            c.execute("ALTER TABLE jobs ADD COLUMN actual_n INTEGER")
++        if "error_details" not in {row[1] for row in c.execute("PRAGMA table_info(jobs)")}:
++            c.execute("ALTER TABLE jobs ADD COLUMN error_details TEXT")
+ 
+ 
+ def seal(value):
+@@ -236,6 +241,25 @@
+         )
+ 
+ 
++def expand_reservation(job, claim, required):
++    with db() as c:
++        c.execute("BEGIN IMMEDIATE")
++        row = c.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
++        if not row or row["claim"] != claim or row["status"] not in ("generating", "preparing"):
++            raise ValueError("task_claim_changed")
++        if required <= row["reserved"]:
++            return row["reserved"]
++        reserved = c.execute("SELECT COALESCE(SUM(reserved),0) FROM jobs").fetchone()[0]
++        inputs = c.execute("SELECT COALESCE(SUM(bytes),0) FROM upload_reservations").fetchone()[0]
++        extra = required - row["reserved"]
++        if reserved + extra > QUOTA:
++            raise AdmissionError("image_storage_capacity_reached")
++        if shutil.disk_usage(DATA).free < MIN_FREE + reserved + extra + inputs:
++            raise AdmissionError("insufficient_disk_space")
++        c.execute("UPDATE jobs SET reserved=? WHERE id=?", (required, job))
++        return required
++
++
+ def finish_job(job):
+     with db() as c:
+         c.execute("BEGIN IMMEDIATE")
+@@ -243,7 +267,7 @@
+         if not row or row["status"] != "saving":
+             return
+         images = c.execute("SELECT * FROM images WHERE job=?", (job,)).fetchall()
+-        if len(images) != row["n"]:
++        if len(images) != (row["actual_n"] if row["actual_n"] is not None else row["n"]):
+             return
+         if any(image["status"] == "failed" for image in images):
+             c.execute("UPDATE jobs SET status='save_failed',error='image_save_failed',updated=? WHERE id=?",
+diff --git a/service/tasks.py b/service/tasks.py
+--- a/service/tasks.py
++++ b/service/tasks.py
+@@ -1,5 +1,8 @@
+ import base64
++import binascii
+ import contextlib
++import json
++import logging
+ import os
+ import threading
+ import time
+@@ -9,7 +12,8 @@
+ import ijson
+ 
+ from .core import (
+-    DATA, GEN_TIMEOUT, LEASE, MAX_IMAGE, UPSTREAM, db, fail_job, finish_job,
++    AdmissionError, DATA, GEN_TIMEOUT, LEASE, MAX_IMAGE, MAX_RESULTS, UPSTREAM,
++    db, expand_reservation, fail_job, finish_job,
+     DecryptedReader, gen_queue, image_id, media_path, now, response_path,
+     save_queue, seal, sniff, unseal, write_frame,
+ )
+@@ -17,6 +21,7 @@
+ from .edit_upload import iter_upload, lock_upload, reclaim_uploads, release_stored_upload, upload_path
+ 
+ preparation_slots = threading.BoundedSemaphore(int(os.getenv("PREPARATION_CONCURRENCY", "2")))
++logger = logging.getLogger(__name__)
+ 
+ 
+ @contextlib.contextmanager
+@@ -78,7 +83,8 @@
+             except Exception:
+                 fail_job(job, "edit_input_missing_or_corrupt")
+                 return
+-        limit = row["n"] * MAX_IMAGE * 4 // 3 + 2 * 1024**2
++        limit = MAX_RESULTS * ((MAX_IMAGE + 2) // 3 * 4) + 2 * 1024**2
++        reserved = row["reserved"]
+         started = time.monotonic()
+         with heartbeat("jobs", job, claim):
+             with httpx.Client(
+@@ -114,6 +120,10 @@
+                             size += len(chunk)
+                             if size > limit:
+                                 raise ValueError("upstream_response_too_large")
++                            if size * 2 + 1024**2 > reserved:
++                                reserved = expand_reservation(
++                                    job, claim, ((size * 2 // MAX_IMAGE) + 1) * MAX_IMAGE + 1024**2,
++                                )
+                             if time.monotonic() - started > GEN_TIMEOUT:
+                                 raise TimeoutError()
+                             write_frame(output, chunk)
+@@ -130,12 +140,16 @@
+                 prepare_impl(job)
+             else:
+                 response_path(job).unlink(missing_ok=True)
+-    except Exception:
++    except Exception as error:
++        code = error.code if isinstance(error, AdmissionError) else (
++            "upstream_response_too_large" if isinstance(error, ValueError)
++            and str(error) == "upstream_response_too_large" else "generation_outcome_unknown"
++        )
+         with db() as c:
+             c.execute(
+-                "UPDATE jobs SET status='indeterminate',error='generation_outcome_unknown',"
++                "UPDATE jobs SET status='indeterminate',error=?,"
+                 "payload=NULL,updated=?,lease=0 WHERE id=? AND claim=? AND status='generating'",
+-                (now(), job, claim),
++                (code, now(), job, claim),
+             )
+     finally:
+         partial.unlink(missing_ok=True)
+@@ -195,26 +209,40 @@
+     if not changed:
+         return
+     partials = []
++    stage = "data"
++    index = None
++    images = []
+     try:
+-        images = []
++        response_size = response_path(job).stat().st_size
++        reserved = row["reserved"]
+         with heartbeat("jobs", job, claim):
+             with DecryptedReader(response_path(job)) as source:
+                 for index, item in enumerate(ijson.items(source, "data.item")):
+-                    if index >= row["n"] or not isinstance(item, dict):
+-                        raise ValueError("invalid_upstream_image_count")
++                    stage = "image_count"
++                    if index >= MAX_RESULTS:
++                        raise ValueError("upstream_image_count_exceeded")
++                    stage = f"data[{index}]"
++                    if not isinstance(item, dict):
++                        raise ValueError("invalid_upstream_image_item")
++                    required = response_size + (index + 1) * MAX_IMAGE + 1024**2
++                    if required > reserved:
++                        reserved = expand_reservation(job, claim, required)
+                     identifier = image_id(job, index)
+                     if isinstance(item.get("url"), str) and item["url"]:
++                        stage += ".url"
+                         validate_url(item["url"])
+                         images.append((identifier, job, index, "pending", seal(item["url"]), None, 0))
+                     elif item.get("b64_json"):
++                        stage += ".b64_json"
+                         partial = DATA / "staging" / f"{job}.{claim}.{index}.decoded.part"
+                         partials.append((partial, media_path(identifier)))
+                         size, media_type = decode_image(item["b64_json"], partial)
+                         images.append((identifier, job, index, "completed", None, media_type, size))
+                     else:
+                         raise ValueError("missing_upstream_image")
+-            if len(images) != row["n"]:
+-                raise ValueError("invalid_upstream_image_count")
++                    stage = "data"
++            if not images:
++                raise ValueError("missing_upstream_image")
+             with db() as c:
+                 c.execute("BEGIN IMMEDIATE")
+                 current = c.execute("SELECT status,claim FROM jobs WHERE id=?", (job,)).fetchone()
+@@ -227,19 +255,37 @@
+                     "VALUES(?,?,?,?,?,?,?)", images,
+                 )
+                 c.execute(
+-                    "UPDATE jobs SET status='saving',payload=NULL,claim=NULL,lease=0,updated=? WHERE id=?",
+-                    (now(), job),
++                    "UPDATE jobs SET status='saving',actual_n=?,payload=NULL,claim=NULL,lease=0,"
++                    "updated=?,error=NULL,error_details=NULL WHERE id=?",
++                    (len(images), now(), job),
+                 )
+             response_path(job).unlink(missing_ok=True)
+             for image in images:
+                 if image[3] == "pending":
+                     enqueue_image(image[0])
+             finish_job(job)
+-    except Exception:
++    except Exception as error:
++        known = {
++            "upstream_image_count_exceeded", "invalid_upstream_image_item", "missing_upstream_image",
++            "invalid_image_url", "blocked_image_port", "blocked_image_destination",
++            "image_too_large", "unsupported_image_type", "task_claim_changed",
++        }
++        if isinstance(error, AdmissionError):
++            code = error.code
++        elif isinstance(error, binascii.Error):
++            code = "invalid_image_base64"
++        elif isinstance(error, ijson.JSONError):
++            code = "invalid_upstream_image_json"
++        else:
++            code = str(error) if isinstance(error, ValueError) and str(error) in known else "upstream_image_response_invalid"
++        details = {"stage": stage, "requested_n": row["n"], "parsed_n": len(images),
++                   "index": index, "exception": type(error).__name__}
++        logger.warning("image preparation failed job=%s code=%s details=%s", job, code, json.dumps(details))
+         with db() as c:
+             c.execute(
+-                "UPDATE jobs SET status='failed',error='upstream_image_response_invalid',updated=?,lease=0 "
+-                "WHERE id=? AND claim=? AND status='preparing'", (now(), job, claim),
++                "UPDATE jobs SET status='failed',error=?,error_details=?,updated=?,lease=0 "
++                "WHERE id=? AND claim=? AND status='preparing'",
++                (code, json.dumps(details), now(), job, claim),
+             )
+     finally:
+         for partial, _ in partials:
+@@ -405,7 +451,7 @@
+         job = row["id"]
+         with db() as c:
+             identifiers = c.execute("SELECT id FROM images WHERE job=?", (job,)).fetchall()
+-        media_ids = {image["id"] for image in identifiers} | {image_id(job, i) for i in range(row["n"])}
++        media_ids = {image["id"] for image in identifiers} | {image_id(job, i) for i in range(MAX_RESULTS)}
+         for identifier in media_ids:
+             path = media_path(identifier)
+             path.unlink(missing_ok=True)
+@@ -434,7 +480,7 @@
+         job = row["id"]
+         with db() as c:
+             identifiers = c.execute("SELECT id FROM images WHERE job=?", (job,)).fetchall()
+-        media_ids = {image["id"] for image in identifiers} | {image_id(job, i) for i in range(row["n"])}
++        media_ids = {image["id"] for image in identifiers} | {image_id(job, i) for i in range(MAX_RESULTS)}
+         for identifier in media_ids:
+             path = media_path(identifier)
+             path.unlink(missing_ok=True)
+diff --git a/service/api.py b/service/api.py
+--- a/service/api.py
++++ b/service/api.py
+@@ -437,6 +437,7 @@
+     result = {
+         "id": row["id"], "status": status,
+         "created_at": stamp(row["created"]), "expires_at": stamp(row["expires"]),
++        "requested_n": row["n"], "actual_n": row["actual_n"],
+         "status_url": f"/async-images/v1/tasks/{row['id']}",
+     }
+     if status == "succeeded":
+@@ -445,6 +446,8 @@
+         result["data"] = [{"url": f"{PUBLIC}/media/{image['id']}"} for image in images]
+     elif status in ("failed", "save_failed", "indeterminate"):
+         result["error"] = {"code": row["error"], "upstream_status": row["upstream_status"]}
++        if row["error_details"]:
++            result["error"]["details"] = json.loads(row["error_details"])
+     return result
+ 
+ 
+diff --git a/service/sync.py b/service/sync.py
+--- a/service/sync.py
++++ b/service/sync.py
+@@ -6,7 +6,7 @@
+ from httpx_sse import EventSource
+ 
+ from .core import (
+-    GEN_TIMEOUT, PUBLIC, TTL, UPSTREAM, db, fail_job,
++    GEN_TIMEOUT, MAX_RESULTS, PUBLIC, TTL, UPSTREAM, db, fail_job,
+     image_id, now, seal, submit,
+ )
+ from .download import validate_url
+@@ -68,7 +68,7 @@
+                 publish(kind, preview)
+             elif kind in ("image_generation.completed", "image_edit.completed") or "data" in value:
+                 batch = value.get("data", [value])
+-                if not isinstance(batch, list) or not batch or len(items) + len(batch) > n:
++                if not isinstance(batch, list) or not batch or len(items) + len(batch) > MAX_RESULTS:
+                     raise SyncError("invalid_upstream_image_count")
+                 items.extend(batch)
+                 final_kind = kind if kind in (
+@@ -103,7 +103,7 @@
+     with db() as c:
+         timestamp = now()
+         changed = c.execute(
+-            "UPDATE jobs SET status='succeeded',n=?,payload=NULL,lease=0,expires=?,"
++            "UPDATE jobs SET status='succeeded',actual_n=?,payload=NULL,lease=0,expires=?,"
+             "recover_until=?,updated=?,reserved=4096 WHERE id=? AND claim=? AND status='generating'",
+             (count, timestamp + TTL, timestamp + TTL, timestamp, identifier, claim),
+         ).rowcount
+@@ -166,7 +166,7 @@
+             if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+                 raise SyncError("invalid_upstream_image_response")
+             items = result["data"]
+-            if not items or len(items) > job["n"]:
++            if not items or len(items) > MAX_RESULTS:
+                 raise SyncError("invalid_upstream_image_count")
+             images = []
+             for index, item in enumerate(items):
+@@ -197,7 +197,7 @@
+                 )
+                 timestamp = now()
+                 c.execute(
+-                    "UPDATE jobs SET status=?,n=?,payload=NULL,lease=0,expires=?,recover_until=?,"
++                    "UPDATE jobs SET status=?,actual_n=?,payload=NULL,lease=0,expires=?,recover_until=?,"
+                     "updated=?,reserved=4096 WHERE id=?",
+                     ("succeeded", len(items), timestamp + TTL,
+                      timestamp + TTL, timestamp, identifier),
+diff --git a/service/sync_stream.py b/service/sync_stream.py
+--- a/service/sync_stream.py
++++ b/service/sync_stream.py
+@@ -8,7 +8,7 @@
+ import httpx
+ from fastapi.responses import JSONResponse, StreamingResponse
+ 
+-from .core import AdmissionError, GEN_TIMEOUT, db, fail_job, now, submit
++from .core import AdmissionError, GEN_TIMEOUT, MAX_RESULTS, db, fail_job, now, submit
+ from . import sync
+ from .json_stream import InvalidImageJSON, filtered_images
+ from .sync import MAX_RESPONSE, SyncError, finish_sync, register_proxy
+@@ -118,7 +118,7 @@
+                         self.release = transfer_slots.release
+                         output = bytearray()
+                         async for part in filtered_images(
+-                            response.aiter_bytes(chunk_size=CHUNK_SIZE), MAX_RESPONSE, job["n"],
++                            response.aiter_bytes(chunk_size=CHUNK_SIZE), MAX_RESPONSE, MAX_RESULTS,
+                             lambda url, index: register_proxy(identifier, index, url),
+                             lambda count: finish_sync(identifier, claim, count),
+                         ):
+diff --git a/service/json_stream.py b/service/json_stream.py
+--- a/service/json_stream.py
++++ b/service/json_stream.py
+@@ -201,9 +201,8 @@
+                 async for part in reader.string():
+                     length += len(part)
+                     yield part
+-                if length <= 2:
+-                    raise InvalidImageJSON("missing_upstream_image")
+-                has_image = emitted = True
++                has_image = has_image or length > 2
++                emitted = True
+             elif image and key == "url":
+                 value = json.loads(await reader.collect(reader.value(), 17000))
+                 if not isinstance(value, str) or not value:
+diff --git a/tests/test_sync_stream.py b/tests/test_sync_stream.py
+--- a/tests/test_sync_stream.py
++++ b/tests/test_sync_stream.py
+@@ -100,7 +100,7 @@
+     [{"type": "error", "error": {"message": "https://secret.example"}}],
+     [{"type": "image_generation.partial_image", "url": "https://secret.example"}],
+     ["{invalid json"],
+-    [final_item(), final_item(), "[DONE]"],
++    [*[final_item() for _ in range(core.MAX_RESULTS + 1)], "[DONE]"],
+ ])
+ def test_invalid_or_incomplete_stream_is_never_replayed(monkeypatch, events):
+     calls = upstream(monkeypatch, events)
+diff --git a/tests/test_multi_image.py b/tests/test_multi_image.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_multi_image.py
+@@ -0,0 +1,170 @@
++"""No generation calls: provider result counts and storage admission regressions."""
++import asyncio
++import base64
++import json
++from concurrent.futures import ThreadPoolExecutor
++from types import SimpleNamespace
++
++import pytest
++from fastapi.testclient import TestClient
++
++from test_service import TOKEN, PNG, owner, reset, make_job, row, set_response, fake_download, mock_sync_upstream
++from service import api, core, tasks, sync
++
++
++def test_requested_one_saves_four_without_regeneration(monkeypatch):
++    job = make_job()["id"]
++    before = row(job)["reserved"]
++    items = [{"url": f"https://upstream.example/{index}.png", "b64_json": ""} for index in range(4)]
++    set_response(job, items)
++    monkeypatch.setattr(tasks, "download", fake_download)
++    tasks.prepare_impl(job)
++    prepared = row(job)
++    assert prepared["status"] == "saving"
++    assert prepared["n"] == 1 and prepared["actual_n"] == 4
++    assert prepared["reserved"] > before
++    for index in range(4):
++        tasks.save_image.call_local(core.image_id(job, index))
++    finished = row(job)
++    assert finished["status"] == "succeeded"
++    assert finished["reserved"] == len(PNG) * 4 + 4096
++    result = api.public_job(finished)
++    assert result["requested_n"] == 1 and result["actual_n"] == 4
++    assert len(result["data"]) == 4
++    assert all(item["url"].startswith(core.PUBLIC + "/media/") for item in result["data"])
++
++
++@pytest.mark.parametrize("requested,actual", [(1, 4), (4, 1), (1, 10)])
++def test_base64_accepts_actual_count(requested, actual):
++    job = make_job(n=requested)["id"]
++    set_response(job, [{"b64_json": base64.b64encode(PNG).decode()}] * actual)
++    tasks.prepare_impl(job)
++    assert row(job)["status"] == "succeeded"
++    assert row(job)["n"] == requested and row(job)["actual_n"] == actual
++    assert len(api.public_job(row(job))["data"]) == actual
++
++
++@pytest.mark.parametrize("items,code,stage", [
++    ([], "missing_upstream_image", "data"),
++    ([{}], "missing_upstream_image", "data[0]"),
++    ([{"url": "https://user:secret@example.test/private"}], "invalid_image_url", "data[0].url"),
++    ([{"b64_json": "%%%="}], "invalid_image_base64", "data[0].b64_json"),
++    ([{"b64_json": base64.b64encode(b"not an image").decode()}], "unsupported_image_type", "data[0].b64_json"),
++    ([{"url": "https://upstream.example/x.png"}] * 11, "upstream_image_count_exceeded", "image_count"),
++])
++def test_specific_errors_without_private_response_data(items, code, stage, caplog):
++    job = make_job()["id"]
++    set_response(job, items)
++    tasks.prepare_impl(job)
++    result = api.public_job(row(job))
++    assert result["error"]["code"] == code
++    assert result["error"]["details"]["stage"] == stage
++    assert "secret" not in json.dumps(result) and "secret" not in caplog.text
++    assert "example.test" not in caplog.text
++
++
++def test_expansion_capacity_failure_does_not_commit_images(monkeypatch):
++    job = make_job()["id"]
++    original = row(job)["reserved"]
++    set_response(job, [{"url": "https://upstream.example/x.png"}] * 4)
++    monkeypatch.setattr(core, "QUOTA", original)
++    tasks.prepare_impl(job)
++    assert row(job)["error"] == "image_storage_capacity_reached"
++    assert row(job)["reserved"] == original
++    with core.db() as connection:
++        assert connection.execute("SELECT COUNT(*) FROM images WHERE job=?", (job,)).fetchone()[0] == 0
++
++
++def test_failed_multi_image_commit_reclaims_every_moved_file(monkeypatch):
++    job = make_job()["id"]
++    set_response(job, [{"b64_json": base64.b64encode(PNG).decode()}] * 4)
++    original = tasks.os.replace
++    calls = 0
++    def interrupted(source, target):
++        nonlocal calls
++        calls += 1
++        if calls == 3:
++            raise OSError("interrupted image commit")
++        return original(source, target)
++    monkeypatch.setattr(tasks.os, "replace", interrupted)
++    tasks.prepare_impl(job)
++    assert row(job)["status"] == "failed"
++    assert core.media_path(core.image_id(job, 1)).exists()
++    tasks.reclaim_failed()
++    assert not list((core.DATA / "media").iterdir())
++    assert not list((core.DATA / "staging").iterdir())
++
++
++def test_expansion_checks_free_disk(monkeypatch):
++    job = make_job()["id"]
++    set_response(job, [{"url": "https://upstream.example/x.png"}] * 4)
++    monkeypatch.setattr(core.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
++    tasks.prepare_impl(job)
++    assert row(job)["error"] == "insufficient_disk_space"
++
++
++def test_expansions_serialize_quota_admission(monkeypatch):
++    identifiers = [make_job("job-one")["id"], make_job("job-two")["id"]]
++    original = row(identifiers[0])["reserved"]
++    monkeypatch.setattr(core, "QUOTA", original * 3)
++    with core.db() as connection:
++        connection.execute("UPDATE jobs SET status='preparing',claim='test'")
++    def expand(identifier):
++        try:
++            core.expand_reservation(identifier, "test", original * 2)
++            return True
++        except core.AdmissionError:
++            return False
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        assert sorted(pool.map(expand, identifiers)) == [False, True]
++    with core.db() as connection:
++        assert connection.execute("SELECT SUM(reserved) FROM jobs").fetchone()[0] == core.QUOTA
++
++
++def test_multi_image_save_retry_never_regenerates(monkeypatch):
++    job = make_job()["id"]
++    set_response(job, [{"url": f"https://upstream.example/{i}.png"} for i in range(4)])
++    tasks.prepare_impl(job)
++    monkeypatch.setattr(tasks, "download", fake_download)
++    for i in range(3):
++        tasks.save_image.call_local(core.image_id(job, i))
++    def broken(*args):
++        raise RuntimeError("download failed")
++    monkeypatch.setattr(tasks, "download", broken)
++    last = core.image_id(job, 3)
++    for _ in range(3):
++        with core.db() as connection:
++            connection.execute("UPDATE images SET next_attempt=0 WHERE id=?", (last,))
++        tasks.save_image.call_local(last)
++    assert row(job)["status"] == "save_failed"
++    client = TestClient(api.app)
++    response = client.post(f"/async-images/v1/tasks/{job}/retry-save", headers={
++        "Authorization": "Bearer " + TOKEN, "X-Real-IP": "127.0.0.1",
++    })
++    assert response.status_code == 202
++    monkeypatch.setattr(tasks, "download", fake_download)
++    tasks.save_image.call_local(last)
++    assert row(job)["status"] == "succeeded"
++    assert len(api.public_job(row(job))["data"]) == 4
++
++
++@pytest.mark.parametrize("streaming", [False, True])
++def test_sync_accepts_four_urls_with_empty_base64(monkeypatch, streaming):
++    calls = mock_sync_upstream(monkeypatch, {"data": [
++        {"url": f"https://upstream.example/{i}.png", "b64_json": ""} for i in range(4)
++    ]})
++    payload = {"model": "mock", "prompt": "x", "n": 1}
++    if streaming:
++        client = TestClient(api.app)
++        result = client.post("/v1/images/generations", json=payload, headers={
++            "Authorization": "Bearer " + TOKEN, "X-Real-IP": "127.0.0.1",
++        })
++        assert result.status_code == 200
++        output = result.json()
++    else:
++        output = sync.generate_sync(owner, TOKEN, "127.0.0.1", payload)
++    assert len(calls) == 1 and len(output["data"]) == 4
++    assert all(item["url"].startswith(core.PUBLIC + "/media/") for item in output["data"])
++    with core.db() as connection:
++        job = dict(connection.execute("SELECT * FROM jobs").fetchone())
++    assert job["n"] == 1 and job["actual_n"] == 4

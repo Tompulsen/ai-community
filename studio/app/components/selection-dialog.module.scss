@@ -1,0 +1,211 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.dialog.dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  color: var(--black);
+  border-color: transparent;
+  outline: none;
+  transform-origin: 50% 60%;
+  animation: selection-dialog-enter 300ms
+    var(--ease-spring, cubic-bezier(0.2, 0.8, 0.2, 1)) both;
+
+  &::backdrop {
+    background: var(--modal-backdrop);
+    backdrop-filter: blur(8px);
+    animation: selection-backdrop-enter 180ms ease-out both;
+  }
+
+  &[data-closing="true"] {
+    animation: selection-dialog-exit 180ms ease-in both;
+
+    &::backdrop {
+      animation: selection-backdrop-exit 180ms ease-in both;
+    }
+  }
+}
+
+@keyframes selection-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes selection-dialog-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+@keyframes selection-sheet-enter {
+  from {
+    opacity: 0.65;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes selection-sheet-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0.65;
+    transform: translateY(100%);
+  }
+}
+
+@keyframes selection-backdrop-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes selection-backdrop-exit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.dialog.compact {
+  width: min(92%, 480px);
+  height: fit-content;
+  max-height: min(70dvh, 560px);
+}
+
+.content {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  margin-inline-start: auto;
+  margin-inline-end: 4px;
+
+  button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--black);
+    font: inherit;
+    font-size: 12px;
+    line-height: 16px;
+    cursor: pointer;
+    transition:
+      background-color 0.15s var(--ease-out, ease),
+      box-shadow 0.15s var(--ease-out, ease);
+
+    @include controls.quiet-button;
+
+    &:active:not(:disabled) {
+      @include controls.hover-surface;
+    }
+  }
+}
+
+@media (forced-colors: active) {
+  .dialog.dialog {
+    border-color: CanvasText;
+
+    &:focus-visible {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .dialog.dialog {
+    inset: 0 auto auto 0;
+    margin: 0;
+    width: 100dvw;
+    max-width: 100dvw;
+    height: 100dvh;
+    max-height: 100dvh;
+    animation: selection-sheet-enter 340ms
+      var(--ease-spring, cubic-bezier(0.2, 0.8, 0.2, 1)) both;
+
+    &[data-closing="true"] {
+      animation: selection-sheet-exit 220ms cubic-bezier(0.4, 0, 0.8, 0.3) both;
+
+      &::backdrop {
+        animation-duration: 220ms;
+      }
+    }
+  }
+
+  .dialog.dialog.compact {
+    inset: auto 0 0;
+    bottom: var(--selection-dialog-viewport-bottom, 0px);
+    height: auto;
+    max-height: min(
+      80dvh,
+      calc(
+        var(--selection-dialog-viewport-height, 100dvh) - var(
+            --safe-area-top,
+            0px
+          ) - 16px
+      )
+    );
+    padding: 12px max(16px, var(--safe-area-right, 0px))
+      calc(16px + var(--safe-area-bottom, 0px))
+      max(16px, var(--safe-area-left, 0px));
+    border-radius: 24px 24px 0 0;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .dialog.dialog,
+  .dialog.dialog[data-closing="true"] {
+    animation: none !important;
+
+    &::backdrop {
+      animation: none !important;
+    }
+  }
+
+  .headerActions button {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .dialog.dialog,
+:global(.reduce-motion) .dialog.dialog[data-closing="true"] {
+  animation: none !important;
+
+  &::backdrop {
+    animation: none !important;
+  }
+}
+
+:global(.reduce-motion) .headerActions button {
+  transition: none;
+}

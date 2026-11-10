@@ -23,7 +23,10 @@ export async function signout() {
 		await cloudBackup();
 	}
 
-	localStorage.clear();
+	// The built-in studio keeps account-scoped history across community sign-outs.
+	for (const key of Object.keys(localStorage)) {
+		if (!key.startsWith('octopus:')) localStorage.removeItem(key);
+	}
 
 	const idbAbortController = new AbortController();
 	const timeout = window.setTimeout(() => idbAbortController.abort(), 5000);

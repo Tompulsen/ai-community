@@ -33,6 +33,7 @@ import { ClientServerService } from './web/ClientServerService.js';
 import { OpenApiServerService } from './api/openapi/OpenApiServerService.js';
 import { OAuth2ProviderService } from './oauth/OAuth2ProviderService.js';
 import { registerHttpAccessLog } from './http-access-log.js';
+import { registerCommunityStudio } from './community-studio.js';
 
 const _dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -152,6 +153,7 @@ export class ServerService implements OnApplicationShutdown {
 			});
 		}
 
+		registerCommunityStudio(fastify, process.env.COMMUNITY_STUDIO_UPSTREAM || 'http://studio:3000', this.config.url);
 		fastify.register(this.apiServerService.createServer, { prefix: '/api' });
 		fastify.register(this.openApiServerService.createServer);
 		fastify.register(this.fileServerService.createServer);

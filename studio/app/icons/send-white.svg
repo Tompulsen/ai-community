@@ -1,0 +1,9 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" overflow="visible">
+  <!-- 纸飞机：实心面性，机头朝左，折纸结构 -->
+  <!-- 上翼面：从机头到右上尾尖 -->
+  <path d="M2 12L22 3L15 12Z"/>
+  <!-- 下翼面：从机头到右下尾尖，下翼倾斜角略小 -->
+  <path d="M2 12L22 21L15 12Z"/>
+  <!-- 折痕线：从机头向右延伸的浅凹槽，分层翼面 -->
+  <line x1="2" y1="12" x2="15" y2="12" stroke="white" stroke-width="0.8"/>
+</svg>

@@ -1,0 +1,18 @@
+@mixin system-reduced-motion($global: false) {
+  $body-selector: ':global(body:not([data-motion="full"]))';
+  @if $global {
+    $body-selector: 'body:not([data-motion="full"])';
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    @if & {
+      #{$body-selector} & {
+        @content;
+      }
+    } @else {
+      #{$body-selector} {
+        @content;
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@
 import { i18n } from '@/i18n.js';
 import { homeLanguage } from '@/pages/home/copy.js';
 
-export const creationText = homeLanguage === 'en-US' ? {
+const legacyCreationText = homeLanguage === 'en-US' ? {
 	community: 'Community', text: 'Text studio', image: 'Image studio', video: 'Video studio',
 	settings: 'Creation links', description: 'Set a destination for each creation tool. Save to enable its entry. Leave a URL empty to show an unconfigured state.',
 	url: 'Creation page URL', urlHint: 'Use a complete external HTTPS URL. Leave it empty to disable the destination. Links are public; do not include passwords or private tokens.',
@@ -19,6 +19,23 @@ export const creationText = homeLanguage === 'en-US' ? {
 	loadError: 'Creation settings could not load. Please try again.', saveError: 'Changes could not be saved. Your edits are still here. Please try again.',
 	saved: 'Creation links saved', adminOnly: 'Only administrators can change creation links.', preview: 'Open the saved creation page',
 } : i18n.ts._creationLinks;
+
+export const creationText = {
+	...legacyCreationText,
+	...(homeLanguage === 'en-US' ? {
+		settings: 'AI Workbench settings', description: 'The built-in workbench uses each user’s New API account and balance. Configure the default models below.',
+		adminOnly: 'Only administrators can change workbench settings.', preview: 'Open AI Workbench',
+		loadError: 'The workbench could not load. Please try again.',
+		builtinReady: 'The built-in workbench is connected to the account service.',
+		builtinUnavailable: 'The built-in workbench account service is unavailable. Check the server configuration.',
+	} : {
+		settings: 'AI 工作台设置', description: '内置工作台使用每位用户自己的 New API 账户和余额。可在下方设置默认模型。',
+		adminOnly: '只有管理员可以修改工作台设置。', preview: '打开 AI 工作台',
+		loadError: '工作台暂时无法加载，请重试。',
+		builtinReady: '内置工作台已接通账号服务。',
+		builtinUnavailable: '内置工作台账号服务尚未就绪，请检查服务端配置。',
+	}),
+};
 
 export const workbenchText = homeLanguage === 'en-US' ? {
 	title: 'AI Workbench', creation: 'Create', personal: 'Your space', tools: 'Community tools',
@@ -36,11 +53,11 @@ export const creationPages = [
 
 export const creationModelText = homeLanguage === 'en-US' ? {
 	title: 'Default creation models', label: 'Default model ID',
-	hint: 'Each entry opens a new chat. Remixes use the original work’s model first. Enter an exact model ID available to your users.',
+	hint: 'Switching creation types restores their own conversations. Remixes use the original work’s model first. Enter an exact model ID available to your users.',
 	empty: 'Leave empty to let users select a model', invalid: 'Use a model ID of up to 100 characters without spaces.', saved: 'Default models saved',
 } : {
 	title: '制作默认模型', label: '默认模型 ID',
-	hint: '进入制作页时自动新建聊天；制作同款优先采用原作品模型。请填写用户有权调用的准确模型 ID。',
+	hint: '切换制作类型时保留各自的聊天记录；制作同款优先采用原作品模型。请填写用户有权调用的准确模型 ID。',
 	empty: '留空时由用户手动选择模型', invalid: '模型 ID 最多 100 个字符，不能包含空白字符。', saved: '默认模型已保存',
 };
 

@@ -1,0 +1,276 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.interaction {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--separator-color);
+  color: var(--black);
+  font-size: 14px;
+  line-height: 20px;
+
+  form {
+    min-width: 0;
+    margin: 0;
+  }
+}
+
+.group {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.question {
+  box-sizing: border-box;
+  display: block;
+  max-width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.limits {
+  margin: 0 0 8px;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.options {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.option {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 12px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  &[data-selected="true"] {
+    @include controls.selected-surface;
+  }
+
+  &:hover:not([data-disabled="true"]) {
+    @include controls.hover-surface;
+  }
+
+  &:focus-within {
+    box-shadow: var(--control-focus-shadow);
+  }
+
+  &[data-disabled="true"] {
+    cursor: default;
+  }
+}
+
+.input[type="checkbox"],
+.input[type="radio"] {
+  appearance: auto;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  accent-color: var(--primary);
+  cursor: inherit;
+
+  &::after {
+    display: none;
+    content: none;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
+.copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.label,
+.description {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.label {
+  color: inherit;
+}
+
+.description {
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.submit,
+.clear {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-width: 104px;
+  max-width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  > svg {
+    flex-shrink: 0;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+}
+
+.submit {
+  margin-inline-start: auto;
+  background: var(--primary-fill);
+  color: var(--primary-foreground);
+
+  &:hover:not(:disabled) {
+    filter: brightness(0.95);
+  }
+
+  &:active:not(:disabled) {
+    filter: brightness(0.9);
+  }
+}
+
+.clear {
+  min-width: 0;
+  background: transparent;
+  color: var(--second-in-gray);
+
+  &:hover:not(:disabled) {
+    @include controls.hover-surface;
+  }
+}
+
+.error {
+  margin-top: 8px;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.receiptHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 16px;
+
+  > svg {
+    flex-shrink: 0;
+    color: var(--primary);
+  }
+}
+
+.receipt {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  > li {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    min-width: 0;
+
+    > svg {
+      margin-top: 2px;
+      color: var(--primary);
+    }
+  }
+}
+
+.spinner {
+  animation: option-spin 900ms linear infinite;
+}
+
+@keyframes option-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@include motion.system-reduced-motion {
+  .spinner {
+    animation: none;
+  }
+}
+
+:global(.reduce-motion) .spinner {
+  animation: none;
+}

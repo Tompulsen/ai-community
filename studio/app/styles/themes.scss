@@ -1,0 +1,132 @@
+@use "sass:color";
+
+// Vivid accents stay bright while text and white-on-color controls stay readable.
+@mixin skin-colors($accent, $fill, $vivid, $surface) {
+  --primary: #{$accent};
+  --primary-rgb: #{color.red($vivid)}, #{color.green($vivid)},
+    #{color.blue($vivid)};
+  --primary-vivid: #{$vivid};
+  --primary-fill: #{$fill};
+  --second: #{color.mix($vivid, $surface, 5%)};
+  --second-hover: #{color.mix($vivid, $surface, 9%)};
+  --primary-container: var(--second);
+}
+
+@mixin skin($vivid, $fill, $dark-vivid) {
+  @include skin-colors(color.mix(#000000, $fill, 14%), $fill, $vivid, #ffffff);
+
+  &.dark,
+  .dark & {
+    @include skin-colors(
+      color.mix(#ffffff, $dark-vivid, 22%),
+      $fill,
+      $dark-vivid,
+      #1c1c1e
+    );
+  }
+}
+
+/* ── 默认主题：Apple Blue ── */
+.theme-blue {
+  @include skin(#007aff, #0070eb, #0a84ff);
+}
+
+/* ── 海洋青绿 ── */
+.theme-teal {
+  @include skin(#00c8b4, #008579, #2cdbca);
+}
+
+/* ── 暖阳珊瑚 ── */
+.theme-coral {
+  @include skin(#ff6b5e, #d53b30, #ff8176);
+}
+
+/* ── 优雅紫罗兰 ── */
+.theme-violet {
+  @include skin(#8755f7, #7851da, #a78bfa);
+}
+
+/* ── 森林绿 ── */
+.theme-green {
+  @include skin(#34c759, #16863d, #30d158);
+}
+
+/* ── 玫瑰粉 ── */
+.theme-rose {
+  @include skin(#ff2d6e, #de1c58, #ff538a);
+}
+
+/* ── 暗夜石墨 ── */
+.theme-graphite {
+  @include skin(#707582, #666c78, #9ba2af);
+}
+
+/* ── 靛蓝 Indigo ── */
+.theme-indigo {
+  @include skin(#5856ff, #5856e8, #7a73ff);
+}
+
+/* ── 翡翠绿 Emerald ── */
+.theme-emerald {
+  @include skin(#00c985, #00855d, #30df9b);
+}
+
+/* ── 品红 Fuchsia ── */
+.theme-fuchsia {
+  @include skin(#eb3be3, #b82ac0, #f767ed);
+}
+
+/* ── 琥珀金 Amber ── */
+.theme-amber {
+  @include skin(#ffba20, #9d6900, #ffc43d);
+}
+
+/* ── 天蓝 Sky ── */
+.theme-sky {
+  @include skin(#32b8ff, #007dae, #5ac8fa);
+}
+
+/* ── 樱花粉 Pink ── */
+.theme-pink {
+  @include skin(#ff70ba, #c52f89, #ff86c8);
+}
+
+/* ── 活力橙 Orange ── */
+.theme-orange {
+  @include skin(#ff9500, #bf5700, #ff9f0a);
+}
+
+/* ── 岩灰蓝 Slate ── */
+.theme-slate {
+  @include skin(#7c9dce, #536f98, #9fbbe3);
+}
+
+/* ── 青柠 Lime ── */
+.theme-lime {
+  @include skin(#a8de20, #5b7e00, #beed38);
+}
+
+/* ── 红色 Red ── */
+.theme-red {
+  @include skin(#ff3b30, #df2f26, #ff453a);
+}
+
+/* ── 霓虹青 Cyan ── */
+.theme-cyan {
+  @include skin(#00c7e6, #007f96, #40ddf2);
+}
+
+/* ── 明黄 Yellow ── */
+.theme-yellow {
+  @include skin(#ffd60a, #8c7100, #ffe031);
+}
+
+/* ── 深紫 Purple ── */
+.theme-purple {
+  @include skin(#af52de, #a33bcd, #bf5af2);
+}
+
+/* ── 暖石灰 Stone ── */
+.theme-stone {
+  @include skin(#b1adba, #6f6c75, #c9c2d0);
+}

@@ -17,6 +17,10 @@ src-js/
 db/
 .devcontainer/compose.yml
 node_modules/
+studio/node_modules
+studio/.next
+studio/.swc
+studio/tsconfig.tsbuildinfo
 packages/*/node_modules
 redis/
 files/

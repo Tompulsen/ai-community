@@ -22,10 +22,29 @@ services:
       - "127.0.0.1:13000:3000"
     environment:
       NODE_OPTIONS: --max-old-space-size=768
+      COMMUNITY_STUDIO_UPSTREAM: http://studio:3000
     volumes:
       - ./private/config:/misskey/.config:ro
       - uploads:/misskey/files
     networks: [database, outbound]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  studio:
+    image: ${COMMUNITY_STUDIO_IMAGE:-ghcr.io/tompulsen/ai-community-studio:latest}
+    build:
+      context: ../studio
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file: ./private/studio.env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      COMMUNITY_INTERNAL_URL: http://web:3000
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [database, outbound, accounts]
     logging:
       options: {max-size: "10m", max-file: "3"}
   db:
@@ -63,3 +82,6 @@ networks:
   database:
     internal: true
   outbound:
+  accounts:
+    external: true
+    name: ${NEW_API_NETWORK:-1panel-network}

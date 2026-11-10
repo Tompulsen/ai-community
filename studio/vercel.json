@@ -1,0 +1,8 @@
+{
+    "framework": "nextjs",
+    "buildCommand": "npx tsx app/masks/build.ts && npx cross-env BUILD_MODE=standalone next build",
+    "installCommand": "npm install --legacy-peer-deps",
+    "github": {
+        "silent": true
+    }
+}

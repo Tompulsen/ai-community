@@ -1,0 +1,114 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--black);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 200ms
+    var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+
+  > svg {
+    flex: 0 0 auto;
+    color: var(--second-in-gray);
+  }
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:focus-visible {
+    @include controls.focus-ring;
+  }
+
+  &[aria-pressed="true"] {
+    @include controls.selected-surface;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      @include controls.hover-surface;
+    }
+  }
+
+  &[aria-pressed="true"] > svg,
+  &:hover:not(:disabled) > svg {
+    color: inherit;
+  }
+}
+
+.empty {
+  margin: 4px 8px 12px;
+  color: var(--second-in-gray);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+
+  button {
+    min-width: 44px;
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--black);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+
+    &:hover {
+      @include controls.hover-surface;
+    }
+
+    &:focus-visible {
+      @include controls.focus-ring;
+    }
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .option,
+  .footer button {
+    min-height: 44px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .option {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .option {
+  transition: none;
+}

@@ -76,8 +76,8 @@ export class NewApiSigninService {
 	private studio(): { origin: string; secret: string; } {
 		this.issuer();
 		const settings = this.config.newApiSso!;
-		if (!settings.studioOrigin || !settings.studioSecret || settings.studioSecret.length < 32) throw new Error('STUDIO_DISABLED');
-		return { origin: newApiOrigin(settings.studioOrigin), secret: settings.studioSecret };
+		if (!settings.studioSecret || settings.studioSecret.length < 32) throw new Error('STUDIO_DISABLED');
+		return { origin: newApiOrigin(this.config.url), secret: settings.studioSecret };
 	}
 
 	private browser(request: FastifyRequest): string | null {
@@ -139,7 +139,7 @@ export class NewApiSigninService {
 				const issuer = this.issuer();
 				let studioOrigin: string | undefined;
 				try { studioOrigin = this.studio().origin; } catch { /* Studio can be enabled after account sign-in. */ }
-				return { enabled: true, issuer, studioOrigin };
+				return { enabled: true, issuer, studioOrigin, studioPath: '/studio' };
 			} catch { return { enabled: false }; }
 		});
 		fastify.post<{ Body: { i?: string; kind?: string; context?: string; returnTo?: string; } }>('/newapi/studio/start', { bodyLimit: 4096 }, async (request, reply) => {
@@ -166,7 +166,7 @@ export class NewApiSigninService {
 				const launch: StudioLaunch = { userId: user.id, issuer, subject: mapping.subject, tokenHash: hash(i), returnTo: newApiReturnPath(request.body.returnTo).startsWith(`/create/${kind}`) ? newApiReturnPath(request.body.returnTo) : `/create/${kind}`, kind: kind as StudioLaunch['kind'], studio: origin, context };
 				await this.redis.set(`newapi:studio:${hash(code)}`, JSON.stringify(launch), 'EX', 120);
 				if (context) return { code, origin, subject: mapping.subject, userId: user.id };
-				const target = new URL('/api/new-api/community/start', origin);
+				const target = new URL('/studio/api/new-api/community/start', origin);
 				target.searchParams.set('code', code);
 				return { url: target.href };
 			} catch { return reply.code(403).send({ error: 'STUDIO_UNAVAILABLE' }); }
