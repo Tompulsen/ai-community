@@ -6,9 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <nav :class="$style.navigation" :aria-label="t.mobileNavigation" data-testid="mobile-community-navigation">
 	<MkA to="/community" :class="{ [$style.current]: homeCurrent }" :aria-current="homeCurrent ? 'page' : undefined">{{ t.mobileHome }}</MkA>
-	<MkA to="/create/video">{{ t.mobileCreate }}</MkA>
+	<MkA to="/create/video" :class="{ [$style.current]: createCurrent }" :aria-current="createCurrent ? 'page' : undefined">{{ t.mobileCreate }}</MkA>
 	<button type="button" class="_button" :class="$style.publish" :aria-label="communityText.publish" @click="publish"><span><i class="ti ti-plus" aria-hidden="true"></i></span></button>
-	<button type="button" class="_button" @click="accountPage('/my/notifications')">{{ t.mobileMessages }}<span v-if="$i?.hasUnreadNotification" :class="$style.badge">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</span></button>
+	<button type="button" class="_button" :class="{ [$style.current]: messagesCurrent }" :aria-current="messagesCurrent ? 'page' : undefined" @click="accountPage('/my/notifications')">{{ t.mobileMessages }}<span v-if="$i?.hasUnreadNotification" :class="$style.badge">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</span></button>
 	<button type="button" class="_button" :class="{ [$style.current]: ownProfile }" :aria-current="ownProfile ? 'page' : undefined" @click="accountPage($i ? `/@${$i.username}` : '/community/mine')">{{ t.mobileMe }}</button>
 </nav>
 </template>
@@ -24,8 +24,11 @@ import * as os from '@/os.js';
 
 const currentPath = ref(mainRouter.getCurrentFullPath());
 mainRouter.useListener('change', ({ fullPath }) => { currentPath.value = fullPath; });
-const homeCurrent = computed(() => currentPath.value.startsWith('/community'));
-const ownProfile = computed(() => !!$i && [`/@${$i.username}`, `/@${$i.username}/community`].includes(currentPath.value.split(/[?#]/)[0].replace(/\/$/, '')));
+const pathname = computed(() => currentPath.value.split(/[?#]/)[0].replace(/\/$/, ''));
+const homeCurrent = computed(() => pathname.value.startsWith('/community') && !ownProfile.value);
+const createCurrent = computed(() => pathname.value.startsWith('/create/'));
+const messagesCurrent = computed(() => pathname.value === '/my/notifications' || /^\/chat(?:\/|$)/.test(pathname.value));
+const ownProfile = computed(() => /^\/settings(?:\/|$)/.test(pathname.value) || pathname.value === '/community/mine' || (!!$i && [`/@${$i.username}`, `/@${$i.username}/community`].includes(pathname.value)));
 
 async function login() {
 	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkSigninDialog.vue').then(x => x.default), { autoSet: true }, { closed: () => dispose() });

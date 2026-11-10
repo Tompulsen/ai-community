@@ -6,7 +6,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <div v-if="show" ref="el" :class="[$style.root]">
 	<div :class="[$style.upper, { [$style.slim]: narrow, [$style.thin]: thin_ }]">
-		<div v-if="!thin_ && (narrow || deviceKind === 'smartphone') && props.displayMyAvatar && $i" class="_button" @click="openAccountMenu">
+		<div v-if="backTo" :class="$style.buttons">
+			<MkA :to="backTo" :class="[$style.button, $style.backButton]" :aria-label="i18n.ts.goBack" data-testid="page-header-back"><i class="ti ti-chevron-left" aria-hidden="true"></i></MkA>
+		</div>
+		<div v-else-if="!thin_ && (narrow || deviceKind === 'smartphone') && props.displayMyAvatar && $i" class="_button" @click="openAccountMenu">
 			<MkAvatar :class="$style.avatar" :user="$i"/>
 		</div>
 		<div v-else-if="!thin_ && narrow && !hideTitle" :class="$style.buttons"></div>
@@ -54,6 +57,7 @@ export type PageHeaderProps = {
 	hideTitle?: boolean;
 	canOmitTitle?: boolean;
 	displayMyAvatar?: boolean;
+	backTo?: string;
 };
 </script>
 
@@ -65,6 +69,7 @@ import { getAccountMenu } from '@/accounts.js';
 import { deviceKind } from '@/utility/device-kind.js';
 import { $i } from '@/i.js';
 import { DI } from '@/di.js';
+import { i18n } from '@/i18n.js';
 import * as os from '@/os.js';
 
 const props = withDefaults(defineProps<PageHeaderProps>(), {
@@ -87,7 +92,7 @@ const narrow = ref(false);
 const hasTabs = computed(() => props.tabs.length > 0);
 const hasActions = computed(() => props.actions && props.actions.length > 0);
 const show = computed(() => {
-	return !hideTitle.value || hasTabs.value || hasActions.value;
+	return !!props.backTo || !hideTitle.value || hasTabs.value || hasActions.value;
 });
 
 const preventDrag = (ev: TouchEvent) => {
@@ -239,6 +244,15 @@ onUnmounted(() => {
 .fullButton {
 	& + .fullButton {
 		margin-left: 12px;
+	}
+}
+
+.backButton {
+	min-width: 44px;
+	min-height: 44px;
+	&:focus-visible {
+		outline: 2px solid var(--MI_THEME-accent);
+		outline-offset: -3px;
 	}
 }
 

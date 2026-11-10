@@ -20,8 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 			<StackingRouterView v-if="prefer.s['experimental.stackingRouterView']" :class="[$style.content, { [$style.homeContent]: isRoot }]"/>
 			<RouterView v-else :class="[$style.content, { [$style.homeContent]: isRoot }]"/>
-			<MobileCommunityNavigation v-if="mobileCommunity"/>
-			<XMobileFooterMenu v-else-if="!isRoot && isMobile" ref="navFooter" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+			<MobileCommunityNavigation v-if="!isRoot && (mobileCommunity || isMobile)"/>
 		</div>
 	</div>
 
@@ -37,7 +36,6 @@ import XCommon from './_common_/common.vue';
 import MobileCommunityNavigation from '@/pages/community/mobile-navigation.vue';
 import { useMobileCommunityFeed } from '@/pages/community/mobile-feed.js';
 import type { PageMetadata } from '@/page.js';
-import XMobileFooterMenu from '@/ui/_common_/mobile-footer-menu.vue';
 import XPreferenceRestore from '@/ui/_common_/PreferenceRestore.vue';
 import XReloadSuggestion from '@/ui/_common_/ReloadSuggestion.vue';
 import XThemePreviewing from '@/ui/_common_/ThemePreviewing.vue';

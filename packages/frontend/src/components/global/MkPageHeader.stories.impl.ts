@@ -51,6 +51,14 @@ export const OneTab = {
 		],
 	},
 } satisfies StoryObj<typeof MkPageHeader>;
+export const Back = {
+	...Empty,
+	args: {
+		...Empty.args,
+		backTo: '/settings',
+		overridePageMetadata: { title: 'Settings', icon: 'ti ti-settings' },
+	},
+} satisfies StoryObj<typeof MkPageHeader>;
 export const Icon = {
 	...OneTab,
 	args: {

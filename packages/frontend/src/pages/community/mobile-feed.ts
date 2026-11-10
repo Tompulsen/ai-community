@@ -14,5 +14,5 @@ export function useMobileCommunityFeed() {
 	viewport.addEventListener('change', resize);
 	onBeforeUnmount(() => viewport.removeEventListener('change', resize));
 	mainRouter.useListener('change', ({ fullPath }) => { path.value = fullPath; });
-	return computed(() => narrow.value && /^(?:\/community(?:\/(?:all|video|image|resource|knowledge|text|code|skill|compose|work\/[^/]+))?|\/@[^/]+(?:\/community)?)\/?$/.test(path.value.split(/[?#]/)[0]));
+	return computed(() => narrow.value && path.value.split(/[?#]/)[0] !== '/');
 }

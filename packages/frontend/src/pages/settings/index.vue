@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<PageWithHeader :tabs="headerTabs" :actions="headerActions">
+<PageWithHeader :tabs="headerTabs" :actions="headerActions" :backTo="backPath">
 	<div class="_spacer" style="--MI_SPACER-w: 900px; --MI_SPACER-min: 20px; --MI_SPACER-max: 32px;">
 		<div ref="el" class="vvcocwet" :class="{ wide: !narrow }">
 			<div class="body">
@@ -72,6 +72,7 @@ const narrow = ref(false);
 const NARROW_THRESHOLD = 600;
 
 const currentPage = computed(() => router.currentRef.value.child);
+const backPath = computed(() => narrow.value && currentPage.value?.route.name != null ? '/settings' : $i ? `/@${$i.username}` : '/community');
 
 const ro = new ResizeObserver((entries, observer) => {
 	if (entries.length === 0) return;
