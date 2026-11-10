@@ -144,7 +144,11 @@ import { useSubmitHandler } from "../utils/use-submit-handler";
 import { useChatModelPicker } from "../utils/use-chat-model-picker";
 import { useComposerFocus } from "../utils/use-composer-focus";
 import { useScrollbarActivity } from "../utils/use-scrollbar-activity";
-import { useModelCapabilities } from "../utils/model-capabilities";
+import {
+  getModelCapabilities,
+  useModelCapabilities,
+} from "../utils/model-capabilities";
+import { canvasBlobDataUrl, type CanvasEditDraft } from "../utils/image-canvas";
 import {
   isLocalPreviewEnabled,
   isLocalPreviewModel,
@@ -175,7 +179,6 @@ import {
   messageFiles,
   type ParsedFile,
 } from "../utils/file-upload";
-import { DeleteImageButton } from "./delete-image-button";
 import {
   ChatContextMenu,
   getMessageSelectionText,
@@ -1632,7 +1635,38 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
       document.querySelector<HTMLElement>("[data-workspace-chat-actions]"),
     );
   }, []);
-  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [lightboxImage, updateLightboxImage] = useState<string | null>(null);
+  const [lightboxCanvas, setLightboxCanvas] = useState(false);
+  const lightboxContext = useRef<{
+    sessionId: string;
+    owner: string;
+    tokenId: number | null;
+  }>();
+  const setLightboxImage = useCallback(
+    (src: string | null) => {
+      lightboxContext.current = src
+        ? {
+            sessionId: session.id,
+            owner: getLocalScope(),
+            tokenId: getLocalTokenId(),
+          }
+        : undefined;
+      setLightboxCanvas(false);
+      updateLightboxImage(src);
+    },
+    [session.id],
+  );
+  useEffect(() => {
+    if (lightboxContext.current?.sessionId !== session.id)
+      setLightboxImage(null);
+    const close = () => setLightboxImage(null);
+    window.addEventListener("local-workspace-switch", close);
+    window.addEventListener("local-data-maintenance", close);
+    return () => {
+      window.removeEventListener("local-workspace-switch", close);
+      window.removeEventListener("local-data-maintenance", close);
+    };
+  }, [session.id, setLightboxImage]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -2044,6 +2078,95 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
       return false;
     }
     return true;
+  };
+
+  const openedImageContext = lightboxContext.current;
+  const validateCanvasContext = () => {
+    if (
+      !openedImageContext ||
+      lightboxContext.current !== openedImageContext ||
+      !attachmentsActiveRef.current ||
+      !isLocalWorkspaceActive() ||
+      getLocalScope() !== openedImageContext.owner ||
+      getLocalTokenId() !== openedImageContext.tokenId ||
+      useAccessStore.getState().switchingToken ||
+      useChatStore.getState().currentSession().id !==
+        openedImageContext.sessionId
+    ) {
+      throw new Error("账号或对话已切换，请重新打开图片后编辑");
+    }
+  };
+  const onCanvasImageEdit = (draft: CanvasEditDraft) => {
+    validateCanvasContext();
+    const current = useChatStore.getState().currentSession();
+    const access = useAccessStore.getState();
+    if (
+      !shouldUseImageGenerationApi(current.mask.modelConfig, {
+        capabilities: getModelCapabilities(
+          current.mask.modelConfig.model,
+          current.mask.modelConfig.providerName,
+        ),
+        customImageMode:
+          usesCustomProvider(access, current.mask.modelConfig.providerName) &&
+          access.customApiMode !== "auto",
+      })
+    )
+      throw new Error("请先选择图片生成模型再使用 AI 修改，画布内容已保留");
+    if (!checkModelAvailability())
+      throw new Error("当前模型不可用，请检查模型和账号状态后重试");
+    if (
+      ChatControllerPool.hasPending(current.id) ||
+      current.messages.some(
+        (message) =>
+          message.streaming || message.materialStatus === "processing",
+      )
+    ) {
+      throw new Error("当前对话仍在生成，请等待完成后再提交画布修改");
+    }
+    validateImagePrompt(draft.prompt);
+    if (
+      !draft.images.length ||
+      draft.images.length > 16 ||
+      draft.images.some((image) => !/^data:image\/[^;,]+;base64,/.test(image))
+    ) {
+      throw new Error("画布图片数据无效，请重新打开图片后重试");
+    }
+    // Keep the composer's existing draft. The normal lifecycle owns billing,
+    // account checks, the generated result, and retrying a failed request.
+    void chatStore
+      .onUserInput(draft.prompt, draft.images, false, {
+        text: draft.prompt,
+        files: [],
+      })
+      .catch((error) =>
+        showToast(
+          error instanceof Error ? error.message : "提交失败，请在对话中重试",
+        ),
+      );
+    chatStore.setLastInput(draft.prompt);
+    scrollToBottom();
+  };
+  const onEditPreviewImage = async (src: string) => {
+    validateCanvasContext();
+    const before = materialDraftRef.current;
+    const snapshot = before.getSnapshot();
+    if (snapshot.pending) throw new Error("素材正在处理中，请稍后再试");
+    if (snapshot.images.length >= 5)
+      throw new Error(Locale.Chat.InputActions.ImageLimit);
+    const image = await canvasBlobDataUrl(await loadImageAsset(src));
+    validateCanvasContext();
+    if (
+      materialDraftRef.current !== before ||
+      before.getSnapshot() !== snapshot
+    )
+      throw new Error("输入框素材已变化，请重新选择图片");
+    setMaterialDraft(
+      createMaterialDraft({
+        images: [...snapshot.images.map((item) => item.url), image],
+        files: snapshot.files.map((item) => item.file),
+      }),
+    );
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const doSubmit = (userInput: string) => {
@@ -4543,17 +4666,36 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
                         <div
                           key={index}
                           className={styles["attach-image"]}
-                          style={{ backgroundImage: `url("${image}")` }}
+                          data-canvas-attachment
                         >
-                          <div className={styles["attach-image-mask"]}>
-                            <DeleteImageButton
-                              deleteImage={() => {
-                                materialDraft.remove(
-                                  materials.images[index].id,
-                                );
-                              }}
-                            />
-                          </div>
+                          <button
+                            type="button"
+                            className={styles["attach-image-edit"]}
+                            aria-label={`画布编辑附件 ${index + 1}`}
+                            title="双击图片编辑，也可点击下方编辑按钮"
+                            style={{ backgroundImage: `url("${image}")` }}
+                            onDoubleClick={() => {
+                              setLightboxImage(image);
+                              setLightboxCanvas(true);
+                            }}
+                            onClick={() => {
+                              setLightboxImage(image);
+                              setLightboxCanvas(true);
+                            }}
+                          >
+                            <span>双击编辑</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={styles["attach-image-remove"]}
+                            aria-label={`移除附件 ${index + 1}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              materialDraft.remove(materials.images[index].id);
+                            }}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                          </button>
                         </div>
                       );
                     })}
@@ -4699,7 +4841,15 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
       )}
 
       {lightboxImage && (
-        <Lightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />
+        <Lightbox
+          key={lightboxImage}
+          src={lightboxImage}
+          startInCanvas={lightboxCanvas}
+          onClose={() => setLightboxImage(null)}
+          onEdit={onEditPreviewImage}
+          onCanvasEdit={onCanvasImageEdit}
+          validateContext={validateCanvasContext}
+        />
       )}
 
       {contextMenu && (

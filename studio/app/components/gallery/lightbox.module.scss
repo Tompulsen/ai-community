@@ -35,6 +35,103 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  &[hidden] {
+    display: none;
+  }
+}
+
+.zoomButton {
+  min-width: 40px;
+  min-height: 40px;
+  border: none;
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  &:hover:not(:disabled) {
+    background: var(--hover-color);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+.editable {
+  background: var(--white);
+  color: var(--black);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  flex-direction: column;
+  justify-content: center;
+  .lightbox-actions {
+    top: max(12px, env(safe-area-inset-top));
+    bottom: auto;
+    right: 12px;
+    left: 12px;
+    transform: none;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .lightbox-content {
+    margin-top: 56px;
+  }
+  .lightbox-image {
+    max-height: calc(100dvh - 100px);
+  }
+  .lightbox-error {
+    color: var(--black);
+  }
+}
+.editing {
+  touch-action: auto;
+  .lightbox-actions {
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+  .lightbox-actions > button {
+    pointer-events: auto;
+  }
+}
+.editorContainer {
+  position: absolute;
+  inset: 64px 20px max(16px, env(safe-area-inset-bottom));
+  overflow: auto;
+  overscroll-behavior: contain;
+  &[hidden] {
+    display: none;
+  }
+}
+@media (max-width: 680px) {
+  .editorContainer {
+    inset: 58px 12px 12px;
+  }
+  .editable .lightbox-content {
+    margin-top: 98px;
+  }
+  .editable .lightbox-image {
+    max-height: calc(100dvh - 150px);
+  }
+  .editable .lightbox-actions button {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lightbox,
+  .lightbox-image {
+    animation: none;
+  }
+  .lightbox-image {
+    transition: none !important;
+  }
 }
 
 .lightbox-image {

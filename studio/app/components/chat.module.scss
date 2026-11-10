@@ -50,6 +50,66 @@
   }
 }
 
+.attach-image[data-canvas-attachment] {
+  flex-basis: 80px;
+  width: 80px;
+  height: 96px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+}
+.attach-image-edit {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background-color: var(--white);
+  background-size: contain;
+  background-position: center top;
+  background-repeat: no-repeat;
+  padding: 0;
+  color: var(--black);
+  cursor: pointer;
+  span {
+    width: 100%;
+    background: var(--white);
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+}
+.attach-image-remove {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: var(--border-in-light);
+  border-radius: 50%;
+  color: var(--black);
+  background: var(--white);
+  cursor: pointer;
+  &:hover {
+    color: var(--danger);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+}
+@media (pointer: coarse) {
+  .attach-image-remove {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .attach-image {
   cursor: default;
   flex: 0 0 64px;

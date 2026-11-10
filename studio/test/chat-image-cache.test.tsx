@@ -237,6 +237,14 @@ test("entering the preload range loads once and preserves original-image clicks"
   expect(screen.getByText("请求耗时 00:02")).toBeInTheDocument();
   fireEvent.click(image);
   expect(onImageClick).toHaveBeenCalledWith(image.getAttribute("src"));
+  expect(image).toHaveAttribute("role", "button");
+  expect(image).toHaveAttribute("tabindex", "0");
+  fireEvent.keyDown(image, { key: "Enter" });
+  fireEvent.keyDown(image, { key: " " });
+  expect(onImageClick).toHaveBeenCalledTimes(3);
+  expect(
+    onImageClick.mock.calls.every(([src]) => src === image.getAttribute("src")),
+  ).toBe(true);
   intersect(observers[0], false);
   intersect(observers[0]);
   expect(loadAsset).toHaveBeenCalledTimes(1);

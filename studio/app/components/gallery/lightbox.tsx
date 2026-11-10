@@ -11,16 +11,47 @@ import { copyImageToClipboard } from "../../utils/image-clipboard";
 import { fetchImageBlob } from "../../utils/image-asset";
 import { showToast } from "../ui-lib";
 import Locale from "../../locales";
+import dynamic from "next/dynamic";
+import clsx from "clsx";
+import { Maximize, Pencil, SquarePen } from "lucide-react";
+import type { CanvasEditDraft } from "../../utils/image-canvas";
+
+const ImageCanvasEditor = dynamic(
+  () =>
+    import("../image-canvas-editor").then((module) => module.ImageCanvasEditor),
+  {
+    ssr: false,
+    loading: () => <p role="status">正在打开图片画布…</p>,
+  },
+);
 
 interface LightboxProps {
   src: string;
   alt?: string;
   onClose: () => void;
   onDownload?: () => void | Promise<void>;
+  onCanvasEdit?: (draft: CanvasEditDraft) => void | Promise<void>;
+  onEdit?: (src: string) => void | Promise<void>;
+  startInCanvas?: boolean;
+  validateContext?: () => void;
 }
 
 export function Lightbox(props: LightboxProps) {
-  const { src, alt, onClose, onDownload } = props;
+  const {
+    src,
+    alt,
+    onClose,
+    onDownload,
+    onCanvasEdit,
+    onEdit,
+    validateContext,
+  } = props;
+  const [editingCanvas, setEditingCanvas] = useState(!!props.startInCanvas);
+  const [editorMounted, setEditorMounted] = useState(!!props.startInCanvas);
+  const [preparingEdit, setPreparingEdit] = useState(false);
+  const dialog = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -31,21 +62,22 @@ export function Lightbox(props: LightboxProps) {
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    },
-    [onClose],
-  );
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      closeRef.current();
+    }
+  }, []);
 
   useEffect(() => {
     document.addEventListener("keydown", handleKeyDown);
+    const overflow = document.body.style.overflow;
+    const previous = document.activeElement as HTMLElement | null;
     document.body.style.overflow = "hidden";
+    dialog.current?.focus({ preventScroll: true });
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = "";
+      document.body.style.overflow = overflow;
+      previous?.focus({ preventScroll: true });
     };
   }, [handleKeyDown]);
 
@@ -164,33 +196,179 @@ export function Lightbox(props: LightboxProps) {
   }, [src]);
 
   return (
-    <div className={styles.lightbox} onClick={onClose}>
+    <div
+      ref={dialog}
+      tabIndex={-1}
+      role="dialog"
+      aria-modal="true"
+      aria-label={editingCanvas ? "图片画布" : "图片预览"}
+      className={clsx(
+        styles.lightbox,
+        onCanvasEdit && styles.editable,
+        editingCanvas && styles.editing,
+      )}
+      onClick={onClose}
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+        const elements = Array.from(
+          dialog.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+          ) ?? [],
+        ).filter((element) => element.getClientRects().length);
+        const first = elements[0],
+          last = elements.at(-1);
+        if (!first) {
+          event.preventDefault();
+          return;
+        }
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            document.activeElement === dialog.current)
+        ) {
+          event.preventDefault();
+          last?.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            document.activeElement === dialog.current)
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+    >
       <div
         className={styles["lightbox-actions"]}
         onClick={(e) => e.stopPropagation()}
       >
+        {!editingCanvas && (
+          <>
+            <button
+              className={styles.zoomButton}
+              type="button"
+              aria-label="缩小图片"
+              disabled={zoom <= 0.5}
+              onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+            >
+              −
+            </button>
+            <button
+              className={styles.zoomButton}
+              type="button"
+              title="重置缩放"
+              onClick={resetTransform}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              className={styles.zoomButton}
+              type="button"
+              aria-label="放大图片"
+              disabled={zoom >= 5}
+              onClick={() => setZoom((value) => Math.min(5, value + 0.25))}
+            >
+              +
+            </button>
+            <IconButton
+              icon={<Maximize size={18} />}
+              aria="全屏预览"
+              title="全屏预览"
+              onClick={() => {
+                const action = document.fullscreenElement
+                  ? document.exitFullscreen?.()
+                  : dialog.current?.requestFullscreen?.();
+                void action?.catch(() => showToast("当前浏览器无法进入全屏"));
+              }}
+            />
+            <IconButton
+              icon={<DownloadIcon />}
+              bordered
+              onClick={handleDownload}
+              disabled={downloading}
+              busy={downloading}
+              busyText={Locale.Download.Pending}
+              title={downloading ? Locale.Download.Pending : "下载图片"}
+              aria="下载图片"
+            />
+            <IconButton
+              icon={<CopyIcon />}
+              bordered
+              onClick={handleCopy}
+              title="复制图片"
+              aria="复制图片"
+            />
+            {onCanvasEdit && (
+              <IconButton
+                icon={<SquarePen size={18} />}
+                text="画布编辑"
+                aria="画布编辑"
+                onClick={() => {
+                  setEditorMounted(true);
+                  setEditingCanvas(true);
+                }}
+              />
+            )}
+            {onEdit && (
+              <IconButton
+                icon={<Pencil size={18} />}
+                text="编辑"
+                aria="编辑图片"
+                busy={preparingEdit}
+                disabled={preparingEdit}
+                onClick={async () => {
+                  setPreparingEdit(true);
+                  try {
+                    await onEdit(src);
+                    onClose();
+                  } catch (failure) {
+                    showToast(
+                      failure instanceof Error
+                        ? failure.message
+                        : "图片读取失败，请重试",
+                    );
+                  } finally {
+                    setPreparingEdit(false);
+                  }
+                }}
+              />
+            )}
+          </>
+        )}
         <IconButton
-          icon={<DownloadIcon />}
+          icon={<CloseIcon />}
+          aria="关闭图片预览"
+          title="关闭图片预览"
           bordered
-          onClick={handleDownload}
-          disabled={downloading}
-          busy={downloading}
-          busyText={Locale.Download.Pending}
-          title={downloading ? Locale.Download.Pending : "下载图片"}
-          aria="下载图片"
+          onClick={onClose}
         />
-        <IconButton
-          icon={<CopyIcon />}
-          bordered
-          onClick={handleCopy}
-          title="复制图片"
-          aria="复制图片"
-        />
-        <IconButton icon={<CloseIcon />} bordered onClick={onClose} />
       </div>
 
+      {editorMounted && (
+        <div
+          className={styles.editorContainer}
+          hidden={!editingCanvas}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <ImageCanvasEditor
+            src={src}
+            active={editingCanvas}
+            onBack={() => setEditingCanvas(false)}
+            validateContext={validateContext}
+            onSubmit={
+              onCanvasEdit
+                ? async (draft) => {
+                    await onCanvasEdit(draft);
+                    onClose();
+                  }
+                : undefined
+            }
+          />
+        </div>
+      )}
+
       {/* 缩放指示器 */}
-      {zoom !== 1 && (
+      {!onCanvasEdit && !editingCanvas && zoom !== 1 && (
         <div
           className={styles["lightbox-zoom-indicator"]}
           onClick={(e) => e.stopPropagation()}
@@ -210,6 +388,7 @@ export function Lightbox(props: LightboxProps) {
 
       <div
         className={styles["lightbox-content"]}
+        hidden={editingCanvas}
         onClick={(e) => e.stopPropagation()}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}

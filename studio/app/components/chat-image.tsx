@@ -184,7 +184,22 @@ export function ChatImage({
             height={readyImage.height}
             unoptimized
             loading="eager"
+            role={onImageClick ? "button" : undefined}
+            tabIndex={onImageClick ? 0 : undefined}
+            aria-label={
+              onImageClick ? `打开图片预览${alt ? `：${alt}` : ""}` : undefined
+            }
             onClick={() => onImageClick?.(readyImage.url)}
+            onKeyDown={(event) => {
+              if (
+                onImageClick &&
+                (event.key === "Enter" || event.key === " ")
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+                onImageClick(readyImage.url);
+              }
+            }}
             style={{
               cursor: onImageClick ? "pointer" : "default",
               animation: reused ? "none" : undefined,
