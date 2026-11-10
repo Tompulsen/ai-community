@@ -1,0 +1,62 @@
+@use "../styles/controls" as controls;
+
+.billing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  padding: 0 4px 6px;
+  color: var(--black);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+
+  button {
+    @include controls.quiet-button;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px;
+    border: 0;
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .price {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .label {
+    color: var(--second-in-gray);
+    flex-shrink: 0;
+  }
+  .balance {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .refresh {
+    justify-content: center;
+    min-width: 32px;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  @media (max-width: 600px), (pointer: coarse) {
+    button {
+      min-height: 44px;
+    }
+    .refresh {
+      min-width: 44px;
+    }
+  }
+}

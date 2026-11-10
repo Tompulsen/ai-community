@@ -15,6 +15,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Box,
+  Bell,
   Compass,
   Drama,
   Expand,
@@ -72,6 +73,7 @@ import {
 import { usePwaInstallAction } from "./pwa-install";
 import { renameChatSession } from "./chat-session-actions";
 import { showToast } from "./ui-lib";
+import { triggerAnnouncement } from "./announcement";
 import {
   dispatchWorkspaceAction,
   useWorkspaceActions,
@@ -118,7 +120,9 @@ function useMcpNavigation() {
 export function WorkspaceTopbar({
   sidebarOpen,
   onToggleSidebar,
+  compact = false,
 }: {
+  compact?: boolean;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
 }) {
@@ -237,13 +241,13 @@ export function WorkspaceTopbar({
   const trigger = useRef<HTMLButtonElement | null>(null);
   useLayoutEffect(() => {
     const target =
-      isMobile && sidebarOpen
+      !compact && isMobile && sidebarOpen
         ? document.querySelector<HTMLElement>("[data-workspace-mobile-more]")
         : null;
     if (target === mobileMoreTarget) return;
     restoreMoreFocus.current = document.activeElement === triggers.current.more;
     setMobileMoreTarget(target);
-  }, [isMobile, sidebarOpen, mobileMoreTarget]);
+  }, [compact, isMobile, sidebarOpen, mobileMoreTarget]);
   trigger.current =
     triggers.current[
       selectedMenu === "tools" && isMobile ? "more" : selectedMenu
@@ -418,17 +422,7 @@ export function WorkspaceTopbar({
     },
     more: { label: "更多操作", items: [] },
   };
-  menus.more.items = [
-    ...(isMobile && sidebarOpen
-      ? [
-          {
-            id: "return-chat",
-            label: "返回对话",
-            icon: <ArrowLeft />,
-            onSelect: onToggleSidebar,
-          },
-        ]
-      : []),
+  const historyItems: MenuItem[] = [
     {
       id: "previous",
       label: "上一个对话",
@@ -443,6 +437,28 @@ export function WorkspaceTopbar({
       disabled: selectedIndex >= sessions.length - 1,
       onSelect: () => step(1),
     },
+  ];
+  if (compact) {
+    menus.chat.items.push(...historyItems);
+    menus.help.items.unshift({
+      id: "announcement",
+      label: "公告",
+      icon: <Bell />,
+      onSelect: triggerAnnouncement,
+    });
+  }
+  menus.more.items = [
+    ...(isMobile && sidebarOpen
+      ? [
+          {
+            id: "return-chat",
+            label: "返回对话",
+            icon: <ArrowLeft />,
+            onSelect: onToggleSidebar,
+          },
+        ]
+      : []),
+    ...(!compact ? historyItems : []),
     ...menus.chat.items.filter((item) => item.id !== "new"),
     {
       id: "shortcuts",
@@ -466,6 +482,47 @@ export function WorkspaceTopbar({
       })),
     ...menus.help.items,
   ];
+  const destinations: MenuItem[] = [
+    ...workspaceNavigation(mcpEnabled).filter(
+      (item) => ![Path.Gallery, Path.Pricing].includes(item.path),
+    ),
+    { path: Path.Account, label: Locale.Account.Title, icon: <UserRound /> },
+    { path: Path.Settings, label: Locale.Settings.Title, icon: <Settings /> },
+  ].map((item) => ({
+    id: `navigate-${item.path}`,
+    label: item.label,
+    icon: item.icon,
+    onSelect: route(item.path),
+    onIntent: (activation) => {
+      void preloadWorkspaceRoute(
+        item.path,
+        activation ? "activation" : "intent",
+      );
+    },
+  }));
+  if (compact) {
+    menus.more.items = isMobile
+      ? [
+          ...menus.chat.items,
+          ...menus.view.items,
+          {
+            id: "shortcuts",
+            label: "编辑与快捷键",
+            icon: <Keyboard />,
+            onSelect: openShortcuts,
+          },
+          ...destinations,
+          ...menus.help.items,
+        ]
+      : destinations;
+  }
+  const menuKeys = useMemo<MenuKey[]>(
+    () =>
+      compact
+        ? ["chat", "tools", "view", "help", "more"]
+        : ["chat", "tools", "view", "help"],
+    [compact],
+  );
   const close = useCallback(
     (restoreFocus = false) => {
       setOpenMenu(null);
@@ -480,16 +537,14 @@ export function WorkspaceTopbar({
   useEffect(() => setOpenMenu(null), [pathname, isMobile]);
   const switchMenu = useCallback(
     (direction: -1 | 1) => {
-      const keys = (["chat", "tools", "view", "help"] as const).filter(
-        (key) => !triggers.current[key]?.disabled,
-      );
+      const keys = menuKeys.filter((key) => !triggers.current[key]?.disabled);
       const index = keys.indexOf(lastMenu.current as (typeof keys)[number]);
       const next = keys[(index + direction + keys.length) % keys.length];
       if (next === "tools") prepareEdit();
       keyboard.current = "first";
       setOpenMenu(next);
     },
-    [prepareEdit],
+    [prepareEdit, menuKeys],
   );
   const moreButton = (
     <button
@@ -530,7 +585,7 @@ export function WorkspaceTopbar({
 
   return (
     <header
-      className={styles.topbar}
+      className={clsx(styles.topbar, { [styles.compact]: compact })}
       aria-label="顶部工具栏"
       data-workspace-topbar
       data-sidebar-open={sidebarOpen}
@@ -542,42 +597,48 @@ export function WorkspaceTopbar({
       }}
     >
       <div className={styles.leading}>
-        <button
-          type="button"
-          className={clsx(styles.icon, styles.history)}
-          aria-label="上一个对话"
-          title="上一个对话"
-          disabled={selectedIndex <= 0}
-          onClick={() => step(-1)}
-        >
-          <ArrowLeft />
-        </button>
-        <button
-          type="button"
-          className={clsx(styles.icon, styles.history)}
-          aria-label="下一个对话"
-          title="下一个对话"
-          disabled={selectedIndex >= sessions.length - 1}
-          onClick={() => step(1)}
-        >
-          <ArrowRight />
-        </button>
-        <button
-          type="button"
-          className={styles.icon}
-          data-workspace-sidebar-toggle
-          aria-label={sidebarLabel}
-          aria-expanded={pathname === Path.Settings ? undefined : sidebarOpen}
-          aria-controls={
-            pathname === Path.Settings ? undefined : "workspace-sidebar"
-          }
-          title={sidebarLabel}
-          onClick={onToggleSidebar}
-        >
-          {pathname === Path.Settings ? <ArrowLeft /> : <PanelLeft />}
-        </button>
+        {!compact && (
+          <button
+            type="button"
+            className={clsx(styles.icon, styles.history)}
+            aria-label="上一个对话"
+            title="上一个对话"
+            disabled={selectedIndex <= 0}
+            onClick={() => step(-1)}
+          >
+            <ArrowLeft />
+          </button>
+        )}
+        {!compact && (
+          <button
+            type="button"
+            className={clsx(styles.icon, styles.history)}
+            aria-label="下一个对话"
+            title="下一个对话"
+            disabled={selectedIndex >= sessions.length - 1}
+            onClick={() => step(1)}
+          >
+            <ArrowRight />
+          </button>
+        )}
+        {(!compact || isMobile) && (
+          <button
+            type="button"
+            className={styles.icon}
+            data-workspace-sidebar-toggle
+            aria-label={sidebarLabel}
+            aria-expanded={pathname === Path.Settings ? undefined : sidebarOpen}
+            aria-controls={
+              pathname === Path.Settings ? undefined : "workspace-sidebar"
+            }
+            title={sidebarLabel}
+            onClick={onToggleSidebar}
+          >
+            {pathname === Path.Settings ? <ArrowLeft /> : <PanelLeft />}
+          </button>
+        )}
         <nav className={styles.menubar} aria-label="应用菜单">
-          {(["chat", "tools", "view", "help"] as const).map((key) => (
+          {menuKeys.map((key) => (
             <button
               key={key}
               ref={(element) => {
@@ -616,9 +677,9 @@ export function WorkspaceTopbar({
                   }
                 } else if (["ArrowLeft", "ArrowRight"].includes(event.key)) {
                   event.preventDefault();
-                  const keys = (
-                    ["chat", "tools", "view", "help"] as const
-                  ).filter((key) => !triggers.current[key]?.disabled);
+                  const keys = menuKeys.filter(
+                    (key) => !triggers.current[key]?.disabled,
+                  );
                   const next =
                     keys[
                       (keys.indexOf(key) +
@@ -635,23 +696,45 @@ export function WorkspaceTopbar({
                 }
               }}
             >
-              {menus[key].label}
+              {key === "more" ? "更多" : menus[key].label}
             </button>
           ))}
         </nav>
       </div>
-      <div className={styles.mobileActions}>
-        <button
-          type="button"
-          className={styles.icon}
-          aria-label={Locale.Home.NewChat}
-          title={Locale.Home.NewChat}
-          onClick={newChat}
-        >
-          <SquarePen />
-        </button>
-        {!mobileMoreTarget && moreButton}
-      </div>
+      {compact && (
+        <nav className={styles.destinations} aria-label="作品与价格">
+          {[
+            { path: Path.Gallery, label: "作品库", icon: <Images /> },
+            { path: Path.Pricing, label: "模型定价", icon: <Tags /> },
+          ].map((item) => (
+            <button
+              key={item.path}
+              type="button"
+              className={styles.menuTrigger}
+              aria-current={pathname === item.path ? "page" : undefined}
+              {...workspaceRoutePreloadHandlers(item.path)}
+              onClick={route(item.path)}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+      {(!compact || isMobile) && (
+        <div className={styles.mobileActions}>
+          <button
+            type="button"
+            className={styles.icon}
+            aria-label={Locale.Home.NewChat}
+            title={Locale.Home.NewChat}
+            onClick={newChat}
+          >
+            <SquarePen />
+          </button>
+          {!mobileMoreTarget && moreButton}
+        </div>
+      )}
       {mobileMoreTarget && createPortal(moreButton, mobileMoreTarget)}
       <div className={styles.chatActions} data-workspace-chat-actions />
       <WorkspaceMenu
@@ -663,7 +746,11 @@ export function WorkspaceTopbar({
         trigger={trigger}
         keyboard={keyboard}
         onClose={close}
-        onSwitch={selectedMenu === "more" ? undefined : switchMenu}
+        onSwitch={
+          isMobile || (!compact && selectedMenu === "more")
+            ? undefined
+            : switchMenu
+        }
         shortcuts={
           selectedMenu === "tools" ? getChatShortcuts(isMac) : undefined
         }

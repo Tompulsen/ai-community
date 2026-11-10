@@ -1149,3 +1149,24 @@
 .rtl-screen {
   direction: rtl;
 }
+
+// The community shell already supplies the brand and outer navigation.
+.container.embedded-container {
+  --workspace-rail-width: 0px;
+  --workspace-toolbar-height: 44px;
+  grid-template-columns: minmax(0, 1fr);
+
+  .workspace-frame {
+    grid-column: 1;
+    border-radius: 0;
+  }
+
+  @media (max-width: 600px) {
+    .sidebar {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      padding-top: 8px;
+    }
+  }
+}

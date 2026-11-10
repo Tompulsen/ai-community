@@ -2,30 +2,69 @@ import type { LLMModel } from "../client/api";
 import { DEFAULT_INPUT_TEMPLATE } from "../constant";
 import { useChatStore } from "../store/chat";
 import type { ChatSession } from "../store/chat";
+import { getModelCapabilities } from "./model-capabilities";
 import { CUSTOM_MODEL_PROVIDER } from "./custom-provider";
 import { getLocalScope, isLocalWorkspaceActive } from "./local-workspace";
 
-export type CommunityEntry = { id: string; kind: "text" | "image" | "video"; model: string; defaultModels?: Partial<Record<"text" | "image" | "video", string>> };
-type CommunityModel = Pick<LLMModel, "name" | "available"> & Partial<Pick<LLMModel, "provider">>;
+export type CommunityEntry = {
+  id: string;
+  kind: "text" | "image" | "video";
+  model: string;
+  defaultModels?: Partial<Record<"text" | "image" | "video", string>>;
+};
+type CommunityModel = Pick<LLMModel, "name" | "available"> &
+  Partial<Pick<LLMModel, "provider">>;
 const titles = { text: "文本", image: "图片", video: "视频" };
 const preparing = new Map<string, Promise<ChatSession>>();
 
 export function findCommunityWorkspace(kind: CommunityEntry["kind"]) {
-  const sessions = useChatStore.getState().sessions;
-  return sessions.find(session => session.communityWorkspaceKind === kind)
-    ?? sessions.find(session => !session.communityWorkspaceKind && session.creationKind === kind && session.messages.length > 0)
-    ?? sessions.find(session => !session.communityWorkspaceKind && session.creationKind === kind);
+  const store = useChatStore.getState();
+  const sessions = store.sessions;
+  const matches = (session: ChatSession) => {
+    if (
+      session.communityWorkspaceKind ||
+      session.creationKind ||
+      session.mask.modelConfig.providerName === CUSTOM_MODEL_PROVIDER
+    )
+      return false;
+    const category = getModelCapabilities(
+      session.mask.modelConfig.model,
+      session.mask.modelConfig.providerName,
+    ).category;
+    return kind === "text"
+      ? category === "chat" || category === "code"
+      : category === kind;
+  };
+  return (
+    sessions.find((session) => session.communityWorkspaceKind === kind) ??
+    sessions.find(
+      (session) =>
+        !session.communityWorkspaceKind &&
+        session.creationKind === kind &&
+        session.messages.length > 0,
+    ) ??
+    sessions.find(
+      (session) =>
+        !session.communityWorkspaceKind && session.creationKind === kind,
+    ) ??
+    (matches(store.currentSession()) ? store.currentSession() : undefined) ??
+    sessions.find(matches)
+  );
 }
 
 /** One persisted workspace per category in the currently verified account. */
-export function startCommunityChat(entry: CommunityEntry, models: CommunityModel[]): Promise<ChatSession> {
+export function startCommunityChat(
+  entry: CommunityEntry,
+  models: CommunityModel[],
+): Promise<ChatSession> {
   const owner = getLocalScope();
   const key = `${owner}:${entry.kind}`;
   const existing = preparing.get(key);
   if (existing) return existing;
   const prepare = async () => {
     const assertOwner = () => {
-      if (!isLocalWorkspaceActive() || getLocalScope() !== owner) throw new Error("工作区账号已变化，请重新连接。");
+      if (!isLocalWorkspaceActive() || getLocalScope() !== owner)
+        throw new Error("工作区账号已变化，请重新连接。");
     };
     assertOwner();
     const store = useChatStore.getState();
@@ -35,32 +74,47 @@ export function startCommunityChat(entry: CommunityEntry, models: CommunityModel
       const previous = store.currentSession().id;
       store.newSession();
       session = store.currentSession();
-      if (session.id === previous) throw new Error("工作区尚未准备好，请重新连接。");
+      if (session.id === previous)
+        throw new Error("工作区尚未准备好，请重新连接。");
     }
     const targetId = session.id;
     // Persist the marker before awaiting asset restoration, including under StrictMode.
-    store.updateTargetSession(session, target => {
+    store.updateTargetSession(session, (target) => {
       target.communityWorkspaceKind = entry.kind;
       target.creationKind = entry.kind;
-      target.topic = titles[entry.kind];
       if (created) {
-        const model = models.find(item => item.available && item.name === entry.model && item.provider?.providerName !== CUSTOM_MODEL_PROVIDER);
+        target.topic = titles[entry.kind];
+        const model = models.find(
+          (item) =>
+            item.available &&
+            item.name === entry.model &&
+            item.provider?.providerName !== CUSTOM_MODEL_PROVIDER,
+        );
         target.mask.syncGlobalConfig = false;
         target.mask.modelConfig.model = entry.model;
-        target.mask.modelConfig.providerName = model?.provider?.providerName || "OpenAI";
+        target.mask.modelConfig.providerName =
+          model?.provider?.providerName || "OpenAI";
         target.mask.modelConfig.template = DEFAULT_INPUT_TEMPLATE;
         target.mask.context = [];
       }
     });
-    const index = useChatStore.getState().sessions.findIndex(item => item.id === targetId);
+    const index = useChatStore
+      .getState()
+      .sessions.findIndex((item) => item.id === targetId);
     if (index < 0) throw new Error("制作工作区已变化，请重新打开。");
     await store.selectSession(index);
     assertOwner();
     const selected = useChatStore.getState().currentSession();
-    if (selected.id !== targetId || selected.communityWorkspaceKind !== entry.kind) throw new Error("会话已切换，请重新打开制作工作区。");
+    if (
+      selected.id !== targetId ||
+      selected.communityWorkspaceKind !== entry.kind
+    )
+      throw new Error("会话已切换，请重新打开制作工作区。");
     return selected;
   };
-  const task = prepare().finally(() => { if (preparing.get(key) === task) preparing.delete(key); });
+  const task = prepare().finally(() => {
+    if (preparing.get(key) === task) preparing.delete(key);
+  });
   preparing.set(key, task);
   return task;
 }

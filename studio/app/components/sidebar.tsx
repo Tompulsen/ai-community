@@ -38,13 +38,7 @@ import {
   workspaceRoutePreloadHandlers,
 } from "../utils/preload-workspace-routes";
 import { triggerAnnouncement } from "./announcement";
-import type { CommunityEntry } from "../utils/community-entry";
 import { importInTransition } from "../utils/import-in-transition";
-
-const CommunityWorkspaces = dynamic(
-  async () => (await import("./community-workspaces")).CommunityWorkspaces,
-  { ssr: false },
-);
 
 const ChatProjectArea = dynamic(
   async () =>
@@ -276,7 +270,7 @@ export function SideBarTail(props: { actions?: React.ReactNode }) {
 }
 
 export const SideBar = React.memo(function SideBar(props: {
-  communityEntry?: CommunityEntry;
+  compact?: boolean;
   className?: string;
   collapsed?: boolean;
   onClose?: () => void;
@@ -309,37 +303,39 @@ export const SideBar = React.memo(function SideBar(props: {
         [sidebarStyles.narrow]: shouldNarrow,
       })}
     >
-      <header className={sidebarStyles.brand} data-tauri-drag-region>
-        <AppBrand
-          className={sidebarStyles["brand-title"]}
-          compact={shouldNarrow}
-        />
-        <div className={sidebarStyles["brand-actions"]}>
-          <IconButton
-            icon={<Bell size={16} />}
-            aria="公告"
-            title="公告"
-            className={sidebarStyles["icon-action"]}
-            onClick={triggerAnnouncement}
+      {!props.compact && (
+        <header className={sidebarStyles.brand} data-tauri-drag-region>
+          <AppBrand
+            className={sidebarStyles["brand-title"]}
+            compact={shouldNarrow}
           />
-          <IconButton
-            icon={<Search size={16} />}
-            aria={Locale.SearchChat.Page.Title}
-            title={Locale.SearchChat.Page.Title}
-            className={clsx(
-              sidebarStyles["icon-action"],
-              sidebarStyles["desktop-search"],
-            )}
-            onClick={() =>
-              navigate(Path.SearchChat, { state: { fromHome: true } })
-            }
-          />
-          <span
-            className={sidebarStyles["mobile-more"]}
-            data-workspace-mobile-more
-          />
-        </div>
-      </header>
+          <div className={sidebarStyles["brand-actions"]}>
+            <IconButton
+              icon={<Bell size={16} />}
+              aria="公告"
+              title="公告"
+              className={sidebarStyles["icon-action"]}
+              onClick={triggerAnnouncement}
+            />
+            <IconButton
+              icon={<Search size={16} />}
+              aria={Locale.SearchChat.Page.Title}
+              title={Locale.SearchChat.Page.Title}
+              className={clsx(
+                sidebarStyles["icon-action"],
+                sidebarStyles["desktop-search"],
+              )}
+              onClick={() =>
+                navigate(Path.SearchChat, { state: { fromHome: true } })
+              }
+            />
+            <span
+              className={sidebarStyles["mobile-more"]}
+              data-workspace-mobile-more
+            />
+          </div>
+        </header>
+      )}
 
       <IconButton
         icon={<SquarePen size={18} />}
@@ -351,41 +347,39 @@ export const SideBar = React.memo(function SideBar(props: {
       />
 
       <SideBarBody className={sidebarStyles["scroll-body"]}>
-        {props.communityEntry && (
-          <CommunityWorkspaces
-            entry={props.communityEntry}
-            narrow={shouldNarrow}
-          />
-        )}
         <ChatProjectArea narrow={shouldNarrow} />
       </SideBarBody>
 
-      <nav className={sidebarStyles["mobile-tail"]} aria-label="账号与设置">
-        <button
-          type="button"
-          className={sidebarStyles.link}
-          aria-current={location.pathname === Path.Account ? "page" : undefined}
-          {...workspaceRoutePreloadHandlers(Path.Account)}
-          onClick={() => {
-            void preloadWorkspaceRoute(Path.Account, "activation");
-            navigate(Path.Account);
-          }}
-        >
-          <UserRound size={18} aria-hidden="true" />
-          <span>{Locale.Account.Title}</span>
-        </button>
-        <IconButton
-          icon={<Settings size={18} />}
-          aria={Locale.Settings.Title}
-          title={Locale.Settings.Title}
-          className={sidebarStyles["icon-action"]}
-          {...workspaceRoutePreloadHandlers(Path.Settings)}
-          onClick={() => {
-            void preloadWorkspaceRoute(Path.Settings, "activation");
-            navigate(Path.Settings);
-          }}
-        />
-      </nav>
+      {!props.compact && (
+        <nav className={sidebarStyles["mobile-tail"]} aria-label="账号与设置">
+          <button
+            type="button"
+            className={sidebarStyles.link}
+            aria-current={
+              location.pathname === Path.Account ? "page" : undefined
+            }
+            {...workspaceRoutePreloadHandlers(Path.Account)}
+            onClick={() => {
+              void preloadWorkspaceRoute(Path.Account, "activation");
+              navigate(Path.Account);
+            }}
+          >
+            <UserRound size={18} aria-hidden="true" />
+            <span>{Locale.Account.Title}</span>
+          </button>
+          <IconButton
+            icon={<Settings size={18} />}
+            aria={Locale.Settings.Title}
+            title={Locale.Settings.Title}
+            className={sidebarStyles["icon-action"]}
+            {...workspaceRoutePreloadHandlers(Path.Settings)}
+            onClick={() => {
+              void preloadWorkspaceRoute(Path.Settings, "activation");
+              navigate(Path.Settings);
+            }}
+          />
+        </nav>
+      )}
     </SideBarContainer>
   );
 });

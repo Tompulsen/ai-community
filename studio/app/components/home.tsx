@@ -206,12 +206,15 @@ const useHasHydrated = () => {
   return hasHydrated;
 };
 
-function Screen({ embedded = false, communityEntry }: { embedded?: boolean; communityEntry?: CommunityEntry }) {
+function Screen({ embedded = false }: { embedded?: boolean }) {
   const config = useAppConfig();
   const location = useLocation();
   const navigate = useNavigate();
   useEffect(() => {
-    if (location.pathname === Path.NewChat || location.pathname === Path.Masks) {
+    if (
+      location.pathname === Path.NewChat ||
+      location.pathname === Path.Masks
+    ) {
       void loadBuiltinMasks();
     }
   }, [location.pathname, location.search]);
@@ -259,10 +262,11 @@ function Screen({ embedded = false, communityEntry }: { embedded?: boolean; comm
     return (
       <>
         <WorkspaceTopbar
+          compact={embedded}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={toggleSidebar}
         />
-        <WorkspaceRail />
+        {!embedded && <WorkspaceRail />}
         <div
           className={clsx(styles["workspace-frame"], {
             [styles["workspace-sidebar-collapsed"]]:
@@ -271,7 +275,7 @@ function Screen({ embedded = false, communityEntry }: { embedded?: boolean; comm
         >
           {!isSettings && (
             <SideBar
-              communityEntry={communityEntry}
+              compact={embedded}
               collapsed={sidebarCollapsed && !isMobileScreen}
               onClose={() => navigate(Path.Chat)}
               className={clsx({
@@ -281,11 +285,11 @@ function Screen({ embedded = false, communityEntry }: { embedded?: boolean; comm
           )}
           <WindowContent>
             <Routes>
-              <Route path={Path.Home} element={<Chat />} />
+              <Route path={Path.Home} element={<Chat embedded={embedded} />} />
               <Route path={Path.NewChat} element={<NewChat />} />
               <Route path={Path.Masks} element={<MaskPage />} />
               <Route path={Path.SearchChat} element={<SearchChat />} />
-              <Route path={Path.Chat} element={<Chat />} />
+              <Route path={Path.Chat} element={<Chat embedded={embedded} />} />
               <Route
                 path={Path.Settings}
                 element={
@@ -554,7 +558,11 @@ export function Home({
       .then(() => {
         if (active) {
           setEntryReady(communityEntry.id);
-          window.dispatchEvent(new CustomEvent("community-workspace-ready", { detail: communityEntry }));
+          window.dispatchEvent(
+            new CustomEvent("community-workspace-ready", {
+              detail: communityEntry,
+            }),
+          );
         }
       })
       .catch((error) => {
@@ -594,7 +602,7 @@ export function Home({
       <TaskRecovery />
       <Announcement />
       <Router>
-        <Screen embedded={embedded} communityEntry={communityEntry} />
+        <Screen embedded={embedded} />
       </Router>
       {maintenance && (
         <div

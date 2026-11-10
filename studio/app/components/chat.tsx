@@ -49,6 +49,7 @@ import { MessageSources } from "./message-sources";
 import { MessageQuoteView } from "./message-quote";
 import { ConversationSearch } from "./conversation-search";
 import { ContextUsage } from "./context-usage";
+import { ComposerBilling } from "./composer-billing";
 import { ContextCompressionNotice } from "./context-compression-notice";
 import { FollowupSuggestions } from "./followup-suggestions";
 import { MessageOptionList } from "./message-option-list";
@@ -1565,7 +1566,7 @@ function activeChatSession(state: ReturnType<typeof useChatStore.getState>) {
   return state.sessions[index] as ChatSessionState | undefined;
 }
 
-function ChatSession() {
+function ChatSession({ embedded = false }: { embedded?: boolean }) {
   const [selectedSession] = useChatStore((state) => {
     const current = activeChatSession(state);
     return [current, current?.messages] as const;
@@ -4474,17 +4475,28 @@ function ChatSession() {
                   ))}
                 </div>
               )}
-              {!isImageComposer && capabilities.category !== "video" && (
-                <ContextUsage
-                  session={session}
-                  draftText={userInput}
-                  imageCount={attachImages.length}
-                  files={attachFiles}
-                  quote={draftQuote}
-                  mobile={isMobileScreen}
-                  pendingAttachments={materials.pending}
+              {embedded && (
+                <ComposerBilling
+                  model={session.mask.modelConfig.model}
+                  customProvider={usesCustomProvider(
+                    accessStore,
+                    session.mask.modelConfig.providerName,
+                  )}
                 />
               )}
+              {!embedded &&
+                !isImageComposer &&
+                capabilities.category !== "video" && (
+                  <ContextUsage
+                    session={session}
+                    draftText={userInput}
+                    imageCount={attachImages.length}
+                    files={attachFiles}
+                    quote={draftQuote}
+                    mobile={isMobileScreen}
+                    pendingAttachments={materials.pending}
+                  />
+                )}
               <div
                 className={styles["chat-input-panel-inner"]}
                 role="group"
@@ -4737,9 +4749,9 @@ function ChatSession() {
 
 const MemoizedChatSession = React.memo(ChatSession);
 
-export function Chat() {
+export function Chat({ embedded = false }: { embedded?: boolean } = {}) {
   const sessionId = useChatStore((state) => activeChatSession(state)?.id);
   return sessionId !== undefined ? (
-    <MemoizedChatSession key={sessionId} />
+    <MemoizedChatSession key={sessionId} embedded={embedded} />
   ) : null;
 }
