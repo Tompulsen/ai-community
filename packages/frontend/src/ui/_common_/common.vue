@@ -91,6 +91,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </component>
 
 <XStreamIndicator/>
+<MkBackgroundStudio v-if="$i"/>
 
 <div v-if="pendingApiRequestsCount > 0" id="wait"></div>
 
@@ -107,9 +108,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { defineAsyncComponent, ref, TransitionGroup } from 'vue';
 import * as Misskey from 'misskey-js';
+import { isSafeMode } from '@@/js/config.js';
 import { swInject } from './sw-inject.js';
 import XNotification from './notification.vue';
-import { isSafeMode } from '@@/js/config.js';
 import { popups } from '@/os.js';
 import { unisonReload } from '@/utility/unison-reload.js';
 import { miLocalStorage } from '@/local-storage.js';
@@ -124,6 +125,7 @@ import { store } from '@/store.js';
 import XNavbar from '@/ui/_common_/navbar.vue';
 
 const XStreamIndicator = defineAsyncComponent(() => import('./stream-indicator.vue'));
+const MkBackgroundStudio = defineAsyncComponent(() => import('@/components/MkBackgroundStudio.vue'));
 const XWidgets = defineAsyncComponent(() => import('./widgets.vue'));
 
 const drawerMenuShowing = defineModel<boolean>('drawerMenuShowing');

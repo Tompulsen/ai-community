@@ -24,7 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<time :class="$style.date" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleString() }}</time>
 				</div>
 			</section>
-			<template #remixAction><MkA :to="remixPath" :class="$style.mobileRemix" data-testid="work-remix"><span><i class="ti ti-wand" aria-hidden="true"></i></span><strong>{{ t.remix }}</strong></MkA></template>
+			<template #remixAction><button type="button" class="_button" :class="$style.mobileRemix" data-testid="work-remix" @click="openRemix"><span><i class="ti ti-wand" aria-hidden="true"></i></span><strong>{{ t.remix }}</strong></button></template>
 		</WorkEngagement>
 	</div>
 	<div v-else :class="$style.layout">
@@ -40,7 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<a v-if="safeWebUrl(work.sourceUrl)" :class="$style.source" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.source }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
 			<time :class="$style.date" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleString() }}</time>
 			<WorkEngagement :key="work.id" :work="work" :viewsCount="views" discussion>
-				<template #afterActions><MkA :to="remixPath" :class="$style.remix" data-testid="work-remix"><i class="ti ti-wand" aria-hidden="true"></i><span><strong>{{ t.remix }}</strong><small>{{ work!.category === 'image' ? t.remixImage : work!.category === 'video' ? t.remixVideo : t.remixText }}</small></span><i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></template>
+				<template #afterActions><button type="button" class="_button" :class="$style.remix" data-testid="work-remix" @click="openRemix"><i class="ti ti-wand" aria-hidden="true"></i><span><strong>{{ t.remix }}</strong><small>{{ backgroundText.modeSummary }}</small></span><i class="ti ti-chevron-down" aria-hidden="true"></i></button></template>
 			</WorkEngagement>
 		</aside>
 	</div>
@@ -59,10 +59,14 @@ import { useWorkView } from './use-work-view.js';
 import { communityUpdates, getCommunityUpdateVersion } from './updates.js';
 import { getCommunityWorkReturnPath } from './work-navigation.js';
 import type { CommunityWork } from './types.js';
+import type { StudioRemix } from '@/utility/studio-remix.js';
+import { backgroundText } from '@/utility/studio-copy.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
 import { definePage } from '@/page.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
+import { $i } from '@/i.js';
+import { backgroundStudio, manualRemix, queueBackgroundRemix } from '@/utility/background-studio.js';
 
 const props = defineProps<{ submissionId: string }>();
 const router = useRouter();
@@ -89,6 +93,23 @@ const captionDescription = computed(() => {
 	return title && text.startsWith(title) ? '' : value.text;
 });
 const remixPath = computed(() => work.value ? `${studioPath(work.value.category)}?remix=${encodeURIComponent(work.value.id)}` : '/create/image');
+let remixOpening = false;
+
+async function openRemix() {
+	if (!$i) { router.pushByPath(remixPath.value); return; }
+	if (!work.value || remixOpening) return;
+	remixOpening = true;
+	try {
+		const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkStudioRemix.vue'), { submissionId: work.value.id, chooseMode: true }, {
+			apply: (value: StudioRemix, mode: 'workbench' | 'background') => {
+				if (mode === 'background') queueBackgroundRemix(value);
+				else { manualRemix.value = value; backgroundStudio.openTask = ''; router.push('/create/:kind', { params: { kind: value.kind } }); }
+			},
+			closed: () => { dispose(); remixOpening = false; },
+		});
+	} catch { remixOpening = false; os.toast('无法打开做同款，请重试。'); }
+}
+
 const backPath = computed(() => getCommunityWorkReturnPath(router, props.submissionId) ?? `/community/${work.value?.category === 'resource' ? 'knowledge' : work.value?.category ?? 'image'}`);
 let controller: AbortController | undefined;
 let loadedVersion = getCommunityUpdateVersion();
@@ -135,7 +156,7 @@ definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', 
 .prompt { h2 { font-size: 12px; font-weight: 500; margin: 0 0 8px; color: var(--MI_THEME-fgTransparentWeak); } p { font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; } > button { display: flex; align-items: center; gap: 6px; min-height: 40px; margin-top: 4px; font-size: 12px; } }
 .meta, .source { display: block; font-size: 12px; line-height: 1.6; margin: 10px 0; overflow-wrap: anywhere; }
 .date { display: block; padding: 16px 0 12px; border-bottom: 1px solid var(--MI_THEME-divider); color: var(--MI_THEME-fgTransparentWeak); font-size: 12px; }
-.remix { display: flex; align-items: center; gap: 12px; min-height: 72px; margin: 8px 0 20px; padding: 12px 16px; box-sizing: border-box; border-radius: 12px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); > i { font-size: 23px; } > i:last-child { margin-left: auto; font-size: 21px; } span { display: flex; flex-direction: column; gap: 2px; } strong { font-size: 16px; } small { font-size: 12px; } &:hover { filter: brightness(.94); } }
+.remix { width: 100%; text-align: left; display: flex; align-items: center; gap: 12px; min-height: 72px; margin: 8px 0 20px; padding: 12px 16px; box-sizing: border-box; border-radius: 12px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); > i { font-size: 23px; } > i:last-child { margin-left: auto; font-size: 21px; } span { display: flex; flex-direction: column; gap: 2px; } strong { font-size: 16px; } small { font-size: 12px; } &:hover { filter: brightness(.94); } }
 .state { display: grid; place-content: center; min-height: 60vh; text-align: center; padding: 24px; button { min-height: 44px; color: var(--MI_THEME-accent); } }
 @container (max-width: 780px) { .layout { display: flex; flex-direction: column; height: auto; min-height: 0; } .stage { height: clamp(280px, 54vh, 620px); flex-shrink: 0; } .sidebar { overflow: visible; padding: 22px 18px; } .topbar { padding: 0 16px; } }
 

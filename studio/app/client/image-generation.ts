@@ -48,6 +48,7 @@ export interface ImageGenerationCallbacks {
 type OutputFormat = "png" | "jpeg" | "webp";
 
 export interface ImageGenerationOptions {
+  requestMode?: "sync" | "async";
   responseFormat?: ImageResponseFormat;
   outputFormat?: OutputFormat;
   outputCompression?: number;
@@ -84,14 +85,15 @@ export class ImageGenerationService {
     return apiPath("images/generations", providerName);
   }
 
-  private requestConfig(config: ChatOptions["config"]) {
+  private requestConfig(config: ChatOptions["config"], requestMode?: "sync" | "async") {
     const preferences = useAppConfig.getState().modelConfig;
+    const mode = requestMode ?? preferences.imageRequestMode ?? "sync";
     return {
       ...config,
       imageResponseFormat: preferences.imageResponseFormat ?? "url",
-      imageRequestMode: preferences.imageRequestMode ?? "sync",
+      imageRequestMode: mode,
       imageStream:
-        preferences.imageRequestMode === "async"
+        mode === "async"
           ? false
           : preferences.imageStream ?? false,
       imagePartialImages: preferences.imagePartialImages ?? 1,
@@ -167,7 +169,7 @@ export class ImageGenerationService {
         : options.accountTokenId === undefined
         ? getLocalTokenId()
         : options.accountTokenId,
-      config: this.requestConfig(options.config),
+      config: this.requestConfig(options.config, imageOptions?.requestMode),
     };
 
     const refImages = imageOptions?.referenceImages?.filter(Boolean) ?? [];

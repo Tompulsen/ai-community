@@ -326,6 +326,8 @@ export interface ChatStat {
 }
 
 export interface ChatSession {
+  backgroundRemixRequestId?: string;
+  backgroundRemixCompleted?: boolean;
   communityWorkspaceKind?: "text" | "image" | "video";
   creationKind?: "text" | "image" | "video";
   remixSourceWorkId?: string;
@@ -987,6 +989,8 @@ export const useChatStore = createPersistStore(
         sessionIds.forEach((id) => ChatControllerPool.stopSession(id));
       },
 
+      restoreSessionAssets,
+
       selectSession(index: number): void | Promise<void> {
         const revision = ++selectionRevision;
         const sessions = get().sessions;
@@ -1041,9 +1045,9 @@ export const useChatStore = createPersistStore(
         });
       },
 
-      newSession(mask?: Mask, projectId?: string) {
+      newSession(mask?: Mask, projectId?: string, select = true) {
         if (!isLocalWorkspaceActive()) return;
-        selectionRevision++;
+        if (select) selectionRevision++;
         const session = createEmptySession();
         if (get().projects.some((project) => project.id === projectId))
           session.projectId = projectId;
@@ -1075,9 +1079,10 @@ export const useChatStore = createPersistStore(
         }
 
         set((state) => ({
-          currentSessionIndex: 0,
+          currentSessionIndex: select ? 0 : state.currentSessionIndex + 1,
           sessions: [session].concat(state.sessions),
         }));
+        return session;
       },
 
       nextSession(delta: number) {

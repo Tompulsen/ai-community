@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<template v-else-if="ready">
 			<MkStudioRemix v-if="remixOpen && remixId && active" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
-			<MkCommunityStudio ref="studio" :origin="siteOrigin" :kind="definition.key" :title="workbenchText.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :defaultModels="defaultModels" :remix="remix" @identity="studioIdentity = $event"/>
+			<div ref="anchor" :class="$style.anchor" data-testid="studio-anchor"></div>
 		</template>
 	</div>
 </PageWithHeader>
@@ -31,26 +31,24 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { url as siteUrl } from '@@/js/config.js';
-import type { StudioRemix } from '@/utility/studio-remix.js';
 import MkButton from '@/components/MkButton.vue';
 import { creationText, creationPages, workbenchText } from '@/utility/creation-pages.js';
-import { fetchInstance, instance } from '@/instance.js';
+import { fetchInstance } from '@/instance.js';
 import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
 import { definePage } from '@/page.js';
 import { homeText } from '@/pages/home/copy.js';
 import MkStudioRemix from '@/components/MkStudioRemix.vue';
-import MkCommunityStudio from '@/components/MkCommunityStudio.vue';
 import { newApiSigninConfig } from '@/utility/newapi-signin.js';
 import { studioText } from '@/utility/studio-copy.js';
 import * as os from '@/os.js';
+import { backgroundStudio, studioAnchor, manualRemix } from '@/utility/background-studio.js';
 
 const props = defineProps<{ kind: string; remixId?: string }>();
-const remix = ref<StudioRemix>();
+const remix = manualRemix;
 const remixOpen = ref(!!props.remixId);
-watch(() => props.remixId, value => { remix.value = undefined; remixOpen.value = !!value; });
+watch(() => props.remixId, value => { if (value) remix.value = undefined; remixOpen.value = !!value; });
 const definition = computed(() => creationPages.find(item => item.key === props.kind));
-const defaultModels = computed(() => Object.fromEntries(creationPages.map(item => [item.key, instance.clientOptions?.[item.modelKey] ?? item.defaultModel])));
 const siteOrigin = new URL(siteUrl).origin;
 const active = ref(false);
 const loading = ref(false);
@@ -60,9 +58,12 @@ let generation = 0;
 const loginOpening = ref(false);
 let loginRequest = 0;
 let disposeLogin: (() => void) | undefined;
-const studio = ref<InstanceType<typeof MkCommunityStudio>>();
-const studioIdentity = ref('');
-const studioActions = computed(() => ready.value ? [{ icon: 'ti ti-refresh', text: studioText.refresh, handler: () => studio.value?.refresh() }] : []);
+const anchor = ref<HTMLElement>();
+const studioIdentity = computed(() => backgroundStudio.identity);
+const studioActions = computed(() => ready.value ? [{ icon: 'ti ti-refresh', text: studioText.refresh, handler: () => { backgroundStudio.refresh++; } }] : []);
+watch([anchor, active, ready, () => props.kind], () => {
+	if (active.value && ready.value && anchor.value) { backgroundStudio.kind = props.kind; backgroundStudio.enabled = true; studioAnchor.value = anchor.value; } else if (studioAnchor.value === anchor.value) studioAnchor.value = undefined;
+}, { flush: 'post' });
 
 async function requestLogin() {
 	if ($i || loginOpening.value || !active.value || !definition.value) return;
@@ -94,7 +95,6 @@ async function refresh() {
 	const current = ++generation;
 	loading.value = true;
 	ready.value = false;
-	studioIdentity.value = '';
 	failed.value = false;
 	try {
 		const [, sso] = await Promise.all([fetchInstance(true), newApiSigninConfig()]);
@@ -116,6 +116,7 @@ function activate() {
 }
 
 function deactivate() {
+	if (studioAnchor.value === anchor.value) studioAnchor.value = undefined;
 	active.value = false;
 	ready.value = false;
 	generation++;
@@ -142,6 +143,7 @@ definePage(() => ({ title: definition.value ? workbenchText.title : i18n.ts.notF
 	width: 100%;
 	min-width: 0;
 }
+.anchor { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .empty {
 	flex: 1;
 	display: flex;

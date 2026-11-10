@@ -47,7 +47,7 @@ import { instance } from '@/instance.js';
 import { useRouter } from '@/router.js';
 
 const props = defineProps<{ origin: string; kind: string; title: string; active: boolean; defaultModel?: string; defaultModels?: Record<string, string>; remix?: StudioRemix }>();
-const emit = defineEmits<{ (event: 'identity', value: string): void }>();
+const emit = defineEmits<{ (event: 'identity', value: string): void; (event: 'background', value: Record<string, any>): void; (event: 'ready'): void; (event: 'state', value: string): void; (event: 'remixApplied'): void }>();
 const workspaceKind = ref('');
 const remixStatus = ref('');
 const remixSent = ref('');
@@ -184,8 +184,13 @@ async function connect() {
 function message(event: MessageEvent) {
 	if (!props.active || event.origin !== props.origin || event.source !== frame.value?.contentWindow || !event.data || event.data.type !== 'community-studio' || event.data.context !== context || event.data.attempt !== attempt.value) return;
 	const data = event.data;
+	if (typeof data.status === 'string' && data.status.startsWith('background-')) {
+		if (status.value === 'ready' && data.subject === launch.value?.subject && data.userId === $i?.id) emit('background', data);
+		return;
+	}
 	if (data.status === 'remix-applied' || data.status === 'remix-error') {
 		if (status.value !== 'ready' || data.subject !== launch.value?.subject || data.userId !== $i?.id || data.requestId !== props.remix?.requestId) return;
+		if (data.status === 'remix-applied') emit('remixApplied');
 		window.clearTimeout(remixTimer); remixStatus.value = data.status === 'remix-applied' ? '' : (typeof data.message === 'string' ? data.message.slice(0, 240) : studioText.remixFailed); if (data.status === 'remix-error') remixSent.value = ''; return;
 	}
 	if (typeof data.status === 'string' && data.status.startsWith('share-')) {
@@ -201,6 +206,7 @@ function message(event: MessageEvent) {
 		if (data.subject !== launch.value?.subject || data.userId !== $i?.id || data.kind !== props.kind || data.requestId !== workspaceRequest) return;
 		window.clearTimeout(workspaceTimeout);
 		workspaceKind.value = data.kind;
+		emit('ready');
 		return;
 	}
 	if (data.status === 'error') { fail(data.code || 'STUDIO_UNAVAILABLE'); return; }
@@ -275,7 +281,16 @@ onBeforeUnmount(() => { stop(); window.removeEventListener('message', message); 
 watch(() => [props.origin, props.active, $i?.id, $i?.token], connect);
 watch(() => props.kind, () => { if (status.value === 'ready') switchWorkspace(); else void connect(); });
 watch(() => [props.remix, status.value, props.active, workspaceKind.value], sendRemix, { flush: 'post' });
-defineExpose({ refresh: () => { void connect(); } });
+watch(status, value => emit('state', value));
+
+function sendBackground(command: Record<string, unknown>) {
+	if (command.kind && command.kind !== props.kind) return false;
+	if (status.value !== 'ready' || workspaceKind.value !== props.kind || !launch.value || !$i || !props.active || !frame.value?.contentWindow) return false;
+	frame.value.contentWindow.postMessage({ ...command, type: 'community-background', context, attempt: attempt.value, subject: launch.value.subject, userId: $i.id }, props.origin);
+	return true;
+}
+
+defineExpose({ refresh: () => { void connect(); }, sendBackground });
 </script>
 
 <style module lang="scss">

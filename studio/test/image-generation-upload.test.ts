@@ -203,6 +203,21 @@ async function generate(images: string[]) {
   return { url, form: request!.body as FormData };
 }
 
+test("background generation uses the async relay without changing manual image preferences", async () => {
+  preferences.imageRequestMode = "sync";
+  jest.mocked(fetch).mockResolvedValueOnce(Response.json({ id: "background-image-task" }));
+  const service = new ImageGenerationService({} as any), onComplete = jest.fn(), onError = jest.fn();
+  service.setCallbacks({ onComplete, onError });
+  await service.generateImage({
+    config: { model: "gpt-image-test" }, messages: [{ role: "user", content: "a background cat" }],
+    taskContext: { sessionId: "background-session", messageId: "background-answer" }, onFinish: jest.fn(),
+  }, { requestMode: "async" });
+  expect(onError).not.toHaveBeenCalled();
+  expect(String(jest.mocked(fetch).mock.calls[0][0])).toContain("async-images/v1/tasks");
+  expect(onComplete).toHaveBeenCalledTimes(1);
+  expect(preferences.imageRequestMode).toBe("sync");
+});
+
 test("keeps a single reference in the compatible image field", async () => {
   const { url, form } = await generate(["data:image/png;base64,YQ=="]);
   expect(url).toBe("/api/v1/images/edits");

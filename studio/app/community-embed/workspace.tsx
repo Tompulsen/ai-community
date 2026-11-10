@@ -45,6 +45,7 @@ export function CommunityEmbed({
     };
     let disposeShare: (() => void) | undefined;
     let disposeRemix: (() => void) | undefined;
+    let disposeBackground: (() => void) | undefined;
     const abort = new AbortController();
     const nativeFetch = window.fetch.bind(window);
     const send = (data: object) => {
@@ -57,6 +58,7 @@ export function CommunityEmbed({
     const fail = (code: string) => {
       disposeShare?.();
       disposeRemix?.();
+      disposeBackground?.();
       active = false;
       abort.abort();
       setWorkspace(null);
@@ -174,6 +176,9 @@ export function CommunityEmbed({
         window.fetch = adaptedFetch;
         disposeShare = installCommunityShare(communityOrigin, { context, attempt, subject: verified.subject, userId: verified.userId });
         disposeRemix = installCommunityRemix(communityOrigin, { context, attempt, subject: verified.subject, userId: verified.userId });
+        const { installCommunityBackground } = await import("../utils/community-background");
+        if (stopped || !active) return;
+        disposeBackground = installCommunityBackground(communityOrigin, { context, attempt, subject: verified.subject, userId: verified.userId });
         send({
           status: "loading", phase: "workspace",
           subject: verified.subject, userId: verified.userId,
@@ -215,6 +220,7 @@ export function CommunityEmbed({
       stopped = true;
       disposeShare?.();
       disposeRemix?.();
+      disposeBackground?.();
       active = false;
       abort.abort();
       if (window.fetch === adaptedFetch) window.fetch = nativeFetch;

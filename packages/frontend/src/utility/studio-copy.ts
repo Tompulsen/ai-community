@@ -24,3 +24,25 @@ const en: Record<keyof typeof zh, string> = {
 	retry: 'Reconnect', refresh: 'Refresh studio', readyHint: 'Results appear here. Usage is charged to your matching 章鱼 account.',
 };
 export const studioText = lang.startsWith('en') ? en : zh;
+
+const backgroundZh = {
+	title: '后台生成任务', tasks: '后台任务', generating: '后台生成', hide: '隐藏任务小窗', complete: '生成完成', error: '任务需要处理', videoRunning: '视频生成中…', imageRunning: '图片生成中…',
+	open: '打开作品', studio: 'AI 工作台', previous: '上一任务', next: '下一任务', hint: '拖动可移动 · 长按可隐藏 · 单击查看生成',
+	previewTitle: '生成作品', loading: '正在打开作品…', imageAlt: '生成图片', download: '下载', retryOpen: '重新打开', close: '关闭', goStudio: '前往 AI 工作台',
+	unlinked: '请先前往 AI 工作台绑定创作账号。', authorize: '请前往 AI 工作台完成账号授权。', connectionError: '工作台连接中断，请前往工作台重新连接。',
+	readError: '作品无法读取，请前往工作台查看。', reconnecting: '工作台正在连接，请稍后重新打开。', slow: '作品读取较慢，请稍后重新打开或前往工作台。',
+	imageComplete: '图片已生成完成，可打开作品下载。', videoComplete: '视频已生成完成，可打开作品下载。', modeSummary: '后台直接生成 / 去 AI 工作台',
+	chooseHint: '后台直接生成可继续浏览社区；去 AI 工作台可先调整内容再生成。后台生成将使用当前创作账号额度。', referenceHint: '点选需要的参考图；不选择则仅使用提示词。',
+	needsPrompt: '后台生成需要提示词，可先前往工作台补充。', workbenchMode: '去 AI 工作台生成', backgroundMode: '后台直接生成',
+};
+const backgroundEn: Record<keyof typeof backgroundZh, string> = {
+	title: 'Background generation tasks', tasks: 'Background tasks', generating: 'Background generation', hide: 'Hide task window', complete: 'Generation complete', error: 'Task needs attention', videoRunning: 'Generating video…', imageRunning: 'Generating image…',
+	open: 'Open result', studio: 'AI Studio', previous: 'Previous task', next: 'Next task', hint: 'Drag to move · Hold to hide · Click to view',
+	previewTitle: 'Generated work', loading: 'Opening your work…', imageAlt: 'Generated image', download: 'Download', retryOpen: 'Try again', close: 'Close', goStudio: 'Go to AI Studio',
+	unlinked: 'Open AI Studio to link your creation account.', authorize: 'Open AI Studio to authorize your account.', connectionError: 'The studio connection was interrupted. Open AI Studio to reconnect.',
+	readError: 'Could not read the result. View it in AI Studio.', reconnecting: 'AI Studio is connecting. Please try opening the result shortly.', slow: 'Loading is taking longer than usual. Try again or open AI Studio.',
+	imageComplete: 'Your image is ready. Open it to preview or download.', videoComplete: 'Your video is ready. Open it to preview or download.', modeSummary: 'Generate in background / Open AI Studio',
+	chooseHint: 'Generate in the background and keep browsing, or adjust your draft in AI Studio. Background generation uses your account balance.', referenceHint: 'Select references to include, or leave them unselected to use only the prompt.',
+	needsPrompt: 'Add a prompt in AI Studio before generating.', workbenchMode: 'Open AI Studio', backgroundMode: 'Generate in background',
+};
+export const backgroundText = lang.startsWith('en') ? backgroundEn : backgroundZh;

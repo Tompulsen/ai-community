@@ -62,6 +62,7 @@ export function findCommunityWorkspace(kind: CommunityEntry["kind"]) {
   const sessions = store.sessions;
   const matches = (session: ChatSession) => {
     if (
+      session.backgroundRemixRequestId ||
       session.communityWorkspaceKind ||
       session.creationKind ||
       session.mask.modelConfig.providerName === CUSTOM_MODEL_PROVIDER
@@ -79,13 +80,13 @@ export function findCommunityWorkspace(kind: CommunityEntry["kind"]) {
     sessions.find((session) => session.communityWorkspaceKind === kind) ??
     sessions.find(
       (session) =>
-        !session.communityWorkspaceKind &&
+        !session.backgroundRemixRequestId && !session.communityWorkspaceKind &&
         session.creationKind === kind &&
         session.messages.length > 0,
     ) ??
     sessions.find(
       (session) =>
-        !session.communityWorkspaceKind && session.creationKind === kind,
+        !session.backgroundRemixRequestId && !session.communityWorkspaceKind && session.creationKind === kind,
     ) ??
     (matches(store.currentSession()) ? store.currentSession() : undefined) ??
     sessions.find(matches)
