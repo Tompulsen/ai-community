@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<MkA to="/community" :class="{ [$style.current]: homeCurrent }" :aria-current="homeCurrent ? 'page' : undefined">{{ t.mobileHome }}</MkA>
 	<MkA to="/create/video" :class="{ [$style.current]: createCurrent }" :aria-current="createCurrent ? 'page' : undefined">{{ t.mobileCreate }}</MkA>
 	<button type="button" class="_button" :class="$style.publish" :aria-label="communityText.publish" @click="publish"><span><i class="ti ti-plus" aria-hidden="true"></i></span></button>
-	<button type="button" class="_button" :class="{ [$style.current]: messagesCurrent }" :aria-current="messagesCurrent ? 'page' : undefined" @click="accountPage('/my/notifications')">{{ t.mobileMessages }}<span v-if="$i?.hasUnreadNotification" :class="$style.badge">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</span></button>
+	<button type="button" class="_button" :class="{ [$style.current]: messagesCurrent }" :aria-current="messagesCurrent ? 'page' : undefined" @click="accountPage('/my/notifications')">{{ t.mobileMessages }}<span v-if="$i?.hasUnreadNotification || $i?.hasUnreadChatMessages" :class="$style.badge">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount || '•' }}</span></button>
 	<button type="button" class="_button" :class="{ [$style.current]: ownProfile }" :aria-current="ownProfile ? 'page' : undefined" @click="accountPage($i ? `/@${$i.username}` : '/community/mine')">{{ t.mobileMe }}</button>
 </nav>
 </template>

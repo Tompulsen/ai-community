@@ -19,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<button v-if="immersive || discussion" type="button" class="_button" :class="[$style.favoriteAction, { [$style.favorited]: favorite }]" :aria-label="favorite ? t.favorited : t.favorite" :aria-pressed="!!favorite" :aria-busy="favoriteBusy" :disabled="favoriteBusy || !work.approvedNoteId" data-testid="work-favorite" @click="onFavorite"><i :class="immersive || favorite ? 'ti ti-star-filled' : 'ti ti-star'" aria-hidden="true"></i><span>{{ favorite ? t.favorited : t.favorite }}</span></button>
 		<button v-if="immersive" ref="shareTrigger" type="button" class="_button" :class="$style.shareAction" :aria-label="t.shareWork" :aria-expanded="showShare" data-testid="work-share" @click="openShare"><i class="ti ti-share-3" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
 		<button v-else type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
+		<button v-if="!immersive && discussion" type="button" class="_button" :disabled="privateSharing" :title="chatText.sharePrivately" :aria-label="chatText.sharePrivately" @click="sharePrivately"><i class="ti ti-mail" aria-hidden="true"></i></button>
 		<ReportButton v-if="!immersive" :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
 		<div v-if="immersive && $slots.remixAction" :class="$style.remixAction"><slot name="remixAction"></slot></div>
 	</div>
@@ -75,6 +76,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<button v-if="nativeSharing" type="button" class="_button" @click="nativeShare"><i class="ti ti-share" aria-hidden="true"></i>{{ t.nativeShare }}</button>
 				<button type="button" class="_button" :disabled="shareState === 'copying'" @click="share"><i class="ti ti-link" aria-hidden="true"></i>{{ shareState === 'copied' ? t.copied : t.copyLink }}</button>
 				<button type="button" class="_button" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i>{{ repostState === 'sent' ? t.reposted : t.repost }}</button>
+				<button type="button" class="_button" :disabled="privateSharing" @click="sharePrivately"><i class="ti ti-mail" aria-hidden="true"></i>{{ chatText.sharePrivately }}</button>
 				<ReportButton :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
 			</div>
 			<p v-if="repostState === 'sent'" role="status">{{ t.repostSuccess }}</p><p v-else-if="repostState === 'uncertain' || repostState === 'rejected'" role="alert">{{ repostState === 'uncertain' ? t.repostUncertain : t.repostFailed }}</p>
@@ -91,6 +93,8 @@ import { url } from '@@/js/config.js';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import ReportButton from './report-button.vue';
 import WorkCommentLike from './work-comment-like.vue';
+import { chatText } from '@/pages/chat/copy.js';
+import { selectPrivateMessageUser, communityWorkMessage, privateMessageError } from '@/pages/chat/private-message.js';
 import MkMediaList from '@/components/MkMediaList.vue';
 import MkNoteSimple from '@/components/MkNoteSimple.vue';
 import type { CommunityWork } from './types.js';
@@ -119,6 +123,25 @@ function commentWorkPath(text: string | null) {
 
 const showComments = ref(!!props.discussion && !props.immersive);
 const showShare = ref(false);
+const privateSharing = ref(false);
+
+async function sharePrivately() {
+	if (!$i) { requestLogin(); return; }
+	if (privateSharing.value) return;
+	privateSharing.value = true;
+	try {
+		const user = await selectPrivateMessageUser($i.id);
+		if (!user) return;
+		await misskeyApi('chat/messages/create-to-user', { toUserId: user.id, text: communityWorkMessage(props.work.id) });
+		os.toast(chatText.sentWork);
+		closeShare();
+	} catch (error) {
+		void os.alert({ type: 'error', text: privateMessageError(error) });
+	} finally {
+		privateSharing.value = false;
+	}
+}
+
 const shareLayer = ref<HTMLElement>();
 const sharePanel = ref<HTMLElement>();
 const shareTrigger = ref<HTMLButtonElement>();

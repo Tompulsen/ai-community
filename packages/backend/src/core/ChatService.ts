@@ -28,6 +28,9 @@ import { CustomEmojiService } from '@/core/CustomEmojiService.js';
 import { emojiRegex } from '@/misc/emoji-regex.js';
 import { NotificationService } from '@/core/NotificationService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { CommunityService } from '@/core/CommunityService.js';
+import { ApiError } from '@/server/api/error.js';
+import { communityChatErrors, parseCommunityChatContent } from '@/misc/community-chat.js';
 
 export class ChatMessageAccessError extends Error {}
 
@@ -93,6 +96,7 @@ export class ChatService {
 		private userFollowingService: UserFollowingService,
 		private customEmojiService: CustomEmojiService,
 		private moderationLogService: ModerationLogService,
+		private communityService: CommunityService,
 	) {
 	}
 
@@ -131,6 +135,42 @@ export class ChatService {
 	}
 
 	@bindThis
+	private async assertCommunityParticipants(fromUserId: string, toUserId: string) {
+		const [from, to, mutual, blocked, blocking] = await Promise.all([
+			this.usersRepository.findOneBy({ id: fromUserId }),
+			this.usersRepository.findOneBy({ id: toUserId }),
+			this.userFollowingService.isMutual(fromUserId, toUserId),
+			this.userBlockingService.checkBlocked(toUserId, fromUserId),
+			this.userBlockingService.checkBlocked(fromUserId, toUserId),
+		]);
+		if (fromUserId === toUserId || !mutual || blocked || blocking ||
+			[from, to].some(user => !user || user.host !== null || user.isSuspended || user.isDeleted || user.movedToUri)) {
+			throw new ApiError(communityChatErrors.mutualRequired);
+		}
+		await this.checkChatAvailability(fromUserId, 'write');
+	}
+
+	@bindThis
+	private async assertCommunityContent(text: string | null | undefined, fromUserId: string, toUserId: string, file?: MiDriveFile | null) {
+		const content = parseCommunityChatContent(text, this.config.url);
+		if (file || !content) throw new ApiError(communityChatErrors.contentRestricted);
+		if (content.type === 'work') {
+			try {
+				await Promise.all([this.communityService.show(content.id, fromUserId), this.communityService.show(content.id, toUserId)]);
+			} catch (error) {
+				if (error instanceof ApiError && error.code === 'COMMUNITY_NOT_FOUND') throw new ApiError(communityChatErrors.workUnavailable);
+				throw error;
+			}
+		} else if (content.type === 'customEmoji') {
+			const emoji = (await this.customEmojiService.localEmojisCache.fetch()).get(content.name);
+			if (!emoji || (emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.length > 0 &&
+				!(await this.roleService.getUserRoles(fromUserId)).some(role => emoji.roleIdsThatCanBeUsedThisEmojiAsReaction.includes(role.id)))) {
+				throw new ApiError(communityChatErrors.contentRestricted);
+			}
+		}
+	}
+
+	@bindThis
 	public async createMessageToUser(fromUser: { id: MiUser['id']; host: MiUser['host']; }, toUser: MiUser, params: {
 		text?: string | null;
 		file?: MiDriveFile | null;
@@ -139,6 +179,10 @@ export class ChatService {
 		if (fromUser.id === toUser.id) {
 			throw new Error('yourself');
 		}
+
+		// Saved chat approvals must never bypass the current mutual-following rule.
+		await this.assertCommunityParticipants(fromUser.id, toUser.id);
+		await this.assertCommunityContent(params.text, fromUser.id, toUser.id, params.file);
 
 		const approvals = await this.chatApprovalsRepository.createQueryBuilder('approval')
 			.where(new Brackets(qb => { // 自分が相手を許可しているか
@@ -247,68 +291,7 @@ export class ChatService {
 		file?: MiDriveFile | null;
 		uri?: string | null;
 	}): Promise<Packed<'ChatMessageLiteForRoom'>> {
-		const memberships = (await this.chatRoomMembershipsRepository.findBy({ roomId: toRoom.id })).map(m => ({
-			userId: m.userId,
-			isMuted: m.isMuted,
-		})).concat({ // ownerはmembershipレコードを作らないため
-			userId: toRoom.ownerId,
-			isMuted: false,
-		});
-
-		if (!memberships.some(member => member.userId === fromUser.id)) {
-			throw new Error('you are not a member of the room');
-		}
-
-		const membershipsOtherThanMe = memberships.filter(member => member.userId !== fromUser.id);
-
-		const message = {
-			id: this.idService.gen(),
-			fromUserId: fromUser.id,
-			toRoomId: toRoom.id,
-			text: params.text ? params.text.trim() : null,
-			fileId: params.file ? params.file.id : null,
-			reads: [],
-			uri: params.uri ?? null,
-		} satisfies Partial<MiChatMessage>;
-
-		const inserted = await this.chatMessagesRepository.insertOne(message);
-
-		const packedMessage = await this.chatEntityService.packMessageLiteForRoom(inserted);
-
-		this.globalEventService.publishChatRoomStream(toRoom.id, 'message', packedMessage);
-
-		const redisPipeline = this.redisClient.pipeline();
-		for (const membership of membershipsOtherThanMe) {
-			if (membership.isMuted) continue;
-
-			redisPipeline.set(`newRoomChatMessageExists:${membership.userId}:${toRoom.id}`, message.id);
-			redisPipeline.sadd(`newChatMessagesExists:${membership.userId}`, `room:${toRoom.id}`);
-		}
-		redisPipeline.exec();
-
-		// 3秒経っても既読にならなかったらイベント発行
-		setTimeout(async () => {
-			const redisPipeline = this.redisClient.pipeline();
-			for (const membership of membershipsOtherThanMe) {
-				redisPipeline.get(`newRoomChatMessageExists:${membership.userId}:${toRoom.id}`);
-			}
-			const markers = await redisPipeline.exec();
-			if (markers == null) throw new Error('redis error');
-
-			if (markers.every(marker => marker[1] == null)) return;
-
-			const packedMessageForTo = await this.chatEntityService.packMessageDetailed(inserted);
-
-			for (let i = 0; i < membershipsOtherThanMe.length; i++) {
-				const marker = markers[i][1];
-				if (marker == null) continue;
-
-				this.globalEventService.publishMainStream(membershipsOtherThanMe[i].userId, 'newChatMessage', packedMessageForTo);
-				this.pushNotificationService.pushNotification(membershipsOtherThanMe[i].userId, 'newChatMessage', packedMessageForTo);
-			}
-		}, 3000);
-
-		return packedMessage;
+		throw new ApiError(communityChatErrors.privateOnly);
 	}
 
 	@bindThis
@@ -561,17 +544,8 @@ export class ChatService {
 	public async createRoom(owner: MiUser, params: Partial<{
 		name: string;
 		description: string;
-	}>) {
-		const room = {
-			id: this.idService.gen(),
-			name: params.name,
-			description: params.description,
-			ownerId: owner.id,
-		} satisfies Partial<MiChatRoom>;
-
-		const created = await this.chatRoomsRepository.insertOne(room);
-
-		return created;
+	}>): Promise<MiChatRoom> {
+		throw new ApiError(communityChatErrors.privateOnly);
 	}
 
 	@bindThis
@@ -660,51 +634,8 @@ export class ChatService {
 	}
 
 	@bindThis
-	public async createRoomInvitation(inviterId: MiUser['id'], roomId: MiChatRoom['id'], inviteeId: MiUser['id']) {
-		if (inviterId === inviteeId) {
-			throw new Error('yourself');
-		}
-
-		const room = await this.chatRoomsRepository.findOneByOrFail({ id: roomId, ownerId: inviterId });
-
-		if (await this.isRoomMember(room, inviteeId)) {
-			throw new Error('already member');
-		}
-
-		const existingInvitation = await this.chatRoomInvitationsRepository.findOneBy({ roomId, userId: inviteeId });
-		if (existingInvitation) {
-			throw new Error('already invited');
-		}
-
-		const membershipsCount = await this.chatRoomMembershipsRepository.countBy({ roomId });
-		if (membershipsCount >= MAX_ROOM_MEMBERS) {
-			throw new Error('room is full');
-		}
-
-		const [blocked, blocking] = await Promise.all([
-			this.userBlockingService.checkBlocked(inviteeId, inviterId),
-			this.userBlockingService.checkBlocked(inviterId, inviteeId),
-		]);
-		if (blocked) {
-			throw new Error('blocked');
-		}
-		if (blocking) {
-			throw new Error('blocking');
-		}
-
-		const invitation = {
-			id: this.idService.gen(),
-			roomId: room.id,
-			userId: inviteeId,
-		} satisfies Partial<MiChatRoomInvitation>;
-
-		const created = await this.chatRoomInvitationsRepository.insertOne(invitation);
-
-		this.notificationService.createNotification(inviteeId, 'chatRoomInvitationReceived', {
-			invitationId: invitation.id,
-		}, inviterId);
-
-		return created;
+	public async createRoomInvitation(inviterId: MiUser['id'], roomId: MiChatRoom['id'], inviteeId: MiUser['id']): Promise<MiChatRoomInvitation> {
+		throw new ApiError(communityChatErrors.privateOnly);
 	}
 
 	@bindThis
@@ -787,14 +718,7 @@ export class ChatService {
 		name?: string;
 		description?: string;
 	}): Promise<MiChatRoom> {
-		return this.chatRoomsRepository.createQueryBuilder().update()
-			.set(params)
-			.where('id = :id', { id: room.id })
-			.returning('*')
-			.execute()
-			.then((response) => {
-				return response.raw[0];
-			});
+		throw new ApiError(communityChatErrors.privateOnly);
 	}
 
 	@bindThis
@@ -902,6 +826,13 @@ export class ChatService {
 			if (!(await this.isRoomMember(room, userId))) {
 				throw new ChatMessageAccessError('cannot react to others message');
 			}
+		}
+
+		if (message.toUserId) {
+			await this.assertCommunityParticipants(userId, message.fromUserId);
+			await this.assertCommunityContent(reaction_, userId, message.fromUserId);
+		} else {
+			throw new ApiError(communityChatErrors.privateOnly);
 		}
 
 		if (message.reactions.length >= MAX_REACTIONS_PER_MESSAGE) {

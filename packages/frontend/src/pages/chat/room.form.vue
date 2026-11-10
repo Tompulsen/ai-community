@@ -3,272 +3,215 @@ SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 <template>
-<div :class="$style.root" @dragover.stop="onDragover" @drop.stop="onDrop">
-	<textarea
-		ref="textareaEl"
-		v-model="text"
-		:class="$style.textarea"
-		:placeholder="i18n.ts.inputMessageHere"
-		:aria-label="t.message"
-		:readonly="textareaReadOnly || sending || !canWrite"
-		:aria-invalid="text.length > 2000"
-		@keydown="onKeydown"
-		@paste="onPaste"
-	></textarea>
-	<div v-if="file" :class="$style.file">
-		<i class="ti ti-paperclip" aria-hidden="true"></i><span>{{ file.name }}</span>
-		<button class="_button" :aria-label="t.removeAttachment" :disabled="sending" @click="file = null"><i class="ti ti-x" aria-hidden="true"></i></button>
-	</div>
-	<p v-if="error" :class="$style.error" role="alert">{{ error }}</p>
-	<p v-if="!canWrite" :class="$style.hint">{{ t.unavailable }}</p>
-	<p v-else-if="text.length > 2000" :class="$style.error" role="alert">{{ t.tooLong }}</p>
-	<p v-if="uploading" :class="$style.hint" role="status">{{ t.uploading }}</p>
-	<footer :class="$style.footer">
-		<div :class="$style.buttons">
-			<button class="_button" :class="$style.button" :disabled="!canWrite || sending || uploading" :aria-label="t.attachment" :title="t.attachment" @click="chooseFile"><i class="ti ti-photo-plus" aria-hidden="true"></i></button>
-			<button class="_button" :class="$style.button" :disabled="!canWrite || sending" :aria-label="t.emoji" :title="t.emoji" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
-			<span :class="$style.count">{{ text.length }} / 2000</span>
-			<button class="_button" :class="[$style.button, $style.send]" :disabled="!canSend || sending || uploading" @click="send">
-				<i class="ti ti-send" aria-hidden="true"></i><span>{{ sending ? t.sending : t.send }}</span>
-			</button>
+<div :class="$style.root">
+	<p :class="$style.hint">{{ room ? t.privateOnly : t.rules }}</p>
+	<template v-if="user">
+		<p v-if="!canWrite" :class="$style.hint" role="status">{{ $i.policies.chatAvailability !== 'available' ? t.unavailable : t.mutualRequired }}</p>
+		<button v-if="!canWrite" type="button" class="_textButton" :class="$style.refresh" :disabled="refreshing || sending" @click="refreshRelation">{{ refreshing ? t.refreshingRelation : t.refreshRelation }}</button>
+		<div :class="$style.actions">
+			<button type="button" class="_button" :class="$style.action" :disabled="!canWrite || sending" :aria-expanded="showWorks" @click="toggleWorks"><i class="ti ti-photo" aria-hidden="true"></i>{{ t.shareWork }}</button>
+			<button type="button" class="_button" :class="$style.action" :disabled="!canWrite || sending" @click="chooseEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i>{{ t.sendEmoji }}</button>
 		</div>
-		<p :class="$style.hint">{{ prefer.r['chat.sendOnEnter'].value ? t.enterHint : t.ctrlHint }}</p>
-	</footer>
+		<section v-if="showWorks" :class="$style.picker" :aria-label="t.chooseWork" :aria-busy="loadingWorks">
+			<form :class="$style.search" @submit.prevent="loadWorks(false)">
+				<input v-model="query" type="search" :placeholder="t.searchWorks" :aria-label="t.searchWorks" :disabled="sending"/>
+				<button type="submit" class="_button" :disabled="loadingWorks || sending">{{ t.findWork }}</button>
+			</form>
+			<p v-if="worksError" role="alert">{{ t.worksFailed }} <button type="button" class="_textButton" :disabled="loadingWorks" @click="loadWorks(!!cursor && works.length > 0)">{{ t.retry }}</button></p>
+			<p v-if="loadingWorks" role="status">{{ t.loadingWorks }}</p>
+			<p v-else-if="!works.length && !worksError" role="status">{{ t.noWorks }}</p>
+			<div :class="$style.works">
+				<button v-for="work in works" :key="work.id" type="button" class="_button" :class="$style.work" :disabled="!canWrite || sending" @click="selectWork(work)">
+					<img v-if="thumbnail(work)" :src="thumbnail(work)!" alt="" loading="lazy"/>
+					<i v-else class="ti ti-photo" aria-hidden="true"></i>
+					<span><strong>{{ work.title }}</strong><small>{{ work.author.name || work.author.username }}</small></span>
+				</button>
+				<button v-if="cursor" type="button" class="_textButton" :class="$style.more" :disabled="loadingWorks || sending" @click="loadWorks(true)">{{ t.moreWorks }}</button>
+			</div>
+		</section>
+		<div v-if="selection" :class="$style.selection" role="status">
+			<span v-if="selection.work"><i class="ti ti-photo" aria-hidden="true"></i> {{ selection.work.title }}</span>
+			<Mfm v-else :text="selection.text" :plain="true"/>
+			<button type="button" class="_button" :disabled="sending" :aria-label="t.removeSelection" @click="selection = null"><i class="ti ti-x" aria-hidden="true"></i></button>
+		</div>
+		<p v-else :class="$style.hint">{{ t.selectHint }}</p>
+		<p v-if="error" :class="$style.error" role="alert">{{ error }}</p>
+		<div :class="$style.footer"><button type="button" class="_button" :class="$style.send" :disabled="!canWrite || !selection || sending" @click="send"><i class="ti ti-send" aria-hidden="true"></i>{{ sending ? t.sending : t.send }}</button></div>
+	</template>
 </div>
 </template>
 
-<script lang="ts" setup>
-import { onMounted, watch, ref, shallowRef, computed, nextTick, onBeforeUnmount, markRaw } from 'vue';
-import * as Misskey from 'misskey-js';
+<script setup lang="ts">
+import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { entities } from 'misskey-js';
+import { emojiRegex } from '@misskey-dev/emoji-data/regex';
+import type { CommunityWork } from '../community/types.js';
 import { chatText as t } from './copy.js';
-import { selectFile } from '@/utility/drive.js';
-import * as os from '@/os.js';
-import { i18n } from '@/i18n.js';
+import { canPrivateMessage, communityWorkMessage, privateMessageError } from './private-message.js';
 import { ensureSignin } from '@/i.js';
-import { miLocalStorage } from '@/local-storage.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
-import { prefer } from '@/preferences.js';
-import { Autocomplete } from '@/utility/autocomplete.js';
-import { emojiPicker } from '@/utility/emoji-picker.js';
-import { checkDragDataType, getDragData } from '@/drag-and-drop.js';
+import { customEmojisMap } from '@/custom-emojis.js';
+import MkEmojiPickerDialog from '@/components/MkEmojiPickerDialog.vue';
+import * as os from '@/os.js';
 
-const props = defineProps<{
-	user?: Misskey.entities.UserDetailed | null;
-	room?: Misskey.entities.ChatRoom | null;
-}>();
-const emit = defineEmits<{ (ev: 'sent', message: Misskey.entities.ChatMessageLite): void }>();
+const props = defineProps<{ user?: entities.UserDetailed | null; room?: entities.ChatRoom | null }>();
+const emit = defineEmits<{ (event: 'sent', message: entities.ChatMessageLite): void }>();
 const $i = ensureSignin();
-const textareaEl = shallowRef<HTMLTextAreaElement>();
-const text = ref('');
-const file = ref<Misskey.entities.DriveFile | null>(null);
+const peer = ref(props.user);
+const canWrite = computed(() => $i.policies.chatAvailability === 'available' && !!peer.value && canPrivateMessage(peer.value, $i.id));
 const sending = ref(false);
-const uploading = ref(false);
+const refreshing = ref(false);
 const error = ref('');
-const textareaReadOnly = ref(false);
-let autocompleteInstance: Autocomplete | null = null;
+const selection = ref<{ text: string; work?: CommunityWork } | null>(null);
+const showWorks = ref(false);
+const query = ref('');
+const works = ref<CommunityWork[]>([]);
+const cursor = ref<string | null>(null);
+const loadingWorks = ref(false);
+const worksError = ref(false);
+let version = 0;
+let loadedQuery = '';
 let disposed = false;
-const canWrite = computed(() => $i.policies.chatAvailability === 'available' && (props.room != null || (props.user != null && props.user.id !== $i.id && props.user.canChat && props.user.host === null)));
-const canSend = computed(() => canWrite.value && text.value.length <= 2000 && (text.value.trim().length > 0 || file.value != null));
+let closePicker: (() => void) | undefined;
 
-function getDraftKey() {
-	return $i.id + ':' + (props.user ? 'user:' + props.user.id : 'room:' + props.room?.id);
-}
-
-type Drafts = Record<string, { updatedAt: string; data: { text: string; file: Misskey.entities.DriveFile | null } }>;
-
-function readDrafts(): Drafts {
-	try {
-		const value = JSON.parse(miLocalStorage.getItem('chatMessageDrafts') || '{}');
-		return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-	} catch { return {}; }
-}
-
-function saveDraft() {
-	if (disposed) return;
-	try {
-		const drafts = readDrafts();
-		if (!text.value && !file.value) delete drafts[getDraftKey()];
-		else drafts[getDraftKey()] = { updatedAt: new Date().toISOString(), data: { text: text.value, file: file.value } };
-		miLocalStorage.setItem('chatMessageDrafts', JSON.stringify(drafts));
-	} catch { /* Sending remains available when browser storage is full. */ }
-}
-
-watch([text, file], saveDraft);
-
-function uploadAttachment(files: File[]): Promise<Misskey.entities.DriveFile[]> {
-	return new Promise((resolve, reject) => {
-		let dispose: (() => void) | undefined;
-		let closed = false;
-		os.popupAsyncWithDialog(import('@/components/MkUploaderDialog.vue').then(x => x.default), {
-			files: markRaw(files), multiple: false,
-		}, {
-			done: resolve,
-			canceled: () => resolve([]),
-			closed: () => {
-				closed = true;
-				resolve([]);
-				dispose?.();
-			},
-		}).then(handle => {
-			dispose = handle.dispose;
-			if (closed) dispose();
-		}, reject);
-	});
-}
-
-async function attachFiles(files: File[]) {
-	if (!canWrite.value || sending.value || uploading.value || files.length === 0) return;
-	if (files.length !== 1) {
-		error.value = i18n.ts.onlyOneFileCanBeAttached;
-		return;
+watch(() => props.user, (user, previous) => {
+	peer.value = user;
+	if (user?.id !== previous?.id) {
+		selection.value = null;
+		error.value = '';
 	}
-	uploading.value = true;
-	error.value = '';
+});
+
+async function refreshRelation() {
+	const userId = props.user?.id;
+	if (!userId || refreshing.value || sending.value || disposed) return;
+	refreshing.value = true;
 	try {
-		const uploaded = await uploadAttachment(files);
-		if (!disposed && uploaded[0]) file.value = uploaded[0];
+		const current = await misskeyApi('users/show', { userId });
+		if (!disposed && props.user?.id === userId) { peer.value = current; error.value = ''; }
 	} catch {
-		if (!disposed) error.value = t.attachmentFailed;
+		if (!disposed && props.user?.id === userId) error.value = t.relationFailed;
 	} finally {
-		if (!disposed) uploading.value = false;
+		if (!disposed) refreshing.value = false;
 	}
 }
 
-function onPaste(ev: ClipboardEvent) {
-	const files = Array.from(ev.clipboardData?.files ?? []);
-	if (!files.length) return;
-	ev.preventDefault();
-	void attachFiles(files);
+function onVisible() {
+	if (!window.document.hidden) void refreshRelation();
 }
 
-function onDragover(ev: DragEvent) {
-	if (!canWrite.value || sending.value || uploading.value || !ev.dataTransfer) return;
-	if (ev.dataTransfer.items[0]?.kind === 'file' || checkDragDataType(ev, ['driveFiles'])) {
-		ev.preventDefault();
-		ev.dataTransfer.dropEffect = 'copy';
-	}
+onMounted(() => window.document.addEventListener('visibilitychange', onVisible));
+onActivated(() => { void refreshRelation(); });
+
+function thumbnail(work: CommunityWork) {
+	const file = work.files[0];
+	return file && !file.isSensitive ? file.thumbnailUrl || (file.type.startsWith('image/') ? file.url : null) : null;
 }
 
-function onDrop(ev: DragEvent) {
-	if (!canWrite.value || sending.value || uploading.value || !ev.dataTransfer) return;
-	if (ev.dataTransfer.files.length) {
-		ev.preventDefault();
-		void attachFiles(Array.from(ev.dataTransfer.files));
-		return;
-	}
-	const dropped = getDragData(ev, 'driveFiles');
-	if (dropped != null) {
-		ev.preventDefault();
-		if (dropped.length === 1) file.value = dropped[0];
-		else error.value = i18n.ts.onlyOneFileCanBeAttached;
-	}
+async function toggleWorks() {
+	if (!canWrite.value || sending.value) return;
+	showWorks.value = !showWorks.value;
+	if (showWorks.value && !works.value.length) await loadWorks(false);
 }
 
-function onKeydown(ev: KeyboardEvent) {
-	if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229 || ev.key !== 'Enter') return;
-	const shouldSend = prefer.s['chat.sendOnEnter'] ? !(ev.ctrlKey || ev.metaKey || ev.shiftKey) : ev.ctrlKey || ev.metaKey;
-	if (shouldSend) {
-		ev.preventDefault();
-		void send();
-	}
-}
-
-async function chooseFile(ev: PointerEvent) {
-	if (!canWrite.value || sending.value || uploading.value) return;
-	error.value = '';
+async function loadWorks(append: boolean) {
+	const request = ++version;
+	const requestedQuery = query.value.trim();
+	append = append && requestedQuery === loadedQuery;
+	loadedQuery = requestedQuery;
+	loadingWorks.value = true;
+	worksError.value = false;
+	if (!append) { works.value = []; cursor.value = null; }
 	try {
-		const selected = await selectFile({ anchorElement: ev.currentTarget ?? ev.target, multiple: false, label: i18n.ts.selectFile });
-		// The shared picker intentionally stays pending when its menu is dismissed.
-		if (!disposed && !sending.value && canWrite.value) file.value = selected;
+		const result = await misskeyApi('community/works', { limit: 12, query: requestedQuery, untilId: append ? cursor.value ?? undefined : undefined });
+		if (disposed || request !== version) return;
+		works.value = append ? [...works.value, ...result.items.filter(work => !works.value.some(existing => existing.id === work.id))] : result.items;
+		cursor.value = result.nextCursor;
 	} catch {
-		if (!disposed) error.value = t.attachmentFailed;
+		if (!disposed && request === version) worksError.value = true;
+	} finally {
+		if (!disposed && request === version) loadingWorks.value = false;
 	}
+}
+
+function selectWork(work: CommunityWork) {
+	if (!canWrite.value || sending.value) return;
+	selection.value = { text: communityWorkMessage(work.id), work };
+	showWorks.value = false;
+	error.value = '';
+}
+
+function chooseEmoji(event: MouseEvent) {
+	if (!canWrite.value || sending.value) return;
+	closePicker?.();
+	const { dispose } = os.popup(MkEmojiPickerDialog, { anchorElement: event.currentTarget as HTMLElement, showPinned: false, choseAndClose: true }, {
+		done: (emoji: string) => {
+			if (disposed || !canWrite.value || sending.value) return;
+			const name = /^:([\w+-]+):$/.exec(emoji)?.[1];
+			if (!(name ? customEmojisMap.has(name) : new RegExp(emojiRegex.source).exec(emoji)?.[0] === emoji)) {
+				error.value = t.chooseEmojiHint;
+				return;
+			}
+			selection.value = { text: emoji };
+			showWorks.value = false;
+			error.value = '';
+		},
+		closed: () => { dispose(); closePicker = undefined; },
+	});
+	closePicker = dispose;
 }
 
 async function send() {
-	if (!canSend.value || sending.value || uploading.value) return;
+	if (!canWrite.value || !selection.value || sending.value || !peer.value) return;
 	sending.value = true;
 	error.value = '';
-	const draftKey = getDraftKey();
-	const submittedText = text.value;
-	const payload = { text: submittedText.trim() || undefined, fileId: file.value?.id };
+	const userId = peer.value.id;
+	const content = selection.value.text;
 	try {
-		const message = props.user
-			? await misskeyApi('chat/messages/create-to-user', { ...payload, toUserId: props.user.id })
-			: await misskeyApi('chat/messages/create-to-room', { ...payload, toRoomId: props.room!.id });
-		// The composer may have unmounted while the request succeeded. Remove only
-		// this exact submitted draft, preserving newer drafts from another instance.
-		try {
-			const drafts = readDrafts();
-			const saved = drafts[draftKey]?.data;
-			if (saved?.text === submittedText && saved.file?.id === payload.fileId) {
-				delete drafts[draftKey];
-				miLocalStorage.setItem('chatMessageDrafts', JSON.stringify(drafts));
-			}
-		} catch { /* A storage failure must not turn a successful send into a retry. */ }
-		if (disposed) return;
+		const current = await misskeyApi('users/show', { userId });
+		if (disposed || props.user?.id !== userId) return;
+		peer.value = current;
+		if (!canPrivateMessage(current, $i.id)) { error.value = t.mutualRequired; return; }
+		const message = await misskeyApi('chat/messages/create-to-user', { toUserId: userId, text: content });
+		if (disposed || props.user?.id !== userId) return;
 		emit('sent', message);
-		text.value = '';
-		file.value = null;
-		saveDraft();
-		nextTick(() => textareaEl.value?.focus());
-	} catch {
-		if (!disposed) error.value = t.sendFailed;
+		selection.value = null;
+	} catch (failure) {
+		if (!disposed) error.value = privateMessageError(failure);
 	} finally {
 		if (!disposed) sending.value = false;
 	}
 }
 
-function insertEmoji(ev: MouseEvent) {
-	if (!canWrite.value || sending.value) return;
-	const target = ev.currentTarget ?? ev.target;
-	if (target == null) return;
-	textareaReadOnly.value = true;
-	let pos = textareaEl.value?.selectionStart ?? 0;
-	let posEnd = textareaEl.value?.selectionEnd ?? text.value.length;
-	emojiPicker.show(target as HTMLElement, emoji => {
-		text.value = text.value.substring(0, pos) + emoji + text.value.substring(posEnd);
-		pos += emoji.length;
-		posEnd = pos;
-	}, () => {
-		textareaReadOnly.value = false;
-		nextTick(() => textareaEl.value?.focus());
-	});
-}
-
-onMounted(() => {
-	if (textareaEl.value) autocompleteInstance = new Autocomplete(textareaEl.value, text);
-	const draft = readDrafts()[getDraftKey()];
-	if (draft?.data && typeof draft.data.text === 'string') {
-		text.value = draft.data.text;
-		file.value = draft.data.file ?? null;
-	}
-});
-
-onBeforeUnmount(() => {
-	disposed = true;
-	autocompleteInstance?.detach();
-});
+onBeforeUnmount(() => { disposed = true; version++; closePicker?.(); window.document.removeEventListener('visibilitychange', onVisible); });
 </script>
 
-<style lang="scss" module>
-.root { position: relative; border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius); overflow: clip; background: var(--MI_THEME-panel); }
-.root:focus-within { border-color: var(--MI_THEME-accent); }
-.textarea { display: block; width: 100%; min-width: 0; min-height: 96px; max-height: 240px; padding: 16px; margin: 0; resize: vertical; font: inherit; font-size: 16px; line-height: 1.6; color: var(--MI_THEME-fg); background: var(--MI_THEME-panel); border: 0; box-sizing: border-box; field-sizing: content; }
-.textarea:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -3px; }
-.textarea::placeholder { color: var(--MI_THEME-fg); opacity: .8; }
-.footer { padding: 0 8px 8px; }
-.file { display: flex; gap: 8px; align-items: center; padding: 4px 16px; font-size: 14px; }
-.file span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.file button { flex-shrink: 0; width: 44px; height: 44px; }
-.buttons { display: flex; align-items: center; gap: 4px; }
-.button { min-width: 44px; min-height: 44px; border-radius: var(--MI-radius); }
-.button:hover:not(:disabled) { background: var(--MI_THEME-buttonHoverBg); }
-.root button:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
-.button:disabled { opacity: .55; cursor: not-allowed; }
-.send { display: flex; gap: 8px; align-items: center; justify-content: center; margin-left: auto; padding-inline: 16px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); }
-.send:hover:not(:disabled) { background: var(--MI_THEME-accent); filter: brightness(.95); }
-.count { font-size: 12px; font-variant-numeric: tabular-nums; }
-.hint { margin: 4px 8px; font-size: 12px; line-height: 1.5; }
-.error { margin: 8px 16px; font-size: 14px; color: var(--MI_THEME-error); }
+<style module lang="scss">
+.root { padding: 14px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius); background: var(--MI_THEME-panel); min-width: 0; }
+.hint { margin: 0 0 12px; font-size: 13px; line-height: 1.6; }
+.refresh { min-height: 44px; margin-bottom: 12px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.action, .send { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 14px; border-radius: var(--MI-radius); }
+.action { background: var(--MI_THEME-buttonBg); }
+.action:hover:not(:disabled) { background: var(--MI_THEME-buttonHoverBg); }
+.root button:disabled { opacity: .5; cursor: not-allowed; }
+.root :is(button, input):focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; }
+.picker { padding-block: 8px; }
+.search { display: flex; gap: 8px; margin-bottom: 10px; }
+.search input { min-width: 0; flex: 1; min-height: 44px; padding: 8px 10px; box-sizing: border-box; font: inherit; font-size: 16px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius); background: var(--MI_THEME-bg); color: var(--MI_THEME-fg); }
+.search > button { padding: 0 12px; min-height: 44px; }
+.works { max-height: min(260px, 35dvh); overflow-y: auto; overscroll-behavior: contain; }
+.work { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border-radius: var(--MI-radius); text-align: start; }
+.work:hover:not(:disabled) { background: var(--MI_THEME-buttonHoverBg); }
+.work img { width: 48px; height: 48px; flex-shrink: 0; object-fit: cover; border-radius: var(--MI-radius); }
+.work > span { min-width: 0; display: grid; gap: 4px; }
+.work strong { font-size: 14px; overflow-wrap: anywhere; }
+.work small { font-size: 12px; }
+.more { min-height: 44px; width: 100%; }
+.selection { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 12px; margin-bottom: 12px; background: var(--MI_THEME-buttonBg); border-radius: var(--MI-radius); }
+.selection > :first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.selection > button { flex-shrink: 0; width: 44px; height: 44px; }
+.footer { display: flex; justify-content: flex-end; }
+.send { background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); }
+.error { font-size: 14px; color: var(--MI_THEME-error); overflow-wrap: anywhere; }
 </style>

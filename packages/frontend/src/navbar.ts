@@ -32,7 +32,7 @@ export const navbarItemDef = reactive<{
 		title: i18n.ts.notifications,
 		icon: 'ti ti-bell',
 		show: computed(() => $i != null),
-		indicated: computed(() => $i != null && $i.hasUnreadNotification),
+		indicated: computed(() => $i != null && ($i.hasUnreadNotification || $i.hasUnreadChatMessages)),
 		indicateValue: computed(() => {
 			if (!$i || $i.unreadNotificationsCount === 0) return '';
 

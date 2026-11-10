@@ -56,6 +56,8 @@ import { trackPromise } from '@/misc/promise-tracker.js';
 import { assertCommunityCommentMedia, assertCommunityVideoEdit, hasVideoAttachments, isCommunityReply } from '@/misc/community-comment-media.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CollapsedQueue } from '@/misc/collapsed-queue.js';
+import { ApiError } from '@/server/api/error.js';
+import { communityChatErrors } from '@/misc/community-chat.js';
 import { CacheService } from '@/core/CacheService.js';
 import { isQuote, isRenote } from '@/misc/is-renote.js';
 import { extractUrlsForKeyWordCheck } from '@/misc/extract-urls-for-keyword-check.js';
@@ -627,6 +629,8 @@ export class NoteCreateService implements OnApplicationShutdown {
 		}
 
 		if (data.visibility === 'specified') {
+			// Covers inherited reply visibility and scheduled posts as well as notes/create.
+			if (user.host === null) throw new ApiError(communityChatErrors.directNotesDisabled);
 			if (data.visibleUsers == null) throw new Error('invalid param');
 
 			for (const u of data.visibleUsers) {

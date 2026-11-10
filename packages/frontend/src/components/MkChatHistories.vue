@@ -25,7 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkAcct :class="$style.messageHeaderUsername" :user="item.other!"/>
 				<MkTime :time="item.message.createdAt" :class="$style.messageHeaderTime"/>
 			</header>
-			<div :class="$style.messageBodyText"><span v-if="item.isMe" :class="$style.youSaid">{{ i18n.ts.you }}:</span>{{ item.message.text || (item.message.file ? t.attachmentPreview : '') }}</div>
+			<div :class="$style.messageBodyText"><span v-if="item.isMe" :class="$style.youSaid">{{ i18n.ts.you }}:</span>{{ sharedCommunityWorkId(item.message.text) ? t.sharedWork : item.message.text || (item.message.file ? t.attachmentPreview : '') }}</div>
 		</div>
 	</MkA>
 </div>
@@ -42,6 +42,7 @@ import { i18n } from '@/i18n.js';
 import { ensureSignin } from '@/i.js';
 import MkButton from '@/components/MkButton.vue';
 import { chatText as t } from '@/pages/chat/copy.js';
+import { sharedCommunityWorkId } from '@/pages/chat/private-message.js';
 import { updateCurrentAccount } from '@/accounts.js';
 
 const $i = ensureSignin();

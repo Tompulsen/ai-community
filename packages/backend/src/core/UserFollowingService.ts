@@ -31,6 +31,8 @@ import { UtilityService } from '@/core/UtilityService.js';
 import type { ThinUser } from '@/queue/types.js';
 import Logger from '../logger.js';
 
+import { communityMutualFollowMessage } from '@/misc/community-chat.js';
+
 const logger = new Logger('following/create');
 
 type Local = MiLocalUser | {
@@ -288,12 +290,14 @@ export class UserFollowingService implements OnModuleInit {
 
 		if (alreadyFollowed) return;
 
+		const mutual = follower.host === null && followee.host === null && await this.isMutual(follower.id, followee.id);
+
 		// 通知を作成
 		if (follower.host === null) {
 			const profile = await this.cacheService.userProfileCache.fetch(followee.id);
 
 			this.notificationService.createNotification(follower.id, 'followRequestAccepted', {
-				message: profile.followedMessage,
+				message: mutual ? communityMutualFollowMessage : profile.followedMessage,
 			}, followee.id);
 		}
 
@@ -356,6 +360,9 @@ export class UserFollowingService implements OnModuleInit {
 			// 通知を作成
 			this.notificationService.createNotification(followee.id, 'follow', {
 			}, follower.id);
+			if (mutual) {
+				this.notificationService.createNotification(followee.id, 'followRequestAccepted', { message: communityMutualFollowMessage }, follower.id);
+			}
 		}
 	}
 

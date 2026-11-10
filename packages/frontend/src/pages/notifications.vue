@@ -10,40 +10,33 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkStreamingNotificationsTimeline :class="$style.notifications" :excludeTypes="excludeTypes"/>
 		</div>
 		<div v-else-if="tab === 'mentions'">
-			<MkNotesTimeline :paginator="mentionsPaginator"/>
+			<MkStreamingNotificationsTimeline :class="$style.notifications" :excludeTypes="mentionsExcludeTypes"/>
 		</div>
 		<div v-else-if="tab === 'directNotes'">
-			<MkNotesTimeline :paginator="directNotesPaginator"/>
+			<XChatHome/>
 		</div>
 	</div>
 </PageWithHeader>
 </template>
 
 <script lang="ts" setup>
-import { computed, markRaw, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { notificationTypes } from 'misskey-js';
 import type { PageHeaderItem } from '@/types/page-header.js';
 import MkStreamingNotificationsTimeline from '@/components/MkStreamingNotificationsTimeline.vue';
-import MkNotesTimeline from '@/components/MkNotesTimeline.vue';
+import XChatHome from '@/pages/chat/home.home.vue';
+import { $i } from '@/i.js';
+import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
 import { i18n } from '@/i18n.js';
 import { definePage } from '@/page.js';
-import { Paginator } from '@/utility/paginator.js';
 
-const tab = ref('all');
+const initialTab = new URL(useRouter().getCurrentFullPath(), window.location.origin).searchParams.get('tab');
+const tab = ref(initialTab === 'directNotes' || initialTab === 'mentions' ? initialTab : 'all');
 const includeTypes = ref<string[] | null>(null);
 const excludeTypes = computed(() => includeTypes.value ? notificationTypes.filter(t => !includeTypes.value!.includes(t)) : null);
 
-const mentionsPaginator = markRaw(new Paginator('notes/mentions', {
-	limit: 10,
-}));
-
-const directNotesPaginator = markRaw(new Paginator('notes/mentions', {
-	limit: 10,
-	params: {
-		visibility: 'specified',
-	},
-}));
+const mentionsExcludeTypes = notificationTypes.filter(type => !['mention', 'reply', 'follow', 'followRequestAccepted', 'receiveFollowRequest'].includes(type));
 
 function setFilter(ev: PointerEvent) {
 	const typeItems = notificationTypes.map(t => ({
@@ -86,7 +79,7 @@ const headerTabs = computed(() => [{
 	icon: 'ti ti-at',
 }, {
 	key: 'directNotes',
-	title: i18n.ts.directNotes,
+	title: $i?.hasUnreadChatMessages ? `${i18n.ts.directNotes} · ${i18n.ts.unread}` : i18n.ts.directNotes,
 	icon: 'ti ti-mail',
 }]);
 

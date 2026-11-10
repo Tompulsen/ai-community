@@ -9,8 +9,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div :class="[$style.body, message.file != null ? $style.fullWidth : null]" @contextmenu.stop="onContextmenu">
 		<div :class="$style.header"><MkUserName v-if="!isMe && prefer.s['chat.showSenderName'] && message.fromUser != null" :user="message.fromUser"/></div>
 		<MkFukidashi :class="$style.fukidashi" :tail="isMe ? 'right' : 'left'" :fullWidth="message.file != null" :accented="isMe">
+			<XWorkMessage v-if="workId" :workId="workId"/>
 			<Mfm
-				v-if="message.text"
+				v-else-if="message.text"
 				ref="text"
 				class="_selectable"
 				:text="message.text"
@@ -52,6 +53,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { computed, defineAsyncComponent, provide } from 'vue';
+import XWorkMessage from './work-message.vue';
+import { sharedCommunityWorkId } from './private-message.js';
 import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import { url } from '@@/js/config.js';
@@ -82,7 +85,8 @@ const props = defineProps<{
 }>();
 
 const isMe = computed(() => props.message.fromUserId === $i.id);
-const urls = computed(() => props.message.text ? extractUrlFromMfm(mfm.parse(props.message.text)) : []);
+const workId = computed(() => sharedCommunityWorkId(props.message.text));
+const urls = computed(() => !workId.value && props.message.text ? extractUrlFromMfm(mfm.parse(props.message.text)) : []);
 
 provide(DI.mfmEmojiReactCallback, (reaction) => {
 	if ($i.policies.chatAvailability !== 'available') return;

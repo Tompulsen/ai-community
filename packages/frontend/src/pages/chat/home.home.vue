@@ -8,7 +8,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div><h1 :class="$style.title">{{ t.title }}</h1><p :class="$style.intro">{{ t.intro }}</p></div>
 		<div v-if="$i.policies.chatAvailability === 'available'" :class="$style.actions">
 			<MkButton primary @click="startUser"><i class="ti ti-edit" aria-hidden="true"></i> {{ t.start }}</MkButton>
-			<MkButton @click="createRoom"><i class="ti ti-users-group" aria-hidden="true"></i> {{ t.createRoom }}</MkButton>
 		</div>
 	</header>
 	<MkInfo v-if="$i.policies.chatAvailability !== 'available'">{{ $i.policies.chatAvailability === 'readonly' ? i18n.ts._chat.chatIsReadOnlyForThisAccountOrServer : i18n.ts._chat.chatNotAvailableForThisAccountOrServer }}</MkInfo>
@@ -36,7 +35,7 @@ import MkButton from '@/components/MkButton.vue';
 import MkInfo from '@/components/MkInfo.vue';
 import MkChatHistories from '@/components/MkChatHistories.vue';
 import { i18n } from '@/i18n.js';
-import { misskeyApi } from '@/utility/misskey-api.js';
+import { selectPrivateMessageUser } from './private-message.js';
 import { ensureSignin } from '@/i.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
@@ -45,18 +44,11 @@ const $i = ensureSignin();
 const router = useRouter();
 
 async function startUser() {
-	const user = await os.selectUser({ localOnly: true, includeSelf: false });
-	router.push('/chat/user/:userId', { params: { userId: user.id } });
-}
-
-async function createRoom() {
-	const { canceled, result } = await os.inputText({ title: i18n.ts.name, minLength: 1 });
-	if (canceled || !result.trim()) return;
 	try {
-		const room = await misskeyApi('chat/rooms/create', { name: result.trim() });
-		router.push('/chat/room/:roomId', { params: { roomId: room.id } });
+		const user = await selectPrivateMessageUser($i.id);
+		if (user) router.push('/chat/user/:userId', { params: { userId: user.id } });
 	} catch {
-		os.alert({ type: 'error', text: t.roomFailed });
+		void os.alert({ type: 'error', text: t.sendFailed });
 	}
 }
 </script>

@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <CommunitySurface :key="user.id" section="profile" :profile="profile" :profileAuthorId="user.id" :viewerId="$i?.id" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate">
 	<template #profileHeader="{ mobile, selectTab }">
 		<ProfileHeader :profile="profile" :mobile="mobile" @navigate="navigate" @favorites="selectTab('favorites')">
-			<template #actions><MkFollowButton v-if="$i?.id !== user.id" :user="user" full/></template>
+			<template #actions><MkFollowButton v-if="$i?.id !== user.id" :user="user" full/><MkButton v-if="$i && $i.id !== user.id && user.host === null" @click="navigate(`/chat/user/${user.id}`)"><i class="ti ti-mail" aria-hidden="true"></i> {{ chatText.title }}</MkButton></template>
 			<template #description><Mfm :text="user.description ?? ''" :isNote="false" :author="user"/></template>
 		</ProfileHeader>
 	</template>
@@ -24,6 +24,8 @@ import { createBrowserCommunityGateway } from '../community/browser-gateway.js';
 import { rememberCommunityWorkReturnPath } from '../community/work-navigation.js';
 import type { CommunityProfile } from '../community/types.js';
 import MkFollowButton from '@/components/MkFollowButton.vue';
+import MkButton from '@/components/MkButton.vue';
+import { chatText } from '@/pages/chat/copy.js';
 import { $i, iAmModerator } from '@/i.js';
 import { instance } from '@/instance.js';
 import { useRouter } from '@/router.js';

@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <PageWithHeader v-model:tab="tab" :reversed="tab === 'chat'" :tabs="headerTabs" :actions="headerActions">
 	<div v-if="tab === 'chat'" class="_spacer" style="--MI_SPACER-w: 700px;">
 		<div class="_gaps">
-			<MkA to="/chat" :class="$style.back"><i class="ti ti-arrow-left" aria-hidden="true"></i> {{ t.back }}</MkA>
+			<MkA to="/my/notifications?tab=directNotes" :class="$style.back"><i class="ti ti-arrow-left" aria-hidden="true"></i> {{ t.back }}</MkA>
 			<div v-if="syncFailed" role="alert" class="_gaps_s"><span>{{ t.syncFailed }}</span><MkButton :wait="syncing" @click="refreshMessages">{{ t.retry }}</MkButton></div>
 			<div v-if="initializing">
 				<MkLoading/>
@@ -25,7 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<div v-else-if="user.chatScope === 'none'">{{ i18n.ts._chat.thisUserNotAllowedChatAnyone }}</div>
 					</template>
 					<template v-else-if="room">
-						<div>{{ i18n.ts._chat.inviteUserToChat }}</div>
+						<div>{{ t.privateOnly }}</div>
 					</template>
 				</div>
 			</div>
@@ -68,7 +68,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 
 	<div v-else-if="tab === 'members'" class="_spacer" style="--MI_SPACER-w: 700px;">
-		<XMembers v-if="room != null" :room="room" @inviteUser="inviteUser"/>
+		<XMembers v-if="room != null" :room="room"/>
 	</div>
 
 	<div v-else-if="tab === 'info'" class="_spacer" style="--MI_SPACER-w: 700px;">
@@ -459,16 +459,6 @@ onBeforeUnmount(() => {
 	window.document.removeEventListener('visibilitychange', onVisibilitychange);
 });
 
-async function inviteUser() {
-	if (room.value == null) return;
-
-	const invitee = await os.selectUser({ includeSelf: false, localOnly: true });
-	os.apiWithDialog('chat/rooms/invitations/create', {
-		roomId: room.value.id,
-		userId: invitee.id,
-	});
-}
-
 async function leaveRoom() {
 	if (room.value == null) return;
 
@@ -487,24 +477,12 @@ async function leaveRoom() {
 function showMenu(ev: PointerEvent) {
 	const menuItems: MenuItem[] = [];
 
-	if (room.value) {
-		if (room.value.ownerId === $i.id) {
-			menuItems.push({
-				text: i18n.ts._chat.inviteUser,
-				icon: 'ti ti-user-plus',
-				action: () => {
-					inviteUser();
-				},
-			});
-		} else {
-			menuItems.push({
-				text: i18n.ts._chat.leave,
-				icon: 'ti ti-x',
-				action: () => {
-					leaveRoom();
-				},
-			});
-		}
+	if (room.value && room.value.ownerId !== $i.id) {
+		menuItems.push({
+			text: i18n.ts._chat.leave,
+			icon: 'ti ti-x',
+			action: leaveRoom,
+		});
 	}
 
 	os.popupMenu(menuItems, ev.currentTarget ?? ev.target);
@@ -539,7 +517,7 @@ const headerTabs = computed(() => room.value ? [{
 	icon: 'ti ti-search',
 }]);
 
-const headerActions = computed<PageHeaderItem[]>(() => room.value ? [{
+const headerActions = computed<PageHeaderItem[]>(() => room.value && room.value.ownerId !== $i.id ? [{
 	icon: 'ti ti-dots',
 	handler: showMenu,
 }] : []);

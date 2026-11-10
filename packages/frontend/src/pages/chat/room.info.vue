@@ -5,15 +5,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div class="_gaps">
-	<MkInput v-model="name_" :disabled="!isOwner">
+	<MkInput v-model="name_" disabled>
 		<template #label>{{ i18n.ts.name }}</template>
 	</MkInput>
 
-	<MkTextarea v-model="description_" :disabled="!isOwner">
+	<MkTextarea v-model="description_" disabled>
 		<template #label>{{ i18n.ts.description }}</template>
 	</MkTextarea>
-
-	<MkButton v-if="isOwner" primary @click="save">{{ i18n.ts.save }}</MkButton>
 
 	<hr>
 
@@ -50,14 +48,6 @@ const isOwner = computed(() => {
 
 const name_ = ref(props.room.name);
 const description_ = ref(props.room.description);
-
-function save() {
-	os.apiWithDialog('chat/rooms/update', {
-		roomId: props.room.id,
-		name: name_.value,
-		description: description_.value,
-	});
-}
 
 async function del() {
 	const { canceled } = await os.confirm({
