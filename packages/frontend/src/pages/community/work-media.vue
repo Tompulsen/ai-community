@@ -14,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-else :class="[$style.message, $style.textWork]"><i class="ti ti-file-text" aria-hidden="true"></i><h2>{{ work.title }}</h2><p>{{ work.text }}</p><a v-for="file in work.files" :key="file.id" :href="safeWebUrl(file.url)" target="_blank" rel="noopener noreferrer"><i class="ti ti-file-download" aria-hidden="true"></i> {{ file.name }}</a></div>
 		<template v-if="media.length > 1"><button type="button" class="_button" :class="[$style.switch, $style.previous]" :aria-label="t.previous" :disabled="index === 0" @click="index--"><i class="ti ti-chevron-left" aria-hidden="true"></i></button><button type="button" class="_button" :class="[$style.switch, $style.next]" :aria-label="t.next" :disabled="index === media.length - 1" @click="index++"><i class="ti ti-chevron-right" aria-hidden="true"></i></button><span :class="$style.counter" aria-live="polite">{{ index + 1 }} / {{ media.length }}</span></template>
 	</section>
-	<div v-if="!immersive && (work.files.length > 1 || work.referenceFiles?.length)" :class="$style.materialStrip"><WorkMaterials :work="work"/></div>
+	<div v-if="!immersive && (work.files.length || work.referenceFiles?.length)" :class="$style.materialStrip"><WorkMaterials :work="work"/></div>
 </div>
 </template>
 

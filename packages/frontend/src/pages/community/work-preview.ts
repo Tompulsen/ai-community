@@ -8,7 +8,8 @@ import { getType, isPreviewable } from '@/utility/lightbox.js';
 import * as os from '@/os.js';
 
 export async function openWorkMedia(work: CommunityWork, id: string, revealed: string[] = []) {
-	const files = [...work.files, ...(work.referenceFiles ?? [])].filter((file, index, all) => all.findIndex(other => other.id === file.id) === index && safeWebUrl(file.url) && (!file.isSensitive || revealed.includes(file.id)));
+	const group = work.files.some(file => file.id === id) ? work.files : work.referenceFiles ?? [];
+	const files = group.filter((file, index, all) => all.findIndex(other => other.id === file.id) === index && safeWebUrl(file.url) && (!file.isSensitive || revealed.includes(file.id)));
 	const selected = files.find(file => file.id === id);
 	if (!selected) return;
 	if (!isPreviewable(selected.type)) { window.open(safeWebUrl(selected.url), '_blank', 'noopener,noreferrer'); return; }

@@ -83,6 +83,7 @@ import { CommunityShareButton } from "./community-share-button";
 import { QuotaPricingCard } from "./quota-pricing-card";
 import {
   findCommunityWorkspace,
+  resolveCommunityRemixModel,
   startCommunityChat,
 } from "../utils/community-entry";
 import {
@@ -1764,12 +1765,7 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
   const remixModels = useAllModels();
   const remixModelStatus = useAccessStore((state) => state.modelListStatus);
   useCommunityRemix("chat", remixModelStatus, async (work, check) => {
-    const model = remixModels.find(
-      (item) =>
-        item.available &&
-        item.name === work.model &&
-        item.provider?.providerName !== CUSTOM_MODEL_PROVIDER,
-    );
+    const model = resolveCommunityRemixModel(work, remixModels);
     const workspace = findCommunityWorkspace(work.kind);
     const targetDraftKey =
       workspace && workspace.id !== session.id
@@ -1805,7 +1801,7 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
     )
       throw new Error("工作区草稿已变化，请重试填入。");
     const target = await startCommunityChat(
-      { id: work.requestId, kind: work.kind, model: work.model },
+      { id: work.requestId, kind: work.kind, model: model.model },
       remixModels,
     );
     const store = useChatStore.getState();
@@ -1813,9 +1809,8 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
       active.creationKind = work.kind;
       active.activeSkillId = undefined;
       active.mask.context = [];
-      active.mask.modelConfig.model = work.model;
-      active.mask.modelConfig.providerName =
-        model?.provider?.providerName || "OpenAI";
+      active.mask.modelConfig.model = model.model;
+      active.mask.modelConfig.providerName = model.providerName;
       active.mask.modelConfig.template = DEFAULT_INPUT_TEMPLATE;
       active.mask.syncGlobalConfig = false;
       active.remixSourceWorkId = work.sourceWorkId;

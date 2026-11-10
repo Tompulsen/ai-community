@@ -61,9 +61,11 @@ jest.unstable_mockModule("@/app/utils/model-capabilities", () => ({
       : null,
   }),
 }));
-const { startCommunityChat, findCommunityWorkspace } = await import(
-  "../app/utils/community-entry"
-);
+const {
+  startCommunityChat,
+  findCommunityWorkspace,
+  resolveCommunityRemixModel,
+} = await import("../app/utils/community-entry");
 const models = [
   {
     name: "gpt-image-2.6",
@@ -85,6 +87,51 @@ beforeEach(() => {
   owner = "user-1";
   active = true;
   restore = undefined;
+});
+
+test("remixing a manual upload keeps a usable model from its matching workspace", async () => {
+  const target = await startCommunityChat(imageEntry, models);
+  const alternatives = [
+    ...models,
+    { ...models[0], name: "gpt-image-other", isDefault: true },
+  ];
+  expect(
+    resolveCommunityRemixModel({ kind: "image", model: "" }, alternatives)
+      .model,
+  ).toBe(target.mask.modelConfig.model);
+  expect(
+    resolveCommunityRemixModel(
+      { kind: "image", model: "explicit-unavailable" },
+      alternatives,
+    ).model,
+  ).toBe("explicit-unavailable");
+});
+
+test("missing remix models use only available models of the requested category", () => {
+  const available = [
+    ...models,
+    { ...models[0], name: "gpt-image-default", isDefault: true },
+    { ...models[0], name: "gpt-text" },
+    { ...models[0], name: "veo-video" },
+    { ...models[0], name: "gpt-image-disabled", available: false },
+  ];
+  expect(
+    resolveCommunityRemixModel({ kind: "image", model: "" }, available).model,
+  ).toBe("gpt-image-default");
+  expect(
+    resolveCommunityRemixModel({ kind: "text", model: "" }, available).model,
+  ).toBe("gpt-text");
+  expect(
+    resolveCommunityRemixModel({ kind: "video", model: "" }, available).model,
+  ).toBe("veo-video");
+  expect(
+    resolveCommunityRemixModel({ kind: "video", model: "" }, models).model,
+  ).toBe("");
+  expect(
+    resolveCommunityRemixModel({ kind: "image", model: "" }, [
+      { ...models[0], available: false },
+    ]).model,
+  ).toBe("");
 });
 
 test("repeated and simultaneous entries reuse one named image workspace", async () => {

@@ -16,7 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<p v-if="captionDescription" :class="$style.description">{{ captionDescription }}</p>
 				<div :class="$style.captionFooter"><WorkTags :tags="work.tags"/><button type="button" class="_button" :aria-expanded="detailsOpen" :aria-controls="detailsId" data-testid="work-expand-details" @click="detailsOpen = !detailsOpen">{{ detailsOpen ? t.collapseDetails : t.expandDetails }}<i :class="detailsOpen ? 'ti ti-chevron-down' : 'ti ti-chevron-up'" aria-hidden="true"></i></button></div>
 				<div v-if="detailsOpen" :id="detailsId" :class="$style.expandedDetails">
-					<section :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.generation?.prompt || work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
+					<section v-if="work.generation?.prompt ?? work.text" :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.generation?.prompt ?? work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
 					<p v-if="work.generation?.model || work.model" :class="$style.meta">{{ work.generation?.model || work.model }}</p>
 					<p v-if="work.license" :class="$style.meta">{{ t.license }} · {{ work.license }}</p>
 					<a v-if="safeWebUrl(work.sourceUrl)" :class="$style.source" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.source }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
@@ -33,7 +33,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div></header>
 			<h1>{{ work.title }}</h1>
 			<WorkTags :tags="work.tags"/>
-			<section :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
+			<p v-if="work.generation && work.text && work.text !== work.generation.prompt" :class="$style.description">{{ work.text }}</p>
+			<section v-if="work.generation?.prompt ?? work.text" :class="$style.prompt"><h2>{{ t.prompt }}</h2><p><Mfm :text="work.generation?.prompt ?? work.text" :plain="true"/></p><button v-if="work.generation?.prompt ?? work.text" type="button" class="_button" @click="copyPrompt"><i class="ti ti-copy" aria-hidden="true"></i> {{ t.copyPrompt }}</button><p v-if="copyFailed" role="alert">{{ t.copyFailed }}</p></section>
 			<p v-if="work.model" :class="$style.meta">{{ work.generation?.model || work.model }}</p>
 			<p v-if="work.license" :class="$style.meta">{{ t.license }} · {{ work.license }}</p>
 			<a v-if="safeWebUrl(work.sourceUrl)" :class="$style.source" :href="safeWebUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ t.source }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
@@ -153,6 +154,7 @@ definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', 
 .caption.expanded { max-height: calc(100% - 100px); overflow: auto; overscroll-behavior: contain; padding: 14px; left: 8px; right: 76px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-divider); border-radius: 12px; text-shadow: none; box-sizing: border-box; h1, .description { display: block; -webkit-line-clamp: unset; overflow: visible; } &::before { display: none; } }
 .caption.expanded.withVideo { max-height: calc(100% - var(--work-video-controls-height) - 88px); }
 .caption.expanded :focus-visible { outline-color: var(--MI_THEME-accent); }
+.sidebar .description { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: pre-wrap; }
 .expandedDetails { padding-top: 8px; .date, .prompt h2 { color: var(--MI_THEME-fgTransparentWeak); } }
 .mobileRemix { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 52px; min-height: 64px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); span { display: grid; place-items: center; width: 42px; height: 42px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); border: 2px solid var(--MI_THEME-fgOnAccent); border-radius: 12px; text-shadow: none; } i { font-size: 25px; } strong { font-size: 12px; line-height: 1.25; white-space: nowrap; } }
 .commentsOpen .mobileMedia { height: max(36dvh, calc(100dvh - 680px)); }

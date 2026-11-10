@@ -57,7 +57,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
 					<p v-if="composerOnly" :class="$style.editHint">{{ directComment ? shareText.directHint : shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
 					<p v-if="hasVideo && generationRecord" :class="$style.editHint">{{ shareText.videoCommunityOnly }}</p>
-					<div v-if="composerOnly && files.length" :class="$style.sharePreview"><template v-for="file in files" :key="file.id"><video v-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" controls muted playsinline preload="metadata" :aria-label="file.name"></video><img v-else-if="file.type.startsWith('image/') && safeWebUrl(file.url)" :src="safeWebUrl(file.thumbnailUrl || file.url)" :alt="file.name"/></template></div>
 					<form :class="$style.form" novalidate @submit.prevent="submit">
 						<div :class="$style.editorRow">
 							<div :class="$style.composerAvatar"><slot name="composerAvatar"><i class="ti ti-pencil" aria-hidden="true"></i></slot></div>
@@ -68,33 +67,51 @@ SPDX-License-Identifier: AGPL-3.0-only
 									<small :class="$style.fieldHint">{{ tagNotice || t.tagsHint }}</small>
 								</div>
 								<label :class="$style.fieldLabel" :for="descriptionId">{{ t.description }}</label>
-								<textarea :id="descriptionId" ref="contentInput" v-model="draft.text" :aria-label="t.description" rows="5" maxlength="2500" :placeholder="t.descriptionPlaceholder" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
+								<textarea :id="descriptionId" ref="contentInput" v-model="draft.text" :aria-label="t.description" rows="3" maxlength="2500" :placeholder="t.descriptionPlaceholder" :disabled="submitting || !!openingId" :readonly="emojiOpen"></textarea>
 							</div>
 						</div>
-						<p v-if="promptExcerpt" :class="$style.editHint">{{ t.promptExcerpt }}</p>
+						<div v-if="!directComment" :class="$style.promptField">
+							<label :class="$style.fieldLabel" :for="promptId">{{ t.creationPrompt }}<small>{{ draft.prompt.length }} / 100000</small></label>
+							<textarea :id="promptId" v-model="draft.prompt" rows="4" maxlength="100000" :placeholder="t.promptPlaceholder" :disabled="submitting || !!openingId" data-testid="submission-prompt"></textarea>
+							<small :class="$style.fieldHint">{{ t.promptHint }}</small>
+						</div>
 						<p v-if="generationRecord" :class="$style.editHint">{{ directComment ? `${t.model} · ${generationRecord.model}` : shareText.provenanceHint }}</p>
 						<p v-if="directComment && generationRecord?.sourceWorkId" :class="$style.editHint" data-testid="direct-comment-source"><strong>{{ shareText.directLabel }}</strong> · <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a><br/>{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</p>
 						<div v-if="!directComment" :class="$style.destinationRow"><label :class="$style.destinationSelect"><i :class="categoryIcon(draft.category)" aria-hidden="true"></i><span>{{ t.destination }}</span><select :value="draft.category" :aria-label="t.category" :disabled="submitting || !!openingId || choosing || emojiOpen" @change="changeCategory(($event.target as HTMLSelectElement).value as CommunityCategory)"><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.title }}</option></select></label><span v-if="!editing" :class="$style.publishHint">{{ publicationMode === 'after' ? t.publicVisibility : t.approvalVisibility }}</span></div>
-						<ul v-if="files.length" :class="$style.fileList"><li v-for="file in files" :key="file.id"><i :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i><span>{{ file.name }}</span><button type="button" :class="$style.quiet" :disabled="submitting || !!openingId || choosing || emojiOpen" :aria-label="`${t.removeFile} ${file.name}`" @click="files = files.filter(f => f.id !== file.id)"><i class="ti ti-x" aria-hidden="true"></i></button></li></ul>
-						<section v-if="referenceFiles.length" :class="$style.referenceSection" :aria-label="shareText.references">
-							<h3>{{ shareText.references }} · {{ selectedReferences.length }} / {{ referenceFiles.length }}</h3>
-							<p>{{ shareText.referenceHint }}</p>
-							<div :class="$style.referenceGrid"><label v-for="file in referenceFiles" :key="file.id"><img :src="file.thumbnailUrl || file.url" :alt="file.name"/><span><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="submitting"/>{{ file.name }}</span></label></div>
+						<section v-for="group in attachmentGroups" :key="group.role" :class="$style.attachmentSection" :aria-label="group.label" :data-testid="`submission-${group.role}`">
+							<h3>{{ group.label }} <span>{{ group.files.length }} / 16</span></h3>
+							<p :class="$style.fieldHint">{{ group.hint }}</p>
+							<div v-if="!directComment" :class="$style.attachmentTools">
+								<template v-if="group.role === 'output'"><button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.secondary" :disabled="attachmentsBusy || group.files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i>{{ tool.label }}</button></template>
+								<button v-else type="button" :class="$style.secondary" :disabled="attachmentsBusy || group.files.length >= 16" @click="openUpload('image', 'reference')"><i class="ti ti-photo-plus" aria-hidden="true"></i>{{ t.uploadReferences }}</button>
+								<button type="button" :class="$style.quiet" :disabled="attachmentsBusy || group.files.length >= 16" :aria-label="group.role === 'reference' ? t.existingReferences : t.existingFiles" @click="chooseFiles($event, group.role)"><i class="ti ti-folder" aria-hidden="true"></i>{{ t.fromUploaded }}</button>
+							</div>
+							<div v-if="group.files.length" :class="$style.attachmentGrid">
+								<article v-for="(file, index) in group.files" :key="file.id" :class="$style.attachment" :data-file-id="file.id">
+									<div :class="$style.attachmentPreview">
+										<button v-if="file.isSensitive && !revealedFiles.includes(file.id)" type="button" :class="$style.quiet" @click="revealedFiles.push(file.id)"><i class="ti ti-eye-off" aria-hidden="true"></i>{{ t.showSensitive }}</button>
+										<video v-else-if="file.type.startsWith('video/') && safeWebUrl(file.url)" :src="safeWebUrl(file.url)" :poster="safeWebUrl(file.thumbnailUrl)" :aria-label="file.name" controls playsinline preload="metadata"></video>
+										<img v-else-if="attachmentPreview(file) && !failedPreviews.includes(file.id)" :src="attachmentPreview(file)" :alt="file.name" @error="failedPreviews.push(file.id)"/>
+										<i v-else :class="categoryIcon(file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : 'resource')" aria-hidden="true"></i>
+									</div>
+									<label v-if="group.role === 'reference'" :class="$style.referenceChoice"><input v-model="selectedReferences" type="checkbox" :value="file.id" :disabled="attachmentsBusy"/>{{ t.referenceImage }} {{ index + 1 }}</label><strong v-else>{{ t.createdWork }} {{ index + 1 }}</strong>
+									<span :class="$style.attachmentName">{{ file.name }}</span>
+									<div :class="$style.attachmentActions"><button v-if="!directComment && file.type.startsWith('image/')" type="button" :class="$style.quiet" :disabled="attachmentsBusy" @click="moveAttachment(file, group.role)">{{ group.role === 'output' ? t.moveToReferences : t.moveToWorks }}</button><button type="button" :class="$style.quiet" :disabled="attachmentsBusy" :aria-label="`${t.removeFile} ${file.name}`" @click="removeAttachment(file.id, group.role)"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+								</article>
+							</div>
 						</section>
 						<section v-if="generationRecord?.sourceWorkId && !editing && !directComment && !hasVideo" :class="$style.referenceSection" data-testid="source-comment-option">
 							<label :class="$style.check"><input v-model="shareToSource" type="checkbox" :disabled="submitting || !!openingId"/>{{ shareText.shareToSource }}</label>
 							<p>{{ publicationMode === 'after' ? shareText.sourcePublicHint : shareText.sourceReviewHint }} <a :href="`/community/work/${generationRecord.sourceWorkId}`" target="_blank" rel="noopener noreferrer">{{ shareText.viewSource }}</a></p>
 						</section>
 						<div v-if="detailsOpen && !directComment" :id="detailsId" :class="$style.extraFields">
-							<label>{{ t.model }}<input v-model="draft.model" :readonly="!!generationRecord" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label>
+							<label>{{ t.model }}<input v-model="draft.model" maxlength="100" :placeholder="t.modelPlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.source }}<input ref="sourceInput" v-model="draft.sourceUrl" type="url" maxlength="2000" :placeholder="t.sourcePlaceholder" :disabled="submitting || !!openingId"/></label><label>{{ t.license }}<input v-model="draft.license" maxlength="200" :placeholder="t.licensePlaceholder" :disabled="submitting || !!openingId"/></label>
 						</div>
 						<label :class="$style.check"><input v-model="rights" type="checkbox" :disabled="submitting || !!openingId"/>{{ t.rights }}</label>
 						<p v-if="formError" role="alert" :class="$style.error">{{ formError }}</p><button v-if="editConflict" type="button" :class="$style.secondary" :disabled="submitting || !!openingId" @click="reloadEditor">{{ t.reloadEditor }}</button>
 						<footer :class="$style.composerFooter">
 							<div :class="$style.composerTools">
 								<div v-if="!directComment" :class="$style.iconTools" role="group" :aria-label="t.composerTools">
-									<button v-for="tool in uploadTools" :key="tool.kind" type="button" :class="$style.iconButton" :aria-label="tool.label" :title="tool.label" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="openUpload(tool.kind)"><i :class="tool.icon" aria-hidden="true"></i></button>
-									<button type="button" :class="$style.iconButton" :aria-label="t.existingFiles" :title="t.existingFiles" :disabled="submitting || !!openingId || choosing || emojiOpen || files.length >= 16" @click="chooseFiles"><i class="ti ti-folder" aria-hidden="true"></i></button>
 									<button type="button" :class="$style.iconButton" :aria-label="t.emoji" :title="t.emoji" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="insertEmoji"><i class="ti ti-mood-happy" aria-hidden="true"></i></button>
 									<button type="button" :class="$style.iconButton" :aria-label="t.insertCode" :title="t.insertCode" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="insertCode"><i class="ti ti-code" aria-hidden="true"></i></button>
 									<button type="button" :class="$style.iconButton" :aria-label="t.addSource" :title="t.addSource" :disabled="submitting || !!openingId || choosing || emojiOpen" @click="openSource"><i class="ti ti-arrow-up-right" aria-hidden="true"></i></button>
@@ -269,11 +286,11 @@ const feedSections = [
 ];
 const tagTrigger = ref<HTMLButtonElement>();
 const descriptionId = useId();
+const promptId = useId();
 const tagPickerOpen = ref(false);
 const filterPickerOpen = ref(false);
 const tagNotice = ref('');
 const knownTags = ref<CommunityTag[]>([]);
-const promptExcerpt = ref(false);
 const contentInput = ref<HTMLTextAreaElement>();
 const sourceInput = ref<HTMLInputElement>();
 const detailsOpen = ref(false);
@@ -325,6 +342,7 @@ const emojiOpen = ref(false);
 const uploadInput = ref<HTMLInputElement>();
 const uploadAccept = ref('');
 const uploadKind = ref<CommunityCategory>('resource');
+const uploadRole = ref<'output' | 'reference'>('output');
 const uploadTools = [
 	{ kind: 'image', label: t.uploadImages, icon: 'ti ti-photo' },
 	{ kind: 'video', label: t.uploadVideos, icon: 'ti ti-video' },
@@ -353,6 +371,12 @@ const formError = ref('');
 const files = ref<CommunityFile[]>([]);
 const referenceFiles = ref<CommunityFile[]>([]);
 const selectedReferences = ref<string[]>([]);
+const revealedFiles = ref<string[]>([]), failedPreviews = ref<string[]>([]);
+const attachmentsBusy = computed(() => submitting.value || !!openingId.value || choosing.value || emojiOpen.value);
+const attachmentGroups = computed(() => [
+	{ role: 'output' as const, label: t.createdWorks, hint: t.worksHint, files: files.value },
+	...(!directComment.value ? [{ role: 'reference' as const, label: t.referenceImages, hint: t.referencesHint, files: referenceFiles.value }] : []),
+]);
 const generationRecord = ref<CommunityWork['generation']>(null);
 const shareToSource = computed({
 	get: () => generationRecord.value?.shareToSource === true,
@@ -368,16 +392,15 @@ const closingComposer = ref(false);
 let editRead: AbortController | undefined;
 let editBaseline = '';
 let newDraft: { content: typeof draft; files: CommunityFile[]; rights: boolean; details: boolean; references: CommunityFile[]; selected: string[]; generation: CommunityWork['generation']; } | undefined;
-const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
+const draft = reactive({ category: (currentCategory.value?.id ?? 'resource') as CommunityCategory, title: '', text: '', prompt: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
 if (props.composerOnly && props.initialDraft) {
 	const initial = props.initialDraft;
-	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.destination !== 'source-comment' && initial.generation?.prompt.trim() ? initial.generation.prompt.slice(0, 2500).replace(/[\uD800-\uDBFF]$/, '') : initial.text, model: initial.model, tagIds: [...(initial.tagIds ?? [])] });
-	promptExcerpt.value = initial.destination !== 'source-comment' && (initial.generation?.prompt.length ?? 0) > 2500;
+	Object.assign(draft, { category: initial.category, title: initial.title, text: initial.text, prompt: initial.generation?.prompt ?? '', model: initial.model, tagIds: [...(initial.tagIds ?? [])] });
 	files.value = initial.files.map(file => ({ ...file }));
 	referenceFiles.value = initial.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = initial.generation ? { ...initial.generation, shareToSource: false } : null;
 	detailsOpen.value = !!initial.model;
 }
-const hasDraft = computed(() => !!(draft.title || draft.text || draft.model || draft.sourceUrl || draft.license || draft.tagIds.length || files.value.length));
+const hasDraft = computed(() => !!(draft.title || draft.text || draft.prompt || referenceFiles.value.length || draft.model || draft.sourceUrl || draft.license || draft.tagIds.length || files.value.length));
 const hasVideo = computed(() => draft.category === 'video' || files.value.some(file => file.type.startsWith('video/')));
 const directComment = computed(() => (editing.value?.destination ?? props.initialDraft?.destination) === 'source-comment');
 const workLink = (work: CommunityWork) => work.destination === 'source-comment' ? work.approvedNoteId ? `/notes/${work.approvedNoteId}` : `/community/work/${work.generation?.sourceWorkId}` : `/community/work/${work.id}`;
@@ -508,7 +531,8 @@ async function openComposer() {
 }
 
 function composerInput() {
-	return { ...draft, tagIds: [...draft.tagIds].sort(), destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: (draft.title.trim() || draft.text.trim().split('\n')[0] || files.value[0]?.name || draft.tagIds.map(tagName).join(' · ') || t.publish).slice(0, 100).replace(/[\uD800-\uDBFF]$/, ''), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: generationRecord.value ? { ...generationRecord.value, referenceFileIds: selectedReferences.value, shareToSource: !hasVideo.value && !directComment.value && shareToSource.value } : null };
+	const { prompt, ...content } = draft;
+	return { ...content, tagIds: [...draft.tagIds].sort(), destination: directComment.value ? 'source-comment' as const : 'community' as const, resultId: props.initialDraft?.resultId, title: (draft.title.trim() || draft.text.trim().split('\n')[0] || draft.prompt.trim().split('\n')[0] || files.value[0]?.name || draft.tagIds.map(tagName).join(' · ') || t.publish).slice(0, 100).replace(/[\uD800-\uDBFF]$/, ''), text: draft.text.trim(), model: draft.model.trim(), license: draft.license.trim(), sourceUrl: draft.sourceUrl.trim(), fileIds: files.value.map(file => file.id), generation: { ...generationRecord.value, prompt, model: draft.model.trim(), referenceFileIds: referenceFiles.value.filter(file => selectedReferences.value.includes(file.id)).map(file => file.id), shareToSource: !hasVideo.value && !directComment.value && shareToSource.value } };
 }
 
 function restoreNewDraft() {
@@ -536,8 +560,8 @@ async function openEditor(work: CommunityWork, reload = false) {
 		if (!editing.value) newDraft = { content: { ...draft, tagIds: [...draft.tagIds] }, files: [...files.value], rights: rights.value, details: detailsOpen.value, references: [...referenceFiles.value], selected: [...selectedReferences.value], generation: generationRecord.value };
 		editing.value = latest;
 		referenceFiles.value = latest.referenceFiles ?? []; selectedReferences.value = referenceFiles.value.map(file => file.id); generationRecord.value = latest.generation;
-		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license, tagIds: [...(latest.tagIds ?? latest.tags?.map(tag => tag.id) ?? [])] });
-		rememberTags(latest.tags ?? []); tagNotice.value = ''; promptExcerpt.value = false;
+		Object.assign(draft, { category: latest.category, title: latest.title, text: latest.text, prompt: latest.generation?.prompt ?? latest.text, model: latest.model, sourceUrl: latest.sourceUrl, license: latest.license, tagIds: [...(latest.tagIds ?? latest.tags?.map(tag => tag.id) ?? [])] });
+		rememberTags(latest.tags ?? []); tagNotice.value = '';
 		files.value = latest.files.map(file => ({ ...file })); rights.value = false; detailsOpen.value = true;
 		editBaseline = JSON.stringify(composerInput()); editConflict.value = false; formError.value = '';
 		composerZIndex.value = claimZIndex('low'); composerOpen.value = true; opened = true;
@@ -628,15 +652,41 @@ watch([composerOpen, () => props.signedIn], ([open, signedIn]) => {
 onMounted(() => { if (!props.composerOnly) window.addEventListener(communityComposeEvent, handleComposeRequest); });
 onDeactivated(() => { active = false; tagPickerOpen.value = false; filterPickerOpen.value = false; editRead?.abort(); composerOpen.value = false; releaseFocus?.(); releaseFocus = undefined; });
 
-async function chooseFiles(event: MouseEvent) {
+function attachmentPreview(file: CommunityFile) { return safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined); }
+
+function addAttachments(selected: CommunityFile[], role: 'output' | 'reference') {
+	const target = role === 'reference' ? referenceFiles : files;
+	const other = role === 'reference' ? files : referenceFiles;
+	if (role === 'reference' && selected.some(file => !file.type.startsWith('image/'))) { formError.value = t.referencesOnlyImages; return false; }
+	if (selected.some(file => other.value.some(item => item.id === file.id))) { formError.value = t.attachmentRoleConflict; return false; }
+	const merged = [...target.value];
+	for (const file of selected) if (!merged.some(item => item.id === file.id)) merged.push(file);
+	if (merged.length > 16) { formError.value = t.tooManyFiles; return false; }
+	target.value = merged;
+	if (role === 'reference') selectedReferences.value = [...new Set([...selectedReferences.value, ...selected.map(file => file.id)])];
+	return true;
+}
+
+function removeAttachment(id: string, role: 'output' | 'reference') {
+	if (role === 'output') files.value = files.value.filter(file => file.id !== id);
+	else { referenceFiles.value = referenceFiles.value.filter(file => file.id !== id); selectedReferences.value = selectedReferences.value.filter(value => value !== id); }
+}
+
+function moveAttachment(file: CommunityFile, from: 'output' | 'reference') {
+	const target = from === 'output' ? referenceFiles : files;
+	if (target.value.length >= 16) { formError.value = t.tooManyFiles; return; }
+	removeAttachment(file.id, from);
+	addAttachments([file], from === 'output' ? 'reference' : 'output');
+	formError.value = '';
+}
+
+async function chooseFiles(event: MouseEvent, role: 'output' | 'reference' = 'output') {
 	const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
 	choosing.value = true; formError.value = '';
 	try {
 		const selected = await props.gateway.chooseFiles(event);
 		if (disposed || !composerOpen.value) return;
-		const merged = [...files.value, ...selected.filter(file => !files.value.some(item => item.id === file.id))];
-		if (merged.length > 16) { formError.value = t.tooManyFiles; return; }
-		files.value = merged;
+		addAttachments(selected, role);
 	} catch (error) { formError.value = errorText(error); } finally {
 		choosing.value = false;
 		await nextTick();
@@ -644,9 +694,9 @@ async function chooseFiles(event: MouseEvent) {
 	}
 }
 
-async function openUpload(kind: CommunityCategory) {
+async function openUpload(kind: CommunityCategory, role: 'output' | 'reference' = 'output') {
 	if (submitting.value || choosing.value || emojiOpen.value) return;
-	uploadKind.value = kind;
+	uploadKind.value = kind; uploadRole.value = role;
 	uploadAccept.value = kind === 'image' ? 'image/*' : kind === 'video' ? 'video/*' : '.pdf,.txt,.md,.markdown,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json,.yaml,.yml,.zip,.7z,.tar,.gz,.skill';
 	await nextTick();
 	uploadInput.value?.click();
@@ -657,16 +707,16 @@ async function uploadSelected(event: Event) {
 	const selected = Array.from(input.files ?? []);
 	input.value = '';
 	if (!selected.length || submitting.value || choosing.value) return;
-	if (files.value.length + selected.length > 16) { formError.value = t.tooManyFiles; return; }
+	const role = uploadRole.value, kind = uploadKind.value;
+	if (role === 'reference' && selected.some(file => !file.type.startsWith('image/'))) { formError.value = t.referencesOnlyImages; return; }
+	if ((role === 'reference' ? referenceFiles.value.length : files.value.length) + selected.length > 16) { formError.value = t.tooManyFiles; return; }
 	choosing.value = true; formError.value = '';
 	try {
 		if (!props.gateway.uploadFiles) throw new Error(t.serviceUnavailable);
 		const uploaded = await props.gateway.uploadFiles(selected);
 		if (disposed || !composerOpen.value) return;
-		if (!files.value.length && uploaded.length) changeCategory(uploadKind.value);
-		const merged = [...files.value, ...uploaded.filter(file => !files.value.some(item => item.id === file.id))];
-		if (merged.length > 16) { formError.value = t.tooManyFiles; return; }
-		files.value = merged;
+		const firstWorks = role === 'output' && !files.value.length && uploaded.length > 0;
+		if (addAttachments(uploaded, role) && firstWorks) changeCategory(kind);
 	} catch (error) { if (!disposed) formError.value = errorText(error); } finally { choosing.value = false; await nextTick(); if (!disposed && composerOpen.value) contentInput.value?.focus(); }
 }
 
@@ -724,8 +774,8 @@ async function submit() {
 		if (disposed) return;
 		notice.value = result.status === 'pending' ? t.submitted : ['published', 'approved'].includes(result.status) ? directComment.value ? shareText.directSent : t.submittedPublic : t.submittedExisting;
 		if (!directComment.value && result.sourceCommentStatus && result.sourceCommentStatus !== 'none') notice.value += ' ' + shareText.sourceStatus[result.sourceCommentStatus];
-		Object.assign(draft, { title: '', text: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
-		tagNotice.value = ''; promptExcerpt.value = false;
+		Object.assign(draft, { title: '', text: '', prompt: '', model: '', sourceUrl: '', license: '', tagIds: [] as string[] });
+		tagNotice.value = ''; revealedFiles.value = []; failedPreviews.value = [];
 		files.value = []; referenceFiles.value = []; selectedReferences.value = []; generationRecord.value = null; rights.value = false; composerOpen.value = false;
 		submissionFingerprint = ''; submissionKey = '';
 		emit('submitted', result);
@@ -814,8 +864,6 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 <style lang="scss" module>
 .composerOnly.root { height: 0; overflow: visible; }
 .composerOnly .canvas { padding: 0; min-height: 0; }
-.sharePreview { display: flex; gap: 12px; overflow-x: auto; max-height: 200px; padding: 0 20px 16px; }
-.sharePreview img, .sharePreview video { max-height: 180px; max-width: 100%; border-radius: 8px; object-fit: contain; background: var(--MI_THEME-bg); }
 .embedded.root { height: auto; overflow: visible; }
 .embedded .canvas { padding: 0; min-height: 0; }
 .danger { color: var(--MI_THEME-error); border: 1px solid currentColor; }
@@ -983,9 +1031,6 @@ button.tagChip { min-height: 44px; }
 .form .check, .reviewForm .check { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
 .check input { width: 18px; height: 18px; flex-shrink: 0; margin: 3px 0 0; accent-color: var(--MI_THEME-accent); }
 .muted { color: var(--MI_THEME-fg); font-size: 13px; margin-top: 8px !important; }
-.fileList { padding: 0; list-style: none; }
-.fileList li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.fileList span { flex: 1; overflow-wrap: anywhere; min-width: 0; }
 .error { color: var(--MI_THEME-error); margin-top: 10px !important; overflow-wrap: anywhere; }
 .notice { background: var(--MI_THEME-panel); border-radius: 8px; padding: 14px 18px; margin: 16px 24px !important; }
 .details { margin-top: 15px; overflow-wrap: anywhere; }
@@ -1056,7 +1101,16 @@ button.tagChip { min-height: 44px; }
 .editHint { margin: -6px 0 18px !important; padding: 12px 14px; border-radius: 8px; background: var(--MI_THEME-buttonBg); font-size: 13px; }
 .composerHeader > button { width: 44px; height: 44px; padding: 0; font-size: 22px; }
 .referenceSection { margin: 16px 0; h3 { margin: 0 0 8px; font-size: 16px; } p { line-height: 1.6; } }
-.referenceGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; label { min-width: 0; padding: 8px; border: 1px solid var(--MI_THEME-divider); border-radius: 12px; } img { width: 100%; height: 110px; object-fit: contain; } span { display: flex; align-items: center; gap: 8px; min-height: 44px; overflow-wrap: anywhere; } input { accent-color: var(--MI_THEME-accent); } }
+.promptField, .attachmentSection { min-width: 0; margin-left: 56px; }
+.promptField { display: grid; gap: 8px; }
+.attachmentSection { padding-top: 16px; border-top: 1px solid var(--MI_THEME-divider); h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 15px; } h3 span { font-size: 12px; font-weight: 400; color: var(--MI_THEME-fgTransparentWeak); } p { margin: 0 0 12px; } }
+.attachmentTools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; font-size: 12px !important; } }
+.attachmentGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 12px; }
+.attachment { min-width: 0; overflow: hidden; padding: 8px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius); > strong { display: flex; align-items: center; min-height: 36px; font-size: 13px; } }
+.attachmentPreview { display: grid; place-items: center; height: 112px; background: var(--MI_THEME-bg); border-radius: 8px; overflow: hidden; img, video { display: block; width: 100%; height: 100%; object-fit: contain; } > i { font-size: 28px; } }
+.attachmentName { display: block; font-size: 12px; overflow-wrap: anywhere; line-height: 1.5; }
+.referenceChoice { display: flex !important; align-items: center; gap: 6px !important; min-height: 44px; font-size: 13px; input { accent-color: var(--MI_THEME-accent); } }
+.attachmentActions { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 4px; button { min-height: 44px; padding: 4px; font-size: 12px !important; } button:last-child { min-width: 44px; margin-left: auto; } }
 .draftHint { margin-left: auto; font-size: 12px; }
 .composer .form { gap: 12px; }
 .editorRow { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; }
@@ -1070,14 +1124,14 @@ button.tagChip { min-height: 44px; }
 .tagTrigger > i:last-child { margin-left: auto; }
 .tagTrigger:hover { border-color: var(--MI_THEME-accent); }
 .tagTrigger .tagChip { padding: 3px 8px; }
-.composer .writingArea textarea { font-size: 16px; min-height: 150px; max-height: 50vh; line-height: 1.6; }
+.composer .writingArea textarea { font-size: 16px; min-height: 84px; max-height: 50vh; line-height: 1.6; }
 .destinationRow { margin-left: 56px; display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
 .destinationSelect { display: inline-flex !important; align-items: center; gap: 5px !important; font-size: 13px; max-width: 100%; }
 .composer .destinationSelect select { width: auto; max-width: 100%; border: 0; padding: 8px 2px; background: transparent; min-height: 44px; font-weight: 600; }
 .publishHint { font-size: 12px; }
 .extraFields { display: grid; gap: 14px; margin-left: 56px; }
 .composer .check { margin-left: 56px; font-size: 12px; }
-.composer .error, .composer .fileList { margin-left: 56px; }
+.composer .error { margin-left: 56px; }
 .composerFooter { border-top: 1px solid var(--MI_THEME-divider); padding-top: 8px; }
 .composerTools { display: flex; align-items: center; gap: 12px; }
 .iconTools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
@@ -1099,7 +1153,7 @@ button.tagChip { min-height: 44px; }
  .extraFields input { font-size: 16px; }
  .composer .writingArea textarea { font-size: 16px; }
  .publicSearch input { font-size: 16px; }
- .destinationRow, .extraFields, .composer .check, .composer .error, .composer .fileList { margin-left: 0; }
+ .destinationRow, .extraFields, .composer .check, .composer .error, .promptField, .attachmentSection { margin-left: 0; }
  .destinationRow { gap: 0 12px; }
  .iconTools { gap: 0; }
  .composerTools { gap: 4px; flex-wrap: wrap; }

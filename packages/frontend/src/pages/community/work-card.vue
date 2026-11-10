@@ -23,7 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div :class="$style.content">
 			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
 			<WorkTags :tags="work.tags"/>
-			<div :class="[$style.mediaLayout, { [$style.withMaterials]: work.files.length > 1 || work.referenceFiles?.length }]">
+			<div :class="[$style.mediaLayout, { [$style.withMaterials]: work.files.length || work.referenceFiles?.length }]">
 				<div :class="$style.mainMedia">
 					<WorkVideo v-if="previewVideo" :workId="work.id" :title="work.title" :url="previewVideo.url" :poster="cover"/>
 					<MkA v-else-if="work.category !== 'resource' || cover" :to="workPath(work.id)" :class="$style.preview" :style="{ aspectRatio: previewAspect }" :aria-label="`${t.preview}: ${work.title}`"><img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/><span v-else :class="$style.noPreview"><i :class="work.category === 'video' ? 'ti ti-video' : 'ti ti-photo'" aria-hidden="true"></i>{{ sensitive ? t.sensitive : t.noPreview }}</span><span :class="$style.previewAction" aria-hidden="true">{{ t.preview }}<i class="ti ti-arrow-up-right"></i></span></MkA>

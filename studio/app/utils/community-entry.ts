@@ -13,9 +13,49 @@ export type CommunityEntry = {
   defaultModels?: Partial<Record<"text" | "image" | "video", string>>;
 };
 type CommunityModel = Pick<LLMModel, "name" | "available"> &
-  Partial<Pick<LLMModel, "provider">>;
+  Partial<Pick<LLMModel, "provider">> & { isDefault?: boolean };
 const titles = { text: "文本", image: "图片", video: "视频" };
 const preparing = new Map<string, Promise<ChatSession>>();
+
+/** Missing provenance keeps a usable model from the matching creation workspace. */
+export function resolveCommunityRemixModel(
+  entry: Pick<CommunityEntry, "kind" | "model">,
+  models: CommunityModel[],
+) {
+  const available = models.filter(
+    (model) =>
+      model.available && model.provider?.providerName !== CUSTOM_MODEL_PROVIDER,
+  );
+  if (entry.model.trim()) {
+    const model = available.find((item) => item.name === entry.model);
+    return {
+      model: entry.model,
+      providerName: model?.provider?.providerName || "OpenAI",
+    };
+  }
+  const candidates = available.filter((model) => {
+    const category = getModelCapabilities(
+      model.name,
+      model.provider?.providerName,
+    ).category;
+    return entry.kind === "text"
+      ? category === "chat" || category === "code"
+      : category === entry.kind;
+  });
+  const current = findCommunityWorkspace(entry.kind)?.mask.modelConfig;
+  const selected =
+    candidates.find(
+      (model) =>
+        model.name === current?.model &&
+        model.provider?.providerName === current.providerName,
+    ) ??
+    candidates.find((model) => model.isDefault) ??
+    candidates[0];
+  return {
+    model: selected?.name ?? "",
+    providerName: selected?.provider?.providerName || "OpenAI",
+  };
+}
 
 export function findCommunityWorkspace(kind: CommunityEntry["kind"]) {
   const store = useChatStore.getState();

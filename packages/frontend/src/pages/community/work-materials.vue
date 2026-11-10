@@ -28,8 +28,8 @@ import { homeLanguage } from '@/pages/home/copy.js';
 const props = defineProps<{ work: CommunityWork }>();
 const revealed = ref<string[]>([]), failed = ref<string[]>([]);
 const groups = computed(() => [
-	{ key: 'output', label: homeLanguage === 'en-US' ? 'Created works' : '生成作品', files: props.work.files.length > 1 ? props.work.files : [] },
-	{ key: 'reference', label: homeLanguage === 'en-US' ? 'References' : '参考素材', files: props.work.referenceFiles ?? [] },
+	{ key: 'output', label: homeLanguage === 'en-US' ? 'Created works' : '作品', files: props.work.files },
+	{ key: 'reference', label: homeLanguage === 'en-US' ? 'References' : '参考图', files: props.work.referenceFiles ?? [] },
 ].filter(group => group.files.length));
 
 function preview(file: CommunityFile) { return safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined); }
