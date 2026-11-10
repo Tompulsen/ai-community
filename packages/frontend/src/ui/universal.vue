@@ -6,11 +6,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <div :class="[$style.root, { '_forceShrinkSpacer': deviceKind === 'smartphone' }]">
 	<XTitlebar v-if="!isRoot && !mobileCommunity && prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
+	<CommunityHeader v-if="!isRoot && !isMobile && !mobileCommunity" @widgets="widgetsShowing = true"/>
 
 	<div :class="$style.nonTitlebarArea">
-		<XSidebar v-if="!isRoot && !isMobile && !mobileCommunity" :class="$style.sidebar" :showWidgetButton="true" @widgetButtonClick="widgetsShowing = true"/>
-
-		<div data-testid="community-workspace" :class="[$style.contents, !isRoot && !isMobile && !mobileCommunity && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
+		<div data-testid="community-workspace" :class="$style.contents" @contextmenu.stop="onContextmenu">
 			<div v-if="!isRoot">
 				<XReloadSuggestion v-if="shouldSuggestReload"/>
 				<XPreferenceRestore v-if="shouldSuggestRestoreBackup"/>
@@ -40,7 +39,7 @@ import XPreferenceRestore from '@/ui/_common_/PreferenceRestore.vue';
 import XReloadSuggestion from '@/ui/_common_/ReloadSuggestion.vue';
 import XThemePreviewing from '@/ui/_common_/ThemePreviewing.vue';
 import XTitlebar from '@/ui/_common_/titlebar.vue';
-import XSidebar from '@/ui/_common_/navbar.vue';
+import CommunityHeader from '@/ui/_common_/community-header.vue';
 import { isPreviewMode as isThemePreviewMode } from '@/theme.js';
 import * as os from '@/os.js';
 import { i18n } from '@/i18n.js';
@@ -136,22 +135,12 @@ function onContextmenu(ev: PointerEvent) {
 	min-height: 0;
 }
 
-.sidebar {
-	border-right: solid 0.5px var(--MI_THEME-divider);
-}
-
 .contents {
 	display: flex;
 	flex-direction: column;
 	flex: 1;
 	height: 100%;
 	min-width: 0;
-
-	&.withSidebarAndTitlebar {
-		background: var(--MI_THEME-navBg);
-		border-radius: 12px 0 0 0;
-		overflow: clip;
-	}
 }
 
 .content {

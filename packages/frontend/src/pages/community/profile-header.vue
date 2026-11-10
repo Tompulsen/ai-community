@@ -31,18 +31,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 </section>
 <section v-else :class="$style.root" :aria-label="t.profile">
-	<div :class="$style.cover"><img v-if="safeWebUrl(profile.bannerUrl)" :src="safeWebUrl(profile.bannerUrl)" alt=""/></div>
+	<div :class="[$style.cover, { [$style.coverEmpty]: !safeWebUrl(profile.bannerUrl) }]"><img v-if="safeWebUrl(profile.bannerUrl)" :src="safeWebUrl(profile.bannerUrl)" alt=""/></div>
 	<div :class="$style.body">
 		<div :class="$style.topline">
 			<div :class="$style.avatar"><img v-if="safeWebUrl(profile.avatarUrl)" :src="safeWebUrl(profile.avatarUrl)" :alt="profile.name"/><span v-else aria-hidden="true">{{ Array.from(profile.name || profile.handle)[0] }}</span></div>
+			<div :class="$style.identity"><h1>{{ profile.name || profile.handle }}</h1><p :class="$style.handle">@{{ profile.handle }}</p></div>
 			<div :class="$style.actions">
 				<a v-if="profile.isOwn" href="/settings/profile" @click.prevent="emit('navigate', '/settings/profile')">{{ t.editProfile }}</a>
 				<slot name="actions"></slot>
 				<a v-if="profile.detailsPath" :href="profile.detailsPath" @click.prevent="emit('navigate', profile.detailsPath)">{{ t.profileDetails }}</a>
 			</div>
 		</div>
-		<h1>{{ profile.name || profile.handle }}</h1>
-		<p :class="$style.handle">@{{ profile.handle }}</p>
 		<div v-if="profile.description" :class="$style.bio"><slot name="description">{{ profile.description }}</slot></div>
 		<p v-if="joinedDate" :class="$style.joined">{{ t.joined }} <time :datetime="profile.createdAt">{{ joinedDate }}</time></p>
 		<div :class="$style.stats">
@@ -65,16 +64,18 @@ const joinedDate = computed(() => Number.isFinite(Date.parse(props.profile.creat
 
 <style lang="scss" module>
 .root { background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: 12px; margin-bottom: 24px; }
-.cover { height: clamp(180px, 22cqw, 300px); background: var(--community-stage, var(--MI_THEME-buttonBg)); border-radius: 12px 12px 0 0; overflow: hidden; }
+.cover { height: clamp(120px, 12cqw, 200px); background: var(--MI_THEME-buttonBg); border-radius: 12px 12px 0 0; overflow: hidden; }
+.cover.coverEmpty { height: 72px; background: var(--MI_THEME-accentedBg); }
 .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .body { padding: 0 32px 24px; }
 .topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
-.avatar { width: 144px; height: 144px; border: 6px solid var(--MI_THEME-panel); border-radius: 50%; background: var(--MI_THEME-buttonBg); margin-top: -64px; position: relative; display: grid; place-items: center; flex-shrink: 0; font-size: 52px; font-weight: 600; overflow: hidden; }
+.avatar { width: 112px; height: 112px; border: 5px solid var(--MI_THEME-panel); border-radius: 50%; background: var(--MI_THEME-buttonBg); margin-top: -40px; position: relative; display: grid; place-items: center; flex-shrink: 0; font-size: 40px; font-weight: 600; overflow: hidden; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 .actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; padding-top: 16px; }
 .actions a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 20px; border-radius: 8px; background: var(--MI_THEME-buttonBg); font-weight: 600; }
 .actions a:hover { background: var(--MI_THEME-buttonHoverBg); }
 .body h1 { font-size: 28px; font-weight: 650; letter-spacing: -.02em; line-height: 1.4; margin-top: 20px; overflow-wrap: anywhere; }
+.identity { flex: 1; min-width: 0; padding-top: 14px; h1 { margin-top: 0; } }
 .handle { margin-top: 4px !important; overflow-wrap: anywhere; }
 .bio { max-width: 75ch; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; margin-top: 20px; }
 .joined { margin-top: 16px !important; font-size: 13px; }

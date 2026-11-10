@@ -4,16 +4,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid, [$style.gallery]: gallery, [$style.featured]: featured }]" :data-motion="prefer.s.animation" :data-featured="featured || undefined" data-testid="community-work-card">
 	<template v-if="compact">
 		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
 			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/>
 			<div v-else :class="$style.compactFallback"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : work.category === 'video' ? 'ti ti-player-play' : 'ti ti-photo'" aria-hidden="true"></i><p v-if="work.category === 'resource' && !sensitive">{{ excerpt || work.title }}</p><span v-else>{{ sensitive ? t.sensitive : t.noPreview }}</span></div>
 			<span v-if="!sensitive" :class="$style.mediaKind"><i :class="work.category === 'video' ? 'ti ti-player-play-filled' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><span v-if="work.files.length > 1">{{ work.files.length }}</span></span>
 			<span v-if="profileGrid && work.likesCount != null" :class="$style.profileMetrics"><i class="ti ti-heart" aria-hidden="true"></i>{{ new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span>
+			<span v-if="gallery" :class="$style.galleryStats"><span v-if="work.likesCount != null" :aria-label="`${t.like} ${work.likesCount}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ formatCount(work.likesCount) }}</span><span :aria-label="`${t.comments} ${work.repliesCount}`"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ formatCount(work.repliesCount) }}</span></span>
+			<span v-if="featured" :class="$style.featureLabel">{{ ft.newShare }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></span>
 		</MkA>
 		<h3 v-if="!profileGrid" :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
-		<div v-if="!profileGrid" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><span :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span></div>
+		<div v-if="!profileGrid" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><time v-if="gallery" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><span v-else :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : formatCount(work.likesCount) }}</span></div>
+		<div v-if="gallery && $slots.actions" :class="$style.compactActions"><slot name="actions"></slot></div>
 	</template>
 	<WorkEngagement v-else :work="work" :viewsCount="views" previewComments>
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><div v-if="$slots.actions" :class="$style.authorActions"><slot name="actions"></slot></div></header>
@@ -46,7 +49,8 @@ import { useWorkView } from './use-work-view.js';
 import type { CommunityWork } from './types.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?: boolean }>();
+const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?: boolean; gallery?: boolean; featured?: boolean }>();
+const formatCount = (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const root = ref<HTMLElement>();
 const views = useWorkView(root, () => props.compact ? null : props.work);
 const failed = ref(false);
@@ -106,4 +110,27 @@ watch(cover, () => { failed.value = false; });
 .profileGrid .compactPreview { border-radius: 0; }
 .profileGrid .mediaKind { top: 6px; bottom: auto; right: 6px; }
 .profileMetrics { @include work-palette.stage; position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 4px; padding: 20px 8px 6px; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 75%, transparent)); color: var(--work-stage-fg); font-size: 12px; pointer-events: none; }
+
+.card.gallery { align-self: stretch; border: 0; border-radius: 10px; background: transparent; }
+.gallery .compactPreview { aspect-ratio: 16 / 9; border-radius: 10px; isolation: isolate; img { transition: transform 250ms ease; } }
+.gallery .compactTitle { margin: 10px 0 0; font-size: 15px; font-weight: 600; }
+.gallery .compactMeta { margin: 2px 0 0; gap: 12px; time { flex: 0 0 auto; font-size: 12px; white-space: nowrap; } }
+.gallery .compactFallback { padding: 16px 16px 40px; gap: 6px; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: 10px; > i { font-size: 22px; } p { -webkit-line-clamp: 2; font-size: 13px; } }
+.gallery .mediaKind { top: 10px; bottom: auto; right: 10px; }
+.galleryStats { @include work-palette.stage; position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 14px; padding: 26px 12px 9px; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 80%, transparent)); color: var(--work-stage-fg); font-size: 12px; pointer-events: none; > span { display: inline-flex; align-items: center; gap: 5px; } i { font-size: 15px; } }
+.compactActions { padding-top: 4px; }
+.featureLabel { display: none; }
+@container community-feed (min-width: 1100px) {
+	.gallery.featured { @include work-palette.stage; position: relative; display: flex; flex-direction: column; grid-column: span 2; grid-row: span 2; overflow: hidden; background: var(--work-stage); color: var(--work-stage-fg); }
+	.featured .compactPreview { position: absolute; inset: 0; height: 100%; aspect-ratio: auto; border-radius: inherit; &::after { content: ''; position: absolute; inset: 35% 0 0; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 96%, transparent)); pointer-events: none; } }
+	.featured .compactFallback { justify-content: flex-start; padding: 70px 24px 130px; background: var(--work-stage); color: var(--work-stage-fg); border: 0; p { color: inherit; -webkit-line-clamp: 6; } }
+	.featured .featureLabel { position: absolute; inset: 20px 20px auto; display: flex; align-items: center; justify-content: space-between; color: var(--work-stage-fg); font-size: 12px; font-weight: 600; text-shadow: 0 1px 4px var(--work-stage); i { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--work-stage) 55%, transparent); font-size: 20px; } }
+	.featured .compactTitle { position: relative; z-index: 1; margin: auto 24px 0; padding-top: 100px; min-height: 0; font-size: clamp(20px, 1.7vw, 28px); font-weight: 650; a { color: inherit; } }
+	.featured .compactMeta { position: relative; z-index: 1; margin: 8px 24px 20px; color: var(--work-stage-fg); }
+	.featured .compactAvatar { background: color-mix(in srgb, var(--work-stage-fg) 16%, transparent); color: inherit; }
+	.featured .galleryStats, .featured .mediaKind { display: none; }
+}
+@media (hover: hover) { .gallery .compactPreview:hover img { transform: scale(1.035); } .gallery .compactTitle a:hover, .gallery .compactMeta a:hover { color: var(--MI_THEME-accent); } .featured .compactTitle a:hover, .featured .compactMeta a:hover { color: inherit; text-decoration: underline; } }
+.card[data-motion='false'] .compactPreview img { transition: none; transform: none; }
+@media (prefers-reduced-motion: reduce) { .gallery .compactPreview img { transition: none; transform: none !important; } }
 </style>

@@ -4,45 +4,30 @@
  */
 
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue';
-import type { Ref } from 'vue';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex } from '@/os.js';
 
-const storageKey = 'community.discovery-open';
-
-function savedOpen() {
-	try { return window.localStorage.getItem(storageKey) !== 'false'; } catch { return true; }
-}
-
-export function useDiscoveryDrawer(root: Ref<HTMLElement | undefined>, enabled: () => boolean) {
+export function useDiscoveryDrawer(enabled: () => boolean) {
 	const discoveryId = useId();
 	const discoveryLayer = ref<HTMLElement>();
 	const discoveryPanel = ref<HTMLElement>();
 	const discoveryToggle = ref<HTMLButtonElement>();
-	const discoveryCompact = ref(false);
-	const desktopOpen = ref(savedOpen());
-	const mobileOpen = ref(false);
+	const discoveryCompact = ref(true);
+	const open = ref(false);
 	const active = ref(true);
 	const discoveryZIndex = ref(0);
-	const discoveryOpen = computed(() => active.value && enabled() && (discoveryCompact.value ? mobileOpen.value : desktopOpen.value));
-	let resize: ResizeObserver | undefined;
+	const discoveryOpen = computed(() => active.value && enabled() && open.value);
 	let releaseFocus: (() => void) | undefined;
 	let restoreToggleFocus = false;
 
-	watch(desktopOpen, value => {
-		try { window.localStorage.setItem(storageKey, String(value)); } catch { /* Storage is optional. */ }
-	});
-
 	function closeDiscovery() {
-		if (discoveryCompact.value) mobileOpen.value = false;
-		else desktopOpen.value = false;
+		open.value = false;
 		void nextTick(() => { if (active.value) discoveryToggle.value?.focus({ preventScroll: true }); });
 	}
 
 	async function toggleDiscovery() {
 		if (discoveryOpen.value) { closeDiscovery(); return; }
-		if (discoveryCompact.value) mobileOpen.value = true;
-		else desktopOpen.value = true;
+		open.value = true;
 		await nextTick();
 		if (discoveryOpen.value) discoveryPanel.value?.focus({ preventScroll: true });
 	}
@@ -65,23 +50,14 @@ export function useDiscoveryDrawer(root: Ref<HTMLElement | undefined>, enabled: 
 		if (restoreToggleFocus) { restoreToggleFocus = false; if (active.value) discoveryToggle.value?.focus({ preventScroll: true }); }
 		if (open && compact && discoveryLayer.value && !releaseFocus) releaseFocus = focusTrap(discoveryLayer.value).release;
 	}, { flush: 'post' });
-	watch(discoveryCompact, () => { mobileOpen.value = false; });
 
 	function start() {
 		active.value = true;
-		desktopOpen.value = savedOpen();
-		if (!root.value) return;
-		const measure = () => { if (root.value) discoveryCompact.value = root.value.getBoundingClientRect().width <= 900; };
-		measure();
-		resize?.disconnect();
-		resize = new ResizeObserver(measure);
-		resize.observe(root.value);
 	}
 
 	function stop() {
 		active.value = false;
-		mobileOpen.value = false;
-		resize?.disconnect();
+		open.value = false;
 		releaseFocus?.(); releaseFocus = undefined;
 	}
 

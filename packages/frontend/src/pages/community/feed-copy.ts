@@ -6,6 +6,7 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	newShare: '最新分享', desktopHint: '发现灵感，分享创作', makeVideo: '制作视频', makeImage: '生成图片', makeText: '文本创作',
 	profilePrivate: '仅自己可见', profileLiked: '点赞过的作品', profileRecent: '最近动态', profileRefresh: '刷新分区', profileNoFavorites: '收藏喜欢的作品，随时回来看看', profileNoLikes: '这里还没有喜欢的作品', profileNoNotes: '还没有动态', profileHiddenLikes: '该用户未公开喜欢的作品', profileRemoteLikes: '暂时无法查看远端用户的喜欢',
 	profileWorks: '作品', profileNotes: '动态', profileLikes: '喜欢', profileFavorites: '收藏', profileManage: '作品管理', profileSettings: '设置', profileTools: '创作者工具', profileAddBio: '添加简介，让大家认识你', profileSearch: '搜索主页作品', profileBack: '返回社区',
 	mobileNavigation: '社区导航', mobileHome: '首页', mobileCreate: '创作', mobileMessages: '消息', mobileMe: '我', mobileAll: '发现', mobileResource: 'skill', mobileSearch: '搜索与筛选', mobileSwipe: '上滑发现更多作品', mobileDetails: '查看完整作品', mobileEnd: '已经看完啦', mobileMenu: '公告与创作者',
@@ -19,6 +20,7 @@ const zh = {
 	loading: '正在加载…', loadFailed: '暂时无法加载，请重试。', retry: '重试', showDiscovery: '查看公告与分享者', hideDiscovery: '收起公告与分享者', viewProfile: '查看创作者主页',
 };
 const en: typeof zh = {
+	newShare: 'Latest share', desktopHint: 'Discover ideas. Share your creations.', makeVideo: 'Make a video', makeImage: 'Create images', makeText: 'Write with AI',
 	profilePrivate: 'Only visible to you', profileLiked: 'Liked works', profileRecent: 'Recent posts', profileRefresh: 'Refresh section', profileNoFavorites: 'Save works to revisit them here', profileNoLikes: 'No liked works here yet', profileNoNotes: 'No posts yet', profileHiddenLikes: 'This user keeps their likes private', profileRemoteLikes: 'Likes are unavailable for remote users',
 	profileWorks: 'Works', profileNotes: 'Posts', profileLikes: 'Likes', profileFavorites: 'Saved', profileManage: 'Manage', profileSettings: 'Settings', profileTools: 'Creator tools', profileAddBio: 'Add a bio to introduce yourself', profileSearch: 'Search profile works', profileBack: 'Back to community',
 	mobileNavigation: 'Community navigation', mobileHome: 'Home', mobileCreate: 'Create', mobileMessages: 'Inbox', mobileMe: 'Me', mobileAll: 'Discover', mobileResource: 'skill', mobileSearch: 'Search and filters', mobileSwipe: 'Swipe up for more', mobileDetails: 'View full work', mobileEnd: 'You’re all caught up', mobileMenu: 'Announcements and creators',

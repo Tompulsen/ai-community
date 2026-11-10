@@ -5,20 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div :class="$style.root">
-	<aside v-if="!isHomepage" :class="$style.side">
-		<MkA to="/" :class="$style.brand">{{ i18n.ts._aiCommunity.title }}</MkA>
-		<MkCommunityNav :compact="narrow"/>
-		<div :class="$style.accountLinks">
-			<MkButton @click="signin">{{ i18n.ts.login }}</MkButton>
-			<MkButton v-if="!instance.disableRegistration" primary @click="signup">{{ i18n.ts.signup }}</MkButton>
-		</div>
-	</aside>
+	<CommunityHeader v-if="!isHomepage && !mobileCommunity"/>
 	<div :class="$style.main">
-		<header v-if="!isHomepage && !mobileCommunity" :class="$style.mobileHeader">
-			<MkA to="/">{{ i18n.ts._aiCommunity.title }}</MkA>
-			<MkButton @click="signin">{{ i18n.ts.login }}</MkButton>
-		</header>
-		<MkCommunityNav v-if="!isHomepage && !mobileCommunity" horizontal :class="$style.mobileNavigation"/>
 		<div :class="$style.content"><RouterView :class="{ [$style.homeContent]: isHomepage }"/></div>
 		<MobileCommunityNavigation v-if="mobileCommunity"/>
 	</div>
@@ -27,28 +15,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, provide, ref } from 'vue';
+import { computed, provide, ref } from 'vue';
 import { instanceName } from '@@/js/config.js';
 import XCommon from './_common_/common.vue';
+import CommunityHeader from './_common_/community-header.vue';
 import MobileCommunityNavigation from '@/pages/community/mobile-navigation.vue';
 import { useMobileCommunityFeed } from '@/pages/community/mobile-feed.js';
+import { deviceKind } from '@/utility/device-kind.js';
 import type { PageMetadata } from '@/page.js';
-import { instance } from '@/instance.js';
 import { provideMetadataReceiver, provideReactiveMetadata } from '@/page.js';
-import { i18n } from '@/i18n.js';
 import { mainRouter } from '@/router.js';
 import { DI } from '@/di.js';
-import MkButton from '@/components/MkButton.vue';
-import MkCommunityNav from '@/components/MkCommunityNav.vue';
-import * as os from '@/os.js';
 
-const mobileCommunity = useMobileCommunityFeed();
-const viewport = window.matchMedia('(max-width: 700px)');
+const narrowCommunity = useMobileCommunityFeed();
 const isHomepage = computed(() => mainRouter.currentRoute.value.name === 'index');
-const narrow = ref(viewport.matches);
-const updateViewport = () => { narrow.value = viewport.matches; };
-viewport.addEventListener('change', updateViewport);
-onBeforeUnmount(() => viewport.removeEventListener('change', updateViewport));
+const mobileCommunity = computed(() => narrowCommunity.value || (!isHomepage.value && deviceKind === 'smartphone'));
 
 const pageMetadata = ref<null | PageMetadata>(null);
 provide(DI.router, mainRouter);
@@ -58,32 +39,11 @@ provideMetadataReceiver((metadataGetter) => {
 });
 provideReactiveMetadata(pageMetadata);
 
-async function signin() {
-	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkSigninDialog.vue').then(x => x.default), { autoSet: true }, { closed: () => dispose() });
-}
-
-async function signup() {
-	if (instance.disableRegistration) return;
-	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkSignupDialog.vue').then(x => x.default), { autoSet: true }, { closed: () => dispose() });
-}
 </script>
 
 <style lang="scss" module>
-.root { display: flex; height: 100dvh; overflow: clip; }
-.side { flex: 0 0 224px; width: 224px; overflow-y: auto; background: var(--MI_THEME-navBg); border-right: 1px solid var(--MI_THEME-divider); }
-.brand { display: block; padding: 28px 24px 12px; font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
-.accountLinks { display: grid; gap: 12px; padding: 24px; }
-.main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.root { display: flex; flex-direction: column; height: 100dvh; overflow: clip; }
+.main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .content { flex: 1; min-height: 0; overflow-y: auto; }
 .homeContent { overflow-y: auto; }
-.mobileHeader, .mobileNavigation { display: none; }
-@media (max-width: 700px) {
-	.side { display: none; }
-	.brand { padding: 20px 10px 8px; font-size: 14px; overflow-wrap: anywhere; }
-	.accountLinks { display: none; }
-	.mobileNavigation { display: flex; padding: 0 8px 8px; gap: 4px; background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
-	.mobileHeader > a { min-width: 0; overflow-wrap: anywhere; }
-	.mobileHeader > button { flex-shrink: 0; min-height: 44px; }
-	.mobileHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; background: var(--MI_THEME-panel); }
-}
 </style>

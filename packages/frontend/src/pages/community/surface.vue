@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="[$style.root, { [$style.galleryFeed]: mobileFeed, [$style.mobileProfile]: mobileProfile, [$style.profileScrolled]: profileScrolled, [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]" @scroll.passive="loadNextMobilePage">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.galleryFeed]: mobileFeed, [$style.desktopGallery]: desktopGallery, [$style.mobileProfile]: mobileProfile, [$style.profileScrolled]: profileScrolled, [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]" @scroll.passive="loadNextMobilePage">
 	<header v-if="mobileProfile" :class="$style.profileTopbar" data-testid="profile-topbar">
 		<MkA to="/community" :aria-label="ft.profileBack" :class="$style.profileBack"><i class="ti ti-arrow-left" aria-hidden="true"></i></MkA>
 		<strong :class="$style.profileTopbarName">{{ profile?.name || t.profile }}</strong>
@@ -145,26 +145,20 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
 				<div v-if="!mobileFeed && !mobileProfile" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
-					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
-					<form v-if="isPublicFeed" :class="$style.publicSearch" role="search" @submit.prevent="search()">
-						<div :class="$style.searchField">
-							<i class="ti ti-search" aria-hidden="true"></i>
-							<input v-model="query" type="search" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/>
-							<button type="submit" :class="$style.searchSubmit">{{ t.searchAction }}</button>
-						</div>
-					</form>
+					<div v-if="isPublicFeed" :class="$style.feedHeading"><h1>{{ ft.latest }}</h1><span>{{ ft.desktopHint }}</span></div><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
+					<nav v-if="isPublicFeed" :class="$style.studioLinks" :aria-label="t.ai"><MkA to="/create/video"><i class="ti ti-video" aria-hidden="true"></i>{{ ft.makeVideo }}</MkA><MkA to="/create/image"><i class="ti ti-photo" aria-hidden="true"></i>{{ ft.makeImage }}</MkA><MkA to="/create/text"><i class="ti ti-file-text" aria-hidden="true"></i>{{ ft.makeText }}</MkA></nav>
 					<form v-else :class="$style.search" role="search" @submit.prevent="search()">
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
 					<div :class="$style.feedTools">
 						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span>{{ isPublicFeed ? ft.refresh : t.refresh }}</span></button>
-						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-layout-sidebar-right-collapse' : 'ti ti-layout-sidebar-right-expand'" aria-hidden="true"></i></button>
+						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
 					</div>
 				</div>
 				<div v-if="isPublicFeed && !mobileFeed" :class="$style.filterBar">
 					<nav :class="$style.feedFilters" :aria-label="ft.filters">
-						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.title }}</a>
+						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))"><i :class="entry.id === 'all' ? 'ti ti-compass' : entry.id === 'video' ? 'ti ti-player-play' : entry.id === 'image' ? 'ti ti-photo' : 'ti ti-code'" aria-hidden="true"></i>{{ entry.id === 'all' ? ft.mobileAll : entry.id === 'resource' ? ft.mobileResource : entry.title }}</a>
 					</nav>
 					<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span :class="$style.filterLabel">{{ t.tagFilter }}</span><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
 				</div>
@@ -182,7 +176,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed || mobileProfile" :profileGrid="mobileProfile"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
+						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed || mobileProfile || desktopGallery" :profileGrid="mobileProfile" :gallery="desktopGallery" :featured="featuredWorkId === work.id"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
@@ -256,6 +250,7 @@ import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
 import { emojiPicker } from '@/utility/emoji-picker.js';
 import { prefer } from '@/preferences.js';
+import { deviceKind } from '@/utility/device-kind.js';
 import { useScrollPositionKeeper } from '@/composables/use-scroll-position-keeper.js';
 
 const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; initialTags?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; profile?: CommunityProfile; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
@@ -285,9 +280,10 @@ const detailsOpen = ref(false);
 const detailsId = useId();
 const surfaceRoot = ref<HTMLElement>();
 const mobileViewport = window.matchMedia('(max-width: 700px)');
-const mobileWidth = ref(mobileViewport.matches);
+const mobileWidth = ref(mobileViewport.matches || deviceKind === 'smartphone');
 const mobileFeed = computed(() => mobileWidth.value && isPublicFeed.value && !props.composerOnly);
 const mobileProfile = computed(() => mobileWidth.value && isProfile.value && !props.embedded);
+const desktopGallery = computed(() => !mobileWidth.value && isCommunity.value && !props.embedded && !props.composerOnly);
 const profileHeaderRoot = ref<HTMLElement>();
 const profileScrolled = ref(false);
 const profileTab = ref('works');
@@ -306,7 +302,7 @@ const mobileSearchOpen = ref(false);
 let feedResize: ResizeObserver | undefined;
 
 function resizeMobileFeed() {
-	mobileWidth.value = mobileViewport.matches;
+	mobileWidth.value = mobileViewport.matches || deviceKind === 'smartphone';
 	profileHeaderHeight.value = profileHeaderRoot.value?.offsetHeight ?? 0;
 	if (surfaceRoot.value) surfaceRoot.value.style.setProperty('--mobile-feed-height', `${surfaceRoot.value.clientHeight}px`);
 }
@@ -321,7 +317,7 @@ onMounted(() => {
 onBeforeUnmount(() => { feedResize?.disconnect(); mobileViewport.removeEventListener('change', resizeMobileFeed); });
 watch(() => props.section, () => { mobileSearchOpen.value = false; });
 useScrollPositionKeeper(surfaceRoot);
-const { discoveryId, discoveryLayer, discoveryPanel, discoveryToggle, discoveryCompact, discoveryOpen, discoveryZIndex, closeDiscovery, toggleDiscovery, discoveryKeydown } = useDiscoveryDrawer(surfaceRoot, () => isPublicFeed.value);
+const { discoveryId, discoveryLayer, discoveryPanel, discoveryToggle, discoveryCompact, discoveryOpen, discoveryZIndex, closeDiscovery, toggleDiscovery, discoveryKeydown } = useDiscoveryDrawer(() => isPublicFeed.value);
 const modalLayer = ref<HTMLElement>();
 const composerPanel = ref<HTMLElement>();
 const composerZIndex = ref(0);
@@ -344,6 +340,7 @@ const activeTagIds = ref(initialPublicTags());
 const filterTagIds = ref([...activeTagIds.value]);
 const status = ref<SubmissionStatus | 'all' | 'unreviewed'>(props.section === 'review' ? 'unreviewed' : 'all');
 const items = ref<CommunityWork[]>([]);
+const featuredWorkId = computed(() => desktopGallery.value && props.section === 'all' && !activeQuery.value && !activeTagIds.value.length && items.value.length >= 5 ? items.value[0].id : undefined);
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
 const loadError = ref('');
@@ -930,6 +927,24 @@ button.tagChip { min-height: 44px; }
 .footerLinks a:hover { text-decoration: underline; }
 .works { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 .works.list { grid-template-columns: 1fr; }
+.desktopGallery { container-name: community-feed; }
+.desktopGallery .canvas { max-width: 1960px; margin-inline: auto; padding: 20px clamp(24px, 3vw, 56px) 32px; }
+.desktopGallery .feedToolbar { flex-wrap: nowrap; gap: 16px; min-height: 52px; padding-bottom: 14px; }
+.feedHeading { display: flex; flex: 0 0 auto; align-items: baseline; gap: 14px; > span { color: var(--MI_THEME-fgTransparentWeak); font-size: 13px; } }
+.desktopGallery .feedToolbar h1 { font-size: 22px; }
+.studioLinks { display: flex; align-items: center; gap: 8px; margin-left: auto; a { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px; border-radius: 8px; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); white-space: nowrap; font-size: 13px; } a:hover { color: var(--MI_THEME-accent); border-color: var(--MI_THEME-accent); } i { color: var(--MI_THEME-accent); font-size: 18px; } }
+.desktopGallery .feedTools { margin-left: 0; gap: 4px; }
+.desktopGallery .filterBar { padding-bottom: 14px; margin-bottom: 20px; }
+.desktopGallery .feedFilters { gap: 10px; }
+.desktopGallery .feedFilters a { gap: 7px; min-width: 82px; font-size: 15px; }
+.desktopGallery .feedFilters a[aria-current] { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); &::after { display: none; } }
+.desktopGallery .works { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 20px; align-items: stretch; }
+@container community-feed (min-width: 850px) { .desktopGallery .works { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container community-feed (min-width: 1100px) { .desktopGallery .works { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container community-feed (min-width: 1360px) { .desktopGallery .works { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@container community-feed (min-width: 1800px) { .desktopGallery .works { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@container community-feed (max-width: 1179px) { .feedHeading > span { display: none; } .studioLinks a { padding-inline: 8px; } }
+@container community-feed (max-width: 849px) { .studioLinks { gap: 4px; } .studioLinks a { font-size: 12px; padding-inline: 6px; } .desktopGallery .refresh span { display: none; } .desktopGallery .feedFilters a { min-width: 60px; } }
 .work { min-width: 0; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius, 12px); }
 .cover { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; aspect-ratio: 16 / 9; max-height: 560px; border-radius: 16px; overflow: hidden; margin-top: 16px; background: var(--MI_THEME-buttonBg); position: relative; font-size: 13px; }
 .cover.coverEmpty { aspect-ratio: auto; min-height: 72px; flex-direction: row; justify-content: flex-start; padding: 20px; background: var(--MI_THEME-bg); }
