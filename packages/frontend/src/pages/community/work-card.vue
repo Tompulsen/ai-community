@@ -4,23 +4,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.immersive]: immersive }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
-	<WorkEngagement :key="immersive ? 'immersive' : 'standard'" :work="work" :viewsCount="views" :previewComments="!immersive" :immersive="immersive" @discussionChange="commentsOpen = $event">
-		<template v-if="immersive" #beforeActions><MkA :to="`/@${work.author.username}`" :class="$style.mobileAvatar" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`">{{ (work.author.name || work.author.username).slice(0, 1) }}<i class="ti ti-user" aria-hidden="true"></i></MkA></template>
-		<template v-if="immersive">
-			<div :class="$style.mobileMedia">
-				<WorkVideo v-if="previewVideo" :workId="work.id" :title="work.title" :url="previewVideo.url" :poster="cover" immersive :suspended="suspended || commentsOpen"/>
-				<MkA v-else-if="cover && !failed" :to="workPath(work.id)" :class="$style.mobileImage" :aria-label="`${t.preview}: ${work.title}`"><img :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/></MkA>
-				<div v-else :class="$style.mobileText"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><h2>{{ sensitive ? t.sensitive : work.title }}</h2><p v-if="!sensitive">{{ excerpt || t.noPreview }}</p><MkA :to="workPath(work.id)">{{ ft.mobileDetails }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
-			</div>
-			<div :class="$style.mobileCaption">
-				<MkA :to="`/@${work.author.username}`" :class="$style.mobileAuthor">@{{ work.author.name || work.author.username }}</MkA>
-				<MkA :to="workPath(work.id)" :class="$style.mobileDescription">{{ excerpt || work.title }}</MkA>
-				<WorkTags :tags="work.tags"/>
-				<MkA :to="workPath(work.id)" :class="$style.mobileDetail"><i class="ti ti-sparkles" aria-hidden="true"></i><span>{{ work.model || ft.mobileDetails }}</span><i class="ti ti-chevron-right" aria-hidden="true"></i></MkA>
-			</div>
-		</template>
-		<template v-else>
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.wide]: compact && wideCover }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
+	<template v-if="compact">
+		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: compactAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
+			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/>
+			<div v-else :class="$style.compactFallback"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : work.category === 'video' ? 'ti ti-player-play' : 'ti ti-photo'" aria-hidden="true"></i><p v-if="work.category === 'resource' && !sensitive">{{ excerpt || work.title }}</p><span v-else>{{ sensitive ? t.sensitive : t.noPreview }}</span></div>
+			<span v-if="!sensitive" :class="$style.mediaKind"><i :class="work.category === 'video' ? 'ti ti-player-play-filled' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><span v-if="work.files.length > 1">{{ work.files.length }}</span></span>
+		</MkA>
+		<h3 :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
+		<div :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><span :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span></div>
+	</template>
+	<WorkEngagement v-else :work="work" :viewsCount="views" previewComments>
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><div v-if="$slots.actions" :class="$style.authorActions"><slot name="actions"></slot></div></header>
 		<div :class="$style.content">
 			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
@@ -34,7 +28,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 			<div v-if="work.category === 'resource' && work.files.length" :class="$style.files"><MkA :to="workPath(work.id)"><i class="ti ti-files" aria-hidden="true"></i> {{ t.attachments }} · {{ work.files.length }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
 		</div>
-		</template>
 	</WorkEngagement>
 </article>
 </template>
@@ -52,10 +45,9 @@ import { useWorkView } from './use-work-view.js';
 import type { CommunityWork } from './types.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ work: CommunityWork; immersive?: boolean; suspended?: boolean }>();
-const commentsOpen = ref(false);
+const props = defineProps<{ work: CommunityWork; compact?: boolean }>();
 const root = ref<HTMLElement>();
-const views = useWorkView(root, () => props.work);
+const views = useWorkView(root, () => props.compact ? null : props.work);
 const failed = ref(false);
 const excerpt = computed(() => {
 	const text = props.work.text.trim();
@@ -66,7 +58,6 @@ const previewVideo = computed(() => sensitive.value ? undefined : props.work.fil
 const cover = computed(() => {
 	if (sensitive.value) return undefined;
 	const file = previewVideo.value ?? props.work.files.find(item => item.type.startsWith('image/') || item.type.startsWith('video/'));
-	if (props.immersive && !prefer.s.dataSaver.media && file?.type.startsWith('image/')) return safeWebUrl(file.url) ?? safeWebUrl(file.thumbnailUrl);
 	return file ? safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined) : undefined;
 });
 const previewAspect = computed(() => {
@@ -75,6 +66,13 @@ const previewAspect = computed(() => {
 	const width = file?.properties?.width, height = file?.properties?.height;
 	return typeof width === 'number' && typeof height === 'number' && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? `${width} / ${height}` : undefined;
 });
+const coverRatio = computed(() => {
+	const file = previewVideo.value ?? props.work.files.find(item => item.type.startsWith('image/'));
+	const width = file?.properties?.width, height = file?.properties?.height;
+	return typeof width === 'number' && typeof height === 'number' && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? width / height : 3 / 4;
+});
+const wideCover = computed(() => !!cover.value && coverRatio.value >= 1.7);
+const compactAspect = computed(() => wideCover.value ? '16 / 9' : String(Math.max(.7, Math.min(1.3, coverRatio.value))));
 watch(cover, () => { failed.value = false; });
 </script>
 
@@ -101,17 +99,14 @@ watch(cover, () => { failed.value = false; });
 @media (prefers-reduced-motion: reduce) { .card, .previewAction { transition: none; } }
 @container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { gap: 8px; } .authorActions { flex-basis: 100%; justify-content: flex-end; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
 
-.card.immersive { @include work-palette.immersive; position: relative; height: var(--mobile-feed-height); min-height: 280px; padding: 0; border: 0; border-radius: 0; background: var(--work-stage); color: var(--work-stage-fg); scroll-snap-align: start; scroll-snap-stop: always; overflow: clip; container-type: normal; }
-.mobileMedia { position: absolute; inset: 0; }
-.mobileImage { display: block; width: 100%; height: 100%; img { display: block; width: 100%; height: 100%; object-fit: contain; } }
-.mobileCaption { position: absolute; bottom: 66px; left: max(16px, env(safe-area-inset-left)); right: 82px; display: grid; gap: 7px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
-.mobileCaption::before { content: ''; position: absolute; inset: -72px -82px -66px -16px; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 78%, transparent)); pointer-events: none; }
-.mobileCaption > * { position: relative; }
-.mobileAuthor { font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-block: 5px; }
-.mobileDescription { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.55; font-size: 14px; }
-.mobileDetail { display: flex; align-items: center; gap: 7px; min-height: 28px; font-size: 12px; span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
-.mobileAvatar { position: relative; display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 12px; box-sizing: border-box; border: 2px solid var(--work-stage-fg); border-radius: 50%; background: var(--work-stage-border); font-size: 20px; font-weight: 600; text-shadow: none; i { position: absolute; bottom: -9px; right: -1px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--work-stage-accent); color: var(--work-stage-fg); font-size: 12px; } }
-.mobileText { position: absolute; inset: 84px 80px 210px 24px; overflow: hidden; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 12px; > i { color: var(--work-stage-muted); font-size: 30px; } h2 { font-size: 25px; line-height: 1.4; margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; } p { margin: 0; color: var(--work-stage-muted); line-height: 1.8; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; } a { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; text-decoration: underline; } }
-@media (max-height: 580px) { .mobileCaption { bottom: 58px; } .mobileText { inset-block: 70px 170px; } .mobileText p { -webkit-line-clamp: 2; } }
-@media (max-height: 500px) { .mobileCaption { right: 120px; bottom: 58px; gap: 2px; } .mobileAuthor { font-size: 15px; } .mobileDescription { -webkit-line-clamp: 1; font-size: 13px; } .mobileText { right: 120px; bottom: 155px; } .mobileText h2 { font-size: 18px; -webkit-line-clamp: 2; } .mobileText p { display: none; } }
+.card.compact { @include work-palette.immersive; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--work-stage-fg); container-type: normal; align-self: start; }
+.compact.wide { grid-column: 1 / -1; }
+.compact :focus-visible { outline-color: var(--work-stage-fg); outline-offset: -2px; }
+.compactPreview { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 8px; background: var(--work-stage-border); aspect-ratio: 3 / 4; img { display: block; width: 100%; height: 100%; object-fit: cover; } }
+.compactPreview:active { opacity: .85; }
+.compactFallback { display: flex; height: 100%; padding: 18px 14px; box-sizing: border-box; flex-direction: column; justify-content: center; gap: 12px; color: var(--work-stage-muted); > i { font-size: 26px; } p { color: var(--work-stage-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 7; margin: 0; font-size: 14px; line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; } > span { font-size: 12px; } }
+.mediaKind { position: absolute; bottom: 7px; right: 8px; display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
+.compactTitle { margin: 6px 1px 0; font-size: 14px; font-weight: 500; line-height: 1.5; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; } }
+.compactMeta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 36px; margin-inline: 1px; color: var(--work-stage-muted); font-size: 12px; font-variant-numeric: tabular-nums; > a { display: flex; min-width: 0; align-items: center; gap: 5px; min-height: 36px; > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } } > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; } }
+.compactAvatar { display: grid; flex: 0 0 auto; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--work-stage-border); color: var(--work-stage-fg); font-size: 10px; }
 </style>

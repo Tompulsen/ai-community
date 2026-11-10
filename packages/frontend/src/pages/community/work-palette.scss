@@ -17,4 +17,18 @@
     --work-stage-border: #252526;
     --work-stage-accent: #fe2c55;
     --work-stage-cyan: #25f4ee;
+    --work-stage-favorite: #ffcf53;
+}
+
+// The supplied mobile reference keeps the discussion sheet white in both themes.
+@mixin discussion {
+	--MI_THEME-panel: #fff;
+	--MI_THEME-fg: #19191c;
+	--MI_THEME-fgTransparentWeak: #747478;
+	--MI_THEME-divider: #ededee;
+	--MI_THEME-inputBorder: #d4d4d7;
+	--MI_THEME-input: #f4f4f5;
+	--MI_THEME-buttonBg: #f4f4f5;
+	--MI_THEME-buttonHoverBg: #e9e9eb;
+	--MI_THEME-accent: #b51d3e;
 }

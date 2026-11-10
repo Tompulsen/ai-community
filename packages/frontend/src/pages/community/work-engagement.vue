@@ -8,32 +8,42 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<div :class="$style.main" data-testid="work-main">
 	<slot></slot>
 	<div :class="$style.actions" data-testid="work-actions">
-		<slot name="beforeActions"></slot>
-		<button ref="commentTrigger" type="button" class="_button" :class="{ [$style.active]: showComments }" :title="!discussion && !previewComments && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i :class="immersive ? 'ti ti-message-circle-filled' : 'ti ti-message-circle'" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
-		<button type="button" class="_button" :class="{ [$style.active]: repostState === 'sent', [$style.reposted]: repostConfirmed }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
-		<button type="button" class="_button" :class="{ [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked || immersive ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
+		<slot name="beforeActions"><div v-if="immersive" :class="$style.authorControl">
+			<MkA :to="`/@${work.author.username}`" :class="$style.authorAvatar" :aria-label="t.viewAuthor"><MkAvatar v-if="author" :user="author" :link="false" :preview="false"/><span v-else>{{ (work.author.name || work.author.username).slice(0, 1) }}</span></MkA>
+			<button v-if="!ownWork" type="button" class="_button" :class="[$style.follow, { [$style.followed]: following || followPending }]" :aria-label="followLabel" :title="followLabel" :aria-pressed="following || followPending" :aria-busy="followBusy" :disabled="followBusy" data-testid="work-follow" @click="onFollow"><i :class="followPending ? 'ti ti-clock' : following ? 'ti ti-check' : 'ti ti-plus'" aria-hidden="true"></i></button>
+		</div></slot>
+		<button ref="commentTrigger" type="button" class="_button" :class="[$style.commentAction, { [$style.active]: showComments }]" :title="!discussion && !previewComments && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i :class="immersive ? 'ti ti-message-circle-filled' : 'ti ti-message-circle'" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
+		<button v-if="!immersive" type="button" class="_button" :class="{ [$style.active]: repostState === 'sent', [$style.reposted]: repostConfirmed }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
+		<button type="button" class="_button" :class="[$style.likeAction, { [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }]" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked || immersive ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
 		<span :class="$style.views" :title="t.viewHint" :aria-label="`${t.views} ${viewsCount ?? work.viewsCount ?? '—'}`"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>{{ format(viewsCount ?? work.viewsCount) }}</span></span>
-		<button type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
-		<ReportButton :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
+		<button v-if="immersive" type="button" class="_button" :class="[$style.favoriteAction, { [$style.favorited]: favorite }]" :aria-label="favorite ? t.favorited : t.favorite" :aria-pressed="!!favorite" :aria-busy="favoriteBusy" :disabled="favoriteBusy || !work.approvedNoteId" data-testid="work-favorite" @click="onFavorite"><i class="ti ti-star-filled" aria-hidden="true"></i><span>{{ favorite ? t.favorited : t.favorite }}</span></button>
+		<button v-if="immersive" ref="shareTrigger" type="button" class="_button" :class="$style.shareAction" :aria-label="t.shareWork" :aria-expanded="showShare" data-testid="work-share" @click="openShare"><i class="ti ti-share-3" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
+		<button v-else type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
+		<ReportButton v-if="!immersive" :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
+		<div v-if="immersive && $slots.remixAction" :class="$style.remixAction"><slot name="remixAction"></slot></div>
 	</div>
+	<div :class="$style.feedbackStack">
 	<p v-if="working" :class="$style.feedback" role="status">{{ activeAction === 'like' ? t.updatingLike : activeAction === 'repost' ? t.reposting : t.refreshingInteraction }}</p>
 	<p v-else-if="reactionFeedback" :class="$style.feedback" role="status">{{ reactionFeedback }}</p>
 	<p v-if="!working && repostState === 'sent'" :class="$style.feedback" role="status">{{ t.repostSuccess }}</p>
 	<p v-if="actionFailed || reactionFailed" :class="$style.feedback" role="alert">{{ t.interactionFailed }} <button type="button" class="_button" :disabled="working || busy" @click="retryInteraction">{{ t.retry }}</button></p>
 	<p v-if="!working && (repostState === 'rejected' || repostState === 'uncertain')" :class="$style.feedback" role="status">{{ repostState === 'uncertain' ? t.repostUncertain : t.repostFailed }}</p>
 	<p v-if="shareFailed" :class="$style.feedback" role="alert">{{ t.shareFailed }} <MkA :to="workPath(work.id)">{{ work.title }}</MkA></p>
+	<p v-if="followFailed" :class="$style.feedback" role="alert">{{ t.followFailed }} <button type="button" class="_button" :disabled="followBusy" @click="readAuthor">{{ t.retry }}</button></p>
+	<p v-if="favoriteFailed" :class="$style.feedback" role="alert">{{ t.favoriteFailed }} <button type="button" class="_button" :disabled="favoriteBusy" @click="readFavorite">{{ t.refreshFavorite }}</button></p>
+	</div>
 	<slot name="afterActions"></slot>
 	</div>
 	<Teleport defer to="#misskey-popup-container" :disabled="!immersive">
 	<div v-if="showComments || previewComments" ref="sheetLayer" :class="immersive ? $style.sheetLayer : $style.discussionContainer" :style="immersive ? { zIndex: sheetZIndex } : undefined" @click.self="immersive && closeComments()">
 	<Transition :css="prefer.s.animation" :enterActiveClass="$style.discussionEnter" :enterFromClass="$style.discussionFrom">
-	<section v-if="showComments || previewComments" ref="commentPanel" :role="immersive ? 'dialog' : undefined" :aria-modal="immersive ? true : undefined" :style="immersive ? { zIndex: sheetZIndex } : undefined" :tabindex="immersive ? -1 : undefined" :class="[$style.discussion, { [$style.commentSheet]: immersive, [$style.previewDiscussion]: previewComments, [$style.withoutComments]: previewComments && !comments.length }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion" @keydown="commentPanelKeydown">
+	<section v-if="showComments || previewComments" ref="commentPanel" :role="immersive ? 'dialog' : undefined" :aria-modal="immersive ? true : undefined" :style="immersive ? { zIndex: sheetZIndex } : undefined" :tabindex="immersive ? -1 : undefined" :class="[$style.discussion, { [$style.commentSheet]: immersive, [$style.previewDiscussion]: previewComments, [$style.withoutComments]: previewComments && !comments.length }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion" @keydown="sheetKeydown">
 		<header v-if="discussion || previewComments || immersive" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :title="t.refresh" :aria-busy="refreshing" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button><button v-if="immersive" type="button" class="_button" :class="$style.closeSheet" :aria-label="t.closeComments" @click="closeComments"><i class="ti ti-x" aria-hidden="true"></i></button></header>
-		<template v-for="part in previewComments ? ['comments', 'composer'] : ['composer', 'comments']" :key="part">
+		<template v-for="part in previewComments || immersive ? ['comments', 'composer'] : ['composer', 'comments']" :key="part">
 		<div v-if="part === 'composer'" :class="$style.commentEntry">
 		<button v-if="previewComments && !showComments && $i" type="button" class="_button" :class="$style.commentPrompt" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.writeComment }}<i class="ti ti-pencil" aria-hidden="true"></i></button>
 		<form v-else-if="$i" :class="$style.composer" @submit.prevent="submitComment">
-			<label><textarea :ref="el => { input = (el as HTMLTextAreaElement | null) ?? undefined; }" v-model="draft" :placeholder="t.commentPlaceholder" :aria-label="t.comment" :readonly="commentState === 'sending'" rows="2" data-testid="work-comment-input" @keydown="onCommentKeydown"></textarea></label>
+			<label><textarea :ref="el => { input = (el as HTMLTextAreaElement | null) ?? undefined; }" v-model="draft" :placeholder="t.commentPlaceholder" :aria-label="t.comment" :readonly="commentState === 'sending'" :rows="immersive ? 1 : 2" data-testid="work-comment-input" @keydown="onCommentKeydown"></textarea></label>
 			<div :class="$style.send"><span v-if="draftLength" :class="{ [$style.error]: draftLength > maxLength }">{{ draftLength }} / {{ maxLength }}</span><button type="submit" class="_button" :disabled="!canSubmitComment" data-testid="work-send-comment">{{ commentState === 'sending' ? t.sending : t.send }}</button></div>
 			<p :class="$style.keyboardHint">{{ t.commentShortcut }}</p>
 		</form>
@@ -42,21 +52,35 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<p v-if="commentState === 'sent'" :class="$style.feedback" role="status">{{ t.sent }}</p>
 		<p v-if="commentState === 'rejected' || commentState === 'uncertain'" :class="$style.feedback" role="alert">{{ commentState === 'uncertain' ? t.uncertain : t.commentFailed }} <button v-if="commentState === 'uncertain'" type="button" class="_button" @click="acknowledgeRetry">{{ t.retrySend }}</button></p>
 		</div>
-		<template v-else>
+		<div v-else :class="immersive ? $style.commentBody : $style.discussionContainer">
 		<p v-if="state === 'loading' || (refreshingComments && !comments.length)" :class="$style.feedback" role="status">{{ state === 'loading' ? t.loading : t.loadingComments }}</p>
 		<p v-else-if="state === 'error' || state === 'unavailable'" :class="$style.feedback" role="alert">{{ state === 'unavailable' ? t.unavailable : t.failed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="commentsFailed" :class="$style.feedback" role="alert">{{ t.commentsFailed }} <button type="button" class="_button" @click="refresh">{{ t.retry }}</button></p>
 		<p v-if="deleteNotice || deleteError" :ref="el => { deleteFeedback = (el as HTMLElement | null) ?? undefined; }" :class="$style.feedback" :role="deleteError ? 'alert' : 'status'" tabindex="-1">{{ deleteError || deleteNotice }}</p>
 		<div v-if="comments.length" :ref="el => { viewport = (el as HTMLElement | null) ?? undefined; }" :class="{ [$style.previewViewport]: previewComments }" data-testid="comment-viewport">
-		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><button v-if="canDeleteComment(reply)" type="button" class="_button" :class="$style.deleteComment" :disabled="!!deletingCommentId" :aria-label="t.deleteComment" data-testid="delete-work-comment" @click="removeComment(reply)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingCommentId === reply.id ? t.deletingComment : t.deleteComment }}</button><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text && reply.cw == null"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="!reply.isHidden && !reply.deletedAt && (reply.files?.length || reply.cw != null)" :class="$style.remixPreview" data-testid="comment-result-preview"><MkMediaList v-if="reply.files?.length && reply.cw == null" :mediaList="reply.files" :user="reply.user"/><MkNoteSimple v-else :note="reply"/><MkA :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div></div></li></ul>
+		<ul :ref="el => { list = (el as HTMLElement | null) ?? undefined; }" :class="$style.comments"><li v-for="(reply, index) in comments" :key="reply.id" :class="{ [$style.hiddenComment]: previewComments && index >= visibleCount }" :aria-hidden="previewComments && index >= visibleCount ? true : undefined" :inert="previewComments && index >= visibleCount" data-testid="work-comment"><MkA :to="`/@${reply.user.username}`" :class="$style.avatar"><MkAvatar :user="reply.user" :link="false" :preview="false"/></MkA><div :class="$style.reply"><div :class="$style.replyHeader"><MkA :to="`/@${reply.user.username}`"><strong>{{ reply.user.name || reply.user.username }}</strong></MkA><time v-if="!immersive" :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><button v-if="canDeleteComment(reply)" type="button" class="_button" :class="$style.deleteComment" :disabled="!!deletingCommentId" :aria-label="t.deleteComment" data-testid="delete-work-comment" @click="removeComment(reply)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingCommentId === reply.id ? t.deletingComment : t.deleteComment }}</button><ReportButton :submissionId="work.id" :noteId="reply.id" :authorId="reply.user.id" @login="requestLogin"/></div><p v-if="reply.text && reply.cw == null"><Mfm :text="reply.text" :plain="true"/></p><div v-if="reply.renote && !reply.renote.isHidden && !reply.renote.deletedAt" :class="$style.remixPreview" data-testid="comment-work-preview"><MkMediaList v-if="reply.renote.files?.length && reply.renote.cw == null" :mediaList="reply.renote.files" :user="reply.renote.user"/><MkNoteSimple v-else :note="reply.renote"/><MkA :to="commentWorkPath(reply.text) ?? `/notes/${reply.renote.id}`" :class="$style.attachment">{{ t.videoDetail }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="!reply.isHidden && !reply.deletedAt && (reply.files?.length || reply.cw != null)" :class="$style.remixPreview" data-testid="comment-result-preview"><MkMediaList v-if="reply.files?.length && reply.cw == null" :mediaList="reply.files" :user="reply.user"/><MkNoteSimple v-else :note="reply"/><MkA :to="`/notes/${reply.id}`" :class="$style.attachment">{{ t.attachmentComment }} <i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div><div v-if="immersive" :class="$style.commentMeta"><time :datetime="reply.createdAt">{{ date(reply.createdAt) }}</time><MkA :to="`/notes/${reply.id}`">{{ t.reply }}<span v-if="reply.repliesCount"> · {{ format(reply.repliesCount) }}</span></MkA><WorkCommentLike :note="reply" @login="requestLogin"/></div></div></li></ul>
 		</div>
 		<p v-else-if="state === 'ready' && !refreshingComments && !commentsFailed" :class="$style.empty">{{ replyCount ? t.noPreviewComments : t.emptyComments }}</p>
 		<div v-if="previewComments && (replyCount || comments.length)" :ref="el => { footer = (el as HTMLElement | null) ?? undefined; }" :class="$style.previewFooter"><MkA :to="workPath(work.id)" data-testid="all-comments">{{ t.allComments }}<i class="ti ti-arrow-up-right" aria-hidden="true"></i></MkA></div>
 		<button v-else-if="!previewComments && commentsMore" type="button" class="_button" :class="$style.more" :disabled="loadingComments || refreshing" @click="loadMoreComments">{{ loadingComments ? t.loadingComments : t.loadMore }}</button>
-		</template>
+		</div>
 		</template>
 	</section>
 	</Transition>
+	</div>
+	<div v-if="showShare && immersive" ref="shareLayer" :class="$style.sheetLayer" :style="{ zIndex: shareZIndex }" @click.self="closeShare" @keydown="sheetKeydown">
+		<section ref="sharePanel" role="dialog" aria-modal="true" :aria-label="t.shareWork" tabindex="-1" :class="$style.shareSheet" data-testid="work-share-sheet">
+			<header><h2>{{ t.shareWork }}</h2><button type="button" class="_button" :aria-label="t.closeShare" @click="closeShare"><i class="ti ti-x" aria-hidden="true"></i></button></header>
+			<div :class="$style.shareOptions">
+				<button v-if="nativeSharing" type="button" class="_button" @click="nativeShare"><i class="ti ti-share" aria-hidden="true"></i>{{ t.nativeShare }}</button>
+				<button type="button" class="_button" :disabled="shareState === 'copying'" @click="share"><i class="ti ti-link" aria-hidden="true"></i>{{ shareState === 'copied' ? t.copied : t.copyLink }}</button>
+				<button type="button" class="_button" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i>{{ repostState === 'sent' ? t.reposted : t.repost }}</button>
+				<ReportButton :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
+			</div>
+			<p v-if="repostState === 'sent'" role="status">{{ t.repostSuccess }}</p><p v-else-if="repostState === 'uncertain' || repostState === 'rejected'" role="alert">{{ repostState === 'uncertain' ? t.repostUncertain : t.repostFailed }}</p>
+			<p v-if="actionFailed" role="alert">{{ t.interactionFailed }}</p>
+			<p v-if="shareFailed" role="alert">{{ t.shareUnavailable }} <MkA :to="workPath(work.id)">{{ work.title }}</MkA></p>
+		</section>
 	</div>
 	</Teleport>
 </div>
@@ -66,11 +90,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { url } from '@@/js/config.js';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import ReportButton from './report-button.vue';
+import WorkCommentLike from './work-comment-like.vue';
 import MkMediaList from '@/components/MkMediaList.vue';
 import MkNoteSimple from '@/components/MkNoteSimple.vue';
 import type { CommunityWork } from './types.js';
 import { workText as t, workPath } from './interactions-copy.js';
 import { useCommentPreview } from './use-comment-preview.js';
+import { useWorkSocial } from './use-work-social.js';
 import { useWorkInteractions } from '@/pages/home/use-work-interactions.js';
 import type { entities } from 'misskey-js';
 import { misskeyApi } from '@/utility/misskey-api.js';
@@ -91,7 +117,14 @@ function commentWorkPath(text: string | null) {
 	} catch { return null; }
 }
 
-const showComments = ref(!!props.discussion);
+const showComments = ref(!!props.discussion && !props.immersive);
+const showShare = ref(false);
+const shareLayer = ref<HTMLElement>();
+const sharePanel = ref<HTMLElement>();
+const shareTrigger = ref<HTMLButtonElement>();
+const shareZIndex = ref(0);
+const nativeSharing = typeof navigator.share === 'function';
+let releaseShare: (() => void) | undefined;
 const commentPanel = ref<HTMLElement>();
 const sheetLayer = ref<HTMLElement>();
 const commentTrigger = ref<HTMLButtonElement>();
@@ -100,27 +133,49 @@ let releaseSheet: (() => void) | undefined;
 
 function closeComments() { showComments.value = false; void nextTick(() => commentTrigger.value?.focus({ preventScroll: true })); }
 
-function commentPanelKeydown(event: KeyboardEvent) {
+function sheetKeydown(event: KeyboardEvent) {
 	if (!props.immersive) return;
-	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeComments(); }
-	if (event.key !== 'Tab' || !commentPanel.value) return;
-	const controls = [...commentPanel.value.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], textarea:not(:disabled)')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
+	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (showShare.value) closeShare(); else closeComments(); }
+	const panel = showShare.value ? sharePanel.value : commentPanel.value;
+	if (event.key !== 'Tab' || !panel) return;
+	const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], textarea:not(:disabled)')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
 	const first = controls[0], last = controls.at(-1);
-	if (event.shiftKey && (window.document.activeElement === first || window.document.activeElement === commentPanel.value)) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && window.document.activeElement === last) { event.preventDefault(); first?.focus(); }
+	if (event.shiftKey && (window.document.activeElement === first || window.document.activeElement === panel)) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && window.document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }
 
-watch([showComments, () => props.immersive], ([show, immersive]) => {
+watch([showComments, showShare, () => props.immersive], ([show, sharing, immersive]) => {
 	releaseSheet?.(); releaseSheet = undefined;
-	emit('discussionChange', show && !!immersive);
+	emit('discussionChange', (show || sharing) && !!immersive);
 	if (show && immersive) sheetZIndex.value = os.claimZIndex('middle');
 }, { flush: 'sync' });
 watch([showComments, sheetLayer, () => props.immersive], ([show, panel, immersive]) => {
 	if (show && immersive && panel && !releaseSheet) releaseSheet = focusTrap(panel).release;
 }, { flush: 'post' });
+watch([showShare, shareLayer], ([show, layer]) => {
+	releaseShare?.(); releaseShare = undefined;
+	if (show && layer) releaseShare = focusTrap(layer).release;
+}, { flush: 'post' });
+
+function closeShare() { showShare.value = false; releaseShare?.(); releaseShare = undefined; void nextTick(() => shareTrigger.value?.focus({ preventScroll: true })); }
+
+async function openShare() { showComments.value = false; shareZIndex.value = os.claimZIndex('middle'); showShare.value = true; await nextTick(); sharePanel.value?.focus({ preventScroll: true }); }
+
+async function nativeShare() {
+	const request = shareGeneration;
+	try { await navigator.share({ title: props.work.title, url: new URL(workPath(props.work.id), window.location.origin).href }); } catch (error) { if (active && request === shareGeneration && !(error instanceof Error && error.name === 'AbortError')) shareFailed.value = true; }
+}
+
+const { author, favorite, following, followPending, ownWork, followBusy, favoriteBusy, followFailed, favoriteFailed, toggleFavorite, toggleFollow, readAuthor, readFavorite } = useWorkSocial(() => props.work, () => !!props.immersive);
+const followLabel = computed(() => following.value ? t.unfollow : followPending.value ? t.cancelFollow : t.follow);
+
+async function onFavorite() { if (!$i) { void requestLogin(); return; } await toggleFavorite(); }
+
+async function onFollow() { if (!$i) { void requestLogin(); return; } await toggleFollow(async () => !(await os.confirm({ type: 'question', text: following.value ? t.unfollowConfirm : followPending.value ? t.cancelFollowConfirm : t.followConfirm })).canceled); }
+
 const previewVisible = ref(false);
 const input = ref<HTMLTextAreaElement>();
 const signin = ref<HTMLButtonElement>();
-const { state, note, comments, commentsFailed, commentsMore, loadingComments, loadMoreComments, refreshing, refreshingComments, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, refreshNote, toggleLike, sendComment, repost, repostState } = useWorkInteractions(() => props.work.approvedNoteId, { immediate: !!props.discussion, publicOnly: false, loadComments: () => showComments.value || (props.previewComments === true && previewVisible.value), commentLimit: 20 });
+const { state, note, comments, commentsFailed, commentsMore, loadingComments, loadMoreComments, refreshing, refreshingComments, myReaction, liked, otherReaction, likes, reactionBusy, reactionFailed, draft, draftLength, maxLength, commentState, busy, canComment, refresh, refreshNote, toggleLike, sendComment, repost, repostState } = useWorkInteractions(() => props.work.approvedNoteId, { immediate: !!props.discussion || !!props.immersive, publicOnly: false, loadComments: () => showComments.value || (props.previewComments === true && previewVisible.value), commentLimit: 20 });
 const { root, viewport, list, footer, inView, visibleCount, schedule } = useCommentPreview(() => !!props.previewComments, () => comments.value, fillPreview);
 watch(inView, value => { previewVisible.value = value; });
 let emptyPages = 0;
@@ -183,7 +238,7 @@ async function requestLogin() {
 
 function clearFeedback() { deleteGeneration++; deleteController?.abort(); deletingCommentId.value = ''; deleteNotice.value = ''; deleteError.value = ''; actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; repostConfirmed.value = false; }
 
-function deactivate() { if (props.immersive) showComments.value = false; releaseSheet?.(); releaseSheet = undefined; active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
+function deactivate() { if (props.immersive) showComments.value = false; showShare.value = false; releaseShare?.(); releaseShare = undefined; releaseSheet?.(); releaseSheet = undefined; active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
 
 onActivated(() => { active = true; });
 onDeactivated(deactivate);
@@ -225,9 +280,11 @@ async function removeComment(reply: entities.Note) {
 
 async function openComment() {
 	if (!props.discussion && !props.previewComments && showComments.value) { showComments.value = false; return; }
+	showShare.value = false;
 	showComments.value = true;
 	await nextTick();
-	(input.value ?? signin.value)?.focus();
+	if (props.immersive) commentPanel.value?.focus({ preventScroll: true });
+	else (input.value ?? signin.value)?.focus();
 }
 
 async function submitComment() {
@@ -372,28 +429,56 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 
 .root.immersive { @include work-palette.immersive; position: relative; height: 100%; color: var(--work-stage-fg); }
 .immersive .main { position: relative; height: 100%; }
-.immersive .actions { position: absolute; bottom: 76px; right: max(9px, env(safe-area-inset-right)); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 13px; width: 52px; padding: 0; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
+.immersive .actions { position: absolute; bottom: 16px; right: max(10px, env(safe-area-inset-right)); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 13px; width: 52px; padding: 0; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
 .immersive .actions > button { display: flex; flex-direction: column; gap: 1px; width: 48px; min-height: 49px; padding: 0; font-size: 12px; background: transparent; }
 .immersive .actions i { font-size: 31px; filter: drop-shadow(0 1px 2px var(--work-stage)); }
-.immersive .actions > button:nth-of-type(1) { order: 2; }
-.immersive .actions > button:nth-of-type(2) { order: 3; }
-.immersive .actions > button:nth-of-type(3) { order: 1; }
-.immersive .actions > button:nth-of-type(4) { order: 4; }
-.immersive .actions > span:not(.views) { order: 5; }
-.immersive .actions > span:not(.views) > button { color: inherit; }
-.immersive .actions > a i { font-size: 12px; }
+.immersive .actions .authorControl { order: 0; }
+.immersive .actions .likeAction { order: 1; }
+.immersive .actions .commentAction { order: 2; }
+.immersive .actions .favoriteAction { order: 3; }
+.immersive .actions .shareAction { order: 4; }
+.immersive .actions .remixAction { order: 5; }
 .immersive .actions .views { display: none; }
 .immersive .actions .liked { color: var(--work-stage-accent); }
+.immersive .actions .favorited { color: var(--work-stage-favorite); }
 .immersive .actions .copied { color: var(--work-stage-cyan); }
-.immersive .main > .feedback { position: absolute; top: 72px; left: 16px; right: 72px; z-index: 2; padding: 8px 12px; border-radius: 6px; background: var(--work-stage); color: var(--work-stage-fg); }
+.authorControl { position: relative; display: grid; place-items: start center; width: 52px; height: 67px; }
+.authorAvatar { display: grid; place-items: center; width: 44px; height: 44px; border: 2px solid var(--work-stage-fg); border-radius: 50%; overflow: hidden; box-sizing: border-box; background: var(--work-stage-border); font-size: 20px; text-shadow: none; > * { width: 100%; height: 100%; display: grid; place-items: center; } }
+.authorControl .follow { display: grid; place-items: center; position: absolute; width: 44px; height: 44px; bottom: 0; padding: 0; i { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--work-stage-accent); font-size: 18px; filter: none; } }
+.authorControl .followed i { background: var(--work-stage-fg); color: var(--work-stage-accent); }
+.remixAction { width: 52px; }
+.immersive .feedbackStack { position: absolute; top: 62px; left: 16px; right: 76px; z-index: 2; max-height: 35%; overflow: auto; }
+.immersive .feedbackStack .feedback { padding: 8px 12px; border-radius: 6px; background: var(--work-stage); color: var(--work-stage-fg); }
 .discussionContainer { display: contents; }
-.sheetLayer { @include work-palette.immersive; position: fixed; inset: 0; display: flex; align-items: flex-end; background: color-mix(in srgb, var(--work-stage) 55%, transparent); }
-.commentSheet { position: relative; width: 100%; max-height: min(72dvh, 680px); min-height: 260px; padding: 6px 18px max(18px, env(safe-area-inset-bottom)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
-.commentSheet :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
-.commentSheet .commentHeading { position: sticky; top: -6px; z-index: 1; padding-block: 8px; margin: 0; background: var(--MI_THEME-panel); }
+.sheetLayer { @include work-palette.immersive; position: fixed; inset: 0; display: flex; align-items: flex-end; background: color-mix(in srgb, var(--work-stage) 8%, transparent); }
+// The supplied reference uses a white discussion surface in either application theme.
+.commentSheet, .shareSheet {
+	@include work-palette.discussion;
+	position: relative; width: 100%; box-sizing: border-box; border-radius: 16px 16px 0 0; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55;
+	button, textarea { font: inherit; }
+	:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
+}
+.commentSheet { display: flex; flex-direction: column; height: min(64dvh, 680px); min-height: min(260px, 64dvh); max-height: 84dvh; overflow: hidden; }
+.commentSheet .commentHeading { flex: 0 0 auto; padding: 12px 18px 6px; margin: 0; border-bottom: 1px solid var(--MI_THEME-divider); h2 { padding-block: 10px; font-size: 16px; font-weight: 700; } h2 span { color: var(--MI_THEME-fg); font-weight: 700; opacity: 1; } }
 .commentSheet .closeSheet { margin-left: auto; }
+.commentBody { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 18px 10px; }
+.commentSheet .commentEntry { flex: 0 0 auto; max-height: 45%; overflow: auto; padding: 10px 14px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--MI_THEME-divider); }
+.commentSheet .composer { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; margin: 0; border: 0; border-radius: 24px; background: var(--MI_THEME-input); label { flex: 1; min-width: 0; } textarea { min-height: 40px; max-height: 100px; padding: 8px 0; resize: none; font-size: 16px; line-height: 1.5; } }
+.commentSheet .send { flex: 0 0 auto; align-self: center; gap: 4px; flex-direction: column; button { min-height: 40px; padding: 8px 12px; border-radius: 20px; font-size: 13px; } }
+.commentSheet .keyboardHint { display: none; }
+.commentSheet .signin { margin: 0; border: 0; border-radius: 24px; text-align: left; padding-inline: 18px; color: var(--MI_THEME-fgTransparentWeak); }
+.commentSheet .comments li { padding: 16px 0; gap: 12px; border: 0; }
+.commentSheet .avatar { flex-basis: 38px; width: 38px; height: 38px; }
+.commentSheet .replyHeader { min-height: 22px; gap: 4px; strong { color: var(--MI_THEME-fgTransparentWeak); font-weight: 400; } > a { flex: 1; } > span { margin-left: auto; } }
+.commentSheet .reply p { margin-top: 3px; font-size: 16px; line-height: 1.55; }
+.commentSheet .replyHeader .deleteComment { font-size: 0; padding: 0 6px; i { font-size: 15px; } }
+.commentSheet .replyHeader > span > button { min-height: 32px; padding: 0 6px; > span { display: none; } }
+.commentMeta { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); a { display: inline-flex; min-height: 36px; align-items: center; } }
+.commentSheet .remixPreview { border: 0; padding: 0; max-width: min(260px, 100%); }
 .commentSheet.discussionFrom { transform: translateY(24px); }
-@media (max-height: 580px) { .immersive .actions { gap: 2px; bottom: 62px; } .immersive .actions i { font-size: 25px; } .immersive .actions > button { min-height: 44px; } }
+.shareSheet { padding: 12px 18px max(24px, env(safe-area-inset-bottom)); header { display: flex; align-items: center; justify-content: space-between; } h2 { font-size: 16px; margin: 0; } header button { width: 44px; height: 44px; font-size: 20px; } p { font-size: 13px; } }
+.shareOptions { display: flex; align-items: stretch; gap: 10px; padding-block: 18px; > button, > span { flex: 1; min-width: 0; } > button, > span > button { display: flex; width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 80px; padding: 8px 2px; border: 0; border-radius: 10px; background: var(--MI_THEME-buttonBg); font-size: 12px; } i { font-size: 24px; } }
+@media (max-height: 580px) { .immersive .actions { gap: 3px; bottom: 10px; } .immersive .actions i { font-size: 25px; } .immersive .actions > button { min-height: 44px; } .authorControl { height: 58px; } .authorControl .follow i { font-size: 17px; } }
 @media (prefers-reduced-motion: reduce) { .commentSheet { transition: none; } }
-@media (max-height: 500px) { .immersive .actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; width: 92px; bottom: 66px; } .immersive .actions > a { margin-bottom: 0; } }
+@media (max-height: 500px) { .immersive .actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; width: 92px; bottom: 12px; } .immersive .actions > a { margin-bottom: 0; } }
 </style>
