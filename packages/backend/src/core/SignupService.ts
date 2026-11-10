@@ -12,6 +12,8 @@ import type { MiMeta, UsedUsernamesRepository, UsersRepository } from '@/models/
 import { MiUser } from '@/models/User.js';
 import { MiUserProfile } from '@/models/UserProfile.js';
 import { MiExternalAccount } from '@/models/ExternalAccount.js';
+import { MiCommunityLotteryReferral } from '@/models/CommunityLottery.js';
+import { lotteryInviter } from '@/misc/community-lottery.js';
 import { IdService } from '@/core/IdService.js';
 import { MiUserKeypair } from '@/models/UserKeypair.js';
 import { MiUsedUsername } from '@/models/UsedUsername.js';
@@ -58,6 +60,7 @@ export class SignupService {
 		ignorePreservedUsernames?: boolean;
 		email?: string;
 		emailVerified?: boolean;
+		lotteryInviterId?: string;
 		externalIdentity?: { issuer: string; subject: string; name: string; };
 	}) {
 		const { username, password, passwordHash, host } = opts;
@@ -190,6 +193,11 @@ export class SignupService {
 					issuer: opts.externalIdentity.issuer, subject: opts.externalIdentity.subject,
 					userId: account.id, createdAt: new Date(),
 				});
+			}
+			const inviterId = lotteryInviter(opts.lotteryInviterId);
+			if (inviterId && inviterId !== account.id && account.host === null) {
+				const inviter = await transactionalEntityManager.findOneBy(MiUser, { id: inviterId, host: IsNull(), isSuspended: false, isDeleted: false });
+				if (inviter && !inviter.movedToUri) await transactionalEntityManager.insert(MiCommunityLotteryReferral, { userId: account.id, inviterId, createdAt: new Date() });
 			}
 			created = true;
 		});

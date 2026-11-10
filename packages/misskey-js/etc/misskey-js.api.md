@@ -152,6 +152,27 @@ type AdminCaptchaCurrentResponse = operations['admin___captcha___current']['resp
 type AdminCaptchaSaveRequest = operations['admin___captcha___save']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
+type AdminCommunityLotteryConfigResponse = operations['admin___community___lottery___config']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryFulfillRequest = operations['admin___community___lottery___fulfill']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryFulfillResponse = operations['admin___community___lottery___fulfill']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryRecordsRequest = operations['admin___community___lottery___records']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryRecordsResponse = operations['admin___community___lottery___records']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryUpdateRequest = operations['admin___community___lottery___update']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryUpdateResponse = operations['admin___community___lottery___update']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type AdminCommunityNotesRequest = operations['admin___community___notes']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
@@ -1329,6 +1350,21 @@ type CommunityFeaturedRequest = operations['community___featured']['requestBody'
 type CommunityFeaturedResponse = operations['community___featured']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
+type CommunityLotteryDrawRequest = operations['community___lottery___draw']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityLotteryDrawResponse = operations['community___lottery___draw']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityLotteryRecordsRequest = operations['community___lottery___records']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityLotteryRecordsResponse = operations['community___lottery___records']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type CommunityLotteryStatusResponse = operations['community___lottery___status']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type CommunityReportRequest = operations['community___report']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
@@ -1685,6 +1721,13 @@ declare namespace entities {
         AdminAvatarDecorationsUpdateRequest,
         AdminCaptchaCurrentResponse,
         AdminCaptchaSaveRequest,
+        AdminCommunityLotteryConfigResponse,
+        AdminCommunityLotteryFulfillRequest,
+        AdminCommunityLotteryFulfillResponse,
+        AdminCommunityLotteryRecordsRequest,
+        AdminCommunityLotteryRecordsResponse,
+        AdminCommunityLotteryUpdateRequest,
+        AdminCommunityLotteryUpdateResponse,
         AdminCommunityNotesRequest,
         AdminCommunityNotesResponse,
         AdminCommunityReviewRequest,
@@ -1944,6 +1987,11 @@ declare namespace entities {
         CommunityCommentsDeleteRequest,
         CommunityFeaturedRequest,
         CommunityFeaturedResponse,
+        CommunityLotteryDrawRequest,
+        CommunityLotteryDrawResponse,
+        CommunityLotteryRecordsRequest,
+        CommunityLotteryRecordsResponse,
+        CommunityLotteryStatusResponse,
         CommunityReportRequest,
         CommunitySubmissionsCreateRequest,
         CommunitySubmissionsCreateResponse,

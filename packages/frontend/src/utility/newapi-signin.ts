@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { rememberLotteryInvite } from './lottery-invite.js';
+
 export async function newApiSigninConfig(signal?: AbortSignal): Promise<{ enabled: boolean; issuer?: string; studioOrigin?: string; studioPath?: string; }> {
 	const response = await window.fetch('/api/newapi/config', { credentials: 'same-origin', cache: 'no-store', signal });
 	if (!response.ok) throw new Error('SSO_UNAVAILABLE');
@@ -31,7 +33,7 @@ export async function startNewApiSignin(returnTo = window.location.pathname + wi
 	const requestSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15000)]);
 	const response = await window.fetch('/api/newapi/start', {
 		method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: requestSignal,
-		headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnTo }),
+		headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnTo: returnTo.startsWith('/community/lottery') ? '/community/lottery' : returnTo, lotteryInviterId: rememberLotteryInvite() }),
 	});
 	if (!response.ok) throw new Error('SSO_UNAVAILABLE');
 	const { authorizationUrl } = await response.json();

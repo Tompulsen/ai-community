@@ -31,4 +31,7 @@ export class MiUserPending {
 		length: 128,
 	})
 	public password: string;
+
+	@Column({ ...id(), nullable: true })
+	public lotteryInviterId: string | null;
 }

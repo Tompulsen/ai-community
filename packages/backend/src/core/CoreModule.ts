@@ -43,6 +43,7 @@ import { MfmService } from './MfmService.js';
 import { ModerationLogService } from './ModerationLogService.js';
 import { CommunityModerationService } from './CommunityModerationService.js';
 import { CommunityService } from './CommunityService.js';
+import { CommunityLotteryService } from './CommunityLotteryService.js';
 import { NoteCreateService } from './NoteCreateService.js';
 import { NoteDeleteService } from './NoteDeleteService.js';
 import { NotePiningService } from './NotePiningService.js';
@@ -342,6 +343,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		MfmService,
 		ModerationLogService,
 		CommunityService,
+		CommunityLotteryService,
 		CommunityModerationService,
 		NoteCreateService,
 		NoteDeleteService,
@@ -646,6 +648,7 @@ const $ApQuestionService: Provider = { provide: 'ApQuestionService', useExisting
 		MfmService,
 		ModerationLogService,
 		CommunityService,
+		CommunityLotteryService,
 		CommunityModerationService,
 		NoteCreateService,
 		NoteDeleteService,

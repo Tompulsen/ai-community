@@ -44,6 +44,7 @@ import { MiRenoteMuting } from '@/models/RenoteMuting.js';
 import { MiCommunityViolation } from '@/models/CommunityViolation.js';
 import { MiCommunitySubmission } from '@/models/CommunitySubmission.js';
 import { MiCommunityTag } from '@/models/CommunityTag.js';
+import { MiCommunityLotteryAccount, MiCommunityLotteryConfig, MiCommunityLotteryDraw, MiCommunityLotteryReferral } from '@/models/CommunityLottery.js';
 import { MiNote } from '@/models/Note.js';
 import { MiNoteFavorite } from '@/models/NoteFavorite.js';
 import { MiNoteReaction } from '@/models/NoteReaction.js';
@@ -185,6 +186,7 @@ export const entities = [
 	MiExternalAccount,
 	MiCommunitySubmission,
 	MiCommunityTag,
+	MiCommunityLotteryAccount, MiCommunityLotteryConfig, MiCommunityLotteryDraw, MiCommunityLotteryReferral,
 	MiCommunityViolation,
 	MiAnnouncement,
 	MiAnnouncementRead,

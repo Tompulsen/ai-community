@@ -37,6 +37,13 @@ import type {
 	AdminAvatarDecorationsUpdateRequest,
 	AdminCaptchaCurrentResponse,
 	AdminCaptchaSaveRequest,
+	AdminCommunityLotteryConfigResponse,
+	AdminCommunityLotteryFulfillRequest,
+	AdminCommunityLotteryFulfillResponse,
+	AdminCommunityLotteryRecordsRequest,
+	AdminCommunityLotteryRecordsResponse,
+	AdminCommunityLotteryUpdateRequest,
+	AdminCommunityLotteryUpdateResponse,
 	AdminCommunityNotesRequest,
 	AdminCommunityNotesResponse,
 	AdminCommunityReviewRequest,
@@ -296,6 +303,11 @@ import type {
 	CommunityCommentsDeleteRequest,
 	CommunityFeaturedRequest,
 	CommunityFeaturedResponse,
+	CommunityLotteryDrawRequest,
+	CommunityLotteryDrawResponse,
+	CommunityLotteryRecordsRequest,
+	CommunityLotteryRecordsResponse,
+	CommunityLotteryStatusResponse,
 	CommunityReportRequest,
 	CommunitySubmissionsCreateRequest,
 	CommunitySubmissionsCreateResponse,
@@ -723,6 +735,10 @@ export type Endpoints = {
 	'admin/avatar-decorations/update': { req: AdminAvatarDecorationsUpdateRequest; res: EmptyResponse };
 	'admin/captcha/current': { req: EmptyRequest; res: AdminCaptchaCurrentResponse };
 	'admin/captcha/save': { req: AdminCaptchaSaveRequest; res: EmptyResponse };
+	'admin/community/lottery/config': { req: EmptyRequest; res: AdminCommunityLotteryConfigResponse };
+	'admin/community/lottery/fulfill': { req: AdminCommunityLotteryFulfillRequest; res: AdminCommunityLotteryFulfillResponse };
+	'admin/community/lottery/records': { req: AdminCommunityLotteryRecordsRequest; res: AdminCommunityLotteryRecordsResponse };
+	'admin/community/lottery/update': { req: AdminCommunityLotteryUpdateRequest; res: AdminCommunityLotteryUpdateResponse };
 	'admin/community/notes': { req: AdminCommunityNotesRequest; res: AdminCommunityNotesResponse };
 	'admin/community/review': { req: AdminCommunityReviewRequest; res: AdminCommunityReviewResponse };
 	'admin/community/submissions': { req: AdminCommunitySubmissionsRequest; res: AdminCommunitySubmissionsResponse };
@@ -896,6 +912,9 @@ export type Endpoints = {
 	'clips/update': { req: ClipsUpdateRequest; res: ClipsUpdateResponse };
 	'community/comments/delete': { req: CommunityCommentsDeleteRequest; res: EmptyResponse };
 	'community/featured': { req: CommunityFeaturedRequest; res: CommunityFeaturedResponse };
+	'community/lottery/draw': { req: CommunityLotteryDrawRequest; res: CommunityLotteryDrawResponse };
+	'community/lottery/records': { req: CommunityLotteryRecordsRequest; res: CommunityLotteryRecordsResponse };
+	'community/lottery/status': { req: EmptyRequest; res: CommunityLotteryStatusResponse };
 	'community/report': { req: CommunityReportRequest; res: EmptyResponse };
 	'community/submissions/create': { req: CommunitySubmissionsCreateRequest; res: CommunitySubmissionsCreateResponse };
 	'community/submissions/delete': { req: CommunitySubmissionsDeleteRequest; res: EmptyResponse };

@@ -87,7 +87,7 @@ type Source = {
 
 	setupPassword?: string;
 	/** Fixed, operator-managed identity provider. Disabled unless explicitly configured. */
-	newApiSso?: { issuer: string; studioOrigin?: string; studioSecret?: string; };
+	newApiSso?: { issuer: string; studioOrigin?: string; studioSecret?: string; lotterySecret?: string; };
 
 	proxy?: string;
 	proxySmtp?: string;
