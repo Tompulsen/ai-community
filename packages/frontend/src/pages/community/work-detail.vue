@@ -100,7 +100,7 @@ async function openRemix() {
 	if (!work.value || remixOpening) return;
 	remixOpening = true;
 	try {
-		const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkStudioRemix.vue'), { submissionId: work.value.id, chooseMode: true }, {
+		const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkStudioRemix.vue').then(component => component.default), { submissionId: work.value.id, chooseMode: true }, {
 			apply: (value: StudioRemix, mode: 'workbench' | 'background') => {
 				if (mode === 'background') queueBackgroundRemix(value);
 				else { manualRemix.value = value; backgroundStudio.openTask = ''; router.push('/create/:kind', { params: { kind: value.kind } }); }
