@@ -21153,6 +21153,7 @@ export interface operations {
         requestBody: {
             content: {
                 'application/json': {
+                    noteIds?: string[];
                     /** @default 20 */
                     limit?: number;
                     /** Format: misskey:id */

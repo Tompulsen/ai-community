@@ -74,5 +74,5 @@ export type CommunityProfile = {
 	avatarUrl?: string | null; bannerUrl?: string | null; createdAt: string;
 	followingCount?: number; followersCount?: number;
 	followingPath?: string; followersPath?: string; detailsPath?: string; notesPath?: string; reactionsPath?: string;
-	isOwn: boolean;
+	isOwn: boolean; remote?: boolean;
 };

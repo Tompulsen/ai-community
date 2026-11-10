@@ -23,7 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</header>
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
-		<div v-if="isProfile" ref="profileHeaderRoot"><slot name="profileHeader" :mobile="mobileProfile"></slot></div>
+		<div v-if="isProfile" ref="profileHeaderRoot"><slot name="profileHeader" :mobile="mobileProfile" :selectTab="selectProfileTab"></slot></div>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
 			<div><h1>{{ title }}</h1><p v-if="!isCommunity">{{ description }}</p></div>
 			<div :class="$style.headerActions">
@@ -36,18 +36,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</div>
 		</header>
-		<nav v-if="mobileProfile" :class="$style.mobileProfileTabs" :aria-label="t.profileWorks" data-testid="profile-tabs">
-			<label :class="$style.profileWorkFilter"><span>{{ profileCategory === 'all' ? ft.profileWorks : profileCategory === 'resource' ? ft.mobileResource : ft[profileCategory] }}<i class="ti ti-chevron-down" aria-hidden="true"></i></span><select v-model="profileCategory" :aria-label="ft.filters"><option value="all">{{ t.allWorks }}</option><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.id === 'resource' ? ft.mobileResource : ft[entry.id] }}</option></select></label>
-			<MkA v-if="profile?.notesPath" :to="profile.notesPath">{{ ft.profileNotes }}</MkA>
-			<MkA v-if="profile?.isOwn" to="/my/favorites">{{ ft.profileFavorites }}</MkA>
-			<MkA v-if="profile?.reactionsPath" :to="profile.reactionsPath">{{ ft.profileLikes }}</MkA>
-			<button type="button" class="_button" :disabled="loading" :aria-label="ft.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i></button>
-		</nav>
-		<nav v-else-if="isProfile" :class="[$style.tabs, $style.profileTabs]" :aria-label="t.profileWorks">
+		<nav v-if="isProfile && !mobileProfile" :class="[$style.tabs, $style.profileTabs]" :aria-label="t.profileWorks">
 			<button type="button" :aria-pressed="profileCategory === 'all'" @click="profileCategory = 'all'">{{ t.allWorks }}</button>
 			<button v-for="entry in communitySections" :key="entry.id" type="button" :aria-pressed="profileCategory === entry.id" @click="profileCategory = entry.id">{{ entry.title }}</button>
 		</nav>
-		<nav v-else-if="!embedded && !isPublicFeed" :class="$style.tabs" :aria-label="t.community">
+		<nav v-else-if="!embedded && !isPublicFeed && !isProfile" :class="$style.tabs" :aria-label="t.community">
 			<a v-for="entry in communitySections" :key="entry.id" :href="entry.path" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', entry.path)">
 				{{ entry.title }}
 			</a>
@@ -126,6 +119,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<section v-else-if="!validSection" :class="$style.empty"><h2>{{ t.unknown }}</h2><p>{{ t.unknownHint }}</p></section>
 		<section v-else-if="section === 'review' && !moderator" :class="$style.empty"><i class="ti ti-lock" aria-hidden="true"></i><h2>{{ t.forbidden }}</h2></section>
 		<section v-else-if="section === 'mine' && !signedIn" :class="$style.empty"><h2>{{ t.loginTitle }}</h2><p>{{ t.loginHint }}</p><button type="button" :class="$style.primary" @click="emit('login')">{{ t.login }}</button></section>
+		<ProfileTabs v-else-if="mobileProfile" :key="`${profileAuthorId}:${viewerId ?? ''}`" ref="profilePager" v-model="profileTab" :tabs="profileTabs" :scrollRoot="surfaceRoot" :headerHeight="profileHeaderHeight">
+			<template #works="{ active }">
+				<div :class="$style.profileTools"><label><select v-model="profileCategory" :aria-label="ft.filters"><option value="all">{{ t.allWorks }}</option><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.id === 'resource' ? ft.mobileResource : ft[entry.id] }}</option></select><i class="ti ti-chevron-down" aria-hidden="true"></i></label><button type="button" class="_button" :disabled="loading" :aria-label="ft.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i></button></div>
+				<div v-if="activeQuery" :class="$style.searchSummary" role="status"><span>{{ ft.search }} · {{ activeQuery }}</span><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}</button></div>
+				<div v-if="loading && !items.length" :class="$style.empty" role="status"><p>{{ t.loading }}</p></div>
+				<div v-else-if="loadError && !items.length" :class="$style.empty" role="alert"><i class="ti ti-cloud-off" aria-hidden="true"></i><p>{{ loadError }}</p><button type="button" :class="$style.secondary" @click="load()">{{ t.retry }}</button></div>
+				<div v-else-if="!items.length" :class="$style.empty"><i class="ti ti-layout-grid" aria-hidden="true"></i><h2>{{ emptyTitle }}</h2><p>{{ emptyHint }}</p><button v-if="activeQuery" type="button" :class="$style.secondary" data-testid="reset-empty-filters" @click="clearSearch">{{ ft.clearSearch }}</button></div>
+				<div v-else :class="$style.works"><WorkCard v-for="work in items" :key="work.id" :work="work" :data-scroll-anchor="active ? `works:${work.id}` : undefined" compact profileGrid/></div>
+				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
+				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
+			</template>
+			<template #notes="{ active }"><ProfileActivity v-if="profileAuthorId" :userId="profileAuthorId" section="notes" :active="active"/></template>
+			<template #favorites="{ active }"><ProfileActivity v-if="profileAuthorId && profile?.isOwn && signedIn" :userId="profileAuthorId" section="favorites" :active="active"/></template>
+			<template #likes="{ active }"><ProfileActivity v-if="profileAuthorId && profile?.reactionsPath && !profile.remote" :userId="profileAuthorId" section="likes" :active="active"/><div v-else :class="$style.empty" data-testid="profile-private-likes"><i class="ti ti-lock" aria-hidden="true"></i><p>{{ profile?.remote ? ft.profileRemoteLikes : ft.profileHiddenLikes }}</p></div></template>
+		</ProfileTabs>
 		<div v-else-if="!composerOnly" :class="[$style.columns, { [$style.withDiscovery]: isPublicFeed && discoveryOpen && !discoveryCompact }]">
 			<Teleport to="body" :disabled="!discoveryCompact">
 				<div v-if="isPublicFeed" v-show="discoveryOpen" :id="discoveryId" ref="discoveryLayer" :class="[$style.discovery, { [$style.drawerLayer]: discoveryCompact }]" :style="discoveryCompact ? { zIndex: discoveryZIndex } : undefined" :data-motion="prefer.s.animation" :role="discoveryCompact ? 'dialog' : undefined" :aria-modal="discoveryCompact ? true : undefined" :aria-label="ft.sidebar" data-testid="discovery-drawer" @click.self="closeDiscovery">
@@ -231,6 +239,8 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, onDeactiva
 import { safetyText as safety } from './safety-copy.js';
 import { communitySections, communityText as t, safeWebUrl } from './copy.js';
 import WorkCard from './work-card.vue';
+import ProfileTabs from './profile-tabs.vue';
+import ProfileActivity from './profile-activity.vue';
 import WorkTags from './work-tags.vue';
 import CommunityTagPicker from './tag-picker.vue';
 import { loadCommunityTags, communityTagUpdates } from './tags.js';
@@ -280,11 +290,24 @@ const mobileFeed = computed(() => mobileWidth.value && isPublicFeed.value && !pr
 const mobileProfile = computed(() => mobileWidth.value && isProfile.value && !props.embedded);
 const profileHeaderRoot = ref<HTMLElement>();
 const profileScrolled = ref(false);
+const profileTab = ref('works');
+const profilePager = ref<InstanceType<typeof ProfileTabs>>();
+const profileHeaderHeight = ref(0);
+const profileTabs = computed(() => [
+	{ key: 'works', label: ft.profileWorks },
+	{ key: 'notes', label: ft.profileNotes },
+	...(props.profile?.isOwn && props.signedIn ? [{ key: 'favorites', label: ft.profileFavorites, locked: true }] : []),
+	{ key: 'likes', label: ft.profileLikes, locked: !props.profile?.reactionsPath || props.profile.remote },
+]);
+
+function selectProfileTab(tab: string) { profilePager.value?.select(tab); }
+
 const mobileSearchOpen = ref(false);
 let feedResize: ResizeObserver | undefined;
 
 function resizeMobileFeed() {
 	mobileWidth.value = mobileViewport.matches;
+	profileHeaderHeight.value = profileHeaderRoot.value?.offsetHeight ?? 0;
 	if (surfaceRoot.value) surfaceRoot.value.style.setProperty('--mobile-feed-height', `${surfaceRoot.value.clientHeight}px`);
 }
 
@@ -293,6 +316,7 @@ onMounted(() => {
 	mobileViewport.addEventListener('change', resizeMobileFeed);
 	feedResize = new ResizeObserver(resizeMobileFeed);
 	if (surfaceRoot.value) feedResize.observe(surfaceRoot.value);
+	if (profileHeaderRoot.value) feedResize.observe(profileHeaderRoot.value);
 });
 onBeforeUnmount(() => { feedResize?.disconnect(); mobileViewport.removeEventListener('change', resizeMobileFeed); });
 watch(() => props.section, () => { mobileSearchOpen.value = false; });
@@ -422,7 +446,7 @@ async function load(append = false) {
 function loadNextMobilePage() {
 	const root = surfaceRoot.value;
 	if (mobileProfile.value && root) profileScrolled.value = root.scrollTop >= (profileHeaderRoot.value?.offsetHeight ?? 200);
-	if ((mobileFeed.value || mobileProfile.value) && root && nextCursor.value && !loading.value && !loadError.value && root.scrollTop + root.clientHeight >= root.scrollHeight - root.clientHeight * .5) void load(true);
+	if ((mobileFeed.value || (mobileProfile.value && profileTab.value === 'works')) && root && nextCursor.value && !loading.value && !loadError.value && root.scrollTop + root.clientHeight >= root.scrollHeight - root.clientHeight * .5) void load(true);
 }
 
 function rememberTags(tags: CommunityTag[]) {
@@ -447,6 +471,7 @@ function feedPath(path: string, value = activeQuery.value, tags = path === (feed
 }
 
 function search(tags = activeTagIds.value) {
+	if (mobileProfile.value) selectProfileTab('works');
 	if (discoveryCompact.value && discoveryOpen.value) closeDiscovery();
 	const nextQuery = query.value.trim().slice(0, 200);
 	if (isPublicFeed.value && (nextQuery !== initialPublicQuery() || tags.join(',') !== initialPublicTags().join(','))) {
@@ -1113,6 +1138,5 @@ button.tagChip { min-height: 44px; }
 .profileScrolled .profileTopbarName { display: block; }
 .profileScrolled .profileBack { display: none; }
 .profileScrolled .profileTopbar form { background: var(--MI_THEME-buttonBg); }
-.mobileProfileTabs { position: sticky; top: var(--profile-topbar-height); z-index: 30; display: flex; align-items: stretch; min-height: 50px; padding-inline: 10px; border-bottom: 1px solid var(--MI_THEME-divider); background: var(--MI_THEME-panel); > a, > label { flex: 1; min-width: 0; display: flex; justify-content: center; align-items: center; gap: 4px; min-height: 50px; font-size: 15px; } > button { flex: 0 0 44px; min-width: 44px; min-height: 50px; color: var(--MI_THEME-fgTransparentWeak); } }
-.profileWorkFilter { position: relative; color: var(--MI_THEME-accent); font-weight: 700; border-bottom: 3px solid currentColor; margin-bottom: -1px; span { display: flex; align-items: center; gap: 4px; } select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; } &:focus-within { outline: 2px solid var(--MI_THEME-accent); outline-offset: -3px; } }
+.profileTools { display: flex; justify-content: space-between; align-items: center; min-height: 44px; padding-inline: 14px; color: var(--MI_THEME-fgTransparentWeak); font-size: 12px; > label { position: relative; display: flex; align-items: center; min-height: 44px; select { min-height: 44px; appearance: none; padding-right: 22px; border: 0; background: transparent; color: var(--MI_THEME-fg); font: inherit; cursor: pointer; } i { position: absolute; right: 3px; pointer-events: none; } } > button { width: 44px; height: 44px; font-size: 18px; } }
 </style>

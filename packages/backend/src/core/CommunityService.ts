@@ -40,7 +40,7 @@ type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
 type SubmissionInput = CommunityRevision & { idempotencyKey: string; destination?: MiCommunitySubmission['destination']; resultId?: string; };
 type UpdateInput = CommunityRevision & { submissionId: string; version: number; };
-type ListInput = { limit: number; untilId?: string; query: string; category?: Category; tagIds?: string[]; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
+type ListInput = { limit: number; untilId?: string; query: string; category?: Category; tagIds?: string[]; noteIds?: string[]; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
 
 @Injectable()
 export class CommunityService {
@@ -368,6 +368,7 @@ export class CommunityService {
 		}
 		if (options.category) query.andWhere(scope === 'public' ? 'submission.category = :category' : 'COALESCE(submission."pendingRevision"->>\'category\', submission.category) = :category', { category: options.category });
 		if (options.authorId) query.andWhere('submission.authorId = :authorId', { authorId: options.authorId });
+		if (options.noteIds) query.andWhere('submission.approvedNoteId IN (:...noteIds)', { noteIds: options.noteIds });
 		if (options.untilId) query.andWhere('submission.id < :cursor', { cursor: options.untilId });
 		const tagMembership = scope === 'public' ? 'tag.id = ANY(submission."tagIds")' : `(COALESCE(submission."pendingRevision"->'tagIds', to_jsonb(submission."tagIds")) ? tag.id)`;
 		const tagCategory = scope === 'public' ? 'submission.category' : `COALESCE(submission."pendingRevision"->>'category', submission.category)`;

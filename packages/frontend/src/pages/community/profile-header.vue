@@ -24,7 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-if="!profile.isOwn" :class="$style.mobileFollow"><slot name="actions"></slot></div>
 		<nav v-if="profile.isOwn" :class="$style.profileShortcuts" :aria-label="ft.profileTools">
 			<a href="/community/mine" @click.prevent="emit('navigate', '/community/mine')"><i class="ti ti-layout-grid" aria-hidden="true"></i>{{ ft.profileManage }}</a>
-			<a href="/my/favorites" @click.prevent="emit('navigate', '/my/favorites')"><i class="ti ti-star" aria-hidden="true"></i>{{ ft.profileFavorites }}</a>
+			<a href="/my/favorites" @click.prevent="emit('favorites')"><i class="ti ti-star" aria-hidden="true"></i>{{ ft.profileFavorites }}</a>
 			<a href="/create/video" @click.prevent="emit('navigate', '/create/video')"><i class="ti ti-wand" aria-hidden="true"></i>{{ ft.mobileCreate }}</a>
 			<a href="/settings" @click.prevent="emit('navigate', '/settings')"><i class="ti ti-settings" aria-hidden="true"></i>{{ ft.profileSettings }}</a>
 		</nav>
@@ -59,7 +59,7 @@ import type { CommunityProfile } from './types.js';
 import { communityText as t, safeWebUrl } from './copy.js';
 import { feedText as ft } from './feed-copy.js';
 const props = defineProps<{ profile: CommunityProfile; mobile?: boolean }>();
-const emit = defineEmits<{ (event: 'navigate', path: string): void; }>();
+const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'favorites'): void; }>();
 const joinedDate = computed(() => Number.isFinite(Date.parse(props.profile.createdAt)) ? new Date(props.profile.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' }) : '');
 </script>
 

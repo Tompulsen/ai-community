@@ -17,7 +17,7 @@ export const meta = {
 
 export const paramDef = {
 	type: 'object',
-	properties: { ...communityListProperties, category: { type: 'string', enum: ['video', 'image', 'resource'] }, authorId: { type: 'string', format: 'misskey:id' } },
+	properties: { noteIds: { type: 'array', items: { type: 'string', format: 'misskey:id' }, minItems: 1, maxItems: 50, uniqueItems: true }, ...communityListProperties, category: { type: 'string', enum: ['video', 'image', 'resource'] }, authorId: { type: 'string', format: 'misskey:id' } },
 	required: [],
 } as const;
 

@@ -5,8 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <CommunitySurface :key="user.id" section="profile" :profile="profile" :profileAuthorId="user.id" :viewerId="$i?.id" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate">
-	<template #profileHeader="{ mobile }">
-		<ProfileHeader :profile="profile" :mobile="mobile" @navigate="navigate">
+	<template #profileHeader="{ mobile, selectTab }">
+		<ProfileHeader :profile="profile" :mobile="mobile" @navigate="navigate" @favorites="selectTab('favorites')">
 			<template #actions><MkFollowButton v-if="$i?.id !== user.id" :user="user" full/></template>
 			<template #description><Mfm :text="user.description ?? ''" :isNote="false" :author="user"/></template>
 		</ProfileHeader>
@@ -43,7 +43,7 @@ const profile = computed<CommunityProfile>(() => ({
  description: props.user.description ?? '',
  avatarUrl: props.user.avatarUrl && (prefer.s.disableShowingAnimatedImages || prefer.s.dataSaver.avatar) ? getStaticImageUrl(props.user.avatarUrl) : props.user.avatarUrl,
  bannerUrl: props.user.bannerUrl && prefer.s.disableShowingAnimatedImages ? getStaticImageUrl(props.user.bannerUrl) : props.user.bannerUrl,
- createdAt: props.user.createdAt, isOwn: $i?.id === props.user.id,
+ createdAt: props.user.createdAt, remote: !!props.user.host, isOwn: $i?.id === props.user.id,
  followingCount: isFollowingVisibleForMe(props.user) ? props.user.followingCount : undefined,
  followersCount: isFollowersVisibleForMe(props.user) ? props.user.followersCount : undefined,
  followingPath: userPage(props.user, 'following'), followersPath: userPage(props.user, 'followers'),
