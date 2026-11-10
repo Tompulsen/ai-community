@@ -113,7 +113,34 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
         assert.equal(await page.getByTestId('studio-anchor').count(),0,'cancelled touch must not navigate');
         const moved=await handle.boundingBox();await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:moved.x+60,y:moved.y+20}]});await page.waitForTimeout(750);await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await touch.detach();
       }else{const moved=await handle.boundingBox();await page.mouse.move(moved.x+60,moved.y+20);await page.mouse.down();await page.waitForTimeout(750);await page.mouse.up();}
-      await page.getByTestId('background-restore').waitFor();
+      const compact=page.getByTestId('background-restore');await compact.waitFor();
+      const compactBefore=await compact.boundingBox();
+      await page.mouse.move(compactBefore.x+40,compactBefore.y+20);await page.mouse.down();await page.mouse.move(compactBefore.x+90,compactBefore.y-80,{steps:8});await page.mouse.up();
+      assert.equal(await compact.count(),1,'dragging compact window must not expand it');
+      assert((await compact.boundingBox()).y<compactBefore.y-60,'compact window must follow mouse drag');
+      assert.equal(await page.getByTestId('studio-anchor').count(),0,'compact drag must not navigate');
+      if(width<500){
+        const touch=await context.newCDPSession(page),rect=await compact.boundingBox();
+        await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:rect.x+40,y:rect.y+20}]});
+        await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:rect.x+40,y:rect.y+120}]});
+        await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        assert.equal(await compact.count(),1,'compact touch drag must not expand it');
+        assert((await compact.boundingBox()).y>rect.y+60,'compact window must follow touch drag');
+        const moved=await compact.boundingBox();
+        await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:moved.x+40,y:moved.y+20}]});
+        await touch.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await touch.detach();
+        assert.equal(await compact.count(),1,'cancelled compact touch must not expand it');
+      }
+      const compactMoved=await compact.boundingBox();
+      await page.mouse.move(compactMoved.x+40,compactMoved.y+20);await page.mouse.down();await page.mouse.move(width-1,899,{steps:8});await page.mouse.up();
+      const bounded=await compact.boundingBox();assert(bounded.x+bounded.width<=width-7&&bounded.y+bounded.height<=893,'compact window stays inside viewport');
+      await page.screenshot({path:path.join(output,`compact-drag-${width}.png`),fullPage:true});
+      await compact.click();await handle.waitFor();
+      const expanded=await page.getByTestId('background-task-window').boundingBox();assert(expanded.x+expanded.width<=width-7&&expanded.y+expanded.height<=893,'expanded window stays inside viewport');
+      await page.getByRole('button',{name:'隐藏任务小窗',exact:true}).click();await compact.waitFor();
+      await compact.focus();await page.keyboard.press('Enter');await handle.waitFor();
+      await page.getByRole('button',{name:'隐藏任务小窗',exact:true}).click();await compact.waitFor();
+      const edge=await compact.boundingBox();await page.mouse.move(edge.x+40,edge.y+20);await page.mouse.down();await page.mouse.move(48,160,{steps:8});await page.mouse.up();
       done=true;await page.getByTestId('background-open-result').waitFor({timeout:15000});
       assert((await page.evaluate(()=>window.__notices)).some(value=>value.includes('完成')));
       await page.getByTestId('background-open-result').click();await page.getByTestId('background-result').locator('img').waitFor({timeout:15000});
@@ -144,7 +171,7 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
       await page.screenshot({path:path.join(output,`failure-state-${width}.png`),fullPage:true});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       assert.deepEqual(await page.evaluate(()=>window.__errors),[]);assert.deepEqual(errors,[]);
-      report.push({width,mockedPaidSubmissions:posts,iframeDocuments:documents,checks:['two choices','background generation','drag','long press hide','touch cancellation','completion notification','image/video preview and download','cross-kind workbench task','manual draft only','reload recovery','deferred anchor initialization','generation error','no overflow']});console.log('PASS viewport '+width);
+      report.push({width,mockedPaidSubmissions:posts,iframeDocuments:documents,checks:['two choices','background generation','drag','compact mouse/touch drag','compact click and keyboard restore','viewport clamping','long press hide','touch cancellation','completion notification','image/video preview and download','cross-kind workbench task','manual draft only','reload recovery','deferred anchor initialization','generation error','no overflow']});console.log('PASS viewport '+width);
     } catch(error) {await page.screenshot({path:path.join(output,`failure-${width}.png`),fullPage:true});fs.writeFileSync(path.join(output,'failure.json'),JSON.stringify({error:String(error),errors,requests,messages:await page.evaluate(()=>window.__messages),vueErrors:await page.evaluate(()=>window.__errors)},null,2));throw error;}
     finally{await context.close();}
   }}finally{await browser.close();}

@@ -3,8 +3,8 @@
 <div v-if="$i && state.enabled" :class="[$style.host, { [$style.offscreen]: !studioAnchor }]" :style="frameStyle" :aria-hidden="!studioAnchor" :inert="!studioAnchor">
 	<MkCommunityStudio ref="studio" :origin="origin" :kind="state.kind" :title="workbenchText.title" :active="true" :defaultModel="defaultModels[state.kind]" :defaultModels="defaultModels" :remix="manualRemix" @identity="state.identity = $event" @ready="ready" @state="connectionState" @background="receive" @remixApplied="manualRemix = undefined"/>
 </div>
-<aside v-if="$i && task" ref="floating" :class="[$style.floating, { [$style.hidden]: state.hidden }]" :style="position" :aria-label="t.title" data-testid="background-task-window">
-	<button v-if="state.hidden" type="button" class="_button" :class="$style.restore" data-testid="background-restore" @click="state.hidden = false"><i class="ti ti-sparkles" aria-hidden="true"></i>{{ t.tasks }} · {{ state.tasks.length }}</button>
+<aside v-if="$i && task" ref="floating" :class="[$style.floating, { [$style.hidden]: state.hidden, [$style.dragging]: dragging }]" :style="position" :aria-label="t.title" data-testid="background-task-window">
+	<button v-if="state.hidden" type="button" class="_button" :class="$style.restore" data-testid="background-restore" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="cancelGesture" @lostpointercapture="cancelGesture" @contextmenu.prevent @click="activateTask"><i class="ti ti-sparkles" aria-hidden="true"></i>{{ t.tasks }} · {{ state.tasks.length }}</button>
 	<template v-else>
 		<div :class="$style.top"><span>{{ t.generating }} <span v-if="state.tasks.length > 1">{{ taskIndex + 1 }} / {{ state.tasks.length }}</span></span><button type="button" class="_button" :class="$style.iconButton" :aria-label="t.hide" @click="state.hidden = true"><i class="ti ti-minus" aria-hidden="true"></i></button></div>
 		<button type="button" class="_button" :class="$style.handle" data-testid="background-task-handle" aria-describedby="background-gesture-hint" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="cancelGesture" @lostpointercapture="cancelGesture" @contextmenu.prevent @click="activateTask">
@@ -46,6 +46,7 @@ const frameStyle = ref({ top: '0px', left: '0px', width: '1000px', height: '700p
 const floating = ref<HTMLElement>();
 const taskIndex = ref(0), task = computed(() => state.tasks[Math.min(taskIndex.value, state.tasks.length - 1)]);
 const point = ref<{ x: number; y: number }>();
+const dragging = ref(false);
 const position = computed(() => point.value ? { left: `${point.value.x}px`, top: `${point.value.y}px`, right: 'auto', bottom: 'auto' } : {});
 const previewTask = ref<BackgroundTask>();
 const previewModal = ref<InstanceType<typeof MkModalWindow>>();
@@ -61,26 +62,26 @@ function clampPoint(x: number, y: number) { const rect = floating.value?.getBoun
 
 function resize() { placeFrame(); if (point.value) point.value = clampPoint(point.value.x, point.value.y); }
 
-function cancelGesture() { window.clearTimeout(pressTimer); pointer = undefined; }
+function cancelGesture() { window.clearTimeout(pressTimer); pointer = undefined; dragging.value = false; }
 
 function pointerDown(event: PointerEvent) {
 	if (!event.isPrimary || event.button !== 0 || pointer) return;
 	const target = event.currentTarget as HTMLElement, rect = floating.value!.getBoundingClientRect();
 	pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, target }; suppressClick = false;
 	target.setPointerCapture(event.pointerId);
-	pressTimer = window.setTimeout(() => { suppressClick = true; state.hidden = true; cancelGesture(); }, 650);
+	if (!state.hidden) pressTimer = window.setTimeout(() => { suppressClick = true; state.hidden = true; cancelGesture(); }, 650);
 }
 
 function pointerMove(event: PointerEvent) {
 	if (!pointer || pointer.id !== event.pointerId) return;
 	const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
 	if (!suppressClick && Math.hypot(dx, dy) < 7) return;
-	suppressClick = true; window.clearTimeout(pressTimer); point.value = clampPoint(pointer.left + dx, pointer.top + dy);
+	dragging.value = true; suppressClick = true; window.clearTimeout(pressTimer); point.value = clampPoint(pointer.left + dx, pointer.top + dy);
 }
 
 function pointerUp(event: PointerEvent) { if (pointer?.id !== event.pointerId) return; const target = pointer.target; cancelGesture(); if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId); }
 
-function activateTask(event: MouseEvent) { if (event.detail && suppressClick) { suppressClick = false; return; } if (task.value) openTask(task.value); }
+function activateTask(event: MouseEvent) { if (event.detail && suppressClick) { suppressClick = false; return; } if (state.hidden) state.hidden = false; else if (task.value) openTask(task.value); }
 
 function openTask(value: BackgroundTask) { viewBackgroundTask(value); router.push('/create/:kind', { params: { kind: value.kind } }); void nextTick(flush); }
 
@@ -153,7 +154,9 @@ onBeforeUnmount(() => { observer?.disconnect(); cancelGesture(); clearPreview();
 .floating { position: fixed; z-index: 12000; right: max(20px, env(safe-area-inset-right)); bottom: max(24px, calc(env(safe-area-inset-bottom) + 72px)); width: min(320px, calc(100vw - 24px)); box-sizing: border-box; border-radius: 14px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); box-shadow: 0 8px 32px var(--MI_THEME-shadow); overflow: hidden; font-size: 13px; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 16px; min-height: 44px; border-bottom: 1px solid var(--MI_THEME-divider); > span { font-weight: 600; } }
 .iconButton { display: inline-grid; place-items: center; flex: none; min-width: 44px; min-height: 44px; }
-.handle { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px; text-align: left; touch-action: none; user-select: none; cursor: grab; > i { font-size: 22px; color: var(--MI_THEME-accent); flex: none; } > i:last-child { margin-left: auto; font-size: 18px; } > span { display: grid; min-width: 0; gap: 6px; } strong { font-size: 15px; } &:active { cursor: grabbing; } }
+.handle, .restore { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
+.dragging { box-shadow: 0 14px 40px var(--MI_THEME-shadow); .handle, .restore { cursor: grabbing; } }
+.handle { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px; text-align: left; > i { font-size: 22px; color: var(--MI_THEME-accent); flex: none; } > i:last-child { margin-left: auto; font-size: 18px; } > span { display: grid; min-width: 0; gap: 6px; } strong { font-size: 15px; } }
 .taskTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 12px; > button { min-height: 44px; padding: 8px 10px; border-radius: 8px; } }
 .primary { background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); }
