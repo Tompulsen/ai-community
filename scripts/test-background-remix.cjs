@@ -5,7 +5,7 @@ const { createRequire } = require('node:module');
 const root = path.resolve(__dirname, '..'), frontend = createRequire(path.join(root, 'packages/frontend/package.json'));
 const { parse, compileScript, compileStyleAsync } = frontend('vue/compiler-sfc');
 const { chromium } = frontend('playwright'), esbuild = require('esbuild');
-const origin = 'https://background.test', studioUrl = process.env.STUDIO_TEST_URL || 'http://127.0.0.1:13411';
+const origin = process.env.BACKGROUND_TEST_ORIGIN || 'https://background.test', studioUrl = process.env.STUDIO_TEST_URL || 'http://127.0.0.1:13411';
 const output = process.env.BACKGROUND_TEST_OUTPUT || path.join(root, '.background-validation');
 const src = path.join(root, 'packages/frontend/src');
 const actual = new Set(['components/MkBackgroundStudio.vue', 'components/MkCommunityStudio.vue', 'components/MkStudioRemix.vue', 'components/MkModalWindow.vue', 'components/MkButton.vue', 'pages/creation.vue', 'pages/community/work-detail.vue', 'utility/background-studio.ts', 'utility/studio-remix.ts', 'utility/studio-copy.ts', 'utility/creation-pages.ts']);
@@ -55,7 +55,7 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI åˆ
 }
 
 (async()=>{
-  fs.mkdirSync(output,{recursive:true}); const built=await buildFixture(), browser=await chromium.launch({headless:true}); const report=[];
+  fs.mkdirSync(output,{recursive:true}); const built=await buildFixture(), browser=await chromium.launch({headless:true,...(process.env.BACKGROUND_TEST_PROXY?{proxy:{server:process.env.BACKGROUND_TEST_PROXY}}:{})}); const report=[];
   try { for(const width of (process.env.BACKGROUND_TEST_WIDTHS||'1440,390,320').split(',').map(Number)) {
     const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<500,serviceWorkers:'block',bypassCSP:true,acceptDownloads:true}),page=await context.newPage();
     let posts=0,documents=0,done=false,videoDone=false,imageFailed=false;const errors=[],requests=[];
@@ -85,7 +85,7 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI åˆ
         else if(u.pathname.includes('/videos/video-job'))body=videoDone?{id:'video-job',status:'completed',url:origin+'/video.mp4'}:{id:'video-job',status:'in_progress'};
         return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
       }
-      if(u.pathname.startsWith('/studio')){if(route.request().isNavigationRequest())documents++;try{const response=await route.fetch({url:studioUrl+u.pathname+u.search,headers:{...route.request().headers(),host:'background.test','x-forwarded-host':'background.test'},timeout:180000});return route.fulfill({response});}catch{return route.abort();}}
+      if(u.pathname.startsWith('/studio')){if(route.request().isNavigationRequest())documents++;try{const response=await route.fetch({url:studioUrl+u.pathname+u.search,headers:{...route.request().headers(),host:new URL(origin).host,'x-forwarded-host':new URL(origin).host},timeout:180000});return route.fulfill({response});}catch{return route.abort();}}
       return route.abort();
     });
     const boot=async(initialPath='/community/work/test')=>{
