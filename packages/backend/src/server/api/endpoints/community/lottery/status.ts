@@ -9,7 +9,7 @@ import { CommunityLotteryService } from '@/core/CommunityLotteryService.js';
 import { lotteryErrors, lotteryStatusSchema } from '@/server/api/lottery-schema.js';
 
 export const meta = {
-	tags: ['community'], requireCredential: false, secure: true,
+	tags: ['community'], requireCredential: false, kind: 'read:account',
 	limit: { duration: 60000, max: 30 }, errors: lotteryErrors, res: lotteryStatusSchema,
 } as const;
 
