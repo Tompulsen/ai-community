@@ -4,9 +4,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.wide]: compact && !profileGrid && wideCover, [$style.profileGrid]: profileGrid }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<template v-if="compact">
-		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: profileGrid ? '3 / 4' : compactAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
+		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
 			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/>
 			<div v-else :class="$style.compactFallback"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : work.category === 'video' ? 'ti ti-player-play' : 'ti ti-photo'" aria-hidden="true"></i><p v-if="work.category === 'resource' && !sensitive">{{ excerpt || work.title }}</p><span v-else>{{ sensitive ? t.sensitive : t.noPreview }}</span></div>
 			<span v-if="!sensitive" :class="$style.mediaKind"><i :class="work.category === 'video' ? 'ti ti-player-play-filled' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><span v-if="work.files.length > 1">{{ work.files.length }}</span></span>
@@ -67,13 +67,6 @@ const previewAspect = computed(() => {
 	const width = file?.properties?.width, height = file?.properties?.height;
 	return typeof width === 'number' && typeof height === 'number' && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? `${width} / ${height}` : undefined;
 });
-const coverRatio = computed(() => {
-	const file = previewVideo.value ?? props.work.files.find(item => item.type.startsWith('image/'));
-	const width = file?.properties?.width, height = file?.properties?.height;
-	return typeof width === 'number' && typeof height === 'number' && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? width / height : 3 / 4;
-});
-const wideCover = computed(() => !!cover.value && coverRatio.value >= 1.7);
-const compactAspect = computed(() => wideCover.value ? '16 / 9' : String(Math.max(.7, Math.min(1.3, coverRatio.value))));
 watch(cover, () => { failed.value = false; });
 </script>
 
@@ -101,13 +94,12 @@ watch(cover, () => { failed.value = false; });
 @container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { gap: 8px; } .authorActions { flex-basis: 100%; justify-content: flex-end; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
 
 .card.compact { padding: 0; border: 1px solid var(--MI_THEME-divider); border-radius: 12px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); container-type: normal; align-self: start; }
-.compact.wide { grid-column: 1 / -1; }
 .compact :focus-visible { outline-color: var(--MI_THEME-accent); outline-offset: -2px; }
 .compactPreview { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 11px 11px 0 0; background: var(--MI_THEME-buttonBg); aspect-ratio: 3 / 4; img { display: block; width: 100%; height: 100%; object-fit: cover; } }
 .compactPreview:active { opacity: .85; }
 .compactFallback { display: flex; height: 100%; padding: 18px 14px; box-sizing: border-box; flex-direction: column; justify-content: center; gap: 12px; color: var(--MI_THEME-fgTransparentWeak); > i { font-size: 26px; } p { color: var(--MI_THEME-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 7; margin: 0; font-size: 14px; line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; } > span { font-size: 12px; } }
 .mediaKind { @include work-palette.stage; position: absolute; bottom: 7px; right: 8px; display: inline-flex; gap: 4px; align-items: center; padding: 3px 5px; border-radius: 5px; font-size: 12px; color: var(--work-stage-fg); background: color-mix(in srgb, var(--work-stage) 65%, transparent); }
-.compactTitle { margin: 8px 9px 0; font-size: 14px; font-weight: 600; line-height: 1.5; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; } }
+.compactTitle { min-height: 3em; margin: 8px 9px 0; font-size: 14px; font-weight: 600; line-height: 1.5; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; } }
 .compactMeta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 36px; margin: 2px 9px 4px; color: var(--work-muted); font-size: 12px; font-variant-numeric: tabular-nums; > a { display: flex; min-width: 0; align-items: center; gap: 5px; min-height: 36px; > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } } > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; } }
 .compactAvatar { display: grid; flex: 0 0 auto; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); font-size: 10px; }
 .card.profileGrid { border: 0; border-radius: 0; }
