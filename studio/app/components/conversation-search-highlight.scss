@@ -1,0 +1,16 @@
+::highlight(octopus-conversation-search) {
+  color: #171717;
+  background-color: #fff0c2;
+  background-color: color-mix(in srgb, var(--warning) 35%, white);
+}
+
+::highlight(octopus-conversation-search-current) {
+  color: #171717;
+  background-color: var(--warning);
+}
+
+[data-chat-search-fallback="true"] [data-chat-search-content="true"] {
+  outline: none;
+  box-shadow: var(--control-focus-shadow);
+  outline-offset: 4px;
+}

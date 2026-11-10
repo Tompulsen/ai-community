@@ -60,6 +60,8 @@ async function offlineContentHTML() {
 }
 
 globalThis.addEventListener('install', (ev) => {
+	// Apply authentication navigation rules to already controlled pages.
+	ev.waitUntil(globalThis.skipWaiting());
 	// 次の問題が発生するため、ServiceWorkerAutoPreload をオプトアウトする必要がある
 	// https://issues.chromium.org/issues/466790291
 	if ('addRoutes' in ev) {
@@ -88,6 +90,14 @@ globalThis.addEventListener('activate', ev => {
 });
 
 globalThis.addEventListener('fetch', ev => {
+	const target = new URL(ev.request.url);
+	// Re-fetching OAuth navigation changes Fetch Metadata and fails its server checks.
+	if (target.origin === globalThis.location.origin && (
+		target.pathname.startsWith('/studio/api/new-api/community/') ||
+		target.pathname === '/api/new-api/community/callback' ||
+		target.pathname === '/api/newapi/callback'
+	)) return;
+
 	let isHTMLRequest = false;
 	if (ev.request.headers.get('sec-fetch-dest') === 'document') {
 		isHTMLRequest = true;

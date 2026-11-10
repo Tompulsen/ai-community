@@ -37,6 +37,7 @@ import type { SuperMenuDef } from '@/components/MkSuperMenu.vue';
 import type { PageMetadata } from '@/page.js';
 import { i18n } from '@/i18n.js';
 import { homeText } from '@/pages/home/copy.js';
+import { lotteryText } from '@/pages/community/lottery-copy.js';
 import { adText } from '@/pages/community/ads.js';
 import { uploadText } from '@/utility/upload-limits.js';
 import { creationText } from '@/utility/creation-pages.js';
@@ -172,6 +173,11 @@ const menuDef = computed<SuperMenuDef[]>(() => [{
 		to: '/admin/announcements',
 		active: currentPage.value?.route.name === 'announcements',
 	}, {
+		icon: 'ti ti-gift',
+		text: lotteryText.adminTitle,
+		to: '/admin/community-lottery',
+		active: currentPage.value?.route.name === 'community-lottery',
+	}, {
 		icon: 'ti ti-ad',
 		text: i18n.ts.ads,
 		to: '/admin/ads',
@@ -204,6 +210,11 @@ const menuDef = computed<SuperMenuDef[]>(() => [{
 		text: homeText.settings,
 		to: '/admin/homepage',
 		active: currentPage.value?.route.name === 'homepage',
+	}, {
+		icon: 'ti ti-gift',
+		text: lotteryText.adminTitle,
+		to: '/admin/community-lottery',
+		active: currentPage.value?.route.name === 'community-lottery',
 	}, {
 		icon: 'ti ti-ad',
 		text: adText.settings,

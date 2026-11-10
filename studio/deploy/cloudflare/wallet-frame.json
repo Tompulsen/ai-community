@@ -1,0 +1,8 @@
+{
+  "zone_id": "e20c83528903339a0418fcf00450a07d",
+  "ruleset_id": "885cf41a611b427a91389427807230fa",
+  "rule_id": "fabe6ed01e4d4431b855d2a3062f3ba2",
+  "expression": "(http.host eq \"oc.zhangyuapi.com\" and http.request.uri.path ne \"/community-embed\")",
+  "before": "frame-src 'self' https://challenges.cloudflare.com;",
+  "after": "frame-src 'self' https://challenges.cloudflare.com https://mzf.mapay.cn;"
+}

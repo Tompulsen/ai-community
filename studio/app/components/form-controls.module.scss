@@ -1,0 +1,323 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.field[type] {
+  @include controls.field;
+  width: min(240px, 48%);
+  max-width: 100%;
+  min-height: 36px;
+  font-size: 14px;
+  text-align: left;
+
+  &[type="number"] {
+    width: 120px;
+    flex-shrink: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &.full {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+.checkbox[type="checkbox"] {
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  display: inline-block;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  vertical-align: middle;
+  touch-action: manipulation;
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+
+  &,
+  &:checked {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    box-sizing: border-box;
+    top: 12px;
+    left: 12px;
+    width: 20px;
+    height: 20px;
+    border: 1.5px solid transparent;
+    border-radius: 6px;
+    background: var(--control-hover-surface);
+    pointer-events: none;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease;
+  }
+
+  &:checked::before {
+    background: var(--primary-fill, var(--primary));
+  }
+
+  &::after,
+  &:checked::after {
+    content: "";
+    position: absolute;
+    box-sizing: border-box;
+    display: block;
+    top: 14px;
+    left: 19px;
+    width: 7px;
+    height: 12px;
+    border: solid var(--primary-foreground, #fff);
+    border-width: 0 2px 2px 0;
+    border-radius: 0;
+    background: transparent;
+    transform: rotate(45deg);
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  &:checked::after {
+    opacity: 1;
+  }
+
+  &:focus-visible:not(:disabled) {
+    @include controls.focus-ring;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  &.switch {
+    &::before {
+      top: 9px;
+      left: 0;
+      width: 44px;
+      height: 26px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: var(--control-hover-surface);
+    }
+
+    &:checked::before {
+      border-color: transparent;
+      background: var(--primary-vivid, var(--primary));
+    }
+
+    &::after,
+    &:checked::after {
+      top: 11px;
+      left: 2px;
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      opacity: 1;
+      transform: translateX(0);
+      transition:
+        transform var(--duration-release, 260ms) var(--ease-release, ease-out),
+        width var(--duration-press, 80ms) ease;
+    }
+
+    &:checked::after {
+      transform: translateX(18px);
+    }
+
+    &:active:not(:disabled)::after {
+      width: 26px;
+    }
+
+    &:checked:active:not(:disabled)::after {
+      transform: translateX(14px);
+    }
+  }
+}
+
+.multiline {
+  @include controls.field;
+  width: min(240px, 48%);
+  max-width: 100%;
+  min-height: 36px;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.button {
+  @include controls.field;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  max-width: 100%;
+  gap: 6px;
+  cursor: pointer;
+  transform: none;
+  transition:
+    transform var(--duration-release, 260ms) var(--ease-release, ease-out),
+    background-color 150ms var(--ease-out, ease),
+    border-color 150ms var(--ease-out, ease),
+    box-shadow 150ms var(--ease-out, ease);
+
+  &:hover:not(:disabled) {
+    transform: none;
+  }
+
+  &:active:not(:disabled) {
+    @include controls.hover-surface;
+    transform: scale(0.96);
+    transition-duration: var(--duration-press, 80ms);
+  }
+
+  > div {
+    margin: 0;
+  }
+
+  svg {
+    display: block;
+    width: controls.$control-icon-size;
+    height: controls.$control-icon-size;
+    flex-shrink: 0;
+  }
+}
+
+.constrained {
+  max-width: 48%;
+}
+
+.choice {
+  @include controls.field;
+  min-height: 32px;
+  padding: 4px 10px;
+  cursor: pointer;
+
+  &:active:where(:not(:disabled)) {
+    @include controls.hover-surface;
+  }
+
+  &[aria-pressed="true"] {
+    @include controls.selected-surface;
+    border-color: transparent;
+
+    @media (forced-colors: active) {
+      border-color: Highlight;
+      background-color: Highlight;
+      color: HighlightText;
+    }
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .field[type],
+  .multiline,
+  .button,
+  .choice {
+    min-height: 44px;
+  }
+
+  .button,
+  .choice {
+    background-clip: padding-box;
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+
+  .field[type],
+  .multiline {
+    font-size: 16px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .checkbox[type="checkbox"],
+  .checkbox[type="checkbox"]::before,
+  .checkbox[type="checkbox"]::after,
+  .button {
+    transition: none;
+  }
+
+  .button:active:not(:disabled) {
+    transform: none;
+  }
+
+  .checkbox[type="checkbox"].switch:active:not(:disabled)::after {
+    width: 22px;
+    transform: translateX(0);
+  }
+
+  .checkbox[type="checkbox"].switch:checked:active:not(:disabled)::after {
+    transform: translateX(18px);
+  }
+}
+
+:global(.reduce-motion) .button,
+:global(.reduce-motion) .checkbox[type="checkbox"] {
+  transition: none;
+
+  &:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+:global(.reduce-motion)
+  .checkbox[type="checkbox"].switch:active:not(:disabled)::after {
+  width: 22px;
+  transform: translateX(0);
+}
+
+:global(.reduce-motion)
+  .checkbox[type="checkbox"].switch:checked:active:not(:disabled)::after {
+  transform: translateX(18px);
+}
+
+@media (forced-colors: active) {
+  .checkbox[type="checkbox"] {
+    forced-color-adjust: none;
+
+    &::before,
+    &.switch::before {
+      border-color: ButtonText;
+      background: Canvas;
+    }
+
+    &:checked::before,
+    &.switch:checked::before {
+      border-color: Highlight;
+      background: Highlight;
+    }
+
+    &::after,
+    &:checked::after {
+      border-color: HighlightText;
+    }
+
+    &:focus-visible:not(:disabled) {
+      @include controls.focus-ring;
+      outline-offset: 1px;
+    }
+
+    &.switch::after {
+      background: ButtonText;
+    }
+
+    &.switch:checked::after {
+      background: HighlightText;
+    }
+  }
+}

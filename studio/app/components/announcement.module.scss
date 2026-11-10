@@ -1,0 +1,177 @@
+@use "../styles/controls" as controls;
+
+.content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--black);
+  font-size: 14px;
+  line-height: 1.7;
+  scrollbar-color: var(--second-in-gray) transparent;
+}
+
+.entry {
+  position: relative;
+
+  & + &::before {
+    position: absolute;
+    top: 0;
+    right: 12px;
+    left: 12px;
+    border-top: var(--border-in-light);
+    content: "";
+  }
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 56px;
+  padding: 16px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  > svg {
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  &[aria-expanded="true"] > svg {
+    transform: rotate(180deg);
+  }
+}
+
+.summaryText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail {
+  padding: 0 12px 20px;
+  overflow-wrap: anywhere;
+
+  h3,
+  h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 550;
+    line-height: 1.65;
+  }
+
+  p {
+    margin: 8px 0;
+    white-space: pre-wrap;
+  }
+
+  a {
+    color: var(--primary);
+    text-underline-offset: 3px;
+  }
+
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+.section {
+  margin-top: 24px;
+}
+
+.newsItem {
+  margin: 16px 0;
+
+  h4 a {
+    color: inherit;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.credit {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--second-in-gray);
+  font-size: 12px;
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: inherit;
+  }
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--hover-color);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover,
+    &:active {
+      @include controls.hover-surface;
+    }
+  }
+}
+
+.content button:focus-visible,
+.content a:focus-visible {
+  outline: none;
+  box-shadow: var(--control-focus-shadow);
+  outline-offset: 2px;
+}

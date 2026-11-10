@@ -1,0 +1,37 @@
+@use "../styles/motion" as motion;
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 20px;
+  user-select: none;
+
+  svg {
+    flex: 0 0 16px;
+  }
+}
+
+.spinner {
+  animation: compression-spin 1s linear infinite;
+}
+
+@keyframes compression-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@include motion.system-reduced-motion {
+  .spinner {
+    animation: none;
+  }
+}
+
+:global(.reduce-motion) .spinner {
+  animation: none;
+}

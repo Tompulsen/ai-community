@@ -3,20 +3,6 @@ name: Build community container
 on:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/community-container.yml'
-      - '.dockerignore'
-      - 'deploy/**'
-      - 'packages/**'
-      - 'packages-private/**'
-      - 'scripts/**'
-      - 'patches/**'
-      - 'locales/**'
-      - 'assets/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - 'healthcheck.sh'
   workflow_dispatch:
 
 permissions:

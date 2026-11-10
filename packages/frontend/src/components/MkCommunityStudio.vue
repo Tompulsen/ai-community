@@ -48,12 +48,13 @@ import { useRouter } from '@/router.js';
 
 const props = defineProps<{ origin: string; kind: string; title: string; active: boolean; defaultModel?: string; defaultModels?: Record<string, string>; remix?: StudioRemix }>();
 const emit = defineEmits<{ (event: 'identity', value: string): void }>();
+const workspaceKind = ref('');
 const remixStatus = ref('');
 const remixSent = ref('');
 let remixTimer: number | undefined;
 
 function sendRemix() {
-	if (!props.remix || status.value !== 'ready' || !props.active || !launch.value || !$i || remixSent.value === props.remix.requestId) return;
+	if (!props.remix || workspaceKind.value !== props.kind || status.value !== 'ready' || !props.active || !launch.value || !$i || remixSent.value === props.remix.requestId) return;
 	const target = frame.value?.contentWindow;
 	if (!target) { remixStatus.value = studioText.remixFailed; return; }
 	remixSent.value = props.remix.requestId; remixStatus.value = studioText.remixLoading;
@@ -85,6 +86,8 @@ let timeout: number | undefined;
 let slowTimeout: number | undefined;
 let heartbeat: number | undefined;
 let generation = 0;
+let workspaceTimeout: number | undefined;
+let workspaceRequest = '';
 let frameHello = false;
 let launchSent = false;
 const ShareComposer = defineAsyncComponent(() => import('@/pages/community/surface.vue'));
@@ -96,6 +99,8 @@ const baseGateway = createBrowserCommunityGateway();
 const shareGateway = { ...baseGateway, submit: (input: Parameters<typeof baseGateway.submit>[0]) => { share.assertCurrent(); return baseGateway.submit(input); } };
 
 function stop() {
+	workspaceKind.value = '';
+	window.clearTimeout(workspaceTimeout);
 	window.clearTimeout(remixTimer); remixSent.value = ''; remixStatus.value = '';
 	share.stop();
 	emit('identity', '');
@@ -122,7 +127,7 @@ function prepareFrame(nextContext: string, kind: string, origin: string) {
 	launchSent = false;
 	launch.value = undefined;
 	attempt.value = crypto.randomUUID();
-	const target = new URL('/community-embed', origin);
+	const target = new URL('/studio/community-embed', origin);
 	target.search = new URLSearchParams({ context, attempt: attempt.value, kind }).toString();
 	frameUrl.value = target.href;
 }
@@ -136,6 +141,13 @@ function sendLaunch() {
 async function connect() {
 	stop();
 	if (!$i || !props.active) return;
+	const location = new URL(window.location.href);
+	if (location.searchParams.get('studio') === 'authorization-failed') {
+		location.searchParams.delete('studio');
+		window.history.replaceState(window.history.state, '', location.pathname + location.search + location.hash);
+		fail('STUDIO_AUTHORIZATION_FAILED');
+		return;
+	}
 	const current = generation, me = $i, kind = props.kind, origin = props.origin;
 	const controller = new AbortController();
 	abort = controller;
@@ -185,19 +197,26 @@ function message(event: MessageEvent) {
 		sendLaunch();
 		return;
 	}
+	if (data.status === 'workspace-ready') {
+		if (data.subject !== launch.value?.subject || data.userId !== $i?.id || data.kind !== props.kind || data.requestId !== workspaceRequest) return;
+		window.clearTimeout(workspaceTimeout);
+		workspaceKind.value = data.kind;
+		return;
+	}
 	if (data.status === 'error') { fail(data.code || 'STUDIO_UNAVAILABLE'); return; }
 	if (!launch.value || data.subject !== launch.value.subject || data.userId !== $i?.id) { fail('STUDIO_ACCOUNT'); return; }
 	if (data.status === 'loading' && data.phase === 'workspace') { phase.value = 'workspace'; return; }
 	if (data.status === 'authorize') {
 		window.clearTimeout(timeout);
 		window.clearTimeout(slowTimeout);
-		try { const target = new URL(data.authorizationUrl); if (target.origin !== props.origin || target.pathname !== '/api/new-api/community/embedded/authorize') throw new Error(); authorizationUrl = target.href; status.value = 'authorize'; } catch { fail('STUDIO_ACCOUNT'); }
+		try { const target = new URL(data.authorizationUrl); if (target.origin !== props.origin || target.pathname !== '/studio/api/new-api/community/embedded/authorize') throw new Error(); authorizationUrl = target.href; status.value = 'authorize'; } catch { fail('STUDIO_ACCOUNT'); }
 	} else if (data.status === 'ready') {
 		window.clearTimeout(timeout);
 		window.clearTimeout(slowTimeout);
 		const username = typeof data.username === 'string' ? data.username : '';
 		emit('identity', studioText.identity + ' · ' + username + ' #' + launch.value.subject);
 		status.value = 'ready';
+		switchWorkspace();
 		const current = generation;
 		const renew = async () => { try { await studioContextAction($i!.token, context, 'renew'); } catch { if (current === generation) fail('STUDIO_CONTEXT_EXPIRED'); } };
 		void renew();
@@ -208,9 +227,25 @@ function message(event: MessageEvent) {
 
 async function authorize() {
 	if (!$i || !props.active || binding.value || !authorizationUrl) return;
-	const current = generation, target = authorizationUrl;
+	const current = generation, me = $i;
 	binding.value = true;
-	try { await newApiStudioLaunch($i.token, props.kind, context, abort?.signal); if (current === generation && props.active) window.location.assign(target); } catch { if (current === generation) { binding.value = false; fail('STUDIO_UNAVAILABLE'); } }
+	try {
+		// Issue a fresh ticket on click, including after a long pause on the consent screen.
+		const next = await newApiStudioLaunch(me.token, props.kind, context, abort?.signal);
+		if (current !== generation || !props.active) return;
+		if (next.origin !== props.origin || next.subject !== launch.value?.subject || next.userId !== me.id) throw new Error('STUDIO_ACCOUNT');
+		const response = await window.fetch('/studio/api/new-api/community/embedded/init', {
+			method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: abort?.signal,
+			headers: { 'Content-Type': 'application/json', 'x-community-embed': context }, body: JSON.stringify({ code: next.code }),
+		});
+		const data = await response.json();
+		if (current !== generation || !props.active) return;
+		if (!response.ok || data.subject !== next.subject || data.userId !== me.id || data.kind !== props.kind) throw new Error('STUDIO_ACCOUNT');
+		if (data.status === 'verify') { await connect(); return; }
+		const target = new URL(data.authorizationUrl);
+		if (data.status !== 'authorize' || target.origin !== props.origin || target.pathname !== '/studio/api/new-api/community/embedded/authorize') throw new Error('STUDIO_ACCOUNT');
+		window.location.assign(target.href);
+	} catch { if (current === generation) fail('STUDIO_UNAVAILABLE'); }
 }
 
 async function bindAccount() {
@@ -222,14 +257,24 @@ async function bindAccount() {
 	try { const target = await startNewApiLink($i.token, credential, code, window.location.pathname + window.location.search, controller.signal); if (current === generation && props.active) window.location.assign(target); } catch { if (current === generation) { bindError.value = true; binding.value = false; } }
 }
 
+function switchWorkspace() {
+	if (!props.active || status.value !== 'ready' || !launch.value || !$i || !frame.value?.contentWindow) return;
+	workspaceKind.value = '';
+	workspaceRequest = crypto.randomUUID();
+	window.clearTimeout(workspaceTimeout);
+	workspaceTimeout = window.setTimeout(() => fail('STUDIO_TIMEOUT'), 45000);
+	frame.value.contentWindow.postMessage({ type: 'community-workspace', context, attempt: attempt.value, requestId: workspaceRequest, subject: launch.value.subject, userId: $i.id, kind: props.kind, defaultModel: props.defaultModel, defaultModels: { ...props.defaultModels } }, props.origin);
+}
+
 function disconnected() { fail('STUDIO_CONTEXT_EXPIRED'); }
 
 function storage(event: StorageEvent) { if (event.key === `community-studio:${$i?.id}` && event.newValue !== context) disconnected(); }
 
 onMounted(() => { window.addEventListener('message', message); window.addEventListener('community-studio-disconnect', disconnected); window.addEventListener('storage', storage); void connect(); });
 onBeforeUnmount(() => { stop(); window.removeEventListener('message', message); window.removeEventListener('community-studio-disconnect', disconnected); window.removeEventListener('storage', storage); });
-watch(() => [props.kind, props.origin, props.active, $i?.id, $i?.token], connect);
-watch(() => [props.remix, status.value, props.active], sendRemix, { flush: 'post' });
+watch(() => [props.origin, props.active, $i?.id, $i?.token], connect);
+watch(() => props.kind, () => { if (status.value === 'ready') switchWorkspace(); else void connect(); });
+watch(() => [props.remix, status.value, props.active, workspaceKind.value], sendRemix, { flush: 'post' });
 defineExpose({ refresh: () => { void connect(); } });
 </script>
 

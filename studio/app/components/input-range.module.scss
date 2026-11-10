@@ -1,0 +1,55 @@
+@use "../styles/controls" as controls;
+
+.input-range {
+  @include controls.field;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: min(240px, 48%);
+  flex-shrink: 0;
+
+  &:has(input:focus-visible) {
+    @include controls.focus-ring;
+  }
+
+  input[type="range"] {
+    --control-keyboard-outline: none;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    accent-color: var(--primary);
+    background-color: transparent;
+    box-shadow: none;
+    outline: none;
+    background-image: linear-gradient(var(--bar-color), var(--bar-color));
+    background-size: 100% 2px;
+    background-position: center;
+    background-repeat: no-repeat;
+
+    &:is(:focus, :focus-visible) {
+      background-color: transparent;
+      box-shadow: none;
+      outline: none;
+    }
+  }
+}
+
+.value {
+  min-width: 3ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (pointer: coarse), (max-width: 600px) {
+  .input-range {
+    padding-block: 0;
+
+    input[type="range"] {
+      min-height: 44px;
+      padding: 0;
+      background-color: transparent;
+    }
+  }
+}

@@ -21,70 +21,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkButton @click="refresh">{{ i18n.ts.retry }}</MkButton>
 		</div>
 		<template v-else-if="ready">
-			<nav v-if="!studioOrigin" :class="$style.modules" :aria-label="workbenchText.modules">
-				<MkA v-for="item in creationPages" :key="item.key" :to="`/create/${item.key}`" :class="[$style.module, { [$style.selectedModule]: item.key === props.kind }]" :aria-current="item.key === props.kind ? 'page' : undefined"><i :class="item.icon" aria-hidden="true"></i>{{ item.title }}</MkA>
-			</nav>
-			<MkStudioRemix v-if="remixOpen && remixId && active && studioOrigin" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
-			<MkCommunityStudio v-if="studioOrigin" ref="studio" :origin="studioOrigin" :kind="definition.key" :title="workbenchText.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :defaultModels="defaultModels" :remix="remix" @identity="studioIdentity = $event"/>
-			<div v-else-if="!targetUrl" :class="$style.empty" data-testid="creation-empty">
-				<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
-				<h1>{{ creationText.notConfigured }}</h1>
-				<p>{{ creationText.emptyHint }}</p>
-				<MkButton v-if="$i?.isAdmin" type="routerLink" to="/admin/creation-links" primary>{{ creationText.configure }}</MkButton>
-			</div>
-			<template v-else>
-				<div ref="toolbar" :class="$style.toolbar">
-					<div :class="$style.destination"><i :class="definition.icon" aria-hidden="true"></i><div><strong>{{ mode === 'embed' ? embedText.workspace : definition.title }}</strong><span>{{ targetHost }}</span></div></div>
-					<div :class="$style.actions">
-						<MkButton v-if="mode === 'embed'" small data-testid="creation-reload" @click="reloadFrame"><i class="ti ti-refresh" aria-hidden="true"></i> {{ embedText.reload }}</MkButton>
-						<MkButton v-if="mode === 'embed'" small :aria-expanded="showHelp" :aria-controls="helpId" data-testid="creation-help" @click="showHelp = !showHelp">{{ showHelp ? embedText.closeHelp : embedText.help }}</MkButton>
-						<MkButton v-if="$i?.isAdmin" type="routerLink" to="/admin/creation-links" small>{{ creationText.settings }}</MkButton>
-						<MkButton type="a" :href="targetUrl" target="_blank" rel="noopener noreferrer" primary small data-testid="creation-open"><i class="ti ti-external-link" aria-hidden="true"></i> {{ creationText.open }}</MkButton>
-					</div>
-				</div>
-				<section v-if="showHelp && mode === 'embed'" :id="helpId" :class="$style.help" data-testid="creation-help-panel">
-					<h2>{{ embedText.helpTitle }}</h2><p>{{ embedText.helpHint }}</p>
-					<p v-if="$i?.isAdmin">{{ embedText.adminHint }} <code>{{ siteOrigin }}</code></p>
-				</section>
-				<div v-if="active && mode === 'embed'" :class="$style.frameStage" data-testid="creation-frame-stage" :aria-busy="frameState === 'loading'">
-					<iframe
-						:key="`${definition.key}:${targetUrl}:${frameAttempt}`"
-						ref="frame"
-						:src="targetUrl"
-						:title="definition.title"
-						:class="$style.frame"
-						sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
-						allow="fullscreen"
-						referrerpolicy="no-referrer"
-						data-testid="creation-frame"
-						@load="frameLoaded"
-						@error="frameFailed"
-					></iframe>
-					<div v-if="frameState !== 'unconfirmed'" :class="$style.frameStatus" :role="frameState === 'error' ? 'alert' : 'status'" data-testid="creation-frame-status">
-						<MkLoading v-if="frameState === 'loading'"/>
-						<i v-else class="ti ti-browser-off" :class="$style.statusIcon" aria-hidden="true"></i>
-						<h2>{{ frameState === 'loading' ? embedText.loading : frameState === 'timeout' ? embedText.slowTitle : embedText.failedTitle }}</h2>
-						<template v-if="frameState !== 'loading'"><p>{{ embedText.waitHint }}</p><div :class="$style.actions"><MkButton primary @click="reloadFrame">{{ embedText.reload }}</MkButton><MkButton type="a" :href="targetUrl" target="_blank" rel="noopener noreferrer">{{ creationText.open }}</MkButton><MkButton @click="continueFrame">{{ embedText.continuePreview }}</MkButton></div></template>
-					</div>
-				</div>
-				<div v-else :class="$style.empty" data-testid="creation-external">
-					<i :class="[definition.icon, $style.emptyIcon]" aria-hidden="true"></i>
-					<h1>{{ definition.title }}</h1>
-					<p>{{ creationText.externalHint }}</p>
-					<MkButton type="a" :href="targetUrl" target="_blank" rel="noopener noreferrer" primary>{{ creationText.open }} <i class="ti ti-external-link" aria-hidden="true"></i></MkButton>
-				</div>
-			</template>
+			<MkStudioRemix v-if="remixOpen && remixId && active" :key="remixId" :submissionId="remixId" @apply="remix = $event" @closed="remixOpen = false"/>
+			<MkCommunityStudio ref="studio" :origin="siteOrigin" :kind="definition.key" :title="workbenchText.title" :active="active" :defaultModel="instance.clientOptions?.[definition.modelKey] ?? definition.defaultModel" :defaultModels="defaultModels" :remix="remix" @identity="studioIdentity = $event"/>
 		</template>
 	</div>
 </PageWithHeader>
 </template>
 
 <script lang="ts" setup>
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { url as siteUrl } from '@@/js/config.js';
 import type { StudioRemix } from '@/utility/studio-remix.js';
 import MkButton from '@/components/MkButton.vue';
-import { creationText, creationEmbedText as embedText, creationPages, normalizeCreationUrl, workbenchText } from '@/utility/creation-pages.js';
+import { creationText, creationPages, workbenchText } from '@/utility/creation-pages.js';
 import { fetchInstance, instance } from '@/instance.js';
 import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
@@ -102,21 +51,7 @@ const remixOpen = ref(!!props.remixId);
 watch(() => props.remixId, value => { remix.value = undefined; remixOpen.value = !!value; });
 const definition = computed(() => creationPages.find(item => item.key === props.kind));
 const defaultModels = computed(() => Object.fromEntries(creationPages.map(item => [item.key, instance.clientOptions?.[item.modelKey] ?? item.defaultModel])));
-const targetUrl = computed(() => {
-	if (!$i) return null;
-	const value = definition.value && instance.clientOptions?.[definition.value.urlKey];
-	return value ? normalizeCreationUrl(value, siteUrl) : null;
-});
-const mode = computed(() => definition.value && instance.clientOptions?.[definition.value.modeKey] === 'newTab' ? 'newTab' : 'embed');
-const targetHost = computed(() => targetUrl.value ? new URL(targetUrl.value).host : '');
 const siteOrigin = new URL(siteUrl).origin;
-const toolbar = ref<HTMLElement>();
-const frame = ref<HTMLIFrameElement>();
-const helpId = useId();
-const showHelp = ref(false);
-const frameAttempt = ref(0);
-const frameState = ref<'loading' | 'unconfirmed' | 'timeout' | 'error'>('loading');
-let frameTimer: number | undefined;
 const active = ref(false);
 const loading = ref(false);
 const ready = ref(false);
@@ -125,46 +60,9 @@ let generation = 0;
 const loginOpening = ref(false);
 let loginRequest = 0;
 let disposeLogin: (() => void) | undefined;
-const studioOrigin = ref('');
 const studio = ref<InstanceType<typeof MkCommunityStudio>>();
 const studioIdentity = ref('');
-const studioActions = computed(() => studioOrigin.value && ready.value ? [{ icon: 'ti ti-refresh', text: studioText.refresh, handler: () => studio.value?.refresh() }] : []);
-
-function clearFrameTimer() { window.clearTimeout(frameTimer); frameTimer = undefined; }
-
-function frameLoaded(event: Event) {
-	if (!active.value || event.target !== frame.value) return;
-	clearFrameTimer();
-	// Browsers also fire load for blocked cross-origin frames. This is not proof of a usable page.
-	frameState.value = 'unconfirmed';
-}
-
-function frameFailed(event: Event) {
-	if (!active.value || event.target !== frame.value) return;
-	clearFrameTimer(); frameState.value = 'error';
-}
-
-async function reloadFrame() {
-	if (!active.value || !targetUrl.value || mode.value !== 'embed') return;
-	showHelp.value = false;
-	frameAttempt.value++;
-	await nextTick();
-	toolbar.value?.querySelector<HTMLButtonElement>('[data-testid="creation-reload"]')?.focus({ preventScroll: true });
-}
-
-async function continueFrame() {
-	frameState.value = 'unconfirmed';
-	await nextTick();
-	frame.value?.focus({ preventScroll: true });
-}
-
-watch([active, ready, targetUrl, mode, frameAttempt], () => {
-	clearFrameTimer();
-	if (!active.value || !ready.value || !targetUrl.value || mode.value !== 'embed') return;
-	frameState.value = 'loading';
-	frameTimer = window.setTimeout(() => { frameState.value = 'timeout'; }, 12000);
-}, { flush: 'post' });
-watch(targetUrl, () => { showHelp.value = false; });
+const studioActions = computed(() => ready.value ? [{ icon: 'ti ti-refresh', text: studioText.refresh, handler: () => studio.value?.refresh() }] : []);
 
 async function requestLogin() {
 	if ($i || loginOpening.value || !active.value || !definition.value) return;
@@ -201,7 +99,7 @@ async function refresh() {
 	try {
 		const [, sso] = await Promise.all([fetchInstance(true), newApiSigninConfig()]);
 		if (current === generation) {
-			studioOrigin.value = sso.studioOrigin ?? '';
+			if (!sso.enabled || sso.studioOrigin !== siteOrigin || sso.studioPath !== '/studio') throw new Error('BUILTIN_STUDIO_UNAVAILABLE');
 			ready.value = true;
 		}
 	} catch {
@@ -218,7 +116,6 @@ function activate() {
 }
 
 function deactivate() {
-	clearFrameTimer();
 	active.value = false;
 	ready.value = false;
 	generation++;
@@ -232,15 +129,11 @@ onMounted(activate);
 onActivated(activate);
 onDeactivated(deactivate);
 onBeforeUnmount(deactivate);
-watch(() => props.kind, refresh);
+watch(() => props.kind, () => { if (!ready.value) void refresh(); });
 definePage(() => ({ title: definition.value ? workbenchText.title : i18n.ts.notFound, subtitle: studioIdentity.value, icon: definition.value ? 'ti ti-sparkles' : 'ti ti-alert-triangle', needWideArea: true }));
 </script>
 
 <style lang="scss" module>
-.modules { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 16px; background: var(--MI_THEME-panel); }
-.module { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 14px; &:hover { text-decoration: none; background: var(--MI_THEME-buttonHoverBg); } &:focus-visible { outline: 2px solid var(--MI_THEME-focus); outline-offset: -2px; } }
-.selectedModule { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); font-weight: 600; }
-
 .workspace {
 	display: flex;
 	flex-direction: column;
@@ -249,23 +142,6 @@ definePage(() => ({ title: definition.value ? workbenchText.title : i18n.ts.notF
 	width: 100%;
 	min-width: 0;
 }
-.toolbar {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	flex-wrap: wrap;
-	gap: 12px;
-	padding: 16px 24px;
-	border-bottom: 1px solid var(--MI_THEME-divider);
-	background: var(--MI_THEME-panel);
-}
-.destination { display: flex; align-items: center; gap: 12px; min-width: 0; > i { font-size: 22px; color: var(--MI_THEME-accent); } > div { min-width: 0; } strong, span { display: block; } strong { font-size: 14px; } span { margin-top: 3px; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); overflow-wrap: anywhere; } }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.frameStage { position: relative; flex: 1; min-height: 240px; }
-.frame { display: block; position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--MI_THEME-bg); }
-.frameStatus { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; overflow: auto; text-align: center; background: var(--MI_THEME-panel); h2 { margin: 0; font-size: 20px; } p { margin: 0; line-height: 1.7; max-width: 38em; } .actions { justify-content: center; } }
-.statusIcon { font-size: 32px; color: var(--MI_THEME-fgTransparentWeak); }
-.help { padding: 18px 24px; border-bottom: 1px solid var(--MI_THEME-divider); background: var(--MI_THEME-infoBg); color: var(--MI_THEME-infoFg); h2 { margin: 0 0 8px; font-size: 15px; } p { margin: 6px 0 0; font-size: 13px; line-height: 1.7; } code { display: inline-block; padding: 2px 6px; border: 1px solid var(--MI_THEME-divider); border-radius: 4px; overflow-wrap: anywhere; } }
 .empty {
 	flex: 1;
 	display: flex;
@@ -280,5 +156,4 @@ definePage(() => ({ title: definition.value ? workbenchText.title : i18n.ts.notF
 	p { margin: 0; line-height: 1.7; max-width: 36em; }
 }
 .emptyIcon { display: grid; place-items: center; width: 88px; height: 88px; margin-bottom: 8px; border-radius: 20px; background: var(--community-stage); color: var(--community-stage-accent); font-size: 34px; }
-@media (max-width: 600px) { .toolbar, .help { padding: 12px 16px; } .actions { gap: 6px; } .frameStatus { padding: 20px 16px; } }
 </style>

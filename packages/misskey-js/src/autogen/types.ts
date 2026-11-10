@@ -214,6 +214,46 @@ export type paths = {
          */
         post: operations['admin___captcha___save'];
     };
+    '/admin/community/lottery/config': {
+        /**
+         * admin/community/lottery/config
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['admin___community___lottery___config'];
+    };
+    '/admin/community/lottery/fulfill': {
+        /**
+         * admin/community/lottery/fulfill
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['admin___community___lottery___fulfill'];
+    };
+    '/admin/community/lottery/records': {
+        /**
+         * admin/community/lottery/records
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['admin___community___lottery___records'];
+    };
+    '/admin/community/lottery/update': {
+        /**
+         * admin/community/lottery/update
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['admin___community___lottery___update'];
+    };
     '/admin/community/notes': {
         /**
          * admin/community/notes
@@ -1783,6 +1823,35 @@ export type paths = {
          *     **Credential required**: *No*
          */
         post: operations['community___featured'];
+    };
+    '/community/lottery/draw': {
+        /**
+         * community/lottery/draw
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['community___lottery___draw'];
+    };
+    '/community/lottery/records': {
+        /**
+         * community/lottery/records
+         * @description No description provided.
+         *
+         *     **Internal Endpoint**: This endpoint is an API for the misskey mainframe and is not intended for use by third parties.
+         *     **Credential required**: *Yes*
+         */
+        post: operations['community___lottery___records'];
+    };
+    '/community/lottery/status': {
+        /**
+         * community/lottery/status
+         * @description No description provided.
+         *
+         *     **Credential required**: *No* / **Permission**: *read:account*
+         */
+        post: operations['community___lottery___status'];
     };
     '/community/report': {
         /**
@@ -7654,6 +7723,429 @@ export interface operations {
             };
             /** @description I'm Ai */
             418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    admin___community___lottery___config: {
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        version: number;
+                        settings: {
+                            enabled: boolean;
+                            invites: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            likes: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            followers: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            /** @enum {string} */
+                            likesMode: 'work' | 'total';
+                            prizes: {
+                                id: string;
+                                name: string;
+                                description: string;
+                                amountCents: number;
+                                weight: number;
+                                stock: number;
+                                enabled: boolean;
+                                /** @enum {string} */
+                                kind: 'balance' | 'empty';
+                            }[];
+                        };
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    admin___community___lottery___fulfill: {
+        requestBody: {
+            content: {
+                'application/json': {
+                    /** Format: misskey:id */
+                    drawId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        id: string;
+                        userId: string;
+                        username: string;
+                        createdAt: string;
+                        creditAttempts: number;
+                        prizes: {
+                            prizeId: string;
+                            name: string;
+                            description: string;
+                            amountCents: number;
+                            /** @enum {string} */
+                            status: 'pending' | 'fulfilled' | 'empty';
+                            fulfilledAt: string | null;
+                            note: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    admin___community___lottery___records: {
+        requestBody: {
+            content: {
+                'application/json': {
+                    /** Format: misskey:id */
+                    untilId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        items: {
+                            id: string;
+                            userId: string;
+                            username: string;
+                            createdAt: string;
+                            creditAttempts: number;
+                            prizes: {
+                                prizeId: string;
+                                name: string;
+                                description: string;
+                                amountCents: number;
+                                /** @enum {string} */
+                                status: 'pending' | 'fulfilled' | 'empty';
+                                fulfilledAt: string | null;
+                                note: string;
+                            }[];
+                        }[];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    admin___community___lottery___update: {
+        requestBody: {
+            content: {
+                'application/json': {
+                    version: number;
+                    settings: {
+                        enabled: boolean;
+                        invites: {
+                            enabled: boolean;
+                            threshold: number;
+                            tickets: number;
+                        };
+                        likes: {
+                            enabled: boolean;
+                            threshold: number;
+                            tickets: number;
+                        };
+                        followers: {
+                            enabled: boolean;
+                            threshold: number;
+                            tickets: number;
+                        };
+                        /** @enum {string} */
+                        likesMode: 'work' | 'total';
+                        prizes: {
+                            id: string;
+                            name: string;
+                            description: string;
+                            amountCents: number;
+                            weight: number;
+                            stock: number;
+                            enabled: boolean;
+                            /** @enum {string} */
+                            kind: 'balance' | 'empty';
+                        }[];
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        version: number;
+                        settings: {
+                            enabled: boolean;
+                            invites: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            likes: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            followers: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            /** @enum {string} */
+                            likesMode: 'work' | 'total';
+                            prizes: {
+                                id: string;
+                                name: string;
+                                description: string;
+                                amountCents: number;
+                                weight: number;
+                                stock: number;
+                                enabled: boolean;
+                                /** @enum {string} */
+                                kind: 'balance' | 'empty';
+                            }[];
+                        };
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20361,6 +20853,305 @@ export interface operations {
                             viewsCount: number;
                         }[];
                         nextCursor: string | null;
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    community___lottery___draw: {
+        requestBody: {
+            content: {
+                'application/json': {
+                    requestId: string;
+                    count: number;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        id: string;
+                        userId: string;
+                        username: string;
+                        createdAt: string;
+                        creditAttempts: number;
+                        prizes: {
+                            prizeId: string;
+                            name: string;
+                            description: string;
+                            amountCents: number;
+                            /** @enum {string} */
+                            status: 'pending' | 'fulfilled' | 'empty';
+                            fulfilledAt: string | null;
+                            note: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    community___lottery___records: {
+        requestBody: {
+            content: {
+                'application/json': {
+                    /** Format: misskey:id */
+                    untilId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        items: {
+                            id: string;
+                            userId: string;
+                            username: string;
+                            createdAt: string;
+                            creditAttempts: number;
+                            prizes: {
+                                prizeId: string;
+                                name: string;
+                                description: string;
+                                amountCents: number;
+                                /** @enum {string} */
+                                status: 'pending' | 'fulfilled' | 'empty';
+                                fulfilledAt: string | null;
+                                note: string;
+                            }[];
+                        }[];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            /** @description Client error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Authentication error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Forbidden error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description I'm Ai */
+            418: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': components['schemas']['Error'];
+                };
+            };
+        };
+    };
+    community___lottery___status: {
+        responses: {
+            /** @description OK (with results) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    'application/json': {
+                        settings: {
+                            enabled: boolean;
+                            invites: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            likes: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            followers: {
+                                enabled: boolean;
+                                threshold: number;
+                                tickets: number;
+                            };
+                            /** @enum {string} */
+                            likesMode: 'work' | 'total';
+                            prizes: {
+                                id: string;
+                                name: string;
+                                description: string;
+                                amountCents: number;
+                                weight: number;
+                                stock: number;
+                                enabled: boolean;
+                                /** @enum {string} */
+                                kind: 'balance' | 'empty';
+                            }[];
+                        };
+                        balance: number;
+                        creditReady: boolean;
+                        accountLinked: boolean;
+                        earned: {
+                            invites: number;
+                            likes: number;
+                            followers: number;
+                        };
+                        counts: {
+                            invites: number;
+                            likes: number;
+                            followers: number;
+                            bestWorkLikes: number;
+                        };
+                        inviteUrl: string;
                     };
                 };
             };

@@ -1,0 +1,261 @@
+@use "../styles/motion" as motion;
+@use "../styles/controls" as controls;
+
+.citation,
+.open-source {
+  --state-hover-text: var(--primary);
+  --state-selected-text: var(--primary);
+}
+
+.citation {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 24px;
+  padding: 0 4px;
+  margin-inline: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--control-surface, var(--second));
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &[aria-expanded="true"] {
+    @include controls.selected-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+.preview {
+  box-sizing: border-box;
+  z-index: 200;
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 8px;
+  background: var(--list-surface, var(--white));
+  box-shadow: var(--shadow);
+  color: var(--black);
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+
+.preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary, var(--black));
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--black);
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+.title {
+  font-weight: 500;
+}
+
+.domain {
+  color: var(--text-secondary, var(--black));
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  color: var(--text-secondary, var(--black));
+  font-weight: 400;
+}
+
+.open-source {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--primary);
+  text-decoration: none;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+.sources {
+  margin-top: 12px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--black);
+
+  > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    width: fit-content;
+    padding: 0 4px;
+    border-radius: 4px;
+    list-style: none;
+    cursor: pointer;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover,
+    &:active {
+      @include controls.hover-surface;
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: var(--control-focus-shadow);
+      outline-offset: 2px;
+    }
+
+    > svg {
+      transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+  }
+
+  &[open] > summary > svg {
+    transform: rotate(180deg);
+  }
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 12px;
+
+  > li {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) 16px;
+    align-items: start;
+    gap: 8px;
+
+    > svg {
+      margin-top: 4px;
+      color: var(--text-secondary, var(--black));
+    }
+  }
+}
+
+.number {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 24px;
+  color: var(--text-secondary, var(--black));
+  font-variant-numeric: tabular-nums;
+}
+
+.link {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 44px;
+  color: var(--black);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+
+  &:hover .title {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .citation {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .close,
+  .open-source,
+  .sources > summary {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .sources > summary > svg {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .sources > summary > svg {
+  transition: none;
+}

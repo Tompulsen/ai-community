@@ -39,6 +39,9 @@ export const ROUTE_DEF = [{
 	path: '/community/ai',
 	redirect: '/create/text',
 }, {
+	path: '/community/lottery',
+	component: page(() => import('@/pages/community/lottery.vue')),
+}, {
 	path: '/community/:module',
 	component: page(() => import('@/pages/community.vue')),
 	query: { q: 'initialQuery', tags: 'initialTags' },
@@ -494,6 +497,10 @@ export const ROUTE_DEF = [{
 		path: '/branding',
 		name: 'branding',
 		component: page(() => import('@/pages/admin/branding.vue')),
+	}, {
+		path: '/community-lottery',
+		name: 'community-lottery',
+		component: $i?.isAdmin ? page(() => import('@/pages/admin/community-lottery.vue')) : page(() => import('@/pages/not-found.vue')),
 	}, {
 		path: '/community-ads',
 		name: 'community-ads',

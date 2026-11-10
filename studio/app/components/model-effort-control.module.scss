@@ -1,0 +1,212 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.effortTrigger,
+.panel {
+  --effort-foreground: var(--primary);
+
+  &[data-effort="low"] {
+    --effort-foreground: color-mix(in srgb, var(--primary) 72%, #4388ee);
+  }
+
+  &[data-effort="auto"] {
+    --effort-foreground: var(--second-in-gray);
+  }
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: auto;
+  gap: 2px;
+}
+
+.trigger,
+.effortTrigger {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 1 auto;
+  min-width: 28px;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--black);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.effortTrigger {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-width: 28px;
+  padding-inline: 4px;
+  background: transparent;
+}
+
+.model {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.effort {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--effort-foreground);
+  font-weight: 500;
+}
+
+.panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--black);
+
+  &[data-mobile="true"] {
+    max-width: none;
+    padding: 0 4px;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  gap: 8px;
+}
+
+.title {
+  color: var(--black);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.value {
+  color: var(--effort-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.automatic,
+.changeModel {
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--second-in-gray);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.automatic {
+  margin-inline-start: auto;
+  min-width: 44px;
+
+  color: var(--primary);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.changeModel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trigger,
+.effortTrigger,
+.automatic,
+.changeModel {
+  transition:
+    background-color 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 200ms cubic-bezier(0.22, 1, 0.36, 1);
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: -2px;
+  }
+
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  @media (hover: hover) {
+    &:hover {
+      @include controls.hover-surface;
+    }
+  }
+}
+
+.effortTrigger[aria-expanded="true"],
+.automatic[aria-pressed="true"] {
+  @include controls.selected-surface;
+}
+
+.effortTrigger:is(:hover, :active, [aria-expanded="true"]) .effort {
+  color: inherit;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .header,
+  .automatic,
+  .changeModel {
+    min-height: 44px;
+  }
+
+  .group {
+    flex: 1 1 auto;
+    gap: 4px;
+  }
+
+  .trigger,
+  .effortTrigger {
+    min-width: 44px;
+    height: 44px;
+    max-width: min(100%, 220px);
+    padding-inline: 8px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .trigger,
+  .effortTrigger,
+  .automatic,
+  .changeModel {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) {
+  .trigger,
+  .effortTrigger,
+  .automatic,
+  .changeModel {
+    transition: none;
+  }
+}

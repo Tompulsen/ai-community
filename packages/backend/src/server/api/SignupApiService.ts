@@ -62,6 +62,7 @@ export class SignupApiService {
 				password: string;
 				host?: string;
 				invitationCode?: string;
+				lotteryInviterId?: string;
 				emailAddress?: string;
 				'hcaptcha-response'?: string;
 				'g-recaptcha-response'?: string;
@@ -119,6 +120,7 @@ export class SignupApiService {
 		}
 		const host: string | null = process.env.NODE_ENV === 'test' ? (body['host'] ?? null) : null;
 		const invitationCode = body['invitationCode'];
+		const lotteryInviterId = typeof body.lotteryInviterId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(body.lotteryInviterId) ? body.lotteryInviterId : undefined;
 		const emailAddress = typeof body['emailAddress'] === 'string' ? body['emailAddress'].trim().toLowerCase() : undefined;
 
 		// Public community registrations always require an email identifier.
@@ -212,6 +214,7 @@ export class SignupApiService {
 					email: emailAddress!,
 					username: username,
 					password: hash,
+					lotteryInviterId: lotteryInviterId ?? null,
 				});
 
 				const link = `${this.config.url}/signup-complete/${code}`;
@@ -241,7 +244,7 @@ export class SignupApiService {
 
 			try {
 				const { account, secret } = await this.signupService.signup({
-					username, password, host, email: emailAddress,
+					username, password, host, email: emailAddress, lotteryInviterId,
 				});
 
 				if (ticket) {
@@ -358,6 +361,7 @@ export class SignupApiService {
 				passwordHash: pendingUser.password,
 				email: pendingUser.email,
 				emailVerified: true,
+				lotteryInviterId: pendingUser.lotteryInviterId ?? undefined,
 			});
 
 			this.userPendingsRepository.delete({

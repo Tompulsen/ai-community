@@ -1,0 +1,116 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.panel {
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 12px;
+  color: var(--black);
+}
+
+.trigger {
+  @include controls.quiet-button;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: start;
+  cursor: pointer;
+
+  &:active:not(:disabled) {
+    @include controls.hover-surface;
+
+    .icon {
+      color: inherit;
+    }
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    &:hover:not(:disabled) .icon {
+      color: inherit;
+    }
+  }
+}
+
+.icon,
+.chevron {
+  flex: 0 0 auto;
+}
+
+.icon {
+  color: var(--primary);
+}
+
+.title {
+  font-weight: 500;
+}
+
+.state {
+  color: var(--text-secondary, var(--black));
+  white-space: nowrap;
+}
+
+.chevron {
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+
+  &[data-open="true"] {
+    transform: rotate(180deg);
+  }
+}
+
+.content {
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--control-surface);
+  font-size: 14px;
+  line-height: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--second-in-gray) transparent;
+  overflow-anchor: none;
+
+  :global(.markdown-body) {
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  :global(p:first-child) {
+    margin-top: 0;
+  }
+
+  :global(p:last-child) {
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .trigger {
+    min-height: 44px;
+  }
+
+  .content {
+    max-height: 240px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .chevron {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .chevron {
+  transition: none;
+}

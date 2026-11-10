@@ -82,6 +82,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
+import { rememberLotteryInvite } from '@/utility/lottery-invite.js';
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import * as Misskey from 'misskey-js';
 import * as config from '@@/js/config.js';
@@ -264,7 +265,8 @@ async function onSubmit(): Promise<void> {
 	errorMessage.value = '';
 	try {
 		if (!createdAccount.value) {
-			const signupPayload: Misskey.entities.SignupRequest = {
+			const signupPayload: Misskey.entities.SignupRequest & { lotteryInviterId?: string } = {
+				lotteryInviterId: rememberLotteryInvite(),
 				username: username.value,
 				password: password.value,
 				emailAddress: email.value.trim().toLowerCase(),

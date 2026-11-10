@@ -19,6 +19,7 @@ import { SignupService } from '@/core/SignupService.js';
 import { UserAuthService } from '@/core/UserAuthService.js';
 import { HttpRequestService } from '@/core/HttpRequestService.js';
 import { getIpHash } from '@/misc/get-ip-hash.js';
+import { lotteryInviter } from '@/misc/community-lottery.js';
 import { RateLimiterService } from './RateLimiterService.js';
 import { SigninService } from './SigninService.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -29,7 +30,7 @@ const random = () => randomBytes(32).toString('base64url');
 const hash = (value: string) => createHash('sha256').update(value).digest('base64url');
 type Identity = { sub: string; preferred_username: string; name: string; };
 type LinkProof = { userId: string; tokenHash: string; credentialHash: string; };
-type Pending = { browser: string; issuer: string; verifier: string; returnTo: string; link?: LinkProof; };
+type Pending = { browser: string; issuer: string; verifier: string; returnTo: string; lotteryInviterId?: string; link?: LinkProof; };
 type Completion = { userId: string; issuer: string; subject: string; tokenHash: string; returnTo: string; link?: LinkProof; identity?: Identity; };
 type StudioLaunch = Completion & { kind: 'text' | 'image' | 'video'; studio: string; context?: string; };
 
@@ -40,7 +41,7 @@ export function newApiOrigin(value: string): string {
 }
 
 export function newApiReturnPath(value: unknown): string {
-	return typeof value === 'string' && /^\/(community|create\/(text|image|video)(\?remix=[a-zA-Z0-9]{1,32})?)$/.test(value) ? value : '/community';
+	return typeof value === 'string' && /^\/(community(?:\/lottery)?|create\/(text|image|video)(\?remix=[a-zA-Z0-9]{1,32})?)$/.test(value) ? value : '/community';
 }
 
 export function newApiIdentity(value: unknown): Identity {
@@ -76,8 +77,8 @@ export class NewApiSigninService {
 	private studio(): { origin: string; secret: string; } {
 		this.issuer();
 		const settings = this.config.newApiSso!;
-		if (!settings.studioOrigin || !settings.studioSecret || settings.studioSecret.length < 32) throw new Error('STUDIO_DISABLED');
-		return { origin: newApiOrigin(settings.studioOrigin), secret: settings.studioSecret };
+		if (!settings.studioSecret || settings.studioSecret.length < 32) throw new Error('STUDIO_DISABLED');
+		return { origin: newApiOrigin(this.config.url), secret: settings.studioSecret };
 	}
 
 	private browser(request: FastifyRequest): string | null {
@@ -139,7 +140,7 @@ export class NewApiSigninService {
 				const issuer = this.issuer();
 				let studioOrigin: string | undefined;
 				try { studioOrigin = this.studio().origin; } catch { /* Studio can be enabled after account sign-in. */ }
-				return { enabled: true, issuer, studioOrigin };
+				return { enabled: true, issuer, studioOrigin, studioPath: '/studio' };
 			} catch { return { enabled: false }; }
 		});
 		fastify.post<{ Body: { i?: string; kind?: string; context?: string; returnTo?: string; } }>('/newapi/studio/start', { bodyLimit: 4096 }, async (request, reply) => {
@@ -166,7 +167,7 @@ export class NewApiSigninService {
 				const launch: StudioLaunch = { userId: user.id, issuer, subject: mapping.subject, tokenHash: hash(i), returnTo: newApiReturnPath(request.body.returnTo).startsWith(`/create/${kind}`) ? newApiReturnPath(request.body.returnTo) : `/create/${kind}`, kind: kind as StudioLaunch['kind'], studio: origin, context };
 				await this.redis.set(`newapi:studio:${hash(code)}`, JSON.stringify(launch), 'EX', 120);
 				if (context) return { code, origin, subject: mapping.subject, userId: user.id };
-				const target = new URL('/api/new-api/community/start', origin);
+				const target = new URL('/studio/api/new-api/community/start', origin);
 				target.searchParams.set('code', code);
 				return { url: target.href };
 			} catch { return reply.code(403).send({ error: 'STUDIO_UNAVAILABLE' }); }
@@ -187,7 +188,7 @@ export class NewApiSigninService {
 				const user = await this.availableUser(launch.userId);
 				if (hash(user.token!) !== launch.tokenHash || !await this.db.getRepository(MiExternalAccount).existsBy({ issuer: launch.issuer, subject: launch.subject, userId: user.id })) throw new Error('STUDIO_ACCOUNT');
 				if (!await this.consume(key, raw)) throw new Error('STUDIO_CODE');
-				return { issuer: launch.issuer, subject: launch.subject, kind: launch.kind, studio: origin, ...(launch.context ? { context: launch.context, userId: user.id, tokenHash: launch.tokenHash } : {}) };
+				return { issuer: launch.issuer, subject: launch.subject, kind: launch.kind, studio: origin, returnTo: launch.returnTo, ...(launch.context ? { context: launch.context, userId: user.id, tokenHash: launch.tokenHash } : {}) };
 			} catch { return reply.code(403).send({ error: 'STUDIO_EXCHANGE_FAILED' }); }
 		});
 		fastify.post<{ Body: { i?: string; context?: string; action?: string; } }>('/newapi/studio/context', { bodyLimit: 4096 }, async (request, reply) => {
@@ -218,7 +219,7 @@ export class NewApiSigninService {
 				return { valid: true };
 			} catch { return reply.code(403).send({ error: 'STUDIO_ACCOUNT_CHANGED' }); }
 		});
-		fastify.post<{ Body: { returnTo?: string; link?: boolean; i?: string; password?: string; token?: string; } }>('/newapi/start', { bodyLimit: 4096 }, async (request, reply) => {
+		fastify.post<{ Body: { returnTo?: string; lotteryInviterId?: string; link?: boolean; i?: string; password?: string; token?: string; } }>('/newapi/start', { bodyLimit: 4096 }, async (request, reply) => {
 			reply.header('Cache-Control', 'no-store');
 			if (request.headers.origin !== new URL(this.config.url).origin) return reply.code(403).send({ error: 'SSO_ORIGIN' });
 			if (await this.rateLimiterService.limit({ key: 'newapi-start', duration: 60000, max: 10 }, getIpHash(request.ip))) return reply.code(429).send({ error: 'SSO_RATE_LIMIT' });
@@ -240,7 +241,7 @@ export class NewApiSigninService {
 					link = { userId: user.id, tokenHash: hash(i), credentialHash: this.credentialHash(profile) };
 				}
 				const browser = random(); const state = random(); const verifier = random();
-				const pending: Pending = { browser: hash(browser), issuer, verifier, returnTo: newApiReturnPath(request.body?.returnTo), link };
+				const pending: Pending = { browser: hash(browser), issuer, verifier, returnTo: newApiReturnPath(request.body?.returnTo), lotteryInviterId: link ? undefined : lotteryInviter(request.body?.lotteryInviterId), link };
 				await this.redis.set(`newapi:state:${state}`, JSON.stringify(pending), 'EX', 600);
 				this.setCookie(reply, browser, 600);
 				const url = new URL('/community-authorize', issuer);
@@ -263,7 +264,7 @@ export class NewApiSigninService {
 				if (!token || token.token_type !== 'Bearer' || typeof token.access_token !== 'string' || !opaque.test(token.access_token)) throw new Error('SSO_TOKEN');
 				const identity = newApiIdentity(await this.json(`${pending.issuer}/api/community-sso/userinfo`, { token: token.access_token }));
 				if (pending.issuer !== this.issuer()) throw new Error('SSO_CONFIG');
-				const user = pending.link ? await this.availableUser(pending.link.userId) : await this.provision(pending.issuer, identity);
+				const user = pending.link ? await this.availableUser(pending.link.userId) : await this.provision(pending.issuer, identity, pending.lotteryInviterId);
 				if (pending.link) await this.checkLink(pending.link, user.token!);
 				const completion: Completion = { userId: user.id, issuer: pending.issuer, subject: identity.sub, tokenHash: hash(user.token!), returnTo: pending.returnTo, link: pending.link, identity: pending.link ? identity : undefined };
 				await this.redis.set(`newapi:complete:${hash(browser)}`, JSON.stringify(completion), 'EX', 300);
@@ -319,7 +320,7 @@ export class NewApiSigninService {
 		return user as MiLocalUser;
 	}
 
-	public async provision(issuer: string, identity: Identity): Promise<MiLocalUser> {
+	public async provision(issuer: string, identity: Identity, lotteryInviterId?: string): Promise<MiLocalUser> {
 		if (this.meta.rootUserId == null) throw new Error('SSO_NOT_INITIALIZED');
 		const mapping = await this.db.getRepository(MiExternalAccount).findOneBy({ issuer, subject: identity.sub });
 		if (mapping) {
@@ -331,7 +332,7 @@ export class NewApiSigninService {
 		for (const username of candidates) {
 			if (!/^[a-zA-Z0-9_]{1,20}$/.test(username)) continue;
 			try {
-				const { account } = await this.signupService.signup({ username, password: random(), externalIdentity: { issuer, subject: identity.sub, name: identity.name || identity.preferred_username } });
+				const { account } = await this.signupService.signup({ username, password: random(), lotteryInviterId, externalIdentity: { issuer, subject: identity.sub, name: identity.name || identity.preferred_username } });
 				return this.availableUser(account.id);
 			} catch (error) {
 				if (!(error instanceof Error) || !['DUPLICATED_USERNAME', 'USED_USERNAME'].includes(error.message)) throw error;

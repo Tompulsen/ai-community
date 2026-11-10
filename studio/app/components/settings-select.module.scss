@@ -1,0 +1,114 @@
+@use "../styles/controls" as controls;
+
+.group {
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+}
+
+.trigger {
+  @include controls.field;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  max-width: 100%;
+  cursor: pointer;
+  text-align: left;
+
+  &:active:not(:disabled) {
+    @include controls.hover-surface;
+  }
+
+  &[aria-expanded="true"] {
+    @include controls.selected-surface;
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  svg {
+    flex-shrink: 0;
+  }
+}
+
+.mask:global(.modal-mask) {
+  align-items: center;
+  padding: 12px;
+  box-sizing: border-box;
+
+  :is(
+      input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+      textarea,
+      select,
+      [data-select-trigger]
+    ):focus-visible:not([data-pointer-focus]),
+  div:has(> input[type="range"]:focus-visible) {
+    @include controls.focus-ring;
+  }
+
+  div:has(> input[type="range"]) > input[type="range"]:focus-visible {
+    --control-keyboard-outline: none;
+    outline: none;
+  }
+}
+
+.dialog {
+  width: min(100%, 480px);
+  max-width: 100%;
+
+  > div {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    border-radius: var(--radius-xl, 24px);
+  }
+}
+
+.options {
+  display: grid;
+  gap: 4px;
+
+  button {
+    min-height: 40px;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 14px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.description {
+  margin: 0 0 16px;
+  color: var(--black);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.compact {
+  width: min(100%, 360px);
+}
+
+.compact:has(input[type="range"]) {
+  .description {
+    margin: 16px 0 0;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .trigger,
+  .native :global([data-select-trigger]),
+  .options button {
+    min-height: 44px;
+  }
+
+  .trigger {
+    touch-action: manipulation;
+  }
+}

@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</ul>
 			<p v-else :class="$style.message">{{ t.noAnnouncements }}</p>
 		</section>
+		<a href="/community/lottery" :class="$style.lottery" data-testid="lottery-entry" @click.prevent="emit('navigate', '/community/lottery')"><i class="ti ti-gift" aria-hidden="true"></i><span><strong>{{ lt.title }}</strong><small>{{ lt.entryHint }}</small></span><i class="ti ti-arrow-up-right" aria-hidden="true"></i></a>
 		<section :class="$style.module" :aria-labelledby="creatorsId" :aria-busy="creatorsLoading">
 			<h2 :id="creatorsId">{{ t.creators }}</h2><p :class="$style.hint">{{ t.creatorsHint }}</p>
 			<p v-if="creatorsLoading && !creators.length" :class="$style.message" role="status">{{ t.loading }}</p>
@@ -37,6 +38,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script setup lang="ts">
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, useId } from 'vue';
+import { lotteryText as lt } from './lottery-copy.js';
 import { feedText as t } from './feed-copy.js';
 import CommunitySidebarAds from './sidebar-ads.vue';
 import { isDiscoverableCreator, loadDiscoveryAnnouncements, loadDiscoveryCreators, readCreatorFollow, requestCreatorFollow } from './discovery-data.js';
@@ -193,6 +195,13 @@ onActivated(() => {
 </script>
 
 <style lang="scss" module>
+.lottery { display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 12px; background: color-mix(in srgb, var(--MI_THEME-accent) 9%, var(--MI_THEME-panel)); color: var(--MI_THEME-fg); text-decoration: none; }
+.lottery > i { color: var(--MI_THEME-accent); font-size: 22px; }
+.lottery > i:last-child { margin-left: auto; transition: transform .18s ease; }
+.lottery span { display: grid; gap: 5px; }
+.lottery small { color: var(--discovery-muted); font-size: 12px; line-height: 1.5; }
+.lottery:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: no-preference) { .lottery:hover > i:last-child { transform: translate(2px, -2px); } }
 .sidebar { --discovery-muted: color-mix(in srgb, var(--MI_THEME-fg) 72%, var(--MI_THEME-panel)); min-width: 0; display: flex; flex-direction: column; gap: 20px; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
 .sidebar, .sidebar * { box-sizing: border-box; }
 .sidebar :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
