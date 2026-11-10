@@ -95,12 +95,13 @@ assert before['/ZY-image-playground']['State']['Running'], 'Required image site 
 for name in ['ai-community-web-1', 'ZY-newapi', 'ZY-chat']:
     assert before['/' + name]['State'].get('Health', {}).get('Status') == 'healthy', name
 
-# The account container is recreated only for its OAuth origin, from its verified main image.
+# This is an account configuration change, not a New API source upgrade.
+# Keep its deployed image and verify that revision belongs to the published main history.
 assert not run(['git', '-C', ACCOUNT_SOURCE, 'status', '--porcelain']), 'Dirty account source'
-run(['git', '-C', ACCOUNT_SOURCE, 'pull', '--ff-only', '--quiet', 'origin', 'main'])
+run(['git', '-C', ACCOUNT_SOURCE, 'fetch', '--quiet', 'origin', 'main'])
 account_revision = account_before['Config']['Labels']['org.opencontainers.image.revision']
-assert run(['git', '-C', ACCOUNT_SOURCE, 'rev-parse', 'HEAD']) == account_revision
-assert run(['git', '-C', ACCOUNT_SOURCE, 'rev-parse', 'origin/main']) == account_revision
+account_remote_main = run(['git', '-C', ACCOUNT_SOURCE, 'rev-parse', 'origin/main'])
+run(['git', '-C', ACCOUNT_SOURCE, 'merge-base', '--is-ancestor', account_revision, account_remote_main])
 
 images = {}
 for service, registry in [('web', 'ai-community'), ('studio', 'ai-community-studio')]:
@@ -223,7 +224,9 @@ try:
             removed.append(old['Id'])
     remaining = containers()
     stopped = [{'name': c['Name'], 'id': c['Id'], 'reason': 'Pre-existing or unrelated; preserved for ownership review'} for c in remaining.values() if not c['State']['Running']]
-    result = {'sha': SHA, 'accountRevision': account_revision, 'healthy': True, 'userBillingRequired': True,
+    result = {'sha': SHA, 'accountRevision': account_revision, 'accountRemoteMain': account_remote_main,
+              'accountChange': 'OAuth origin configuration only; New API source and image unchanged',
+              'healthy': True, 'userBillingRequired': True,
               'publicStudioOrigin': ORIGIN, 'storageAndUnrelatedServicesPreserved': True,
               'removedStoppedContainers': removed, 'remainingStopped': stopped,
               'runningContainers': sum(c['State']['Running'] for c in remaining.values())}

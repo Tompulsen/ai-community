@@ -3,7 +3,6 @@ name: Build community studio container
 on:
   push:
     branches: [main]
-    paths: ['studio/**', '.github/workflows/studio-container.yml']
   workflow_dispatch:
 
 permissions:
