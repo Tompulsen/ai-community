@@ -40,7 +40,7 @@ type Category = MiCommunitySubmission['category'];
 type Status = MiCommunitySubmission['status'];
 type SubmissionInput = CommunityRevision & { idempotencyKey: string; destination?: MiCommunitySubmission['destination']; resultId?: string; };
 type UpdateInput = CommunityRevision & { submissionId: string; version: number; };
-type ListInput = { limit: number; untilId?: string; query: string; category?: Category; tagIds?: string[]; noteIds?: string[]; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
+type ListInput = { feedSeed?: string; feedAnchor?: number; feedBoundary?: string; limit: number; untilId?: string; query: string; category?: Category; tagIds?: string[]; noteIds?: string[]; authorId?: string; status?: Status | 'all' | 'unreviewed' | 'withdrawn'; };
 
 @Injectable()
 export class CommunityService {
@@ -369,7 +369,6 @@ export class CommunityService {
 		if (options.category) query.andWhere(scope === 'public' ? 'submission.category = :category' : 'COALESCE(submission."pendingRevision"->>\'category\', submission.category) = :category', { category: options.category });
 		if (options.authorId) query.andWhere('submission.authorId = :authorId', { authorId: options.authorId });
 		if (options.noteIds) query.andWhere('submission.approvedNoteId IN (:...noteIds)', { noteIds: options.noteIds });
-		if (options.untilId) query.andWhere('submission.id < :cursor', { cursor: options.untilId });
 		const tagMembership = scope === 'public' ? 'tag.id = ANY(submission."tagIds")' : `(COALESCE(submission."pendingRevision"->'tagIds', to_jsonb(submission."tagIds")) ? tag.id)`;
 		const tagCategory = scope === 'public' ? 'submission.category' : `COALESCE(submission."pendingRevision"->>'category', submission.category)`;
 		const tagMatch = `SELECT 1 FROM community_tag tag WHERE tag."isDeleted" = false AND tag.category = ${tagCategory} AND ${tagMembership}`;
@@ -385,13 +384,39 @@ export class CommunityService {
 			const prompt = scope === 'public' ? `submission.generation->>'prompt'` : `CASE WHEN submission."pendingRevision" ? 'generation' THEN submission."pendingRevision"->'generation'->>'prompt' ELSE submission.generation->>'prompt' END`;
 			query.andWhere(`(${title} ILIKE :query OR ${body} ILIKE :query OR (${prompt}) ILIKE :query OR author.name ILIKE :query OR author.username ILIKE :query OR EXISTS (${tagMatch} AND tag.name ILIKE :query))`, { query: `%${options.query.trim().replace(/[\\%_]/g, '\\$&')}%` });
 		}
+		const shuffle = scope === 'public' && !options.authorId && !options.noteIds && !!options.feedSeed && (options.untilId ? options.feedBoundary !== undefined : this.meta.clientOptions.communityFeedMode !== 'latest');
+		let feedBoundary: string | undefined;
+		let feedAnchor: number | undefined;
+		const feedOrder = `CASE WHEN submission.id >= :feedBoundary THEN md5(submission.id || :feedSeed) ELSE 'z' END`;
+		if (shuffle) {
+			feedAnchor = options.untilId && options.feedAnchor ? options.feedAnchor : Date.now();
+			query.andWhere('submission.submittedAt <= :feedAnchor', { feedAnchor: new Date(feedAnchor) });
+			const poolSize = this.meta.clientOptions.communityFeedPoolSize ?? 200;
+			// Keep this refresh's range fixed across pages, even if a work is deleted.
+			feedBoundary = options.untilId ? options.feedBoundary : undefined;
+			if (!feedBoundary) {
+				const boundary = await query.clone().select('submission.id', 'id').orderBy('submission.id', 'DESC').offset(poolSize - 1).limit(1).getRawOne<{ id: string }>();
+				feedBoundary = boundary?.id ?? '0';
+			}
+			query.addSelect(feedOrder, 'community_feed_order').setParameters({ feedBoundary, feedSeed: options.feedSeed });
+		}
+		const after = (page: typeof query, cursor: string) => {
+			if (!shuffle) { page.andWhere('submission.id < :cursor', { cursor }); return; }
+			const rank = cursor >= feedBoundary! ? createHash('md5').update(cursor + options.feedSeed).digest('hex') : 'z';
+			page.andWhere(`(${feedOrder} > :rank OR (${feedOrder} = :rank AND submission.id < :cursor))`, { rank, cursor });
+		};
 		const rows: MiCommunitySubmission[] = [];
 		let scannedCursor: string | null = null;
 		let exhausted = false;
 		// Apply native author privacy before selecting a response page. Bound each scan.
 		for (let batch = 0; batch < 10 && rows.length <= options.limit; batch++) {
-			const page = query.clone().orderBy('submission.id', 'DESC').take(50);
-			if (scannedCursor) page.andWhere('submission.id < :scannedCursor', { scannedCursor });
+			const page = query.clone();
+			if (shuffle) page.orderBy('community_feed_order', 'ASC').addOrderBy('submission.id', 'DESC');
+			else page.orderBy('submission.id', 'DESC');
+			// All joins are many-to-one; avoid TypeORM's DISTINCT pagination wrapper.
+			page.limit(50);
+			const cursor = scannedCursor ?? options.untilId;
+			if (cursor) after(page, cursor);
 			const candidates = await page.getMany();
 			for (const row of candidates) {
 				scannedCursor = row.id;
@@ -402,7 +427,7 @@ export class CommunityService {
 		}
 		const selected = rows.slice(0, options.limit);
 		const buffered = this.meta.enableReactionsBuffering ? await this.reactionsBufferingService.getMany(selected.flatMap(row => row.approvedNoteId ? [row.approvedNoteId] : [])) : new Map();
-		return { items: await Promise.all(selected.map(row => this.pack(row, buffered.get(row.approvedNoteId!)?.deltas ?? {}, scope !== 'public'))), nextCursor: rows.length > options.limit ? rows[options.limit - 1].id : exhausted ? null : scannedCursor };
+		return { ...(feedBoundary ? { feedBoundary, feedAnchor } : {}), items: await Promise.all(selected.map(row => this.pack(row, buffered.get(row.approvedNoteId!)?.deltas ?? {}, scope !== 'public'))), nextCursor: rows.length > options.limit ? rows[options.limit - 1].id : exhausted ? null : scannedCursor };
 	}
 
 	public async show(submissionId: string, viewerId?: string) {

@@ -32,7 +32,9 @@ export function isCommunityWork(value: unknown): value is CommunityWork {
 
 export function parseCommunityPage(value: unknown): CommunityPage {
 	if (!isObject(value) || !Array.isArray(value.items) || !value.items.every(isCommunityWork)
-		|| !(value.nextCursor === null || isId(value.nextCursor))) throw new Error(t.invalidResponse);
+		|| !(value.nextCursor === null || isId(value.nextCursor))
+		|| !(value.feedAnchor === undefined || Number.isSafeInteger(value.feedAnchor) && Number(value.feedAnchor) > 0)
+		|| !(value.feedBoundary === undefined || isId(value.feedBoundary))) throw new Error(t.invalidResponse);
 	return value as CommunityPage;
 }
 
@@ -79,6 +81,7 @@ export function createCommunityGateway(options: {
 			if (section === 'profile' && (!isId(query.authorId) || (query.category != null && !['video', 'image', 'resource'].includes(query.category)))) throw new Error(t.invalidResponse);
 			const endpoint = section === 'review' ? 'admin/community/submissions' : section === 'mine' ? 'community/submissions/mine' : 'community/works';
 			const page = parseCommunityPage(await request(endpoint, {
+				...(endpoint === 'community/works' && section !== 'profile' && query.feedSeed ? { feedSeed: query.feedSeed, feedAnchor: query.feedAnchor, feedBoundary: query.feedBoundary } : {}),
 				limit: 20, query: query.query, ...(endpoint === 'community/works' && query.tagIds?.length ? { tagIds: query.tagIds } : {}), ...(query.cursor ? { untilId: query.cursor } : {}),
 				...(section === 'profile' ? { authorId: query.authorId, ...(query.category ? { category: query.category } : {}) } : section === 'mine' || section === 'review' ? { status: query.status } : section === 'all' ? {} : { category: section }),
 			}, signal));

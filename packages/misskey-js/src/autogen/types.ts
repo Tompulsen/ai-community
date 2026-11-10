@@ -5874,6 +5874,10 @@ export type components = {
             communityAutoBanEnabled?: boolean;
             communityViolationThreshold?: number;
             /** @enum {string} */
+            communityFeedMode?: 'shuffle' | 'latest';
+            communityFeedPoolSize?: number;
+            communityPullToRefresh?: boolean;
+            /** @enum {string} */
             communityPublicationMode?: 'before' | 'after';
             /** @enum {string} */
             homeShowcaseMode?: 'custom' | 'popular';
@@ -8399,6 +8403,8 @@ export interface operations {
                 };
                 content: {
                     'application/json': {
+                        feedAnchor?: number;
+                        feedBoundary?: string;
                         items: {
                             /** @enum {string} */
                             destination: 'community' | 'source-comment';
@@ -14309,6 +14315,10 @@ export interface operations {
                         creationVideoModel?: string;
                         communityAutoBanEnabled?: boolean;
                         communityViolationThreshold?: number;
+                        /** @enum {string} */
+                        communityFeedMode?: 'shuffle' | 'latest';
+                        communityFeedPoolSize?: number;
+                        communityPullToRefresh?: boolean;
                         /** @enum {string} */
                         communityPublicationMode?: 'before' | 'after';
                         /** @enum {string} */
@@ -20805,6 +20815,8 @@ export interface operations {
                 };
                 content: {
                     'application/json': {
+                        feedAnchor?: number;
+                        feedBoundary?: string;
                         items: {
                             /** @enum {string} */
                             destination: 'community' | 'source-comment';
@@ -21497,6 +21509,8 @@ export interface operations {
                 };
                 content: {
                     'application/json': {
+                        feedAnchor?: number;
+                        feedBoundary?: string;
                         items: {
                             /** @enum {string} */
                             destination: 'community' | 'source-comment';
@@ -21944,6 +21958,9 @@ export interface operations {
         requestBody: {
             content: {
                 'application/json': {
+                    feedSeed?: string;
+                    feedAnchor?: number;
+                    feedBoundary?: string;
                     noteIds?: string[];
                     /** @default 20 */
                     limit?: number;
@@ -21967,6 +21984,8 @@ export interface operations {
                 };
                 content: {
                     'application/json': {
+                        feedAnchor?: number;
+                        feedBoundary?: string;
                         items: {
                             /** @enum {string} */
                             destination: 'community' | 'source-comment';

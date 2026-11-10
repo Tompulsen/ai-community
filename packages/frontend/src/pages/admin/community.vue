@@ -26,7 +26,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<p>{{ safety.ruleHint }}</p><p>{{ safety.scopeHint }}</p>
 					<p v-if="!validThreshold" role="alert" :class="$style.error">{{ safety.invalidThreshold }}</p>
 				</fieldset>
-				<div :class="$style.actions"><MkButton primary :wait="saving" :disabled="saving || !validThreshold || !dirty" @click="save">{{ t.modeSave }}</MkButton><p v-if="saved" role="status">{{ t.modeSaved }}</p></div>
+				<fieldset :class="$style.banRules" :disabled="saving" data-testid="community-refresh-settings">
+					<legend>{{ rt.settings }}</legend>
+					<label :class="$style.threshold">{{ rt.mode }}<select v-model="feedMode"><option value="shuffle">{{ rt.shuffle }}</option><option value="latest">{{ rt.latest }}</option></select></label>
+					<label v-if="feedMode === 'shuffle'" :class="$style.threshold">{{ rt.pool }}<input v-model.number="feedPool" type="number" min="20" max="1000" step="1" inputmode="numeric" :aria-invalid="!validFeedPool" :aria-describedby="feedHintId"/></label>
+					<p :id="feedHintId">{{ feedMode === 'shuffle' ? rt.shuffleHint : rt.latestHint }}</p>
+					<label :class="$style.toggle"><input v-model="pullRefresh" type="checkbox"/>{{ rt.mobile }}</label>
+					<p>{{ rt.scope }}</p><p v-if="!validFeedPool" role="alert" :class="$style.error">{{ rt.invalidPool }}</p>
+				</fieldset>
+				<div :class="$style.actions"><MkButton primary :wait="saving" :disabled="saving || !validThreshold || !validFeedPool || !dirty" @click="save">{{ rt.save }}</MkButton><p v-if="saved" role="status">{{ rt.saved }}</p></div>
 				<p v-if="error" role="alert" :class="$style.error">{{ error }}</p>
 			</template>
 		</section>
@@ -38,12 +46,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { apiUrl } from '@@/js/config.js';
 import CommunitySurface from '@/pages/community/surface.vue';
 import CommunityTags from '@/pages/admin/community-tags.vue';
 import { createCommunityGateway } from '@/pages/community/api.js';
 import { moderationText as t } from '@/pages/community/moderation-copy.js';
+import { refreshText as rt } from '@/pages/community/refresh-copy.js';
 import { safetyText as safety } from '@/pages/community/safety-copy.js';
 import MkButton from '@/components/MkButton.vue';
 import { $i, iAmModerator } from '@/i.js';
@@ -57,12 +66,17 @@ const mode = ref<'before' | 'after'>('before');
 const savedMode = ref<'before' | 'after'>('before');
 const loading = ref(false), loaded = ref(false), saving = ref(false), saved = ref(false);
 const error = ref('');
+const feedHintId = useId();
+const feedMode = ref<'shuffle' | 'latest'>('shuffle'), savedFeedMode = ref<'shuffle' | 'latest'>('shuffle');
+const feedPool = ref<number | string>(200), savedFeedPool = ref(200);
+const pullRefresh = ref(true), savedPullRefresh = ref(true);
+const validFeedPool = computed(() => typeof feedPool.value === 'number' && Number.isInteger(feedPool.value) && feedPool.value >= 20 && feedPool.value <= 1000);
 const autoBan = ref(true), savedAutoBan = ref(true), threshold = ref<number | string>(3), savedThreshold = ref(3);
 const validThreshold = computed(() => typeof threshold.value === 'number' && Number.isInteger(threshold.value) && threshold.value >= 1 && threshold.value <= 1000);
-const dirty = computed(() => mode.value !== savedMode.value || autoBan.value !== savedAutoBan.value || threshold.value !== savedThreshold.value);
+const dirty = computed(() => feedMode.value !== savedFeedMode.value || feedPool.value !== savedFeedPool.value || pullRefresh.value !== savedPullRefresh.value || mode.value !== savedMode.value || autoBan.value !== savedAutoBan.value || threshold.value !== savedThreshold.value);
 let disposed = false;
 const gateway = createCommunityGateway({ apiUrl, getToken: () => $i?.token, chooseFiles: async () => [] });
-watch([mode, autoBan, threshold], () => { saved.value = false; error.value = ''; });
+watch([mode, autoBan, threshold, feedMode, feedPool, pullRefresh], () => { saved.value = false; error.value = ''; });
 
 async function load() {
 	if (!$i?.isAdmin || loading.value) return;
@@ -74,19 +88,25 @@ async function load() {
 		savedMode.value = mode.value;
 		autoBan.value = savedAutoBan.value = meta.clientOptions.communityAutoBanEnabled !== false;
 		threshold.value = savedThreshold.value = meta.clientOptions.communityViolationThreshold ?? 3;
+		feedMode.value = savedFeedMode.value = meta.clientOptions.communityFeedMode === 'latest' ? 'latest' : 'shuffle';
+		feedPool.value = savedFeedPool.value = meta.clientOptions.communityFeedPoolSize ?? 200;
+		pullRefresh.value = savedPullRefresh.value = meta.clientOptions.communityPullToRefresh !== false;
 		loaded.value = true;
 	} catch { loaded.value = false; } finally { loading.value = false; }
 }
 
 async function save() {
-	if (!$i?.isAdmin || !loaded.value || saving.value || !validThreshold.value) return;
+	if (!$i?.isAdmin || !loaded.value || saving.value || !validThreshold.value || !validFeedPool.value) return;
 	const value = mode.value;
+	const refreshMode = feedMode.value, pool = Number(feedPool.value), pull = pullRefresh.value;
 	const enabled = autoBan.value, limit = Number(threshold.value);
 	saving.value = true; saved.value = false; error.value = '';
 	try {
-		await misskeyApi('admin/update-meta', { clientOptions: { communityPublicationMode: value, communityAutoBanEnabled: enabled, communityViolationThreshold: limit } });
+		await misskeyApi('admin/update-meta', { clientOptions: { communityFeedMode: refreshMode, communityFeedPoolSize: pool, communityPullToRefresh: pull, communityPublicationMode: value, communityAutoBanEnabled: enabled, communityViolationThreshold: limit } });
 		if (disposed) return;
 		savedMode.value = value;
+		savedFeedMode.value = refreshMode; savedFeedPool.value = pool; savedPullRefresh.value = pull;
+		Object.assign(instance.clientOptions, { communityFeedMode: refreshMode, communityFeedPoolSize: pool, communityPullToRefresh: pull });
 		savedAutoBan.value = enabled; savedThreshold.value = limit;
 		instance.clientOptions.communityPublicationMode = value;
 		void fetchInstance(true).catch(() => {});
@@ -106,7 +126,8 @@ definePage(() => ({ title: t.review, icon: 'ti ti-shield-check' }));
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; > button { min-height: 44px; } }
 .banRules { display: grid; gap: 12px; border: 0; padding: 20px 0 0; margin: 24px 0 0; legend { font-size: 18px; font-weight: 600; } label { display: flex; align-items: center; gap: 12px; min-height: 44px; } input:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; } }
 .toggle input { width: 20px; height: 20px; accent-color: var(--MI_THEME-accent); }
-.threshold { flex-wrap: wrap; input { width: 100px; min-height: 44px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 8px; padding: 8px 12px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font: inherit; } }
+.threshold { flex-wrap: wrap; input, select { width: 100px; min-height: 44px; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 8px; padding: 8px 12px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font: inherit; } }
+.threshold select { width: auto; max-width: 100%; }
 .management { display: flex; gap: 16px; flex-wrap: wrap; margin: 20px 0; a { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--MI_THEME-accent); } }
 .hint { font-size: 13px; }
 .error { color: var(--MI_THEME-error); }

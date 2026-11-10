@@ -55,10 +55,10 @@ export type CommunitySubmissionInput = {
 export type CommunityComposerDraft = Pick<CommunitySubmissionInput, 'category' | 'title' | 'text' | 'model' | 'destination' | 'resultId' | 'tagIds'> & { files: CommunityFile[]; generation?: CommunityGeneration | null; referenceFiles?: CommunityFile[]; };
 export type CommunityReviewInput = { submissionId: string; version: number; decision: 'approve' | 'reject' | 'remove'; reason?: string; recordViolation?: boolean; };
 export type CommunityUpdateInput = Omit<CommunitySubmissionInput, 'idempotencyKey'> & { submissionId: string; version: number; };
-export type CommunityPage = { items: CommunityWork[]; nextCursor: string | null; };
+export type CommunityPage = { feedAnchor?: number; feedBoundary?: string; items: CommunityWork[]; nextCursor: string | null; };
 
 export interface CommunityGateway {
-	list: (section: CommunitySection, options: { query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; tagIds?: string[]; }, signal: AbortSignal) => Promise<CommunityPage>;
+	list: (section: CommunitySection, options: { feedSeed?: string; feedAnchor?: number; feedBoundary?: string; query: string; status: SubmissionStatus | 'all' | 'unreviewed'; cursor?: string; authorId?: string; category?: CommunityCategory; tagIds?: string[]; }, signal: AbortSignal) => Promise<CommunityPage>;
 	submit: (input: CommunitySubmissionInput) => Promise<{ id: string; status: SubmissionStatus; submittedAt: string; sourceCommentStatus?: SourceCommentStatus; }>;
 	show: (submissionId: string, signal?: AbortSignal) => Promise<CommunityWork>;
 	update: (input: CommunityUpdateInput) => Promise<CommunityWork>;

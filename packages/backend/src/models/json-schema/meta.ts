@@ -470,6 +470,9 @@ export const packedMetaClientOptionsSchema = {
 		},
 		communityAutoBanEnabled: { type: 'boolean', optional: true, nullable: false },
 		communityViolationThreshold: { type: 'integer', optional: true, nullable: false },
+		communityFeedMode: { type: 'string', enum: ['shuffle', 'latest'], optional: true, nullable: false },
+		communityFeedPoolSize: { type: 'integer', optional: true, nullable: false },
+		communityPullToRefresh: { type: 'boolean', optional: true, nullable: false },
 		communityPublicationMode: {
 			type: 'string', enum: ['before', 'after'], optional: true, nullable: false,
 		},

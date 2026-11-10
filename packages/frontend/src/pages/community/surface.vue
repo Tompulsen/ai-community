@@ -19,9 +19,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<div v-if="mobileSearchOpen" :class="$style.mobileSearchPanel">
 			<form role="search" @submit.prevent="search(); mobileSearchOpen = false"><input v-model="query" type="search" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/><button type="submit" class="_button">{{ t.searchAction }}</button></form>
-			<div><button type="button" class="_button" :disabled="loading" @click="load(); mobileSearchOpen = false"><i class="ti ti-refresh" aria-hidden="true"></i>{{ ft.refresh }}</button><button type="button" class="_button" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>{{ t.tagFilter }}<span v-if="activeTagIds.length"> · {{ activeTagIds.length }}</span></button><button v-if="activeQuery || activeTagIds.length" type="button" class="_button" @click="clearSearch">{{ ft.clearSearch }}</button></div>
+			<div><button type="button" class="_button" :disabled="loading" @click="refreshWorks(); mobileSearchOpen = false"><i class="ti ti-refresh" aria-hidden="true"></i>{{ ft.refresh }}</button><button type="button" class="_button" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>{{ t.tagFilter }}<span v-if="activeTagIds.length"> · {{ activeTagIds.length }}</span></button><button v-if="activeQuery || activeTagIds.length" type="button" class="_button" @click="clearSearch">{{ ft.clearSearch }}</button></div>
 		</div>
 	</header>
+	<div v-if="mobileFeed && (pullDistance || refreshing)" :class="$style.pullIndicator" role="status" data-testid="community-pull-refresh">
+		<i :class="refreshing ? 'ti ti-refresh' : pullReady ? 'ti ti-arrow-up' : 'ti ti-arrow-down'" aria-hidden="true"></i>{{ refreshing ? rt.refreshing : pullReady ? rt.release : rt.pull }}
+	</div>
+	<p v-if="refreshMessage" :class="$style.refreshMessage" role="status">{{ refreshMessage }}</p>
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
 		<div v-if="isProfile" ref="profileHeaderRoot"><slot name="profileHeader" :mobile="mobileProfile" :selectTab="selectProfileTab"></slot></div>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
@@ -144,7 +148,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div v-else-if="loadError && !items.length" :class="$style.empty" role="alert"><i class="ti ti-cloud-off" aria-hidden="true"></i><p>{{ loadError }}</p><button type="button" :class="$style.secondary" @click="load()">{{ t.retry }}</button></div>
 				<div v-else-if="!items.length" :class="$style.empty"><i class="ti ti-layout-grid" aria-hidden="true"></i><h2>{{ emptyTitle }}</h2><p>{{ emptyHint }}</p><button v-if="activeQuery" type="button" :class="$style.secondary" data-testid="reset-empty-filters" @click="clearSearch">{{ ft.clearSearch }}</button></div>
 				<div v-else :class="$style.works"><WorkCard v-for="work in items" :key="work.id" :work="work" :data-scroll-anchor="active ? `works:${work.id}` : undefined" compact profileGrid/></div>
-				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
+				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }} <button type="button" :class="$style.quiet" :disabled="loading" @click="refreshWorks()">{{ t.retry }}</button></p>
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
 			</template>
 			<template #notes="{ active }"><ProfileActivity v-if="profileAuthorId" :userId="profileAuthorId" section="notes" :active="active"/></template>
@@ -162,14 +166,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
 				<div v-if="!mobileFeed && !mobileProfile" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
-					<div v-if="isPublicFeed" :class="$style.feedHeading"><h1>{{ ft.latest }}</h1><span>{{ ft.desktopHint }}</span></div><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
+					<div v-if="isPublicFeed" :class="$style.feedHeading"><h1>{{ instance.clientOptions.communityFeedMode === 'latest' ? ft.latest : rt.recommended }}</h1><span>{{ ft.desktopHint }}</span></div><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
 					<nav v-if="isPublicFeed" :class="$style.studioLinks" :aria-label="t.ai"><MkA to="/create/video"><i class="ti ti-video" aria-hidden="true"></i>{{ ft.makeVideo }}</MkA><MkA to="/create/image"><i class="ti ti-photo" aria-hidden="true"></i>{{ ft.makeImage }}</MkA><MkA to="/create/text"><i class="ti ti-file-text" aria-hidden="true"></i>{{ ft.makeText }}</MkA></nav>
 					<form v-else :class="$style.search" role="search" @submit.prevent="search()">
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
 					<div :class="$style.feedTools">
-						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i><span>{{ isPublicFeed ? ft.refresh : t.refresh }}</span></button>
+						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i><span>{{ isPublicFeed ? ft.refresh : t.refresh }}</span></button>
 						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
 					</div>
 				</div>
@@ -226,9 +230,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 						</article>
 					</template>
 				</div>
-				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
+				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }} <button type="button" :class="$style.quiet" :disabled="loading" @click="refreshWorks()">{{ t.retry }}</button></p>
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
-				<p v-if="mobileFeed && items.length && !nextCursor" :class="$style.mobileEnd">{{ ft.mobileEnd }}<button type="button" class="_button" :disabled="loading" @click="load()">{{ ft.refresh }}</button></p>
+				<p v-if="mobileFeed && items.length && !nextCursor" :class="$style.mobileEnd">{{ ft.mobileEnd }}<button type="button" class="_button" :disabled="loading" @click="refreshWorks()">{{ ft.refresh }}</button></p>
 			</section>
 			<footer v-if="!embedded && !mobileFeed && !mobileProfile" :class="$style.communityFooter">
 				<details :class="$style.guide">
@@ -258,6 +262,9 @@ import { loadCommunityTags, communityTagUpdates } from './tags.js';
 import { parseTagQuery } from './work-tags.js';
 import DiscoverySidebar from './discovery-sidebar.vue';
 import { feedText as ft } from './feed-copy.js';
+import { refreshText as rt } from './refresh-copy.js';
+import { usePullRefresh } from './use-pull-refresh.js';
+import { instance, fetchInstance } from '@/instance.js';
 import { communityComposeEvent } from './compose.js';
 import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
 import { useDiscoveryDrawer } from './use-discovery-drawer.js';
@@ -325,6 +332,7 @@ function resizeMobileFeed() {
 }
 
 onMounted(() => {
+	if (isPublicFeed.value) void fetchInstance(true).catch(() => {});
 	resizeMobileFeed();
 	mobileViewport.addEventListener('change', resizeMobileFeed);
 	feedResize = new ResizeObserver(resizeMobileFeed);
@@ -362,6 +370,9 @@ const featuredWorkId = computed(() => desktopGallery.value && props.section === 
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
 const loadError = ref('');
+const refreshing = ref(false);
+const refreshMessage = ref('');
+let feedSession: { feedSeed?: string; feedAnchor?: number; feedBoundary?: string } = {};
 const notice = ref('');
 const noticeElement = ref<HTMLElement>();
 const composerOpen = ref(false);
@@ -432,32 +443,50 @@ function errorText(error: unknown) {
 	return error instanceof Error && Object.values(t).includes(error.message as never) ? error.message : t.networkError;
 }
 
-async function load(append = false) {
+const { distance: pullDistance, ready: pullReady } = usePullRefresh(surfaceRoot, () => mobileFeed.value && active && instance.clientOptions.communityPullToRefresh !== false && !loading.value && !composerOpen.value && !discoveryOpen.value && !filterPickerOpen.value, refreshWorks);
+
+async function refreshWorks() {
+	if (loading.value || refreshing.value) return;
+	refreshing.value = true;
+	refreshMessage.value = '';
+	try {
+		const refreshed = await load(false, true);
+		if (refreshed) refreshMessage.value = rt.updated;
+		void fetchInstance(true).catch(() => {});
+	} finally { refreshing.value = false; }
+}
+
+async function load(append = false, keepItems = false): Promise<boolean> {
 	const version = getCommunityUpdateVersion();
-	if (disposed || props.composerOnly) return;
+	if (disposed || props.composerOnly) return false;
 	controller?.abort();
 	const current = ++requestId;
 	if (!validSection.value || props.section === 'ai' || (props.section === 'mine' && !props.signedIn) || (props.section === 'review' && !props.moderator)) {
-		items.value = []; nextCursor.value = null; loading.value = false; return;
+		items.value = []; nextCursor.value = null; loading.value = false; return false;
 	}
 	controller = new AbortController();
 	loading.value = true;
 	loadError.value = '';
 	if (!append) {
-		items.value = []; nextCursor.value = null;
+		if (!keepItems) { items.value = []; nextCursor.value = null; }
+		refreshMessage.value = '';
 		for (const id of Object.keys(reviewViolations)) delete reviewViolations[id];
 		for (const id of Object.keys(reviewChecks)) delete reviewChecks[id];
 		for (const id of Object.keys(reviewErrors)) delete reviewErrors[id];
 	}
+	const session = isPublicFeed.value ? append ? feedSession : { feedSeed: crypto.randomUUID() } : {};
 	try {
-		const page = await props.gateway.list(props.section as CommunitySection, { query: activeQuery.value, tagIds: isPublicFeed.value ? activeTagIds.value : undefined, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
-		if (current !== requestId || disposed) return;
+		const page = await props.gateway.list(props.section as CommunitySection, { ...session, query: activeQuery.value, tagIds: isPublicFeed.value ? activeTagIds.value : undefined, status: status.value, ...(isProfile.value ? { authorId: props.profileAuthorId, category: profileCategory.value === 'all' ? undefined : profileCategory.value } : {}), cursor: append ? nextCursor.value ?? undefined : undefined }, controller.signal);
+		if (current !== requestId || disposed) return false;
 		// Fail closed: a malformed public response cannot expose pending content.
 		if (isCommunity.value && page.items.some(work => !['approved', 'published'].includes(work.status) || !work.approvedNoteId || (isProfile.value ? work.author.id !== props.profileAuthorId || (profileCategory.value !== 'all' && work.category !== profileCategory.value) : props.section !== 'all' && work.category !== props.section))) throw new Error(t.invalidResponse);
 		items.value = append ? [...items.value, ...page.items.filter(work => !items.value.some(existing => existing.id === work.id))] : page.items;
 		nextCursor.value = page.nextCursor; loadedVersion = version;
+		feedSession = { ...session, feedBoundary: page.feedBoundary, feedAnchor: page.feedAnchor };
+		return true;
 	} catch (error) {
 		if (current === requestId && !disposed && !(error instanceof Error && error.name === 'AbortError')) loadError.value = errorText(error);
+		return false;
 	} finally {
 		if (current === requestId && !disposed) loading.value = false;
 	}
@@ -870,6 +899,8 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .notice a { text-decoration: underline; font-weight: 600; }
 .root { color: var(--MI_THEME-fg); background: var(--MI_THEME-bg); min-width: 0; overflow-y: auto; scroll-padding-block-start: 72px; height: 100%; container-type: inline-size; font-size: 14px; line-height: 1.6; --community-gap: 28px; }
 .root.discoveryLocked { overflow: hidden; }
+.pullIndicator { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 48px; color: var(--MI_THEME-accent); background: var(--MI_THEME-bg); font-size: 14px; }
+.refreshMessage { margin: 8px 16px; text-align: center; font-size: 13px; color: var(--MI_THEME-fg); }
 :is(.root, .modalLayer) * { box-sizing: border-box; }
 :is(.root, .modalLayer) a { color: inherit; text-decoration: none; text-underline-offset: 4px; }
 :is(.root, .modalLayer) button, :is(.root, .modalLayer) input, :is(.root, .modalLayer) select, :is(.root, .modalLayer) textarea { font: inherit; }

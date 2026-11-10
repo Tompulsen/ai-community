@@ -771,6 +771,9 @@ export class MiMeta {
 		creationImageModel?: string;
 		creationVideoModel?: string;
 		homeShowcaseMode?: 'custom' | 'popular';
+		communityFeedMode?: 'shuffle' | 'latest';
+		communityFeedPoolSize?: number;
+		communityPullToRefresh?: boolean;
 		communityPublicationMode?: 'before' | 'after';
 		communityAutoBanEnabled?: boolean;
 		communityViolationThreshold?: number;

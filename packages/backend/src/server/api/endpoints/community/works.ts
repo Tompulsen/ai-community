@@ -17,7 +17,11 @@ export const meta = {
 
 export const paramDef = {
 	type: 'object',
-	properties: { noteIds: { type: 'array', items: { type: 'string', format: 'misskey:id' }, minItems: 1, maxItems: 50, uniqueItems: true }, ...communityListProperties, category: { type: 'string', enum: ['video', 'image', 'resource'] }, authorId: { type: 'string', format: 'misskey:id' } },
+	properties: {
+		feedSeed: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-zA-Z0-9-]+$' },
+		feedAnchor: { type: 'integer', minimum: 1, maximum: 8640000000000000 },
+		feedBoundary: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[a-zA-Z0-9]+$' },
+		noteIds: { type: 'array', items: { type: 'string', format: 'misskey:id' }, minItems: 1, maxItems: 50, uniqueItems: true }, ...communityListProperties, category: { type: 'string', enum: ['video', 'image', 'resource'] }, authorId: { type: 'string', format: 'misskey:id' } },
 	required: [],
 } as const;
 

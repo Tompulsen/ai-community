@@ -49,7 +49,7 @@ export const communityWorkSchema = {
 } as const;
 export const communityPageSchema = {
 	type: 'object', optional: false, nullable: false,
-	properties: { items: { type: 'array', optional: false, nullable: false, items: communityWorkSchema }, nextCursor: nullableString },
+	properties: { feedAnchor: { type: 'integer', optional: true, nullable: false }, feedBoundary: { type: 'string', optional: true, nullable: false }, items: { type: 'array', optional: false, nullable: false, items: communityWorkSchema }, nextCursor: nullableString },
 } as const;
 export const communityListProperties = {
 	limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
