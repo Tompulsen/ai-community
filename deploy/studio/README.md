@@ -32,7 +32,14 @@ Private environment files and rollback configuration must not be committed.
 
 The deployment uses the existing account network (`NEW_API_NETWORK`, default
 `1panel-network`) for the internal New API and asynchronous image service. Studio
-sessions use database 3 of the community Redis and their own session secret.
+sessions use database 3 of `ZY-redis` and their own session secret. The explicit
+hostname preserves the existing sessions and avoids the ambiguous `redis` alias
+present on both attached networks.
+
+Community authorization routes bypass the community Service Worker so browser
+navigation metadata and OAuth redirects remain intact. The updated worker
+activates immediately for existing tabs. Failed authorization returns to the
+workbench with a retry action; successful authorization preserves the remix URL.
 
 On this server, `python3 deploy/studio/deploy.py <full-main-commit>` verifies and
 pulls main and both images, updates the account authorization origin, preserves
@@ -43,6 +50,7 @@ private rollback files are under `/opt/community-studio-releases/`.
 Validation commands:
 - `node deploy/studio/test-proxy.cjs`
 - `node deploy/studio/test-environment.cjs`
+- `node deploy/studio/test-authorization-navigation.cjs` (installed Playwright and Chromium)
 - From `studio`: `node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testTimeout=30000`
 - From `studio`: `node node_modules/typescript/bin/tsc --noEmit --incremental false`
 - `node scripts/check-shipping.mjs --base <previous-main-commit>`

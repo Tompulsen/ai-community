@@ -141,6 +141,13 @@ function sendLaunch() {
 async function connect() {
 	stop();
 	if (!$i || !props.active) return;
+	const location = new URL(window.location.href);
+	if (location.searchParams.get('studio') === 'authorization-failed') {
+		location.searchParams.delete('studio');
+		window.history.replaceState(window.history.state, '', location.pathname + location.search + location.hash);
+		fail('STUDIO_AUTHORIZATION_FAILED');
+		return;
+	}
 	const current = generation, me = $i, kind = props.kind, origin = props.origin;
 	const controller = new AbortController();
 	abort = controller;
@@ -220,9 +227,25 @@ function message(event: MessageEvent) {
 
 async function authorize() {
 	if (!$i || !props.active || binding.value || !authorizationUrl) return;
-	const current = generation, target = authorizationUrl;
+	const current = generation, me = $i;
 	binding.value = true;
-	try { await newApiStudioLaunch($i.token, props.kind, context, abort?.signal); if (current === generation && props.active) window.location.assign(target); } catch { if (current === generation) { binding.value = false; fail('STUDIO_UNAVAILABLE'); } }
+	try {
+		// Issue a fresh ticket on click, including after a long pause on the consent screen.
+		const next = await newApiStudioLaunch(me.token, props.kind, context, abort?.signal);
+		if (current !== generation || !props.active) return;
+		if (next.origin !== props.origin || next.subject !== launch.value?.subject || next.userId !== me.id) throw new Error('STUDIO_ACCOUNT');
+		const response = await window.fetch('/studio/api/new-api/community/embedded/init', {
+			method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: abort?.signal,
+			headers: { 'Content-Type': 'application/json', 'x-community-embed': context }, body: JSON.stringify({ code: next.code }),
+		});
+		const data = await response.json();
+		if (current !== generation || !props.active) return;
+		if (!response.ok || data.subject !== next.subject || data.userId !== me.id || data.kind !== props.kind) throw new Error('STUDIO_ACCOUNT');
+		if (data.status === 'verify') { await connect(); return; }
+		const target = new URL(data.authorizationUrl);
+		if (data.status !== 'authorize' || target.origin !== props.origin || target.pathname !== '/studio/api/new-api/community/embedded/authorize') throw new Error('STUDIO_ACCOUNT');
+		window.location.assign(target.href);
+	} catch { if (current === generation) fail('STUDIO_UNAVAILABLE'); }
 }
 
 async function bindAccount() {

@@ -188,7 +188,7 @@ export class NewApiSigninService {
 				const user = await this.availableUser(launch.userId);
 				if (hash(user.token!) !== launch.tokenHash || !await this.db.getRepository(MiExternalAccount).existsBy({ issuer: launch.issuer, subject: launch.subject, userId: user.id })) throw new Error('STUDIO_ACCOUNT');
 				if (!await this.consume(key, raw)) throw new Error('STUDIO_CODE');
-				return { issuer: launch.issuer, subject: launch.subject, kind: launch.kind, studio: origin, ...(launch.context ? { context: launch.context, userId: user.id, tokenHash: launch.tokenHash } : {}) };
+				return { issuer: launch.issuer, subject: launch.subject, kind: launch.kind, studio: origin, returnTo: launch.returnTo, ...(launch.context ? { context: launch.context, userId: user.id, tokenHash: launch.tokenHash } : {}) };
 			} catch { return reply.code(403).send({ error: 'STUDIO_EXCHANGE_FAILED' }); }
 		});
 		fastify.post<{ Body: { i?: string; context?: string; action?: string; } }>('/newapi/studio/context', { bodyLimit: 4096 }, async (request, reply) => {

@@ -119,8 +119,9 @@ shared_secret = cfg['newApiSso']['studioSecret']
 assert len(shared_secret) >= 32 and shared_secret == chat_env['COMMUNITY_SSO_SECRET']
 assert cfg['newApiSso']['issuer'] == chat_env['NEW_API_PUBLIC_URL']
 env = {key: chat_env[key] for key in ['NEW_API_BASE_URL', 'NEW_API_PUBLIC_URL', 'NEW_API_TRUST_PROXY', 'NEW_API_IMAGE_BASE_URL', 'NEW_API_ASYNC_BASE_URL'] if chat_env.get(key)}
+# Both attached networks have a "redis" alias; pin the existing session database.
 env.update(COMMUNITY_SSO_ORIGIN=ORIGIN, STUDIO_PUBLIC_ORIGIN=ORIGIN,
-    COMMUNITY_SSO_SECRET=shared_secret, NEW_API_REDIS_URL='redis://redis:6379/3',
+    COMMUNITY_SSO_SECRET=shared_secret, NEW_API_REDIS_URL='redis://ZY-redis:6379/3',
     NEW_API_SESSION_SECRET=secrets.token_urlsafe(48))
 if STUDIO_ENV.exists():
     # Preserve the studio's sessions during later releases.

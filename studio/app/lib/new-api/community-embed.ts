@@ -35,7 +35,7 @@ const random = () => randomBytes(32).toString("base64url");
 const hash = (text: string) =>
   createHash("sha256").update(text).digest("base64url");
 type Kind = "text" | "image" | "video";
-type Launch = CommunityBinding & { kind: Kind; generation?: string };
+type Launch = CommunityBinding & { kind: Kind; returnTo?: string; generation?: string };
 type Pending = { launch: Launch; browser: string; verifier: string };
 type Selection = (
   req: NextRequest,
@@ -46,6 +46,12 @@ function store() {
   const redis = getNewApiRedis();
   if (!redis) throw new Error("Session store unavailable");
   return redis;
+}
+function returnPath(value: unknown, kind: Kind = "text") {
+  return typeof value === "string" &&
+    /^\/create\/(text|image|video)(\?remix=[a-zA-Z0-9]{1,32})?$/.test(value)
+    ? value
+    : `/create/${kind}`;
 }
 function grantKey(launch: CommunityBinding) {
   return (
@@ -139,6 +145,7 @@ async function initialize(req: NextRequest) {
     tokenHash: data.tokenHash,
     context,
     kind: data.kind,
+    returnTo: returnPath(data.returnTo, data.kind),
   };
   const id = await store().get(grantKey(launch));
   const session = id ? await readSessionById(id) : null;
@@ -185,7 +192,7 @@ async function initialize(req: NextRequest) {
     subject: launch.subject,
     userId: launch.userId,
     kind: launch.kind,
-    authorizationUrl: `${config.studio}/studio/api/new-api/community/embedded/authorize?ticket=${ticket}`,
+    authorizationUrl: `${config.studio}/studio/api/new-api/community/embedded/authorize?${new URLSearchParams({ ticket, returnTo: launch.returnTo! })}`,
   });
 }
 
@@ -329,7 +336,7 @@ async function callback(
           });
         } catch {}
       });
-    const res = redirect(`${config.community}/create/${pending.launch.kind}`);
+    const res = redirect(config.community + returnPath(pending.launch.returnTo, pending.launch.kind));
     if (OPAQUE.test(req.nextUrl.searchParams.get("state") || "")) flowCookie(res, "", 0, req.nextUrl.searchParams.get("state")!);
     return res;
   } finally {
@@ -350,6 +357,7 @@ export async function handleCommunityEmbed(
 ) {
   let callbackRaw: string | null = null,
     callbackKey = "";
+  let returnTo = returnPath(req.nextUrl.searchParams.get("returnTo"));
   if (route === "community/callback" && req.method === "GET") {
     const state = req.nextUrl.searchParams.get("state") || "";
     if (OPAQUE.test(state)) {
@@ -359,8 +367,11 @@ export async function handleCommunityEmbed(
     if (!callbackRaw) return null;
   } else if (!route.startsWith("community/embedded/")) return null;
   try {
-    if (callbackRaw)
+    if (callbackRaw) {
+      const pending = JSON.parse(callbackRaw) as Pending;
+      returnTo = returnPath(pending.launch.returnTo, pending.launch.kind);
       return await callback(req, select, callbackRaw, callbackKey);
+    }
     if (route === "community/embedded/authorize" && req.method === "GET")
       return await authorize(req);
     if (route === "community/embedded/init" && req.method === "POST")
@@ -388,9 +399,18 @@ export async function handleCommunityEmbed(
     return json({ status: "error", code: "COMMUNITY_INVALID_REQUEST" });
   } catch (error) {
     if (req.method === "GET") {
-      const res = redirect(
-        embedConfig().community + "/community?studio=authorization-failed",
-      );
+      // Only fixed codes and Fetch Metadata are logged; tickets and credentials stay private.
+      console.warn("[Community studio] Authorization failed", {
+        stage: route === "community/callback" ? "callback" : "authorize",
+        code: error instanceof NewApiError ? error.code :
+          error instanceof Error && error.message === "Top-level authorization required" ? "NAVIGATION_REQUIRED" :
+          error instanceof Error && error.message === "Authorization expired" ? "AUTHORIZATION_EXPIRED" : "AUTHORIZATION_FAILED",
+        destination: req.headers.get("sec-fetch-dest")?.slice(0, 32) || "missing",
+        mode: req.headers.get("sec-fetch-mode")?.slice(0, 32) || "missing",
+      });
+      const target = new URL(returnTo, embedConfig().community);
+      target.searchParams.set("studio", "authorization-failed");
+      const res = redirect(target.href);
       if (OPAQUE.test(req.nextUrl.searchParams.get("state") || "")) flowCookie(res, "", 0, req.nextUrl.searchParams.get("state")!);
       return res;
     }
