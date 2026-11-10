@@ -4,13 +4,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div ref="root" :class="[$style.root, { [$style.previewLayout]: previewComments }]" :data-motion="prefer.s.animation" data-testid="work-engagement">
+<div ref="root" :class="[$style.root, { [$style.previewLayout]: previewComments, [$style.immersive]: immersive }]" :data-motion="prefer.s.animation" data-testid="work-engagement">
 	<div :class="$style.main" data-testid="work-main">
 	<slot></slot>
 	<div :class="$style.actions" data-testid="work-actions">
-		<button type="button" class="_button" :class="{ [$style.active]: showComments }" :title="!discussion && !previewComments && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
+		<slot name="beforeActions"></slot>
+		<button ref="commentTrigger" type="button" class="_button" :class="{ [$style.active]: showComments }" :title="!discussion && !previewComments && showComments ? t.closeComments : t.comment" :aria-label="`${t.comment} ${replyCount}`" :aria-expanded="showComments" @click="openComment"><i :class="immersive ? 'ti ti-message-circle-filled' : 'ti ti-message-circle'" aria-hidden="true"></i><span>{{ format(replyCount) }}</span></button>
 		<button type="button" class="_button" :class="{ [$style.active]: repostState === 'sent', [$style.reposted]: repostConfirmed }" :title="repostState === 'sent' ? t.reposted : t.repost" :aria-label="`${repostState === 'sent' ? t.reposted : t.repost} ${repostCount}`" :aria-busy="activeAction === 'repost' || repostState === 'sending'" :disabled="working || busy || repostState === 'sent' || repostState === 'uncertain'" @click="onRepost"><i class="ti ti-repeat" aria-hidden="true"></i><span>{{ format(repostCount) }}</span></button>
-		<button type="button" class="_button" :class="{ [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
+		<button type="button" class="_button" :class="{ [$style.liked]: liked, [$style.likeConfirmed]: liked && reactionFeedback === t.liked }" :aria-pressed="liked" :aria-busy="activeAction === 'like' || reactionBusy" :title="liked ? t.liked : t.like" :aria-label="`${liked ? t.liked : t.like} ${likeCount}`" :disabled="working || busy" @click="onLike"><i :class="liked || immersive ? 'ti ti-heart-filled' : 'ti ti-heart'" aria-hidden="true"></i><span>{{ format(likeCount) }}</span></button>
 		<span :class="$style.views" :title="t.viewHint" :aria-label="`${t.views} ${viewsCount ?? work.viewsCount ?? '—'}`"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>{{ format(viewsCount ?? work.viewsCount) }}</span></span>
 		<button type="button" class="_button" :class="{ [$style.copied]: shareState === 'copied' }" :aria-label="shareState === 'copied' ? t.copied : t.share" :title="shareState === 'copied' ? t.copied : t.share" :aria-busy="shareState === 'copying'" :disabled="shareState === 'copying'" @click="share"><i :class="shareState === 'copied' ? 'ti ti-check' : 'ti ti-share-2'" aria-hidden="true"></i></button>
 		<ReportButton :submissionId="work.id" :authorId="work.author.id" @login="requestLogin"/>
@@ -23,9 +24,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<p v-if="shareFailed" :class="$style.feedback" role="alert">{{ t.shareFailed }} <MkA :to="workPath(work.id)">{{ work.title }}</MkA></p>
 	<slot name="afterActions"></slot>
 	</div>
+	<Teleport defer to="#misskey-popup-container" :disabled="!immersive">
+	<div v-if="showComments || previewComments" ref="sheetLayer" :class="immersive ? $style.sheetLayer : $style.discussionContainer" :style="immersive ? { zIndex: sheetZIndex } : undefined" @click.self="immersive && closeComments()">
 	<Transition :css="prefer.s.animation" :enterActiveClass="$style.discussionEnter" :enterFromClass="$style.discussionFrom">
-	<section v-if="showComments || previewComments" :class="[$style.discussion, { [$style.previewDiscussion]: previewComments, [$style.withoutComments]: previewComments && !comments.length }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion">
-		<header v-if="discussion || previewComments" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :title="t.refresh" :aria-busy="refreshing" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button></header>
+	<section v-if="showComments || previewComments" ref="commentPanel" :role="immersive ? 'dialog' : undefined" :aria-modal="immersive ? true : undefined" :style="immersive ? { zIndex: sheetZIndex } : undefined" :tabindex="immersive ? -1 : undefined" :class="[$style.discussion, { [$style.commentSheet]: immersive, [$style.previewDiscussion]: previewComments, [$style.withoutComments]: previewComments && !comments.length }]" :aria-label="previewComments ? t.commentPreview : t.comments" :aria-busy="refreshingComments || loadingComments" data-testid="work-discussion" @keydown="commentPanelKeydown">
+		<header v-if="discussion || previewComments || immersive" :class="$style.commentHeading"><h2>{{ previewComments ? t.commentPreview : t.comments }} <span>{{ format(replyCount) }}</span></h2><button type="button" class="_button" :aria-label="t.refresh" :title="t.refresh" :aria-busy="refreshing" :disabled="refreshing || busy || working" @click="refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button><button v-if="immersive" type="button" class="_button" :class="$style.closeSheet" :aria-label="t.closeComments" @click="closeComments"><i class="ti ti-x" aria-hidden="true"></i></button></header>
 		<template v-for="part in previewComments ? ['comments', 'composer'] : ['composer', 'comments']" :key="part">
 		<div v-if="part === 'composer'" :class="$style.commentEntry">
 		<button v-if="previewComments && !showComments && $i" type="button" class="_button" :class="$style.commentPrompt" @click="openComment"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ t.writeComment }}<i class="ti ti-pencil" aria-hidden="true"></i></button>
@@ -54,6 +57,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</template>
 	</section>
 	</Transition>
+	</div>
+	</Teleport>
 </div>
 </template>
 
@@ -72,8 +77,10 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 import { $i } from '@/i.js';
 import * as os from '@/os.js';
 import { prefer } from '@/preferences.js';
+import { focusTrap } from '@/utility/focus-trap.js';
 
-const props = defineProps<{ work: CommunityWork; discussion?: boolean; previewComments?: boolean; viewsCount?: number }>();
+const props = defineProps<{ work: CommunityWork; discussion?: boolean; previewComments?: boolean; viewsCount?: number; immersive?: boolean }>();
+const emit = defineEmits<{ (event: 'discussionChange', value: boolean): void }>();
 
 function commentWorkPath(text: string | null) {
 	const lastLine = text?.split('\n').at(-1);
@@ -85,6 +92,31 @@ function commentWorkPath(text: string | null) {
 }
 
 const showComments = ref(!!props.discussion);
+const commentPanel = ref<HTMLElement>();
+const sheetLayer = ref<HTMLElement>();
+const commentTrigger = ref<HTMLButtonElement>();
+const sheetZIndex = ref(0);
+let releaseSheet: (() => void) | undefined;
+
+function closeComments() { showComments.value = false; void nextTick(() => commentTrigger.value?.focus({ preventScroll: true })); }
+
+function commentPanelKeydown(event: KeyboardEvent) {
+	if (!props.immersive) return;
+	if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeComments(); }
+	if (event.key !== 'Tab' || !commentPanel.value) return;
+	const controls = [...commentPanel.value.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], textarea:not(:disabled)')].filter(el => el.getClientRects().length && !el.closest('[inert]'));
+	const first = controls[0], last = controls.at(-1);
+	if (event.shiftKey && (window.document.activeElement === first || window.document.activeElement === commentPanel.value)) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && window.document.activeElement === last) { event.preventDefault(); first?.focus(); }
+}
+
+watch([showComments, () => props.immersive], ([show, immersive]) => {
+	releaseSheet?.(); releaseSheet = undefined;
+	emit('discussionChange', show && !!immersive);
+	if (show && immersive) sheetZIndex.value = os.claimZIndex('middle');
+}, { flush: 'sync' });
+watch([showComments, sheetLayer, () => props.immersive], ([show, panel, immersive]) => {
+	if (show && immersive && panel && !releaseSheet) releaseSheet = focusTrap(panel).release;
+}, { flush: 'post' });
 const previewVisible = ref(false);
 const input = ref<HTMLTextAreaElement>();
 const signin = ref<HTMLButtonElement>();
@@ -151,7 +183,7 @@ async function requestLogin() {
 
 function clearFeedback() { deleteGeneration++; deleteController?.abort(); deletingCommentId.value = ''; deleteNotice.value = ''; deleteError.value = ''; actionGeneration++; activeAction.value = null; actionFailed.value = false; reactionFeedback.value = ''; shareGeneration++; window.clearTimeout(shareTimer); shareState.value = 'idle'; shareFailed.value = false; repostConfirmed.value = false; }
 
-function deactivate() { active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
+function deactivate() { if (props.immersive) showComments.value = false; releaseSheet?.(); releaseSheet = undefined; active = false; clearFeedback(); disposeLogin?.(); disposeLogin = undefined; loginOpening = false; }
 
 onActivated(() => { active = true; });
 onDeactivated(deactivate);
@@ -263,6 +295,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 </script>
 
 <style lang="scss" module>
+@use './work-palette.scss';
 .deleteComment { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 4px 8px; color: var(--MI_THEME-error); font-size: .82em; white-space: nowrap; &:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 2px; } &:disabled { opacity: .5; cursor: wait; } }
 .remixPreview { margin-block: 10px; max-width: 420px; min-width: 0; overflow: hidden; border: 1px solid var(--MI_THEME-divider); border-radius: 10px; padding: 8px; }
 .root { min-width: 0; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
@@ -336,4 +369,31 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .root[data-motion='false'] { @include quietMotion; }
 @media (prefers-reduced-motion: reduce) { .root { @include quietMotion; } }
 @media (hover: none) { .keyboardHint { display: none; } }
+
+.root.immersive { @include work-palette.immersive; position: relative; height: 100%; color: var(--work-stage-fg); }
+.immersive .main { position: relative; height: 100%; }
+.immersive .actions { position: absolute; bottom: 76px; right: max(9px, env(safe-area-inset-right)); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 13px; width: 52px; padding: 0; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
+.immersive .actions > button { display: flex; flex-direction: column; gap: 1px; width: 48px; min-height: 49px; padding: 0; font-size: 12px; background: transparent; }
+.immersive .actions i { font-size: 31px; filter: drop-shadow(0 1px 2px var(--work-stage)); }
+.immersive .actions > button:nth-of-type(1) { order: 2; }
+.immersive .actions > button:nth-of-type(2) { order: 3; }
+.immersive .actions > button:nth-of-type(3) { order: 1; }
+.immersive .actions > button:nth-of-type(4) { order: 4; }
+.immersive .actions > span:not(.views) { order: 5; }
+.immersive .actions > span:not(.views) > button { color: inherit; }
+.immersive .actions > a i { font-size: 12px; }
+.immersive .actions .views { display: none; }
+.immersive .actions .liked { color: var(--work-stage-accent); }
+.immersive .actions .copied { color: var(--work-stage-cyan); }
+.immersive .main > .feedback { position: absolute; top: 72px; left: 16px; right: 72px; z-index: 2; padding: 8px 12px; border-radius: 6px; background: var(--work-stage); color: var(--work-stage-fg); }
+.discussionContainer { display: contents; }
+.sheetLayer { @include work-palette.immersive; position: fixed; inset: 0; display: flex; align-items: flex-end; background: color-mix(in srgb, var(--work-stage) 55%, transparent); }
+.commentSheet { position: relative; width: 100%; max-height: min(72dvh, 680px); min-height: 260px; padding: 6px 18px max(18px, env(safe-area-inset-bottom)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55; }
+.commentSheet :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
+.commentSheet .commentHeading { position: sticky; top: -6px; z-index: 1; padding-block: 8px; margin: 0; background: var(--MI_THEME-panel); }
+.commentSheet .closeSheet { margin-left: auto; }
+.commentSheet.discussionFrom { transform: translateY(24px); }
+@media (max-height: 580px) { .immersive .actions { gap: 2px; bottom: 62px; } .immersive .actions i { font-size: 25px; } .immersive .actions > button { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .commentSheet { transition: none; } }
+@media (max-height: 500px) { .immersive .actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; width: 92px; bottom: 66px; } .immersive .actions > a { margin-bottom: 0; } }
 </style>

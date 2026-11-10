@@ -32,3 +32,8 @@ Misskey source and community extension files retain their AGPL-3.0-only SPDX hea
 
 ## Tabler Icons (isolated preview)
 17 icons were obtained from the official tabler/tabler-icons source for the component preview; production continues to use its existing Tabler dependency. Copyright (c) 2020-2026 Paweł Kuna, MIT licensed. The full license is retained at `.community-preview/vendor/tabler-icons/LICENSE`; icon paths are embedded into the generated preview stylesheet.
+
+
+## Douyin-Vue 移动端界面参考（2026-11-10）
+
+参考：`zyronon/douyin`，本地目录 `D:/ip/抖音/douyin-master/douyin-master`。已核对该目录 `LICENSE`（GPL-3.0）和 README（另载学习研究/非商业说明）。本次参考其全屏内容流、顶部分类、右侧操作与五项底栏的组织方式，由本项目现有 Vue 组件实现；未复制原项目源码、图片、视频、字体或商标资产。新增项目源码继续遵循现有 AGPL-3.0-only 文件声明。

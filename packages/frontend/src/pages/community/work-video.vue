@@ -4,8 +4,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div ref="root" :class="[$style.player, { [$style.playing]: playing }]" data-testid="work-video" @pointerenter="enter" @pointerleave="leave" @focusout="focusOut">
-	<video ref="video" :src="activated ? source : undefined" :poster="poster" muted playsinline preload="none" :aria-label="title" @playing="playing = true; waiting = false" @pause="playing = false; waiting = false" @waiting="waiting = true" @ended="ended" @timeupdate="syncTime" @loadedmetadata="syncTime" @volumechange="syncVolume" @error="mediaError"></video>
+<div ref="root" :class="[$style.player, { [$style.playing]: playing, [$style.immersive]: immersive }]" data-testid="work-video" @pointerenter="enter" @pointerleave="leave" @focusout="focusOut">
+	<video ref="video" :src="activated ? source : undefined" :poster="poster" :loop="immersive" muted playsinline preload="none" :aria-label="title" @click="immersive && toggle()" @playing="playing = true; waiting = false" @pause="playing = false; waiting = false" @waiting="waiting = true" @ended="ended" @timeupdate="syncTime" @loadedmetadata="syncTime" @volumechange="syncVolume" @error="mediaError"></video>
 	<div v-if="failed" :class="$style.message" role="status"><p>{{ t.videoFailed }}</p><button type="button" class="_button" @click="retry">{{ t.retry }}</button></div>
 	<template v-else>
 		<button v-if="!playing && !waiting" type="button" class="_button" :class="$style.centerPlay" :aria-label="t.playVideo" @click="start(false)"><i class="ti ti-player-play-filled" aria-hidden="true"></i></button>
@@ -33,7 +33,7 @@ import { workText as t, workPath } from './interactions-copy.js';
 import { claimVideoPlayback, releaseVideoPlayback } from './video-playback.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ workId: string; title: string; url: string; poster?: string; }>();
+const props = defineProps<{ workId: string; title: string; url: string; poster?: string; immersive?: boolean; suspended?: boolean; }>();
 const root = ref<HTMLElement>();
 const video = ref<HTMLVideoElement>();
 const source = computed(() => safeWebUrl(props.url));
@@ -47,7 +47,8 @@ const position = ref(0);
 const duration = ref(0);
 const fullscreenSupported = ref(false);
 let active = true;
-let visible = true;
+let visible = !props.immersive;
+let manuallyPaused = false;
 let hovering = false;
 let ticket = 0;
 let hoverTimer: number | undefined;
@@ -68,14 +69,15 @@ function stop() {
 }
 
 async function start(automatic: boolean) {
-	if (!source.value || !active || !visible || window.document.hidden || failed.value) return;
+	if (!source.value || !active || !visible || props.suspended || window.document.hidden || failed.value) return;
 	window.clearTimeout(hoverTimer);
+	if (!automatic) manuallyPaused = false;
 	const attempt = ++ticket;
 	activated.value = true;
 	waiting.value = true;
 	playError.value = '';
 	await nextTick();
-	if (attempt !== ticket || !video.value || !active || (automatic && !hovering)) return;
+	if (attempt !== ticket || !video.value || !active || !visible || props.suspended || window.document.hidden || (automatic && !hovering && !props.immersive)) return;
 	const media = video.value;
 	if (automatic) muted.value = true;
 	media.muted = muted.value;
@@ -91,6 +93,7 @@ async function start(automatic: boolean) {
 }
 
 function enter(event: PointerEvent) {
+	if (props.immersive) return;
 	if (event.pointerType !== 'mouse') return;
 	hovering = true;
 	const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
@@ -99,16 +102,22 @@ function enter(event: PointerEvent) {
 }
 
 function leave(event: PointerEvent) {
+	if (props.immersive) return;
 	if (event.pointerType !== 'mouse') return;
 	hovering = false;
 	if (window.document.fullscreenElement !== root.value) stop();
 }
 
 function focusOut(event: FocusEvent) {
-	if (!hovering && window.document.fullscreenElement !== root.value && !root.value?.contains(event.relatedTarget as Node | null)) stop();
+	if (!props.immersive && !hovering && window.document.fullscreenElement !== root.value && !root.value?.contains(event.relatedTarget as Node | null)) stop();
 }
 
-function toggle() { if (playing.value || waiting.value) stop(); else void start(false); }
+function toggle() { manuallyPaused = playing.value || waiting.value; if (manuallyPaused) stop(); else void start(false); }
+
+function autoplay() {
+	const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+	if (props.immersive && !manuallyPaused && !playing.value && !waiting.value && !prefer.s.dataSaver.media && !connection?.saveData && prefer.s.animation !== false && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) void start(true);
+}
 
 function toggleSound() {
 	muted.value = !muted.value;
@@ -144,18 +153,19 @@ async function fullscreen() {
 }
 
 watch(source, () => {
-	stop(); activated.value = false; failed.value = false; playError.value = ''; position.value = 0; duration.value = 0; muted.value = true;
+	stop(); activated.value = false; failed.value = false; playError.value = ''; position.value = 0; duration.value = 0; muted.value = true; manuallyPaused = false;
 });
+watch(() => props.suspended, value => { if (value) stop(); else autoplay(); });
 onMounted(() => {
 	fullscreenSupported.value = !!window.document.fullscreenEnabled;
 	window.document.addEventListener('visibilitychange', visibilityChanged);
 	observer = new IntersectionObserver(entries => {
-		visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= .1);
-		if (!visible) { hovering = false; stop(); }
-	}, { threshold: [0, .1] });
+		visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= (props.immersive ? .7 : .1));
+		if (!visible) { hovering = false; manuallyPaused = false; stop(); } else autoplay();
+	}, { threshold: [0, .1, .7] });
 	if (root.value) observer.observe(root.value);
 });
-onActivated(() => { active = true; });
+onActivated(() => { active = true; autoplay(); });
 onDeactivated(() => { active = false; hovering = false; stop(); });
 onBeforeUnmount(() => { active = false; stop(); observer?.disconnect(); window.document.removeEventListener('visibilitychange', visibilityChanged); });
 </script>
@@ -184,4 +194,16 @@ onBeforeUnmount(() => { active = false; stop(); observer?.disconnect(); window.d
 @media (pointer: coarse) { .player .seek { height: 44px; } }
 @container (max-width: 360px) { .detail, .centerPlay { display: none; } }
 @media (prefers-reduced-motion: reduce) { .controls { transition: none; } }
+
+.player.immersive { @include work-palette.immersive; width: 100%; height: 100%; max-height: none; aspect-ratio: auto; border-radius: 0; background: var(--work-stage); }
+.immersive .controls { padding: 0 12px 0; background: transparent; z-index: 1; }
+.immersive .seek { height: 18px; }
+.immersive .controlRow { height: 42px; }
+.immersive .detail, .immersive .previewHint { display: none; }
+.immersive .centerPlay { display: grid; background: transparent; border: 0; width: 72px; height: 72px; font-size: 46px; opacity: .8; }
+.immersive .controlRow button { width: 36px; flex-basis: 36px; }
+.immersive .time { font-size: 11px; }
+.immersive .playError { top: 70px; }
+.immersive .message { inset: 76px 76px 170px 16px; }
+.immersive.playing .controls { opacity: 1; pointer-events: auto; }
 </style>

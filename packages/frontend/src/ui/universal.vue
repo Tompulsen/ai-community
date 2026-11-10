@@ -5,12 +5,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div :class="[$style.root, { '_forceShrinkSpacer': deviceKind === 'smartphone' }]">
-	<XTitlebar v-if="!isRoot && prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
+	<XTitlebar v-if="!isRoot && !mobileCommunity && prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
 
 	<div :class="$style.nonTitlebarArea">
-		<XSidebar v-if="!isRoot && !isMobile" :class="$style.sidebar" :showWidgetButton="true" @widgetButtonClick="widgetsShowing = true"/>
+		<XSidebar v-if="!isRoot && !isMobile && !mobileCommunity" :class="$style.sidebar" :showWidgetButton="true" @widgetButtonClick="widgetsShowing = true"/>
 
-		<div data-testid="community-workspace" :class="[$style.contents, !isRoot && !isMobile && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
+		<div data-testid="community-workspace" :class="[$style.contents, !isRoot && !isMobile && !mobileCommunity && prefer.r.showTitlebar.value ? $style.withSidebarAndTitlebar : null]" @contextmenu.stop="onContextmenu">
 			<div v-if="!isRoot">
 				<XReloadSuggestion v-if="shouldSuggestReload"/>
 				<XPreferenceRestore v-if="shouldSuggestRestoreBackup"/>
@@ -20,7 +20,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 			<StackingRouterView v-if="prefer.s['experimental.stackingRouterView']" :class="[$style.content, { [$style.homeContent]: isRoot }]"/>
 			<RouterView v-else :class="[$style.content, { [$style.homeContent]: isRoot }]"/>
-			<XMobileFooterMenu v-if="!isRoot && isMobile" ref="navFooter" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
+			<MobileCommunityNavigation v-if="mobileCommunity"/>
+			<XMobileFooterMenu v-else-if="!isRoot && isMobile" ref="navFooter" v-model:drawerMenuShowing="drawerMenuShowing" v-model:widgetsShowing="widgetsShowing"/>
 		</div>
 	</div>
 
@@ -33,6 +34,8 @@ import { defineAsyncComponent, provide, computed, ref } from 'vue';
 import { instanceName } from '@@/js/config.js';
 import { isLink } from '@@/js/is-link.js';
 import XCommon from './_common_/common.vue';
+import MobileCommunityNavigation from '@/pages/community/mobile-navigation.vue';
+import { useMobileCommunityFeed } from '@/pages/community/mobile-feed.js';
 import type { PageMetadata } from '@/page.js';
 import XMobileFooterMenu from '@/ui/_common_/mobile-footer-menu.vue';
 import XPreferenceRestore from '@/ui/_common_/PreferenceRestore.vue';
@@ -56,6 +59,7 @@ import { shouldSuggestReload } from '@/utility/reload-suggest.js';
 const XStatusBars = defineAsyncComponent(() => import('@/ui/_common_/statusbars.vue'));
 const XAnnouncements = defineAsyncComponent(() => import('@/ui/_common_/announcements.vue'));
 
+const mobileCommunity = useMobileCommunityFeed();
 const isRoot = computed(() => mainRouter.currentRoute.value.name === 'index');
 
 const MOBILE_THRESHOLD = 500;

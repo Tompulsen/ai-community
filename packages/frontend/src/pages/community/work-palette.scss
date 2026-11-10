@@ -8,3 +8,13 @@
 	--work-stage: #101112;
 	--work-stage-fg: #f5f5f5;
 }
+
+// The mobile feed follows the user's Douyin reference in both application themes.
+@mixin immersive {
+    --work-stage: #080808;
+    --work-stage-fg: #fff;
+    --work-stage-muted: #c4c4c6;
+    --work-stage-border: #252526;
+    --work-stage-accent: #fe2c55;
+    --work-stage-cyan: #25f4ee;
+}

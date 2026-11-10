@@ -6,6 +6,7 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	mobileNavigation: '社区导航', mobileHome: '首页', mobileCreate: '创作', mobileMessages: '消息', mobileMe: '我', mobileAll: '发现', mobileResource: '图文', mobileSearch: '搜索与筛选', mobileSwipe: '上滑发现更多作品', mobileDetails: '查看完整作品', mobileEnd: '已经看完啦', mobileMenu: '公告与创作者',
 	latest: '最新作品', all: '全部', video: '视频', image: '图片', resource: '文本 · 代码 · Skill', filters: '作品分类', refresh: '刷新作品',
 	search: '搜索社区', clearSearch: '重置条件',
 	sidebar: '发现社区', announcements: '最新公告', allAnnouncements: '全部公告', noAnnouncements: '暂时没有新的公告。',
@@ -16,6 +17,7 @@ const zh = {
 	loading: '正在加载…', loadFailed: '暂时无法加载，请重试。', retry: '重试', showDiscovery: '查看公告与分享者', hideDiscovery: '收起公告与分享者', viewProfile: '查看创作者主页',
 };
 const en: typeof zh = {
+	mobileNavigation: 'Community navigation', mobileHome: 'Home', mobileCreate: 'Create', mobileMessages: 'Inbox', mobileMe: 'Me', mobileAll: 'Discover', mobileResource: 'Posts', mobileSearch: 'Search and filters', mobileSwipe: 'Swipe up for more', mobileDetails: 'View full work', mobileEnd: 'You’re all caught up', mobileMenu: 'Announcements and creators',
 	latest: 'Latest work', all: 'All', video: 'Video', image: 'Images', resource: 'Text · Code · Skills', filters: 'Work categories', refresh: 'Refresh work',
 	search: 'Search community', clearSearch: 'Reset filters',
 	sidebar: 'Discover the community', announcements: 'Latest announcements', allAnnouncements: 'View all', noAnnouncements: 'No new announcements yet.',

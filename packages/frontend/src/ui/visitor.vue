@@ -14,12 +14,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</aside>
 	<div :class="$style.main">
-		<header v-if="!isHomepage" :class="$style.mobileHeader">
+		<header v-if="!isHomepage && !mobileCommunity" :class="$style.mobileHeader">
 			<MkA to="/">{{ i18n.ts._aiCommunity.title }}</MkA>
 			<MkButton @click="signin">{{ i18n.ts.login }}</MkButton>
 		</header>
-		<MkCommunityNav v-if="!isHomepage" horizontal :class="$style.mobileNavigation"/>
+		<MkCommunityNav v-if="!isHomepage && !mobileCommunity" horizontal :class="$style.mobileNavigation"/>
 		<div :class="$style.content"><RouterView :class="{ [$style.homeContent]: isHomepage }"/></div>
+		<MobileCommunityNavigation v-if="mobileCommunity"/>
 	</div>
 </div>
 <XCommon/>
@@ -29,6 +30,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, onBeforeUnmount, provide, ref } from 'vue';
 import { instanceName } from '@@/js/config.js';
 import XCommon from './_common_/common.vue';
+import MobileCommunityNavigation from '@/pages/community/mobile-navigation.vue';
+import { useMobileCommunityFeed } from '@/pages/community/mobile-feed.js';
 import type { PageMetadata } from '@/page.js';
 import { instance } from '@/instance.js';
 import { provideMetadataReceiver, provideReactiveMetadata } from '@/page.js';
@@ -39,6 +42,7 @@ import MkButton from '@/components/MkButton.vue';
 import MkCommunityNav from '@/components/MkCommunityNav.vue';
 import * as os from '@/os.js';
 
+const mobileCommunity = useMobileCommunityFeed();
 const viewport = window.matchMedia('(max-width: 700px)');
 const isHomepage = computed(() => mainRouter.currentRoute.value.name === 'index');
 const narrow = ref(viewport.matches);

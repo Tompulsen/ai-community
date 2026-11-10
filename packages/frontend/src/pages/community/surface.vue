@@ -4,7 +4,18 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="[$style.root, { [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.immersiveFeed]: mobileFeed, [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]" @scroll.passive="loadNextMobilePage">
+	<header v-if="mobileFeed" :class="$style.mobileHeader">
+		<div :class="$style.mobileTopbar">
+			<button ref="discoveryToggle" type="button" class="_button" :aria-label="ft.mobileMenu" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" data-testid="toggle-mobile-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
+			<nav :aria-label="ft.filters"><a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.id === 'all' ? ft.mobileAll : entry.id === 'resource' ? ft.mobileResource : entry.title }}</a></nav>
+			<button type="button" class="_button" :aria-label="ft.mobileSearch" :aria-expanded="mobileSearchOpen" @click="mobileSearchOpen = !mobileSearchOpen"><i :class="mobileSearchOpen ? 'ti ti-x' : 'ti ti-search'" aria-hidden="true"></i></button>
+		</div>
+		<div v-if="mobileSearchOpen" :class="$style.mobileSearchPanel">
+			<form role="search" @submit.prevent="search(); mobileSearchOpen = false"><input v-model="query" type="search" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/><button type="submit" class="_button">{{ t.searchAction }}</button></form>
+			<div><button type="button" class="_button" :disabled="loading" @click="load(); mobileSearchOpen = false"><i class="ti ti-refresh" aria-hidden="true"></i>{{ ft.refresh }}</button><button type="button" class="_button" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>{{ t.tagFilter }}<span v-if="activeTagIds.length"> · {{ activeTagIds.length }}</span></button><button v-if="activeQuery || activeTagIds.length" type="button" class="_button" @click="clearSearch">{{ ft.clearSearch }}</button></div>
+		</div>
+	</header>
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
 		<slot v-if="isProfile" name="profileHeader"></slot>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
@@ -112,7 +123,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
-				<div :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
+				<div v-if="!mobileFeed" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
 					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
 					<form v-if="isPublicFeed" :class="$style.publicSearch" role="search" @submit.prevent="search()">
 						<div :class="$style.searchField">
@@ -130,13 +141,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="discoveryOpen ? ft.closeSidebar : ft.openSidebar" :title="discoveryOpen ? ft.closeSidebar : ft.openSidebar" data-testid="toggle-discovery" @click="toggleDiscovery"><i :class="discoveryOpen ? 'ti ti-layout-sidebar-right-collapse' : 'ti ti-layout-sidebar-right-expand'" aria-hidden="true"></i></button>
 					</div>
 				</div>
-				<div v-if="isPublicFeed" :class="$style.filterBar">
+				<div v-if="isPublicFeed && !mobileFeed" :class="$style.filterBar">
 					<nav :class="$style.feedFilters" :aria-label="ft.filters">
 						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.title }}</a>
 					</nav>
 					<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span :class="$style.filterLabel">{{ t.tagFilter }}</span><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
 				</div>
-				<div v-if="isPublicFeed && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
+				<div v-if="isPublicFeed && !mobileFeed && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
 					<label>{{ t.all }}<select v-model="status"><option v-if="section === 'review'" value="unreviewed">{{ t.unreviewed }}</option><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="published">{{ t.published }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option><option value="removed">{{ t.removed }}</option><option value="withdrawn">{{ t.withdrawn }}</option></select></label>
 				</div>
@@ -150,7 +161,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
+						<WorkCard v-if="isCommunity" :work="work" :immersive="mobileFeed" :suspended="composerOpen || discoveryOpen || mobileSearchOpen || filterPickerOpen"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
@@ -185,8 +196,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<p v-if="loadError && items.length" role="alert" :class="$style.error">{{ loadError }}</p>
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
+				<p v-if="mobileFeed && items.length && !nextCursor" :class="$style.mobileEnd">{{ ft.mobileEnd }}<button type="button" class="_button" :disabled="loading" @click="load()">{{ ft.refresh }}</button></p>
 			</section>
-			<footer v-if="!embedded" :class="$style.communityFooter">
+			<footer v-if="!embedded && !mobileFeed" :class="$style.communityFooter">
 				<details :class="$style.guide">
 					<summary>{{ t.process }}<span>{{ t.approvedOnly }}</span></summary>
 					<div :class="$style.guideContent"><section><h2>{{ t.process }}</h2><ol><li v-for="step in t.processItems" :key="step">{{ step }}</li></ol></section><section><h2>{{ t.guidelines }}</h2><ul><li v-for="item in t.guideItems" :key="item">{{ item }}</li></ul></section></div>
@@ -249,6 +261,25 @@ const sourceInput = ref<HTMLInputElement>();
 const detailsOpen = ref(false);
 const detailsId = useId();
 const surfaceRoot = ref<HTMLElement>();
+const mobileViewport = window.matchMedia('(max-width: 700px)');
+const mobileWidth = ref(mobileViewport.matches);
+const mobileFeed = computed(() => mobileWidth.value && isPublicFeed.value && !props.composerOnly);
+const mobileSearchOpen = ref(false);
+let feedResize: ResizeObserver | undefined;
+
+function resizeMobileFeed() {
+	mobileWidth.value = mobileViewport.matches;
+	if (surfaceRoot.value) surfaceRoot.value.style.setProperty('--mobile-feed-height', `${surfaceRoot.value.clientHeight}px`);
+}
+
+onMounted(() => {
+	resizeMobileFeed();
+	mobileViewport.addEventListener('change', resizeMobileFeed);
+	feedResize = new ResizeObserver(resizeMobileFeed);
+	if (surfaceRoot.value) feedResize.observe(surfaceRoot.value);
+});
+onBeforeUnmount(() => { feedResize?.disconnect(); mobileViewport.removeEventListener('change', resizeMobileFeed); });
+watch(() => props.section, () => { mobileSearchOpen.value = false; });
 useScrollPositionKeeper(surfaceRoot);
 const { discoveryId, discoveryLayer, discoveryPanel, discoveryToggle, discoveryCompact, discoveryOpen, discoveryZIndex, closeDiscovery, toggleDiscovery, discoveryKeydown } = useDiscoveryDrawer(surfaceRoot, () => isPublicFeed.value);
 const modalLayer = ref<HTMLElement>();
@@ -370,6 +401,11 @@ async function load(append = false) {
 	} finally {
 		if (current === requestId && !disposed) loading.value = false;
 	}
+}
+
+function loadNextMobilePage() {
+	const root = surfaceRoot.value;
+	if (mobileFeed.value && root && nextCursor.value && !loading.value && !loadError.value && root.scrollTop + root.clientHeight >= root.scrollHeight - root.clientHeight * .5) void load(true);
 }
 
 function rememberTags(tags: CommunityTag[]) {
@@ -737,6 +773,7 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 </script>
 
 <style lang="scss" module>
+@use './work-palette.scss';
 .composerOnly.root { height: 0; overflow: visible; }
 .composerOnly .canvas { padding: 0; min-height: 0; }
 .sharePreview { display: flex; gap: 12px; overflow-x: auto; max-height: 200px; padding: 0 20px 16px; }
@@ -1015,4 +1052,31 @@ button.tagChip { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) { .primary, .primary i:last-child { transition: none; transform: none !important; } }
+
+.root.immersiveFeed { @include work-palette.immersive; background: var(--work-stage); color: var(--work-stage-fg); scroll-snap-type: y mandatory; scroll-padding: 0; overscroll-behavior-y: contain; scrollbar-width: none; }
+.immersiveFeed::-webkit-scrollbar { display: none; }
+.immersiveFeed .canvas.communityCanvas { padding: 0; }
+.immersiveFeed .columns { display: block; padding: 0; }
+.immersiveFeed .feed { margin: 0; min-width: 0; }
+.immersiveFeed .works { display: block; gap: 0; }
+.immersiveFeed .empty { min-height: var(--mobile-feed-height); margin: 0; padding: 84px 28px; border: 0; border-radius: 0; color: var(--work-stage-fg); background: var(--work-stage); scroll-snap-align: start; }
+.immersiveFeed .empty p { color: var(--work-stage-muted); }
+.immersiveFeed .empty button, .immersiveFeed .loadMore { color: var(--work-stage-fg); background: var(--work-stage-border); }
+.immersiveFeed .loadMore, .mobileEnd { scroll-snap-align: end; min-height: 84px; margin: 0; width: 100%; padding: 18px; text-align: center; }
+.mobileEnd { display: grid; place-content: center; gap: 8px; font-size: 13px; color: var(--work-stage-muted); button { min-height: 44px; color: var(--work-stage-fg); } }
+.mobileHeader { position: sticky; top: 0; height: 0; z-index: 30; color: var(--work-stage-fg); }
+.mobileTopbar { display: flex; align-items: center; gap: 2px; height: calc(60px + env(safe-area-inset-top, 0px)); box-sizing: border-box; padding: env(safe-area-inset-top, 0px) 6px 0; background: linear-gradient(color-mix(in srgb, var(--work-stage) 90%, transparent), transparent); }
+.mobileTopbar > button { flex: 0 0 44px; display: grid; place-items: center; width: 44px; height: 48px; color: inherit; font-size: 23px; }
+.mobileTopbar nav { display: flex; justify-content: space-evenly; align-items: stretch; flex: 1; min-width: 0; height: 48px; }
+.mobileTopbar nav a { position: relative; display: grid; place-items: center; padding: 0 7px; white-space: nowrap; color: var(--work-stage-muted); font-weight: 600; font-size: 16px; text-shadow: 0 1px 3px var(--work-stage); }
+.mobileTopbar nav a[aria-current] { color: var(--work-stage-fg); font-weight: 750; }
+.mobileTopbar nav a[aria-current]::after { content: ''; position: absolute; bottom: 2px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: currentColor; }
+.mobileSearchPanel { padding: 10px 14px 14px; background: var(--work-stage); border-bottom: 1px solid var(--work-stage-border); }
+.mobileSearchPanel form { display: flex; gap: 8px; }
+.mobileSearchPanel input { min-width: 0; flex: 1; border: 1px solid var(--work-stage-muted); border-radius: 6px; background: var(--work-stage-border); color: var(--work-stage-fg); padding: 10px; font-size: 16px; }
+.mobileSearchPanel input::placeholder { color: var(--work-stage-muted); }
+.mobileSearchPanel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 6px 10px; color: inherit; font-size: 13px; }
+.mobileSearchPanel > div { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
+.mobileHeader :focus-visible { outline: 2px solid var(--work-stage-fg); outline-offset: -2px; }
+@media (max-width: 360px) { .mobileTopbar nav a { font-size: 14px; padding-inline: 4px; } }
 </style>
