@@ -118,6 +118,8 @@ function onContextmenu(ev: PointerEvent) {
 
 <style lang="scss" module>
 .root {
+	position: fixed;
+	inset: 0;
 	height: 100dvh;
 	overflow: clip;
 	contain: strict;

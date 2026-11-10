@@ -173,5 +173,13 @@ export function calcPopupPosition(el: HTMLElement, props: {
 		}
 	};
 
-	return calc();
+	const position = calc();
+	const parent = el.offsetParent;
+	if (parent instanceof HTMLElement && parent !== window.document.body && parent !== window.document.documentElement) {
+		// A contained app shell uses its own origin instead of document coordinates.
+		const parentRect = parent.getBoundingClientRect();
+		position.left -= parentRect.left + window.scrollX + parent.clientLeft - parent.scrollLeft;
+		position.top -= parentRect.top + window.scrollY + parent.clientTop - parent.scrollTop;
+	}
+	return position;
 }

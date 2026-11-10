@@ -6,7 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <article ref="root" :data-scroll-anchor="work.id" :class="$style.card" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<WorkEngagement :work="work" :viewsCount="views" previewComments>
-		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><slot name="actions"></slot></header>
+		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><div v-if="$slots.actions" :class="$style.authorActions"><slot name="actions"></slot></div></header>
 		<div :class="$style.content">
 			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
 			<WorkTags :tags="work.tags"/>
@@ -60,13 +60,14 @@ watch(cover, () => { failed.value = false; });
 </script>
 
 <style lang="scss" module>
-.card { box-sizing: border-box; min-width: 0; padding: 20px 20px 12px; border: 1px solid var(--MI_THEME-divider); background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border-radius: var(--community-radius, 12px); font-size: 14px; line-height: 1.6; container-type: inline-size; }
+.card { --work-muted: color-mix(in srgb, var(--MI_THEME-fg) 72%, var(--MI_THEME-panel)); box-sizing: border-box; min-width: 0; padding: 20px 20px 12px; border: 1px solid var(--MI_THEME-divider); background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border-radius: var(--community-radius, 12px); font-size: 14px; line-height: 1.6; container-type: inline-size; }
 .card :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
-.author { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; time { margin-left: auto; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); white-space: nowrap; } }
+.author { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; time { margin-left: auto; font-size: 12px; color: var(--work-muted); white-space: nowrap; } }
 .avatar { flex-shrink: 0; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--MI_THEME-buttonBg); font-size: 18px; font-weight: 600; }
-.identity { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; > a, > span { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } span { font-size: 13px; color: var(--MI_THEME-fgTransparentWeak); } }
-.content { margin-left: 0; min-width: 0; container-type: inline-size; h3 { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 16px; line-height: 1.55; } h3 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; } }
-.excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0 0 16px; overflow-wrap: anywhere; white-space: pre-wrap; color: color-mix(in srgb, var(--MI_THEME-fg) 85%, var(--MI_THEME-panel)); font-size: 13px; line-height: 1.65; }
+.identity { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 0; min-width: 0; > a, > span { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } strong { font-size: 13px; font-weight: 600; } span { font-size: 12px; color: var(--work-muted); } }
+.authorActions { display: flex; min-width: 0; flex-wrap: wrap; margin-left: auto; }
+.content { margin-left: 0; min-width: 0; container-type: inline-size; h3 { overflow-wrap: anywhere; margin: 0 0 8px; font-size: 18px; line-height: 1.5; font-weight: 650; } h3 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; } }
+.excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0 0 16px; overflow-wrap: anywhere; white-space: pre-wrap; color: color-mix(in srgb, var(--MI_THEME-fg) 82%, var(--MI_THEME-panel)); font-size: 14px; line-height: 1.65; }
 .mediaLayout { display: grid; gap: 12px; min-width: 0; }
 .mainMedia { min-width: 0; }
 @container (min-width: 600px) { .withMaterials { grid-template-columns: minmax(0, 1fr) 148px; align-items: start; } }
@@ -78,5 +79,5 @@ watch(cover, () => { failed.value = false; });
 @media (hover: none) { .previewAction { opacity: 1; transform: none; } }
 .card[data-motion='false'] { &, .previewAction { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .card, .previewAction { transition: none; } }
-@container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { flex-wrap: nowrap; gap: 8px; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
+@container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { gap: 8px; } .authorActions { flex-basis: 100%; justify-content: flex-end; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
 </style>

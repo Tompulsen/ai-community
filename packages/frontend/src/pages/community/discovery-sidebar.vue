@@ -193,7 +193,7 @@ onActivated(() => {
 </script>
 
 <style lang="scss" module>
-.sidebar { min-width: 0; display: flex; flex-direction: column; gap: 20px; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
+.sidebar { --discovery-muted: color-mix(in srgb, var(--MI_THEME-fg) 72%, var(--MI_THEME-panel)); min-width: 0; display: flex; flex-direction: column; gap: 20px; color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.6; }
 .sidebar, .sidebar * { box-sizing: border-box; }
 .sidebar :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
 .module { min-width: 0; padding: 20px; border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius, 12px); background: var(--MI_THEME-panel); }
@@ -209,11 +209,11 @@ onActivated(() => {
 .announcements li > a { display: block; padding: 14px 0; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
 .announcements li:first-child > a { padding-top: 0; }
 .announcements li:last-child > a { padding-bottom: 0; }
-.announcements time { color: var(--community-muted, var(--MI_THEME-fg)); font-size: 12px; }
+.announcements time { color: var(--discovery-muted); font-size: 12px; }
 .announcements h3 { margin: 4px 0 6px; font-size: 14px; line-height: 1.6; font-weight: 600; }
 .announcements a:hover h3 { text-decoration: underline; text-underline-offset: 3px; }
-.announcements p { margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; }
-.hint { margin: 10px 0 0; font-size: 13px; }
+.announcements p { color: var(--discovery-muted); margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; }
+.hint { margin: 8px 0 0; font-size: 13px; color: var(--discovery-muted); }
 .message { margin: 16px 0 0; font-size: 13px; overflow-wrap: anywhere; }
 .message p { margin: 0 0 8px; }
 .creators li { padding: 14px 0; }
@@ -223,6 +223,7 @@ onActivated(() => {
 .creatorLink { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
 .avatar { flex-shrink: 0; width: 40px; height: 40px; }
 .identity { display: flex; flex-direction: column; min-width: 0; font-size: 12px; }
+.identity > span { color: var(--discovery-muted); }
 .identity > strong { font-size: 14px; font-weight: 600; }
 .identity > * { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .creatorLink:hover strong { text-decoration: underline; text-underline-offset: 3px; }

@@ -7,7 +7,7 @@ import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
 	latest: '最新作品', all: '全部', video: '视频', image: '图片', resource: '文本 · 代码 · Skill', filters: '作品分类', refresh: '刷新作品',
-	search: '搜索社区', clearSearch: '清空搜索',
+	search: '搜索社区', clearSearch: '重置条件',
 	sidebar: '发现社区', announcements: '最新公告', allAnnouncements: '全部公告', noAnnouncements: '暂时没有新的公告。',
 	openSidebar: '展开侧栏', closeSidebar: '收起侧栏', explore: '发现社区',
 	creators: '优质分享者', creatorsHint: '从近期公开作品中，发现互动活跃的创作者。', noCreators: '还没有可推荐的分享者。新的公开作品会让这里热闹起来。',
@@ -17,7 +17,7 @@ const zh = {
 };
 const en: typeof zh = {
 	latest: 'Latest work', all: 'All', video: 'Video', image: 'Images', resource: 'Text · Code · Skills', filters: 'Work categories', refresh: 'Refresh work',
-	search: 'Search community', clearSearch: 'Clear search',
+	search: 'Search community', clearSearch: 'Reset filters',
 	sidebar: 'Discover the community', announcements: 'Latest announcements', allAnnouncements: 'View all', noAnnouncements: 'No new announcements yet.',
 	openSidebar: 'Show sidebar', closeSidebar: 'Hide sidebar', explore: 'Explore',
 	creators: 'Creators to discover', creatorsHint: 'Meet creators whose recent public work sparks conversation.', noCreators: 'No creators to recommend yet. New public work will bring people here.',
