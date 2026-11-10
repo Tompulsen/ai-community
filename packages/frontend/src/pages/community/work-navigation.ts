@@ -19,7 +19,8 @@ function pathsFor(router: Router): Map<string, string> {
 }
 
 export function rememberCommunityWorkReturnPath(router: Router, beforeFullPath: string, fullPath: string): void {
-	if (!feedPaths.has(beforeFullPath.split(/[?#]/, 1)[0])) return;
+	const sourcePath = beforeFullPath.split(/[?#]/, 1)[0];
+	if (!feedPaths.has(sourcePath) && !/^\/@[^/]+(?:\/community)?\/?$/.test(sourcePath)) return;
 	const work = /^\/community\/work\/([^/?#]+)(?:[?#]|$)/.exec(fullPath);
 	if (!work) return;
 	const paths = pathsFor(router);

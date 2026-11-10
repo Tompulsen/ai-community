@@ -41,7 +41,15 @@ describe('Community work return navigation', () => {
 		expect(getCommunityWorkReturnPath({} as Router, 'cat')).toBeUndefined();
 	});
 
-	test.each(['/community/mine', '/community/review', '/community/work/other', '/create/image', 'https://other.example/community', '//other.example/community'])(
+	test.each(['/@artist', '/@artist/community', '/@artist@remote.example/community?q=cat'])(
+		'returns to the creator profile: %s', source => {
+			const router = {} as Router;
+			rememberCommunityWorkReturnPath(router, source, '/community/work/cat');
+			expect(getCommunityWorkReturnPath(router, 'cat')).toBe(source);
+		},
+	);
+
+	test.each(['/community/mine', '/community/review', '/community/work/other', '/create/image', '/@artist/home', '/@artist/following', 'https://other.example/community', '//other.example/community'])(
 		'ignores non-feed entry points: %s', source => {
 			const router = {} as Router;
 			rememberCommunityWorkReturnPath(router, source, '/community/work/cat');

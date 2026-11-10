@@ -4,7 +4,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="surfaceRoot" :class="[$style.root, { [$style.galleryFeed]: mobileFeed, [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]" @scroll.passive="loadNextMobilePage">
+<main ref="surfaceRoot" :class="[$style.root, { [$style.galleryFeed]: mobileFeed, [$style.mobileProfile]: mobileProfile, [$style.profileScrolled]: profileScrolled, [$style.composerOnly]: composerOnly, [$style.embedded]: embedded, [$style.discoveryLocked]: discoveryCompact && discoveryOpen }]" @scroll.passive="loadNextMobilePage">
+	<header v-if="mobileProfile" :class="$style.profileTopbar" data-testid="profile-topbar">
+		<MkA to="/community" :aria-label="ft.profileBack" :class="$style.profileBack"><i class="ti ti-arrow-left" aria-hidden="true"></i></MkA>
+		<strong :class="$style.profileTopbarName">{{ profile?.name || t.profile }}</strong>
+		<form role="search" @submit.prevent="search()"><input v-model="query" type="search" :aria-label="ft.profileSearch" :placeholder="ft.profileSearch" maxlength="200"/><button type="submit" class="_button" :aria-label="t.searchAction"><i class="ti ti-search" aria-hidden="true"></i></button></form>
+		<MkA :to="profile?.isOwn ? '/settings' : profile?.detailsPath || '/community'" :aria-label="profile?.isOwn ? ft.profileSettings : t.profileDetails"><i :class="profile?.isOwn ? 'ti ti-menu-2' : 'ti ti-dots'" aria-hidden="true"></i></MkA>
+	</header>
 	<header v-if="mobileFeed" :class="$style.mobileHeader">
 		<div :class="$style.mobileTopbar">
 			<button ref="discoveryToggle" type="button" class="_button" :aria-label="ft.mobileMenu" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" data-testid="toggle-mobile-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
@@ -17,7 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</header>
 	<div :class="[$style.canvas, { [$style.communityCanvas]: isPublicFeed }]">
-		<slot v-if="isProfile" name="profileHeader"></slot>
+		<div v-if="isProfile" ref="profileHeaderRoot"><slot name="profileHeader" :mobile="mobileProfile"></slot></div>
 		<header v-else-if="!isCommunity && !embedded" :class="$style.heading">
 			<div><h1>{{ title }}</h1><p v-if="!isCommunity">{{ description }}</p></div>
 			<div :class="$style.headerActions">
@@ -30,7 +36,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</div>
 		</header>
-		<nav v-if="isProfile" :class="[$style.tabs, $style.profileTabs]" :aria-label="t.profileWorks">
+		<nav v-if="mobileProfile" :class="$style.mobileProfileTabs" :aria-label="t.profileWorks" data-testid="profile-tabs">
+			<label :class="$style.profileWorkFilter"><span>{{ profileCategory === 'all' ? ft.profileWorks : profileCategory === 'resource' ? ft.mobileResource : ft[profileCategory] }}<i class="ti ti-chevron-down" aria-hidden="true"></i></span><select v-model="profileCategory" :aria-label="ft.filters"><option value="all">{{ t.allWorks }}</option><option v-for="entry in communitySections" :key="entry.id" :value="entry.id">{{ entry.id === 'resource' ? ft.mobileResource : ft[entry.id] }}</option></select></label>
+			<MkA v-if="profile?.notesPath" :to="profile.notesPath">{{ ft.profileNotes }}</MkA>
+			<MkA v-if="profile?.isOwn" to="/my/favorites">{{ ft.profileFavorites }}</MkA>
+			<MkA v-if="profile?.reactionsPath" :to="profile.reactionsPath">{{ ft.profileLikes }}</MkA>
+			<button type="button" class="_button" :disabled="loading" :aria-label="ft.refresh" @click="load()"><i class="ti ti-refresh" aria-hidden="true"></i></button>
+		</nav>
+		<nav v-else-if="isProfile" :class="[$style.tabs, $style.profileTabs]" :aria-label="t.profileWorks">
 			<button type="button" :aria-pressed="profileCategory === 'all'" @click="profileCategory = 'all'">{{ t.allWorks }}</button>
 			<button v-for="entry in communitySections" :key="entry.id" type="button" :aria-pressed="profileCategory === entry.id" @click="profileCategory = entry.id">{{ entry.title }}</button>
 		</nav>
@@ -46,7 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<section ref="composerPanel" role="dialog" aria-modal="true" :aria-label="editing ? t.editWork : directComment ? shareText.directTitle : t.publish" :class="$style.composer" tabindex="-1">
 					<header :class="$style.composerHeader">
 						<button type="button" :class="$style.quiet" :aria-label="editing ? t.closeEditor : t.close" :disabled="submitting || !!openingId || choosing || emojiOpen || closingComposer" @click="closeComposer"><i class="ti ti-x" aria-hidden="true"></i></button>
-						<h2 v-if="editing || composerOnly" :class="$style.editorTitle">{{ editing ? t.editWork : directComment ? shareText.directTitle : shareText.title }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
+						<h2 :class="$style.editorTitle">{{ editing ? t.editWork : composerOnly ? directComment ? shareText.directTitle : shareText.title : t.publish }}</h2><span v-if="editing ? editChanged : hasDraft" :class="$style.draftHint">{{ editing ? t.editDraftHint : t.draftHint }}</span>
 					</header>
 					<p v-if="editing" :class="$style.editHint" role="status">{{ openingId ? t.loadingEdit : editHint }}</p>
 					<p v-if="composerOnly" :class="$style.editHint">{{ directComment ? shareText.directHint : shareText.imported }}<br v-if="files.some(file => file.name.endsWith('.md'))"/><span v-if="files.some(file => file.name.endsWith('.md'))">{{ shareText.longText }}</span></p>
@@ -123,7 +136,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
-				<div v-if="!mobileFeed" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
+				<div v-if="!mobileFeed && !mobileProfile" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
 					<h1 v-if="isPublicFeed">{{ ft.latest }}</h1><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
 					<form v-if="isPublicFeed" :class="$style.publicSearch" role="search" @submit.prevent="search()">
 						<div :class="$style.searchField">
@@ -147,7 +160,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</nav>
 					<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span :class="$style.filterLabel">{{ t.tagFilter }}</span><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
 				</div>
-				<div v-if="isPublicFeed && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
+				<div v-if="(isPublicFeed || mobileProfile) && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
 					<label>{{ t.all }}<select v-model="status"><option v-if="section === 'review'" value="unreviewed">{{ t.unreviewed }}</option><option value="all">{{ t.all }}</option><option value="pending">{{ t.pending }}</option><option value="published">{{ t.published }}</option><option value="approved">{{ t.approved }}</option><option value="rejected">{{ t.rejected }}</option><option value="removed">{{ t.removed }}</option><option value="withdrawn">{{ t.withdrawn }}</option></select></label>
 				</div>
@@ -156,12 +169,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div v-else-if="!items.length" :class="$style.empty">
 					<i :class="isCommunity ? currentCategory?.icon ?? 'ti ti-layout-grid' : 'ti ti-inbox'" aria-hidden="true"></i>
 					<h2>{{ emptyTitle }}</h2><p>{{ emptyHint }}</p>
-					<button v-if="isPublicFeed && (activeQuery || activeTagIds.length)" type="button" :class="$style.secondary" data-testid="reset-empty-filters" @click="clearSearch">{{ ft.clearSearch }}</button>
+					<button v-if="(isPublicFeed || mobileProfile) && (activeQuery || activeTagIds.length)" type="button" :class="$style.secondary" data-testid="reset-empty-filters" @click="clearSearch">{{ ft.clearSearch }}</button>
 					<button v-if="section === 'mine'" type="button" :class="$style.secondary" @click="openComposer">{{ t.publish }}</button>
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
+						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed || mobileProfile" :profileGrid="mobileProfile"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
@@ -198,7 +211,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<button v-if="nextCursor" type="button" :class="[$style.secondary, $style.loadMore]" :disabled="loading" @click="load(true)">{{ loading ? t.loading : t.loadMore }}</button>
 				<p v-if="mobileFeed && items.length && !nextCursor" :class="$style.mobileEnd">{{ ft.mobileEnd }}<button type="button" class="_button" :disabled="loading" @click="load()">{{ ft.refresh }}</button></p>
 			</section>
-			<footer v-if="!embedded && !mobileFeed" :class="$style.communityFooter">
+			<footer v-if="!embedded && !mobileFeed && !mobileProfile" :class="$style.communityFooter">
 				<details :class="$style.guide">
 					<summary>{{ t.process }}<span>{{ t.approvedOnly }}</span></summary>
 					<div :class="$style.guideContent"><section><h2>{{ t.process }}</h2><ol><li v-for="step in t.processItems" :key="step">{{ step }}</li></ol></section><section><h2>{{ t.guidelines }}</h2><ul><li v-for="item in t.guideItems" :key="item">{{ item }}</li></ul></section></div>
@@ -227,7 +240,7 @@ import { feedText as ft } from './feed-copy.js';
 import { communityComposeEvent } from './compose.js';
 import { communityUpdates, getCommunityUpdateVersion, markCommunityUpdated } from './updates.js';
 import { useDiscoveryDrawer } from './use-discovery-drawer.js';
-import type { CommunityComposerDraft, CommunityCategory, CommunityTag, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, SubmissionStatus } from './types.js';
+import type { CommunityComposerDraft, CommunityCategory, CommunityTag, CommunityFile, CommunityGateway, CommunitySection, CommunityWork, CommunityProfile, SubmissionStatus } from './types.js';
 import { studioShareText as shareText } from '@/utility/studio-share-copy.js';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex, confirm } from '@/os.js';
@@ -235,7 +248,7 @@ import { emojiPicker } from '@/utility/emoji-picker.js';
 import { prefer } from '@/preferences.js';
 import { useScrollPositionKeeper } from '@/composables/use-scroll-position-keeper.js';
 
-const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; initialTags?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
+const props = defineProps<{ section: string; composerOnly?: boolean; initialDraft?: CommunityComposerDraft; initialQuery?: string; initialTags?: string; embedded?: boolean; publicationMode?: 'before' | 'after'; profileAuthorId?: string; profile?: CommunityProfile; viewerId?: string; compose?: boolean; composeRequest?: number; signedIn: boolean; moderator: boolean; registrationClosed: boolean; gateway: CommunityGateway; }>();
 const emit = defineEmits<{ (event: 'navigate', path: string): void; (event: 'login'): void; (event: 'signup'): void; (event: 'composerClosed'): void; (event: 'submitted', value: Awaited<ReturnType<CommunityGateway['submit']>>): void; }>();
 const currentCategory = computed(() => communitySections.find(entry => entry.id === props.section));
 const isProfile = computed(() => props.section === 'profile');
@@ -264,6 +277,9 @@ const surfaceRoot = ref<HTMLElement>();
 const mobileViewport = window.matchMedia('(max-width: 700px)');
 const mobileWidth = ref(mobileViewport.matches);
 const mobileFeed = computed(() => mobileWidth.value && isPublicFeed.value && !props.composerOnly);
+const mobileProfile = computed(() => mobileWidth.value && isProfile.value && !props.embedded);
+const profileHeaderRoot = ref<HTMLElement>();
+const profileScrolled = ref(false);
 const mobileSearchOpen = ref(false);
 let feedResize: ResizeObserver | undefined;
 
@@ -405,7 +421,8 @@ async function load(append = false) {
 
 function loadNextMobilePage() {
 	const root = surfaceRoot.value;
-	if (mobileFeed.value && root && nextCursor.value && !loading.value && !loadError.value && root.scrollTop + root.clientHeight >= root.scrollHeight - root.clientHeight * .5) void load(true);
+	if (mobileProfile.value && root) profileScrolled.value = root.scrollTop >= (profileHeaderRoot.value?.offsetHeight ?? 200);
+	if ((mobileFeed.value || mobileProfile.value) && root && nextCursor.value && !loading.value && !loadError.value && root.scrollTop + root.clientHeight >= root.scrollHeight - root.clientHeight * .5) void load(true);
 }
 
 function rememberTags(tags: CommunityTag[]) {
@@ -561,7 +578,7 @@ async function closeComposer() {
 
 function handleComposeRequest(event: Event) {
 	// Only the visible community surface handles a global compose request.
-	if (props.embedded || event.defaultPrevented || isProfile.value || !surfaceRoot.value?.isConnected || !surfaceRoot.value.getClientRects().length) return;
+	if (props.embedded || event.defaultPrevented || !surfaceRoot.value?.isConnected || !surfaceRoot.value.getClientRects().length) return;
 	event.preventDefault();
 	void openComposer();
 }
@@ -773,7 +790,6 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 </script>
 
 <style lang="scss" module>
-@use './work-palette.scss';
 .composerOnly.root { height: 0; overflow: visible; }
 .composerOnly .canvas { padding: 0; min-height: 0; }
 .sharePreview { display: flex; gap: 12px; overflow-x: auto; max-height: 200px; padding: 0 20px 16px; }
@@ -1053,32 +1069,50 @@ button.tagChip { min-height: 44px; }
 
 @media (prefers-reduced-motion: reduce) { .primary, .primary i:last-child { transition: none; transform: none !important; } }
 
-.root.galleryFeed { @include work-palette.immersive; background: var(--work-stage); color: var(--work-stage-fg); scroll-padding-top: calc(52px + env(safe-area-inset-top, 0px)); overscroll-behavior-y: contain; scrollbar-width: none; }
+.root.galleryFeed { background: var(--MI_THEME-bg); color: var(--MI_THEME-fg); scroll-padding-top: calc(52px + env(safe-area-inset-top, 0px)); overscroll-behavior-y: contain; scrollbar-width: none; }
 .galleryFeed::-webkit-scrollbar { display: none; }
 .galleryFeed .canvas.communityCanvas { padding: 8px 10px 0; }
 .galleryFeed .columns { display: block; padding: 0; }
 .galleryFeed .feed { margin: 0; min-width: 0; }
 .galleryFeed .works { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px 8px; }
-.galleryFeed .empty { min-height: calc(var(--mobile-feed-height) - 64px); margin: 0; padding: 48px 28px; border: 0; border-radius: 0; color: var(--work-stage-fg); background: var(--work-stage); }
-.galleryFeed .searchSummary { margin: 0 0 8px; padding: 6px 4px; color: var(--work-stage-muted); }
-.galleryFeed .searchSummary button { color: var(--work-stage-fg); }
-.galleryFeed .empty p { color: var(--work-stage-muted); }
-.galleryFeed .empty button, .galleryFeed .loadMore { color: var(--work-stage-fg); background: var(--work-stage-border); }
+.galleryFeed .empty { min-height: calc(var(--mobile-feed-height) - 64px); margin: 0; padding: 48px 28px; border: 0; border-radius: 0; color: var(--MI_THEME-fg); background: var(--MI_THEME-bg); }
+.galleryFeed .searchSummary { margin: 0 0 8px; padding: 6px 4px; color: var(--MI_THEME-fgTransparentWeak); }
+.galleryFeed .searchSummary button { color: var(--MI_THEME-fg); }
+.galleryFeed .empty p { color: var(--MI_THEME-fgTransparentWeak); }
+.galleryFeed .empty button, .galleryFeed .loadMore { color: var(--MI_THEME-fg); background: var(--MI_THEME-buttonBg); }
 .galleryFeed .loadMore, .mobileEnd { min-height: 84px; margin: 0; width: 100%; padding: 18px; text-align: center; }
-.mobileEnd { display: grid; place-content: center; gap: 8px; font-size: 13px; color: var(--work-stage-muted); button { min-height: 44px; color: var(--work-stage-fg); } }
-.mobileHeader { position: sticky; top: 0; z-index: 30; color: var(--work-stage-fg); background: var(--work-stage); }
-.mobileTopbar { display: flex; align-items: center; gap: 2px; height: calc(52px + env(safe-area-inset-top, 0px)); box-sizing: border-box; padding: env(safe-area-inset-top, 0px) 6px 0; background: var(--work-stage); }
+.mobileEnd { display: grid; place-content: center; gap: 8px; font-size: 13px; color: var(--MI_THEME-fgTransparentWeak); button { min-height: 44px; color: var(--MI_THEME-fg); } }
+.mobileHeader { position: sticky; top: 0; z-index: 30; color: var(--MI_THEME-fg); background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
+.mobileTopbar { display: flex; align-items: center; gap: 2px; height: calc(52px + env(safe-area-inset-top, 0px)); box-sizing: border-box; padding: env(safe-area-inset-top, 0px) 6px 0; background: var(--MI_THEME-panel); }
 .mobileTopbar > button { flex: 0 0 44px; display: grid; place-items: center; width: 44px; height: 48px; color: inherit; font-size: 23px; }
 .mobileTopbar nav { display: flex; justify-content: space-evenly; align-items: stretch; flex: 1; min-width: 0; height: 48px; }
-.mobileTopbar nav a { position: relative; display: grid; place-items: center; padding: 0 7px; white-space: nowrap; color: var(--work-stage-muted); font-weight: 600; font-size: 16px; text-shadow: 0 1px 3px var(--work-stage); }
-.mobileTopbar nav a[aria-current] { color: var(--work-stage-fg); font-weight: 750; }
+.mobileTopbar nav a { position: relative; display: grid; place-items: center; padding: 0 7px; white-space: nowrap; color: var(--MI_THEME-fgTransparentWeak); font-weight: 600; font-size: 16px; }
+.mobileTopbar nav a[aria-current] { color: var(--MI_THEME-accent); font-weight: 750; }
 .mobileTopbar nav a[aria-current]::after { content: ''; position: absolute; bottom: 2px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: currentColor; }
-.mobileSearchPanel { position: absolute; top: 100%; left: 0; right: 0; padding: 10px 14px 14px; background: var(--work-stage); border-bottom: 1px solid var(--work-stage-border); }
+.mobileSearchPanel { position: absolute; top: 100%; left: 0; right: 0; padding: 10px 14px 14px; background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
 .mobileSearchPanel form { display: flex; gap: 8px; }
-.mobileSearchPanel input { min-width: 0; flex: 1; border: 1px solid var(--work-stage-muted); border-radius: 6px; background: var(--work-stage-border); color: var(--work-stage-fg); padding: 10px; font-size: 16px; }
-.mobileSearchPanel input::placeholder { color: var(--work-stage-muted); }
+.mobileSearchPanel input { min-width: 0; flex: 1; border: 1px solid var(--MI_THEME-inputBorder); border-radius: 10px; background: var(--MI_THEME-input); color: var(--MI_THEME-fg); padding: 10px; font-size: 16px; }
+.mobileSearchPanel input::placeholder { color: var(--MI_THEME-fgTransparentWeak); }
 .mobileSearchPanel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 6px 10px; color: inherit; font-size: 13px; }
+.mobileSearchPanel button[type='submit'] { border-radius: 10px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); }
 .mobileSearchPanel > div { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
-.mobileHeader :focus-visible { outline: 2px solid var(--work-stage-fg); outline-offset: -2px; }
+.mobileHeader :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
 @media (max-width: 360px) { .mobileTopbar nav a { font-size: 14px; padding-inline: 4px; } }
+
+.mobileProfile.root { --profile-topbar-height: calc(56px + env(safe-area-inset-top, 0px)); background: var(--MI_THEME-panel); scroll-padding-top: calc(var(--profile-topbar-height) + 50px); }
+.mobileProfile .canvas { padding: 0; max-width: none; }
+.mobileProfile .columns { display: block; padding: 0; }
+.mobileProfile .feed { margin: 0; min-width: 0; }
+.mobileProfile .works { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 2px; }
+.mobileProfile .empty { min-height: 220px; border: 0; margin: 0; padding: 32px 20px; }
+.mobileProfile .searchSummary { padding: 8px 14px; margin: 0; font-size: 12px; }
+.mobileProfile .loadMore { width: 100%; min-height: 52px; margin: 0; border-radius: 0; }
+.profileTopbar { position: sticky; top: 0; z-index: 31; display: flex; align-items: center; gap: 8px; min-height: var(--profile-topbar-height); box-sizing: border-box; padding: env(safe-area-inset-top, 0px) 10px 0; background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-fg); > a { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 50%; font-size: 22px; } form { display: flex; align-items: center; flex: 1; min-width: 0; height: 40px; border-radius: 22px; background: var(--MI_THEME-panel); } input { min-width: 0; width: 100%; padding: 8px 0 8px 14px !important; border: 0 !important; background: transparent !important; font-size: 16px !important; } form button { flex: 0 0 44px; width: 44px; height: 44px; font-size: 20px; } }
+.profileTopbarName { display: none; min-width: 0; max-width: 28%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 16px; }
+.profileScrolled .profileTopbar { background: var(--MI_THEME-panel); border-bottom: 1px solid var(--MI_THEME-divider); }
+.profileScrolled .profileTopbarName { display: block; }
+.profileScrolled .profileBack { display: none; }
+.profileScrolled .profileTopbar form { background: var(--MI_THEME-buttonBg); }
+.mobileProfileTabs { position: sticky; top: var(--profile-topbar-height); z-index: 30; display: flex; align-items: stretch; min-height: 50px; padding-inline: 10px; border-bottom: 1px solid var(--MI_THEME-divider); background: var(--MI_THEME-panel); > a, > label { flex: 1; min-width: 0; display: flex; justify-content: center; align-items: center; gap: 4px; min-height: 50px; font-size: 15px; } > button { flex: 0 0 44px; min-width: 44px; min-height: 50px; color: var(--MI_THEME-fgTransparentWeak); } }
+.profileWorkFilter { position: relative; color: var(--MI_THEME-accent); font-weight: 700; border-bottom: 3px solid currentColor; margin-bottom: -1px; span { display: flex; align-items: center; gap: 4px; } select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; } &:focus-within { outline: 2px solid var(--MI_THEME-accent); outline-offset: -3px; } }
 </style>

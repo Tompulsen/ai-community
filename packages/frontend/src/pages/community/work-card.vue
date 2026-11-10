@@ -4,15 +4,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.wide]: compact && wideCover }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.wide]: compact && !profileGrid && wideCover, [$style.profileGrid]: profileGrid }]" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<template v-if="compact">
-		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: compactAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
+		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: profileGrid ? '3 / 4' : compactAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
 			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @error="failed = true"/>
 			<div v-else :class="$style.compactFallback"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : work.category === 'video' ? 'ti ti-player-play' : 'ti ti-photo'" aria-hidden="true"></i><p v-if="work.category === 'resource' && !sensitive">{{ excerpt || work.title }}</p><span v-else>{{ sensitive ? t.sensitive : t.noPreview }}</span></div>
 			<span v-if="!sensitive" :class="$style.mediaKind"><i :class="work.category === 'video' ? 'ti ti-player-play-filled' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><span v-if="work.files.length > 1">{{ work.files.length }}</span></span>
+			<span v-if="profileGrid && work.likesCount != null" :class="$style.profileMetrics"><i class="ti ti-heart" aria-hidden="true"></i>{{ new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span>
 		</MkA>
-		<h3 :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
-		<div :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><span :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span></div>
+		<h3 v-if="!profileGrid" :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
+		<div v-if="!profileGrid" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><span :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span></div>
 	</template>
 	<WorkEngagement v-else :work="work" :viewsCount="views" previewComments>
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><div v-if="$slots.actions" :class="$style.authorActions"><slot name="actions"></slot></div></header>
@@ -45,7 +46,7 @@ import { useWorkView } from './use-work-view.js';
 import type { CommunityWork } from './types.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ work: CommunityWork; compact?: boolean }>();
+const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?: boolean }>();
 const root = ref<HTMLElement>();
 const views = useWorkView(root, () => props.compact ? null : props.work);
 const failed = ref(false);
@@ -99,14 +100,18 @@ watch(cover, () => { failed.value = false; });
 @media (prefers-reduced-motion: reduce) { .card, .previewAction { transition: none; } }
 @container (max-width: 600px) { .card { padding: 16px 14px 8px; border-radius: 12px; } .content { margin-left: 0; } .author { gap: 8px; } .authorActions { flex-basis: 100%; justify-content: flex-end; } .identity { flex-direction: column; align-items: flex-start; gap: 0; } .author time { flex-shrink: 0; } }
 
-.card.compact { @include work-palette.immersive; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--work-stage-fg); container-type: normal; align-self: start; }
+.card.compact { padding: 0; border: 1px solid var(--MI_THEME-divider); border-radius: 12px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); container-type: normal; align-self: start; }
 .compact.wide { grid-column: 1 / -1; }
-.compact :focus-visible { outline-color: var(--work-stage-fg); outline-offset: -2px; }
-.compactPreview { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 8px; background: var(--work-stage-border); aspect-ratio: 3 / 4; img { display: block; width: 100%; height: 100%; object-fit: cover; } }
+.compact :focus-visible { outline-color: var(--MI_THEME-accent); outline-offset: -2px; }
+.compactPreview { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 11px 11px 0 0; background: var(--MI_THEME-buttonBg); aspect-ratio: 3 / 4; img { display: block; width: 100%; height: 100%; object-fit: cover; } }
 .compactPreview:active { opacity: .85; }
-.compactFallback { display: flex; height: 100%; padding: 18px 14px; box-sizing: border-box; flex-direction: column; justify-content: center; gap: 12px; color: var(--work-stage-muted); > i { font-size: 26px; } p { color: var(--work-stage-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 7; margin: 0; font-size: 14px; line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; } > span { font-size: 12px; } }
-.mediaKind { position: absolute; bottom: 7px; right: 8px; display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
-.compactTitle { margin: 6px 1px 0; font-size: 14px; font-weight: 500; line-height: 1.5; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; } }
-.compactMeta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 36px; margin-inline: 1px; color: var(--work-stage-muted); font-size: 12px; font-variant-numeric: tabular-nums; > a { display: flex; min-width: 0; align-items: center; gap: 5px; min-height: 36px; > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } } > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; } }
-.compactAvatar { display: grid; flex: 0 0 auto; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--work-stage-border); color: var(--work-stage-fg); font-size: 10px; }
+.compactFallback { display: flex; height: 100%; padding: 18px 14px; box-sizing: border-box; flex-direction: column; justify-content: center; gap: 12px; color: var(--MI_THEME-fgTransparentWeak); > i { font-size: 26px; } p { color: var(--MI_THEME-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 7; margin: 0; font-size: 14px; line-height: 1.65; overflow: hidden; overflow-wrap: anywhere; } > span { font-size: 12px; } }
+.mediaKind { @include work-palette.stage; position: absolute; bottom: 7px; right: 8px; display: inline-flex; gap: 4px; align-items: center; padding: 3px 5px; border-radius: 5px; font-size: 12px; color: var(--work-stage-fg); background: color-mix(in srgb, var(--work-stage) 65%, transparent); }
+.compactTitle { margin: 8px 9px 0; font-size: 14px; font-weight: 600; line-height: 1.5; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; } }
+.compactMeta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 36px; margin: 2px 9px 4px; color: var(--work-muted); font-size: 12px; font-variant-numeric: tabular-nums; > a { display: flex; min-width: 0; align-items: center; gap: 5px; min-height: 36px; > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } } > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; } }
+.compactAvatar { display: grid; flex: 0 0 auto; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); font-size: 10px; }
+.card.profileGrid { border: 0; border-radius: 0; }
+.profileGrid .compactPreview { border-radius: 0; }
+.profileGrid .mediaKind { top: 6px; bottom: auto; right: 6px; }
+.profileMetrics { @include work-palette.stage; position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 4px; padding: 20px 8px 6px; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 75%, transparent)); color: var(--work-stage-fg); font-size: 12px; pointer-events: none; }
 </style>

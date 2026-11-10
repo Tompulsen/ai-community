@@ -4,9 +4,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<CommunitySurface :key="user.id" section="profile" :profileAuthorId="user.id" :viewerId="$i?.id" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate">
-	<template #profileHeader>
-		<ProfileHeader :profile="profile" @navigate="navigate">
+<CommunitySurface :key="user.id" section="profile" :profile="profile" :profileAuthorId="user.id" :viewerId="$i?.id" :publicationMode="instance.clientOptions.communityPublicationMode === 'after' ? 'after' : 'before'" :signedIn="!!$i" :moderator="iAmModerator" :registrationClosed="instance.disableRegistration" :gateway="gateway" @navigate="navigate">
+	<template #profileHeader="{ mobile }">
+		<ProfileHeader :profile="profile" :mobile="mobile" @navigate="navigate">
 			<template #actions><MkFollowButton v-if="$i?.id !== user.id" :user="user" full/></template>
 			<template #description><Mfm :text="user.description ?? ''" :isNote="false" :author="user"/></template>
 		</ProfileHeader>
@@ -21,6 +21,7 @@ import { acct, userPage } from '@@/js/user.js';
 import CommunitySurface from '../community/surface.vue';
 import ProfileHeader from '../community/profile-header.vue';
 import { createBrowserCommunityGateway } from '../community/browser-gateway.js';
+import { rememberCommunityWorkReturnPath } from '../community/work-navigation.js';
 import type { CommunityProfile } from '../community/types.js';
 import MkFollowButton from '@/components/MkFollowButton.vue';
 import { $i, iAmModerator } from '@/i.js';
@@ -31,7 +32,11 @@ import { getStaticImageUrl } from '@/utility/media-proxy.js';
 import { isFollowingVisibleForMe, isFollowersVisibleForMe } from '@/utility/isFfVisibleForMe.js';
 const props = defineProps<{ user: Misskey.entities.UserDetailed; }>();
 const router = useRouter();
-const navigate = (path: string) => { router.push(path); };
+const sourcePath = router.getCurrentFullPath();
+router.useListener('change', ({ beforeFullPath, fullPath }) => {
+	if (beforeFullPath === sourcePath) rememberCommunityWorkReturnPath(router, beforeFullPath, fullPath);
+});
+const navigate = (path: string) => { router.pushByPath(path); };
 const gateway = createBrowserCommunityGateway();
 const profile = computed<CommunityProfile>(() => ({
  id: props.user.id, name: props.user.name || props.user.username, handle: acct(props.user),
@@ -43,5 +48,7 @@ const profile = computed<CommunityProfile>(() => ({
  followersCount: isFollowersVisibleForMe(props.user) ? props.user.followersCount : undefined,
  followingPath: userPage(props.user, 'following'), followersPath: userPage(props.user, 'followers'),
  detailsPath: userPage(props.user, 'home'),
+ notesPath: userPage(props.user, 'notes'),
+ reactionsPath: $i?.id === props.user.id || props.user.publicReactions ? userPage(props.user, 'reactions') : undefined,
 }));
 </script>

@@ -73,6 +73,6 @@ export type CommunityProfile = {
 	id: string; name: string; handle: string; description: string;
 	avatarUrl?: string | null; bannerUrl?: string | null; createdAt: string;
 	followingCount?: number; followersCount?: number;
-	followingPath?: string; followersPath?: string; detailsPath?: string;
+	followingPath?: string; followersPath?: string; detailsPath?: string; notesPath?: string; reactionsPath?: string;
 	isOwn: boolean;
 };

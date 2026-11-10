@@ -8,11 +8,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<video ref="video" :src="activated ? source : undefined" :poster="poster" :loop="immersive" muted playsinline preload="none" :aria-label="title" @click="immersive && toggle()" @playing="playing = true; waiting = false" @pause="playing = false; waiting = false" @waiting="waiting = true" @ended="ended" @timeupdate="syncTime" @loadedmetadata="syncTime" @volumechange="syncVolume" @error="mediaError"></video>
 	<div v-if="failed" :class="$style.message" role="status"><p>{{ t.videoFailed }}</p><button type="button" class="_button" @click="retry">{{ t.retry }}</button></div>
 	<template v-else>
-		<button v-if="!playing && !waiting" type="button" class="_button" :class="$style.centerPlay" :aria-label="t.playVideo" @click="start(false)"><i class="ti ti-player-play-filled" aria-hidden="true"></i></button>
+		<button v-if="!playing && !waiting && (!immersive || !suspended)" type="button" class="_button" :class="$style.centerPlay" :aria-label="t.playVideo" @click="start(false)"><i class="ti ti-player-play-filled" aria-hidden="true"></i></button>
 		<span v-if="waiting" :class="$style.waiting" role="status">{{ t.videoLoading }}</span>
 		<span v-if="playing && muted" :class="$style.previewHint"><i class="ti ti-volume-off" aria-hidden="true"></i>{{ t.mutedPreview }}</span>
-		<div :class="$style.controls">
-			<input :class="$style.seek" type="range" min="0" :max="duration || 1" step="0.1" :value="position" :disabled="!duration" :aria-label="t.videoProgress" :aria-valuetext="`${timeLabel(position)} / ${timeLabel(duration)}`" @input="seek"/>
+		<div v-show="!immersive || !suspended" :class="$style.controls">
+			<input :class="$style.seek" :style="{ '--work-progress': `${duration ? position / duration * 100 : 0}%` }" type="range" min="0" :max="duration || 1" step="0.1" :value="position" :disabled="!duration" :aria-label="t.videoProgress" :aria-valuetext="`${timeLabel(position)} / ${timeLabel(duration)}`" @input="seek"/>
 			<div :class="$style.controlRow">
 				<button type="button" class="_button" :aria-label="playing || waiting ? t.pauseVideo : t.playVideo" :title="playing || waiting ? t.pauseVideo : t.playVideo" @click="toggle"><i :class="playing || waiting ? 'ti ti-player-pause-filled' : 'ti ti-player-play-filled'" aria-hidden="true"></i></button>
 				<span :class="$style.time">{{ timeLabel(position) }} / {{ timeLabel(duration) }}</span>
@@ -196,13 +196,17 @@ onBeforeUnmount(() => { active = false; stop(); observer?.disconnect(); window.d
 @media (prefers-reduced-motion: reduce) { .controls { transition: none; } }
 
 .player.immersive { @include work-palette.immersive; width: 100%; height: 100%; max-height: none; aspect-ratio: auto; border-radius: 0; background: var(--work-stage); }
-.immersive .controls { padding: 0 12px 0; background: transparent; z-index: 1; }
-.immersive .seek { height: 18px; }
-.immersive .controlRow { height: 42px; }
+.immersive .controls { box-sizing: border-box; height: var(--work-video-controls-height, 88px); padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left)); background: color-mix(in srgb, var(--work-stage) 88%, transparent); z-index: 1; }
+.immersive .seek { appearance: none; height: 44px; background: linear-gradient(to right, var(--work-stage-accent) 0 var(--work-progress), color-mix(in srgb, var(--work-stage-fg) 32%, transparent) var(--work-progress) 100%) center / 100% 3px no-repeat; &:disabled { opacity: .4; cursor: default; } }
+.immersive .seek::-webkit-slider-runnable-track { height: 3px; background: transparent; }
+.immersive .seek::-moz-range-track { height: 3px; background: transparent; }
+.immersive .seek::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: var(--work-stage-accent); }
+.immersive .seek::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: var(--work-stage-accent); }
+.immersive .controlRow { height: 44px; }
 .immersive .detail, .immersive .previewHint { display: none; }
 .immersive .centerPlay { display: grid; background: transparent; border: 0; width: 72px; height: 72px; font-size: 46px; opacity: .8; }
-.immersive .controlRow button { width: 36px; flex-basis: 36px; }
-.immersive .time { font-size: 11px; }
+.immersive .controlRow button { width: 44px; flex-basis: 44px; }
+.immersive .time { font-size: 12px; }
 .immersive .playError { top: 70px; }
 .immersive .message { inset: 76px 76px 170px 16px; }
 .immersive.playing .controls { opacity: 1; pointer-events: auto; }

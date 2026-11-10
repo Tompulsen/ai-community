@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<main ref="root" :class="[$style.root, { [$style.mobileDetail]: mobile, [$style.commentsOpen]: commentsOpen }]" data-testid="community-work-detail">
+<main ref="root" :class="[$style.root, { [$style.mobileDetail]: mobile, [$style.withVideo]: mobile && hasVideo, [$style.commentsOpen]: commentsOpen }]" data-testid="community-work-detail">
 	<header :class="[$style.topbar, { [$style.mobileTopbar]: mobile }]"><MkA :to="backPath" :class="$style.back" :aria-label="t.back"><i class="ti ti-arrow-left" aria-hidden="true"></i><span>{{ t.back }}</span></MkA><span>{{ mobile ? t.preview : work?.title }}</span></header>
 	<div v-if="!work" :class="$style.state" :role="failed ? 'alert' : 'status'"><p>{{ failed ? unavailable ? t.unavailable : t.failed : t.loading }}</p><button v-if="failed" type="button" class="_button" @click="load">{{ t.retry }}</button></div>
 	<div v-else-if="mobile" :class="$style.mobileStage">
@@ -138,24 +138,26 @@ definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', 
 .state { display: grid; place-content: center; min-height: 60vh; text-align: center; padding: 24px; button { min-height: 44px; color: var(--MI_THEME-accent); } }
 @container (max-width: 780px) { .layout { display: flex; flex-direction: column; height: auto; min-height: 0; } .stage { height: clamp(280px, 54vh, 620px); flex-shrink: 0; } .sidebar { overflow: visible; padding: 22px 18px; } .topbar { padding: 0 16px; } }
 
-.root.mobileDetail { @include work-palette.immersive; position: relative; overflow: hidden; background: var(--work-stage); color: var(--work-stage-fg); container-type: normal; }
+.root.mobileDetail { @include work-palette.immersive; --work-video-controls-height: 88px; position: relative; overflow: hidden; background: var(--work-stage); color: var(--work-stage-fg); container-type: normal; }
+.mobileDetail.withVideo { --work-actions-inset: var(--work-video-controls-height); }
 .mobileDetail :focus-visible { outline-color: var(--work-stage-fg); outline-offset: -3px; }
 .topbar.mobileTopbar { position: absolute; inset: 0 0 auto; z-index: 3; min-height: 58px; padding: max(4px, env(safe-area-inset-top)) 16px 4px; border: 0; background: linear-gradient(color-mix(in srgb, var(--work-stage) 65%, transparent), transparent); color: var(--work-stage-fg); > span { font-size: 15px; font-weight: 600; } .back { width: 44px; min-height: 44px; font-size: 25px; span { display: none; } } }
 .mobileStage { height: 100%; min-height: 0; }
 .mobileMedia { position: absolute; inset: 0; height: 100%; transition: height 180ms ease-out; }
 .caption { position: absolute; left: max(16px, env(safe-area-inset-left)); right: 86px; bottom: 28px; display: grid; gap: 7px; text-shadow: 0 1px 3px var(--work-stage); color: var(--work-stage-fg); > * { position: relative; } h1 { margin: 0; font-size: 16px; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } }
 .caption::before { content: ''; position: absolute; inset: -80px -86px -28px -16px; background: linear-gradient(transparent, color-mix(in srgb, var(--work-stage) 85%, transparent)); pointer-events: none; }
-.caption.withVideo { bottom: 74px; }
+.caption.withVideo { bottom: calc(var(--work-video-controls-height) + 14px); }
 .mobileAuthor { font-size: 18px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
 .description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.6; font-size: 14px; margin: 0; }
 .captionFooter { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; > button { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; font-size: 13px; font-weight: 600; } }
-.caption.expanded { max-height: calc(100% - 100px); overflow: auto; overscroll-behavior: contain; padding: 14px; left: 8px; right: 76px; background: color-mix(in srgb, var(--work-stage) 94%, transparent); border-radius: 10px; text-shadow: none; box-sizing: border-box; h1, .description { display: block; -webkit-line-clamp: unset; overflow: visible; } &::before { display: none; } }
-.caption.expanded.withVideo { max-height: calc(100% - 146px); }
-.expandedDetails { --MI_THEME-fg: var(--work-stage-fg); --MI_THEME-fgTransparentWeak: var(--work-stage-muted); --MI_THEME-panel: var(--work-stage); --MI_THEME-bg: var(--work-stage-border); --MI_THEME-divider: var(--work-stage-border); padding-top: 8px; .date { color: var(--work-stage-muted); } .prompt h2 { color: var(--work-stage-muted); } }
-.mobileRemix { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 52px; min-height: 64px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); span { display: grid; place-items: center; width: 42px; height: 42px; background: color-mix(in srgb, var(--work-stage-fg) 24%, var(--work-stage)); border: 2px solid var(--work-stage-fg); border-radius: 50%; } i { font-size: 25px; } strong { font-size: 12px; line-height: 1.25; white-space: nowrap; } }
+.caption.expanded { max-height: calc(100% - 100px); overflow: auto; overscroll-behavior: contain; padding: 14px; left: 8px; right: 76px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); border: 1px solid var(--MI_THEME-divider); border-radius: 12px; text-shadow: none; box-sizing: border-box; h1, .description { display: block; -webkit-line-clamp: unset; overflow: visible; } &::before { display: none; } }
+.caption.expanded.withVideo { max-height: calc(100% - var(--work-video-controls-height) - 88px); }
+.caption.expanded :focus-visible { outline-color: var(--MI_THEME-accent); }
+.expandedDetails { padding-top: 8px; .date, .prompt h2 { color: var(--MI_THEME-fgTransparentWeak); } }
+.mobileRemix { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 52px; min-height: 64px; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); span { display: grid; place-items: center; width: 42px; height: 42px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); border: 2px solid var(--MI_THEME-fgOnAccent); border-radius: 12px; text-shadow: none; } i { font-size: 25px; } strong { font-size: 12px; line-height: 1.25; white-space: nowrap; } }
 .commentsOpen .mobileMedia { height: max(36dvh, calc(100dvh - 680px)); }
 .commentsOpen .caption, .commentsOpen .mobileTopbar, .commentsOpen [data-testid='work-actions'] { visibility: hidden; }
-@media (max-height: 580px) { .caption { bottom: 16px; gap: 3px; } .caption.withVideo { bottom: 64px; } .mobileAuthor { font-size: 15px; } .caption h1, .description { -webkit-line-clamp: 1; font-size: 13px; } }
-@media (max-height: 500px) { .caption { right: 132px; } .caption.expanded { right: 122px; } .mobileRemix { min-height: 48px; span { width: 30px; height: 30px; } i { font-size: 20px; } } }
+@media (max-height: 580px) { .caption { bottom: 16px; gap: 3px; } .caption.withVideo { bottom: calc(var(--work-video-controls-height) + 10px); } .mobileAuthor { font-size: 15px; } .caption h1, .description { -webkit-line-clamp: 1; font-size: 13px; } }
+@media (max-height: 560px) { .caption { right: 132px; } .caption.expanded { right: 122px; } .mobileRemix { min-height: 48px; span { width: 30px; height: 30px; } i { font-size: 20px; } } }
 @media (prefers-reduced-motion: reduce) { .mobileMedia { transition: none; } }
 </style>

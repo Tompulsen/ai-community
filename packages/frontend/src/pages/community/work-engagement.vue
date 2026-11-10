@@ -369,7 +369,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .actions .active { color: var(--MI_THEME-fg); background: var(--MI_THEME-accentedBg); }
 .commentHeading { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; h2 { font-size: 16px; margin: 0; } h2 span { margin-left: 6px; opacity: .7; font-weight: normal; } button { flex-shrink: 0; width: 44px; height: 44px; border-radius: 8px; color: var(--MI_THEME-fgTransparentWeak); &:hover:not(:disabled) { background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); } &:disabled { opacity: .6; } } }
 .composer { border: 1px solid var(--MI_THEME-inputBorder); border-radius: var(--MI-radius, 12px); padding: 12px; margin: 12px 0; &:focus-within { outline: 2px solid var(--MI_THEME-fg); outline-offset: 2px; } label { display: block; } textarea { box-sizing: border-box; display: block; width: 100%; resize: vertical; min-height: 72px; max-height: 180px; border: none; color: inherit; background: transparent; line-height: 1.65; &:focus-visible { outline: none; } } }
-.send { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 12px; button { min-height: 44px; padding: 8px 16px; border-radius: 20px; color: var(--MI_THEME-panel); background: var(--MI_THEME-fg); font-weight: 600; } button:disabled { opacity: .45; cursor: not-allowed; } }
+.send { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 12px; button { min-height: 44px; padding: 8px 16px; border-radius: 20px; color: var(--MI_THEME-fgOnAccent); background: var(--MI_THEME-accent); font-weight: 600; } button:disabled { opacity: .45; cursor: not-allowed; } }
 .keyboardHint { margin: 8px 0 0; font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); }
 .signin, .more { display: block; box-sizing: border-box; min-height: 44px; width: 100%; padding: 10px; margin: 12px 0; border: 1px solid var(--MI_THEME-divider); border-radius: var(--MI-radius, 12px); background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); &:hover:not(:disabled) { background: var(--MI_THEME-buttonHoverBg); } &:disabled { opacity: .6; } }
 .feedback { margin: 8px 0; font-size: 13px; overflow-wrap: anywhere; button, a { color: var(--MI_THEME-accent); text-decoration: underline; min-height: 40px; } }
@@ -429,7 +429,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 
 .root.immersive { @include work-palette.immersive; position: relative; height: 100%; color: var(--work-stage-fg); }
 .immersive .main { position: relative; height: 100%; }
-.immersive .actions { position: absolute; bottom: 16px; right: max(10px, env(safe-area-inset-right)); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 13px; width: 52px; padding: 0; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
+.immersive .actions { position: absolute; bottom: calc(16px + var(--work-actions-inset, 0px)); right: max(10px, env(safe-area-inset-right)); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 13px; width: 52px; padding: 0; color: var(--work-stage-fg); text-shadow: 0 1px 3px var(--work-stage); }
 .immersive .actions > button { display: flex; flex-direction: column; gap: 1px; width: 48px; min-height: 49px; padding: 0; font-size: 12px; background: transparent; }
 .immersive .actions i { font-size: 31px; filter: drop-shadow(0 1px 2px var(--work-stage)); }
 .immersive .actions .authorControl { order: 0; }
@@ -439,21 +439,19 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .immersive .actions .shareAction { order: 4; }
 .immersive .actions .remixAction { order: 5; }
 .immersive .actions .views { display: none; }
-.immersive .actions .liked { color: var(--work-stage-accent); }
-.immersive .actions .favorited { color: var(--work-stage-favorite); }
-.immersive .actions .copied { color: var(--work-stage-cyan); }
+.immersive .actions .liked { color: var(--MI_THEME-love); }
+.immersive .actions .favorited { color: var(--work-stage-accent); }
+.immersive .actions .copied { color: var(--work-stage-accent); }
 .authorControl { position: relative; display: grid; place-items: start center; width: 52px; height: 67px; }
 .authorAvatar { display: grid; place-items: center; width: 44px; height: 44px; border: 2px solid var(--work-stage-fg); border-radius: 50%; overflow: hidden; box-sizing: border-box; background: var(--work-stage-border); font-size: 20px; text-shadow: none; > * { width: 100%; height: 100%; display: grid; place-items: center; } }
-.authorControl .follow { display: grid; place-items: center; position: absolute; width: 44px; height: 44px; bottom: 0; padding: 0; i { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--work-stage-accent); font-size: 18px; filter: none; } }
-.authorControl .followed i { background: var(--work-stage-fg); color: var(--work-stage-accent); }
+.authorControl .follow { display: grid; place-items: center; position: absolute; width: 44px; height: 44px; bottom: 0; padding: 0; i { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--work-stage-accent); color: var(--MI_THEME-fgOnAccent); text-shadow: none; font-size: 18px; filter: none; } }
+.authorControl .followed i { background: var(--MI_THEME-panel); color: var(--work-stage-accent); }
 .remixAction { width: 52px; }
 .immersive .feedbackStack { position: absolute; top: 62px; left: 16px; right: 76px; z-index: 2; max-height: 35%; overflow: auto; }
 .immersive .feedbackStack .feedback { padding: 8px 12px; border-radius: 6px; background: var(--work-stage); color: var(--work-stage-fg); }
 .discussionContainer { display: contents; }
 .sheetLayer { @include work-palette.immersive; position: fixed; inset: 0; display: flex; align-items: flex-end; background: color-mix(in srgb, var(--work-stage) 8%, transparent); }
-// The supplied reference uses a white discussion surface in either application theme.
 .commentSheet, .shareSheet {
-	@include work-palette.discussion;
 	position: relative; width: 100%; box-sizing: border-box; border-radius: 16px 16px 0 0; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-size: 14px; line-height: 1.55;
 	button, textarea { font: inherit; }
 	:focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
@@ -464,7 +462,7 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .commentBody { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 18px 10px; }
 .commentSheet .commentEntry { flex: 0 0 auto; max-height: 45%; overflow: auto; padding: 10px 14px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--MI_THEME-divider); }
 .commentSheet .composer { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; margin: 0; border: 0; border-radius: 24px; background: var(--MI_THEME-input); label { flex: 1; min-width: 0; } textarea { min-height: 40px; max-height: 100px; padding: 8px 0; resize: none; font-size: 16px; line-height: 1.5; } }
-.commentSheet .send { flex: 0 0 auto; align-self: center; gap: 4px; flex-direction: column; button { min-height: 40px; padding: 8px 12px; border-radius: 20px; font-size: 13px; } }
+.commentSheet .send { flex: 0 0 auto; align-self: center; gap: 4px; flex-direction: column; button { min-height: 44px; padding: 8px 12px; border-radius: 22px; font-size: 13px; } }
 .commentSheet .keyboardHint { display: none; }
 .commentSheet .signin { margin: 0; border: 0; border-radius: 24px; text-align: left; padding-inline: 18px; color: var(--MI_THEME-fgTransparentWeak); }
 .commentSheet .comments li { padding: 16px 0; gap: 12px; border: 0; }
@@ -477,8 +475,8 @@ async function acknowledgeRetry() { if (!(await os.confirm({ type: 'warning', te
 .commentSheet .remixPreview { border: 0; padding: 0; max-width: min(260px, 100%); }
 .commentSheet.discussionFrom { transform: translateY(24px); }
 .shareSheet { padding: 12px 18px max(24px, env(safe-area-inset-bottom)); header { display: flex; align-items: center; justify-content: space-between; } h2 { font-size: 16px; margin: 0; } header button { width: 44px; height: 44px; font-size: 20px; } p { font-size: 13px; } }
-.shareOptions { display: flex; align-items: stretch; gap: 10px; padding-block: 18px; > button, > span { flex: 1; min-width: 0; } > button, > span > button { display: flex; width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 80px; padding: 8px 2px; border: 0; border-radius: 10px; background: var(--MI_THEME-buttonBg); font-size: 12px; } i { font-size: 24px; } }
-@media (max-height: 580px) { .immersive .actions { gap: 3px; bottom: 10px; } .immersive .actions i { font-size: 25px; } .immersive .actions > button { min-height: 44px; } .authorControl { height: 58px; } .authorControl .follow i { font-size: 17px; } }
+.shareOptions { display: flex; align-items: stretch; gap: 10px; padding-block: 18px; > button, > span { flex: 1; min-width: 0; } > button, > span > button { display: flex; width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 80px; padding: 8px 2px; border: 0; border-radius: 10px; background: var(--MI_THEME-buttonBg); font-size: 12px; &:active { background: var(--MI_THEME-buttonHoverBg); } } i { font-size: 24px; color: var(--MI_THEME-accent); } }
+@media (max-height: 640px) { .immersive .actions { gap: 3px; bottom: calc(10px + var(--work-actions-inset, 0px)); } .immersive .actions i { font-size: 25px; } .immersive .actions > button { min-height: 44px; } .authorControl { height: 67px; } .authorControl .follow i { font-size: 17px; } }
 @media (prefers-reduced-motion: reduce) { .commentSheet { transition: none; } }
-@media (max-height: 500px) { .immersive .actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; width: 92px; bottom: 12px; } .immersive .actions > a { margin-bottom: 0; } }
+@media (max-height: 560px) { .immersive .actions { display: grid; grid-template-columns: repeat(2, 44px); gap: 4px; width: 92px; bottom: calc(10px + var(--work-actions-inset, 0px)); } .immersive .actions > a { margin-bottom: 0; } }
 </style>
