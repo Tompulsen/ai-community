@@ -4,9 +4,31 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import { chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits } from '../../src/misc/community-lottery.js';
+import { chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits, normalizeLotterySettings } from '../../src/misc/community-lottery.js';
+import { lotterySettingsParam } from '../../src/server/api/lottery-schema.js';
+import Ajv from 'ajv';
 
 describe('community lottery', () => {
+	test('old settings receive a separate default wheel without altering rewards', () => {
+		const { wheel: _, ...old } = defaultLotterySettings();
+		const first = normalizeLotterySettings(old);
+		expect(first.wheel.theme).toBe('teal');
+		expect(first.prizes).toEqual(old.prizes);
+		first.wheel.title = 'Changed';
+		expect(normalizeLotterySettings(old).wheel.title).toBe('');
+	});
+
+	test('appearance accepts bounded text and known themes, and remains optional for old clients', () => {
+		const validate = new Ajv().compile(lotterySettingsParam);
+		const settings = defaultLotterySettings();
+		expect(validate(settings)).toBe(true);
+		const { wheel: _, ...old } = settings;
+		expect(validate(old)).toBe(true);
+		for (const wheel of [{ ...settings.wheel, theme: 'url(example)' }, { ...settings.wheel, title: 'a'.repeat(33) }, { ...settings.wheel, buttonText: '' }, { ...settings.wheel, rulesText: 'a'.repeat(2001) }, { ...settings.wheel, html: '<script>' }]) {
+			expect(validate({ ...settings, wheel })).toBe(false);
+		}
+	});
+
 	test('each work earns separately and milestones cannot be reclaimed after counts fall', () => {
 		const settings = { ...defaultLotterySettings(), enabled: true };
 		const counts = { invites: 1, followers: 100, works: [{ id: 'a', likes: 99 }, { id: 'b', likes: 1 }] };

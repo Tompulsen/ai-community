@@ -6,6 +6,7 @@
 import { randomInt } from 'node:crypto';
 
 export type LotteryRule = { enabled: boolean; threshold: number; tickets: number };
+export type LotteryWheel = { theme: 'teal' | 'violet' | 'sunset'; title: string; subtitle: string; buttonText: string; rulesText: string };
 export type LotteryPrize = { id: string; name: string; description: string; weight: number; stock: number; enabled: boolean; amountCents: number; kind: 'balance' | 'empty' };
 export type LotterySettings = {
 	enabled: boolean;
@@ -14,9 +15,17 @@ export type LotterySettings = {
 	followers: LotteryRule;
 	likesMode: 'work' | 'total';
 	prizes: LotteryPrize[];
+	wheel: LotteryWheel;
 };
+export type LotterySettingsInput = Omit<LotterySettings, 'wheel'> & { wheel?: LotteryWheel };
 export type LotteryAward = { amountCents: number; prizeId: string; name: string; description: string; status: 'pending' | 'fulfilled' | 'empty'; fulfilledAt: string | null; fulfilledBy: string | null; note: string };
 export type LotteryProgress = { invites: number; likes: number; followers: number; works: Record<string, number> };
+
+export const defaultLotteryWheel = (): LotteryWheel => ({ theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' });
+
+export function normalizeLotterySettings(settings: LotterySettingsInput): LotterySettings {
+	return { ...settings, wheel: { ...defaultLotteryWheel(), ...settings.wheel } };
+}
 
 export function defaultLotterySettings(): LotterySettings {
 	return {
@@ -25,6 +34,7 @@ export function defaultLotterySettings(): LotterySettings {
 		likes: { enabled: true, threshold: 100, tickets: 1 },
 		followers: { enabled: true, threshold: 100, tickets: 1 },
 		likesMode: 'work', prizes: [],
+		wheel: defaultLotteryWheel(),
 	};
 }
 

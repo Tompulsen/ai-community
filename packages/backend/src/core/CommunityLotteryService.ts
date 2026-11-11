@@ -12,8 +12,8 @@ import { MiUser } from '@/models/User.js';
 import { MiExternalAccount } from '@/models/ExternalAccount.js';
 import { newApiOrigin } from '@/server/api/NewApiSigninService.js';
 import { MiCommunityLotteryAccount, MiCommunityLotteryConfig, MiCommunityLotteryDraw, MiCommunityLotteryReferral } from '@/models/CommunityLottery.js';
-import { availableLotteryPrizes, chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits } from '@/misc/community-lottery.js';
-import type { LotteryAward, LotterySettings } from '@/misc/community-lottery.js';
+import { availableLotteryPrizes, chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits, normalizeLotterySettings } from '@/misc/community-lottery.js';
+import type { LotteryAward, LotterySettings, LotterySettingsInput } from '@/misc/community-lottery.js';
 import { lotteryErrors } from '@/server/api/lottery-schema.js';
 import { ApiError } from '@/server/api/error.js';
 import { IdService } from './IdService.js';
@@ -114,7 +114,9 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		await manager.createQueryBuilder().insert().into(MiCommunityLotteryConfig).values({ id: 'default', version: 0, settings: defaultLotterySettings() }).orIgnore().execute();
 		const query = manager.getRepository(MiCommunityLotteryConfig).createQueryBuilder('config').where({ id: 'default' });
 		if (lock) query.setLock('pessimistic_write');
-		return query.getOneOrFail();
+		const config = await query.getOneOrFail();
+		config.settings = normalizeLotterySettings(config.settings);
+		return config;
 	}
 
 	private async statistics(manager: EntityManager, userId: string) {
@@ -204,7 +206,7 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		return { settings, version };
 	}
 
-	public async updateConfig(userId: string, version: number, settings: LotterySettings) {
+	public async updateConfig(userId: string, version: number, settings: LotterySettingsInput) {
 		await this.admin(userId);
 		const normalized = structuredClone(settings);
 		for (const prize of normalized.prizes) { prize.name = prize.name.trim(); prize.description = prize.description.trim(); }
@@ -216,7 +218,11 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		return this.db.transaction(async manager => {
 			const config = await this.configuration(manager, true);
 			if (config.version !== version) throw new ApiError(lotteryErrors.conflict);
-			config.settings = normalized; config.version++;
+			// Older admin clients omit wheel; preserve the current design inside the version lock.
+			config.settings = normalizeLotterySettings({ ...normalized, wheel: normalized.wheel ?? config.settings.wheel });
+			for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) config.settings.wheel[key] = config.settings.wheel[key].trim();
+			config.settings.wheel.buttonText ||= 'GO';
+			config.version++;
 			await manager.save(config);
 			return { version: config.version, settings: config.settings };
 		});

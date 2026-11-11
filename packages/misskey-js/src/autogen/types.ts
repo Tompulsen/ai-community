@@ -7774,6 +7774,14 @@ export interface operations {
                             };
                             /** @enum {string} */
                             likesMode: 'work' | 'total';
+                            wheel: {
+                                /** @enum {string} */
+                                theme: 'teal' | 'violet' | 'sunset';
+                                title: string;
+                                subtitle: string;
+                                buttonText: string;
+                                rulesText: string;
+                            };
                             prizes: {
                                 id: string;
                                 name: string;
@@ -8054,6 +8062,14 @@ export interface operations {
                         };
                         /** @enum {string} */
                         likesMode: 'work' | 'total';
+                        wheel?: {
+                            /** @enum {string} */
+                            theme: 'teal' | 'violet' | 'sunset';
+                            title: string;
+                            subtitle: string;
+                            buttonText: string;
+                            rulesText: string;
+                        };
                         prizes: {
                             id: string;
                             name: string;
@@ -8097,6 +8113,14 @@ export interface operations {
                             };
                             /** @enum {string} */
                             likesMode: 'work' | 'total';
+                            wheel: {
+                                /** @enum {string} */
+                                theme: 'teal' | 'violet' | 'sunset';
+                                title: string;
+                                subtitle: string;
+                                buttonText: string;
+                                rulesText: string;
+                            };
                             prizes: {
                                 id: string;
                                 name: string;
@@ -21137,6 +21161,14 @@ export interface operations {
                             };
                             /** @enum {string} */
                             likesMode: 'work' | 'total';
+                            wheel: {
+                                /** @enum {string} */
+                                theme: 'teal' | 'violet' | 'sunset';
+                                title: string;
+                                subtitle: string;
+                                buttonText: string;
+                                rulesText: string;
+                            };
                             prizes: {
                                 id: string;
                                 name: string;
