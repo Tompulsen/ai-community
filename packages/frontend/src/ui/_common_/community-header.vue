@@ -4,26 +4,29 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<header :class="$style.header" :data-motion="prefer.s.animation" data-testid="desktop-community-navigation">
-	<div :class="$style.inner">
-		<MkA to="/community" :class="$style.brand"><img :src="instance.iconUrl || '/favicon.ico'" alt=""/><span>{{ i18n.ts._aiCommunity.title }}</span></MkA>
+<header :class="$style.header" data-testid="desktop-community-navigation">
+	<aside :class="$style.rail" :aria-label="ft.mobileNavigation">
+		<MkA to="/community" :class="$style.brand" :aria-label="i18n.ts._aiCommunity.title" :title="i18n.ts._aiCommunity.title"><img :src="instance.iconUrl || '/favicon.ico'" alt=""/></MkA>
 		<nav :class="$style.navigation" :aria-label="ft.mobileNavigation">
-			<MkA to="/community" :class="{ [$style.current]: communityCurrent }" :aria-current="communityCurrent ? 'page' : undefined"><i class="ti ti-compass" aria-hidden="true"></i>{{ ft.mobileAll }}</MkA>
-			<MkA to="/create/text" :class="{ [$style.current]: createCurrent }" :aria-current="createCurrent ? 'page' : undefined"><i class="ti ti-sparkles" aria-hidden="true"></i>{{ workbenchText.title }}</MkA>
+			<MkA to="/community" :class="[$style.railButton, { [$style.current]: communityCurrent }]" :aria-label="ft.mobileAll" :title="ft.mobileAll" :aria-current="communityCurrent ? 'page' : undefined"><i class="ti ti-compass" aria-hidden="true"></i></MkA>
+			<button type="button" class="_button" :class="[$style.railButton, { [$style.current]: createCurrent }]" :aria-label="workbenchText.title" :title="workbenchText.title" aria-haspopup="menu" @click="createMenu"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
+			<button type="button" class="_button" :class="$style.railButton" :aria-label="t.publish" :title="t.publish" data-testid="desktop-publish" @click="publish"><i class="ti ti-square-plus" aria-hidden="true"></i></button>
+			<button type="button" class="_button" :class="[$style.railButton, { [$style.current]: pathname === '/my/favorites' }]" :aria-label="ft.profileFavorites" :title="ft.profileFavorites" @click="accountPage('/my/favorites')"><i class="ti ti-bookmark" aria-hidden="true"></i></button>
+			<button type="button" class="_button" :class="[$style.railButton, { [$style.current]: messagesCurrent }]" :aria-label="ft.mobileMessages" :title="ft.mobileMessages" @click="accountPage('/my/notifications')"><i class="ti ti-bell" aria-hidden="true"></i><span v-if="$i?.hasUnreadNotification" :class="$style.badge" :aria-label="String($i.unreadNotificationsCount)"></span></button>
+			<button type="button" class="_button" :class="[$style.railButton, { [$style.current]: pathname === '/community/mine' }]" :aria-label="ft.profileManage" :title="ft.profileManage" @click="accountPage('/community/mine')"><i class="ti ti-folders" aria-hidden="true"></i></button>
 		</nav>
-		<form :class="$style.search" role="search" @submit.prevent="search">
-			<input v-model="query" type="search" :aria-label="ft.search" :placeholder="t.searchPlaceholder" maxlength="200" data-testid="desktop-community-search"/>
-			<button type="submit" class="_button" :aria-label="t.searchAction" :title="t.searchAction"><i class="ti ti-search" aria-hidden="true"></i></button>
-		</form>
-		<div :class="$style.actions">
-			<button type="button" class="_button" :class="[$style.utility, { [$style.current]: pathname === '/my/favorites' }]" :aria-label="ft.profileFavorites" :title="ft.profileFavorites" @click="accountPage('/my/favorites')"><i class="ti ti-bookmark" aria-hidden="true"></i><span>{{ ft.profileFavorites }}</span></button>
-			<button type="button" class="_button" :class="[$style.utility, { [$style.current]: messagesCurrent }]" :aria-label="ft.mobileMessages" :title="ft.mobileMessages" @click="accountPage('/my/notifications')"><i class="ti ti-bell" aria-hidden="true"></i><span>{{ ft.mobileMessages }}</span><b v-if="$i?.hasUnreadNotification" :class="$style.badge">{{ $i.unreadNotificationsCount > 99 ? '99+' : $i.unreadNotificationsCount }}</b></button>
-			<button type="button" class="_button" :class="[$style.utility, { [$style.current]: pathname === '/community/mine' }]" :aria-label="ft.profileManage" :title="ft.profileManage" @click="accountPage('/community/mine')"><i class="ti ti-folders" aria-hidden="true"></i><span>{{ ft.profileManage }}</span></button>
-			<button type="button" class="_button" :class="$style.utility" :aria-label="i18n.ts.more" :title="i18n.ts.more" aria-haspopup="menu" @click="more"><i class="ti ti-dots" aria-hidden="true"></i></button>
-			<button type="button" class="_button" :class="$style.publish" data-testid="desktop-publish" @click="publish"><i class="ti ti-plus" aria-hidden="true"></i>{{ t.publish }}</button>
-			<button v-if="$i" type="button" class="_button" :class="$style.account" :aria-label="`${i18n.ts.account}: @${$i.username}`" :title="`${i18n.ts.account}: @${$i.username}`" aria-haspopup="menu" @click="accountMenu"><MkAvatar :user="$i" :class="$style.avatar"/></button>
-			<button v-else type="button" class="_button" :class="$style.login" @click="login">{{ i18n.ts.login }}</button>
+		<div :class="$style.railFooter">
+			<button type="button" class="_button" :class="$style.railButton" :aria-label="i18n.ts.more" :title="i18n.ts.more" aria-haspopup="menu" @click="more"><i class="ti ti-dots" aria-hidden="true"></i></button>
+			<button type="button" class="_button" :class="[$style.railButton, { [$style.current]: pathname.startsWith('/settings') }]" :aria-label="i18n.ts.settings" :title="i18n.ts.settings" @click="accountPage('/settings')"><i class="ti ti-settings" aria-hidden="true"></i></button>
 		</div>
+	</aside>
+	<div :class="$style.inner">
+		<form :class="$style.search" role="search" @submit.prevent="search">
+			<button type="submit" class="_button" :aria-label="t.searchAction" :title="t.searchAction"><i class="ti ti-search" aria-hidden="true"></i></button>
+			<input v-model="query" type="search" :aria-label="ft.search" :placeholder="t.searchPlaceholder" maxlength="200" data-testid="desktop-community-search"/>
+		</form>
+		<button v-if="$i" type="button" class="_button" :class="$style.account" :aria-label="`${i18n.ts.account}: @${$i.username}`" :title="`${i18n.ts.account}: @${$i.username}`" aria-haspopup="menu" @click="accountMenu"><MkAvatar :user="$i" :class="$style.avatar"/><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+		<button v-else type="button" class="_button" :class="$style.login" @click="login">{{ i18n.ts.login }}</button>
 	</div>
 </header>
 </template>
@@ -39,7 +42,6 @@ import { getHTMLElementOrNull } from '@/utility/get-dom-node-or-null.js';
 import { $i } from '@/i.js';
 import { i18n } from '@/i18n.js';
 import { instance } from '@/instance.js';
-import { prefer } from '@/preferences.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
 
@@ -83,6 +85,14 @@ async function accountMenu(event: MouseEvent) {
 	os.popupMenu([{ type: 'link', text: ft.ownProfile, icon: 'ti ti-user', to: `/@${$i.username}` }, { type: 'link', text: i18n.ts.settings, icon: 'ti ti-settings', to: '/settings' }, { type: 'divider' }, ...items], target);
 }
 
+function createMenu(event: MouseEvent) {
+	os.popupMenu([
+		{ type: 'link', text: ft.makeVideo, icon: 'ti ti-video', to: '/create/video' },
+		{ type: 'link', text: ft.makeImage, icon: 'ti ti-photo', to: '/create/image' },
+		{ type: 'link', text: ft.makeText, icon: 'ti ti-file-text', to: '/create/text' },
+	], event.currentTarget);
+}
+
 async function launchTools(target: HTMLElement) {
 	const { dispose } = await os.popupAsyncWithDialog(import('@/components/MkLaunchPad.vue').then(x => x.default), { anchorElement: target, includePinned: true }, { closed: () => dispose() });
 }
@@ -111,23 +121,19 @@ function more(event: MouseEvent) {
 </script>
 
 <style lang="scss" module>
-.header { flex: 0 0 auto; z-index: 32; background: var(--MI_THEME-navBg); color: var(--MI_THEME-navFg); border-bottom: 1px solid var(--MI_THEME-divider); }
-.inner { display: flex; align-items: center; gap: clamp(12px, 1.6vw, 28px); min-height: 72px; max-width: 1960px; margin-inline: auto; padding: 10px clamp(20px, 3vw, 56px); box-sizing: border-box; }
+.header { flex: 0 0 auto; z-index: 32; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); }
+.inner { display: flex; align-items: center; gap: 12px; height: 64px; padding: 8px 16px; box-sizing: border-box; }
 .header :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -3px; }
-.brand { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-height: 44px; color: inherit; text-decoration: none; font-size: 18px; font-weight: 750; letter-spacing: -.03em; img { width: 32px; height: 32px; border-radius: 9px; } }
-.navigation { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; a { display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 10px; border-radius: 8px; color: inherit; text-decoration: none; font-size: 14px; white-space: nowrap; } i { font-size: 19px; } }
-.header .current { color: var(--MI_THEME-accent); font-weight: 650; }
-.navigation .current { background: var(--MI_THEME-accentedBg); }
-.search { display: flex; align-items: center; flex: 1; min-width: 140px; max-width: 580px; height: 44px; margin-inline: auto; border: 1px solid var(--MI_THEME-divider); border-radius: 10px; background: var(--MI_THEME-buttonBg); &:focus-within { border-color: var(--MI_THEME-accent); background: var(--MI_THEME-panel); } input { width: 100%; min-width: 0; padding: 10px 0 10px 14px; background: transparent; border: 0; outline: 0; font: inherit; font-size: 14px; color: var(--MI_THEME-fg); &::placeholder { color: var(--MI_THEME-fgTransparentWeak); opacity: 1; } } button { display: grid; place-items: center; flex: 0 0 44px; height: 44px; font-size: 21px; color: var(--MI_THEME-fg); border-radius: 8px; } }
-.actions { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; }
-.utility { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 44px; height: 48px; padding: 0 5px; border-radius: 8px; font-size: 11px; color: inherit; white-space: nowrap; i { font-size: 21px; } }
-.badge { position: absolute; top: 0; left: 55%; min-width: 14px; padding: 1px 4px; border-radius: 12px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); font-size: 10px; line-height: 14px; }
-.publish { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; padding: 0 16px; border-radius: 8px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); font-size: 14px; font-weight: 600; white-space: nowrap; transition: transform 160ms ease; i { font-size: 20px; } &:active { transform: scale(.97); } }
-.account, .login { display: grid; place-items: center; min-width: 44px; min-height: 44px; border-radius: 8px; color: inherit; font-size: 13px; }
-.avatar { width: 32px; height: 32px; }
-@media (hover: hover) { .utility:hover, .login:hover, .account:hover, .navigation a:hover { background: var(--MI_THEME-buttonHoverBg); } .publish:hover { filter: brightness(.95); } }
-@media (max-width: 1279px) { .inner { gap: 12px; } .utility span { display: none; } .actions { gap: 2px; } .brand { font-size: 16px; gap: 8px; } .navigation a { padding-inline: 8px; } }
-@media (max-width: 1000px) { .inner { flex-wrap: wrap; gap: 6px 12px; padding: 8px 20px 12px; } .search { order: 4; flex-basis: 100%; max-width: none; } .actions { margin-left: auto; } .navigation { gap: 0; } .brand span { display: none; } }
-.header[data-motion='false'] .publish { transition: none; }
-@media (prefers-reduced-motion: reduce) { .publish { transition: none; } }
+.rail { position: fixed; inset: 0 auto 0 0; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0; box-sizing: border-box; background: var(--MI_THEME-panel); border-right: 1px solid var(--MI_THEME-divider); overflow-y: auto; scrollbar-width: none; }
+.brand { display: grid; place-items: center; flex: 0 0 48px; width: 48px; border-radius: 12px; img { width: 30px; height: 30px; border-radius: 9px; } }
+.navigation, .railFooter { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.railFooter { margin-top: auto; }
+.railButton { position: relative; display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border-radius: 12px; color: inherit; text-decoration: none; i { font-size: 23px; } }
+.header .current { background: var(--MI_THEME-buttonBg); color: var(--MI_THEME-fg); }
+.badge { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border: 2px solid var(--MI_THEME-panel); border-radius: 50%; background: var(--MI_THEME-accent); }
+.search { display: flex; align-items: center; flex: 1; min-width: 0; height: 44px; border-radius: 12px; background: var(--MI_THEME-buttonBg); &:focus-within { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; } input { flex: 1; width: 100%; min-width: 0; height: 44px; padding: 0 14px 0 0; background: transparent; border: 0; outline: 0; font: inherit; font-size: 14px; color: inherit; &::placeholder { color: color-mix(in srgb, var(--MI_THEME-fg) 72%, var(--MI_THEME-panel)); opacity: 1; } } button { display: grid; place-items: center; flex: 0 0 44px; height: 44px; font-size: 20px; border-radius: 12px; } }
+.account, .login { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-width: 44px; min-height: 44px; border-radius: 12px; color: inherit; font-size: 13px; }
+.login { padding-inline: 12px; font-weight: 600; }
+.avatar { width: 30px; height: 30px; }
+@media (hover: hover) { .railButton:hover, .brand:hover, .login:hover, .account:hover { background: var(--MI_THEME-buttonHoverBg); } }
 </style>

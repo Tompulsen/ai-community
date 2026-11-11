@@ -165,23 +165,24 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 			</Teleport>
 			<section :class="$style.feed" :aria-label="title" :aria-busy="loading">
-				<div v-if="!mobileFeed && !mobileProfile" :class="[$style.toolbar, { [$style.feedToolbar]: isPublicFeed }]">
-					<div v-if="isPublicFeed" :class="$style.feedHeading"><h1>{{ instance.clientOptions.communityFeedMode === 'latest' ? ft.latest : rt.recommended }}</h1><span>{{ ft.desktopHint }}</span></div><h2 v-else>{{ isCommunity ? t.latest : title }}</h2>
-					<nav v-if="isPublicFeed" :class="$style.studioLinks" :aria-label="t.ai"><MkA to="/create/video"><i class="ti ti-video" aria-hidden="true"></i>{{ ft.makeVideo }}</MkA><MkA to="/create/image"><i class="ti ti-photo" aria-hidden="true"></i>{{ ft.makeImage }}</MkA><MkA to="/create/text"><i class="ti ti-file-text" aria-hidden="true"></i>{{ ft.makeText }}</MkA></nav>
-					<form v-else :class="$style.search" role="search" @submit.prevent="search()">
+				<div v-if="!mobileFeed && !mobileProfile && !isPublicFeed" :class="$style.toolbar">
+					<h2>{{ isCommunity ? t.latest : title }}</h2>
+					<form :class="$style.search" role="search" @submit.prevent="search()">
 						<label :class="$style.searchField"><i class="ti ti-search" aria-hidden="true"></i><input v-model="query" :aria-label="t.search" :placeholder="t.searchPlaceholder" maxlength="200"/></label>
 						<button type="submit" :class="$style.secondary">{{ t.searchAction }}</button>
 					</form>
-					<div :class="$style.feedTools">
-						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="isPublicFeed ? ft.refresh : t.refresh" :title="isPublicFeed ? ft.refresh : t.refresh" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i><span>{{ isPublicFeed ? ft.refresh : t.refresh }}</span></button>
-						<button v-if="isPublicFeed" ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
-					</div>
+					<button type="button" :class="$style.quiet" :disabled="loading" :aria-busy="loading" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i>{{ t.refresh }}</button>
 				</div>
 				<div v-if="isPublicFeed && !mobileFeed" :class="$style.filterBar">
+					<h1 :class="$style.feedHeading">{{ instance.clientOptions.communityFeedMode === 'latest' ? ft.latest : rt.recommended }}</h1>
 					<nav :class="$style.feedFilters" :aria-label="ft.filters">
-						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))"><i :class="entry.id === 'all' ? 'ti ti-compass' : entry.id === 'video' ? 'ti ti-player-play' : entry.id === 'image' ? 'ti ti-photo' : 'ti ti-code'" aria-hidden="true"></i>{{ entry.id === 'all' ? ft.mobileAll : entry.id === 'resource' ? ft.mobileResource : entry.title }}</a>
+						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.id === 'all' ? ft.all : entry.id === 'resource' ? ft.mobileResource : entry.title }}</a>
 					</nav>
-					<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span :class="$style.filterLabel">{{ t.tagFilter }}</span><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
+					<div :class="$style.feedTools">
+						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="ft.refresh" :title="ft.refresh" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i></button>
+						<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
+						<button ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
+					</div>
 				</div>
 				<div v-if="(isPublicFeed || mobileProfile) && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
 				<div v-if="!isCommunity" :class="$style.listMeta">
@@ -956,8 +957,6 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .toolbar h2, .sectionTitle h2 { font-size: 16px; font-weight: 600; }
 .toolbar { padding: 20px 8px; gap: 12px; }
 .toolbar h2 { white-space: nowrap; }
-.feedToolbar { padding: 0 0 16px; min-height: 60px; gap: 12px 24px; flex-wrap: wrap; }
-.feedToolbar h1 { margin: 0; font-size: 24px; line-height: 1.35; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
 .filterBar { display: flex; align-items: center; gap: 16px; min-width: 0; padding-bottom: 12px; margin-bottom: 20px; border-bottom: 1px solid var(--MI_THEME-divider); }
 .feedFilters { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--MI_THEME-divider) transparent; padding: 4px; margin: -4px; }
 .feedFilters a { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border-radius: 8px; font-size: 14px; white-space: nowrap; text-decoration: none; }
@@ -965,8 +964,6 @@ onBeforeUnmount(() => { editRead?.abort(); window.removeEventListener(communityC
 .feedFilters a[aria-current] { background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); font-weight: 650; }
 .feedFilters a[aria-current]::after { position: absolute; content: ''; height: 2px; inset: auto 14px 4px; border-radius: 2px; background: var(--MI_THEME-accent); }
 .feedTools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
-.feedToolbar .refresh { min-height: 44px; gap: 6px; padding: 0 10px; font-size: 12px; i { font-size: 16px; } }
-.feedToolbar .discoveryToggle[aria-expanded='true'] { color: var(--MI_THEME-accent); background: var(--MI_THEME-buttonBg); }
 .searchSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 12px; font-size: 13px; overflow-wrap: anywhere; }
 .searchSummary span { min-width: 0; }
 .publicSearch { display: flex; flex: 1 1 280px; min-width: 0; }
@@ -1005,24 +1002,17 @@ button.tagChip { min-height: 44px; }
 .footerLinks a:hover { text-decoration: underline; }
 .works { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 .works.list { grid-template-columns: 1fr; }
-.desktopGallery { container-name: community-feed; }
-.desktopGallery .canvas { max-width: 1960px; margin-inline: auto; padding: 20px clamp(24px, 3vw, 56px) 32px; }
-.desktopGallery .feedToolbar { flex-wrap: nowrap; gap: 16px; min-height: 52px; padding-bottom: 14px; }
-.feedHeading { display: flex; flex: 0 0 auto; align-items: baseline; gap: 14px; > span { color: var(--MI_THEME-fgTransparentWeak); font-size: 13px; } }
-.desktopGallery .feedToolbar h1 { font-size: 22px; }
-.studioLinks { display: flex; align-items: center; gap: 8px; margin-left: auto; a { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px; border-radius: 8px; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); white-space: nowrap; font-size: 13px; } a:hover { color: var(--MI_THEME-accent); border-color: var(--MI_THEME-accent); } i { color: var(--MI_THEME-accent); font-size: 18px; } }
-.desktopGallery .feedTools { margin-left: 0; gap: 4px; }
-.desktopGallery .filterBar { padding-bottom: 14px; margin-bottom: 20px; }
-.desktopGallery .feedFilters { gap: 10px; }
-.desktopGallery .feedFilters a { gap: 7px; min-width: 82px; font-size: 15px; }
-.desktopGallery .feedFilters a[aria-current] { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); &::after { display: none; } }
-.desktopGallery .works { --work-row-gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1px; gap: 0 20px; align-items: start; }
-@container community-feed (min-width: 850px) { .desktopGallery .works { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container community-feed (min-width: 1100px) { .desktopGallery .works { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@container community-feed (min-width: 1360px) { .desktopGallery .works { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-@container community-feed (min-width: 1800px) { .desktopGallery .works { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
-@container community-feed (max-width: 1179px) { .feedHeading > span { display: none; } .studioLinks a { padding-inline: 8px; } }
-@container community-feed (max-width: 849px) { .studioLinks { gap: 4px; } .studioLinks a { font-size: 12px; padding-inline: 6px; } .desktopGallery .refresh span { display: none; } .desktopGallery .feedFilters a { min-width: 60px; } }
+.desktopGallery { background: var(--MI_THEME-panel); }
+.desktopGallery .canvas { max-width: none; padding: 0 16px 32px; }
+.feedHeading { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.desktopGallery .filterBar { position: sticky; top: 0; z-index: 4; min-height: 48px; gap: 12px; padding: 0 0 8px; margin-bottom: 8px; border: 0; background: var(--MI_THEME-panel); }
+.desktopGallery .feedFilters { gap: 8px; }
+.desktopGallery .feedFilters a { min-height: 44px; padding: 8px 12px; border-radius: 0; font-size: 14px; }
+.desktopGallery .feedFilters a[aria-current] { background: transparent; color: var(--MI_THEME-fg); &::after { inset-inline: 12px; background: currentColor; } }
+.desktopGallery .feedTools { gap: 0; margin-left: 0; }
+.desktopGallery .feedTools button { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 8px; border: 0; border-radius: 12px; background: transparent; }
+.desktopGallery .feedTools button:hover, .desktopGallery .discoveryToggle[aria-expanded='true'] { background: var(--MI_THEME-buttonBg); }
+.desktopGallery .works { --work-row-gap: 16px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); grid-auto-rows: 1px; gap: 0 16px; align-items: start; }
 .work { min-width: 0; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius, 12px); }
 .cover { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; aspect-ratio: 16 / 9; max-height: 560px; border-radius: 16px; overflow: hidden; margin-top: 16px; background: var(--MI_THEME-buttonBg); position: relative; font-size: 13px; }
 .cover.coverEmpty { aspect-ratio: auto; min-height: 72px; flex-direction: row; justify-content: flex-start; padding: 20px; background: var(--MI_THEME-bg); }

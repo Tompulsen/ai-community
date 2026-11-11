@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div :class="[$style.root, { '_forceShrinkSpacer': deviceKind === 'smartphone' }]">
+<div :class="[$style.root, { '_forceShrinkSpacer': deviceKind === 'smartphone', [$style.withDesktopNavigation]: !isRoot && !isMobile && !mobileCommunity }]">
 	<XTitlebar v-if="!isRoot && !mobileCommunity && prefer.r.showTitlebar.value" style="flex-shrink: 0;"/>
 	<CommunityHeader v-if="!isRoot && !isMobile && !mobileCommunity" @widgets="widgetsShowing = true"/>
 
@@ -128,6 +128,8 @@ function onContextmenu(ev: PointerEvent) {
 	flex-direction: column;
 	background: var(--MI_THEME-navBg);
 }
+
+.withDesktopNavigation { padding-inline-start: 64px; }
 
 .nonTitlebarArea {
 	display: flex;

@@ -15,14 +15,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<span v-if="profileGrid && work.likesCount != null" :class="$style.profileMetrics"><i class="ti ti-heart" aria-hidden="true"></i>{{ new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span>
 			<span v-if="gallery" :class="$style.galleryStats"><span v-if="work.likesCount != null" :aria-label="`${t.like} ${work.likesCount}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ formatCount(work.likesCount) }}</span><span :aria-label="`${t.comments} ${work.repliesCount}`"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ formatCount(work.repliesCount) }}</span></span>
 		</div>
-		<h3 v-if="!profileGrid && !thumbnailOnly" :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
+		<h3 v-if="!profileGrid && !thumbnailOnly" :class="$style.compactTitle"><MkA :to="workPath(work.id)" :title="work.title">{{ work.title }}</MkA></h3>
 		<div v-if="!profileGrid && !thumbnailOnly" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><time v-if="gallery" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><span v-else :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : formatCount(work.likesCount) }}</span></div>
 		<div v-if="gallery && $slots.actions" :class="$style.compactActions"><slot name="actions"></slot></div>
 	</template>
 	<WorkEngagement v-else :work="work" :viewsCount="views" previewComments>
 		<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div :class="$style.identity"><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><div v-if="$slots.actions" :class="$style.authorActions"><slot name="actions"></slot></div></header>
 		<div :class="$style.content">
-			<h3><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
+			<h3><MkA :to="workPath(work.id)" :title="work.title">{{ work.title }}</MkA></h3><p v-if="excerpt" :class="$style.excerpt"><Mfm :text="excerpt" :plain="true"/></p>
 			<WorkTags :tags="work.tags"/>
 			<div :class="[$style.mediaLayout, { [$style.withMaterials]: work.files.length || work.referenceFiles?.length }]">
 				<div :class="$style.mainMedia">
@@ -136,13 +136,17 @@ watch(cover, () => { failed.value = false; loadedAspect.value = undefined; });
 .thumbnailOnly .compactPreview { border-radius: 8px; }
 .thumbnailOnly .compactFallback { height: auto; min-height: 110px; padding: 12px 8px; gap: 6px; > i { font-size: 20px; } p { -webkit-line-clamp: 3; font-size: 12px; } }
 
-.card.gallery { align-self: start; border: 0; border-radius: 10px; background: transparent; }
-.gallery .compactPreview { border-radius: 10px; }
-.gallery .compactInfo { padding-inline: 0; }
-.gallery .compactTitle { margin: 4px 0 0; font-size: 15px; font-weight: 600; }
-.gallery .compactMeta { margin: 2px 0 0; gap: 12px; time { flex: 0 0 auto; font-size: 12px; white-space: nowrap; } }
-.gallery .compactFallback { padding: 16px 16px 40px; gap: 6px; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: 10px; > i { font-size: 22px; } p { -webkit-line-clamp: 2; font-size: 13px; } }
-.galleryStats { display: flex; align-items: center; gap: 14px; font-size: 12px; > span { display: inline-flex; align-items: center; gap: 5px; } i { font-size: 15px; } }
+.card.gallery { display: grid; grid-template-columns: minmax(0, 1fr); align-self: start; border: 0; border-radius: 12px; background: transparent; }
+.gallery .compactPreview { grid-area: 1 / 1; border-radius: 12px; }
+.gallery .compactInfo { grid-area: 1 / 1; z-index: 1; align-self: start; justify-self: end; gap: 10px; min-height: 28px; margin: 8px; padding: 2px 8px; border-radius: 8px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); pointer-events: none; }
+.gallery .compactTitle { margin: 6px 2px 0; font-size: 12px; font-weight: 500; line-height: 20px; a { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+.gallery .compactMeta { grid-area: 1 / 1; z-index: 1; align-self: end; justify-self: start; max-width: calc(100% - 16px); margin: 8px; padding: 0 8px; border-radius: 8px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); time { display: none; } }
+.gallery .compactFallback { min-height: 140px; padding: 16px; gap: 6px; background: var(--MI_THEME-buttonBg); border-radius: 12px; > i { font-size: 22px; } p { -webkit-line-clamp: 5; font-size: 13px; } }
+.galleryStats { display: flex; align-items: center; gap: 10px; font-size: 12px; > span { display: inline-flex; align-items: center; gap: 4px; } i { font-size: 14px; } }
 .compactActions { padding-top: 4px; }
-@media (hover: hover) { .gallery .compactTitle a:hover, .gallery .compactMeta a:hover { color: var(--MI_THEME-accent); } }
+@media (hover: hover) {
+	.gallery .compactInfo, .gallery .compactMeta { opacity: 0; }
+	.gallery:is(:hover, :focus-within) .compactInfo, .gallery:is(:hover, :focus-within) .compactMeta { opacity: 1; }
+	.gallery .compactTitle a:hover, .gallery .compactMeta a:hover { color: var(--MI_THEME-accent); }
+}
 </style>

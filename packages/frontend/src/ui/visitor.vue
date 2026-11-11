@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<div :class="$style.root">
+<div :class="[$style.root, { [$style.withDesktopNavigation]: !isHomepage && !mobileCommunity }]">
 	<CommunityHeader v-if="!isHomepage && !mobileCommunity"/>
 	<div :class="$style.main">
 		<div :class="$style.content"><RouterView :class="{ [$style.homeContent]: isHomepage }"/></div>
@@ -43,6 +43,7 @@ provideReactiveMetadata(pageMetadata);
 
 <style lang="scss" module>
 .root { display: flex; flex-direction: column; height: 100dvh; overflow: clip; }
+.withDesktopNavigation { padding-inline-start: 64px; }
 .main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .content { flex: 1; min-height: 0; overflow-y: auto; }
 .homeContent { overflow-y: auto; }
