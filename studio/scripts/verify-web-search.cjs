@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
-const base = process.env.UI_TEST_URL || "http://localhost:3001/";
+const base = process.env.UI_TEST_URL || "http://localhost:3001/studio/";
 const translation = JSON.parse(
   fs.readFileSync("skills/catalog.json", "utf8"),
 ).skills.find((skill) => skill.id === "translation");
@@ -23,22 +23,40 @@ const translation = JSON.parse(
       page.on("pageerror", (error) => errors.push(error.message));
       await page.addInitScript(() => localStorage.setItem("lang", "cn"));
       await page.route("**/api/**", (route) => {
-        const pathname = new URL(route.request().url()).pathname;
+        const pathname = new URL(route.request().url()).pathname.replace(
+          /^\/studio(?=\/)/,
+          "",
+        );
         const ok = (data) => route.fulfill({ json: { success: true, data } });
         if (pathname === "/api/skills/retrieve") {
           retrievals.push(route.request().postDataJSON());
           return route.fulfill({
             json: {
+              searchedAt: "2026-11-11T03:00:00Z",
               sources: [
                 {
                   title: "Verified source",
                   url: "https://example.test/evidence",
                   snippet: "Real fixture evidence.",
+                  ...(route.request().postDataJSON().mode === "deep"
+                    ? {
+                        page: {
+                          status: "read",
+                          text: "Actual retrieved webpage body",
+                          readAt: "2026-11-11T03:00:01Z",
+                        },
+                      }
+                    : {}),
                 },
               ],
             },
           });
         }
+        if (pathname === "/api/v1/videos")
+          return route.fulfill({
+            status: 400,
+            json: { error: "Video fixture: no generation" },
+          });
         assert.equal(
           route.request().method(),
           "GET",
@@ -88,6 +106,8 @@ const translation = JSON.parse(
       });
       try {
         await page.goto(`${base}#/chat`);
+        // Next's development issue badge covers the composer at 320px; page errors remain asserted below.
+        await page.addStyleTag({ content: "nextjs-portal { display: none; }" });
         const trigger = page.locator(
           'button[aria-controls="composer-web-search"]',
         );
@@ -224,6 +244,9 @@ const translation = JSON.parse(
         messages = await send();
         assert.equal(retrievals.at(-1).mode, "deep");
         assert.ok(JSON.stringify(messages).includes("untrusted evidence"));
+        assert.ok(
+          JSON.stringify(messages).includes("Actual retrieved webpage body"),
+        );
         await choose("关闭联网");
         const count = retrievals.length;
         await send();

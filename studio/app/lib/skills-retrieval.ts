@@ -3,7 +3,13 @@ import { auth } from "@/app/api/auth";
 import { assertSameOrigin, getAuthenticatedSession } from "./new-api/client";
 import { isNewApiEnabled, NewApiError } from "./new-api/config";
 import { checkRateLimit } from "@/app/utils/rate-limit";
-import { relayHeaders, resolveWebSearchCredentials } from "./new-api/relay";
+import { searchWeb } from "./web-search/search";
+import { enrichWebResults } from "./web-search/page-reader";
+import {
+  extractWebPageUrls,
+  MAX_WEB_PAGE_URLS,
+  type WebSearchResult,
+} from "../utils/web-search-context";
 
 export type SkillSource = { title: string; url: string; snippet: string };
 export type SkillRetrievalKind = "papers" | "web";
@@ -22,17 +28,8 @@ export class SkillRetrievalError extends Error {
   }
 }
 
-function webSearchModel() {
-  return process.env.SKILLS_WEB_SEARCH_MODEL?.trim() || "tavily-quick";
-}
-
 export function skillRetrievalCapabilities() {
-  return {
-    web:
-      isNewApiEnabled() &&
-      ["tavily-quick", "tavily-deep"].includes(webSearchModel()),
-    papers: true,
-  };
+  return { web: true, papers: true };
 }
 
 export async function authorizeSkillRetrieval(req: NextRequest) {
@@ -232,41 +229,15 @@ function paperSources(data: any): SkillSource[] {
   });
 }
 
-function webSources(data: any): SkillSource[] {
-  if (!Array.isArray(data?.sources)) {
-    throw new SkillRetrievalError("联网搜索服务返回的数据格式无效");
-  }
-  const seen = new Set<string>();
-  const sources: SkillSource[] = [];
-  for (const item of data.sources) {
-    const url = sourceUrl(item?.url);
-    const title = plainText(item?.title, 300);
-    if (!url || !title || seen.has(url)) continue;
-    seen.add(url);
-    sources.push({ title, url, snippet: plainText(item?.snippet, 1000) });
-    if (sources.length === MAX_SOURCES) break;
-  }
-  return sources;
-}
-
 export async function retrieveSkillSources(
   kind: SkillRetrievalKind,
   query: string,
   signal: AbortSignal,
-  req?: NextRequest,
+  _req?: NextRequest,
   mode?: "quick" | "deep",
 ) {
   if (kind === "web") {
-    return retrieveBilledWebSources(
-      mode === "deep"
-        ? "tavily-deep"
-        : mode === "quick"
-        ? "tavily-quick"
-        : webSearchModel(),
-      query,
-      signal,
-      req,
-    );
+    return retrieveWebSources(query, signal, mode);
   }
   const url = new URL("https://api.crossref.org/works");
   const headers = new Headers({ Accept: "application/json" });
@@ -333,86 +304,78 @@ export async function retrieveSkillSources(
   }
 }
 
-async function retrieveBilledWebSources(
-  model: string,
+async function retrieveWebSources(
   query: string,
   signal: AbortSignal,
-  req?: NextRequest,
+  mode?: "quick" | "deep",
 ) {
-  if (
-    !isNewApiEnabled() ||
-    !req ||
-    !["tavily-quick", "tavily-deep"].includes(model)
-  ) {
-    throw new SkillRetrievalError(
-      "联网搜索需要登录账号并配置 Tavily 搜索渠道，请联系管理员",
-      503,
-      "SKILL_WEB_UNAVAILABLE",
-    );
-  }
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signal.addEventListener("abort", cancel, { once: true });
-  if (signal.aborted) controller.abort();
-  const timeout = setTimeout(cancel, 45000);
   try {
-    if (controller.signal.aborted) throw new Error("aborted");
-    const { baseUrl, apiKey } = await resolveWebSearchCredentials(req);
-    if (controller.signal.aborted) throw new Error("aborted");
-    const headers = relayHeaders(req, apiKey);
-    headers.set("Content-Type", "application/json");
-    headers.set("Accept", "application/json");
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: query }],
-        stream: false,
-      }),
-      signal: controller.signal,
-      cache: "no-store",
-      redirect: "error",
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
+    signal.throwIfAborted();
+    const urls = extractWebPageUrls(query);
+    if (urls.length > MAX_WEB_PAGE_URLS) {
       throw new SkillRetrievalError(
-        [402, 403].includes(response.status)
-          ? "联网搜索被拒绝，请检查账户余额、密钥权限和搜索模型分组"
-          : response.status === 429
-          ? "联网搜索请求过于频繁，请稍后重试"
-          : "联网搜索请求失败，请检查搜索渠道配置",
-        [401, 402, 403, 429].includes(response.status) ? response.status : 502,
+        "每次最多读取 3 个网页链接，请分批发送",
+        400,
+        "SKILL_INPUT",
       );
     }
-    const data = (await boundedJson(
-      response.body,
-      response.headers.get("content-length"),
-      MAX_RESPONSE_BYTES,
-    )) as { choices?: { message?: { content?: unknown } }[] };
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") throw new Error("invalid response");
-    const result = JSON.parse(content);
+    const search = urls.length
+      ? {
+          results: urls.map(
+            (url): WebSearchResult => ({
+              title: new URL(url).hostname,
+              url,
+              snippet: "",
+              source: "webpage",
+            }),
+          ),
+          searchedAt: new Date().toISOString(),
+          cached: false,
+        }
+      : await searchWeb(query, fetch, signal);
+    signal.throwIfAborted();
+    if (!search.results.length) {
+      throw new SkillRetrievalError(
+        "未找到相关网页资料，请调整关键词后重试",
+        502,
+        "SKILL_WEB_NO_RESULTS",
+      );
+    }
+    const sources =
+      mode === "deep" || urls.length
+        ? await enrichWebResults(
+            search.results,
+            signal,
+            urls.length ? MAX_WEB_PAGE_URLS : 2,
+          )
+        : search.results;
+    signal.throwIfAborted();
+    if (urls.length && !sources.some((source) => source.page?.text)) {
+      throw new SkillRetrievalError(
+        "网页正文未能读取，可能需要登录、动态加载或地址不受支持",
+        502,
+        "SKILL_WEB_NO_CONTENT",
+      );
+    }
     return {
       kind: "web" as const,
-      provider: "Tavily",
-      coverage: "search-snippets",
-      sources: webSources(result),
+      provider: urls.length ? "Web" : "DuckDuckGo / Bing",
+      coverage: sources.some((source) => source.page?.text)
+        ? "webpage-content"
+        : "search-snippets",
+      query,
+      searchedAt: search.searchedAt,
+      cached: search.cached,
+      sources,
     };
   } catch (error) {
     if (signal.aborted)
       throw new SkillRetrievalError("检索已取消", 499, "SKILL_ABORTED");
-    if (controller.signal.aborted)
-      throw new SkillRetrievalError(
-        "检索超时，请稍后重试",
-        504,
-        "SKILL_TIMEOUT",
-      );
-    if (error instanceof SkillRetrievalError || error instanceof NewApiError)
-      throw error;
-    throw new SkillRetrievalError("联网搜索返回异常，请联系管理员");
-  } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener("abort", cancel);
+    if (error instanceof SkillRetrievalError) throw error;
+    throw new SkillRetrievalError(
+      "联网搜索暂时不可用，请稍后重试",
+      502,
+      "SKILL_WEB_UNAVAILABLE",
+    );
   }
 }

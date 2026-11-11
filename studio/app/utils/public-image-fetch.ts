@@ -56,7 +56,8 @@ export class PublicImageError extends Error {
   }
 }
 
-function publicAddress(address: string) {
+export function publicAddress(address: string) {
+  if (address.includes("%")) return false;
   return isIP(address) === 4
     ? !privateIPv4.check(address, "ipv4")
     : isIP(address) === 6 &&
