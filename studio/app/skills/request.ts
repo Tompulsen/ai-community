@@ -54,6 +54,8 @@ export async function skillRequestContext(
   )}`;
   if (skill.kind === "web")
     return webSearchRequestContext("quick", query, signal);
+  if (skill.kind === "document")
+    return "用户启用了文档工作区。当前请求是普通聊天，直接回答，不要输出文档计划或虚构文件链接。";
   if (skill.kind !== "papers") return instruction;
   return retrievalContext("papers", query, signal, instruction);
 }

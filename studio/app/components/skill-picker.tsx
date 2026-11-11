@@ -6,6 +6,7 @@ import { ArrowRight, Sparkles, X } from "lucide-react";
 import { Path } from "../constant";
 import { useSkillStore } from "../store/skills";
 import { useChatStore } from "../store/chat";
+import { DocumentWorkspace } from "./document-workspace";
 import { ChatAction } from "./chat-action";
 import { SelectionDialog } from "./selection-dialog";
 import { SkillIcon, unavailableReason, useSkillCapabilities } from "./skill-ui";
@@ -48,6 +49,10 @@ export function SkillPicker({
 
   return (
     <div className={styles.skillPicker}>
+      <DocumentWorkspace
+        sessionId={sessionId}
+        enabled={selected?.kind === "document"}
+      />
       <ChatAction
         text={selected?.name || "技能"}
         title={selected ? `技能：${selected.name}` : "技能"}

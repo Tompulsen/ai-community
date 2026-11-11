@@ -41,10 +41,30 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: 3000
       COMMUNITY_INTERNAL_URL: http://web:3000
+      DOCUMENT_SERVICE_URL: http://documents:3010
     depends_on:
       redis:
         condition: service_healthy
     networks: [database, outbound, accounts]
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  documents:
+    image: ${COMMUNITY_DOCUMENTS_IMAGE:-ghcr.io/tompulsen/ai-community-documents:latest}
+    build:
+      context: ..
+      dockerfile: deploy/documents/Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file: ./private/documents.env
+    volumes: [documents:/documents]
+    networks: [database]
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 128
+    read_only: true
+    tmpfs: [/tmp:size=268435456,mode=1777]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     logging:
       options: {max-size: "10m", max-file: "3"}
   db:
@@ -75,6 +95,7 @@ services:
     logging:
       options: {max-size: "10m", max-file: "3"}
 volumes:
+  documents:
   postgres:
   redis:
   uploads:

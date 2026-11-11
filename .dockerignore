@@ -17,6 +17,10 @@ src-js/
 db/
 .devcontainer/compose.yml
 node_modules/
+services/documents/node_modules
+services/documents/dist
+services/documents/test-output
+services/documents/data
 studio/node_modules
 studio/.next
 studio/.swc

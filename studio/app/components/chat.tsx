@@ -1,3 +1,4 @@
+import { DocumentChatCard } from "./document-chat-card";
 import { useDebouncedCallback } from "use-debounce";
 import React, {
   Fragment,
@@ -1671,6 +1672,25 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [userInput, setUserInput] = useState("");
+  useEffect(() => {
+    const composeDocument = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ sessionId: string; prompt: string }>
+      ).detail;
+      if (
+        detail?.sessionId === session.id &&
+        typeof detail.prompt === "string"
+      ) {
+        setUserInput(detail.prompt);
+        requestAnimationFrame(
+          () => document.getElementById("chat-input")?.focus(),
+        );
+      }
+    };
+    window.addEventListener("community:document-compose", composeDocument);
+    return () =>
+      window.removeEventListener("community:document-compose", composeDocument);
+  }, [session.id]);
   const [draftQuote, setDraftQuote] = useState<MessageQuote>();
   const draftQuoteRef = useRef(draftQuote);
   const [quoteDraftKey] = useState(() =>
@@ -4119,6 +4139,12 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
                                     model={message.model || ""}
                                   />
                                 )}
+                              {!isUser && message.documentTask && (
+                                <DocumentChatCard
+                                  message={message}
+                                  sessionId={session.id}
+                                />
+                              )}
                               {!isUser && sources && (
                                 <MessageSources sources={sources} />
                               )}

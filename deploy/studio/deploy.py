@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Deploy this repository's two verified images on the community server.
+"""Deploy this repository's three verified images on the community server.
 
-Run after GitHub main and both revision-tagged images have been verified.
+Run after GitHub main and all revision-tagged images have been verified.
 Only the community web/studio and New API studio OAuth origin are changed.
 """
 import fcntl
@@ -27,6 +27,7 @@ ACCOUNT_SOURCE = Path('/opt/new-api-source')
 ACCOUNT_COMPOSE = Path('/opt/1panel/apps/new-api/new-api/docker-compose.yml')
 CONFIG = COMPOSE.parent / 'private/config/default.yml'
 STUDIO_ENV = COMPOSE.parent / 'private/studio.env'
+DOCUMENT_ENV = COMPOSE.parent / 'private/documents.env'
 ORIGIN = 'https://zaiduyu.top'
 RECORD = Path('/opt/community-studio-releases') / SHA[:12]
 ARCHIVE = Path('/opt/1panel/www/sites/zaiduyu.top/source/ai-community.tar.gz')
@@ -104,7 +105,7 @@ account_remote_main = run(['git', '-C', ACCOUNT_SOURCE, 'rev-parse', 'origin/mai
 run(['git', '-C', ACCOUNT_SOURCE, 'merge-base', '--is-ancestor', account_revision, account_remote_main])
 
 images = {}
-for service, registry in [('web', 'ai-community'), ('studio', 'ai-community-studio')]:
+for service, registry in [('web', 'ai-community'), ('studio', 'ai-community-studio'), ('documents', 'ai-community-documents')]:
     ref = 'ghcr.io/tompulsen/' + registry + ':sha-' + SHA
     run(['docker', 'pull', '--quiet', ref])
     image = json.loads(run(['docker', 'image', 'inspect', ref]))[0]
@@ -127,12 +128,14 @@ if STUDIO_ENV.exists():
     # Preserve the studio's sessions during later releases.
     existing = environment(inspect('ai-community-studio-1'))
     env['NEW_API_SESSION_SECRET'] = existing['NEW_API_SESSION_SECRET']
+    env['DOCUMENT_SERVICE_SECRET'] = existing.get('DOCUMENT_SERVICE_SECRET') or secrets.token_urlsafe(48)
+env.setdefault('DOCUMENT_SERVICE_SECRET', secrets.token_urlsafe(48))
 assert not any('\n' in value or '\r' in value or '$' in value or "'" in value for value in env.values()), 'Unexpected dotenv value encoding'
 
 assert not (RECORD / 'before.json').exists(), 'Release already attempted; inspect its record'
 RECORD.mkdir(parents=True, exist_ok=True)
 originals = {}
-for path in [COMPOSE, ACCOUNT_COMPOSE, CONFIG, STUDIO_ENV]:
+for path in [COMPOSE, ACCOUNT_COMPOSE, CONFIG, STUDIO_ENV, DOCUMENT_ENV]:
     originals[path] = path.read_bytes() if path.exists() else None
     if path.exists():
         shutil.copy2(path, RECORD / ('before-' + ('account-' if path == ACCOUNT_COMPOSE else '') + path.name))
@@ -142,6 +145,10 @@ if '/ai-community-studio-1' in before:
     c = before['/ai-community-studio-1']
     run(['docker', 'tag', c['Image'], 'community-studio-rollback-studio:' + c['Id'][:12]])
 (RECORD / 'before.json').write_text(json.dumps({'sha': SHA, 'containers': {name: {'id': c['Id'], 'image': c['Image'], 'mounts': mounts(c)} for name, c in before.items()}}, indent=2))
+
+if '/ai-community-documents-1' in before:
+    c = before['/ai-community-documents-1']
+    run(['docker', 'tag', c['Image'], 'community-documents-rollback:' + c['Id'][:12]])
 
 changed = False
 try:
@@ -156,6 +163,11 @@ try:
     studio.pop('build', None)
     studio['image'] = images['studio'][0]
     community['services']['studio'] = studio
+    documents = template['services']['documents']
+    documents.pop('build', None)
+    documents['image'] = images['documents'][0]
+    community['services']['documents'] = documents
+    community.setdefault('volumes', {})['documents'] = None
     community['networks']['accounts'] = {'external': True, 'name': '1panel-network'}
     accounts['services']['new-api']['environment']['STUDIO_SSO_ORIGIN'] = ORIGIN
     # Pin the existing verified account image while changing only its environment.
@@ -165,12 +177,19 @@ try:
     changed = True
     STUDIO_ENV.write_text(''.join(key + "='" + value + "'\n" for key, value in env.items()))
     os.chmod(STUDIO_ENV, 0o600)
+    DOCUMENT_ENV.write_text("DOCUMENT_SERVICE_SECRET='" + env['DOCUMENT_SERVICE_SECRET'] + "'\n")
+    os.chmod(DOCUMENT_ENV, 0o600)
     COMPOSE.write_text(yaml.safe_dump(community, sort_keys=False))
     ACCOUNT_COMPOSE.write_text(yaml.safe_dump(accounts, sort_keys=False))
     CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
     # Validate both resolved documents without logging credentials.
     compose(COMPOSE, 'ai-community', 'config', '--quiet')
     compose(ACCOUNT_COMPOSE, 'new-api', 'config', '--quiet')
+    compose(COMPOSE, 'ai-community', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'documents')
+    documents_after = healthy('ai-community-documents-1')
+    assert documents_after['Image'] == images['documents'][1]
+    if '/ai-community-documents-1' in before:
+        assert mounts(documents_after) == mounts(before['/ai-community-documents-1'])
     compose(COMPOSE, 'ai-community', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'studio')
     studio_after = healthy('ai-community-studio-1')
     compose(ACCOUNT_COMPOSE, 'new-api', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'new-api')
@@ -199,7 +218,7 @@ try:
     assert http('/api/new-api/community/callback')[0] == 400
     after = containers()
     for name, previous in before.items():
-        if name in ['/ai-community-web-1', '/ai-community-studio-1', '/ZY-newapi']:
+        if name in ['/ai-community-web-1', '/ai-community-studio-1', '/ai-community-documents-1', '/ZY-newapi']:
             continue
         current = after[name]
         assert current['Id'] == previous['Id'] and mounts(current) == mounts(previous), name
@@ -216,7 +235,7 @@ try:
     # Compose removes its replaced containers. Remove only stopped old IDs verified above.
     removed = []
     current_ids = {c['Id']: c for c in containers().values()}
-    for name in ['/ai-community-web-1', '/ai-community-studio-1', '/ZY-newapi']:
+    for name in ['/ai-community-web-1', '/ai-community-studio-1', '/ai-community-documents-1', '/ZY-newapi']:
         old = before.get(name)
         if old and old['Id'] in current_ids and old['Id'] != after[name]['Id']:
             candidate = current_ids[old['Id']]
@@ -270,6 +289,21 @@ except BaseException:
                     assert not inspect(failed['Id'])['State']['Running']
                     run(['docker', 'container', 'rm', failed['Id']])
             recover('candidate cleanup', cleanup_candidate)
+        if '/ai-community-documents-1' in before:
+            previous_document = before['/ai-community-documents-1']
+            recover('documents image', lambda: run(['docker', 'tag', previous_document['Image'], previous_document['Config']['Image']]))
+            recover('documents service', lambda: compose(COMPOSE, 'ai-community', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'documents'))
+            recover('documents health', lambda: verify_restored('ai-community-documents-1', previous_document))
+        else:
+            def cleanup_documents():
+                failed = containers().get('/ai-community-documents-1')
+                if failed:
+                    assert failed['Config']['Labels']['com.docker.compose.service'] == 'documents'
+                    assert failed['Config']['Labels']['com.docker.compose.project'] == 'ai-community'
+                    if failed['State']['Running']: run(['docker', 'stop', '--time', '30', failed['Id']])
+                    assert not inspect(failed['Id'])['State']['Running']
+                    run(['docker', 'container', 'rm', failed['Id']])
+            recover('documents candidate cleanup (data retained)', cleanup_documents)
         if (RECORD / 'source.before.tar.gz').exists():
             recover('source archive', lambda: shutil.copy2(RECORD / 'source.before.tar.gz', ARCHIVE))
         if rollback_errors:
