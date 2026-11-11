@@ -16,6 +16,19 @@ export const lotteryErrors = {
 const string = { type: 'string', optional: false, nullable: false } as const;
 const integer = { type: 'integer', optional: false, nullable: false } as const;
 const boolean = { type: 'boolean', optional: false, nullable: false } as const;
+export const lotteryAccountSchema = { type: 'object', optional: false, nullable: false, properties: { userId: string, balance: integer } } as const;
+export const lotteryAdjustmentParam = {
+	type: 'object',
+	properties: {
+		userId: { type: 'string', format: 'misskey:id' },
+		mode: { type: 'string', enum: ['add', 'set'] },
+		amount: { type: 'integer', minimum: 0, maximum: 2147483647 },
+		expectedBalance: { type: 'integer', minimum: 0, maximum: 2147483647 },
+		requestId: { type: 'string', pattern: '^[a-zA-Z0-9_-]{16,64}$' },
+		reason: { type: 'string', maxLength: 300, default: '' },
+	},
+	required: ['userId', 'mode', 'amount', 'expectedBalance', 'requestId'],
+} as const;
 const rule = { type: 'object', optional: false, nullable: false, properties: { enabled: boolean, threshold: integer, tickets: integer } } as const;
 export const lotteryPrizeSchema = { type: 'object', optional: false, nullable: false, properties: { id: string, name: string, description: string, amountCents: integer, weight: integer, stock: integer, enabled: boolean, kind: { ...string, enum: ['balance', 'empty'] } } } as const;
 export const lotteryWheelSchema = { type: 'object', optional: false, nullable: false, properties: { theme: { ...string, enum: ['teal', 'violet', 'sunset'] }, title: string, subtitle: string, buttonText: string, rulesText: string } } as const;

@@ -50,6 +50,7 @@ import MkSelect from '@/components/MkSelect.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkTl from '@/components/MkTl.vue';
 import { i18n } from '@/i18n.js';
+import { lotteryText } from '@/pages/community/lottery-copy.js';
 import { definePage } from '@/page.js';
 import { prefer } from '@/preferences.js';
 import { useMkSelect } from '@/composables/use-mkselect.js';
@@ -64,7 +65,7 @@ const {
 } = useMkSelect({
 	items: [
 		{ label: i18n.ts.all, value: null },
-		...Misskey.moderationLogTypes.map(t => ({ label: i18n.ts._moderationLogTypes[t] ?? t, value: t })),
+		...Misskey.moderationLogTypes.map(t => ({ label: t === 'adjustLotteryChances' ? lotteryText.adjustmentLog : i18n.ts._moderationLogTypes[t] ?? t, value: t })),
 	],
 	initialValue: null,
 });

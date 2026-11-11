@@ -463,6 +463,8 @@ export * as 'community/lottery/status' from './endpoints/community/lottery/statu
 export * as 'community/lottery/draw' from './endpoints/community/lottery/draw.js';
 export * as 'community/lottery/records' from './endpoints/community/lottery/records.js';
 export * as 'admin/community/lottery/config' from './endpoints/admin/community/lottery/config.js';
+export * as 'admin/community/lottery/account' from './endpoints/admin/community/lottery/account.js';
+export * as 'admin/community/lottery/adjust-chances' from './endpoints/admin/community/lottery/adjust-chances.js';
 export * as 'admin/community/lottery/update' from './endpoints/admin/community/lottery/update.js';
 export * as 'admin/community/lottery/records' from './endpoints/admin/community/lottery/records.js';
 export * as 'admin/community/lottery/fulfill' from './endpoints/admin/community/lottery/fulfill.js';

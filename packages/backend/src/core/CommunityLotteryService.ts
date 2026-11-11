@@ -9,6 +9,7 @@ import { DataSource, IsNull, type EntityManager } from 'typeorm';
 import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { MiUser } from '@/models/User.js';
+import { MiModerationLog } from '@/models/ModerationLog.js';
 import { MiExternalAccount } from '@/models/ExternalAccount.js';
 import { newApiOrigin } from '@/server/api/NewApiSigninService.js';
 import { MiCommunityLotteryAccount, MiCommunityLotteryConfig, MiCommunityLotteryDraw, MiCommunityLotteryReferral } from '@/models/CommunityLottery.js';
@@ -136,10 +137,12 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		const account = await manager.getRepository(MiCommunityLotteryAccount).createQueryBuilder('account').setLock('pessimistic_write').where({ userId }).getOneOrFail();
 		const counts = await this.statistics(manager, userId);
 		const credit = lotteryCredits(account.progress, counts, settings);
-		account.balance += credit.added;
-		if (account.balance > 2147483647) throw new ApiError(lotteryErrors.invalid);
-		account.progress = credit.progress;
-		await manager.save(account);
+		// Defer unclaimed rewards at the storage limit so users can spend or admins can reduce it.
+		if (account.balance + credit.added <= 2147483647) {
+			account.balance += credit.added;
+			account.progress = credit.progress;
+			await manager.save(account);
+		}
 		return { account, counts };
 	}
 
@@ -204,6 +207,44 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		await this.admin(userId);
 		const { settings, version } = await this.configuration(this.db.manager);
 		return { settings, version };
+	}
+
+	public async getAccount(adminId: string, userId: string) {
+		await this.admin(adminId);
+		await this.actor(userId);
+		return this.db.transaction(async manager => {
+			const { settings } = await this.configuration(manager, true);
+			const { account } = await this.sync(manager, userId, settings);
+			return { userId, balance: account.balance };
+		});
+	}
+
+	public async adjustChances(adminId: string, input: { userId: string; mode: 'add' | 'set'; amount: number; expectedBalance: number; requestId: string; reason: string }) {
+		await this.admin(adminId);
+		await this.actor(input.userId);
+		const { userId, mode, amount, expectedBalance, requestId } = input;
+		if (!['add', 'set'].includes(mode) || !Number.isInteger(amount) || amount < (mode === 'add' ? 1 : 0) || amount > 2147483647 || !Number.isInteger(expectedBalance) || expectedBalance < 0 || expectedBalance > 2147483647 || !/^[a-zA-Z0-9_-]{16,64}$/.test(requestId) || typeof input.reason !== 'string' || input.reason.length > 300) throw new ApiError(lotteryErrors.invalid);
+		const reason = input.reason.trim();
+		return this.db.transaction(async manager => {
+			// Match the draw lock order; the audit receipt makes retries safe even after a draw.
+			const { settings } = await this.configuration(manager, true);
+			const receipt = await manager.getRepository(MiModerationLog).createQueryBuilder('log')
+				.where('log."userId" = :adminId AND log.type = :type', { adminId, type: 'adjustLotteryChances' })
+				.andWhere("log.info ->> 'requestId' = :requestId", { requestId }).getOne();
+			if (receipt && (receipt.info.userId !== userId || receipt.info.mode !== mode || receipt.info.amount !== amount || receipt.info.before !== expectedBalance || receipt.info.reason !== reason)) throw new ApiError(lotteryErrors.conflict);
+			const { account } = await this.sync(manager, userId, settings);
+			if (receipt) return { userId, balance: account.balance };
+			if (account.balance !== expectedBalance) throw new ApiError(lotteryErrors.conflict);
+			const balance = mode === 'add' ? account.balance + amount : amount;
+			if (balance > 2147483647) throw new ApiError(lotteryErrors.invalid);
+			account.balance = balance;
+			await manager.save(account);
+			await manager.insert(MiModerationLog, {
+				id: this.idService.gen(), userId: adminId, type: 'adjustLotteryChances',
+				info: { userId, mode, amount, before: expectedBalance, after: balance, requestId, reason },
+			});
+			return { userId, balance };
+		});
 	}
 
 	public async updateConfig(userId: string, version: number, settings: LotterySettingsInput) {

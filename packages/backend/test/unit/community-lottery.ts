@@ -5,10 +5,27 @@
 
 import { describe, expect, test } from 'vitest';
 import { chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits, normalizeLotterySettings } from '../../src/misc/community-lottery.js';
-import { lotterySettingsParam } from '../../src/server/api/lottery-schema.js';
+import { lotterySettingsParam, lotteryAdjustmentParam } from '../../src/server/api/lottery-schema.js';
 import Ajv from 'ajv';
 
 describe('community lottery', () => {
+	test('manual adjustments require a target, expected balance and bounded whole numbers', () => {
+		const ajv = new Ajv({ useDefaults: true });
+		ajv.addFormat('misskey:id', /^[a-zA-Z0-9]+$/);
+		const validate = ajv.compile(lotteryAdjustmentParam);
+		const input = { userId: 'localuser', mode: 'set', amount: 0, expectedBalance: 5, requestId: 'adjust_request_0001' };
+		expect(validate({ ...input })).toBe(true);
+		expect(validate({ ...input, mode: 'add', amount: 2147483647 })).toBe(true);
+		for (const invalid of [{ amount: -1 }, { amount: .5 }, { amount: 2147483648 }, { expectedBalance: -1 }, { expectedBalance: .5 }, { expectedBalance: 2147483648 }, { mode: 'subtract' }, { requestId: 'short' }, { reason: 'a'.repeat(301) }, { userId: 'invalid id' }]) {
+			expect(validate({ ...input, ...invalid })).toBe(false);
+		}
+		for (const key of ['userId', 'mode', 'amount', 'expectedBalance', 'requestId']) {
+			const missing: Record<string, unknown> = { ...input };
+			delete missing[key];
+			expect(validate(missing)).toBe(false);
+		}
+	});
+
 	test('old settings receive a separate default wheel without altering rewards', () => {
 		const { wheel: _, ...old } = defaultLotterySettings();
 		const first = normalizeLotterySettings(old);

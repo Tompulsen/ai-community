@@ -137,6 +137,7 @@ export const permissions = [
 ] as const;
 
 export const moderationLogTypes = [
+	'adjustLotteryChances',
 	'updateServerSettings',
 	'suspend',
 	'unsuspend',
@@ -276,6 +277,15 @@ type ReceivedAbuseReport = {
 };
 
 export type ModerationLogPayloads = {
+	adjustLotteryChances: {
+		userId: string;
+		mode: 'add' | 'set';
+		amount: number;
+		before: number;
+		after: number;
+		requestId: string;
+		reason: string;
+	};
 	updateServerSettings: {
 		before: MetaDetailed | null;
 		after: MetaDetailed | null;

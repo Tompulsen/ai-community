@@ -152,6 +152,18 @@ type AdminCaptchaCurrentResponse = operations['admin___captcha___current']['resp
 type AdminCaptchaSaveRequest = operations['admin___captcha___save']['requestBody']['content']['application/json'];
 
 // @public (undocumented)
+type AdminCommunityLotteryAccountRequest = operations['admin___community___lottery___account']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryAccountResponse = operations['admin___community___lottery___account']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryAdjustChancesRequest = operations['admin___community___lottery___adjust-chances']['requestBody']['content']['application/json'];
+
+// @public (undocumented)
+type AdminCommunityLotteryAdjustChancesResponse = operations['admin___community___lottery___adjust-chances']['responses']['200']['content']['application/json'];
+
+// @public (undocumented)
 type AdminCommunityLotteryConfigResponse = operations['admin___community___lottery___config']['responses']['200']['content']['application/json'];
 
 // @public (undocumented)
@@ -1721,6 +1733,10 @@ declare namespace entities {
         AdminAvatarDecorationsUpdateRequest,
         AdminCaptchaCurrentResponse,
         AdminCaptchaSaveRequest,
+        AdminCommunityLotteryAccountRequest,
+        AdminCommunityLotteryAccountResponse,
+        AdminCommunityLotteryAdjustChancesRequest,
+        AdminCommunityLotteryAdjustChancesResponse,
         AdminCommunityLotteryConfigResponse,
         AdminCommunityLotteryFulfillRequest,
         AdminCommunityLotteryFulfillResponse,
@@ -3092,7 +3108,7 @@ type ModerationLog = {
 }[keyof ModerationLogPayloads]);
 
 // @public (undocumented)
-export const moderationLogTypes: readonly ["updateServerSettings", "suspend", "unsuspend", "updateUserNote", "addCustomEmoji", "updateCustomEmoji", "deleteCustomEmoji", "assignRole", "unassignRole", "createRole", "updateRole", "deleteRole", "clearQueue", "promoteQueue", "deleteDriveFile", "deleteNote", "createGlobalAnnouncement", "createUserAnnouncement", "updateGlobalAnnouncement", "updateUserAnnouncement", "deleteGlobalAnnouncement", "deleteUserAnnouncement", "resetPassword", "suspendRemoteInstance", "unsuspendRemoteInstance", "updateRemoteInstanceNote", "markSensitiveDriveFile", "unmarkSensitiveDriveFile", "resolveAbuseReport", "forwardAbuseReport", "updateAbuseReportNote", "createInvitation", "createAd", "updateAd", "deleteAd", "createAvatarDecoration", "updateAvatarDecoration", "deleteAvatarDecoration", "unsetMfa", "unsetUserAvatar", "unsetUserBanner", "createSystemWebhook", "updateSystemWebhook", "deleteSystemWebhook", "createAbuseReportNotificationRecipient", "updateAbuseReportNotificationRecipient", "deleteAbuseReportNotificationRecipient", "deleteAccount", "deletePage", "deleteFlash", "deleteGalleryPost", "deleteChatRoom", "updateProxyAccountDescription"];
+export const moderationLogTypes: readonly ["adjustLotteryChances", "updateServerSettings", "suspend", "unsuspend", "updateUserNote", "addCustomEmoji", "updateCustomEmoji", "deleteCustomEmoji", "assignRole", "unassignRole", "createRole", "updateRole", "deleteRole", "clearQueue", "promoteQueue", "deleteDriveFile", "deleteNote", "createGlobalAnnouncement", "createUserAnnouncement", "updateGlobalAnnouncement", "updateUserAnnouncement", "deleteGlobalAnnouncement", "deleteUserAnnouncement", "resetPassword", "suspendRemoteInstance", "unsuspendRemoteInstance", "updateRemoteInstanceNote", "markSensitiveDriveFile", "unmarkSensitiveDriveFile", "resolveAbuseReport", "forwardAbuseReport", "updateAbuseReportNote", "createInvitation", "createAd", "updateAd", "deleteAd", "createAvatarDecoration", "updateAvatarDecoration", "deleteAvatarDecoration", "unsetMfa", "unsetUserAvatar", "unsetUserBanner", "createSystemWebhook", "updateSystemWebhook", "deleteSystemWebhook", "createAbuseReportNotificationRecipient", "updateAbuseReportNotificationRecipient", "deleteAbuseReportNotificationRecipient", "deleteAccount", "deletePage", "deleteFlash", "deleteGalleryPost", "deleteChatRoom", "updateProxyAccountDescription"];
 
 // @public (undocumented)
 type MuteCreateRequest = operations['mute___create']['requestBody']['content']['application/json'];

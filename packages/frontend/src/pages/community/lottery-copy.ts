@@ -6,6 +6,15 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	chancesTitle: '用户抽奖次数', chancesHint: '为社区用户追加次数，或手动设置剩余次数。保存后立即生效，并记录管理员、修改前后次数及备注。',
+	selectUser: '选择用户', changeUser: '更换用户', selectUserHint: '先搜索并选择一位社区用户，查看和调整其抽奖次数。', chancesLoading: '正在读取用户次数…',
+	adjustmentMode: '调整方式', addChances: '追加次数', setChances: '设置剩余次数', chancesToAdd: '追加次数（次）', chancesToSet: '剩余次数（次）',
+	adjustmentReason: '调整备注（选填）', adjustmentReasonHint: '例如：活动奖励、补发或纠正次数', afterAdjustment: '调整后可用次数：',
+	addChancesHint: '在当前剩余次数上增加，不影响已领取的任务奖励。', setChancesHint: '直接替换剩余次数，填 0 可清零；已领取的任务奖励不会重复发放。',
+	saveChances: '保存次数', confirmAdjustment: '确认调整这位用户的抽奖次数？', chancesSaved: '用户抽奖次数已保存。',
+	chancesLoadFailed: '暂时无法读取用户次数，请点击刷新后重试。', chancesForbidden: '仅管理员可管理有效的本地社区用户，请检查账号状态或更换用户。',
+	chancesConflict: '用户次数已变化，本次未修改。请刷新后核对次数，再确认保存。', chancesInvalid: '次数须为 0–2,147,483,647 的整数，追加须大于 0，且调整后不能超出上限。请刷新后重试。',
+	chancesUncertain: '本次保存结果尚未确认。请核对本次调整；同一请求不会重复增加次数。', checkAdjustment: '核对本次调整', adjustmentLog: '调整抽奖次数',
 	beforeDrawOdds: '抽奖前参考概率', snapshotHint: '当前保留本轮转盘快照，刷新后查看最新奖池。',
 	probabilityInput: '设定中奖概率（%）', probabilityTotal: '设定概率合计', probabilityHint: '为启用的奖品分别填写百分比，合计须为 100%。谢谢参与也占用概率；售罄奖品暂时退出抽取，剩余奖项按比例计算当前概率。', probabilityInvalid: '请将启用奖品的概率设为 0.01%–100%，保留最多两位小数，合计必须为 100%。',
 	wheelTitle: '幸运转盘', wheelSubtitle: '每一次创作与分享，都值得一份惊喜。', wheelStart: '开启幸运', wheelPreparing: '待上架', wheelPreview: '预览', wheelFallback: '转盘暂时无法显示，仍可使用抽奖按钮查看真实结果。',
@@ -25,6 +34,15 @@ const zh = {
 	fulfill: '重试入账', fulfillConfirm: '重新尝试将待入账奖励充值到原中奖账户？同一笔不会重复加款。', fulfillHint: '系统最多自动尝试 3 次，账号或金额冲突时停止。处理问题后可在这里重试。', fulfillFailed: '重试失败，请稍后再试。', adminOnly: '只有管理员可以编辑抽奖活动。', noAdminHistory: '暂无中奖记录。', user: '用户', invalid: '请填写有效规则、奖品名称和库存；开启活动至少需要一份可用奖品。',
 };
 const en: typeof zh = {
+	chancesTitle: 'User draw chances', chancesHint: 'Add chances or set a community user’s remaining balance. Changes take effect immediately and record the administrator, before/after counts and note.',
+	selectUser: 'Select user', changeUser: 'Change user', selectUserHint: 'Search for a community user to view and adjust their draw chances.', chancesLoading: 'Loading user chances…',
+	adjustmentMode: 'Adjustment type', addChances: 'Add chances', setChances: 'Set remaining chances', chancesToAdd: 'Chances to add', chancesToSet: 'Remaining chances',
+	adjustmentReason: 'Adjustment note (optional)', adjustmentReasonHint: 'For example: campaign reward or correction', afterAdjustment: 'Chances after adjustment:',
+	addChancesHint: 'Adds to the current balance without changing claimed task rewards.', setChancesHint: 'Replaces the remaining balance; enter 0 to clear it. Claimed task rewards will not be awarded again.',
+	saveChances: 'Save chances', confirmAdjustment: 'Confirm the change to this user’s draw chances?', chancesSaved: 'User draw chances saved.',
+	chancesLoadFailed: 'Could not load user chances. Refresh to retry.', chancesForbidden: 'Only administrators can manage eligible local users. Check the account status or choose another user.',
+	chancesConflict: 'The user’s balance changed. Nothing was updated. Refresh and review it before saving again.', chancesInvalid: 'Use a whole number from 0 to 2,147,483,647. Added chances must be positive and the resulting balance must stay within this range. Refresh to retry.',
+	chancesUncertain: 'The save result is not confirmed yet. Check this adjustment; the same request will not add chances twice.', checkAdjustment: 'Check this adjustment', adjustmentLog: 'Adjust draw chances',
 	beforeDrawOdds: 'Odds before this draw', snapshotHint: 'This wheel keeps the draw snapshot. Refresh to see the latest pool.',
 	probabilityInput: 'Winning probability (%)', probabilityTotal: 'Configured total', probabilityHint: 'Set a percentage for each enabled prize, totaling 100%. No-prize outcomes also need a percentage. Sold-out prizes leave the live pool and remaining odds are proportionally recalculated.', probabilityInvalid: 'Use 0.01%–100% with up to two decimals for enabled prizes. Their total must be 100%.',
 	wheelTitle: 'Lucky wheel', wheelSubtitle: 'A little surprise for every creation you share.', wheelStart: 'Try your luck', wheelPreparing: 'Coming soon', wheelPreview: 'Preview', wheelFallback: 'The wheel is unavailable. Use the draw button to see your confirmed result.',

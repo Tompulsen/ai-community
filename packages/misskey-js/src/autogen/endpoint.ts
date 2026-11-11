@@ -37,6 +37,10 @@ import type {
 	AdminAvatarDecorationsUpdateRequest,
 	AdminCaptchaCurrentResponse,
 	AdminCaptchaSaveRequest,
+	AdminCommunityLotteryAccountRequest,
+	AdminCommunityLotteryAccountResponse,
+	AdminCommunityLotteryAdjustChancesRequest,
+	AdminCommunityLotteryAdjustChancesResponse,
 	AdminCommunityLotteryConfigResponse,
 	AdminCommunityLotteryFulfillRequest,
 	AdminCommunityLotteryFulfillResponse,
@@ -735,6 +739,8 @@ export type Endpoints = {
 	'admin/avatar-decorations/update': { req: AdminAvatarDecorationsUpdateRequest; res: EmptyResponse };
 	'admin/captcha/current': { req: EmptyRequest; res: AdminCaptchaCurrentResponse };
 	'admin/captcha/save': { req: AdminCaptchaSaveRequest; res: EmptyResponse };
+	'admin/community/lottery/account': { req: AdminCommunityLotteryAccountRequest; res: AdminCommunityLotteryAccountResponse };
+	'admin/community/lottery/adjust-chances': { req: AdminCommunityLotteryAdjustChancesRequest; res: AdminCommunityLotteryAdjustChancesResponse };
 	'admin/community/lottery/config': { req: EmptyRequest; res: AdminCommunityLotteryConfigResponse };
 	'admin/community/lottery/fulfill': { req: AdminCommunityLotteryFulfillRequest; res: AdminCommunityLotteryFulfillResponse };
 	'admin/community/lottery/records': { req: AdminCommunityLotteryRecordsRequest; res: AdminCommunityLotteryRecordsResponse };

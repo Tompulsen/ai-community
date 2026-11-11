@@ -44,7 +44,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 					'deleteChatRoom',
 				].includes(log.type)
 			}"
-		>{{ i18n.ts._moderationLogTypes[log.type] }}</b>
+		>{{ log.type === 'adjustLotteryChances' ? lotteryText.adjustmentLog : i18n.ts._moderationLogTypes[log.type] }}</b>
+		<span v-if="log.type === 'adjustLotteryChances'">: {{ log.info.before }} → {{ log.info.after }} {{ lotteryText.times }}</span>
 		<span v-if="log.type === 'updateUserNote'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'suspend'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'unsuspend'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
@@ -222,6 +223,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</div>
 		</template>
 
+		<template v-if="log.type === 'adjustLotteryChances'">
+			<div>{{ i18n.ts.user }}: <MkA :to="`/admin/user/${log.info.userId}`" class="_link">{{ log.info.userId }}</MkA></div>
+			<div>{{ lotteryText.adjustmentMode }}: {{ log.info.mode === 'add' ? lotteryText.addChances : lotteryText.setChances }}</div>
+			<div>{{ log.info.before }} → {{ log.info.after }} {{ lotteryText.times }}</div>
+			<div v-if="log.info.reason">{{ lotteryText.adjustmentReason }}: {{ log.info.reason }}</div>
+		</template>
 		<details>
 			<summary>raw</summary>
 			<pre>{{ JSON5.stringify(log, null, '\t') }}</pre>
@@ -235,6 +242,7 @@ import * as Misskey from 'misskey-js';
 import { CodeDiff } from 'v-code-diff';
 import JSON5 from 'json5';
 import { i18n } from '@/i18n.js';
+import { lotteryText } from '@/pages/community/lottery-copy.js';
 import MkFolder from '@/components/MkFolder.vue';
 
 const props = defineProps<{
