@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# Check if running on a supported system
+case "$(uname -s)" in
+  Linux)
+    if [[ -f "/etc/lsb-release" ]]; then
+      . /etc/lsb-release
+      if [[ "$DISTRIB_ID" != "Ubuntu" ]]; then
+        echo "This script only works on Ubuntu, not $DISTRIB_ID."
+        exit 1
+      fi
+    else
+      if [[ !"$(cat /etc/*-release | grep '^ID=')" =~ ^(ID=\"ubuntu\")|(ID=\"centos\")|(ID=\"arch\")|(ID=\"debian\")$ ]]; then
+        echo "Unsupported Linux distribution."
+        exit 1
+      fi
+    fi
+    ;;
+  Darwin)
+    echo "Running on MacOS."
+    ;;
+  *)
+    echo "Unsupported operating system."
+    exit 1
+    ;;
+esac
+
+# Check if needed dependencies are installed and install if necessary
+if ! command -v node >/dev/null || ! command -v git >/dev/null || ! command -v yarn >/dev/null; then
+  case "$(uname -s)" in
+    Linux)
+      if [[ "$(cat /etc/*-release | grep '^ID=')" = "ID=ubuntu" ]]; then
+        sudo apt-get update
+        sudo apt-get -y install nodejs git yarn
+      elif [[ "$(cat /etc/*-release | grep '^ID=')" = "ID=debian" ]]; then
+        sudo apt-get update
+        sudo apt-get -y install nodejs git yarn
+      elif [[ "$(cat /etc/*-release | grep '^ID=')" = "ID=centos" ]]; then
+        sudo yum -y install epel-release
+        sudo yum -y install nodejs git yarn
+      elif [[ "$(cat /etc/*-release | grep '^ID=')" = "ID=arch" ]]; then
+        sudo pacman -Syu -y
+        sudo pacman -S -y nodejs git yarn
+      else
+        echo "Unsupported Linux distribution"
+        exit 1
+      fi
+      ;;
+    Darwin)
+      /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+      brew install node git yarn
+      ;;
+  esac
+fi
+
+# Clone the repository and install dependencies
+git clone https://github.com/qzq00767/octopus_chat
+cd octopus_chat
+yarn install
+
+# Prompt user for environment variables
+read -p "Enter MODEL_API_KEY: " MODEL_API_KEY
+read -p "Enter ACCESS_PASSWORD: " ACCESS_PASSWORD
+read -p "Enter PORT: " PORT
+
+# Build and run the project using the environment variables
+MODEL_API_KEY=$MODEL_API_KEY ACCESS_PASSWORD=$ACCESS_PASSWORD PORT=$PORT yarn build
+MODEL_API_KEY=$MODEL_API_KEY ACCESS_PASSWORD=$ACCESS_PASSWORD PORT=$PORT yarn start

@@ -1,0 +1,88 @@
+@use "../styles/motion" as motion;
+@use "../styles/controls" as controls;
+
+.select-compress-model {
+  width: 60%;
+  select {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+.advanced-settings {
+  min-width: 0;
+
+  summary {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    padding: 12px 16px;
+    list-style: none;
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color var(--duration-fast, 150ms)
+      var(--ease-out, ease);
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    svg {
+      flex-shrink: 0;
+      color: var(--second-in-gray);
+      transition: transform var(--duration-fast, 150ms) var(--ease-out, ease);
+    }
+
+    @media (hover: hover) {
+      &:hover {
+        @include controls.hover-surface;
+      }
+    }
+
+    &:active {
+      @include controls.hover-surface;
+    }
+
+    &:is(:hover, :active) svg {
+      color: inherit;
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: var(--control-focus-shadow);
+      outline-offset: -3px;
+      border-radius: 6px;
+    }
+  }
+
+  &[open] > summary svg {
+    transform: rotate(180deg);
+  }
+}
+
+.advanced-content {
+  border-top: var(--border-in-light);
+
+  > :last-child {
+    border-bottom: 0;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .advanced-settings summary,
+  .advanced-settings summary svg {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .advanced-settings {
+  summary,
+  summary svg {
+    transition: none;
+  }
+}

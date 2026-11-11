@@ -1,0 +1,224 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.root {
+  position: relative;
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.trigger,
+.fallback {
+  @include controls.surface;
+  width: 100%;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  &:active:not(:disabled) {
+    @include controls.hover-surface;
+  }
+
+  &[data-state="open"] {
+    @include controls.selected-surface;
+  }
+}
+
+.value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  text-align: center;
+}
+
+.root[data-align="left"] .value {
+  text-align: left;
+}
+
+.chevron {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--second-in-gray);
+  transition: transform 180ms var(--ease-out, ease-out);
+}
+
+.trigger[data-state="open"] .chevron {
+  transform: rotate(180deg);
+}
+
+.trigger:is(:hover, :active, [data-state="open"]) .chevron {
+  color: inherit;
+}
+
+.content {
+  z-index: 1600;
+  box-sizing: border-box;
+  min-width: var(--radix-select-trigger-width);
+  max-width: min(360px, var(--radix-select-content-available-width));
+  max-height: min(320px, var(--radix-select-content-available-height));
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--list-surface);
+  color: var(--black);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  box-shadow: var(--floating-shadow, var(--shadow));
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: reveal 150ms var(--ease-out, ease-out);
+
+  &[data-state="closed"] {
+    animation: dismiss 100ms ease-in;
+  }
+}
+
+.viewport {
+  padding: 4px;
+  max-height: inherit;
+  overscroll-behavior: contain;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 6px 30px 6px 10px;
+  border-radius: 5px;
+  outline: none;
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+  overflow-wrap: anywhere;
+
+  &[data-highlighted]:focus-visible {
+    @include controls.focus-ring;
+    outline-offset: -2px;
+
+    &:not([data-state="checked"]) {
+      @include controls.hover-surface;
+    }
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    &[data-highlighted]:not([data-state="checked"]):hover {
+      @include controls.hover-surface;
+    }
+  }
+
+  &[data-state="checked"] {
+    @include controls.selected-surface;
+    font-weight: 500;
+  }
+
+  &[data-disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.check {
+  position: absolute;
+  inset-inline-end: 9px;
+  display: flex;
+  align-items: center;
+  color: inherit;
+}
+
+.group + .group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid transparent;
+}
+
+.label {
+  padding: 6px 10px 4px;
+  color: var(--second-in-gray);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  background: var(--list-surface);
+  color: var(--second-in-gray);
+}
+
+@media (forced-colors: active) {
+  .content {
+    border-color: ButtonText;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .trigger,
+  .fallback,
+  .item {
+    min-height: 44px;
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dismiss {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@include motion.system-reduced-motion {
+  .content {
+    animation: none !important;
+  }
+
+  .trigger,
+  .chevron {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) {
+  .content {
+    animation: none !important;
+  }
+
+  .trigger,
+  .chevron {
+    transition: none;
+  }
+}

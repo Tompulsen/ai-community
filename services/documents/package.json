@@ -1,0 +1,22 @@
+{
+  "name": "qxchat-genoffice-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.10.1",
+    "jszip": "3.10.1",
+    "numfmt": "3.2.6",
+    "undici": "6.21.3",
+    "utif2": "4.1.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "7zip-bin": "5.2.0",
+    "esbuild": "0.25.12"
+  }
+}

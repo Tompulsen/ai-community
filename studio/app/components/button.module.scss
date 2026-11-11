@@ -1,0 +1,243 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+/* ═══════════════════════════════════════════════════════════════
+   Apple-Style Button
+   ═══════════════════════════════════════════════════════════════ */
+
+.icon-button {
+  background-color: var(--list-surface);
+  border-radius: var(--button-radius, 8px);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--button-height, 32px);
+  min-height: var(--button-height, 32px);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition:
+    transform var(--duration-release, 260ms) var(--ease-release, ease-out),
+    background-color 0.15s var(--ease-out, ease),
+    box-shadow 0.15s var(--ease-out, ease),
+    color 0.15s var(--ease-out, ease),
+    opacity 0.15s ease;
+  overflow: hidden;
+  user-select: none;
+  outline: none;
+  border: none;
+  color: var(--black);
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0;
+  touch-action: manipulation;
+
+  &[disabled] {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  &[aria-busy="true"] {
+    cursor: progress;
+    opacity: 0.75;
+  }
+
+  &.primary {
+    --state-hover-surface: var(--primary-fill, var(--primary));
+    --state-selected-surface: var(--state-hover-surface);
+    --state-hover-text: var(--primary-foreground);
+    --state-selected-text: var(--state-hover-text);
+    --button-focus-surface: var(--primary-fill, var(--primary));
+    background-color: var(--primary-fill, var(--primary));
+    color: var(--primary-foreground);
+
+    .icon-button-icon
+      > svg:not(:global(.lucide))
+      path:not([fill="none"]):not([stroke]):not([style*="stroke:"]) {
+      fill: currentColor !important;
+    }
+
+    .icon-button-icon > svg:not(:global(.lucide)) {
+      path[stroke],
+      path[style*="stroke:"] {
+        stroke: currentColor !important;
+      }
+    }
+  }
+
+  &.danger {
+    --state-hover-surface: rgba(var(--danger-rgb, 255, 59, 48), 0.1);
+    --state-selected-surface: var(--state-hover-surface);
+    --state-hover-text: var(--danger-text, var(--danger));
+    --state-selected-text: var(--state-hover-text);
+    --button-focus-surface: rgba(var(--danger-rgb, 255, 59, 48), 0.06);
+    color: var(--danger-text, var(--danger));
+    border-color: transparent;
+    background-color: rgba(var(--danger-rgb, 255, 59, 48), 0.06);
+
+    &:hover:not([disabled]) {
+      border-color: transparent;
+      background-color: rgba(var(--danger-rgb, 255, 59, 48), 0.1);
+    }
+
+    .icon-button-icon
+      > svg:not(:global(.lucide))
+      path:not([fill="none"]):not([stroke]):not([style*="stroke:"]) {
+      fill: currentColor !important;
+    }
+
+    .icon-button-icon > svg:not(:global(.lucide)) {
+      path[stroke],
+      path[style*="stroke:"] {
+        stroke: currentColor !important;
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    &:hover:not([disabled]):not(.primary):not(.danger) {
+      @include controls.hover-surface;
+    }
+
+    &.primary:hover:not([disabled]) {
+      background-color: var(--primary-fill, var(--primary));
+    }
+  }
+
+  &:active:not([disabled]) {
+    transform: scale(0.95);
+    transition-duration: var(--duration-press, 80ms);
+  }
+
+  &:active:not([disabled]):not(.primary):not(.danger),
+  &:is([aria-expanded="true"], [aria-pressed="true"]):not([disabled]):not(
+      .primary
+    ):not(.danger) {
+    @include controls.selected-surface;
+  }
+
+  &:focus-visible:not([disabled]):not([data-pointer-focus]) {
+    @include controls.focus-ring;
+  }
+}
+
+@media (forced-colors: active) {
+  .icon-button {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+
+    &:focus-visible:not([disabled]):not([data-pointer-focus]) {
+      border-color: Highlight;
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+  }
+}
+
+.shadow {
+  box-shadow: none;
+}
+
+.border {
+  border: var(--border-in-light);
+}
+
+.icon-button-icon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.icon-button .icon-button-icon > svg:global(.lucide) {
+  fill: none;
+  filter: none;
+}
+
+.icon-button-icon > svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .icon-button {
+    border: 6px solid transparent;
+    padding: 4px 8px;
+    background-clip: padding-box;
+  }
+
+  .icon-button.border {
+    border: 6px solid transparent;
+  }
+}
+
+.icon-button-text {
+  display: grid;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  line-height: 18px;
+
+  > span {
+    grid-area: 1 / 1;
+  }
+  > span:nth-child(2) {
+    visibility: hidden;
+  }
+  &[data-busy="true"]:has(> span:nth-child(2)) {
+    > span:first-child {
+      visibility: hidden;
+    }
+    > span:nth-child(2) {
+      visibility: visible;
+    }
+  }
+
+  &:not(:first-child) {
+    margin-left: 5px;
+  }
+}
+
+.busy-icon {
+  animation: button-spin 0.8s linear infinite;
+}
+
+.icon-button .busy-icon path {
+  fill: none !important;
+}
+
+@keyframes button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@include motion.system-reduced-motion {
+  .icon-button {
+    transition: none;
+
+    &:active:not([disabled]) {
+      transform: none;
+    }
+  }
+
+  .busy-icon {
+    animation: none;
+  }
+}
+
+:global(.reduce-motion) .icon-button {
+  transition: none;
+
+  &:active:not([disabled]) {
+    transform: none;
+  }
+}
+
+:global(.reduce-motion) .busy-icon {
+  animation: none;
+}

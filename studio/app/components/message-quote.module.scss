@@ -1,0 +1,112 @@
+@use "../styles/controls" as controls;
+
+.quote {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: var(--control-surface, var(--second));
+  color: var(--black);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary, var(--black));
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.remove {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--black);
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+.excerpt {
+  min-width: 0;
+  max-height: 80px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.selection {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 210;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 88px;
+  height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--list-surface, var(--white));
+  box-shadow: var(--shadow);
+  color: var(--black);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .remove {
+    width: 44px;
+    height: 44px;
+  }
+}

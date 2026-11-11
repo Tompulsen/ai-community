@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.config
+.env*
+.impeccable
+playwright-report
+test-results
+tests
+studio
+services
+*.log

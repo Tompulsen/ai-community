@@ -1,0 +1,130 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.materials {
+  min-width: 0;
+  padding-block: 6px;
+  color: var(--black);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  font-weight: 500;
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+
+  > svg {
+    flex-shrink: 0;
+  }
+}
+
+[data-file-status="failed"] .state,
+.error {
+  color: var(--danger);
+}
+
+.error {
+  padding-inline-start: 22px;
+  overflow-wrap: anywhere;
+}
+
+.name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.size {
+  color: var(--text-secondary, var(--black));
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.icon-button,
+.retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 5px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 2px;
+  }
+}
+
+.icon-button {
+  width: 28px;
+  padding: 4px;
+}
+
+.retry {
+  color: var(--primary);
+}
+
+.spinner {
+  animation: material-spin 1s linear infinite;
+}
+
+@keyframes material-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@include motion.system-reduced-motion {
+  .spinner {
+    animation: none;
+  }
+}
+
+:global(.reduce-motion) .spinner {
+  animation: none;
+}
+
+@media (max-width: 600px) {
+  .size {
+    display: none;
+  }
+}

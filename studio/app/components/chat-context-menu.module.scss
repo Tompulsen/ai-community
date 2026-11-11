@@ -1,0 +1,14 @@
+.action {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: start;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: -2px;
+  }
+}

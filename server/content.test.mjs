@@ -1,0 +1,278 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Community contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { byteRange, handleContent, hiddenByTime, legacyIdTime, normalizeRevision, publicVisibilitySql, readWorkCursor } from './content.ts';
+import { mediaState, sniffType, uploadLimitsFor } from './media.ts';
+
+function context({ method = 'GET', path = '/api/works', body, user, query = async () => ({ rows: [] }) } = {}) {
+  const result = {};
+  return {
+    req: { method, headers: {} }, res: {}, url: new URL(path, 'https://community.example'), body: body ?? {}, user,
+    config: { url: 'https://community.example', id: 'aidx' },
+    db: { query }, result,
+    json(status, payload) { result.status = status; result.payload = payload; },
+    requireUser() { if (!user) throw Object.assign(new Error('Sign in required'), { statusCode: 401 }); return user; },
+  };
+}
+
+test('public content query preserves visitor, visibility, account and blocking constraints', async () => {
+  let statement, values;
+  const ctx = context({ query: async (sql, parameters) => { statement = sql; values = parameters; return { rows: [] }; } });
+  assert.equal(await handleContent(ctx), true);
+  assert.equal(ctx.result.status, 200);
+  assert.deepEqual(ctx.result.payload.items, []);
+  for (const guard of ['destination', 'visibility', 'isDeleted', 'isSuspended', 'requireSigninToViewContents', 'ugcVisibilityForVisitor', 'makeNotesHiddenBefore', 'makeNotesFollowersOnlyBefore', 'blocking']) assert(statement.includes(guard), guard);
+  assert.equal(values[0], null);
+  assert.equal(statement.includes('SELECT u.*'), false);
+  assert.equal(statement.includes('password'), false);
+  assert(publicVisibilitySql.includes("s.status IN ('published', 'approved')"));
+});
+
+test('an arbitrary account id never grants access to private library', async () => {
+  let queried = false;
+  const ctx = context({ path: '/api/library?userId=anotheruser', query: async () => { queried = true; return { rows: [] }; } });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 401);
+  assert.equal(queried, false);
+});
+
+test('anonymous create and regular user moderation are rejected before database access', async () => {
+  const create = context({ method: 'POST', body: { title: 'Test' } });
+  await assert.rejects(handleContent(create), error => error.statusCode === 401);
+  const review = context({ method: 'POST', path: '/api/admin/submissions/work1/review', user: { id: 'user1' }, body: { action: 'approve', version: 0 } });
+  await assert.rejects(handleContent(review), error => error.statusCode === 403);
+});
+
+test('revision boundary rejects untrusted types, oversized fields and unsafe provenance URLs', () => {
+  const base = { kind: 'resource', title: 'Notes', body: 'Useful text', fileIds: [] };
+  assert.equal(normalizeRevision(base).text, 'Useful text');
+  assert.equal(normalizeRevision({ ...base, sourceUrl: 'https://example.com/reference' }).sourceUrl, 'https://example.com/reference');
+  assert.throws(() => normalizeRevision({ ...base, sourceUrl: 'javascript:alert(1)' }));
+  assert.throws(() => normalizeRevision({ ...base, sourceUrl: 'https://user:password@example.com' }));
+  assert.throws(() => normalizeRevision({ ...base, title: 'x'.repeat(101) }));
+  assert.throws(() => normalizeRevision({ ...base, fileIds: ['id1', 'id1'] }));
+  assert.throws(() => normalizeRevision({ ...base, fileIds: ['../secret'] }));
+  assert.throws(() => normalizeRevision({ ...base, generation: { referenceFileIds: {} } }));
+});
+
+test('range parser handles bounded, open and suffix ranges and rejects ambiguous or invalid ranges', () => {
+  assert.equal(byteRange(undefined, 100), null);
+  assert.deepEqual(byteRange('bytes=0-9', 100), { start: 0, end: 9 });
+  assert.deepEqual(byteRange('bytes=90-', 100), { start: 90, end: 99 });
+  assert.deepEqual(byteRange('bytes=-10', 100), { start: 90, end: 99 });
+  assert.deepEqual(byteRange('bytes=10-1000', 100), { start: 10, end: 99 });
+  for (const range of ['bytes=100-', 'bytes=10-9', 'bytes=-0', 'bytes=0-1,4-5', 'bytes=-', 'bytes=x-y']) assert.equal(byteRange(range, 100), false, range);
+  assert.equal(byteRange('bytes=0-', 0), false);
+});
+
+test('unauthorized legacy media lookup remains a 404 without touching filesystem', async () => {
+  let statement, parameters;
+  const ctx = context({ path: '/legacy-files/file1', query: async (sql, values) => { statement = sql; parameters = values; return { rows: [] }; } });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 404);
+  assert(statement.includes('f."userId"=$1'));
+  assert(statement.includes(publicVisibilitySql));
+  assert.deepEqual(parameters, [null, 'file1', false]);
+});
+
+test('unknown API is not claimed by content handler', async () => {
+  assert.equal(await handleContent(context({ path: '/api/unknown' })), false);
+});
+
+function transactionalContext({ path, method, body, actor, row }) {
+  const statements = [];
+  const ctx = context({
+    path, method, body, user: actor,
+    query: async (sql, parameters) => {
+      statements.push({ sql, parameters });
+      if (sql.includes('FROM community_submission s')) return { rows: [row], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    },
+  });
+  ctx.db.connect = async () => ({ query: ctx.db.query, release() { statements.push({ sql: 'RELEASE' }); } });
+  ctx.newId = () => 'generated1';
+  return { ctx, statements };
+}
+
+const workRow = {
+  id: 'work1', authorId: 'owner1', authorName: 'Owner', authorUsername: 'owner',
+  category: 'resource', title: 'Published title', text: 'Published body', model: '', sourceUrl: '', license: '',
+  fileIds: [], tagIds: [], generation: null, destination: 'community', submittedAt: new Date('2026-11-12T00:00:00Z'),
+  approvedNoteId: 'note1', status: 'approved', version: 2,
+};
+
+test('stale owner edits roll back without updating published content', async () => {
+  const { ctx, statements } = transactionalContext({
+    path: '/api/works/work1', method: 'PATCH', actor: { id: 'owner1' },
+    body: { version: 1, title: 'Stale edit' }, row: { ...workRow },
+  });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 409);
+  assert(statements.some(item => item.sql === 'ROLLBACK'));
+  assert.equal(statements.some(item => item.sql.startsWith('UPDATE')), false);
+  assert.equal(statements.at(-1).sql, 'RELEASE');
+});
+
+test('rejecting a pending revision retains original public columns and note id', async () => {
+  const { ctx, statements } = transactionalContext({
+    path: '/api/admin/submissions/work1/review', method: 'POST',
+    actor: { id: 'admin1', isAdmin: true }, body: { version: 2, action: 'reject', reason: 'Needs revision' },
+    row: { ...workRow, pendingRevision: { ...workRow, title: 'Unapproved private title' } },
+  });
+  await handleContent(ctx);
+  const update = statements.find(item => item.sql.startsWith('UPDATE community_submission SET category'));
+  assert.equal(update.parameters[2], 'Published title');
+  assert.equal(update.parameters[10], null);
+  assert.equal(update.parameters[11], 'approved');
+  assert.equal(update.parameters[12], 'note1');
+  assert(statements.some(item => item.sql.includes('INSERT INTO announcement')));
+  assert(statements.some(item => item.sql.includes('INSERT INTO moderation_log')));
+  assert(statements.some(item => item.sql === 'COMMIT'));
+  assert.equal(statements.some(item => item.sql.startsWith('DELETE FROM note')), false);
+});
+
+test('own-work likes are rejected in the transaction before any reaction write', async () => {
+  const { ctx, statements } = transactionalContext({
+    path: '/api/works/work1/like', method: 'POST', actor: { id: 'owner1' }, body: { active: true }, row: { ...workRow },
+  });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 400);
+  assert.equal(statements.some(item => item.sql.startsWith('INSERT INTO note_reaction')), false);
+  assert(statements.some(item => item.sql === 'ROLLBACK'));
+});
+
+test('legacy create alias keeps authentication checks instead of trusting body i or userId', async () => {
+  const ctx = context({ path: '/api/community/submissions/create', method: 'POST', body: { i: 'spoofed', userId: 'owner1', category: 'resource', title: 'Title', idempotencyKey: 'once' } });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 401);
+});
+
+test('a database file key cannot escape the mounted storage root', async () => {
+  const ctx = context({
+    path: '/legacy-files/file1',
+    query: async () => ({ rows: [{ id: 'file1', name: 'secret', type: 'text/plain', accessKey: '../outside' }] }),
+  });
+  await assert.rejects(handleContent(ctx), error => error.statusCode === 404);
+});
+
+test('saved library filtering and cursor are applied in SQL before the page limit', async () => {
+  let statement, parameters;
+  const ctx = context({ path: '/api/library?status=saved&cursor=work8', user: { id: 'reader1' },
+    query: async (sql, values) => { statement = sql; parameters = values; return { rows: [] }; } });
+  await handleContent(ctx);
+  assert(statement.includes('EXISTS (SELECT 1 FROM note_favorite f WHERE f."noteId"=s."approvedNoteId"'));
+  assert(statement.indexOf('EXISTS (SELECT 1 FROM note_favorite') < statement.indexOf('ORDER BY'));
+  assert(statement.includes('s.id<$2'));
+  assert.deepEqual(parameters, ['reader1', 'work8', 101]);
+  assert.equal(ctx.result.payload.nextCursor, null);
+});
+
+test('legacy timestamp codecs preserve relative, absolute and expired privacy boundaries', () => {
+  const now = Date.UTC(2026, 10, 12);
+  const aidx = (now - 946684800000).toString(36).padStart(8, '0') + '0123456789abcdef';
+  assert.equal(legacyIdTime(aidx), now);
+  assert.equal(legacyIdTime(aidx, 'objectid'), now);
+  assert.equal(legacyIdTime('00000001' + '0'.repeat(16), 'objectid'), 1000);
+  assert.equal(legacyIdTime('800000000001' + '0'.repeat(12), 'meid'), 1);
+  assert.equal(legacyIdTime('g' + '00000000001' + '0'.repeat(12), 'meidg'), 1);
+  assert.equal(legacyIdTime('0000000001' + '0'.repeat(16), 'ulid'), 1);
+  assert.equal(hiddenByTime(null, now - 100000, now), false);
+  assert.equal(hiddenByTime(-60, now - 59000, now), false);
+  assert.equal(hiddenByTime(-60, now - 60000, now), true);
+  assert.equal(hiddenByTime(now / 1000, now, now), true);
+  assert.equal(hiddenByTime((now - 1000) / 1000, now, now), false);
+  assert(publicVisibilitySql.includes('privacy_follow."followerId"=$1'));
+  assert(publicVisibilitySql.includes('u.id=$1'));
+});
+
+test('ranking cursors reject tampering and retain the random feed seed, boundary and anchor', () => {
+  const source = { v: 1, id: 'work7', order: 'random', seed: 'refresh-1', boundary: 'work2', anchor: Date.now() };
+  const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  assert.deepEqual(readWorkCursor(encode(source)), source);
+  assert.deepEqual(readWorkCursor('work7'), { v: 1, id: 'work7', order: 'latest' });
+  for (const value of [{ ...source, boundary: '../secret' }, { ...source, anchor: Date.now() + 3600000 }, { ...source, seed: "'" }, { ...source, order: 'unsafe' }]) {
+    assert.throws(() => readWorkCursor(encode(value)), error => error.statusCode === 400);
+  }
+});
+
+test('featured feed includes reactions, replies and reposts; following feed requires sign-in', async () => {
+  let statement;
+  const ctx = context({ path: '/api/works?sort=featured', query: async sql => { statement = sql; return { rows: [] }; } });
+  await handleContent(ctx);
+  for (const part of ['repliesCount', 'renoteCount', 'jsonb_each_text', 'heat DESC']) assert(statement.includes(part));
+  await assert.rejects(handleContent(context({ path: '/api/works?sort=following' })), error => error.statusCode === 401);
+});
+
+test('view deduplication uses the original server identity and only increments once in thirty minutes', async () => {
+  let count = 10, updates = 0;
+  const keys = new Set();
+  const ctx = context({ method: 'POST', path: '/api/works/work1/view', query: async sql => {
+    if (sql.startsWith('UPDATE community_submission')) { updates++; return { rows: [{ viewsCount: ++count }] }; }
+    return { rows: [{ ...workRow, viewsCount: count }] };
+  } });
+  ctx.ip = '192.0.2.5';
+  ctx.redis = { async set(key, _value, expiry, ttl, mode) {
+    assert.equal(expiry, 'EX'); assert.equal(ttl, 1800); assert.equal(mode, 'NX');
+    assert.equal(key.includes(ctx.ip), false);
+    const exists = keys.has(key); keys.add(key); return exists ? null : 'OK';
+  } };
+  await handleContent(ctx);
+  assert.equal(ctx.result.payload.viewsCount, 11);
+  await handleContent(ctx);
+  assert.equal(ctx.result.payload.viewsCount, 11);
+  assert.equal(updates, 1);
+});
+
+test('upload limits resolve role priority without reducing configured limits to twenty MiB', async () => {
+  const ctx = context({ user: { id: 'reader1' }, query: async sql => {
+    if (sql.includes('FROM meta')) return { rows: [{ policies: { maxFileSizeMb: 300, driveCapacityMb: 1000 },
+      clientOptions: { uploadLimits: { image: 80, video: 256, audio: 40, document: 50, other: 30 } } }] };
+    if (sql.includes('FROM role_assignment')) return { rows: [{ roleId: 'role1' }, { roleId: 'role2' }] };
+    if (sql.includes('FROM role')) return { rows: [
+      { id: 'role1', target: 'manual', policies: { maxFileSizeMb: { priority: 2, useDefault: false, value: 100 } } },
+      { id: 'role2', target: 'manual', policies: { maxFileSizeMb: { priority: 1, useDefault: false, value: 512 } } },
+    ] };
+    return { rows: [{ id: 'reader1', host: null }] };
+  } });
+  const limits = await uploadLimitsFor(ctx);
+  assert.equal(limits.maxFileSizeMb, 100);
+  assert.equal(limits.imagesMb, 80);
+  assert.equal(limits.videosMb, 100);
+  assert.equal(limits.documentsMb, 50);
+});
+
+test('media type detection trusts file signatures and legacy files do not enter processing', () => {
+  assert.equal(sniffType(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), 'application/json'), 'image/png');
+  assert.equal(sniffType(Buffer.from('<script>bad</script>'), 'image/png'), 'application/octet-stream');
+  assert.equal(mediaState({ width: 300 }), 'ready');
+  assert.equal(mediaState({ communityMedia: { state: 'pending', version: 1 } }), 'pending');
+  assert.equal(mediaState({ communityMedia: { state: 'failed', attempts: 3 } }), 'failed');
+});
+
+test('missing legacy derivatives fall back to the already authorized original with its MIME and size', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'community-media-fallback-'));
+  const original = join(root, 'original-key');
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  await writeFile(original, png);
+  try {
+    for (const variant of ['', '?variant=web', '?variant=webpublic', '?variant=thumbnail']) {
+      const ctx = context({ method: 'HEAD', path: `/legacy-files/file1${variant}`, query: async () => ({ rows: [{
+        id: 'file1', name: 'legacy.png', type: 'image/png', accessKey: 'original-key',
+        thumbnailAccessKey: 'missing-thumbnail', webpublicAccessKey: 'missing-web', webpublicType: 'image/webp',
+      }] }) });
+      const headers = {};
+      ctx.filesRoot = root;
+      ctx.reply = {
+        header(name, value) { headers[name] = value; return this; },
+        code(value) { ctx.result.status = value; return this; },
+        send() { return this; },
+      };
+      await handleContent(ctx);
+      assert.equal(ctx.result.status, 200);
+      assert.equal(headers['Content-Type'], 'image/png');
+      assert.equal(headers['Content-Length'], png.length);
+    }
+  } finally { await unlink(original); await rmdir(root); }
+});

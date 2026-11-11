@@ -1,0 +1,130 @@
+$control-height: 36px;
+$control-radius: 8px;
+$control-icon-size: 16px;
+
+@mixin focus-ring {
+  outline: var(--control-keyboard-outline, 2px solid var(--second-in-gray));
+  outline-offset: 2px;
+
+  @media (forced-colors: active) {
+    outline: var(--control-keyboard-outline, 2px solid Highlight);
+  }
+}
+
+// Shared by segmented controls, menus, and model lists.
+@mixin hover-surface {
+  background-color: var(--state-hover-surface, var(--hover-color));
+  color: var(--state-hover-text, var(--black));
+}
+
+@mixin selected-surface {
+  background-color: var(
+    --state-selected-surface,
+    var(--state-hover-surface, var(--hover-color))
+  );
+  box-shadow: var(--state-selected-shadow, none);
+  color: var(--state-selected-text, var(--state-hover-text, var(--black)));
+}
+
+@mixin message-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--second-in-gray);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@mixin composer-surface {
+  --composer-radius: 16px;
+  --composer-inset: 8px;
+  --composer-stroke: 1px;
+  --composer-action-size: 28px;
+  --composer-gap: 4px;
+  padding: var(--composer-inset);
+  box-sizing: border-box;
+  border-radius: var(--composer-radius);
+  border: var(--composer-stroke) solid transparent;
+  transition:
+    background-color var(--duration-normal, 0.25s) var(--ease-out, ease),
+    box-shadow var(--duration-normal, 0.25s) var(--ease-out, ease);
+  background: var(--composer-focused-surface);
+  box-shadow: var(--composer-focus-shadow);
+}
+
+@mixin surface {
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: $control-radius;
+  background: var(--control-surface);
+  color: var(--black);
+  font-family: inherit;
+  letter-spacing: 0;
+  box-shadow: none;
+  transition:
+    border-color 0.2s var(--ease-out, ease),
+    background-color 0.2s var(--ease-out, ease),
+    box-shadow 0.2s var(--ease-out, ease);
+
+  &:focus-visible:not(:disabled):not([data-pointer-focus]) {
+    @include focus-ring;
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled):not(
+        :is([data-state="open"], [aria-expanded="true"], [aria-pressed="true"])
+      ) {
+      @include hover-surface;
+    }
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  @media (forced-colors: active) {
+    border-color: ButtonText;
+
+    &:focus-visible:not(:disabled):not([data-pointer-focus]) {
+      border-color: Highlight;
+      box-shadow: none;
+    }
+  }
+}
+
+@mixin field {
+  @include surface;
+  min-height: $control-height;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 22px;
+  min-width: 0;
+}
+
+@mixin quiet-button {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+
+  &:is(:focus, :focus-visible):not(:disabled) {
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    &:hover:not(:disabled) {
+      @include hover-surface;
+    }
+  }
+
+  &:focus-visible:not(:disabled):not([data-pointer-focus]) {
+    @include focus-ring;
+
+    @media (forced-colors: active) {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+      box-shadow: none;
+    }
+  }
+}

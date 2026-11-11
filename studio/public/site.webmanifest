@@ -1,0 +1,28 @@
+{
+  "name": "章鱼公益平台",
+  "short_name": "章鱼公益平台",
+  "description": "智能 AI 对话服务，支持多模态交互",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "scope": "/",
+  "theme_color": "#fafafa",
+  "background_color": "#fafafa",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "categories": ["productivity", "utilities"],
+  "screenshots": []
+}

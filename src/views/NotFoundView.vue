@@ -1,0 +1,1 @@
+<template><div class="empty-state not-found"><span class="not-found-number">404</span><h1>这一页还没有作品</h1><p>链接可能不完整，回社区继续看看。</p><RouterLink to="/discover" class="button primary">返回发现</RouterLink></div></template>

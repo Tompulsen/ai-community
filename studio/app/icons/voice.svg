@@ -1,0 +1,11 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" overflow="visible">
+  <!-- 麦克风：实心面性，修长比例，视觉重心上移 -->
+  <!-- 拾音头：竖直胶囊，高宽比2:1，高10px宽5px -->
+  <rect x="9.5" y="1" width="5" height="10" rx="2.5"/>
+  <!-- 托架弧线：弧线宽≈拾音头宽1/3≈1.7px，优雅U型 -->
+  <path d="M6.5 8.5Q6.5 16 12 16Q17.5 16 17.5 8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  <!-- 竖杆：纤细 -->
+  <line x1="12" y1="16" x2="12" y2="19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  <!-- 底座横线：短横条，两端小圆角 -->
+  <line x1="10" y1="19" x2="14" y2="19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+</svg>

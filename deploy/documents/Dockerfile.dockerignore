@@ -1,0 +1,15 @@
+**
+!services/
+!services/documents/
+!services/documents/package.json
+!services/documents/package-lock.json
+!services/documents/engine.mjs
+!services/documents/build.mjs
+!services/documents/upstream-lock.json
+!services/documents/test.mjs
+!services/documents/server.ts
+!services/documents/QXChat-LICENSE
+!studio/
+!studio/app/
+!studio/app/utils/
+!studio/app/utils/document-workspace.ts

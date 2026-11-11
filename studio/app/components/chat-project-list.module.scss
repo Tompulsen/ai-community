@@ -1,0 +1,445 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.create,
+.toggle,
+.more,
+.create-action,
+.empty-action {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--black);
+  box-shadow: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+
+  > svg {
+    flex: 0 0 auto;
+    stroke-width: 1.65;
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      @include controls.hover-surface;
+    }
+  }
+
+  &:active:not(:disabled) {
+    @include controls.hover-surface;
+  }
+
+  &:focus-visible {
+    @include controls.focus-ring;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.empty-action {
+  width: 100%;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.create {
+  flex: 0 0 28px;
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 6px;
+  color: var(--second-in-gray);
+}
+
+.create-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 280ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    visibility 0s linear 280ms;
+
+  &[data-open="true"] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    visibility: visible;
+    transition:
+      grid-template-rows 280ms var(--ease-out),
+      opacity 200ms var(--ease-out),
+      visibility 0s;
+  }
+}
+
+.create-inner {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  padding-right: 4px;
+}
+
+.create-input {
+  @include controls.field;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  line-height: 20px;
+  box-shadow: none;
+  caret-color: currentColor;
+
+  &:focus-visible {
+    @include controls.focus-ring;
+  }
+}
+
+.create-action {
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 6px;
+  color: var(--second-in-gray);
+}
+
+.create-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.folder {
+  min-width: 0;
+  margin-top: 2px;
+
+  &[data-current] .name {
+    font-weight: 500;
+  }
+
+  &[data-drag-over] > .row {
+    @include controls.hover-surface;
+
+    .toggle,
+    .more,
+    .chevron {
+      color: inherit;
+    }
+  }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-right: 4px;
+  border-radius: 6px;
+  transition: background-color 200ms var(--ease-out);
+
+  @media (hover: hover) {
+    &:hover {
+      @include controls.hover-surface;
+    }
+  }
+
+  &:active {
+    @include controls.hover-surface;
+  }
+
+  &:hover,
+  &:active {
+    .toggle,
+    .more,
+    .chevron {
+      color: inherit;
+    }
+  }
+
+  .toggle,
+  .more {
+    &:hover,
+    &:active {
+      background: transparent;
+    }
+  }
+}
+
+.toggle {
+  flex: 1;
+  gap: 6px;
+  padding-right: 8px;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toggle .name {
+  flex: 1;
+}
+
+.count {
+  flex: 0 0 auto;
+  min-width: 2ch;
+  color: var(--second-in-gray);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.chevron {
+  color: var(--second-in-gray);
+  transition: transform 280ms var(--ease-out);
+}
+
+.folder[data-open="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.more {
+  flex: 0 0 28px;
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  padding: 6px;
+  color: var(--second-in-gray);
+
+  &[aria-expanded="true"] {
+    color: var(--state-selected-text, var(--state-hover-text, var(--black)));
+  }
+}
+
+.contents {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 280ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    visibility 0s linear 280ms;
+}
+
+.folder[data-open="true"] > .contents {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 280ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    visibility 0s;
+}
+
+.inner {
+  min-width: 0;
+  min-height: 0;
+  padding-left: 36px;
+  overflow: hidden;
+}
+
+.empty-action {
+  color: var(--second-in-gray);
+}
+
+.conversations {
+  min-width: 0;
+  margin-top: 20px;
+
+  &[data-drag-over] > section > .heading > button {
+    @include controls.hover-surface;
+  }
+}
+
+[data-narrow="true"] {
+  .heading {
+    padding-right: 0;
+  }
+
+  .create {
+    display: none;
+  }
+}
+
+.narrow {
+  .row {
+    position: relative;
+    justify-content: center;
+    width: 44px;
+    max-width: 100%;
+    height: 44px;
+    margin: 0 auto 4px;
+    padding: 0;
+  }
+
+  .toggle,
+  .empty-action {
+    justify-content: center;
+  }
+
+  .toggle {
+    width: 100%;
+    height: 44px;
+    gap: 0;
+    padding: 0;
+  }
+
+  .more {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 6;
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
+    padding: 0;
+
+    > svg {
+      width: 12px;
+      height: 12px;
+    }
+  }
+
+  .name,
+  .count,
+  .chevron {
+    display: none;
+  }
+
+  .inner {
+    padding-left: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .narrow {
+    .more {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 200ms var(--ease-out);
+    }
+
+    .row:hover .more,
+    .row:focus-within .more,
+    .more[aria-expanded="true"] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .toggle,
+  .empty-action {
+    min-height: 44px;
+  }
+
+  .create,
+  .more,
+  .create-action {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+    padding: 12px;
+  }
+
+  .create-form {
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
+  }
+
+  .create-input {
+    min-height: 44px;
+  }
+
+  .narrow {
+    .row {
+      flex-direction: column;
+      height: auto;
+    }
+
+    .more {
+      position: static;
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 12px;
+
+      > svg {
+        width: 16px;
+        height: 16px;
+      }
+    }
+  }
+}
+
+@include motion.system-reduced-motion {
+  .create,
+  .create-action,
+  .create-panel,
+  .create-panel[data-open="true"],
+  .toggle,
+  .more,
+  .empty-action,
+  .row,
+  .chevron,
+  .contents,
+  .folder[data-open="true"] > .contents {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) {
+  .create,
+  .create-action,
+  .create-panel,
+  .create-panel[data-open="true"],
+  .toggle,
+  .more,
+  .empty-action,
+  .row,
+  .chevron,
+  .contents,
+  .folder[data-open="true"] > .contents {
+    transition: none;
+  }
+}

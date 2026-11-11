@@ -1,0 +1,194 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.usage {
+  display: flex;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.metrics {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  box-sizing: border-box;
+  min-height: 28px;
+  min-width: 44px;
+  margin: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--second-in-gray);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: color 160ms var(--ease-out, ease);
+
+  > svg {
+    flex: 0 0 14px;
+  }
+
+  &[aria-expanded="true"] {
+    color: var(--state-selected-text, var(--state-hover-text, var(--black)));
+  }
+
+  &:focus-visible {
+    color: var(--black);
+    @include controls.focus-ring;
+  }
+}
+
+@media (hover: hover) {
+  .trigger:hover {
+    color: var(--state-hover-text, var(--black));
+  }
+}
+
+.value {
+  min-width: 5ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: start;
+}
+
+.trigger[data-metric="speed"] .value {
+  min-width: 9ch;
+}
+
+.ring {
+  overflow: visible;
+}
+
+.track {
+  opacity: 0.28;
+}
+
+.fill {
+  transition: stroke-dasharray 200ms var(--ease-out, ease);
+}
+
+.panel {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 86px;
+  min-width: 0;
+  padding: 4px 0;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  animation: metric-detail-enter 140ms var(--ease-out, ease);
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+
+  strong {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.description,
+.note {
+  margin: 0;
+  color: var(--second-in-gray);
+  text-wrap: pretty;
+}
+
+.contextPanel {
+  min-height: 0;
+  text-align: center;
+}
+
+.contextSummary {
+  display: grid;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+
+  p {
+    margin: 0;
+  }
+}
+
+.contextHeading {
+  color: var(--second-in-gray);
+  font-size: 13px;
+}
+
+.contextPercent {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.contextTokens {
+  color: var(--black);
+}
+
+.estimateNote {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@keyframes metric-detail-enter {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .trigger {
+    min-height: 44px;
+    padding-block: 8px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .trigger,
+  .fill {
+    transition: none;
+  }
+  .panel {
+    animation: none;
+  }
+}
+
+:global(.reduce-motion) {
+  .trigger,
+  .fill {
+    transition: none;
+  }
+  .panel {
+    animation: none;
+  }
+}

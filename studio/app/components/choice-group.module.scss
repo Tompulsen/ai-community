@@ -1,0 +1,175 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.group {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  vertical-align: middle;
+  color: var(--black);
+  font-family: inherit;
+}
+
+.options {
+  display: grid;
+  grid-template-columns: repeat(var(--choice-columns), minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.choice {
+  position: relative;
+  display: block;
+  min-width: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.input[type="radio"] {
+  --control-keyboard-outline: none;
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.option {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 32px;
+  height: 100%;
+  padding: 4px 8px;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--black);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  text-align: center;
+  transition:
+    background-color 200ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 200ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 200ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 200ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.input:checked + .option {
+  @include controls.selected-surface;
+  font-weight: 500;
+}
+
+.input:focus-visible + .option {
+  @include controls.focus-ring;
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .input:not(:disabled):not(:checked):hover + .option {
+    @include controls.hover-surface;
+  }
+}
+
+.input:not(:disabled):active + .option {
+  @include controls.hover-surface;
+}
+
+.input:disabled,
+.group:disabled .input {
+  cursor: not-allowed;
+}
+
+.input:disabled + .option,
+.group:disabled .option {
+  opacity: 0.45;
+}
+
+.visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  color: var(--second-in-gray);
+}
+
+.input:not(:disabled):is(:checked, :hover, :active) + .option .visual {
+  color: inherit;
+}
+
+.check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  color: inherit;
+  opacity: 0;
+}
+
+.group[data-variant="grid"] {
+  display: block;
+  width: 100%;
+
+  .options {
+    gap: 8px;
+    padding: 0;
+    background: transparent;
+  }
+
+  .option {
+    flex-direction: column;
+    min-height: 64px;
+    padding: 8px;
+    gap: 8px;
+    border-radius: 8px;
+    background: var(--control-surface);
+  }
+
+  .visual {
+    min-height: 24px;
+  }
+
+  .input:checked + .option {
+    border-color: transparent;
+    @include controls.selected-surface;
+
+    .check {
+      opacity: 1;
+    }
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .option {
+    min-height: 44px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .option {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .option {
+  transition: none;
+}

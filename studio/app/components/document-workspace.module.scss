@@ -1,0 +1,189 @@
+.workspace {
+  padding: 16px;
+  min-width: 0;
+  color: var(--black);
+}
+.meta {
+  color: var(--second-in-gray);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  button {
+    min-height: 36px;
+  }
+}
+.fileCard {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--separator-color);
+  border-radius: 10px;
+  max-width: 100%;
+  min-width: 0;
+}
+.fileTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  strong {
+    overflow-wrap: anywhere;
+    min-width: 0;
+    font-size: 14px;
+  }
+  svg {
+    flex-shrink: 0;
+  }
+}
+.files {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+  max-height: 220px;
+  overflow-y: auto;
+  button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-align: left;
+    padding: 10px;
+    background: transparent;
+    color: inherit;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    min-height: 44px;
+    span {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    small {
+      white-space: nowrap;
+    }
+    &[aria-pressed="true"],
+    &:hover {
+      background: var(--hover-color);
+      border-color: var(--separator-color);
+    }
+  }
+}
+.detail {
+  margin-top: 20px;
+  min-width: 0;
+  h3 {
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+  select {
+    padding: 8px;
+    color: inherit;
+    background: var(--white);
+    border: 1px solid var(--separator-color);
+    border-radius: 4px;
+  }
+}
+.contentPreview {
+  margin-top: 16px;
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  p {
+    white-space: pre-wrap;
+    margin: 8px 0;
+  }
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 8px 0;
+  }
+}
+.tableParagraph {
+  padding-inline: 8px;
+  background: var(--hover-color);
+}
+.previewTable {
+  max-width: 100%;
+  max-height: 360px;
+  overflow: auto;
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+  th,
+  td {
+    padding: 8px;
+    border-bottom: 1px solid var(--separator-color);
+    text-align: left;
+    min-width: 65px;
+    max-width: 420px;
+  }
+  td {
+    font-variant-numeric: tabular-nums;
+  }
+}
+.error {
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  max-width: 160px;
+  min-width: 0;
+  flex: 0 1 130px;
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  button {
+    flex: 0 0 28px;
+    background: transparent;
+    color: inherit;
+    border: 0;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    min-width: 28px;
+    min-height: 28px;
+  }
+}
+.workspace,
+.fileCard,
+.source {
+  button:focus-visible,
+  select:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
+@media (max-width: 600px) {
+  .workspace {
+    padding: 12px;
+  }
+  .actions {
+    button {
+      min-height: 44px;
+    }
+  }
+  .previewTable {
+    th,
+    td {
+      padding: 6px;
+    }
+  }
+}

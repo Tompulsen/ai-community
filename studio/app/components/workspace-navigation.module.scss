@@ -1,0 +1,368 @@
+@use "../styles/controls" as controls;
+@use "../styles/motion" as motion;
+
+.topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--second-in-gray);
+  background: var(--workspace-chrome-surface);
+}
+
+.leading,
+.menubar,
+.mobileActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.menubar {
+  margin-left: 12px;
+}
+
+.icon,
+.menuTrigger,
+.menu button {
+  @include controls.quiet-button;
+  box-sizing: border-box;
+  border: 0;
+  margin: 0;
+  font-family: inherit;
+  letter-spacing: 0;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+
+  svg {
+    width: 16px;
+    height: 16px;
+    stroke-width: 1.7;
+    filter: none !important;
+  }
+}
+
+.menuTrigger {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 20px;
+
+  &[aria-expanded="true"] {
+    @include controls.selected-surface;
+  }
+}
+
+.mobileActions {
+  display: none;
+}
+
+.chatActions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.rail {
+  grid-row: 2;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 0;
+  padding: 4px 4px 12px;
+  color: var(--second-in-gray);
+  background: var(--workspace-chrome-surface);
+
+  .icon {
+    width: 36px;
+    height: 36px;
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+  }
+}
+
+.railGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+
+  [aria-current="page"] {
+    @include controls.selected-surface;
+  }
+}
+
+.menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1600;
+  box-sizing: border-box;
+  padding: 6px;
+  overflow: auto;
+  border: 0;
+  border-radius: 8px;
+  background: var(--list-surface);
+  color: var(--black);
+  box-shadow: var(--floating-shadow);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 220ms var(--ease-out),
+    visibility 0s 220ms;
+
+  &[data-open="true"] {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+
+  button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: transparent;
+    text-align: left;
+    font-size: 13px;
+    line-height: 20px;
+
+    &[data-destructive] {
+      --state-hover-text: var(--danger-text, var(--danger));
+      color: var(--danger-text, var(--danger));
+    }
+
+    > span:first-child {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+    }
+
+    svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.7;
+      filter: none !important;
+    }
+  }
+}
+
+.shortcutMenu {
+  max-width: calc(100vw - 16px);
+
+  &:focus-visible {
+    @include controls.focus-ring;
+  }
+}
+
+.menu button.shortcutRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 20px;
+
+  &[data-group-start] {
+    margin-top: 6px;
+  }
+
+  > span:first-child {
+    display: block;
+    min-width: 0;
+  }
+}
+
+.shortcutLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcutKeys {
+  color: var(--second-in-gray);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+@starting-style {
+  .menu[data-open="true"] {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (max-width: 600px) {
+  .topbar {
+    padding: 0 4px;
+    background: var(--workspace-canvas-surface);
+
+    &[data-sidebar-open="true"] {
+      display: none;
+    }
+  }
+
+  .history,
+  .menubar,
+  .rail,
+  .chatActions {
+    display: none;
+  }
+
+  .mobileActions {
+    display: flex;
+  }
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .icon,
+  .rail .icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .rail {
+    padding-inline: 2px;
+  }
+
+  .menuTrigger,
+  .menu button,
+  .menu button.shortcutRow {
+    min-height: 44px;
+  }
+}
+
+@include motion.system-reduced-motion {
+  .menu,
+  .icon,
+  .menuTrigger,
+  .menu button {
+    transition: none;
+    transform: none;
+  }
+}
+
+:global(.reduce-motion) .menu,
+:global(.reduce-motion) .icon,
+:global(.reduce-motion) .menuTrigger,
+:global(.reduce-motion) .menu button {
+  transition: none;
+  transform: none;
+}
+
+.compact {
+  gap: 8px;
+  padding-inline: 12px;
+  border-bottom: 1px solid var(--border-in-light);
+
+  .menubar {
+    margin-left: 0;
+  }
+  .chatActions {
+    display: none;
+  }
+  .menuTrigger {
+    min-height: 36px;
+  }
+  .destinations {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    flex-shrink: 0;
+
+    button {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+    [aria-current="page"] {
+      @include controls.selected-surface;
+    }
+  }
+
+  @media (max-width: 600px) {
+    padding-inline: 4px;
+    gap: 0;
+    &[data-sidebar-open="true"] {
+      display: flex;
+    }
+    .menuTrigger {
+      min-height: 44px;
+      padding-inline: 8px;
+    }
+    .destinations {
+      margin: 0 auto;
+      gap: 0;
+    }
+  }
+}
+
+:global([data-community-embed]) .topbar {
+  padding-inline: 12px;
+
+  .menuTrigger {
+    min-height: 40px;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  @media (max-width: 600px), (pointer: coarse) {
+    padding-inline: 4px;
+
+    .menuTrigger {
+      min-height: 44px;
+      font-size: 12px;
+    }
+  }
+}

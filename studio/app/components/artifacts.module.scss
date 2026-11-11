@@ -1,0 +1,52 @@
+.artifacts {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  background: var(--second);
+
+  &-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    padding: 0 20px;
+    background: var(--white);
+    border-bottom: var(--border-in-light);
+    flex-shrink: 0;
+  }
+
+  &-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--black);
+    white-space: nowrap;
+  }
+
+  &-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &-content {
+    flex-grow: 1;
+    padding: 16px;
+    min-height: 0;
+  }
+}
+
+.artifacts-iframe {
+  width: 100%;
+  height: 100%;
+  border: var(--border-in-light);
+  border-radius: var(--radius-sm);
+  background-color: var(--white);
+}

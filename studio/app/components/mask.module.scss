@@ -1,0 +1,339 @@
+@use "../styles/controls" as controls;
+@import "../styles/animation.scss";
+
+.mask-config {
+  :global(.user-avatar) {
+    box-sizing: border-box;
+    background: var(--white);
+    border: 1px solid transparent;
+  }
+
+  svg:global(.user-avatar) {
+    fill: var(--black);
+
+    rect[width="30"][height="30"][fill="#E7F8FF"] {
+      fill: transparent;
+    }
+  }
+}
+
+.mask-avatar-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.config-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: var(--border-in-light);
+
+  button {
+    min-height: 36px;
+    padding: 6px 14px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: var(--white);
+    color: var(--black);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+
+    &[aria-selected="true"] {
+      @include controls.selected-surface;
+    }
+
+    @media (hover: hover) {
+      &:hover:not([aria-selected="true"]) {
+        @include controls.hover-surface;
+      }
+    }
+
+    &:focus-visible {
+      border-color: transparent;
+      color: var(--primary);
+    }
+  }
+}
+
+.config-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.context-list {
+  min-width: 0;
+}
+
+.context-item {
+  min-width: 0;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: var(--border-in-light);
+}
+
+.context-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  margin-bottom: 10px;
+
+  > button {
+    border-color: transparent;
+    width: 32px;
+    height: 32px;
+    padding: 7px;
+    border-radius: 10px;
+  }
+}
+
+.context-role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+
+  select {
+    min-width: 130px;
+  }
+}
+
+.context-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 32px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--second-in-gray);
+  cursor: grab;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.context-add {
+  display: flex;
+  justify-content: flex-start;
+
+  button {
+    border-color: transparent;
+  }
+}
+
+.context-empty {
+  padding: 28px 0;
+  font-size: 14px;
+  color: var(--second-in-gray);
+}
+
+.mask-page {
+  --focus-ring: none;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  :global(.window-actions .window-action-button) > button {
+    @include controls.quiet-button;
+  }
+
+  .mask-page-body {
+    padding: 20px;
+    overflow-y: auto;
+
+    @media screen and (max-width: 600px) {
+      padding: 16px;
+    }
+
+    .mask-filter {
+      width: 100%;
+      max-width: 100%;
+      margin-bottom: 16px;
+      animation: slide-in ease 0.3s;
+      height: 44px;
+
+      display: flex;
+
+      .search-bar {
+        flex-grow: 1;
+        max-width: 100%;
+        min-width: 0;
+
+        &:focus-visible {
+          @include controls.focus-ring;
+        }
+      }
+
+      .filter-select {
+        height: 100%;
+        min-width: 0;
+        margin-left: 10px;
+
+        > [data-select-trigger] {
+          height: 100%;
+          min-height: 44px;
+          padding: 0 8px;
+          border: var(--border-in-light);
+          border-radius: var(--radius-sm, 10px);
+          background: var(--white);
+          font-size: 13px;
+          cursor: pointer;
+        }
+      }
+
+      .mask-filter-lang {
+        height: 100%;
+        margin-left: 10px;
+
+        > [data-select-trigger] {
+          @include controls.quiet-button;
+        }
+      }
+
+      .mask-create {
+        height: 100%;
+        margin-left: 10px;
+        box-sizing: border-box;
+        min-width: 80px;
+      }
+    }
+
+    .mask-list {
+      border: var(--border-in-light);
+      border-radius: 8px;
+      background: var(--list-surface);
+
+      &:empty {
+        border: 0;
+      }
+    }
+
+    .mask-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px;
+      animation: slide-in ease 0.3s;
+
+      &:not(:last-child) {
+        border-bottom: var(--border-in-light);
+      }
+
+      .mask-header {
+        display: flex;
+        align-items: center;
+        flex: 1;
+        min-width: 0;
+
+        .mask-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          margin-right: 10px;
+        }
+
+        .mask-title {
+          min-width: 0;
+
+          .mask-name {
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 20px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .mask-info {
+            margin-top: 2px;
+            color: var(--second-in-gray);
+            font-size: 13px;
+            line-height: 18px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        }
+      }
+
+      .mask-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: nowrap;
+        flex-shrink: 0;
+        gap: 4px;
+        transition: opacity 0.3s var(--ease-out);
+
+        .mask-chat {
+          color: var(--primary);
+        }
+      }
+
+      @media screen and (max-width: 600px) {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        padding: 8px 12px;
+
+        .mask-actions {
+          width: 100%;
+          justify-content: flex-end;
+
+          button {
+            min-width: 44px;
+            min-height: 44px;
+            border: 0;
+            padding: 6px 10px;
+          }
+        }
+      }
+    }
+  }
+}
+
+.mask-preview-summary {
+  margin-bottom: 16px;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 18px;
+
+  p {
+    margin: 0 0 6px;
+    color: var(--black);
+    font-size: 14px;
+    line-height: 22px;
+  }
+}
+
+.search-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--second-in-gray);
+
+  .search-empty-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+
+  .search-empty-text {
+    font-size: 14px;
+  }
+}

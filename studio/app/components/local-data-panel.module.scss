@@ -1,0 +1,211 @@
+@use "../styles/motion" as motion;
+
+.panel {
+  min-width: 0;
+  margin: 0 0 24px;
+  color: var(--black);
+  font-size: 14px;
+  line-height: 1.45;
+
+  > div {
+    margin: 0;
+    border: 0;
+    border-radius: 14px;
+    background: var(--white);
+  }
+}
+
+.hint {
+  margin: 0;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.options {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 32px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--control-focus-shadow);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  padding: 1px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--bar-color);
+  transition: background-color 180ms var(--ease-out, ease);
+
+  > span {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    transition: transform 240ms var(--ease-out, ease);
+  }
+}
+
+.option[aria-checked="true"] .switch {
+  border-color: transparent;
+  background: var(--primary-vivid, var(--primary));
+
+  > span {
+    transform: translateX(14px);
+  }
+}
+
+.panel .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  gap: 16px;
+  padding: 10px 16px;
+
+  > div:first-child > div {
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.45;
+
+    > div + div {
+      margin-top: 3px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+  }
+}
+
+.panel .scope-row {
+  align-items: stretch;
+  gap: 10px;
+
+  > div:first-child > div {
+    margin-bottom: 0;
+    font-weight: 600;
+
+    > div + div {
+      margin-bottom: 0;
+      font-weight: 400;
+    }
+  }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+
+  button {
+    min-height: var(--button-height, 32px);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+}
+
+.preview {
+  padding: 10px 16px;
+  border-bottom: var(--border-in-light);
+
+  .option {
+    flex: 1;
+    max-width: 340px;
+  }
+}
+
+.preview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding-top: 8px;
+}
+
+.feedback {
+  margin: 0;
+  padding: 10px 16px;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+@include motion.system-reduced-motion {
+  .switch,
+  .switch > span {
+    transition: none;
+  }
+}
+
+:global(.reduce-motion) .switch,
+:global(.reduce-motion) .switch > span {
+  transition: none;
+}
+
+@media (pointer: coarse) {
+  .actions button {
+    min-height: 44px;
+  }
+}
+
+@media only screen and (max-width: 600px) {
+  .options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel .row,
+  .preview-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .actions {
+    justify-content: flex-end;
+
+    button {
+      min-height: 44px;
+    }
+  }
+
+  .preview .option {
+    max-width: none;
+  }
+}

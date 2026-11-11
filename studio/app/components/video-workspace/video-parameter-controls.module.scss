@@ -1,0 +1,280 @@
+@use "../../styles/controls" as controls;
+
+.trigger > button[type="button"] {
+  justify-content: center;
+  width: auto;
+  height: var(--composer-action-size, 28px);
+  min-height: var(--composer-action-size, 28px);
+  padding: 0 6px;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 16px;
+
+  > svg {
+    flex-shrink: 0;
+  }
+}
+
+.triggerSummary {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controls {
+  display: grid;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0;
+  gap: 12px;
+  color: var(--black);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.controls .modeField {
+  min-height: 36px;
+  padding: 0;
+}
+
+.section {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.label {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  color: var(--second-in-gray);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.resolutionChoice,
+.ratioChoice {
+  min-width: 0;
+
+  [role="radiogroup"] {
+    display: block;
+    width: 100%;
+  }
+}
+
+.ratioChoice [role="radiogroup"][data-variant="grid"] > div {
+  gap: 4px;
+
+  > label > span {
+    min-height: 48px;
+    padding: 2px 4px;
+    gap: 2px;
+    background: transparent;
+  }
+}
+
+.ratioChoice :global(.lucide-check) {
+  display: none;
+}
+
+.durationHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  gap: 12px;
+
+  .label {
+    margin: 0;
+  }
+
+  output {
+    color: var(--black);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.currentDuration {
+  min-width: 5ch;
+  font-weight: 500;
+  text-align: right;
+}
+
+.durationRange[type="range"] {
+  display: block;
+  min-height: 32px;
+  margin: 0;
+}
+
+.durationLimits {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--second-in-gray);
+  font-variant-numeric: tabular-nums;
+}
+
+.customDimensions {
+  min-width: 0;
+  margin: 0;
+
+  > summary {
+    @include controls.quiet-button;
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    min-height: 32px;
+    padding: 4px 0;
+    gap: 6px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--second-in-gray);
+    list-style: none;
+    cursor: pointer;
+
+    &::marker,
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &[open] > summary > svg {
+    transform: rotate(180deg);
+  }
+}
+
+.sizeDimensions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
+  align-items: end;
+  min-width: 0;
+  margin-top: 8px;
+  gap: 8px;
+
+  label {
+    display: grid;
+    min-width: 0;
+    margin: 0;
+    gap: 4px;
+    color: var(--second-in-gray);
+  }
+
+  button {
+    @include controls.quiet-button;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    color: var(--second-in-gray);
+    cursor: pointer;
+  }
+}
+
+.sizeDimensions input[type="number"],
+.customDuration input[type="number"] {
+  @include controls.surface;
+  width: 100%;
+  max-width: none;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sizePreview {
+  display: block;
+  margin-top: 8px;
+  color: var(--second-in-gray);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.customDuration {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  margin-top: 8px;
+  gap: 12px;
+  color: var(--second-in-gray);
+}
+
+.customValue {
+  display: block;
+  margin-top: 8px;
+  color: var(--second-in-gray);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.limitHint {
+  margin: 6px 0 0;
+  color: var(--black);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.error {
+  margin: 8px 0 0;
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .controls .modeField,
+  .customDimensions > summary {
+    min-height: 44px;
+  }
+
+  .trigger > button[type="button"] {
+    min-height: 44px;
+  }
+
+  .durationRange[type="range"] {
+    min-height: 44px;
+  }
+
+  .sizeDimensions input[type="number"],
+  .customDuration input[type="number"] {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 600px) {
+  .trigger {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+  }
+
+  .trigger > button[type="button"] {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .triggerSummary {
+    display: none;
+  }
+}
