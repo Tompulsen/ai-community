@@ -1,4 +1,5 @@
 import React from "react";
+import { VIDEO_MODEL_PROFILES } from "../app/config/video-models";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { jest } from "@jest/globals";
 import type { VideoDraft } from "../app/store/video";
@@ -46,7 +47,7 @@ beforeEach(() => {
   useVideoStore.setState({
     draft: {
       ...initialDraft,
-      model: "sora-2",
+      model: "grok-imagine-video",
       resolution: "720p",
       aspectRatio: "16:9",
       size: "1280x720",
@@ -62,11 +63,12 @@ beforeEach(() => {
 });
 
 test.each([45, 2.5])(
-  "opening controls preserves custom resolution, ratio and duration %s without writing",
+  "opening controls corrects unsupported resolution and duration %s without mutating stored data",
   (duration) => {
     useVideoStore.setState((state) => ({
       draft: {
         ...state.draft,
+        model: "sora-2",
         resolution: "2160p",
         aspectRatio: "7:4",
         size: "2048x1080",
@@ -74,21 +76,15 @@ test.each([45, 2.5])(
       },
     }));
     const original = useVideoStore.getState().draft;
-    const { rerender } = render(<ParameterControls />);
-    fireEvent.click(screen.getByText("自定义参数"));
-    rerender(<ParameterControls />);
-    expect(screen.getByText("2160p")).toBeInTheDocument();
+    render(<ParameterControls />);
+    expect(screen.queryByText("2160p")).not.toBeInTheDocument();
     expect(screen.getByText("7:4")).toBeInTheDocument();
-    expect(screen.getByText(`${duration}s`)).toBeInTheDocument();
-    expect(screen.getByLabelText("自定义视频时长")).toHaveValue(duration);
-    expect(screen.getByRole("slider", { name: "视频时长" })).toHaveValue(
-      String(duration > 30 ? 30 : 3),
-    );
+    expect(screen.queryByLabelText("自定义视频时长")).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "视频时长" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "720P" })).toBeChecked();
     expect(
-      screen
-        .getAllByRole("radio")
-        .some((radio) => (radio as HTMLInputElement).checked),
-    ).toBe(false);
+      screen.getByRole("radio", { name: duration > 12 ? "12s" : "4s" }),
+    ).toBeChecked();
     expect(changes).not.toHaveBeenCalled();
     expect(useVideoStore.getState().draft).toBe(original);
   },
@@ -101,7 +97,7 @@ test("preset selection recalculates manual dimensions once and ignores an alread
   render(<ParameterControls />);
   const resolution = within(
     screen.getByRole("radiogroup", { name: "分辨率" }),
-  ).getByRole("radio", { name: "480p" });
+  ).getByRole("radio", { name: "480P" });
   fireEvent.click(resolution);
   expect(useVideoStore.getState().draft).toMatchObject({
     resolution: "480p",
@@ -146,7 +142,6 @@ test("default dimensions hide pixel editors and preserve the stored draft", () =
     },
   }));
   render(<ParameterControls />);
-  fireEvent.click(screen.getByText("自定义参数"));
   expect(screen.queryByLabelText("视频宽度")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("视频高度")).not.toBeInTheDocument();
   expect(
@@ -157,20 +152,22 @@ test("default dimensions hide pixel editors and preserve the stored draft", () =
   expect(changes).not.toHaveBeenCalled();
 });
 
-test("clearing custom duration never stores zero and finite decimal input is retained", () => {
+test("discrete duration selection exposes only supported seconds and updates the draft", () => {
   useVideoStore.setState((state) => ({
-    draft: { ...state.draft, duration: 2.5 },
+    draft: { ...state.draft, model: "sora-2", duration: 2.5 },
   }));
   render(<ParameterControls />);
-  fireEvent.click(screen.getByText("自定义参数"));
-  const duration = screen.getByLabelText("自定义视频时长");
-  fireEvent.change(duration, { target: { value: "" } });
+  expect(screen.queryByLabelText("自定义视频时长")).not.toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: "4s" })).toBeChecked();
+  expect(
+    within(screen.getByRole("radiogroup", { name: "视频时长" }))
+      .getAllByRole("radio")
+      .map((input) => (input as HTMLInputElement).value),
+  ).toEqual(["4", "8", "12"]);
   expect(changes).not.toHaveBeenCalled();
-  expect(useVideoStore.getState().draft.duration).toBe(2.5);
-  fireEvent.change(duration, { target: { value: "2.75" } });
-  expect(changes).toHaveBeenCalledWith({ duration: 2.75 });
-  expect(useVideoStore.getState().draft.duration).toBe(2.75);
-  expect(duration).toHaveAttribute("step", "any");
+  fireEvent.click(screen.getByRole("radio", { name: "12s" }));
+  expect(changes).toHaveBeenCalledWith({ duration: 12 });
+  expect(useVideoStore.getState().draft.duration).toBe(12);
 });
 
 test("chat-owned parameters render and emit patches without reading or changing the global video draft", () => {
@@ -188,16 +185,16 @@ test("chat-owned parameters render and emit patches without reading or changing 
       <button type="button">聊天参数工具</button>
     </VideoParameterControls>,
   );
-  expect(screen.getByText("2160p")).toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: "720P" })).toBeChecked();
   expect(screen.getByText("7:4")).toBeInTheDocument();
-  expect(screen.getByText("45s")).toBeInTheDocument();
+  expect(screen.getByRole("slider", { name: "视频时长" })).toHaveValue("15");
   expect(
     screen.getByRole("button", { name: "聊天参数工具" }),
   ).toBeInTheDocument();
   fireEvent.click(
     within(screen.getByRole("radiogroup", { name: "分辨率" })).getByRole(
       "radio",
-      { name: "480p" },
+      { name: "480P" },
     ),
   );
   fireEvent.change(screen.getByRole("slider", { name: "视频时长" }), {
@@ -209,4 +206,39 @@ test("chat-owned parameters render and emit patches without reading or changing 
   ]);
   expect(changes).not.toHaveBeenCalled();
   expect(useVideoStore.getState().draft).toBe(globalDraft);
+});
+
+test("new models with many discrete durations only offer supported seconds", () => {
+  const durations = [4, 6, 8, 10, 12, 14, 16];
+  VIDEO_MODEL_PROFILES.push({
+    models: ["future-discrete-video"],
+    resolutions: ["720p"],
+    durations,
+  });
+  try {
+    render(
+      <VideoParameterControls
+        draft={
+          {
+            ...initialDraft,
+            model: "future-discrete-video",
+            apiFormat: "openai",
+            mode: "text-to-video",
+            resolution: "720p",
+            aspectRatio: "16:9",
+            duration: 8,
+          } as VideoDraft
+        }
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("slider", { name: "视频时长" })).toBeNull();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "视频时长" }))
+        .getAllByRole("radio")
+        .map((input) => (input as HTMLInputElement).value),
+    ).toEqual(durations.map(String));
+  } finally {
+    VIDEO_MODEL_PROFILES.pop();
+  }
 });

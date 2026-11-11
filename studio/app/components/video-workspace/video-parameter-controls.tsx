@@ -46,6 +46,9 @@ export function VideoParameterControls({
   );
   const minimum = durations[0] ?? 0;
   const maximum = durations[durations.length - 1] ?? 0;
+  const useDurationSlider =
+    durations.length > 6 &&
+    durations.every((value, index) => !index || value === durations[index - 1] + 1);
   const sliderDuration = Math.min(maximum, Math.max(minimum, draft.duration));
   const progress =
     maximum === minimum
@@ -143,9 +146,10 @@ export function VideoParameterControls({
             {limitsKnown ? `${draft.duration}s` : "待配置"}
           </output>
         </div>
-        {!limitsKnown ? null : durations.length <= 6 ? (
+        {!limitsKnown ? null : !useDurationSlider ? (
           <ChoiceGroup
             label="视频时长"
+            variant={durations.length > 6 ? "grid" : "segmented"}
             value={String(draft.duration)}
             options={durations.map((duration) => ({
               value: String(duration),
@@ -173,7 +177,7 @@ export function VideoParameterControls({
             }
           />
         )}
-        {durations.length > 6 && (
+        {useDurationSlider && (
           <div className={styles.durationLimits} aria-hidden="true">
             <span>{minimum}s</span>
             <span>{maximum}s</span>
