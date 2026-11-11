@@ -43,6 +43,9 @@ test("legacy reasoning formats preserve skill context using a supported role", (
   expect(skillContextRole("gpt-4o")).toBe("system");
 });
 
+const { documentSkill, documentSkillBody } = await import(
+  "../app/skills/document-skill"
+);
 const catalog = JSON.parse(readFileSync("skills/catalog.json", "utf8"));
 const definition = catalog.skills.find(
   (entry: { id: string }) => entry.id === "translation",
@@ -54,6 +57,17 @@ const skill = {
 };
 const originalFetch = global.fetch;
 const fetchMock = jest.fn<typeof fetch>();
+
+test("built-in document tool survives catalog failure and matches its bundled instructions", async () => {
+  fetchMock.mockRejectedValue(new Error("offline"));
+  await expect(loadSkillCatalog()).resolves.toEqual([documentSkill]);
+  expect(createHash("sha256").update(documentSkillBody).digest("hex")).toBe(
+    documentSkill.sha256,
+  );
+  expect(documentSkillBody).toBe(
+    readFileSync("skills/document-workspace/SKILL.md", "utf8"),
+  );
+});
 
 test("local skills retain explicit enablement and migrate existing downloads", () => {
   expect(installedSkillSchema.parse(skill).enabled).toBe(true);
@@ -139,7 +153,10 @@ test("expanded skills use the versioned same-origin catalog so browser GitHub DN
   fetchMock.mockResolvedValue(
     new Response(JSON.stringify({ version: 1, skills: [definition] })),
   );
-  await expect(loadSkillCatalog()).resolves.toEqual([definition]);
+  await expect(loadSkillCatalog()).resolves.toEqual([
+    documentSkill,
+    definition,
+  ]);
   expect(fetchMock.mock.calls[0][0]).toBe(
     "/studio/api/skills/resources/catalog-v2.json",
   );
@@ -147,9 +164,10 @@ test("expanded skills use the versioned same-origin catalog so browser GitHub DN
 
 test("the complete published directory fits the loader and validates as one response", async () => {
   fetchMock.mockResolvedValue(new Response(JSON.stringify(catalog)));
-  await expect(loadSkillCatalog()).resolves.toEqual(
-    catalog.skills.filter((entry: { kind: string }) => entry.kind !== "web"),
-  );
+  await expect(loadSkillCatalog()).resolves.toEqual([
+    documentSkill,
+    ...catalog.skills.filter((entry: { kind: string }) => entry.kind !== "web"),
+  ]);
 });
 
 test("skill documents use the same-origin resource route and retain checksum verification", async () => {
@@ -173,7 +191,10 @@ test("remote catalogs cannot restore web search as an installable skill", async 
       }),
     ),
   );
-  await expect(loadSkillCatalog()).resolves.toEqual([definition]);
+  await expect(loadSkillCatalog()).resolves.toEqual([
+    documentSkill,
+    definition,
+  ]);
   expect(acceptsSkill({ ...skill, kind: "web" }, false)).toBe(false);
 });
 

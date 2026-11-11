@@ -150,3 +150,18 @@ test("style skills use corrected aliases only within their selected provider", (
     ),
   ).toThrow("生图模型");
 });
+
+test("document skill keeps text models and switches away from video", () => {
+  const document = { kind: "document" } as SkillDefinition;
+  expect(
+    skillModelSelection(document, { model: "gpt-4o" }, [], false),
+  ).toBeUndefined();
+  expect(
+    skillModelSelection(
+      document,
+      { model: "sora-2" },
+      [model("gpt-4o")],
+      false,
+    ),
+  ).toEqual({ model: "gpt-4o", providerName: "OpenAI" });
+});

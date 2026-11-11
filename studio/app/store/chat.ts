@@ -1,3 +1,9 @@
+import type {
+  ChatDocumentTask,
+  ChatDocumentAttachment,
+  DocumentSource,
+} from "../utils/document-chat";
+import type { DocumentPlan } from "../utils/document-workspace";
 import {
   getMessageTextContent,
   isDalle3,
@@ -234,6 +240,8 @@ export type ChatMessageTool = {
 };
 
 export type ChatMessage = RequestMessage & {
+  documentTask?: ChatDocumentTask & { plan?: DocumentPlan };
+  documents?: ChatDocumentAttachment[];
   quotaExceeded?: boolean;
   videoResultId?: string;
   generation?: {
@@ -326,6 +334,7 @@ export interface ChatStat {
 }
 
 export interface ChatSession {
+  documentSource?: DocumentSource;
   backgroundRemixRequestId?: string;
   backgroundRemixCompleted?: boolean;
   communityWorkspaceKind?: "text" | "image" | "video";
@@ -1375,6 +1384,22 @@ export const useChatStore = createPersistStore(
           return answer?.role === "assistant" ? answer : undefined;
         };
         const answer = session ? retryAnswer(session) : undefined;
+        if (session && answer?.documentTask?.plan) {
+          try {
+            const { retryDocumentFile } = await import(
+              "../utils/document-client"
+            );
+            await retryDocumentFile(sessionId, answer.id);
+            return true;
+          } catch (error) {
+            showToast(
+              error instanceof Error
+                ? error.message
+                : "文件制作重试失败，请稍后重试。",
+            );
+            return false;
+          }
+        }
         const videoResultId = answer?.videoResultId;
         if (session && videoResultId) {
           const owner = getLocalScope();
@@ -2615,6 +2640,44 @@ export const useChatStore = createPersistStore(
           if (turn) {
             ChatControllerPool.remove(session.id, botMessage.id);
             materialTurns.delete(userMessage.id);
+          }
+
+          if (
+            selectedSkill?.kind === "document" &&
+            modelCapabilities?.category !== "video" &&
+            !imageRoute(hasFileContent(normalizeMessages(sendMessages)))
+          ) {
+            const { runDocumentChat } = await import(
+              "../utils/document-client"
+            );
+            const handled = await runDocumentChat({
+              input: composerInput?.text ?? content,
+              sessionId: session.id,
+              bot: botMessage,
+              turns: session.messages.filter(
+                (message) =>
+                  message.id !== userMessage.id && message.id !== botMessage.id,
+              ),
+              files: composerInput?.files ?? messageFiles(userMessage),
+              source: session.documentSource,
+              config: { ...modelConfig, chatApiFormat: requestChatApiFormat },
+              accountTokenId,
+              assertActive: () =>
+                requestIsActive() &&
+                relaySelection(modelConfig.providerName) === selection,
+              publish: () => {
+                if (isLocalWorkspaceActive() && getLocalScope() === scope)
+                  get().updateTargetSession(session, (target) => {
+                    target.messages = [...target.messages];
+                  });
+              },
+              onSource: (source) => {
+                userMessage.documents = [
+                  { name: source.fileName, type: "", size: 0, source },
+                ];
+              },
+            });
+            if (handled) return;
           }
 
           if (modelCapabilities?.category === "video") {

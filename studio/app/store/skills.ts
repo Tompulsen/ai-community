@@ -1,3 +1,4 @@
+import { documentSkill, documentSkillBody } from "../skills/document-skill";
 import { StoreKey } from "../constant";
 import { createPersistStore } from "../utils/store";
 import {
@@ -33,7 +34,10 @@ export const useSkillStore = createPersistStore(
         !get().installed[entry.id]
       )
         throw new Error("最多安装 100 个技能，请先移除不再使用的技能");
-      const body = await readSkillResource(entry.documentUrl, 32000);
+      const body =
+        entry.id === documentSkill.id
+          ? documentSkillBody
+          : await readSkillResource(entry.documentUrl, 32000);
       await verifySkillDocument(body, entry.sha256);
       const installed = installedSkillSchema.parse({
         ...entry,

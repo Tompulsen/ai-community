@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/genspark-ai/genoffice.git",
+  "tag": "v0.12.600",
+  "commit": "1a0fcec971c714d11777cbd5c68da1c933572d14",
+  "license": "Apache-2.0",
+  "excluded": ["ee", "desktop application", "cloud providers"]
+}

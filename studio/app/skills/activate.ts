@@ -20,7 +20,15 @@ export function skillModelSelection(
     capabilities,
     customImageMode,
   });
-  if (imageRoute === wantsImage) return;
+  if (
+    imageRoute === wantsImage &&
+    !(
+      skill.kind === "document" &&
+      capabilities.category &&
+      !["chat", "code"].includes(capabilities.category)
+    )
+  )
+    return;
   const forcedImageMode = customImageMode && capabilities.override === "auto";
   if (forcedImageMode && wantsImage)
     return { chatApiFormat: "chat-completions" as const };

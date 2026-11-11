@@ -5,6 +5,7 @@ import {
   BookOpen,
   Code2,
   FilePenLine,
+  FileText,
   Globe,
   Languages,
   Lightbulb,
@@ -65,7 +66,9 @@ export function SkillIcon({
   category,
 }: Pick<SkillDefinition, "kind" | "category">) {
   const Icon =
-    kind === "image-style"
+    kind === "document"
+      ? FileText
+      : kind === "image-style"
       ? Palette
       : kind === "papers"
       ? BookOpen

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { documentSkill } from "./document-skill";
 
 const githubDocument = z
   .string()
@@ -62,7 +63,14 @@ export const skillDefinitionSchema = z.object({
     "coding",
     "productivity",
   ]),
-  kind: z.enum(["prompt", "image-style", "web", "papers", "client"]),
+  kind: z.enum([
+    "prompt",
+    "image-style",
+    "web",
+    "papers",
+    "client",
+    "document",
+  ]),
   version: z.string().min(1).max(40),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   documentUrl: githubDocument,
@@ -179,9 +187,14 @@ export async function loadSkillCatalog() {
   const url = new URL(catalogUrl);
   if (url.protocol !== "https:" || url.hostname !== "raw.githubusercontent.com")
     throw new Error("技能目录必须使用 GitHub 原始文件地址");
-  return catalogSchema
-    .parse(JSON.parse(await readSkillResource(catalogUrl, 128000)))
-    .skills.filter((skill) => skill.kind !== "web");
+  const catalog = await readSkillResource(catalogUrl, 128000).catch(() => null);
+  const skills = catalog ? catalogSchema.parse(JSON.parse(catalog)).skills : [];
+  return [
+    documentSkill,
+    ...skills.filter(
+      (skill) => skill.kind !== "web" && skill.id !== documentSkill.id,
+    ),
+  ];
 }
 
 export function skillInstructions(skill: InstalledSkill) {
