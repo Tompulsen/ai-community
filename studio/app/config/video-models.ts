@@ -13,6 +13,16 @@ type VideoModelProfile = ParameterLimits & {
 // validation both consume this registry; never infer limits from its API format.
 export const VIDEO_MODEL_PROFILES: VideoModelProfile[] = [
   {
+    models: ["sd2.0-mini-720p"],
+    resolutions: ["720p"],
+    durations: { min: 4, max: 15 },
+  },
+  {
+    models: ["wan3.0"],
+    resolutions: ["720p", "1080p"],
+    durations: { min: 5, max: 30 },
+  },
+  {
     models: ["grok-imagine-video"],
     resolutions: ["480p", "720p"],
     durations: { min: 1, max: 15 },

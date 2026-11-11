@@ -567,7 +567,7 @@ export function ModelSelect(props: {
                             <Select
                               id={typeSelectId}
                               className={styles["model-type-select"]}
-                              value={modelType}
+                              value={modelType === "auto" ? metadata.defaultType ?? modelType : modelType}
                               disabled={!modelPreferencesReady}
                               autoFocus
                               onChange={(event) => {

@@ -32,6 +32,25 @@ Historical serializers remain compatible and do not rewrite old results.
 
 ## Adding a video model
 
+The site's video group also has two channel-specific IDs, verified on 2026-11-11:
+
+- `sd2.0-mini-720p`: the configured channel is `api.kunrouai.com`. Its official
+  documentation at https://doc.kunrouai.com/#sd-doc specifies **720p only** and
+  integer durations **4–15 seconds**, including reference-image requests.
+  The upstream uses `/v1/tasks/sora` with polling through `/v1/videos/{id}`;
+  routing availability must be confirmed through New API, independently of these limits.
+- `wan3.0`: the configured channel is https://zhiyingai.xyz. Its public generation
+  UI's `wan3.0` configuration (the homepage's
+  `/_next/static/chunks/app/page-line4-grey-0515a7b4cc5f48ea.js`) specifies **720p/1080p**
+  and integer durations **5–30 seconds**, with up to ten reference images.
+  Reference-video generation additionally requires output duration plus total
+  reference-video duration to stay within 30 seconds. The community remix accepts
+  image references only; this profile does not enable or validate video/audio uploads.
+
+The shared billing schema at https://zhangyuapi.com/api/pricing lists generic
+resolution tiers. It is not proof that every channel supports every tier; it must
+not enable 480p for WAN or 1080p for the SD 720p model.
+
 1. Confirm the actual upstream channel's supported resolutions and seconds;
    a marketing model name alone is not evidence of channel support.
 2. Add its exact model ID to `VIDEO_MODEL_PROFILES` in

@@ -22,6 +22,14 @@ const draft = (patch: Partial<VideoDraft> = {}) =>
     ...patch,
   }) as VideoDraft;
 
+test("video group aliases follow the configured upstream rather than shared billing tiers", () => {
+  expect(videoCapabilities("sd2.0-mini-720p")).toEqual({ resolutions: ["720p"], durations: Array.from({length: 12}, (_, i) => i + 4) });
+  expect(normalizeVideoParameters(draft({ model: "sd2.0-mini-720p" }))).toMatchObject({ resolution: "720p", duration: 15 });
+  expect(videoCapabilities("wan3.0", "image-to-video")).toEqual({ resolutions: ["720p", "1080p"], durations: Array.from({length: 26}, (_, i) => i + 5) });
+  for (const body of [{ model: "sd2.0-mini-720p", resolution: "1080p" }, { model: "wan3.0", resolution: "480p" }, { model: "wan3.0", seconds: "31" }])
+    expect(() => validateVideoRequestParameters(JSON.stringify(body), "text-to-video")).toThrow();
+});
+
 test("Grok options enforce version-specific resolution and duration limits", () => {
   expect(videoOptions("openai", "grok-imagine-video").resolutions).toEqual([
     "480p",

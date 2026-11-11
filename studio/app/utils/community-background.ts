@@ -2,15 +2,12 @@ import { getClientApi } from "../client/api";
 import { ImageGenerationService } from "../client/image-generation";
 import { ChatControllerPool } from "../client/controller";
 import { createMessage, useChatStore, type ChatSession } from "../store/chat";
-import { useAppConfig } from "../store/config";
-import { useAccessStore } from "../store/access";
+import { prepareCommunityRemixModel, REMIX_MODEL_UNAVAILABLE } from "./community-model-group";
 import { useVideoStore } from "../store/video";
 import { DEFAULT_INPUT_TEMPLATE } from "../constant";
 import { remixImages, type RemixWork } from "./community-remix";
 import { messageShareSource, readMedia } from "./community-share";
-import { getLocalScope, getLocalTokenId, isLocalWorkspaceActive, localKey, flushLocalWrites } from "./local-workspace";
-import { getModelCapabilities } from "./model-capabilities";
-import { CUSTOM_MODEL_PROVIDER } from "./custom-provider";
+import { getLocalScope, isLocalWorkspaceActive, localKey, flushLocalWrites } from "./local-workspace";
 import { pendingTasks } from "./local-tasks";
 import { chatVideoDraft } from "./chat-video";
 import { generateVideoRequest } from "./video-generation";
@@ -37,7 +34,7 @@ export function backgroundSnapshot(session: ChatSession): BackgroundSnapshot {
     id: session.backgroundRemixRequestId!, sessionId: session.id, kind: session.creationKind === "video" ? "video" : "image",
     title: session.topic, model: session.mask.modelConfig.model, createdAt: session.lastUpdate,
     state: complete ? "complete" : waiting ? "running" : "error",
-    ...(!complete && !waiting ? { message: video?.error || (answer?.isError && typeof answer.content === "string" ? answer.content : "查询已中断，请到 AI 工作台恢复查询。") } : {}),
+    ...(!complete && !waiting ? { message: (video?.error ? `${REMIX_MODEL_UNAVAILABLE}\n${video.error}` : undefined) || (answer?.isError && typeof answer.content === "string" ? answer.content : "查询已中断，请到 AI 工作台恢复查询。") } : {}),
   };
 }
 
@@ -46,6 +43,7 @@ export function installCommunityBackground(origin: string, identity: Identity) {
   const controller = new AbortController();
   const owner = `user-${identity.subject}`;
   const services = new Set<ImageGenerationService>();
+  const requests = new Set<AbortController>();
   const submitting = new Set<string>();
   let lastSnapshot = "";
   const current = () => !controller.signal.aborted && useChatStore.getState()._hasHydrated && isLocalWorkspaceActive() && getLocalScope() === owner;
@@ -58,19 +56,17 @@ export function installCommunityBackground(origin: string, identity: Identity) {
     if (force || lastSnapshot !== serialized) { lastSnapshot = serialized; send({ status: "background-tasks", tasks }); }
   };
   const submit = async (work: RemixWork) => {
+    work = { ...work, model: work.model.trim() };
     check();
     const key = localKey(`background-remix:${work.requestId}`);
     if (sessions().some(session => session.backgroundRemixRequestId === work.requestId)) { snapshot(true); return; }
     // A lost acknowledgement must never become a second paid generation, even after reload.
     if (localStorage.getItem(key)) throw new Error("此任务已提交，请到工作台检查记录；不会重复扣费生成。");
-    const tokenId = getLocalTokenId();
-    await useAccessStore.getState().fetch(); check();
+    const { model, capabilities, tokenId } = await prepareCommunityRemixModel(work, check);
+    check();
     if (localStorage.getItem(key)) { snapshot(true); return; }
-    const model = useAppConfig.getState().models.find(model => model.available && model.name === work.model && model.provider?.providerName !== CUSTOM_MODEL_PROVIDER);
-    if (!model) throw new Error("原作品模型未记录或当前不可用，请前往 AI 工作台选择模型。");
+    if (!model || !capabilities) throw new Error(REMIX_MODEL_UNAVAILABLE);
     const provider = model.provider.providerName;
-    const capabilities = getModelCapabilities(work.model, provider);
-    if (capabilities.category !== work.kind || (work.kind === "image" && !capabilities.usesImageApi)) throw new Error("该模型暂不支持此类后台生成，请前往 AI 工作台调整模型。");
     check();
     const store = useChatStore.getState(), session = store.newSession(undefined, undefined, false);
     if (!session) throw new Error("工作台尚未准备好，请稍后重试。");
@@ -84,6 +80,7 @@ export function installCommunityBackground(origin: string, identity: Identity) {
       target.messages = [user, answer];
     });
     const update = (patch: Partial<typeof answer>) => { if (current()) store.updateTargetSession(session, target => { target.messages = target.messages.map(message => message.id === answer.id ? { ...message, ...patch } : message); }); };
+    const fail = (reason: string) => update({ streaming: false, isError: true, content: `${REMIX_MODEL_UNAVAILABLE}\n${reason}` });
     try {
       localStorage.setItem(key, session.id);
       await flushLocalWrites(); check();
@@ -99,24 +96,31 @@ export function installCommunityBackground(origin: string, identity: Identity) {
         check(); update({ streaming: false });
       } else {
         const service = new ImageGenerationService(getClientApi(provider).llm); services.add(service);
-        service.setCallbacks({
-          onComplete: (url, urls = [url]) => {
+        const complete = (url: string, urls = [url]) => {
             if (!current()) return;
             store.updateTargetSession(session, target => { target.backgroundRemixCompleted = true; });
             update({ content: urls.map(url => `![Generated Image](${url})`).join("\n\n"), streaming: false, interrupted: false, isError: false });
             void store.saveGeneratedImage(session.id, answer.id, urls, work.prompt, work.model);
-          },
-          onError: message => update({ content: message, streaming: false, isError: true }),
-        });
+        };
+        service.setCallbacks({ onComplete: complete, onError: fail });
+        let requestController: AbortController | undefined;
         try {
           await service.generateImage({
             accountTokenId: tokenId, taskContext: { sessionId: session.id, messageId: answer.id }, modelCapabilities: capabilities,
-            messages: [{ role: "user", content: work.prompt }], config: session.mask.modelConfig,
-            onController: value => ChatControllerPool.addController(session.id, answer.id, value), onFinish: () => {},
+            messages: [{ role: "user", content: [{ type: "text", text: work.prompt }, ...references.map(url => ({ type: "image_url" as const, image_url: { url } }))] }],
+            config: { ...session.mask.modelConfig, stream: false },
+            onController: value => { requestController = value; requests.add(value); ChatControllerPool.addController(session.id, answer.id, value); },
+            onError: error => fail(error.message),
+            onFinish: content => {
+              const source = messageShareSource(content, "", "");
+              const urls = source.kind === "image" ? source.media?.map(item => item.url!).filter(Boolean) ?? [] : [];
+              if (urls.length) complete(urls[0], urls);
+              else fail("模型未返回图片，请到工作台查看或调整提示词。");
+            },
           }, { referenceImages: references, requestMode: "async" });
-        } finally { services.delete(service); ChatControllerPool.remove(session.id, answer.id); }
+        } finally { services.delete(service); if (requestController) requests.delete(requestController); ChatControllerPool.remove(session.id, answer.id); }
       }
-    } catch (error) { update({ streaming: false, isError: true, content: error instanceof Error ? error.message : "后台生成失败，请到工作台查看。" }); }
+    } catch (error) { fail(error instanceof Error ? error.message : "后台生成失败。"); }
     snapshot(true);
   };
   const receive = async (event: MessageEvent) => {
@@ -155,5 +159,5 @@ export function installCommunityBackground(origin: string, identity: Identity) {
   // Recovery can update only local task metadata after a query failure.
   const recoveryTimer = setInterval(() => snapshot(), 5000);
   window.addEventListener("message", receive);
-  return () => { controller.abort(); clearInterval(recoveryTimer); services.forEach(service => service.cancel()); unsubscribeChat(); unsubscribeVideo(); window.removeEventListener("message", receive); };
+  return () => { controller.abort(); clearInterval(recoveryTimer); services.forEach(service => service.cancel()); requests.forEach(request => request.abort()); unsubscribeChat(); unsubscribeVideo(); window.removeEventListener("message", receive); };
 }

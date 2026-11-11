@@ -24,6 +24,8 @@ async function buildFixture() {
   }
   const runtime = `import {ref,defineComponent,h,createApp} from 'vue';
 export const homeLanguage='zh-CN',lang='zh-CN',deviceKind=innerWidth<500?'smartphone':'desktop',url=location.origin;
+export const prefer={s:{animation:false}};
+export const useDiscoveryDrawer=()=>({discoveryId:'related',discoveryLayer:ref(),discoveryPanel:ref(),discoveryToggle:ref(),discoveryOpen:ref(false),discoveryZIndex:ref(100),closeDiscovery(){},toggleDiscovery(){},discoveryKeydown(){}});
 export const i18n={ts:{done:'完成',retry:'重试',notFound:'未找到'}};
 export const $i={id:'fixtureUser',username:'fixture',token:'local-fixture',policies:{maxFileSizeMb:32}};
 export const instance={clientOptions:{creationTextModel:'gpt-6.1-sol',creationImageModel:'gpt-image-2.6',creationVideoModel:'sora-2'}},fetchInstance=async()=>{},definePage=()=>{};
@@ -58,7 +60,7 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
   fs.mkdirSync(output,{recursive:true}); const built=await buildFixture(), browser=await chromium.launch({headless:true,...(process.env.BACKGROUND_TEST_PROXY?{proxy:{server:process.env.BACKGROUND_TEST_PROXY}}:{})}); const report=[];
   try { for(const width of (process.env.BACKGROUND_TEST_WIDTHS||'1440,390,320').split(',').map(Number)) {
     const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<500,serviceWorkers:'block',bypassCSP:true,acceptDownloads:true}),page=await context.newPage();
-    let posts=0,documents=0,done=false,videoDone=false,imageFailed=false;const errors=[],requests=[];
+    let posts=0,documents=0,done=false,videoDone=false,imageFailed=false,selectedGroup='auto',selectedTokenId=1;const errors=[],requests=[],groupSelections=[];
     const waitPosts=async count=>{for(let i=0;i<600&&posts<count;i++)await new Promise(resolve=>setTimeout(resolve,50));assert.equal(posts,count)};
     const pixel=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6P9sAAAAASUVORK5CYII=','base64');
     page.on('pageerror',e=>errors.push(e.message));
@@ -70,18 +72,20 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
       if(u.pathname.endsWith('/videos/video-job/content'))return route.fulfill({contentType:'video/mp4',body:Buffer.from('AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAPWbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAAggAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAwF0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAAggAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAKAAAABaAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAIIAAAEAAABAAAAAAJ5bWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAyAAAAGgBVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAACJG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAeRzdGJsAAAAwHN0c2QAAAAAAAAAAQAAALBhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAKAAWgBIAAAASAAAAAAAAAABFUxhdmM2Mi4xOS4xMDAgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAANmF2Y0MBZAAL/+EAGWdkAAus2UKN+TARAAADAAEAAAMAMg8UKZYBAAZo6+PLIsD9+PgAAAAAEHBhc3AAAAABAAAAAQAAABRidHJ0AAAAAAAANkQAAAAAAAAAGHN0dHMAAAAAAAAAAQAAAA0AAAIAAAAAFHN0c3MAAAAAAAAAAQAAAAEAAAB4Y3R0cwAAAAAAAAANAAAAAQAABAAAAAABAAAKAAAAAAEAAAQAAAAAAQAAAAAAAAABAAACAAAAAAEAAAoAAAAAAQAABAAAAAABAAAAAAAAAAEAAAIAAAAAAQAACgAAAAABAAAEAAAAAAEAAAAAAAAAAQAAAgAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAA0AAAABAAAASHN0c3oAAAAAAAAAAAAAAA0AAALbAAAADwAAAA0AAAAMAAAADAAAABUAAAAPAAAADAAAAAwAAAAVAAAADwAAAAwAAAAMAAAAFHN0Y28AAAAAAAAAAQAABAYAAABhdWR0YQAAAFltZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAACxpbHN0AAAAJKl0b28AAAAcZGF0YQAAAAEAAAAATGF2ZjYyLjYuMTAxAAAACGZyZWUAAAOPbWRhdAAAAqAGBf//nNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MSByZWY9MyBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PS0yIHRocmVhZHM9MyBsb29rYWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVyYXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTMgYl9weXJhbWlkPTIgYl9hZGFwdD0xIGJfYmlhcz0wIGRpcmVjdD0xIHdlaWdodGI9MSBvcGVuX2dvcD0wIHdlaWdodHA9MiBrZXlpbnQ9MjUwIGtleWludF9taW49MjUgc2NlbmVjdXQ9NDAgaW50cmFfcmVmcmVzaD0wIHJjX2xvb2thaGVhZD00MCByYz1jcmYgbWJ0cmVlPTEgY3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAzZYiEADv//uOr+BTNM4HMctk5W2NGNPzxSXbPITNxywVQ/PquVu8GW2S0vyAMgABeQf/5AAAAC0GaJGxDf/6nhAHHAAAACUGeQniF/wDzgQAAAAgBnmF0Qr8BUwAAAAgBnmNqQr8BUwAAABFBmmhJqEFomUwIZ//+nhAGzQAAAAtBnoZFESwv/wDzgQAAAAgBnqV0Qr8BUwAAAAgBnqdqQr8BUwAAABFBmqxJqEFsmUwIV//+OEAaMAAAAAtBnspFFSwv/wDzgQAAAAgBnul0Qr8BUwAAAAgBnutqQr8BUw==','base64')});
       if(u.pathname.startsWith('/studio/api/')){
         const q=new URL(route.request().frame().url()).searchParams,kind=q.get('kind'),identity={context:q.get('context'),attempt:q.get('attempt'),subject:'9001',userId:'fixtureUser'};
-        const session={authenticated:true,user:{id:9001,username:'fixture',display_name:'Fixture',quota:100000,used_quota:0,request_count:0,group:'default'},selectedTokenId:1};
+        const session={authenticated:true,user:{id:9001,username:'fixture',display_name:'Fixture',quota:100000,used_quota:0,request_count:0,group:'default'},selectedTokenId};
         const config={newApiEnabled:true,needCode:false,hideUserApiKey:true,disableFastLink:true,customModels:'',defaultModel:'gpt-6.1-sol'};let body={success:true,data:[]};
         if(u.pathname.endsWith('/embedded/init'))body={status:'verify',...identity,kind};
         else if(u.pathname.endsWith('/embedded/verify'))body={status:'ready',...identity,kind};
         else if(u.pathname==='/studio/api/new-api/bootstrap')body={success:true,data:{session,config}};
         else if(u.pathname==='/studio/api/new-api/session')body={success:true,data:session};
         else if(u.pathname==='/studio/api/config')body=config;
-        else if(u.pathname.endsWith('/models')||u.pathname.endsWith('/remote-models'))body={object:'list',data:[{id:'gpt-6.1-sol'},{id:'gpt-image-2.6'},{id:'sora-2'}]};
+        else if(u.pathname.endsWith('/model-groups/select')){selectedGroup=route.request().postDataJSON().group;groupSelections.push(selectedGroup);selectedTokenId=selectedGroup==='生图'?2:3;body={success:true,data:{group:selectedGroup,selectedTokenId}};}
+        else if(u.pathname.endsWith('/model-groups'))body={success:true,data:{selectedGroup,groups:['auto','生图','视频'].map(id=>({id,name:id,ratio:1,description:''}))}};
+        else if(u.pathname.endsWith('/models')||u.pathname.endsWith('/remote-models'))body={object:'list',data:(selectedGroup==='生图'?['gpt-image-2.6']:selectedGroup==='视频'?['sora-2','grok-imagine-video-1.5','sd2.0-mini-720p','wan3.0']:['gpt-6.1-sol']).map(id=>({id}))};
         else if(u.pathname==='/studio/api/new-api/status')body={success:true,data:{enabled:true,configured:true}};
         else if(u.pathname==='/studio/api/mcp')body={success:true,enabled:false,servers:[]};
-        else if(u.pathname.includes('/async-images/v1/tasks')){if(method==='POST'){posts++;body={id:'image-job-'+posts,status:'queued'}}else body=imageFailed?{id:'image-job',status:'failed',error:'测试：模型额度不足'}:done?{id:'image-job',status:'succeeded',data:[{url:origin+'/result.png'}]}:{id:'image-job',status:'generating'};}
-        else if(u.pathname.endsWith('/videos')&&method==='POST'){posts++;body={id:'video-job',status:'queued'};}
+        else if(u.pathname.includes('/async-images/v1/tasks')){if(method==='POST'){assert.equal(route.request().headers()['x-new-api-token'],'2');assert.equal(route.request().postDataJSON().model,'gpt-image-2.6');posts++;body={id:'image-job-'+posts,status:'queued'}}else body=imageFailed?{id:'image-job',status:'failed',error:'测试：模型额度不足'}:done?{id:'image-job',status:'succeeded',data:[{url:origin+'/result.png'}]}:{id:'image-job',status:'generating'};}
+        else if(u.pathname.endsWith('/videos')&&method==='POST'){assert.equal(route.request().headers()['x-new-api-token'],'3');assert.match(route.request().postData(),/sora-2/);posts++;body={id:'video-job',status:'queued'};}
         else if(u.pathname.includes('/videos/video-job'))body=videoDone?{id:'video-job',status:'completed',url:origin+'/video.mp4'}:{id:'video-job',status:'in_progress'};
         return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
       }
@@ -151,6 +155,25 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
       const frame=page.frameLocator('iframe');await frame.locator('#chat-input').waitFor({timeout:20000});
       assert.equal(documents,1,'community and workbench share the same studio document');
       await page.screenshot({path:path.join(output,`workbench-${width}.png`),fullPage:true});
+      const checkModelTypes=async(names,type)=>{
+        const expanded=await page.getByTestId('background-task-window').isVisible();
+        if(expanded){
+          await page.getByRole('button',{name:'隐藏任务小窗',exact:true}).click();
+          const small=await page.getByTestId('background-restore').boundingBox();
+          await page.mouse.move(small.x+30,small.y+15);await page.mouse.down();await page.mouse.move(width-70,120,{steps:6});await page.mouse.up();
+        }
+        await frame.locator('button[data-model-picker-trigger]').click();
+        const dialog=frame.getByRole('dialog');
+        for(const name of names){
+          await dialog.getByRole('button',{name:'调整模型类型: '+name,exact:true}).click();
+          const panel=dialog.getByRole('group',{name:'模型类型: '+name,exact:true});
+          assert.equal(await panel.getByRole('combobox',{name:'模型类型',exact:true}).innerText(),type);
+        }
+        await page.screenshot({path:path.join(output,`model-types-${type==='视频'?'video':'image'}-${width}.png`),fullPage:true});
+        await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+        if(expanded)await page.getByTestId('background-restore').click();
+      };
+      await checkModelTypes(['gpt-image-2.6'],'生图');
       await page.evaluate(()=>window.__navigate('/community/work/test'));await page.getByTestId('work-remix').click();await page.getByTestId('remix-workbench').click();
       await page.waitForFunction(()=>window.__messages.some(message=>message.status==='remix-applied'),null,{timeout:20000});
       assert.equal(await frame.locator('#chat-input').inputValue(),'An orange cat in a quiet garden');assert.equal(posts,1,'manual option does not submit');
@@ -166,9 +189,21 @@ const app=createApp({render:()=>h('div',[h('header',{class:'site-header'},'AI �
       await page.getByRole('button',{name:'前往 AI 工作台',exact:true}).click();
       await page.waitForFunction(()=>window.__messages.some(message=>message.status==='background-opened'&&window.__state.tasks.some(task=>task.id===message.requestId&&task.kind==='video')),null,{timeout:20000});
       assert.equal(await page.evaluate(()=>window.__state.kind),'video');
+      await checkModelTypes(['grok-imagine-video-1.5','sd2.0-mini-720p','wan3.0'],'视频');
       imageFailed=true;await page.evaluate(()=>{window.__navigate('/community/work/test');window.__queue({requestId:crypto.randomUUID(),sourceWorkId:'original',kind:'image',model:'gpt-image-2.6',prompt:'A failed task',references:[]})});await waitPosts(3);
       await page.waitForFunction(()=>window.__state.tasks.some(task=>task.state==='error'&&task.message.includes('额度不足')),null,{timeout:15000});
       await page.screenshot({path:path.join(output,`failure-state-${width}.png`),fullPage:true});
+      const openRequests = await page.evaluate(()=>window.__messages.filter(message=>message.status==='background-opened').length);
+      await page.evaluate(()=>window.__queue({requestId:crypto.randomUUID(),sourceWorkId:'original',kind:'image',model:'missing-model',prompt:'Missing model regression',references:[]}));
+      await page.waitForFunction(()=>window.__state.tasks.some(task=>task.model==='missing-model'&&task.state==='error'&&task.message.includes('无法调用该模型生成，请前往工作台切换模型')));
+      await page.screenshot({path:path.join(output,`missing-model-${width}.png`),fullPage:true});
+      await page.getByTestId('background-task-window').getByRole('button',{name:'AI 工作台',exact:true}).click();
+      await page.getByTestId('studio-anchor').waitFor();
+      await frame.locator('#chat-input').waitFor();
+      assert.equal(await page.evaluate(()=>window.__state.openTask),'','preflight failure must not query a nonexistent session');
+      assert.equal(await page.evaluate(()=>window.__messages.filter(message=>message.status==='background-opened').length),openRequests);
+      assert.equal(posts,3,'unavailable model must never fall back to another paid model');
+      assert.deepEqual(groupSelections,['生图','视频','生图']);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       assert.deepEqual(await page.evaluate(()=>window.__errors),[]);assert.deepEqual(errors,[]);
       report.push({width,mockedPaidSubmissions:posts,iframeDocuments:documents,checks:['two choices','background generation','drag','compact mouse/touch drag','compact click and keyboard restore','viewport clamping','long press hide','touch cancellation','completion notification','image/video preview and download','cross-kind workbench task','manual draft only','reload recovery','deferred anchor initialization','generation error','no overflow']});console.log('PASS viewport '+width);

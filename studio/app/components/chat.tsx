@@ -87,6 +87,7 @@ import {
   resolveCommunityRemixModel,
   startCommunityChat,
 } from "../utils/community-entry";
+import { prepareCommunityRemixModel } from "../utils/community-model-group";
 import {
   useCommunityRemix,
   useCommunityRemixDraft,
@@ -1819,7 +1820,6 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
   const remixModels = useAllModels();
   const remixModelStatus = useAccessStore((state) => state.modelListStatus);
   useCommunityRemix("chat", remixModelStatus, async (work, check) => {
-    const model = resolveCommunityRemixModel(work, remixModels);
     const workspace = findCommunityWorkspace(work.kind);
     const targetDraftKey =
       workspace && workspace.id !== session.id
@@ -1847,6 +1847,10 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
         throw new Error("草稿或会话已变化，已保留当前内容，请重试填入。");
     };
     unchanged();
+    await prepareCommunityRemixModel(work, unchanged, false);
+    unchanged();
+    const preparedModels = useAppConfig.getState().models;
+    const model = resolveCommunityRemixModel(work, preparedModels);
     const images = await remixImages(work, unchanged);
     unchanged();
     if (
@@ -1856,7 +1860,7 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
       throw new Error("工作区草稿已变化，请重试填入。");
     const target = await startCommunityChat(
       { id: work.requestId, kind: work.kind, model: model.model },
-      remixModels,
+      preparedModels,
     );
     const store = useChatStore.getState();
     store.updateTargetSession(target, (active) => {

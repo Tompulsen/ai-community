@@ -11,6 +11,9 @@ let readBarrier: Promise<void> | undefined;
 let readError: Error | undefined;
 const access = create(() => ({
   newApiEnabled: true,
+  modelGroupType: undefined as "image" | "video" | undefined,
+  modelGroupTokenId: null as number | null,
+  modelGroupModels: [] as string[],
   openaiUrl: "https://custom.example.test/v1",
 }));
 jest.unstable_mockModule("@/app/store/access", () => ({
@@ -73,10 +76,38 @@ beforeEach(async () => {
   readError = undefined;
   access.setState({
     newApiEnabled: true,
+    modelGroupType: undefined,
+    modelGroupTokenId: null,
+    modelGroupModels: [],
     openaiUrl: "https://custom.example.test/v1",
   });
   preferences.setState({ overrides: {}, apiFormats: {}, _hasHydrated: true });
   await Promise.all([...writes]);
+});
+
+test("group defaults classify unknown image and video aliases without creating manual preferences", () => {
+  access.setState({ modelGroupType: "video", modelGroupTokenId: 100, modelGroupModels: ["sd2.0-mini-720p", "wan3.0", "future-alias", "gemini-3-pro-image"] });
+  for (const name of ["sd2.0-mini-720p", "wan3.0", "future-alias"])
+    expect(getModelCapabilities(name, "OpenAI")).toMatchObject({ category: "video", override: "auto", usesImageApi: false });
+  access.setState({ modelGroupType: "image" });
+  expect(getModelCapabilities("future-alias", "OpenAI")).toMatchObject({ category: "image", usesImageApi: true });
+  expect(getModelCapabilities("gemini-3-pro-image", "OpenAI")).toMatchObject({ category: "image", usesImageApi: false });
+  expect(preferences.getState().overrides).toEqual({});
+  expect(getModelCapabilities("grok-imagine-video-1.5", "OpenAI").category).toBe("video");
+  expect(getModelCapabilities("future-alias", CUSTOM_MODEL_PROVIDER).category).toBeNull();
+  tokenId = 101;
+  expect(getModelCapabilities("future-alias", "OpenAI").category).toBeNull();
+});
+
+test("both mounted capability hooks react to confirmed group changes", () => {
+  const single = renderHook(() => useModelCapabilities("future-alias", "OpenAI"));
+  const resolver = renderHook(() => useModelCapabilitiesResolver());
+  act(() => access.setState({ modelGroupType: "video", modelGroupTokenId: 100, modelGroupModels: ["future-alias"] }));
+  expect(single.result.current.category).toBe("video");
+  expect(resolver.result.current("future-alias", "OpenAI").category).toBe("video");
+  act(() => access.setState({ modelGroupType: "image" }));
+  expect(single.result.current.category).toBe("image");
+  expect(resolver.result.current("future-alias", "OpenAI").category).toBe("image");
 });
 
 test("model corrections persist in the current account workspace and survive rehydration", async () => {

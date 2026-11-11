@@ -4,6 +4,7 @@ import { useModelPreferenceStore } from "../store/model-preferences";
 import { CUSTOM_MODEL_PROVIDER, customApiPath } from "./custom-provider";
 import { getLocalTokenId } from "./local-workspace";
 import { getModelMetadata, type ModelTypeOverride } from "./model-metadata";
+import type { MediaModelType } from "./model-group";
 import type { ChatApiFormat } from "./chat-api-format";
 
 function preferenceKey(
@@ -29,14 +30,38 @@ export function getModelPreferenceKey(model: string, providerName?: string) {
   return preferenceKey(model, providerName, useAccessStore.getState());
 }
 
+function groupDefault(
+  model: string,
+  providerName: string | undefined,
+  access: ReturnType<typeof useAccessStore.getState>,
+) {
+  return providerName !== CUSTOM_MODEL_PROVIDER &&
+    access.newApiEnabled &&
+    access.modelGroupModels?.includes(model) &&
+    access.modelGroupTokenId === getLocalTokenId()
+    ? access.modelGroupType
+    : undefined;
+}
+
 function resolveCapabilities(
   model: string,
   override: ModelTypeOverride,
   apiFormat?: ChatApiFormat,
+  groupType?: MediaModelType,
 ) {
   const metadata = getModelMetadata(model);
   return {
     ...metadata,
+    ...(groupType
+      ? {
+          defaultType: groupType,
+          category: groupType,
+          // Gemini image models keep their native chat transport.
+          usesImageApi:
+            groupType === "image" &&
+            (metadata.category !== "image" || metadata.usesImageApi),
+        }
+      : {}),
     ...(override !== "auto"
       ? { category: override, usesImageApi: override === "image" }
       : {}),
@@ -51,6 +76,7 @@ export function getModelCapabilities(model: string, providerName?: string) {
     model,
     useModelPreferenceStore.getState().overrides[key] ?? "auto",
     useModelPreferenceStore.getState().apiFormats?.[key],
+    groupDefault(model, providerName, useAccessStore.getState()),
   );
 }
 
@@ -64,6 +90,7 @@ export function useModelCapabilitiesResolver() {
         model,
         overrides[preferenceKey(model, providerName, access)] ?? "auto",
         apiFormats?.[preferenceKey(model, providerName, access)],
+        groupDefault(model, providerName, access),
       ),
     [access, overrides, apiFormats],
   );
@@ -77,5 +104,8 @@ export function useModelCapabilities(model: string, providerName?: string) {
     (state) => state.overrides[key] ?? "auto",
   );
   const apiFormat = useModelPreferenceStore((state) => state.apiFormats?.[key]);
-  return resolveCapabilities(model, override, apiFormat);
+  const groupType = useAccessStore((access) =>
+    groupDefault(model, providerName, access),
+  );
+  return resolveCapabilities(model, override, apiFormat, groupType);
 }

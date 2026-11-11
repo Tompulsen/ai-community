@@ -1,3 +1,4 @@
+import { modelGroupType, type MediaModelType } from "../utils/model-group";
 import { StoreKey, ApiPath, OPENAI_BASE_URL } from "../constant";
 import { getHeaders } from "../client/api";
 import {
@@ -33,7 +34,11 @@ let activeModelScope: ModelScope | undefined;
 const MODEL_TTL = 60_000;
 
 function modelScopeKey(scope: ModelScope) {
-  return JSON.stringify(["/studio/api/remote-models", scope.userId, scope.tokenId]);
+  return JSON.stringify([
+    "/studio/api/remote-models",
+    scope.userId,
+    scope.tokenId,
+  ]);
 }
 
 function rememberModels(scope: ModelScope, models: LLMModel[]) {
@@ -47,6 +52,7 @@ function rememberModels(scope: ModelScope, models: LLMModel[]) {
 function replaceModels(models: LLMModel[]) {
   useAppConfig.getState().clearModels();
   useAppConfig.getState().mergeModels(models);
+  useAccessStore.setState({ modelGroupModels: models.map(model => model.name) });
 }
 
 type HydrationStore = {
@@ -100,6 +106,11 @@ export function refreshSelectedNewApiModels(selection: NewApiSelection) {
     getLocalTokenId() !== selection.tokenId
   )
     return refetchModels();
+  if (selection.group !== undefined)
+    useAccessStore.setState({
+      modelGroupType: modelGroupType(selection.group),
+      modelGroupTokenId: selection.tokenId,
+    });
   // Multiple consumers may observe the same confirmed selection.
   if (
     activeModelScope?.userId === selection.userId &&
@@ -201,6 +212,9 @@ const DEFAULT_ACCESS_STATE = {
   switchingToken: false,
   modelListStatus: "idle" as "idle" | "loading" | "ready" | "error",
   modelRefreshError: false,
+  modelGroupType: undefined as MediaModelType | undefined,
+  modelGroupTokenId: null as number | null,
+  modelGroupModels: [] as string[],
 
   // openai
   openaiUrl: DEFAULT_OPENAI_URL,
@@ -251,6 +265,7 @@ export const useAccessStore = createPersistStore(
       fetchState = 1;
       set({ modelListStatus: "loading", modelRefreshError: false });
       activeModelScope = undefined;
+      set({ modelGroupType: undefined, modelGroupTokenId: null, modelGroupModels: [] });
       const epoch = fetchEpoch;
       const isCurrent = () => epoch === fetchEpoch;
       fetchPromise = (async () => {
@@ -319,14 +334,18 @@ export const useAccessStore = createPersistStore(
               userId: session.user.id,
               tokenId: session.selectedTokenId,
             };
-            // Prepare the selector before the user opens it.
-            void newApiClient
-              .modelGroups(session.user.id)
-              .then(() => {
-                if (isCurrent() && typeof window !== "undefined")
-                  window.dispatchEvent(new Event("new-api-model-source-ready"));
-              })
-              .catch(() => {});
+            const source = await newApiClient.modelGroups(session.user.id);
+            if (!isCurrent()) return;
+            set({
+              modelGroupType: modelGroupType(
+                source.groups.find(
+                  (group) => group.id === source.selectedGroup,
+                ) ?? source.selectedGroup,
+              ),
+              modelGroupTokenId: session.selectedTokenId,
+            });
+            if (typeof window !== "undefined")
+              window.dispatchEvent(new Event("new-api-model-source-ready"));
           }
         }
 
@@ -354,6 +373,7 @@ export const useAccessStore = createPersistStore(
           const json = await remote.json();
           if (!isCurrent()) return;
           const models = remoteModels(json);
+          set({ modelGroupModels: accountMode ? models.map(model => model.name) : [] });
           if (accountMode && activeModelScope)
             rememberModels(activeModelScope, models);
           if (accountMode && models.length === 0) {
@@ -389,6 +409,9 @@ export const useAccessStore = createPersistStore(
       switchingToken: false,
       modelListStatus: "idle" as const,
       modelRefreshError: false,
+      modelGroupType: undefined,
+      modelGroupTokenId: null,
+      modelGroupModels: [],
     }),
   },
 );

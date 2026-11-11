@@ -20,6 +20,6 @@ export function queueBackgroundRemix(work: StudioRemix) {
 
 export function viewBackgroundTask(task: BackgroundTask) {
 	backgroundStudio.kind = task.kind;
-	backgroundStudio.openTask = task.id;
+	backgroundStudio.openTask = task.sessionId ? task.id : '';
 	backgroundStudio.enabled = true;
 }
