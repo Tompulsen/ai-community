@@ -4,6 +4,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { Brackets } from 'typeorm';
 import type { UsersRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { DI } from '@/di-symbols.js';
@@ -89,8 +90,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				case 'remote': query.andWhere('user.host IS NOT NULL'); break;
 			}
 
-			if (ps.username) {
-				query.andWhere('user.usernameLower like :username', { username: sqlLikeEscape(ps.username.toLowerCase()) + '%' });
+			const username = ps.username?.trim().replace(/^@/, '');
+			if (username) {
+				query.andWhere(new Brackets(qb => {
+					qb.where('user.usernameLower LIKE :username', { username: sqlLikeEscape(username.toLowerCase()) + '%' })
+						.orWhere('user.name ILIKE :name', { name: '%' + sqlLikeEscape(username) + '%' });
+				}));
 			}
 
 			if (ps.hostname) {

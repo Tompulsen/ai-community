@@ -12,6 +12,8 @@ import { IdService } from '@/core/IdService.js';
 import { GlobalModule } from '@/GlobalModule.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import AdminShowUsers from '@/server/api/endpoints/admin/show-users.js';
+import type { RoleService } from '@/core/RoleService.js';
 
 describe('UserSearchService', () => {
 	let app: TestingModule;
@@ -134,7 +136,47 @@ describe('UserSearchService', () => {
 		await app.close();
 	});
 
+	describe('admin/show-users', () => {
+		async function search(username: string, state: 'all' | 'available' = 'available') {
+			const endpoint = new AdminShowUsers(usersRepository, {
+				packMany: async users => users,
+			} as UserEntityService, {} as RoleService);
+			return endpoint.exec({ username, origin: 'local', state, limit: 100 }, root);
+		}
+
+		test('finds new and inactive accounts by display name without hiding duplicate names', async () => {
+			await usersRepository.update(alice.id, { name: 'Root Creator' });
+			await usersRepository.update(alyce.id, { name: 'Root Creator', updatedAt: new Date(0) });
+			await usersRepository.update(alyson.id, { name: 'Root Creator' });
+			expect((await search(' creator ')).map(x => x.id).sort()).toEqual([alice.id, alyce.id].sort());
+		});
+
+		test('supports copied handles and keeps suspension filters on name matches', async () => {
+			expect((await search(' @ALICE ')).map(x => x.id)).toEqual([alice.id]);
+			await usersRepository.update(alice.id, { name: 'Creator', isSuspended: true });
+			expect(await search('Creator')).toEqual([]);
+			expect((await search('Creator', 'all')).map(x => x.id)).toEqual([alice.id]);
+		});
+
+		test('treats search wildcard characters literally', async () => {
+			await usersRepository.update(alice.id, { name: '100%_Creator' });
+			await usersRepository.update(alyce.id, { name: '100xxCreator' });
+			expect((await search('%_')).map(x => x.id)).toEqual([alice.id]);
+		});
+	});
+
 	describe('searchByUsernameAndHost', () => {
+		test('finds unfollowed new accounts with no posts for a signed-in user', async () => {
+			const result = await service.searchByUsernameAndHost({ username: 'alice', host: '.' }, { limit: 10 }, root);
+			expect(result).toEqual([alice.id]);
+		});
+
+		test('keeps local and suspended filters when including accounts without updates', async () => {
+			await setSuspended([alice]);
+			const result = await service.searchByUsernameAndHost({ username: 'al', host: '.' }, { limit: 100 }, root);
+			expect(result).toEqual([alyce, alycia, alysha].map(x => x.id));
+		});
+
 		test('フォロー中のアクティブユーザのうち、"al"から始まる人が全員ヒットする', async () => {
 			await createFollowings(root, [alice, alyce, alycia, alysha, alyson, alyssa, bob, bobbi, bobbie, bobby]);
 			await setActive([alice, alyce, alyssa, bob, bobbi, bobbie, bobby]);

@@ -10,7 +10,7 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 
 export async function lookupUser() {
 	const { canceled, result } = await os.inputText({
-		title: i18n.ts.usernameOrUserId,
+		title: `${i18n.ts.usernameOrUserId} / ${i18n.ts.name}`,
 	});
 	if (canceled || result == null) return;
 
@@ -18,27 +18,22 @@ export async function lookupUser() {
 		os.pageWindow(`/admin/user/${user.id}`);
 	};
 
-	const usernamePromise = misskeyApi('users/show', Misskey.acct.parse(result));
-	const idPromise = misskeyApi('users/show', { userId: result });
-	let _notFound = false;
-	const notFound = () => {
-		if (_notFound) {
-			os.alert({
-				type: 'error',
-				text: i18n.ts.noSuchUser,
-			});
-		} else {
-			_notFound = true;
-		}
-	};
-	usernamePromise.then(show).catch(err => {
-		if (err.code === 'NO_SUCH_USER') {
-			notFound();
-		}
-	});
-	idPromise.then(show).catch(_ => {
-		notFound();
-	});
+	const query = result.trim();
+	if (!query) return;
+	const results = await Promise.allSettled([
+		misskeyApi('users/show', Misskey.acct.parse(query)),
+		misskeyApi('users/show', { userId: query }),
+	]);
+	const found = results.find(r => r.status === 'fulfilled');
+	if (found?.status === 'fulfilled') {
+		show(found.value);
+		return;
+	}
+	if (results.some(r => r.status === 'rejected' && !['NO_SUCH_USER', 'INVALID_PARAM'].includes(r.reason?.code))) {
+		await os.alert({ type: 'error', text: i18n.ts.failedToFetchAccountInformation });
+		return;
+	}
+	show(await os.selectUser({ includeSelf: true, initialQuery: query }));
 }
 
 export async function lookupUserByEmail() {

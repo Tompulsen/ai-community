@@ -24,7 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<div :class="$style.inputs">
 				<MkInput v-model="searchUsername" style="flex: 1;" type="text" :spellcheck="false">
 					<template #prefix>@</template>
-					<template #label>{{ i18n.ts.username }}</template>
+					<template #label>{{ i18n.ts.username }} / {{ i18n.ts.name }}</template>
 				</MkInput>
 				<MkInput v-model="searchHost" style="flex: 1;" type="text" :spellcheck="false" :disabled="paginator.computedParams?.value?.origin === 'local'">
 					<template #prefix>@</template>
