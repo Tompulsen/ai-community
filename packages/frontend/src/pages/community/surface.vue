@@ -197,7 +197,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<div v-else :class="[$style.works, { [$style.list]: !isCommunity || section === 'resource' || (isProfile && profileCategory === 'resource') }]">
 					<template v-for="work in items" :key="work.id">
-						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed || mobileProfile || desktopGallery" :profileGrid="mobileProfile" :gallery="desktopGallery" :featured="featuredWorkId === work.id"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
+						<WorkCard v-if="isCommunity" :work="work" :compact="mobileFeed || mobileProfile || desktopGallery" :profileGrid="mobileProfile" :gallery="desktopGallery"><template v-if="canManage(work)" #actions><div :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></template></WorkCard>
 						<article v-else :class="$style.work">
 							<div :class="[$style.workBody, { [$style.publicWork]: isCommunity }]">
 								<header :class="$style.author"><span :class="$style.avatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><div :class="$style.identity"><strong>{{ work.author.name || work.author.username }}</strong><span>@{{ work.author.username }}</span></div><time :datetime="work.submittedAt">{{ formatDate(work.submittedAt) }}</time><div v-if="canManage(work)" :class="$style.workActions"><button v-if="canEdit(work)" type="button" :data-edit-work="work.id" :class="[$style.secondary, $style.editAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.editWork}: ${work.title}`" @click="openEditor(work)"><i class="ti ti-pencil" aria-hidden="true"></i>{{ openingId === work.id ? t.loadingEditor : t.editWork }}</button><button type="button" :class="[$style.quiet, $style.editAction, $style.deleteAction]" :disabled="!!openingId || !!deletingId" :aria-label="`${t.deleteWork}: ${work.title}`" @click="deleteWork(work)"><i class="ti ti-trash" aria-hidden="true"></i>{{ deletingId === work.id ? t.deletingWork : t.deleteWork }}</button></div></header>
@@ -366,7 +366,6 @@ const activeTagIds = ref(initialPublicTags());
 const filterTagIds = ref([...activeTagIds.value]);
 const status = ref<SubmissionStatus | 'all' | 'unreviewed'>(props.section === 'review' ? 'unreviewed' : 'all');
 const items = ref<CommunityWork[]>([]);
-const featuredWorkId = computed(() => desktopGallery.value && props.section === 'all' && !activeQuery.value && !activeTagIds.value.length && items.value.length >= 5 ? items.value[0].id : undefined);
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
 const loadError = ref('');
@@ -1017,7 +1016,7 @@ button.tagChip { min-height: 44px; }
 .desktopGallery .feedFilters { gap: 10px; }
 .desktopGallery .feedFilters a { gap: 7px; min-width: 82px; font-size: 15px; }
 .desktopGallery .feedFilters a[aria-current] { background: var(--MI_THEME-accentedBg); color: var(--MI_THEME-accent); &::after { display: none; } }
-.desktopGallery .works { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 20px; align-items: stretch; }
+.desktopGallery .works { --work-row-gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1px; gap: 0 20px; align-items: start; }
 @container community-feed (min-width: 850px) { .desktopGallery .works { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @container community-feed (min-width: 1100px) { .desktopGallery .works { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container community-feed (min-width: 1360px) { .desktopGallery .works { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
@@ -1199,7 +1198,7 @@ button.tagChip { min-height: 44px; }
 .galleryFeed .canvas.communityCanvas { padding: 8px 10px 0; }
 .galleryFeed .columns { display: block; padding: 0; }
 .galleryFeed .feed { margin: 0; min-width: 0; }
-.galleryFeed .works { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px 8px; }
+.galleryFeed .works { --work-row-gap: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1px; align-items: start; gap: 0 8px; }
 .galleryFeed .empty { min-height: calc(var(--mobile-feed-height) - 64px); margin: 0; padding: 48px 28px; border: 0; border-radius: 0; color: var(--MI_THEME-fg); background: var(--MI_THEME-bg); }
 .galleryFeed .searchSummary { margin: 0 0 8px; padding: 6px 4px; color: var(--MI_THEME-fgTransparentWeak); }
 .galleryFeed .searchSummary button { color: var(--MI_THEME-fg); }
