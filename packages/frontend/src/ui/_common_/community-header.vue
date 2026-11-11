@@ -27,7 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { feedText as ft } from '@/pages/community/feed-copy.js';
 import { communityText as t } from '@/pages/community/copy.js';
 import { requestCommunityComposer } from '@/pages/community/compose.js';
@@ -93,9 +93,10 @@ function communityMenu(event: MouseEvent) {
 	if (!(target instanceof HTMLElement)) return;
 	const discoveryPath = new URL(publicFeedPath(pathname.value) ? currentPath.value : '/community', window.location.origin);
 	discoveryPath.searchParams.set('panel', 'community');
+	let openCreators = false;
 	os.popupMenu([
 		{ type: 'link', text: ft.allAnnouncements, icon: 'ti ti-speakerphone', to: '/announcements' },
-		{ type: 'link', text: ft.creators, icon: 'ti ti-users', to: discoveryPath.pathname + discoveryPath.search },
+		{ text: ft.creators, icon: 'ti ti-users', action: () => { openCreators = true; } },
 		{ type: 'link', text: ft.mobileHome, icon: 'ti ti-home', to: '/' },
 		...($i ? [
 			{ type: 'link' as const, text: i18n.ts.timeline, icon: 'ti ti-messages', to: '/timeline' },
@@ -103,7 +104,12 @@ function communityMenu(event: MouseEvent) {
 			{ text: workbenchText.tools, icon: 'ti ti-grid-dots', action: () => launchTools(target) },
 			{ text: i18n.ts.widgets, icon: 'ti ti-apps', action: () => emit('widgets') },
 		] : []),
-	], target);
+	], target, {
+		onClosed: () => {
+			// Release the menu's focus trap before opening the community drawer.
+			if (openCreators) void nextTick(() => router.pushByPath(discoveryPath.pathname + discoveryPath.search));
+		},
+	});
 }
 </script>
 

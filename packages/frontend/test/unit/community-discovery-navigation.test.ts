@@ -17,10 +17,8 @@ const route = vi.hoisted(() => ({
 		route.listeners.forEach(listener => listener({ fullPath: path }));
 	}),
 }));
-const release = vi.hoisted(() => vi.fn());
 vi.mock('@/router.js', () => ({ useRouter: () => route }));
 vi.mock('@/os.js', () => ({ claimZIndex: () => 100 }));
-vi.mock('@/utility/focus-trap.js', () => ({ focusTrap: () => ({ release }) }));
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -63,7 +61,8 @@ describe('community menu discovery navigation', () => {
 		await nextTick();
 		expect(drawer.discoveryOpen.value).toBe(false);
 		expect(document.activeElement).toBe(host.querySelector('[data-testid="community-menu"]'));
-		expect(release).toHaveBeenCalled();
+		expect(host.inert).not.toBe(true);
+		expect(host.querySelector('button')!.inert).not.toBe(true);
 	});
 
 	test('the menu can reopen a mounted feed after closing', async () => {
