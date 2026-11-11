@@ -6,7 +6,8 @@ import DownloadIcon from "../icons/download.svg";
 import UploadIcon from "../icons/upload.svg";
 import { SquarePen as EditIcon } from "lucide-react";
 import AddIcon from "../icons/add.svg";
-import CloseIcon from "../icons/close.svg";
+import BackIcon from "../icons/left.svg";
+import { useWorkspaceBack } from "./workspace-history";
 import DeleteIcon from "../icons/delete.svg";
 import EyeIcon from "../icons/eye.svg";
 import CopyIcon from "../icons/copy.svg";
@@ -29,6 +30,7 @@ export { MaskConfig, ContextPrompts } from "./mask-config";
 
 export function MaskPage() {
   const navigate = useNavigate();
+  const back = useWorkspaceBack();
   useBuiltinMasksLoaded();
 
   const maskStore = useMaskStore();
@@ -81,6 +83,12 @@ export function MaskPage() {
     <ErrorBoundary>
       <div className={styles["mask-page"]}>
         <div className="window-header">
+          <IconButton
+            icon={<BackIcon />}
+            title="返回上一页"
+            aria="返回上一页"
+            onClick={back}
+          />
           <div className="window-header-title">
             <div className="window-header-main-title">
               {Locale.Mask.Page.Title}
@@ -105,13 +113,6 @@ export function MaskPage() {
                 text={Locale.UI.Import}
                 bordered
                 onClick={() => importFromFile()}
-              />
-            </div>
-            <div className="window-action-button">
-              <IconButton
-                icon={<CloseIcon />}
-                bordered
-                onClick={() => navigate(-1)}
               />
             </div>
           </div>

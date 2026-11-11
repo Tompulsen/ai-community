@@ -3,7 +3,7 @@
 import React, { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Path } from "../constant";
+import { useWorkspaceBack } from "./workspace-history";
 import { useMobileScreen } from "../utils";
 import styles from "./page-header.module.scss";
 import clsx from "clsx";
@@ -65,7 +65,7 @@ interface PageHeaderProps {
   actions?: React.ReactNode;
   /** 返回行为: "back" 显示返回箭头, "close" 显示关闭X, undefined 不显示 */
   backType?: "back" | "close";
-  /** 返回目标路径, 默认回首页 */
+  /** 显式返回目标；未指定时返回工作台上一页 */
   backPath?: string;
   /** 额外 className */
   className?: string;
@@ -82,6 +82,7 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   const navigate = useNavigate();
+  const back = useWorkspaceBack();
   const isMobile = useMobileScreen();
   const config = useAppConfig();
   const [actionsTarget, setActionsTarget] = useState<HTMLElement | null>(null);
@@ -101,7 +102,7 @@ export function PageHeader({
     if (backPath) {
       navigate(backPath);
     } else {
-      navigate(Path.Home);
+      back();
     }
   };
 
@@ -138,21 +139,24 @@ export function PageHeader({
   return (
     <div className={clsx("window-header", styles["page-header"], className)}>
       {/* 左侧: 返回/关闭按钮 */}
-      {isMobile && backType && (
-        <div className={toolbarClass}>
-          <ChatAction
-            text={backType === "back" ? Locale.NewChat.Return : Locale.UI.Close}
-            icon={backType === "back" ? <BackArrow /> : <CloseIcon />}
-            onClick={handleBack}
-          />
-        </div>
+      {backType && (
+        <button
+          type="button"
+          className={styles["header-back"]}
+          aria-label={backType === "back" ? Locale.NewChat.Return : Locale.UI.Close}
+          title={backType === "back" ? Locale.NewChat.Return : Locale.UI.Close}
+          onClick={handleBack}
+        >
+          {backType === "back" ? <BackArrow /> : <CloseIcon />}
+          <span>{backType === "back" ? Locale.NewChat.Return : Locale.UI.Close}</span>
+        </button>
       )}
 
       {/* 中间: 图标 + 标题 */}
-      <div className={styles["header-title"]}>
+      <h1 className={styles["header-title"]}>
         {icon && <span className={styles["header-icon"]}>{icon}</span>}
         <span>{title}</span>
-      </div>
+      </h1>
 
       {/* 右侧: 自定义操作 */}
       {actionsTarget && !isMobile

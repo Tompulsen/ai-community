@@ -10,9 +10,9 @@
 .page-header:global(.window-header) {
   flex-shrink: 0;
   box-sizing: border-box;
-  height: 40px;
-  min-height: 40px;
-  padding: 4px 24px;
+  height: 60px;
+  min-height: 60px;
+  padding: 10px 24px;
   gap: 12px;
   border: 0;
   background: transparent;
@@ -23,15 +23,28 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: var(--border-in-light);
-  border-radius: var(--radius-sm, 10px);
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  touch-action: manipulation;
   background: var(--white);
   color: var(--black);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.2s var(--ease-out, ease);
+  transition: background-color 150ms ease;
+
+  &:focus-visible {
+    @include controls.focus-ring;
+  }
+
+  svg {
+    flex-shrink: 0;
+  }
 
   &:hover {
     @include controls.hover-surface;
@@ -39,8 +52,7 @@
   }
 
   &:active {
-    transform: scale(0.94);
-    transition-duration: 0.08s;
+    @include controls.selected-surface;
   }
 }
 
@@ -49,9 +61,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 20px;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
   color: var(--black);
   letter-spacing: 0;
   flex: 1;
@@ -194,10 +207,15 @@
 /* ── 响应式 ── */
 @media (max-width: 600px), (pointer: coarse) {
   .page-header:global(.window-header) {
-    height: 48px;
-    min-height: 48px;
+    height: 56px;
+    min-height: 56px;
     padding-block: 2px;
     gap: 8px;
+  }
+
+  .header-back {
+    min-height: 44px;
+    min-width: 44px;
   }
 }
 
@@ -207,7 +225,6 @@
   }
 
   .header-back {
-    width: 32px;
-    height: 32px;
+    padding-inline: 8px;
   }
 }

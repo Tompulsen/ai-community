@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<PageWithHeader :tabs="[]" :actions="studioActions">
+<PageWithHeader :tabs="[]" :actions="studioActions" backTo="/community">
 	<div :class="$style.workspace" data-testid="creation-workspace">
 		<div v-if="!definition" :class="$style.empty"><h1>{{ i18n.ts.notFound }}</h1></div>
 		<div v-else-if="!$i" :class="$style.empty" data-testid="creation-login-required">

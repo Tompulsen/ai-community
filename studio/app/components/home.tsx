@@ -56,6 +56,7 @@ import { initializeLocalWorkspace } from "../utils/local-workspace";
 import { ChatControllerPool } from "../client/controller";
 import { TaskRecovery } from "./task-recovery";
 import { WindowContent } from "./window-content";
+import { WorkspaceHistory } from "./workspace-history";
 import { WorkspaceRail, WorkspaceTopbar } from "./workspace-navigation";
 import { getMotionPreference } from "../utils/motion";
 import { preloadChatRenderers } from "../utils/preload-chat-renderers";
@@ -602,7 +603,9 @@ export function Home({
       <TaskRecovery />
       <Announcement />
       <Router>
-        <Screen embedded={embedded} />
+        <WorkspaceHistory>
+          <Screen embedded={embedded} />
+        </WorkspaceHistory>
       </Router>
       {maintenance && (
         <div

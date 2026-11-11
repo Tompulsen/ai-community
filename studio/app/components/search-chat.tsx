@@ -3,7 +3,8 @@ import { ErrorBoundary } from "./error";
 import styles from "./mask.module.scss";
 import { useNavigate } from "react-router-dom";
 import { IconButton } from "./button";
-import CloseIcon from "../icons/close.svg";
+import BackIcon from "../icons/left.svg";
+import { useWorkspaceBack } from "./workspace-history";
 import EyeIcon from "../icons/eye.svg";
 import Locale from "../locales";
 import { Path } from "../constant";
@@ -48,6 +49,7 @@ function highlightText(text: string, query: string): string {
 
 export function SearchChatPage() {
   const navigate = useNavigate();
+  const back = useWorkspaceBack();
 
   const chatStore = useChatStore();
 
@@ -155,6 +157,12 @@ export function SearchChatPage() {
       <div className={styles["mask-page"]}>
         {/* header */}
         <div className="window-header">
+          <IconButton
+            icon={<BackIcon />}
+            title="返回上一页"
+            aria="返回上一页"
+            onClick={back}
+          />
           <div className="window-header-title">
             <div className="window-header-main-title">
               {Locale.SearchChat.Page.Title}
@@ -164,15 +172,7 @@ export function SearchChatPage() {
             </div>
           </div>
 
-          <div className="window-actions">
-            <div className="window-action-button">
-              <IconButton
-                icon={<CloseIcon />}
-                bordered
-                onClick={() => navigate(-1)}
-              />
-            </div>
-          </div>
+          <div className="window-actions"></div>
         </div>
 
         <div className={styles["mask-page-body"]}>

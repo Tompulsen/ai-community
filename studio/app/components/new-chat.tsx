@@ -9,6 +9,7 @@ import LightningIcon from "../icons/lightning.svg";
 import EyeIcon from "../icons/eye.svg";
 
 import { useLocation, useNavigate } from "react-router-dom";
+import { useWorkspaceBack } from "./workspace-history";
 import { Mask, useMaskStore } from "../store/mask";
 import Locale from "../locales";
 import { useAppConfig, useChatStore } from "../store";
@@ -92,6 +93,7 @@ export function NewChat() {
   const groups = useMaskGroup(masks);
 
   const navigate = useNavigate();
+  const back = useWorkspaceBack();
 
   const maskRef = useRef<HTMLDivElement>(null);
 
@@ -132,7 +134,7 @@ export function NewChat() {
         <IconButton
           icon={<LeftIcon />}
           text={Locale.NewChat.Return}
-          onClick={() => navigate(Path.Home)}
+          onClick={back}
         ></IconButton>
         {!state?.fromHome && (
           <IconButton

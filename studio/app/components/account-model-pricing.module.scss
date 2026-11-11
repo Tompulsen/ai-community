@@ -36,7 +36,7 @@
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  flex: 1;
   gap: 12px;
   min-width: 0;
   margin-inline-start: auto;
@@ -46,7 +46,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 200px;
+  width: 320px;
+  max-width: 100%;
   min-width: 0;
   min-height: 36px;
   padding: 0 10px;
@@ -80,6 +81,7 @@
 
 .count {
   flex-shrink: 0;
+  margin-inline-start: auto;
   color: var(--second-in-gray);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -119,7 +121,7 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   align-items: stretch;
   gap: 16px;
 }
@@ -129,12 +131,12 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  min-height: 232px;
+  min-height: 208px;
   padding: 16px;
   box-sizing: border-box;
   border-radius: 8px;
   background: var(--list-surface);
-  box-shadow: var(--card-shadow);
+  border: 1px solid var(--control-border);
 }
 
 .cardHeading {
@@ -166,8 +168,8 @@
   min-width: 0;
 
   h3 {
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 14px;
+    font-weight: 600;
     line-height: 19px;
     overflow-wrap: anywhere;
   }
@@ -366,12 +368,6 @@
   white-space: nowrap;
 }
 
-@container (max-width: 800px) {
-  .grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @container (max-width: 520px) {
   .heading {
     margin-bottom: 16px;
@@ -409,7 +405,7 @@
   }
 
   .card {
-    min-height: 244px;
+    min-height: 208px;
   }
 }
 

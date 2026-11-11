@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import styles from "./mcp-market.module.scss";
 import EditIcon from "../icons/edit.svg";
 import AddIcon from "../icons/add.svg";
-import CloseIcon from "../icons/close.svg";
+import BackIcon from "../icons/left.svg";
+import { useWorkspaceBack } from "./workspace-history";
 import DeleteIcon from "../icons/delete.svg";
 import RestartIcon from "../icons/reload.svg";
 import EyeIcon from "../icons/eye.svg";
@@ -43,6 +44,7 @@ interface ConfigProperty {
 
 export function McpMarketPage() {
   const navigate = useNavigate();
+  const back = useWorkspaceBack();
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [userConfig, setUserConfig] = useState<Record<string, any>>({});
@@ -642,6 +644,12 @@ export function McpMarketPage() {
     <ErrorBoundary>
       <div className={styles["mcp-market-page"]}>
         <div className="window-header">
+          <IconButton
+            icon={<BackIcon />}
+            title="返回上一页"
+            aria="返回上一页"
+            onClick={back}
+          />
           <div className="window-header-title">
             <div className="window-header-main-title">
               MCP Market
@@ -663,14 +671,6 @@ export function McpMarketPage() {
                 bordered
                 onClick={handleRestartAll}
                 text="Restart All"
-                disabled={isLoading}
-              />
-            </div>
-            <div className="window-action-button">
-              <IconButton
-                icon={<CloseIcon />}
-                bordered
-                onClick={() => navigate(-1)}
                 disabled={isLoading}
               />
             </div>

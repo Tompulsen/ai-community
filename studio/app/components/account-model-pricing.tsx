@@ -173,10 +173,12 @@ export function AccountModelPricing({
   model = "",
   userId,
   previewData,
+  showTitle = true,
 }: {
   model?: string;
   userId: number;
   previewData?: ModelPricing;
+  showTitle?: boolean;
 }) {
   const [data, setData] = useState<ModelPricing>();
   const [error, setError] = useState("");
@@ -247,7 +249,7 @@ export function AccountModelPricing({
       data-testid="account-model-pricing"
     >
       <div className={styles.heading}>
-        <h2>模型价格</h2>
+        {showTitle && <h2>模型价格</h2>}
         <div className={styles.toolbar}>
           <label className={styles.search}>
             <Search size={15} aria-hidden="true" />

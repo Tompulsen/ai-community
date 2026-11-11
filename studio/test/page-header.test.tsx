@@ -18,6 +18,8 @@ config.update.mockImplementation((updater: unknown) => {
 
 jest.unstable_mockModule("react-router-dom", () => ({
   useNavigate: () => navigate,
+  useLocation: () => ({ pathname: "/gallery", search: "", hash: "" }),
+  useNavigationType: () => "POP",
 }));
 jest.unstable_mockModule("@/app/utils", () => ({
   useMobileScreen: () => mobile,
@@ -159,7 +161,9 @@ test("desktop without a topbar slot falls back to local actions", () => {
     within(localHeader)
       .getAllByRole("button")
       .map((button) => button.textContent),
-  ).toEqual(["Page action", "Announcements", "Full screen"]);
+  ).toEqual(["Return", "Page action", "Announcements", "Full screen"]);
+  fireEvent.click(within(localHeader).getByRole("button", { name: "Return" }));
+  expect(navigate).toHaveBeenCalledWith("/chat", { replace: true });
 });
 
 test("plain empty states group a working action while the default text-only API remains valid", () => {

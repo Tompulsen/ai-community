@@ -693,11 +693,7 @@ export function GalleryPage() {
 
   return (
     <div className={styles["gallery-page"]}>
-      <PageHeader
-        title={Locale.Gallery.Title}
-        icon={<ImageIcon size={20} />}
-        backType="close"
-      />
+      <PageHeader title={Locale.Gallery.Title} icon={<ImageIcon size={20} />} />
 
       <div className={styles["gallery-controls"]}>
         <div className={styles["gallery-toolbar"]}>

@@ -1568,12 +1568,8 @@ export function AccountPage() {
       }
     >
       <PageHeader
-        title={pricingView ? "模型价格" : Locale.Account.Title}
+        title={pricingView ? "模型定价" : Locale.Account.Title}
         icon={pricingView ? <Tags size={19} /> : <UserRound size={19} />}
-        backPath={Path.Home}
-        className={
-          pricingView && authenticated ? styles.pricingHeader : undefined
-        }
       />
       <div
         className={`${styles.body} ${!authenticated ? styles.loginBody : ""}`}
@@ -1881,6 +1877,7 @@ export function AccountPage() {
                 key={userId!}
                 userId={userId!}
                 model={pricingModel}
+                showTitle={!pricingView}
                 previewData={preview ? localAccountPreview.pricing : undefined}
               />
             ) : (

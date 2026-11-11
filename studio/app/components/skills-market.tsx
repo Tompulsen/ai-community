@@ -314,7 +314,6 @@ export function SkillsMarket() {
       <PageHeader
         title="技能广场"
         icon={<Sparkles size={19} aria-hidden="true" />}
-        backPath={Path.Chat}
       />
       <div className={styles.content} ref={content}>
         <div className={styles.controls}>

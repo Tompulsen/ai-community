@@ -11,11 +11,9 @@
 
 .pricingPage {
   background: var(--workspace-sidebar-surface, var(--sidebar-surface));
-}
 
-@media (min-width: 601px) {
-  .pricingPage .pricingHeader {
-    display: none;
+  > .body {
+    padding-top: 8px;
   }
 }
 
