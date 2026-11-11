@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid, [$style.gallery]: gallery, [$style.thumbnailOnly]: thumbnailOnly }]" :style="compact && !profileGrid ? { gridRowEnd: `span ${masonryRows}` } : undefined" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid, [$style.gallery]: gallery, [$style.thumbnailOnly]: thumbnailOnly }]" :style="compact && !profileGrid && !gallery ? { gridRowEnd: `span ${masonryRows}` } : undefined" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<template v-if="compact">
 		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: previewAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
 			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @load="coverLoaded" @error="failed = true"/>
@@ -54,7 +54,7 @@ const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?
 const formatCount = (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const root = ref<HTMLElement>();
 const masonryRows = ref(1);
-watch([root, () => props.compact && !props.profileGrid], ([element, masonry], _previous, onCleanup) => {
+watch([root, () => props.compact && !props.profileGrid && !props.gallery], ([element, masonry], _previous, onCleanup) => {
 	if (!element || !masonry) return;
 	const observer = new ResizeObserver(([entry]) => {
 		const height = entry.borderBoxSize[0]?.blockSize ?? element.getBoundingClientRect().height;
@@ -81,6 +81,7 @@ const cover = computed(() => {
 	return file ? safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined) : undefined;
 });
 const previewAspect = computed(() => {
+	if (props.gallery) return '3 / 4';
 	if (!cover.value || failed.value) return props.thumbnailOnly ? 'auto' : undefined;
 	if (loadedAspect.value) return loadedAspect.value;
 	const width = coverFile.value?.properties?.width, height = coverFile.value?.properties?.height;
@@ -137,16 +138,16 @@ watch(cover, () => { failed.value = false; loadedAspect.value = undefined; });
 .thumbnailOnly .compactFallback { height: auto; min-height: 110px; padding: 12px 8px; gap: 6px; > i { font-size: 20px; } p { -webkit-line-clamp: 3; font-size: 12px; } }
 
 .card.gallery { display: grid; grid-template-columns: minmax(0, 1fr); align-self: start; border: 0; border-radius: 12px; background: transparent; }
-.gallery .compactPreview { grid-area: 1 / 1; border-radius: 12px; }
+.gallery .compactPreview { grid-area: 1 / 1; border-radius: var(--community-radius); img { object-fit: cover; } }
 .gallery .compactInfo { grid-area: 1 / 1; z-index: 1; align-self: start; justify-self: end; gap: 10px; min-height: 28px; margin: 8px; padding: 2px 8px; border-radius: 8px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); pointer-events: none; }
-.gallery .compactTitle { margin: 6px 2px 0; font-size: 12px; font-weight: 500; line-height: 20px; a { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
-.gallery .compactMeta { grid-area: 1 / 1; z-index: 1; align-self: end; justify-self: start; max-width: calc(100% - 16px); margin: 8px; padding: 0 8px; border-radius: 8px; background: var(--MI_THEME-panel); color: var(--MI_THEME-fg); time { display: none; } }
+.gallery .compactTitle { min-height: 40px; margin: 12px 0 8px; font-size: 14px; font-weight: 600; line-height: 20px; a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; } }
+.gallery .compactMeta { margin: 0; padding: 0; min-width: 0; max-width: 100%; color: var(--work-muted); time { flex-shrink: 0; font-size: 12px; } }
 .gallery .compactFallback { min-height: 140px; padding: 16px; gap: 6px; background: var(--MI_THEME-buttonBg); border-radius: 12px; > i { font-size: 22px; } p { -webkit-line-clamp: 5; font-size: 13px; } }
 .galleryStats { display: flex; align-items: center; gap: 10px; font-size: 12px; > span { display: inline-flex; align-items: center; gap: 4px; } i { font-size: 14px; } }
 .compactActions { padding-top: 4px; }
 @media (hover: hover) {
-	.gallery .compactInfo, .gallery .compactMeta { opacity: 0; }
-	.gallery:is(:hover, :focus-within) .compactInfo, .gallery:is(:hover, :focus-within) .compactMeta { opacity: 1; }
+	.gallery .compactInfo { opacity: 0; }
+	.gallery:is(:hover, :focus-within) .compactInfo { opacity: 1; }
 	.gallery .compactTitle a:hover, .gallery .compactMeta a:hover { color: var(--MI_THEME-accent); }
 }
 </style>

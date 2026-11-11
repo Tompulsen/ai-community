@@ -179,9 +179,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<a v-for="entry in feedSections" :key="entry.id" :href="feedPath(entry.path)" :aria-current="section === entry.id ? 'page' : undefined" @click.prevent="emit('navigate', feedPath(entry.path))">{{ entry.id === 'all' ? ft.all : entry.id === 'resource' ? ft.mobileResource : entry.title }}</a>
 					</nav>
 					<div :class="$style.feedTools">
-						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="ft.refresh" :title="ft.refresh" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i></button>
-						<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
-						<button ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
+						<button type="button" :class="[$style.quiet, $style.refresh]" :disabled="loading" :aria-busy="loading" :aria-label="ft.refresh" :title="ft.refresh" @click="refreshWorks()"><i class="ti ti-refresh" aria-hidden="true"></i><span :class="$style.toolLabel">{{ ft.refresh }}</span></button>
+						<button type="button" :class="[$style.filterButton, { [$style.filterActive]: activeTagIds.length }]" :aria-label="activeTagIds.length ? `${t.tagFilter} · ${activeTagIds.length}` : t.tagFilter" :title="t.tagFilter" aria-haspopup="dialog" :aria-expanded="filterPickerOpen" data-testid="filter-work-tags" @click="openFilterPicker"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span :class="$style.toolLabel">{{ t.tagFilter }}</span><span v-if="activeTagIds.length" :class="$style.filterCount">{{ activeTagIds.length }}</span></button>
+						<button ref="discoveryToggle" type="button" :class="[$style.quiet, $style.discoveryToggle]" :aria-controls="discoveryId" :aria-expanded="discoveryOpen" :aria-label="ft.mobileMenu" :title="ft.mobileMenu" data-testid="toggle-discovery" @click="toggleDiscovery"><i class="ti ti-menu-2" aria-hidden="true"></i><span :class="$style.toolLabel">{{ ft.mobileMenu }}</span></button>
 					</div>
 				</div>
 				<div v-if="(isPublicFeed || mobileProfile) && (activeQuery || activeTagIds.length)" :class="$style.searchSummary" role="status"><div :class="$style.selectedFilters"><span v-if="activeQuery">{{ ft.search }} · {{ activeQuery }}</span><button v-for="id in activeTagIds" :key="id" type="button" :class="$style.tagChip" :aria-label="`${t.removeTag}: ${tagName(id)}`" @click="removeFilter(id)"># {{ tagName(id) }}<i class="ti ti-x" aria-hidden="true"></i></button></div><button type="button" :class="$style.quiet" @click="clearSearch">{{ ft.clearSearch }}<i class="ti ti-x" aria-hidden="true"></i></button></div>
@@ -1003,16 +1003,19 @@ button.tagChip { min-height: 44px; }
 .works { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 .works.list { grid-template-columns: 1fr; }
 .desktopGallery { background: var(--MI_THEME-panel); }
-.desktopGallery .canvas { max-width: none; padding: 0 16px 32px; }
+.desktopGallery .canvas { max-width: none; padding: 0 var(--community-grid-margin) 32px; }
 .feedHeading { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.desktopGallery .filterBar { position: sticky; top: 0; z-index: 4; min-height: 48px; gap: 12px; padding: 0 0 8px; margin-bottom: 8px; border: 0; background: var(--MI_THEME-panel); }
+.desktopGallery .filterBar { position: sticky; top: 0; z-index: 4; display: grid; grid-template-columns: repeat(var(--community-grid-columns), minmax(0, 1fr)); min-height: 64px; gap: var(--community-grid-gap); padding: 8px 0; margin-bottom: 16px; border: 0; background: var(--MI_THEME-panel); }
+.desktopGallery .feedFilters { grid-column: 1 / span 4; }
 .desktopGallery .feedFilters { gap: 8px; }
 .desktopGallery .feedFilters a { min-height: 44px; padding: 8px 12px; border-radius: 0; font-size: 14px; }
 .desktopGallery .feedFilters a[aria-current] { background: transparent; color: var(--MI_THEME-fg); &::after { inset-inline: 12px; background: currentColor; } }
-.desktopGallery .feedTools { gap: 0; margin-left: 0; }
-.desktopGallery .feedTools button { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 8px; border: 0; border-radius: 12px; background: transparent; }
+.desktopGallery .feedTools { grid-column: 5 / -1; justify-self: end; gap: 8px; margin-left: 0; }
+.desktopGallery .feedTools button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; width: auto; min-width: 44px; min-height: 44px; padding: 8px; border: 0; border-radius: var(--community-radius-small); background: transparent; white-space: nowrap; }
+.toolLabel { font-size: 12px; }
+@media (max-width: 959px) { .desktopGallery .toolLabel { display: none; } }
 .desktopGallery .feedTools button:hover, .desktopGallery .discoveryToggle[aria-expanded='true'] { background: var(--MI_THEME-buttonBg); }
-.desktopGallery .works { --work-row-gap: 16px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); grid-auto-rows: 1px; gap: 0 16px; align-items: start; }
+.desktopGallery .works { grid-template-columns: repeat(var(--community-grid-columns), minmax(0, 1fr)); gap: var(--community-grid-gap); align-items: start; > * { grid-column: span 2; } }
 .work { min-width: 0; background: var(--MI_THEME-panel); border: 1px solid var(--MI_THEME-divider); border-radius: var(--community-radius, 12px); }
 .cover { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; aspect-ratio: 16 / 9; max-height: 560px; border-radius: 16px; overflow: hidden; margin-top: 16px; background: var(--MI_THEME-buttonBg); position: relative; font-size: 13px; }
 .cover.coverEmpty { aspect-ratio: auto; min-height: 72px; flex-direction: row; justify-content: flex-start; padding: 20px; background: var(--MI_THEME-bg); }
