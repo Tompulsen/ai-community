@@ -6,8 +6,12 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue';
 import { focusTrap } from '@/utility/focus-trap.js';
 import { claimZIndex } from '@/os.js';
+import { useRouter } from '@/router.js';
 
 export function useDiscoveryDrawer(enabled: () => boolean) {
+	const router = useRouter();
+	const route = ref(router.getCurrentFullPath());
+	router.useListener('change', ({ fullPath }) => { route.value = fullPath; });
 	const discoveryId = useId();
 	const discoveryLayer = ref<HTMLElement>();
 	const discoveryPanel = ref<HTMLElement>();
@@ -19,10 +23,11 @@ export function useDiscoveryDrawer(enabled: () => boolean) {
 	const discoveryOpen = computed(() => active.value && enabled() && open.value);
 	let releaseFocus: (() => void) | undefined;
 	let restoreToggleFocus = false;
+	const focusToggle = () => (discoveryToggle.value ?? window.document.querySelector<HTMLElement>('[data-testid="community-menu"]'))?.focus({ preventScroll: true });
 
 	function closeDiscovery() {
 		open.value = false;
-		void nextTick(() => { if (active.value) discoveryToggle.value?.focus({ preventScroll: true }); });
+		void nextTick(() => { if (active.value) focusToggle(); });
 	}
 
 	async function toggleDiscovery() {
@@ -47,9 +52,20 @@ export function useDiscoveryDrawer(enabled: () => boolean) {
 		if (!open && discoveryLayer.value?.contains(window.document.activeElement)) restoreToggleFocus = true;
 	}, { flush: 'sync' });
 	watch([discoveryOpen, discoveryCompact, discoveryLayer], ([open, compact]) => {
-		if (restoreToggleFocus) { restoreToggleFocus = false; if (active.value) discoveryToggle.value?.focus({ preventScroll: true }); }
+		if (restoreToggleFocus) { restoreToggleFocus = false; if (active.value) focusToggle(); }
 		if (open && compact && discoveryLayer.value && !releaseFocus) releaseFocus = focusTrap(discoveryLayer.value).release;
 	}, { flush: 'post' });
+
+	watch([route, enabled, active], async ([path, available, current]) => {
+		if (!available || !current) return;
+		const url = new URL(path, window.location.origin);
+		if (url.searchParams.get('panel') !== 'community') return;
+		open.value = true;
+		url.searchParams.delete('panel');
+		router.replaceByPath(url.pathname + url.search + url.hash);
+		await nextTick();
+		if (discoveryOpen.value) discoveryPanel.value?.focus({ preventScroll: true });
+	}, { immediate: true });
 
 	function start() {
 		active.value = true;
