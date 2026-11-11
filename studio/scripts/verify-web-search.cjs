@@ -19,6 +19,8 @@ const translation = JSON.parse(
       });
       const page = await context.newPage();
       const retrievals = [];
+      const modelRequests = [];
+      let retrievalFails = false;
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.addInitScript(() => localStorage.setItem("lang", "cn"));
@@ -30,6 +32,11 @@ const translation = JSON.parse(
         const ok = (data) => route.fulfill({ json: { success: true, data } });
         if (pathname === "/api/skills/retrieve") {
           retrievals.push(route.request().postDataJSON());
+          if (retrievalFails)
+            return route.fulfill({
+              status: 502,
+              json: { message: "联网检索测试失败" },
+            });
           return route.fulfill({
             json: {
               searchedAt: "2026-11-11T03:00:00Z",
@@ -50,6 +57,17 @@ const translation = JSON.parse(
                 },
               ],
             },
+          });
+        }
+        if (pathname === "/api/v1/chat/completions") {
+          modelRequests.push(route.request().postDataJSON());
+          return route.fulfill({
+            contentType: "text/event-stream",
+            body: `data: ${JSON.stringify({
+              choices: [
+                { delta: { content: "Fixture answer" }, finish_reason: null },
+              ],
+            })}\n\ndata: [DONE]\n\n`,
           });
         }
         if (pathname === "/api/v1/videos")
@@ -96,10 +114,12 @@ const translation = JSON.parse(
         if (pathname.endsWith("/models") || pathname === "/api/remote-models")
           return route.fulfill({
             json: {
-              data: ["gpt-4o", "gpt-image-2", "sora-2"].map((id) => ({
-                id,
-                object: "model",
-              })),
+              data: ["deepseek-v4.1-flash", "gpt-image-2", "sora-2"].map(
+                (id) => ({
+                  id,
+                  object: "model",
+                }),
+              ),
             },
           });
         return ok([]);
@@ -157,20 +177,13 @@ const translation = JSON.parse(
                 session.activeSkillId = "translation";
                 session.mask.syncGlobalConfig = false;
                 Object.assign(session.mask.modelConfig, {
-                  model: "gpt-4o",
+                  model: "deepseek-v4.1-flash",
                   providerName: "OpenAI",
                   chatApiFormat: "chat-completions",
                   sendMemory: false,
                 });
               },
             );
-          window.webCalls = [];
-          window.webModule(
-            "/app/client/platforms/openai.ts",
-          ).ChatGPTApi.prototype.chat = async function (options) {
-            window.webCalls.push(JSON.parse(JSON.stringify(options.messages)));
-            options.onFinish?.("Fixture answer", { content: "Fixture answer" });
-          };
         }, translation);
         const input = page.locator("#chat-input");
         await input.fill("保留草稿");
@@ -226,14 +239,25 @@ const translation = JSON.parse(
           path: path.join(os.tmpdir(), `octopus-web-search-${width}.png`),
           animations: "disabled",
         });
-        const send = () =>
-          page.evaluate(async () => {
+        const settled = () =>
+          page.waitForFunction(
+            () =>
+              !window
+                .webModule("/app/store/chat.ts")
+                .useChatStore.getState()
+                .currentSession()
+                .messages.some((m) => m.streaming),
+          );
+        const send = async () => {
+          await page.evaluate(async () => {
             await window
               .webModule("/app/store/chat.ts")
               .useChatStore.getState()
               .onUserInput("Search this question");
-            return window.webCalls.at(-1);
           });
+          await settled();
+          return modelRequests.at(-1)?.messages;
+        };
         let messages = await send();
         assert.equal(retrievals.at(-1).mode, "quick");
         assert.ok(JSON.stringify(messages).includes("TRANSLATION_INSTRUCTION"));
@@ -247,9 +271,56 @@ const translation = JSON.parse(
         assert.ok(
           JSON.stringify(messages).includes("Actual retrieved webpage body"),
         );
+        const verifyInput = async (messages) => {
+          const input = messages.at(-1);
+          assert.equal(input.role, "user");
+          const text =
+            typeof input.content === "string"
+              ? input.content
+              : input.content.find((part) => part.type === "text").text;
+          assert.ok(text.includes("Actual retrieved webpage body"));
+          assert.ok(text.includes("https://example.test/evidence"));
+          assert.ok(text.includes("untrusted evidence"));
+          assert.ok(text.endsWith("Search this question"));
+          assert.equal((text.match(/<web_search_results>/g) || []).length, 1);
+          const saved = await page.evaluate(
+            () =>
+              window
+                .webModule("/app/store/chat.ts")
+                .useChatStore.getState()
+                .currentSession().messages,
+          );
+          assert.ok(!JSON.stringify(saved).includes("web_search_results"));
+        };
+        await verifyInput(messages);
+        const beforeRetry = retrievals.length;
+        const beforeRetryModelRequests = modelRequests.length;
+        await page.evaluate(async () => {
+          const chat = window.webModule("/app/store/chat.ts").useChatStore;
+          const session = chat.getState().currentSession();
+          await chat
+            .getState()
+            .retryMessage(session.id, session.messages.at(-1).id);
+        });
+        await settled();
+        assert.equal(retrievals.length, beforeRetry + 1);
+        assert.equal(modelRequests.length, beforeRetryModelRequests + 1);
+        assert.equal(retrievals.at(-1).mode, "deep");
+        await verifyInput(modelRequests.at(-1).messages);
+        retrievalFails = true;
+        const beforeFailure = modelRequests.length;
+        await send();
+        assert.equal(
+          modelRequests.length,
+          beforeFailure,
+          "Failed search must not call the model",
+        );
+        await page.getByText("联网检索测试失败", { exact: true }).waitFor();
+        retrievalFails = false;
         await choose("关闭联网");
         const count = retrievals.length;
-        await send();
+        messages = await send();
+        assert.ok(!JSON.stringify(messages).includes("web_search_results"));
         assert.equal(
           retrievals.length,
           count,
@@ -315,7 +386,7 @@ const translation = JSON.parse(
         );
         assert.deepEqual(errors, []);
         console.log(
-          `${width}px: modes, no charge on selection/off, skill composition, legacy compatibility, image/video hiding, no overlap passed`,
+          `${width}px: actual model payload, fresh retry evidence, unchanged history, failure stops model, modes, legacy compatibility, image/video hiding, no overlap passed`,
         );
       } catch (error) {
         await page.screenshot({

@@ -147,6 +147,7 @@ import {
   webSearchRequestContext,
 } from "../skills/request";
 import { getWebSearchMode, type WebSearchMode } from "../utils/web-search";
+import { withWebSearchContext } from "../utils/web-search-context";
 import { collectModelsWithDefaultModel } from "../utils/model";
 import { createEmptyMask, Mask } from "./mask";
 import { executeMcpAction, getAllTools } from "../mcp/actions";
@@ -2783,6 +2784,7 @@ export const useChatStore = createPersistStore(
               requestIsActive() &&
               relaySelection(modelConfig.providerName) === selection;
             try {
+              let requestInput = userMessage;
               if (webSearchMode !== "off") {
                 const context = await webSearchRequestContext(
                   webSearchMode,
@@ -2790,15 +2792,8 @@ export const useChatStore = createPersistStore(
                   controller.signal,
                 );
                 if (!active()) throw new Error("请求已取消");
-                recentMessages.unshift(
-                  createMessage({
-                    role: skillContextRole(
-                      modelConfig.model,
-                      requestChatApiFormat,
-                    ),
-                    content: context,
-                  }),
-                );
+                // Some relays discard system messages; keep evidence with this turn's input.
+                requestInput = withWebSearchContext(userMessage, context);
               }
               if (selectedSkill && acceptsSkill(selectedSkill, false)) {
                 const context = await skillRequestContext(
@@ -2824,7 +2819,7 @@ export const useChatStore = createPersistStore(
                 accountTokenId,
                 session,
                 bot: botMessage,
-                input: userMessage,
+                input: requestInput,
                 prefix: recentMessages.filter(
                   (message) => !historyIds.has(message.id),
                 ),

@@ -76,6 +76,24 @@ export function normalizeWebSearchQuery(value: string) {
   return (withoutCommand || normalized).slice(0, MAX_QUERY_LENGTH);
 }
 
+export function withWebSearchContext<T extends RequestMessage>(
+  message: T,
+  context: string,
+): T {
+  const prefix = `${context}\n\n用户本轮问题：\n`;
+  if (typeof message.content === "string") {
+    return { ...message, content: prefix + message.content };
+  }
+  let attached = false;
+  const content = message.content.map((part) => {
+    if (part.type !== "text" || attached) return part;
+    attached = true;
+    return { ...part, text: prefix + (part.text || "") };
+  });
+  if (!attached) content.unshift({ type: "text", text: context });
+  return { ...message, content };
+}
+
 export function buildWebSearchContext(
   response: WebSearchResponse,
 ): RequestMessage {

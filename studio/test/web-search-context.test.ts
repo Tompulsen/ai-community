@@ -2,7 +2,95 @@ import {
   buildWebSearchContext,
   normalizeWebSearchQuery,
   extractWebPageUrls,
+  withWebSearchContext,
 } from "../app/utils/web-search-context";
+import type { RequestMessage } from "../app/client/api";
+import { prepareContext } from "../app/utils/context-budget";
+
+test("web evidence travels with the current question without changing saved history", () => {
+  const original = {
+    id: "question",
+    role: "user" as const,
+    content: "今天萍乡天气",
+  };
+  const request = withWebSearchContext(original, "Fresh sources");
+  expect(request).toEqual({
+    ...original,
+    content: "Fresh sources\n\n用户本轮问题：\n今天萍乡天气",
+  });
+  expect(original.content).toBe("今天萍乡天气");
+  const retry = withWebSearchContext(original, "Updated sources");
+  expect(retry.content).toContain("Updated sources");
+  expect(retry.content).not.toContain("Fresh sources");
+});
+
+test("web evidence preserves all text and attachments and does not mutate original parts", () => {
+  const original: RequestMessage = {
+    role: "user",
+    content: [
+      {
+        type: "image_url",
+        image_url: { url: "https://example.org/image.png" },
+      },
+      { type: "text", text: "Question" },
+      { type: "text", text: "Extra detail" },
+      {
+        type: "file",
+        file: {
+          filename: "notes.pdf",
+          file_data: "data:application/pdf;base64,YQ==",
+        },
+      },
+    ],
+  };
+  const before = JSON.stringify(original);
+  const request = withWebSearchContext(original, "Sources");
+  expect(request.content).toEqual([
+    original.content[0],
+    { type: "text", text: "Sources\n\n用户本轮问题：\nQuestion" },
+    original.content[2],
+    original.content[3],
+  ]);
+  expect(JSON.stringify(original)).toBe(before);
+  const media: RequestMessage = {
+    role: "user",
+    content: [
+      {
+        type: "image_url",
+        image_url: { url: "https://example.org/image.png" },
+      },
+    ],
+  };
+  expect(withWebSearchContext(media, "Sources").content).toEqual([
+    { type: "text", text: "Sources" },
+    ...(media.content as Exclude<RequestMessage["content"], string>),
+  ]);
+});
+
+test("context preparation budgets and retains current web evidence through history compression", async () => {
+  const original = {
+    id: "current",
+    role: "user" as const,
+    content: "Question",
+  };
+  const input = withWebSearchContext(
+    original,
+    "Fresh web evidence and citations",
+  );
+  const result = await prepareContext({
+    prefix: [],
+    history: [
+      { id: "old", role: "user", content: "Old unrelated facts ".repeat(400) },
+    ],
+    input,
+    memory: "",
+    config: { sendMemory: true, compressionThreshold: 1000 },
+    summarize: async () => "Short summary",
+  });
+  expect(result.summarizedIds).toEqual(["old"]);
+  expect(result.messages.at(-1)).toEqual(input);
+  expect(original.content).toBe("Question");
+});
 
 test("deep evidence preserves every source and complete JSON within the text budget", () => {
   const content = String(
