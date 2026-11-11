@@ -4706,7 +4706,11 @@ function ChatSession({ embedded = false }: { embedded?: boolean }) {
                   handleFileUpload={handleFileUpload}
                   onComposerActionComplete={restoreAfterAction}
                   isImageSkill={isImageComposer}
-                  referenceCount={attachImages.length}
+                  referenceCount={
+                    attachImages.length +
+                    attachFiles.filter((file) => file.type.startsWith("image/"))
+                      .length
+                  }
                   onSkillOpen={() => {
                     onSearch.cancel();
                     setPromptHints([]);

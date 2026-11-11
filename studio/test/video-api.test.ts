@@ -620,33 +620,31 @@ test("Kling compatible models expose multi-image references", () => {
 });
 
 test.each([
-  "sora-2",
-  "sora-2-pro",
-  "grok-imagine-video",
-  "grok-imagine-video-1.5",
-  "grok-imagine-video-1.5-lite",
-  "doubao-seedance-1-0",
-  "doubao-seedance-2-0",
-  "doubao-seedance-2-0-fast",
-  "doubao-seedance-2-5",
-  "veo-2-channel",
-  "veo-3.1",
-])(
-  "%s shares resolution presets, 3–30 second suggestions and ten reference limit",
-  (model) => {
-    for (const mode of [
-      "text-to-video",
-      "image-to-video",
-      "first-last-frame",
-      "reference-to-video",
-    ] as const) {
-      const options = videoOptions("openai", model, mode, "1080p");
-      expect(options.resolutions).toEqual(["480p", "720p", "1080p", "auto"]);
-      expect(options.durations).toEqual(
-        Array.from({ length: 28 }, (_, i) => i + 3),
-      );
-      expect(options.maxReferences).toBe(10);
-    }
+  ["sora-2", ["720p", "auto"], [4, 8, 12]],
+  [
+    "grok-imagine-video",
+    ["480p", "720p", "auto"],
+    Array.from({ length: 15 }, (_, i) => i + 1),
+  ],
+  [
+    "grok-imagine-video-1.5",
+    ["480p", "720p", "1080p", "auto"],
+    Array.from({ length: 15 }, (_, i) => i + 1),
+  ],
+  [
+    "doubao-seedance-2-0-fast",
+    ["480p", "720p", "auto"],
+    Array.from({ length: 12 }, (_, i) => i + 4),
+  ],
+  ["veo-3.1", ["720p", "1080p", "4k", "auto"], [4, 6, 8]],
+  ["provider-custom", ["auto"], []],
+] as const)(
+  "%s exposes its verified limits without changing reference capacity",
+  (model, resolutions, durations) => {
+    const options = videoOptions("openai", model);
+    expect(options.resolutions).toEqual(resolutions);
+    expect(options.durations).toEqual(durations);
+    expect(options.maxReferences).toBe(10);
   },
 );
 
@@ -687,7 +685,7 @@ test("saved resolutions outside presets remain custom values without being reset
   });
   const restored = { ...saved, ...videoDraftForFormat(saved) };
   expect(restored.resolution).toBe("4k");
-  expect(videoOptions("openai", saved.model).resolutions).not.toContain("4k");
+  expect(videoOptions("openai", saved.model).resolutions).toContain("4k");
   expect(
     JSON.parse(buildVideoRequest(restored, saved.model).body as string).metadata
       .resolution,

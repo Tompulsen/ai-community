@@ -100,6 +100,8 @@ function draft(patch: Partial<VideoDraft> = {}): VideoDraft {
   return {
     ...initialDraft,
     model: "sora-2",
+    resolution: "720p",
+    size: "1280x720",
     prompt: "Ocean waves",
     draftAutoSave: false,
     ...patch,
@@ -495,27 +497,36 @@ test("scoped cleanup removes this account's snapshots and assets only", async ()
   );
 });
 
-test("size selection recalculates, preserves manual edits across model changes and stores auto", async () => {
+test("size selection applies model limits, recalculates dimensions and stores auto", async () => {
   const store = useVideoStore.getState();
   await store.loadDraft();
-  store.updateDraft({ resolution: "480p", aspectRatio: "16:9" });
+  store.updateDraft({
+    model: "grok-imagine-video",
+    resolution: "480p",
+    aspectRatio: "16:9",
+  });
   expect(useVideoStore.getState().draft.size).toBe("854x480");
   store.updateDraft({ size: "1000x600" });
   store.updateDraft({ model: "veo-3.1" });
-  expect(useVideoStore.getState().draft.size).toBe("1000x600");
+  expect(useVideoStore.getState().draft.size).toBe("1280x720");
   store.updateDraft({ aspectRatio: "9:16" });
-  expect(useVideoStore.getState().draft.size).toBe("480x854");
+  expect(useVideoStore.getState().draft.size).toBe("720x1280");
   store.updateDraft({ aspectRatio: "auto" });
   expect(useVideoStore.getState().draft.size).toBe("auto");
   await store.saveDraft();
   expect(JSON.parse(localStorage.getItem(draftKey)!).size).toBe("auto");
   store.updateDraft({ aspectRatio: "16:9" });
-  expect(useVideoStore.getState().draft.size).toBe("854x480");
+  expect(useVideoStore.getState().draft.size).toBe("1280x720");
 });
 
 test("resolution changes during hydration calculate with the restored aspect ratio", async () => {
   useVideoStore.setState({
-    draft: draft({ aspectRatio: "9:16", resolution: "720p", size: "720x1280" }),
+    draft: draft({
+      model: "grok-imagine-video",
+      aspectRatio: "9:16",
+      resolution: "720p",
+      size: "720x1280",
+    }),
   });
   await useVideoStore.getState().saveDraft();
   useVideoStore.setState({ draft: draft(), hasHydrated: false });
@@ -759,7 +770,7 @@ test("chat video config copies parameters and excludes private identity, referen
     model: "sora-2",
     prompt: "Current prompt",
     sourceWorkId: "current-work",
-    duration: 15,
+    duration: 12,
     materials: [],
     openaiReferenceSource: "upload",
     customParams: {},
@@ -852,6 +863,46 @@ test.each(["video/mp4", "audio/wav"])(
     expect(request).not.toHaveBeenCalled();
   },
 );
+
+test("mixed image attachments use the same reference-mode limits before generation", async () => {
+  const { chatVideoDraft } = await import("../app/utils/chat-video");
+  const image = `data:image/png;base64,${btoa("reference")}`;
+  const input = chatVideoDraft(
+    "References",
+    "grok-imagine-video-1.5",
+    "",
+    [image],
+    undefined,
+    { resolution: "1080p", duration: 30 },
+    [
+      {
+        name: "second.png",
+        type: "image/png",
+        size: 9,
+        content: image,
+        isText: false,
+      },
+    ],
+  );
+  expect(input).toMatchObject({
+    mode: "reference-to-video",
+    resolution: "720p",
+    duration: 15,
+  });
+});
+
+test("unconfigured and invalid custom parameters fail before any billable request", async () => {
+  await expect(
+    generateVideoRequest(draft({ model: "future-video-unconfigured" })),
+  ).rejects.toThrow("尚未配置");
+  await expect(
+    generateVideoRequest(
+      draft({ customParams: { openai: '{"seconds":"30"}' } }),
+    ),
+  ).rejects.toThrow("时长");
+  expect(request).not.toHaveBeenCalled();
+  expect(useVideoStore.getState().results).toHaveLength(0);
+});
 
 test("document references name the unsupported attachment without linking to a removed workspace", async () => {
   const { chatVideoDraft } = await import("../app/utils/chat-video");

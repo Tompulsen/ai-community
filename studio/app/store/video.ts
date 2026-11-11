@@ -18,6 +18,7 @@ import {
   removeChatSnapshot,
 } from "../utils/chat-persistence";
 import { forgetTask } from "../utils/local-tasks";
+import { normalizeVideoParameters } from "../utils/video-capabilities";
 import { selectedVideoSize } from "../utils/video-size";
 import { removeVideoMention } from "../utils/video-mentions";
 
@@ -259,10 +260,11 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
         draft.size = selectedVideoSize(draft);
       return {
         draftRevision: s.draftRevision + 1,
-        draft:
+        draft: normalizeVideoParameters(
           patch.apiFormat || patch.model || patch.mode || patch.resolution
             ? { ...draft, ...videoDraftForFormat(draft) }
             : draft,
+        ),
       };
     });
     autoSaveDraft();
@@ -391,7 +393,10 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
             : {}),
         }));
         return {
-          draft: { ...draft, ...videoDraftForFormat(draft) },
+          draft: normalizeVideoParameters({
+            ...draft,
+            ...videoDraftForFormat(draft),
+          }),
           results:
             initialResultRevision === resultRevision
               ? restored

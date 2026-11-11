@@ -225,6 +225,14 @@
   overflow-wrap: anywhere;
 }
 
+.limitHint {
+  margin: 6px 0 0;
+  color: var(--black);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 .error {
   margin: 8px 0 0;
   color: var(--red);

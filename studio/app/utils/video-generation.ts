@@ -28,6 +28,7 @@ import {
   videoParameterFormat,
   videoTaskId,
 } from "./video-api";
+import { validateVideoRequestParameters } from "./video-capabilities";
 import { videoResultFields } from "./video-media";
 
 const waiting = new Map<
@@ -257,6 +258,7 @@ async function submitVideoRequest(
   const [model, providerName] = getModelProvider(draft.model);
   const format = videoApiFormat(draft.apiFormat);
   const request = buildVideoRequest(draft, model);
+  validateVideoRequestParameters(request.body, draft.mode);
   const sent =
     typeof request.body === "string"
       ? JSON.parse(request.body)

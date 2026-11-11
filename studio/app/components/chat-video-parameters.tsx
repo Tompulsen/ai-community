@@ -4,6 +4,7 @@ import { useChatStore } from "../store/chat";
 import { DEFAULT_DRAFT, type VideoDraft } from "../store/video";
 import { useMobileScreen } from "../utils";
 import { chatVideoConfig } from "../utils/chat-video";
+import { normalizeVideoParameters } from "../utils/video-capabilities";
 import { selectedVideoSize } from "../utils/video-size";
 import { ChatAction } from "./chat-action";
 import { ComposerParameterPopover } from "./composer-parameter-popover";
@@ -27,7 +28,7 @@ export function ChatVideoParameters({
   const session = store.currentSession();
   const config = session.mask.modelConfig;
   const parameters = chatVideoConfig(config.videoConfig ?? {});
-  const draft: VideoDraft = {
+  const draft = normalizeVideoParameters({
     ...DEFAULT_DRAFT,
     size: "auto",
     aspectRatio: "auto",
@@ -42,7 +43,7 @@ export function ChatVideoParameters({
         ? "image-to-video"
         : "text-to-video"),
     materials: [],
-  };
+  });
   const trigger = useRef<HTMLDivElement>(null);
   const id = useId();
   const mobile = useMobileScreen();
@@ -54,7 +55,15 @@ export function ChatVideoParameters({
       };
       if (patch.resolution !== undefined || patch.aspectRatio !== undefined)
         next.size = selectedVideoSize({ ...draft, ...next });
-      target.mask.modelConfig.videoConfig = chatVideoConfig(next);
+      const normalized = normalizeVideoParameters({
+        ...draft,
+        ...next,
+        mode: next.mode ?? draft.mode,
+      });
+      target.mask.modelConfig.videoConfig = chatVideoConfig({
+        ...normalized,
+        mode: next.mode,
+      });
       target.mask.syncGlobalConfig = false;
     });
   const reset = () =>

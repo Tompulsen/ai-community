@@ -25,7 +25,10 @@ export function evenVideoDimension(value: number) {
 }
 
 export function calculateVideoSize(resolution: string, ratio: string) {
-  const short = Number(/^(\d+)p$/.exec(resolution)?.[1] ?? 720);
+  const short =
+    resolution === "4k"
+      ? 2160
+      : Number(/^(\d+)p$/.exec(resolution)?.[1] ?? 720);
   const [w, h] = ratio.split(":").map(Number);
   if (!(w > 0 && h > 0)) throw new Error("画面比例无效");
   const width = w >= h ? (short * w) / h : short;

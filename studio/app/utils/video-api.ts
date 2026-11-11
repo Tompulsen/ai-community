@@ -4,10 +4,10 @@ import type {
   VideoAspectRatio,
   VideoResolution,
 } from "../store/video";
+import { videoCapabilities } from "./video-capabilities";
 import type { LocalTask } from "./local-tasks";
 import {
   VIDEO_RATIOS,
-  VIDEO_RESOLUTIONS,
   isVideoSizeAuto,
   videoSizeParameters,
 } from "./video-size";
@@ -57,7 +57,7 @@ export function videoBuiltinParameters(draft: VideoDraft) {
 export function videoOptions(
   format: VideoApiFormat,
   model = "",
-  _mode?: VideoGenMode,
+  mode?: VideoGenMode,
   _resolution?: VideoResolution,
 ) {
   format = videoParameterFormat(format, model);
@@ -68,13 +68,17 @@ export function videoOptions(
     "reference-to-video",
   ];
   const ratios: VideoAspectRatio[] = VIDEO_RATIOS;
-  const resolutions: VideoResolution[] = VIDEO_RESOLUTIONS;
-  const durations = Array.from({ length: 28 }, (_, i) => i + 3);
+  const capabilities = videoCapabilities(model, mode);
+  const resolutions: VideoResolution[] = capabilities
+    ? [...capabilities.resolutions, "auto"]
+    : ["auto"];
+  const durations = capabilities?.durations ?? [];
   return {
     modes,
     ratios,
     resolutions,
     durations,
+    limitsKnown: !!capabilities,
     maxReferences: MAX_VIDEO_REFERENCES,
     parameterFormat: format,
     usesSize: format === "openai",

@@ -6,6 +6,10 @@ import {
 } from "../store/video";
 import type { ParsedFile } from "./file-upload";
 import { buildVideoRequest, videoUploadMode } from "./video-api";
+import {
+  normalizeVideoParameters,
+  validateVideoRequestParameters,
+} from "./video-capabilities";
 import { selectedVideoSize } from "./video-size";
 
 export function chatVideoConfig(
@@ -81,7 +85,7 @@ export function chatVideoDraft(
   ) {
     throw new Error("首尾帧模式需要恰好两张图片，请调整参考素材后重试。");
   }
-  const draft: VideoDraft = {
+  const draft = normalizeVideoParameters({
     ...JSON.parse(JSON.stringify(DEFAULT_DRAFT)),
     size: "auto",
     aspectRatio: "auto",
@@ -96,8 +100,11 @@ export function chatVideoDraft(
         ? videoUploadMode("text-to-video", materials.length)
         : "text-to-video"),
     materials,
-  };
+  });
   if (parameters.size === undefined) draft.size = selectedVideoSize(draft);
-  buildVideoRequest(draft, model);
+  validateVideoRequestParameters(
+    buildVideoRequest(draft, model).body,
+    draft.mode,
+  );
   return snapshotVideoDraft(draft);
 }
