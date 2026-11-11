@@ -8,8 +8,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<header :class="[$style.topbar, { [$style.mobileTopbar]: mobile }]"><MkA :to="backPath" :class="$style.back" :aria-label="t.back"><i class="ti ti-arrow-left" aria-hidden="true"></i><span>{{ t.back }}</span></MkA><span>{{ mobile ? t.preview : work?.title }}</span></header>
 	<div v-if="!work" :class="$style.state" :role="failed ? 'alert' : 'status'"><p>{{ failed ? unavailable ? t.unavailable : t.failed : t.loading }}</p><button v-if="failed" type="button" class="_button" @click="load">{{ t.retry }}</button></div>
 	<div v-else-if="mobile" :class="$style.mobileStage">
+		<button v-show="!commentsOpen && !detailsOpen" ref="relatedToggle" type="button" class="_button" :class="$style.relatedToggle" :aria-label="t.openRelated" :title="t.openRelated" :aria-controls="relatedId" :aria-expanded="relatedOpen" data-testid="related-works-toggle" @click="toggleRelated"><span><i class="ti ti-chevron-right" aria-hidden="true"></i></span></button>
 		<WorkEngagement :key="work.id" :work="work" :viewsCount="views" immersive @discussionChange="commentsOpen = $event">
-			<div :class="$style.mobileMedia"><WorkMedia :work="work" immersive :suspended="commentsOpen || !active"/></div>
+			<div :class="$style.mobileMedia"><WorkMedia :work="work" immersive :suspended="commentsOpen || relatedOpen || !active"/></div>
 			<section :class="[$style.caption, { [$style.expanded]: detailsOpen, [$style.withVideo]: hasVideo }]" :aria-label="t.prompt">
 				<MkA :to="`/@${work.author.username}`" :class="$style.mobileAuthor">@{{ work.author.name || work.author.username }}</MkA>
 				<h1>{{ work.title }}</h1>
@@ -28,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</WorkEngagement>
 	</div>
 	<div v-else :class="$style.layout">
+		<aside :class="$style.relatedSidebar"><RelatedWorks :key="work.id" :work="work"/></aside>
 		<div :class="$style.stage"><WorkMedia :work="work"/></div>
 		<aside :class="$style.sidebar">
 			<header :class="$style.author"><MkA :to="`/@${work.author.username}`" :class="$style.avatar" aria-hidden="true" tabindex="-1">{{ (work.author.name || work.author.username).slice(0, 1) }}</MkA><div><MkA :to="`/@${work.author.username}`"><strong>{{ work.author.name || work.author.username }}</strong></MkA><span>@{{ work.author.username }}</span></div></header>
@@ -44,6 +46,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</WorkEngagement>
 		</aside>
 	</div>
+	<Teleport to="body">
+		<Transition :enterActiveClass="$style.drawerActive" :leaveActiveClass="$style.drawerActive" :enterFromClass="$style.drawerHidden" :leaveToClass="$style.drawerHidden">
+			<div v-if="mobile && work && relatedOpen" :id="relatedId" ref="relatedLayer" :class="$style.relatedLayer" :style="{ zIndex: relatedZIndex }" :data-motion="prefer.s.animation" role="dialog" aria-modal="true" :aria-label="t.relatedWorks" data-testid="related-works-drawer" @click.self="closeRelated">
+				<div ref="relatedPanel" :class="$style.relatedPanel" tabindex="-1" @keydown="relatedKeydown">
+					<RelatedWorks :key="work.id" :work="work"><template #close><button type="button" class="_button" :class="$style.relatedClose" :aria-label="t.closeRelated" @click="closeRelated"><i class="ti ti-chevron-left" aria-hidden="true"></i></button></template></RelatedWorks>
+				</div>
+			</div>
+		</Transition>
+	</Teleport>
 </main>
 </template>
 
@@ -53,6 +64,8 @@ import WorkMedia from './work-media.vue';
 import WorkEngagement from './work-engagement.vue';
 import WorkMaterials from './work-materials.vue';
 import WorkTags from './work-tags.vue';
+import RelatedWorks from './related-works.vue';
+import { useDiscoveryDrawer } from './use-discovery-drawer.js';
 import { workText as t, studioPath } from './interactions-copy.js';
 import { safeWebUrl } from './copy.js';
 import { useWorkView } from './use-work-view.js';
@@ -66,6 +79,7 @@ import { definePage } from '@/page.js';
 import { useRouter } from '@/router.js';
 import * as os from '@/os.js';
 import { $i } from '@/i.js';
+import { prefer } from '@/preferences.js';
 import { backgroundStudio, manualRemix, queueBackgroundRemix } from '@/utility/background-studio.js';
 
 const props = defineProps<{ submissionId: string }>();
@@ -80,6 +94,7 @@ const commentsOpen = ref(false);
 const detailsOpen = ref(false);
 const detailsId = useId();
 const work = ref<CommunityWork | null>(null);
+const { discoveryId: relatedId, discoveryLayer: relatedLayer, discoveryPanel: relatedPanel, discoveryToggle: relatedToggle, discoveryOpen: relatedOpen, discoveryZIndex: relatedZIndex, closeDiscovery: closeRelated, toggleDiscovery: toggleRelated, discoveryKeydown: relatedKeydown } = useDiscoveryDrawer(() => mobile.value && !!work.value && !commentsOpen.value);
 const failed = ref(false);
 const unavailable = ref(false);
 const copyFailed = ref(false);
@@ -116,6 +131,7 @@ let loadedVersion = getCommunityUpdateVersion();
 
 async function load() {
 	const version = getCommunityUpdateVersion();
+	if (relatedOpen.value) closeRelated();
 	controller?.abort();
 	const current = new AbortController(); controller = current;
 	work.value = null; failed.value = false; unavailable.value = false; copyFailed.value = false; commentsOpen.value = false; detailsOpen.value = false;
@@ -134,7 +150,7 @@ async function copyPrompt() { try { await navigator.clipboard.writeText(work.val
 
 watch(() => props.submissionId, load, { immediate: true });
 watch(communityUpdates, () => { if (active.value) void load(); });
-watch(mobile, () => { commentsOpen.value = false; detailsOpen.value = false; });
+watch(mobile, () => { closeRelated(); commentsOpen.value = false; detailsOpen.value = false; });
 onActivated(() => { active.value = true; if (loadedVersion !== getCommunityUpdateVersion()) void load(); });
 onDeactivated(() => { active.value = false; commentsOpen.value = false; });
 onBeforeUnmount(() => { controller?.abort(); controller = undefined; viewport.removeEventListener('change', resize); });
@@ -148,7 +164,8 @@ definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', 
 .root :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: 3px; }
 .topbar { display: flex; align-items: center; gap: 24px; padding: 0 20px; min-height: 54px; border-bottom: 1px solid var(--MI_THEME-divider); box-sizing: border-box; > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; } }
 .back { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; flex-shrink: 0; font-size: 13px; }
-.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 380px); height: calc(100% - 55px); min-height: 540px; }
+.layout { display: grid; grid-template-columns: clamp(220px, 20vw, 340px) minmax(0, 1fr) minmax(300px, 360px); height: calc(100% - 55px); min-height: 540px; }
+.relatedSidebar { min-width: 0; min-height: 0; border-right: 1px solid var(--MI_THEME-divider); }
 .stage { min-width: 0; min-height: 0; }
 .sidebar { min-width: 0; padding: 28px 24px; border-left: 1px solid var(--MI_THEME-divider); overflow-y: auto; scrollbar-width: thin; box-sizing: border-box; h1 { font-size: 21px; margin: 20px 0 14px; line-height: 1.45; overflow-wrap: anywhere; } }
 .author { display: flex; align-items: center; gap: 10px; font-size: 14px; > div { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; } span { font-size: 12px; color: var(--MI_THEME-fgTransparentWeak); } }
@@ -158,7 +175,16 @@ definePage(() => ({ title: work.value?.title ?? t.preview, icon: 'ti ti-photo', 
 .date { display: block; padding: 16px 0 12px; border-bottom: 1px solid var(--MI_THEME-divider); color: var(--MI_THEME-fgTransparentWeak); font-size: 12px; }
 .remix { width: 100%; text-align: left; display: flex; align-items: center; gap: 12px; min-height: 72px; margin: 8px 0 20px; padding: 12px 16px; box-sizing: border-box; border-radius: 12px; background: var(--MI_THEME-accent); color: var(--MI_THEME-fgOnAccent); > i { font-size: 23px; } > i:last-child { margin-left: auto; font-size: 21px; } span { display: flex; flex-direction: column; gap: 2px; } strong { font-size: 16px; } small { font-size: 12px; } &:hover { filter: brightness(.94); } }
 .state { display: grid; place-content: center; min-height: 60vh; text-align: center; padding: 24px; button { min-height: 44px; color: var(--MI_THEME-accent); } }
-@container (max-width: 780px) { .layout { display: flex; flex-direction: column; height: auto; min-height: 0; } .stage { height: clamp(280px, 54vh, 620px); flex-shrink: 0; } .sidebar { overflow: visible; padding: 22px 18px; } .topbar { padding: 0 16px; } }
+@container (max-width: 1100px) { .layout { grid-template-columns: 220px minmax(0, 1fr); height: auto; min-height: 0; } .relatedSidebar { position: sticky; top: 0; grid-row: 1 / span 2; height: calc(100dvh - 120px); } .stage { height: clamp(320px, 60vh, 680px); } .sidebar { grid-column: 2; overflow: visible; border-top: 1px solid var(--MI_THEME-divider); padding: 22px 18px; } .topbar { padding: 0 16px; } }
+
+.relatedToggle { position: absolute; z-index: 4; top: 40%; left: env(safe-area-inset-left, 0px); display: flex; align-items: center; width: 44px; height: 56px; color: var(--work-stage-fg); span { display: grid; place-items: center; width: 22px; height: 44px; border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--work-stage) 78%, transparent); } i { font-size: 16px; } &:active span { width: 26px; } }
+.relatedLayer { position: fixed; inset: 0; background: var(--MI_THEME-modalBg, color-mix(in srgb, var(--MI_THEME-fg) 35%, transparent)); color: var(--MI_THEME-fg); }
+.relatedPanel { width: min(320px, calc(100vw - 48px)); height: 100%; box-sizing: border-box; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); background: var(--MI_THEME-panel); }
+.relatedClose { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; margin: -10px -6px -8px 0; border-radius: 8px; font-size: 20px; &:hover { background: var(--MI_THEME-buttonBg); } }
+.relatedLayer :focus-visible { outline: 2px solid var(--MI_THEME-accent); outline-offset: -2px; }
+.drawerActive[data-motion='true'] { transition: opacity 180ms ease-out; .relatedPanel { transition: transform 220ms ease-out; } }
+.drawerHidden { opacity: 0; .relatedPanel { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .drawerActive[data-motion='true'], .drawerActive[data-motion='true'] .relatedPanel { transition: none; } }
 
 .root.mobileDetail { @include work-palette.immersive; --work-video-controls-height: 88px; position: relative; overflow: hidden; background: var(--work-stage); color: var(--work-stage-fg); container-type: normal; }
 .mobileDetail.withVideo { --work-actions-inset: var(--work-video-controls-height); }

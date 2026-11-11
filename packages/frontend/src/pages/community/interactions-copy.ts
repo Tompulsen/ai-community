@@ -6,6 +6,7 @@
 import { homeLanguage } from '@/pages/home/copy.js';
 
 const zh = {
+	relatedWorks: '相关作品', relatedTags: '同标签作品', openRelated: '查看相关作品', closeRelated: '收起相关作品', relatedMore: '加载更多作品', relatedEmpty: '暂时没有同标签的其他作品。', relatedNoTags: '此作品暂无标签，暂时没有相关作品。', relatedFailed: '相关作品加载失败，请重试。',
 	deleteComment: '删除评论', deletingComment: '正在删除…', deleteCommentConfirm: '确认删除这条评论？评论及其附件展示将被移除，引用的社区作品和原始文件会保留。', commentDeleted: '评论已删除', deleteCommentFailed: '未能确认删除结果，请刷新评论后重试。',
 	follow: '关注作者', following: '已关注', followPending: '关注申请待通过', unfollow: '取消关注', cancelFollow: '取消关注申请', followConfirm: '确认关注这位作者？', unfollowConfirm: '确认取消关注这位作者？', cancelFollowConfirm: '确认取消关注申请？', followFailed: '关注状态未能确认，请刷新后重试。', viewAuthor: '查看作者主页',
 	favorite: '收藏', favorited: '已收藏', favoriteFailed: '收藏状态未能确认，请刷新后重试。', refreshFavorite: '刷新收藏状态', shareWork: '转发与分享', nativeShare: '分享给朋友', copyLink: '复制链接', closeShare: '关闭分享', shareUnavailable: '分享未能完成，可复制链接后分享。', reply: '回复', likeComment: '点赞评论', likedComment: '已点赞评论', expandDetails: '展开', collapseDetails: '收起',
@@ -32,6 +33,7 @@ const zh = {
 	attachmentComment: '包含附件的评论', viewComment: '查看评论详情', shareFailed: '复制失败，请使用下面的作品链接。',
 };
 const en: typeof zh = {
+	relatedWorks: 'Related works', relatedTags: 'Works with matching tags', openRelated: 'Show related works', closeRelated: 'Close related works', relatedMore: 'Load more works', relatedEmpty: 'No other works with matching tags yet.', relatedNoTags: 'This work has no tags to find related works.', relatedFailed: 'Could not load related works. Please retry.',
 	deleteComment: 'Delete comment', deletingComment: 'Deleting…', deleteCommentConfirm: 'Delete this comment and its attachment preview? Quoted community works and original files will be kept.', commentDeleted: 'Comment deleted', deleteCommentFailed: 'Deletion could not be confirmed. Refresh the comments before retrying.',
 	follow: 'Follow author', following: 'Following', followPending: 'Follow request pending', unfollow: 'Unfollow', cancelFollow: 'Cancel follow request', followConfirm: 'Follow this author?', unfollowConfirm: 'Unfollow this author?', cancelFollowConfirm: 'Cancel this follow request?', followFailed: 'Follow status is unconfirmed. Refresh before retrying.', viewAuthor: 'View author profile',
 	favorite: 'Save', favorited: 'Saved', favoriteFailed: 'Saved status is unconfirmed. Refresh before retrying.', refreshFavorite: 'Refresh saved status', shareWork: 'Repost and share', nativeShare: 'Share with friends', copyLink: 'Copy link', closeShare: 'Close sharing', shareUnavailable: 'Could not share. Copy the link to share it instead.', reply: 'Reply', likeComment: 'Like comment', likedComment: 'Liked comment', expandDetails: 'More', collapseDetails: 'Less',

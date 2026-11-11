@@ -4,19 +4,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid, [$style.gallery]: gallery }]" :style="compact && !profileGrid ? { gridRowEnd: `span ${masonryRows}` } : undefined" :data-motion="prefer.s.animation" data-testid="community-work-card">
+<article ref="root" :data-scroll-anchor="work.id" :class="[$style.card, { [$style.compact]: compact, [$style.profileGrid]: profileGrid, [$style.gallery]: gallery, [$style.thumbnailOnly]: thumbnailOnly }]" :style="compact && !profileGrid ? { gridRowEnd: `span ${masonryRows}` } : undefined" :data-motion="prefer.s.animation" data-testid="community-work-card">
 	<template v-if="compact">
 		<MkA :to="workPath(work.id)" :class="$style.compactPreview" :style="{ aspectRatio: previewAspect }" :aria-label="`${t.preview}: ${work.title}`" data-testid="gallery-work-open">
 			<img v-if="cover && !failed" :src="cover" :alt="work.title" loading="lazy" decoding="async" @load="coverLoaded" @error="failed = true"/>
 			<div v-else :class="$style.compactFallback"><i :class="sensitive ? 'ti ti-eye-off' : work.category === 'resource' ? 'ti ti-file-text' : work.category === 'video' ? 'ti ti-player-play' : 'ti ti-photo'" aria-hidden="true"></i><p v-if="work.category === 'resource' && !sensitive">{{ excerpt || work.title }}</p><span v-else>{{ sensitive ? t.sensitive : t.noPreview }}</span></div>
 		</MkA>
-		<div v-if="!sensitive" :class="$style.compactInfo">
+		<div v-if="!sensitive && !thumbnailOnly" :class="$style.compactInfo">
 			<span :class="$style.mediaKind"><i :class="work.category === 'video' ? 'ti ti-player-play-filled' : work.category === 'resource' ? 'ti ti-file-text' : 'ti ti-photo'" aria-hidden="true"></i><span v-if="work.files.length > 1">{{ work.files.length }}</span></span>
 			<span v-if="profileGrid && work.likesCount != null" :class="$style.profileMetrics"><i class="ti ti-heart" aria-hidden="true"></i>{{ new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(work.likesCount) }}</span>
 			<span v-if="gallery" :class="$style.galleryStats"><span v-if="work.likesCount != null" :aria-label="`${t.like} ${work.likesCount}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ formatCount(work.likesCount) }}</span><span :aria-label="`${t.comments} ${work.repliesCount}`"><i class="ti ti-message-circle" aria-hidden="true"></i>{{ formatCount(work.repliesCount) }}</span></span>
 		</div>
-		<h3 v-if="!profileGrid" :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
-		<div v-if="!profileGrid" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><time v-if="gallery" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><span v-else :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : formatCount(work.likesCount) }}</span></div>
+		<h3 v-if="!profileGrid && !thumbnailOnly" :class="$style.compactTitle"><MkA :to="workPath(work.id)">{{ work.title }}</MkA></h3>
+		<div v-if="!profileGrid && !thumbnailOnly" :class="$style.compactMeta"><MkA :to="`/@${work.author.username}`" :aria-label="`${ft.viewProfile}: ${work.author.name || work.author.username}`"><span :class="$style.compactAvatar" aria-hidden="true">{{ (work.author.name || work.author.username).slice(0, 1) }}</span><span>{{ work.author.name || work.author.username }}</span></MkA><time v-if="gallery" :datetime="work.submittedAt">{{ new Date(work.submittedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</time><span v-else :aria-label="`${t.like} ${work.likesCount ?? '—'}`"><i class="ti ti-heart" aria-hidden="true"></i>{{ work.likesCount == null ? '—' : formatCount(work.likesCount) }}</span></div>
 		<div v-if="gallery && $slots.actions" :class="$style.compactActions"><slot name="actions"></slot></div>
 	</template>
 	<WorkEngagement v-else :work="work" :viewsCount="views" previewComments>
@@ -50,7 +50,7 @@ import { useWorkView } from './use-work-view.js';
 import type { CommunityWork } from './types.js';
 import { prefer } from '@/preferences.js';
 
-const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?: boolean; gallery?: boolean }>();
+const props = defineProps<{ work: CommunityWork; compact?: boolean; profileGrid?: boolean; gallery?: boolean; thumbnailOnly?: boolean }>();
 const formatCount = (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const root = ref<HTMLElement>();
 const masonryRows = ref(1);
@@ -81,7 +81,7 @@ const cover = computed(() => {
 	return file ? safeWebUrl(file.thumbnailUrl) ?? (file.type.startsWith('image/') ? safeWebUrl(file.url) : undefined) : undefined;
 });
 const previewAspect = computed(() => {
-	if (!cover.value || failed.value) return undefined;
+	if (!cover.value || failed.value) return props.thumbnailOnly ? 'auto' : undefined;
 	if (loadedAspect.value) return loadedAspect.value;
 	const width = coverFile.value?.properties?.width, height = coverFile.value?.properties?.height;
 	return typeof width === 'number' && typeof height === 'number' && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? `${width} / ${height}` : undefined;
@@ -131,6 +131,10 @@ watch(cover, () => { failed.value = false; loadedAspect.value = undefined; });
 .profileGrid .compactPreview { border-radius: 0; }
 .profileGrid .compactInfo { padding: 4px 6px; }
 .profileMetrics { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+
+.card.thumbnailOnly { border: 0; border-radius: 8px; }
+.thumbnailOnly .compactPreview { border-radius: 8px; }
+.thumbnailOnly .compactFallback { height: auto; min-height: 110px; padding: 12px 8px; gap: 6px; > i { font-size: 20px; } p { -webkit-line-clamp: 3; font-size: 12px; } }
 
 .card.gallery { align-self: start; border: 0; border-radius: 10px; background: transparent; }
 .gallery .compactPreview { border-radius: 10px; }
