@@ -18,7 +18,8 @@ export type LotterySettings = {
 	wheel: LotteryWheel;
 };
 export type LotterySettingsInput = Omit<LotterySettings, 'wheel'> & { wheel?: LotteryWheel };
-export type LotteryAward = { amountCents: number; prizeId: string; name: string; description: string; status: 'pending' | 'fulfilled' | 'empty'; fulfilledAt: string | null; fulfilledBy: string | null; note: string };
+export type LotteryCreditReceipt = { id: number; quotaAdded: number; quotaPerUsd: string };
+export type LotteryAward = { amountCents: number; prizeId: string; name: string; description: string; status: 'pending' | 'fulfilled' | 'empty'; fulfilledAt: string | null; fulfilledBy: string | null; note: string; creditReceipt?: LotteryCreditReceipt; creditBlocked?: boolean };
 export type LotteryProgress = { invites: number; likes: number; followers: number; works: Record<string, number> };
 
 export const defaultLotteryWheel = (): LotteryWheel => ({ theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' });
@@ -78,4 +79,17 @@ export function chooseLotteryPrize(prizes: LotteryPrize[], random = randomInt): 
 
 export function lotteryInviter(value: unknown): string | undefined {
 	return typeof value === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(value) ? value : undefined;
+}
+
+export function lotteryCreditReceipt(response: Record<string, unknown>, reference: string, userId: number, amountCents: number): LotteryCreditReceipt {
+	const receipt = response.receipt as Record<string, unknown> | null | undefined;
+	if (response.credited !== true || response.reference !== reference || response.user_id !== userId || response.amount_cents !== amountCents
+		|| !receipt || !Number.isSafeInteger(receipt.id) || Number(receipt.id) <= 0 || !Number.isSafeInteger(receipt.quota_added) || Number(receipt.quota_added) <= 0
+		|| typeof receipt.quota_per_usd !== 'string' || !/^(?:0|[1-9]\d{0,30})(?:\.\d{1,30})?$/.test(receipt.quota_per_usd)) throw new Error('LOTTERY_CREDIT_RESPONSE');
+	const [whole, fraction = ''] = receipt.quota_per_usd.split('.');
+	const denominator = 100n * 10n ** BigInt(fraction.length);
+	// Match New API's positive decimal rounding without losing precision to JavaScript floats.
+	const quota = (BigInt(amountCents) * BigInt(whole + fraction) + denominator / 2n) / denominator;
+	if (quota !== BigInt(Number(receipt.quota_added))) throw new Error('LOTTERY_CREDIT_RESPONSE');
+	return { id: Number(receipt.id), quotaAdded: Number(receipt.quota_added), quotaPerUsd: receipt.quota_per_usd };
 }

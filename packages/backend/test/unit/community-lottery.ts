@@ -4,11 +4,22 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import { chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits, normalizeLotterySettings } from '../../src/misc/community-lottery.js';
+import { chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCreditReceipt, lotteryCredits, normalizeLotterySettings } from '../../src/misc/community-lottery.js';
 import { lotterySettingsParam, lotteryAdjustmentParam } from '../../src/server/api/lottery-schema.js';
 import Ajv from 'ajv';
 
 describe('community lottery', () => {
+	test('credits require a matching persisted quota snapshot with exact decimal rounding', () => {
+		const response = { credited: true, reference: 'community_lottery_fixture_0', user_id: 3, amount_cents: 1, receipt: { id: 7, quota_added: 5000, quota_per_usd: '500000' } };
+		expect(lotteryCreditReceipt(response, response.reference, 3, 1)).toEqual({ id: 7, quotaAdded: 5000, quotaPerUsd: '500000' });
+		for (const [rate, quota] of [['50', 1], ['500000.25', 5000], ['900000000000000000', 9000000000000000]] as const) {
+			expect(lotteryCreditReceipt({ ...response, receipt: { id: 7, quota_added: quota, quota_per_usd: rate } }, response.reference, 3, 1).quotaAdded).toBe(quota);
+		}
+		for (const patch of [{ credited: false }, { user_id: 4 }, { amount_cents: 2 }, { reference: 'other' }, { receipt: null }, { receipt: { ...response.receipt, id: 0 } }, { receipt: { ...response.receipt, quota_added: 4999 } }, { receipt: { ...response.receipt, quota_added: 5000.5 } }, { receipt: { ...response.receipt, quota_per_usd: '1e6' } }, { receipt: { ...response.receipt, quota_per_usd: '0' } }]) {
+			expect(() => lotteryCreditReceipt({ ...response, ...patch }, response.reference, 3, 1)).toThrow('LOTTERY_CREDIT_RESPONSE');
+		}
+	});
+
 	test('manual adjustments require a target, expected balance and bounded whole numbers', () => {
 		const ajv = new Ajv({ useDefaults: true });
 		ajv.addFormat('misskey:id', /^[a-zA-Z0-9]+$/);

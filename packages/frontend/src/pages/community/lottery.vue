@@ -68,6 +68,8 @@ const wheel = ref<InstanceType<typeof LotteryWheel>>();
 const wheelPrizes = ref<Prize[]>([]);
 const pending = ref<Endpoints['community/lottery/draw']['req']>();
 let active = true, mounted = false, generation = 0;
+let creditTimer: number | undefined;
+let creditPage = 0;
 const controllers = new Set<AbortController>();
 const storageKey = `community-lottery-pending:${$i?.id ?? ''}`;
 const canDraw = computed(() => state.value?.settings.enabled && state.value.creditReady && state.value.settings.prizes.some(p => p.stock !== 0 && p.weight > 0));
@@ -77,6 +79,7 @@ const drawDisabled = computed(() => !$i ? false : busy.value || loading.value ||
 const actionLabel = computed(() => !$i ? t.login : busy.value ? t.drawing : pending.value ? t.checkResult : `${t.draw} ×${count.value}`);
 const formatDate = (date: string) => new Date(date).toLocaleString(homeLanguage);
 const statusText = (status: string) => status === 'fulfilled' ? t.fulfilled : status === 'empty' ? t.empty : t.pending;
+const awaitingCredit = (item: Draw | undefined) => item && item.creditAttempts < 3 && item.prizes.some(prize => prize.status === 'pending');
 
 async function request<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
 	const controller = new AbortController(); controllers.add(controller);
@@ -97,11 +100,29 @@ async function load() {
 	if (active && current === generation && $i) void loadHistory(false);
 }
 
-async function loadHistory(more: boolean) {
+async function loadHistory(more: boolean, updateOnly = false) {
 	if (!$i || historyBusy.value) return;
+	const untilId = more ? cursor.value ?? undefined : undefined;
+	let drawId: string | undefined;
+	if (updateOnly) {
+		const waiting = records.value.filter(awaitingCredit);
+		if (awaitingCredit(result.value) && !waiting.some(item => item.id === result.value?.id)) waiting.unshift(result.value!);
+		if (!waiting.length) return;
+		drawId = waiting[creditPage++ % waiting.length].id;
+	}
 	const current = generation;
 	historyBusy.value = true; historyError.value = false;
-	try { const data = await request(signal => misskeyApi('community/lottery/records', { untilId: more ? cursor.value ?? undefined : undefined }, undefined, signal)); if (active && current === generation) { records.value = more ? [...records.value, ...data.items] : data.items; cursor.value = data.nextCursor; } } catch { if (active && current === generation) historyError.value = true; } finally { if (current === generation) historyBusy.value = false; }
+	try {
+		const data = await request(signal => misskeyApi('community/lottery/records', { untilId, drawId }, undefined, signal));
+		if (active && current === generation) {
+			if (updateOnly) {
+				const refreshed = new Map(data.items.map(item => [item.id, item]));
+				records.value = records.value.map(item => refreshed.get(item.id) ?? item);
+			} else records.value = more ? [...records.value, ...data.items] : data.items;
+			if (!updateOnly) cursor.value = data.nextCursor;
+			if (result.value) result.value = data.items.find(item => item.id === result.value?.id) ?? result.value;
+		}
+	} catch { if (active && current === generation) historyError.value = true; } finally { if (current === generation) historyBusy.value = false; }
 }
 
 async function draw() {
@@ -138,10 +159,17 @@ function signup() { const { dispose } = os.popup(defineAsyncComponent(() => impo
 
 function deactivate() { active = false; generation++; loading.value = false; busy.value = false; historyBusy.value = false; for (const c of controllers) c.abort(); }
 
-onMounted(() => { mounted = true; rememberLotteryInvite(); try { const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null'); if (saved && /^[a-zA-Z0-9_-]{16,64}$/.test(saved.requestId) && [1, 3, 5].includes(saved.count)) { pending.value = saved; count.value = saved.count; } } catch { /* Ignore invalid local state. */ } void load(); });
+onMounted(() => {
+	mounted = true; rememberLotteryInvite();
+	try { const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null'); if (saved && /^[a-zA-Z0-9_-]{16,64}$/.test(saved.requestId) && [1, 3, 5].includes(saved.count)) { pending.value = saved; count.value = saved.count; } } catch { /* Ignore invalid local state. */ }
+	void load();
+	creditTimer = window.setInterval(() => {
+		if (active && !window.document.hidden && !busy.value && [result.value, ...records.value].some(awaitingCredit)) void loadHistory(false, true);
+	}, 3000);
+});
 onActivated(() => { const wasInactive = !active; active = true; if (mounted && wasInactive) void load(); });
 onDeactivated(deactivate);
-onBeforeUnmount(deactivate);
+onBeforeUnmount(() => { window.clearInterval(creditTimer); deactivate(); });
 definePage(() => ({ title: t.title, icon: 'ti ti-gift', needWideArea: true }));
 </script>
 

@@ -13,11 +13,11 @@ export const meta = {
 	limit: { duration: 60000, max: 30 }, errors: lotteryErrors, res: lotteryRecordsSchema,
 } as const;
 
-export const paramDef = { type: 'object', properties: { untilId: { type: 'string', format: 'misskey:id', maxLength: 32 } }, required: [] } as const;
+export const paramDef = { type: 'object', properties: { untilId: { type: 'string', format: 'misskey:id', maxLength: 32 }, drawId: { type: 'string', format: 'misskey:id', maxLength: 32 } }, required: [] } as const;
 
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(private service: CommunityLotteryService) {
-		super(meta, paramDef, async (ps, me) => service.records(me.id, false, ps.untilId));
+		super(meta, paramDef, async (ps, me) => service.records(me.id, false, ps.untilId, ps.drawId));
 	}
 }

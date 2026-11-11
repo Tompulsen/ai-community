@@ -21228,6 +21228,8 @@ export interface operations {
                 'application/json': {
                     /** Format: misskey:id */
                     untilId?: string;
+                    /** Format: misskey:id */
+                    drawId?: string;
                 };
             };
         };

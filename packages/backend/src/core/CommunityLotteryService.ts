@@ -13,7 +13,7 @@ import { MiModerationLog } from '@/models/ModerationLog.js';
 import { MiExternalAccount } from '@/models/ExternalAccount.js';
 import { newApiOrigin } from '@/server/api/NewApiSigninService.js';
 import { MiCommunityLotteryAccount, MiCommunityLotteryConfig, MiCommunityLotteryDraw, MiCommunityLotteryReferral } from '@/models/CommunityLottery.js';
-import { availableLotteryPrizes, chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCredits, normalizeLotterySettings } from '@/misc/community-lottery.js';
+import { availableLotteryPrizes, chooseLotteryPrize, defaultLotterySettings, emptyLotteryProgress, lotteryCreditReceipt, lotteryCredits, normalizeLotterySettings } from '@/misc/community-lottery.js';
 import type { LotteryAward, LotterySettings, LotterySettingsInput } from '@/misc/community-lottery.js';
 import { lotteryErrors } from '@/server/api/lottery-schema.js';
 import { ApiError } from '@/server/api/error.js';
@@ -60,7 +60,8 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 
 	public onApplicationBootstrap() {
 		if (process.env.NODE_ENV === 'test') return;
-		this.retryTimer = setInterval(() => { void this.processPending(); }, 60000);
+		void this.processPending();
+		this.retryTimer = setInterval(() => { void this.processPending(); }, 5000);
 		this.retryTimer.unref();
 	}
 
@@ -82,19 +83,20 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 			row.creditAttempts++;
 			const signal = AbortSignal.timeout(8000);
 			for (const [index, prize] of row.prizes.entries()) {
-				if (prize.status !== 'pending') continue;
+				if (prize.status !== 'pending' || prize.creditBlocked) continue;
 				const reference = `community_lottery_${row.id}_${index}`;
 				try {
 					const response = await this.creditRequest(row.creditIssuer!, { client_id: new URL(this.config.url).origin, user_id: Number(row.creditSubject), reference, amount_cents: prize.amountCents }, signal);
-					if (response.credited !== true || response.reference !== reference || response.user_id !== Number(row.creditSubject) || response.amount_cents !== prize.amountCents) throw new LotteryCreditError('LOTTERY_CREDIT_RESPONSE', true);
+					try { prize.creditReceipt = lotteryCreditReceipt(response, reference, Number(row.creditSubject), prize.amountCents); } catch { throw new LotteryCreditError('LOTTERY_CREDIT_RESPONSE', true); }
 					prize.status = 'fulfilled'; prize.fulfilledAt = new Date().toISOString(); prize.note = `${(prize.amountCents / 100).toFixed(2)} USD`;
 				} catch (error) {
-					if (error instanceof LotteryCreditError && error.permanent) row.creditAttempts = 3;
 					this.logger.warn(`Credit pending for draw ${row.id}: ${error instanceof LotteryCreditError ? error.message : 'transport error'}.`);
+					if (error instanceof LotteryCreditError && error.permanent) { prize.creditBlocked = true; continue; }
 					break;
 				}
 			}
 			row.creditPending = row.prizes.some(p => p.status === 'pending');
+			if (row.creditPending && row.prizes.filter(p => p.status === 'pending').every(p => p.creditBlocked)) row.creditAttempts = 3;
 			row.creditRetryAt = row.creditPending ? new Date(Date.now() + row.creditAttempts * 60000) : null;
 			await manager.save(row);
 			return this.pack(row);
@@ -165,7 +167,7 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 	}
 
 	private pack(row: MiCommunityLotteryDraw, username = '') {
-		return { id: row.id, userId: row.userId ?? '', username, createdAt: row.createdAt.toISOString(), creditAttempts: row.creditAttempts, prizes: row.prizes.map(({ fulfilledBy: _actor, ...prize }) => prize) };
+		return { id: row.id, userId: row.userId ?? '', username, createdAt: row.createdAt.toISOString(), creditAttempts: row.creditAttempts, prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt: _receipt, creditBlocked: _blocked, ...prize }) => prize) };
 	}
 
 	public async draw(userId: string, requestId: string, count: number) {
@@ -200,7 +202,8 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 			await manager.save(row);
 			return this.pack(row);
 		});
-		try { return await this.deliver(receipt.id); } catch { return receipt; }
+		void this.processPending();
+		return receipt;
 	}
 
 	public async getConfig(userId: string) {
@@ -269,11 +272,12 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		});
 	}
 
-	public async records(userId: string, admin: boolean, untilId?: string) {
+	public async records(userId: string, admin: boolean, untilId?: string, drawId?: string) {
 		if (admin) await this.admin(userId); else await this.actor(userId);
 		const query = this.db.getRepository(MiCommunityLotteryDraw).createQueryBuilder('draw').leftJoinAndSelect('draw.user', 'user');
 		if (!admin) query.where('draw."userId" = :userId', { userId });
-		if (untilId) query.andWhere('draw.id < :untilId', { untilId });
+		if (drawId) query.andWhere('draw.id = :drawId', { drawId });
+		else if (untilId) query.andWhere('draw.id < :untilId', { untilId });
 		const rows = await query.orderBy('draw.id', 'DESC').take(21).getMany();
 		return { items: rows.slice(0, 20).map(row => this.pack(row, admin ? row.user?.username ?? '' : '')), nextCursor: rows.length > 20 ? rows[19].id : null };
 	}
@@ -283,7 +287,7 @@ export class CommunityLotteryService implements OnApplicationBootstrap, OnApplic
 		await this.db.transaction(async manager => {
 			const row = await manager.getRepository(MiCommunityLotteryDraw).createQueryBuilder('draw').setLock('pessimistic_write').where({ id: drawId }).getOne();
 			if (!row) throw new ApiError(lotteryErrors.notFound);
-			if (row.creditPending) { row.creditAttempts = 0; row.creditRetryAt = null; await manager.save(row); }
+			if (row.creditPending) { row.creditAttempts = 0; row.creditRetryAt = null; for (const prize of row.prizes) delete prize.creditBlocked; await manager.save(row); }
 			return this.pack(row);
 		});
 		return this.deliver(drawId);
