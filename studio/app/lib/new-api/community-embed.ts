@@ -11,6 +11,7 @@ import {
 } from "./client";
 import {
   AccountSession,
+  SESSION_COOKIE,
   getNewApiRedis,
   readSessionById,
   saveSession,
@@ -20,6 +21,7 @@ import {
 import {
   CommunityBinding,
   OPAQUE,
+  bindingForRequest,
   communityRequest,
   embedConfig,
   embedContext,
@@ -173,27 +175,57 @@ async function initialize(req: NextRequest) {
     });
     return res;
   }
-  const ticket = random();
-  launch.generation = hash(ticket);
-  await store().set(
-    grantKey(launch) + ":generation",
-    launch.generation,
-    "EX",
-    900,
-  );
-  await store().set(
-    PREFIX + "authorize:" + hash(ticket),
-    JSON.stringify(launch),
-    "EX",
-    300,
-  );
-  return json({
-    status: "authorize",
+  const loginId = req.cookies.get(SESSION_COOKIE)?.value || "";
+  if (!OPAQUE.test(loginId))
+    throw new NewApiError("请先登录章鱼账号", 401, "NEW_API_LOGIN_REQUIRED");
+  const { expiresAt, removedContexts } = await withSessionLock(loginId, async () => {
+    const login = await readSessionById(loginId);
+    if (!login?.user || !login.accessToken || !login.refreshToken)
+      throw new NewApiError("请先登录章鱼账号", 401, "NEW_API_LOGIN_REQUIRED");
+    if (login.communityEmbed || String(login.user.id) !== launch.subject)
+      throw new NewApiError(
+        "章鱼账号已变化，请重新登录社区",
+        409,
+        "NEW_API_ACCOUNT_CHANGED",
+      );
+    await validateCommunityBinding(launch);
+    // All contexts keep the same refresh chain and lock as the account login.
+    const bindings: [string, CommunityBinding][] = [
+      ...Object.entries(login.communityBindings || {}).filter(([key]) => key !== context),
+      [context, launch],
+    ];
+    const removedContexts = bindings.slice(0, Math.max(0, bindings.length - 16))
+      .map(([key]) => key);
+    login.communityBindings = Object.fromEntries(bindings.slice(-16));
+    login.version++;
+    await saveSession(loginId, login);
+    return { expiresAt: login.expiresAt, removedContexts };
+  });
+  const res = json({
+    status: "verify",
     subject: launch.subject,
     userId: launch.userId,
     kind: launch.kind,
-    authorizationUrl: `${config.studio}/studio/api/new-api/community/embedded/authorize?${new URLSearchParams({ ticket, returnTo: launch.returnTo! })}`,
   });
+  res.cookies.set(embeddedCookie(context), loginId, {
+    secure: true,
+    httpOnly: true,
+    sameSite: "none",
+    partitioned: true,
+    path: "/",
+    maxAge: Math.max(1, Math.floor(expiresAt - Date.now() / 1000)),
+  });
+  for (const previousContext of removedContexts) {
+    res.cookies.set(embeddedCookie(previousContext), "", {
+      secure: true,
+      httpOnly: true,
+      sameSite: "none",
+      partitioned: true,
+      path: "/",
+      maxAge: 0,
+    });
+  }
+  return res;
 }
 
 async function authorize(req: NextRequest) {
@@ -383,16 +415,14 @@ export async function handleCommunityEmbed(
       const user = sanitizeUser(
         (await accountRequest(req, "/api/user/self", { reuseRequestSession: true })).data,
       );
-      if (
-        !session.communityEmbed ||
-        String(user.id) !== session.communityEmbed.subject
-      )
+      const binding = bindingForRequest(req, session);
+      if (!binding || String(user.id) !== binding.subject)
         throw new Error("Account mismatch");
       return json({
         status: "ready",
-        context: session.communityEmbed.context,
+        context: binding.context,
         subject: String(user.id),
-        userId: session.communityEmbed.userId,
+        userId: binding.userId,
         username: user.username,
       });
     }

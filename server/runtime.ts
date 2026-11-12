@@ -88,9 +88,10 @@ type ModuleHandler = (ctx: RequestContext) => Promise<boolean>
 type RouteGroup = [HTTPMethods | HTTPMethods[], string[]]
 
 export function createApplication({ db, redis, config, filesRoot, distRoot = path.join(projectRoot, 'dist'), studioUpstream }: ApplicationOptions): FastifyInstance {
-  const auth = authServices({ db, redis, config })
   const origin = new URL(config.url).origin
-  const upstream = studioUpstream || process.env.COMMUNITY_STUDIO_UPSTREAM || 'http://studio:3000'
+  const upstream = studioUpstream || config.communityStudioUpstream || process.env.COMMUNITY_STUDIO_UPSTREAM || 'http://studio:3000'
+  config = { ...config, communityStudioUpstream: upstream }
+  const auth = authServices({ db, redis, config })
   const app = Fastify({
     bodyLimit, requestTimeout: 120000, exposeHeadRoutes: false,
     routerOptions: { maxParamLength: 512 },
@@ -132,8 +133,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
           .header('Cache-Control', 'private, no-store')
           .header('X-Content-Type-Options', 'nosniff').send(value)
       },
-      createSession: (userId, expectedTokenHash) => auth.createSession(userId, reply.raw, request.raw, expectedTokenHash),
-      authenticateFactor: auth.authenticateFactor,
+      createSession: (userId, expectedTokenHash, account) => auth.createSession(userId, reply.raw, request.raw, expectedTokenHash, account),
       requireUser,
       requireAdmin: () => {
         const user = requireUser()
@@ -185,7 +185,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   ])
   register(handleAccount, [
     ['GET', ['/api/newapi/callback', '/auth/newapi', '/api/newapi/config', '/api/account']],
-    ['POST', ['/api/account/connect', '/api/newapi/start', '/api/account/finish', '/api/newapi/finish',
+    ['POST', ['/api/account/session', '/api/account/connect', '/api/newapi/start', '/api/account/finish', '/api/newapi/finish',
       '/api/newapi/studio/start', '/api/newapi/studio/exchange', '/api/newapi/studio/context', '/api/newapi/studio/validate']],
   ])
   register(handleLottery, [
@@ -218,8 +218,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   ])
   register(handleSecurity, [
     ['GET', ['/api/security/capabilities', '/api/security/status', '/api/security/logins', '/api/security/sessions']],
-    ['POST', ['/api/security/password/forgot', '/api/security/password/reset', '/api/security/password',
-      '/api/security/mfa/setup', '/api/security/mfa/confirm', '/api/security/mfa/disable', '/api/security/mfa/recovery', '/api/security/sessions/revoke']],
+    ['POST', ['/api/security/password/forgot', '/api/security/password/reset', '/api/security/password', '/api/security/sessions/revoke']],
   ])
   app.all('/api/*', async (_request, reply) => reply.code(404).header('Cache-Control', 'private, no-store').send({ error: { message: '接口不存在。' } }))
   const serveClient = async (request: FastifyRequest, reply: FastifyReply) => {

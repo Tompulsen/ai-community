@@ -4,6 +4,7 @@ dist
 .config
 .env*
 .impeccable
+.taste-skill
 playwright-report
 test-results
 tests

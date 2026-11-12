@@ -8,7 +8,9 @@ import type { PoolClient } from 'pg'
 import type { Redis } from 'ioredis'
 import bcrypt from 'bcryptjs'
 import { lotteryInviter } from './business/lottery.ts'
-import type { Database, Queryable, RequestContext, TwoFactorProfile } from './types.ts'
+import { readStudioAccount } from './account-session.ts'
+import { hash as sessionTokenHash, publicUser } from './auth.ts'
+import type { Database, Queryable, RequestContext } from './types.ts'
 
 interface Identity {
   sub: string
@@ -23,33 +25,19 @@ interface LinkProof {
   sessionHash: string | null
 }
 
-interface Pending {
-  browser: string
-  issuer: string
-  verifier: string
-  returnTo: string
-  lotteryInviterId?: string
-  link?: LinkProof
-}
-
-interface Completion {
+interface StudioLaunch {
   userId: string
   issuer: string
   subject: string
   tokenHash: string
   returnTo: string
-  link?: LinkProof
-  identity?: Identity
-}
-
-interface StudioLaunch extends Completion {
   kind: 'text' | 'image' | 'video'
   studio: string
   context?: string
   sessionHash: string | null
 }
 
-interface CredentialRow extends Omit<TwoFactorProfile, 'userId'> {
+interface CredentialRow {
   id: string
   username: string
   name: string | null
@@ -86,7 +74,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const COOKIE = '__Host-community-next-oauth'
-const PREFIX = 'community-next:oauth:'
 const OPAQUE = /^[A-Za-z0-9_-]{43}$/
 const random = () => randomBytes(32).toString('base64url')
 export const accountHash = (value: string) => createHash('sha256').update(value).digest('base64url')
@@ -112,9 +99,30 @@ export function newApiIdentity(value: unknown): Identity {
 }
 
 export function newApiReturnPath(value: unknown): string {
-  return typeof value === 'string'
-    && /^\/(?:account|discover|activities|community(?:\/lottery)?|create(?:\/(?:text|image|video))?(?:\?remix=[a-zA-Z0-9]{1,32})?)$/.test(value)
-    ? value : '/account'
+  if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\#]/.test(value)) return '/account'
+  const path = value.split('?')[0]!
+  if (!/^\/(?:discover|work\/[a-zA-Z0-9]{1,32}|create(?:\/(?:text|image|video))?|library|activities|community|account|messages(?:\/[a-zA-Z0-9]{1,32})?)$/.test(path)) return '/account'
+  const query = value.slice(path.length + 1)
+  try { decodeURIComponent(query) } catch { return '/account' }
+  const id = /^[a-zA-Z0-9]{1,32}$/
+  const allowed: Record<string, RegExp> = { publish: /^1$/, invite: id }
+  switch (path.split('/')[1]) {
+    case 'discover':
+      Object.assign(allowed, { kind: /^(all|image|video|resource)$/, q: /^[^\u0000-\u001f\u007f\\]{0,500}$/,
+        tag: /^[^\u0000-\u001f\u007f\\]{1,100}$/, sort: /^(featured|latest|following)$/ })
+      break
+    case 'create': Object.assign(allowed, { from: id, remix: id }); break
+    case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
+    case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/ }); break
+    case 'account': allowed.tab = /^(profile|balance|security)$/; break
+    case 'messages': allowed.peer = id; break
+  }
+  const seen = new Set<string>()
+  for (const [key, item] of new URLSearchParams(query)) {
+    if (seen.has(key) || /[\u0000-\u001f\u007f\\]/.test(item) || !Object.hasOwn(allowed, key) || !allowed[key]!.test(item)) return '/account'
+    seen.add(key)
+  }
+  return value
 }
 
 export function verifyStudioBearer(authorization: string | undefined, secret: unknown): boolean {
@@ -134,12 +142,6 @@ function studio(ctx: RequestContext): { origin: string; secret: string } {
   issuer(ctx)
   if (typeof secret !== 'string' || secret.length < 32) fail('STUDIO_UNAVAILABLE', 503)
   return { origin, secret }
-}
-
-function flowCookie(ctx: RequestContext, value: string, age: number): void {
-  const previous = ctx.res.getHeader('Set-Cookie')
-  const cookies = previous ? (Array.isArray(previous) ? previous : [String(previous)]) : []
-  ctx.res.setHeader('Set-Cookie', [...cookies, `${COOKIE}=${value}; Path=/; Max-Age=${age}; Secure; HttpOnly; SameSite=Lax`])
 }
 
 export function readFlowCookie(header: string = ''): string | null {
@@ -165,37 +167,15 @@ async function rateLimit(ctx: RequestContext, key: string, maximum: number, seco
   if (counter > maximum) fail('SSO_RATE_LIMIT', 429)
 }
 
-async function upstreamJson(url: string, { body, token }: { body?: Record<string, string>; token?: string } = {}): Promise<Record<string, unknown>> {
-  const response = await fetch(url, {
-    method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(15000),
-    headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  if (!response.ok || !response.headers.get('content-type')?.includes('application/json') || !response.body) fail('SSO_UPSTREAM', 502)
-  let size = 0
-  const chunks: Buffer[] = []
-  for await (const chunk of response.body) {
-    size += chunk.length
-    if (size > 1024 * 1024) fail('SSO_UPSTREAM', 502)
-    chunks.push(Buffer.from(chunk))
-  }
-  try {
-    const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    if (!isRecord(value)) fail('SSO_UPSTREAM', 502)
-    return value
-  }
-  catch { fail('SSO_UPSTREAM', 502) }
-}
-
 async function availableUser(db: Queryable, userId: string, lock = false): Promise<CredentialUser> {
-  const { rows } = await db.query<CredentialRow>(`SELECT u.id,u.username,u.name,u.token,p.password,p."twoFactorEnabled",p."twoFactorSecret",p."twoFactorBackupSecret"
+  const { rows } = await db.query<CredentialRow>(`SELECT u.id,u.username,u.name,u.token,p.password
     FROM "user" u JOIN user_profile p ON p."userId"=u.id
     WHERE u.id=$1 AND u.host IS NULL AND NOT u."isDeleted" AND NOT u."isSuspended" AND u."movedToUri" IS NULL${lock ? ' FOR UPDATE OF u,p' : ''}`, [userId])
   if (!rows[0]?.token) fail('SSO_ACCOUNT_UNAVAILABLE')
   return { ...rows[0], userId: rows[0].id, token: rows[0].token }
 }
 
-const credentialHash = (user: CredentialUser) => accountHash(JSON.stringify([user.password, user.twoFactorEnabled, user.twoFactorSecret]))
+const credentialHash = (user: CredentialUser) => accountHash(user.password || '')
 
 async function transaction<T>(db: Database, action: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await db.connect()
@@ -270,92 +250,21 @@ async function provision(ctx: RequestContext, accountIssuer: string, identity: I
   fail('SSO_PROVISION', 409)
 }
 
-async function start(ctx: RequestContext) {
-  await rateLimit(ctx, 'newapi-start', 10)
-  const accountIssuer = issuer(ctx)
-  let link: LinkProof | undefined
-  if (ctx.user) {
-    const user = await availableUser(ctx.db, ctx.user.id)
-    if (typeof ctx.body.password !== 'string' || ctx.body.password.length > 1024
-      || !user.password || !await bcrypt.compare(ctx.body.password, user.password)) fail('SSO_LINK_AUTH')
-    if (user.twoFactorEnabled) await ctx.authenticateFactor(user, ctx.body.token, ctx.body.recoveryCode)
-    link = { userId: user.id, tokenHash: accountHash(user.token), credentialHash: credentialHash(user), sessionHash: ctx.sessionHash }
+async function synchronizeSession(ctx: RequestContext) {
+  await rateLimit(ctx, 'account-session', 30)
+  const account = await readStudioAccount(ctx.config, ctx.req)
+  const user = await provision(ctx, account.binding.issuer, {
+    sub: account.binding.subject, preferred_username: account.username, name: account.name,
+  }, lotteryInviter(ctx.body.lotteryInviterId))
+  let result
+  if (ctx.user?.id === user.id) result = publicUser(ctx.user)
+  else {
+    result = await ctx.createSession(user.id, sessionTokenHash(user.token), account.binding)
+    await ctx.db.query('INSERT INTO signin(id,"userId",ip,headers,success) VALUES($1,$2,$3,$4,true)',
+      [ctx.newId(), user.id, ctx.ip || ctx.req.socket.remoteAddress || null,
+        JSON.stringify({ 'user-agent': String(ctx.req.headers['user-agent'] || '').slice(0, 512) })])
   }
-  const browser = random(), state = random(), verifier = random()
-  await ctx.redis.set(`${PREFIX}state:${state}`, JSON.stringify({
-    browser: accountHash(browser), issuer: accountIssuer, verifier,
-    returnTo: newApiReturnPath(ctx.body.returnTo),
-    lotteryInviterId: link ? undefined : lotteryInviter(ctx.body.lotteryInviterId), link,
-  }), 'EX', 600)
-  flowCookie(ctx, browser, 600)
-  const url = new URL('/community-authorize', accountIssuer)
-  url.search = new URLSearchParams({
-    client_id: new URL(ctx.config.url).origin, redirect_uri: new URL('/api/newapi/callback', ctx.config.url).href,
-    response_type: 'code', scope: 'identity', state, code_challenge: accountHash(verifier), code_challenge_method: 'S256',
-  }).toString()
-  return { url: url.href, authorizationUrl: url.href }
-}
-
-async function callback(ctx: RequestContext): Promise<void> {
-  try {
-    const state = ctx.url.searchParams.get('state'), code = ctx.url.searchParams.get('code')
-    const browser = readFlowCookie(ctx.req.headers.cookie)
-    if (!state || !code || !OPAQUE.test(state) || !OPAQUE.test(code) || !browser) fail('SSO_FLOW')
-    const key = `${PREFIX}state:${state}`, raw = await ctx.redis.get(key)
-    if (!raw) fail('SSO_FLOW')
-    const pending = JSON.parse(raw) as Pending
-    if (pending.browser !== accountHash(browser) || pending.issuer !== issuer(ctx) || !await consume(ctx.redis, key, raw)) fail('SSO_FLOW')
-    if (pending.link) await checkLink(ctx, pending.link)
-    const token = await upstreamJson(`${pending.issuer}/api/community-sso/token`, { body: {
-      grant_type: 'authorization_code', client_id: new URL(ctx.config.url).origin,
-      redirect_uri: new URL('/api/newapi/callback', ctx.config.url).href, code, code_verifier: pending.verifier,
-    } })
-    if (!token || token.token_type !== 'Bearer' || typeof token.access_token !== 'string' || !OPAQUE.test(token.access_token)) fail('SSO_TOKEN')
-    const identity = newApiIdentity(await upstreamJson(`${pending.issuer}/api/community-sso/userinfo`, { token: token.access_token }))
-    const user = pending.link ? await checkLink(ctx, pending.link) : await provision(ctx, pending.issuer, identity, pending.lotteryInviterId)
-    await ctx.redis.set(`${PREFIX}complete:${accountHash(browser)}`, JSON.stringify({
-      userId: user.id, issuer: pending.issuer, subject: identity.sub, tokenHash: accountHash(user.token),
-      returnTo: pending.returnTo, link: pending.link, identity: pending.link ? identity : undefined,
-    }), 'EX', 300)
-    redirect(ctx, '/account?newapi=complete')
-  } catch {
-    flowCookie(ctx, '', 0)
-    redirect(ctx, '/account?newapi=error')
-  }
-}
-
-async function finish(ctx: RequestContext) {
-  await rateLimit(ctx, 'newapi-finish', 15, 600)
-  const browser = readFlowCookie(ctx.req.headers.cookie)
-  if (!browser) fail('SSO_FLOW')
-  const key = `${PREFIX}complete:${accountHash(browser)}`, raw = await ctx.redis.get(key)
-  if (!raw) fail('SSO_FLOW')
-  const complete = JSON.parse(raw) as Completion
-  if (complete.issuer !== issuer(ctx)) fail('SSO_CONFIG')
-  if (complete.link) {
-    const user = await checkLink(ctx, complete.link)
-    if (ctx.body.confirmLink !== true) return {
-      requiresLinkConfirmation: true, communityUsername: user.username,
-      newApiUsername: complete.identity?.preferred_username, subject: complete.subject,
-      returnTo: newApiReturnPath(complete.returnTo),
-    }
-    if (!await consume(ctx.redis, key, raw)) fail('SSO_FLOW')
-    await bindExternalAccount(ctx, complete.issuer, complete.subject, complete.link)
-    flowCookie(ctx, '', 0)
-    return { linked: true, returnTo: newApiReturnPath(complete.returnTo) }
-  }
-  const user = await availableUser(ctx.db, complete.userId)
-  if (accountHash(user.token) !== complete.tokenHash) fail('SSO_FLOW')
-  const { rows } = await ctx.db.query('SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3', [complete.issuer, complete.subject, user.id])
-  if (!rows.length) fail('SSO_FLOW')
-  if (user.twoFactorEnabled) {
-    if (!ctx.body.token && !ctx.body.recoveryCode) return { requiresTotp: true }
-    await ctx.authenticateFactor(user, ctx.body.token, ctx.body.recoveryCode)
-  }
-  if (!await consume(ctx.redis, key, raw)) fail('SSO_FLOW')
-  const publicUser = await ctx.createSession(user.id, accountHash(user.token))
-  flowCookie(ctx, '', 0)
-  return { user: publicUser, returnTo: newApiReturnPath(complete.returnTo) }
+  return { user: result, returnTo: newApiReturnPath(ctx.body.returnTo ?? '/discover') }
 }
 
 async function studioStart(ctx: RequestContext) {
@@ -485,12 +394,14 @@ export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'r
 
 export async function handleAccount(ctx: RequestContext): Promise<boolean> {
   const path = ctx.url.pathname, method = ctx.req.method
-  if (method === 'GET' && path === '/api/newapi/callback') { await callback(ctx); return true }
-  if (method === 'GET' && path === '/auth/newapi') { redirect(ctx, '/account?newapi=complete'); return true }
+  if (method === 'POST' && ['/api/account/connect', '/api/newapi/start', '/api/account/finish', '/api/newapi/finish'].includes(path)) {
+    fail('ACCOUNT_LOGIN_REQUIRED', 410)
+  }
+  if (method === 'GET' && ['/api/newapi/callback', '/auth/newapi'].includes(path)) { redirect(ctx, '/account'); return true }
   if (!path.startsWith('/api/account') && !path.startsWith('/api/newapi/')) return false
   let result: unknown
   if (method === 'GET' && path === '/api/newapi/config') {
-    try { result = { enabled: true, issuer: issuer(ctx), studioOrigin: studio(ctx).origin, studioPath: '/studio' } }
+    try { result = { enabled: true, authentication: 'zhangyu', issuer: issuer(ctx), accountUrl: issuer(ctx), studioOrigin: studio(ctx).origin, studioPath: '/studio' } }
     catch { result = { enabled: false } }
   } else if (method === 'GET' && path === '/api/account') {
     const accountIssuer = issuer(ctx)
@@ -500,8 +411,7 @@ export async function handleAccount(ctx: RequestContext): Promise<boolean> {
     const balance = rows.length ? await readAccountBalance(ctx, rows[0].subject) : null
     result = { linked: rows.length > 0, issuer: accountIssuer, subject: rows[0]?.subject ?? null,
       balance: null, ...balance, accountUrl: accountIssuer, studioReady }
-  } else if (method === 'POST' && ['/api/account/connect', '/api/newapi/start'].includes(path)) result = await start(ctx)
-  else if (method === 'POST' && ['/api/account/finish', '/api/newapi/finish'].includes(path)) result = await finish(ctx)
+  } else if (method === 'POST' && path === '/api/account/session') result = await synchronizeSession(ctx)
   else if (method === 'POST' && path === '/api/newapi/studio/start') result = await studioStart(ctx)
   else if (method === 'POST' && path === '/api/newapi/studio/exchange') result = await studioExchange(ctx)
   else if (method === 'POST' && path === '/api/newapi/studio/context') result = await studioContext(ctx)

@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "start": "node server/runtime.ts",
     "test:server": "node --test server/*.test.mjs",
-    "test": "vitest run src/state.test.ts server/business",
+    "test": "vitest run src/state.test.ts src/login-navigation.test.ts server/business",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -22,7 +22,6 @@
     "figma-squircle": "1.1.0",
     "ioredis": "5.11.1",
     "nodemailer": "10.5.0",
-    "otpauth": "9.5.2",
     "pg": "8.23.1",
     "sharp": "0.35.5",
     "vue": "^3.5.44",

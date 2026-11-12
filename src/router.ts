@@ -6,6 +6,8 @@ import LibraryView from './views/LibraryView.vue'
 import ActivityView from './views/ActivityView.vue'
 import CommunityView from './views/CommunityView.vue'
 import AccountView from './views/AccountView.vue'
+import { session } from './state'
+import { loginReturnPath } from './login-navigation'
 import AdminView from './views/AdminView.vue'
 import NotFoundView from './views/NotFoundView.vue'
 import MessagesView from './views/MessagesView.vue'
@@ -21,6 +23,7 @@ export const router = createRouter({
     { path: '/activities', component: ActivityView, meta: { title: '推广中心' } },
     { path: '/community', component: CommunityView, meta: { title: '社区' } },
     { path: '/account', component: AccountView, meta: { title: '账号设置' } },
+    { path: '/account/authorize', redirect: '/account' },
     { path: '/messages/:userId?', component: MessagesView, meta: { title: '私信' } },
     { path: '/admin', component: AdminView, meta: { title: '管理' } },
     { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { title: '页面未找到' } },
@@ -32,4 +35,10 @@ export const router = createRouter({
   },
 })
 
+router.beforeEach((to, from) => {
+  if (to.path === '/account' && !session.user && !to.query.returnTo && !to.query.newapi && !to.query.reset
+    && from.matched.length && !from.path.startsWith('/account')) {
+    return { path: to.path, query: { ...to.query, returnTo: loginReturnPath(from.fullPath) } }
+  }
+})
 router.afterEach(to => { document.title = `${String(to.meta.title)} · 章鱼社区` })

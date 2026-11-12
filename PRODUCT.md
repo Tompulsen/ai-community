@@ -70,6 +70,12 @@ delivery now includes the frontend and an independent community backend.
 - Migration must preserve identity, permissions, work/file relationships,
   interactions and reward receipts; include Redis and browser-local data.
 - External account balance stays authoritative in the account service.
+- Community sign-in uses the Octopus account exclusively. Reuse the Studio
+  account login, verify its session server-side, and map issuer plus subject to
+  existing community profiles. Keep old unlinked profiles without matching by
+  username or email. Registration and password management belong to the account
+  centre. Embedded creation contexts share the verified Studio session and its
+  refresh lock instead of requesting another authorization.
 - Detailed migration gates are recorded in MIGRATION.md. Licensing of newly
   authored source and final deployment details remain open decisions.
 

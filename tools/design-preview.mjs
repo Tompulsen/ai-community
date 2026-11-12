@@ -3,7 +3,7 @@ import { request as httpsRequest } from 'node:https'
 import { pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
-const publicOrigin = 'https://zaiduyu.top'
+const publicOrigin = 'https://www.zhangyuapi.com'
 const publicPaths = new Set([
   '/healthz', '/api/works', '/api/community/works', '/api/tags', '/api/creators',
   '/api/announcements', '/api/community/ads', '/api/site', '/api/uploads/limits',

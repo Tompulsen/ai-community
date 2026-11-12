@@ -197,6 +197,16 @@ describe("New API opaque browser sessions", () => {
     expect(await readSessionById(current.id)).toEqual(current.session);
   });
 
+  test("leftover embedded cookies do not block the normal account session", async () => {
+    const created = await createSession(request(), NextResponse.json({}), credentials);
+    const req = new NextRequest("https://chat.example.test/api/account", {
+      headers: { cookie: `${SESSION_COOKIE}=${created.id}; __Host-octopus-embed-${"a".repeat(43)}=${"b".repeat(43)}` },
+    });
+
+    expect(getSessionId(req)).toBe(created.id);
+    expect((await readSession(req))?.user?.id).toBe(user.id);
+  });
+
   test("limits an incomplete MFA session to five minutes", async () => {
     const response = NextResponse.json({});
     const created = await createSession(request(), response, {

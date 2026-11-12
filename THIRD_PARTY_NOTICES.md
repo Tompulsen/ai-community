@@ -19,7 +19,7 @@ Runtime packages and their upstream declared licenses:
 - pg: MIT.
 - yaml: ISC.
 - bcryptjs: BSD-3-Clause.
-- otpauth and ioredis: MIT.
+- ioredis: MIT.
 - Fastify and @fastify/multipart: MIT.
 - Sharp: Apache-2.0; its packaged libvips dependencies retain their own notices.
 - Nodemailer: MIT-0.

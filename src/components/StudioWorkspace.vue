@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RefreshCw, X, Upload } from '@lucide/vue'
 import { api, errorMessage, getUploadLimits, notify, session, uploadFile } from '../state'
 import { isCurrentStudioMessage, validateStudioWork, validShareId, type ShareWork } from '../studio-share'
@@ -10,12 +10,13 @@ const props = defineProps<{ kind: 'text' | 'image' | 'video'; source?: Work | nu
 const emit = defineEmits<{ ready: []; state: [state: string]; background: [data: Record<string, unknown>] }>()
 const frame = ref<HTMLIFrameElement>()
 const frameUrl = ref('')
-const state = ref<'loading' | 'ready' | 'authorize' | 'error'>('loading')
+const state = ref<'loading' | 'ready' | 'error'>('loading')
 const error = ref('')
+const loginRequired = ref(false)
+const loginTarget = computed(() => ({ path: '/account', query: { returnTo: `/create/${props.kind}${props.source ? `?remix=${encodeURIComponent(props.source.id)}` : ''}` } }))
 const launch = ref<{ code: string; origin: string; subject: string; userId: string }>()
 const attempt = ref('')
 const context = ref('')
-const authorizing = ref(false)
 const shareDialog = ref<HTMLDialogElement>()
 const sharePhase = ref<'' | 'uploading' | 'editing' | 'error' | 'submitting'>('')
 const shareTitle = ref('')
@@ -31,7 +32,6 @@ let heartbeat: ReturnType<typeof setInterval> | undefined
 let controller: AbortController | undefined
 let workspaceRequest = ''
 let remixRequest = ''
-let authorizationUrl = ''
 let task: { id: string; destination: string; sourceWorkId?: string; resultId?: string; content?: ShareWork; limits?: { image: number; video: number; document: number }; files: { id: string; role?: string }[]; controller: AbortController } | undefined
 
 function send(type: string, value: object = {}) {
@@ -59,7 +59,7 @@ function stop() {
   hello = false; sent = false
   frameUrl.value = ''; launch.value = undefined
 }
-function fail(message: string) { stop(); error.value = message; state.value = 'error' }
+function fail(message: string, requiresLogin = false) { stop(); error.value = message; loginRequired.value = requiresLogin; state.value = 'error' }
 function sendLaunch() {
   if (!hello || sent || !launch.value || !frame.value?.contentWindow) return
   sent = true
@@ -73,7 +73,7 @@ async function connect() {
   const current = generation
   const active = new AbortController()
   controller = active
-  state.value = 'loading'; error.value = ''; remixNotice.value = ''
+  state.value = 'loading'; error.value = ''; loginRequired.value = false; remixNotice.value = ''
   context.value = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   attempt.value = crypto.randomUUID()
   const url = new URL('/studio/community-embed', origin)
@@ -92,22 +92,6 @@ function switchWorkspace() {
   if (state.value !== 'ready') return
   workspaceRequest = crypto.randomUUID()
   send('community-workspace', { kind: props.kind, requestId: workspaceRequest })
-}
-async function authorize() {
-  if (authorizing.value || !launch.value) return
-  authorizing.value = true
-  try {
-    const next = await api<NonNullable<typeof launch.value>>('/api/newapi/studio/start', { method: 'POST', body: { kind: props.kind, context: context.value, returnTo: `/create/${props.kind}` } })
-    if (next.origin !== origin || next.userId !== session.user?.id || next.subject !== launch.value.subject) throw new Error('账号已变化，请重新连接。')
-    const response = await fetch('/studio/api/new-api/community/embedded/init', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'x-community-embed': context.value }, body: JSON.stringify({ code: next.code }) })
-    const result = await response.json()
-    if (!response.ok || result.userId !== next.userId || result.subject !== next.subject || result.kind !== props.kind) throw new Error('工作台授权失败。')
-    if (result.status === 'verify') { await connect(); return }
-    const url = new URL(result.authorizationUrl)
-    if (url.origin !== origin || url.pathname !== '/studio/api/new-api/community/embedded/authorize') throw new Error('授权地址无效。')
-    window.location.assign(url.href)
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { authorizing.value = false }
 }
 async function uploadShared() {
   const active = task
@@ -190,15 +174,14 @@ function message(event: MessageEvent) {
   if (!isCurrentStudioMessage(event, frame.value?.contentWindow, origin, identity)) return
   const data = event.data
   if (data.status === 'hello') { hello = true; sendLaunch(); return }
-  if (data.status === 'error') { fail('工作台连接失败，请重新连接章鱼账号后重试。'); return }
+  if (data.status === 'error') {
+    const requiresLogin = ['NEW_API_LOGIN_REQUIRED', 'COMMUNITY_LOGIN_REQUIRED', 'COMMUNITY_ACCOUNT_CHANGED', 'NEW_API_ACCOUNT_CHANGED'].includes(data.code)
+    fail(requiresLogin ? '章鱼账号登录已过期或已切换，请重新登录。' : '工作台连接失败，请重试。', requiresLogin)
+    return
+  }
   if (!isCurrentStudioMessage(event, frame.value?.contentWindow, origin, identity, true) || launch.value?.userId !== session.user?.id) return
   if (data.status === 'authorize') {
-    try {
-      const url = new URL(data.authorizationUrl)
-      if (url.origin !== origin || url.pathname !== '/studio/api/new-api/community/embedded/authorize') throw new Error()
-      authorizationUrl = url.href
-      state.value = 'authorize'; clearTimeout(timeout)
-    } catch { fail('工作台授权地址无效。') }
+    fail('请登录章鱼账号后继续创作。', true)
   } else if (data.status === 'ready') {
     state.value = 'ready'; clearTimeout(timeout)
     switchWorkspace()
@@ -234,7 +217,7 @@ watch(state, value => emit('state', value), { immediate: true })
 <template>
   <section class="studio-stage" aria-label="创作工作台" :data-state="state">
     <iframe v-if="frameUrl" :key="attempt" ref="frame" :src="frameUrl" title="创作工作台" class="studio-frame" sandbox="allow-same-origin allow-scripts allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox" allow="fullscreen; clipboard-write" referrerpolicy="no-referrer" />
-    <div v-if="state !== 'ready'" class="studio-state" :role="state === 'error' ? 'alert' : 'status'"><h2>{{ state === 'loading' ? '正在连接创作工作台…' : state === 'authorize' ? '授权创作工作台' : '无法打开工作台' }}</h2><p v-if="error">{{ error }}</p><button v-if="state === 'authorize' && authorizationUrl" class="button primary btn" :disabled="authorizing" @click="authorize">确认授权</button><button v-else-if="state === 'error'" class="button btn" @click="connect"><RefreshCw :size="16" />重试</button><RouterLink v-if="state === 'error'" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink></div>
+    <div v-if="state !== 'ready'" class="studio-state" :role="state === 'error' ? 'alert' : 'status'"><h2>{{ state === 'loading' ? '正在连接创作工作台…' : loginRequired ? '请登录章鱼账号' : '无法打开工作台' }}</h2><p v-if="error">{{ error }}</p><RouterLink v-if="loginRequired" :to="loginTarget" class="button primary btn">登录后继续创作</RouterLink><button v-else-if="state === 'error'" class="button btn" @click="connect"><RefreshCw :size="16" />重试</button></div>
     <div v-if="sharePhase === 'uploading' || sharePhase === 'error'" class="studio-share-status" role="status"><p>{{ sharePhase === 'uploading' ? '正在上传作品…' : shareError }}</p><button v-if="sharePhase === 'error'" class="button btn" @click="uploadShared">重试上传</button><button class="button subtle btn" @click="finishShare('canceled')">取消</button></div>
     <p v-if="remixNotice" class="studio-remix-status" role="status">{{ remixNotice }}</p>
     <Teleport to="body"><dialog ref="shareDialog" class="compact-dialog" aria-labelledby="studio-share-title" @cancel.prevent="sharePhase !== 'submitting' && finishShare('canceled')"><div class="dialog-heading"><h2 id="studio-share-title">{{ task?.destination === 'source-comment' ? '发布同款评论' : '分享作品' }}</h2><button class="icon-button" aria-label="取消分享" :disabled="sharePhase === 'submitting'" @click="finishShare('canceled')"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="publishShared"><label class="field"><span>作品标题</span><input v-model="shareTitle" class="control" maxlength="100" required :disabled="sharePhase === 'submitting'" /></label><label class="field"><span>创作说明</span><textarea v-model="shareText" class="control" rows="4" maxlength="2500" :disabled="sharePhase === 'submitting'" /></label><p v-if="shareError" class="form-error" role="alert">{{ shareError }}</p><button class="button primary btn" :disabled="sharePhase === 'submitting'"><Upload :size="16" />{{ sharePhase === 'submitting' ? '正在提交…' : '提交作品' }}</button></form></dialog></Teleport>

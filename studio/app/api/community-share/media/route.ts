@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertSameOrigin, getAuthenticatedSession } from "@/app/lib/new-api/client";
-import { embedContext } from "@/app/lib/new-api/community-embed-validation";
+import { bindingForRequest, embedContext } from "@/app/lib/new-api/community-embed-validation";
 import { NewApiError } from "@/app/lib/new-api/config";
 import { fetchPublicMedia, PublicImageError } from "@/app/utils/public-image-fetch";
 import { readRequestBody, RequestBodyError } from "@/app/utils/request-body";
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     assertSameOrigin(request);
     if (!embedContext(request)) throw new NewApiError("Embedded session required", 401);
     const { session } = await getAuthenticatedSession(request, true);
-    const grant = session.communityEmbed;
+    const grant = bindingForRequest(request, session);
     if (!grant || !session.user || String(session.user.id) !== grant.subject) throw new NewApiError("Account mismatch", 401);
     if (!request.headers.get("content-type")?.includes("application/json")) throw new PublicImageError("JSON required", 415);
     let input: { url?: unknown; kind?: unknown; maxBytes?: unknown };

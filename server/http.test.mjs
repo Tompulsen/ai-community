@@ -99,11 +99,23 @@ async function closeServer(server) {
 }
 
 test('Fastify keeps JSON errors, same-origin writes, guest session and logout cookies', async t => {
-  const { app } = await fixture(t)
+  const { app, queries } = await fixture(t)
   const anonymous = await app.inject({ method: 'GET', url: '/api/session' })
   assert.equal(anonymous.statusCode, 200)
-  assert.deepEqual(anonymous.json(), { user: null })
+  assert.deepEqual(anonymous.json(), { user: null, authentication: 'zhangyu', accountUrl: 'https://zhangyuapi.com' })
   assert.match(anonymous.headers['cache-control'], /no-store/)
+  const registration = await app.inject({ method: 'GET', url: '/api/registration' })
+  assert.equal(registration.statusCode, 200)
+  assert.deepEqual(registration.json(), { enabled: false, authentication: 'zhangyu', accountUrl: 'https://zhangyuapi.com' })
+  for (const url of ['/api/session/login', '/api/session/register']) {
+    assertJsonError(await app.inject({ method: 'POST', url, headers: { origin: 'https://other.example',
+      'content-type': 'application/json' }, payload: '{}' }), 403)
+    const disabled = await app.inject({ method: 'POST', url, headers: jsonHeaders,
+      payload: '{"login":"legacy","username":"legacy","password":"legacy-password"}' })
+    assertJsonError(disabled, 410)
+    assert.equal(disabled.json().error.code, 'ACCOUNT_LOGIN_REQUIRED')
+  }
+  assert.equal(queries.length, 0, 'disabled native authentication must not read or change legacy account data')
 
   for (const headers of [
     { 'content-type': 'application/json' },
@@ -120,9 +132,11 @@ test('Fastify keeps JSON errors, same-origin writes, guest session and logout co
   assert.equal(logout.statusCode, 200)
   assert.deepEqual(logout.json(), { user: null })
   const cookies = [].concat(logout.headers['set-cookie'] || [])
-  const expired = cookies.find(value => value.startsWith('community_session='))
-  assert(expired, 'logout must forward the raw response Set-Cookie header')
-  for (const attribute of [/Max-Age=0/i, /Path=\//i, /HttpOnly/i, /SameSite=Lax/i, /Secure/i]) assert.match(expired, attribute)
+  for (const name of ['community_session', 'octopus_new_api_session']) {
+    const expired = cookies.find(value => value.startsWith(`${name}=`))
+    assert(expired, `logout must forward the raw ${name} Set-Cookie header`)
+    for (const attribute of [/Max-Age=0/i, /Path=\//i, /HttpOnly/i, /SameSite=Lax/i, /Secure/i]) assert.match(expired, attribute)
+  }
 
   // A permitted upload body must reach authentication instead of Fastify's 1 MiB default cap.
   const upload = JSON.stringify({ name: 'creation.png', type: 'image/png', data: 'x'.repeat(1024 * 1024 + 1) })
@@ -132,7 +146,10 @@ test('Fastify keeps JSON errors, same-origin writes, guest session and logout co
 
   const handoff = await app.inject({ method: 'GET', url: '/auth/newapi' })
   assert.equal(handoff.statusCode, 303)
-  assert.equal(handoff.headers.location, '/account?newapi=complete')
+  assert.equal(handoff.headers.location, '/account')
+  const oldCallback = await app.inject({ method: 'GET', url: '/api/newapi/callback?code=old-code&state=old-state' })
+  assert.equal(oldCallback.statusCode, 303)
+  assert.equal(oldCallback.headers.location, '/account')
 })
 
 test('static assets and SPA routes preserve HEAD and never expose paths outside dist', async t => {

@@ -27,6 +27,7 @@ export interface AccountUser {
 
 export interface AccountSession {
   communityEmbed?: CommunityBinding;
+  communityBindings?: Record<string, CommunityBinding>;
   communityPending?: boolean;
   user?: AccountUser;
   accessToken?: string;

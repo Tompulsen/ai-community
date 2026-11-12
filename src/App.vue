@@ -24,8 +24,21 @@ const notifications = ref<Notification[]>([]), notificationError = ref(''), noti
 const unreadCount = computed(() => notifications.value.filter(item => !item.isRead).length)
 let poll: ReturnType<typeof setInterval> | undefined
 let notificationGeneration = 0
-onMounted(() => { rememberLotteryInvite(route.query.invite); void loadSession() })
-onBeforeUnmount(() => { clearInterval(poll); notificationGeneration++ })
+function refreshActiveIdentity() {
+  if (session.user && document.visibilityState !== 'hidden') void loadSession(true)
+}
+onMounted(() => {
+  rememberLotteryInvite(route.query.invite); void loadSession()
+  window.addEventListener('focus', refreshActiveIdentity)
+  window.addEventListener('pageshow', refreshActiveIdentity)
+  document.addEventListener('visibilitychange', refreshActiveIdentity)
+})
+onBeforeUnmount(() => {
+  clearInterval(poll); notificationGeneration++
+  window.removeEventListener('focus', refreshActiveIdentity)
+  window.removeEventListener('pageshow', refreshActiveIdentity)
+  document.removeEventListener('visibilitychange', refreshActiveIdentity)
+})
 watch(() => route.fullPath, () => document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false }))
 watch(() => session.user?.id, id => {
   clearInterval(poll); notificationGeneration++; notifications.value = []; notificationError.value = ''; notificationsLoading.value = false
@@ -99,7 +112,7 @@ function dismissMenus(event: Event) {
       </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
     </div></header>
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
-    <main id="main" tabindex="-1"><RouterView :key="`${route.path}:${session.user?.id || 'guest'}`" /></main>
+    <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
     <footer v-if="!guestAccount" class="app-footer"><span>章鱼社区</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
     <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>

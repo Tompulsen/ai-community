@@ -119,6 +119,92 @@ describe('real API state', () => {
     expect(rememberLotteryInvite('../invalid')).toBe('oldUser1')
     expect(values.get('studio-draft')).toBe('keep')
   })
+  it('logs into the account service once and only accepts a confirmed community session', async () => {
+    fetchMock.mockImplementation((path: string) => {
+      if (path === '/studio/api/new-api/login') return response({ success: true, data: { authenticated: true } })
+      if (path === '/api/account/session') return response({ user })
+      return response({ user, csrfToken: 'signed-in' })
+    })
+    const { login, session } = await import('./state')
+    await login({ login: 'octopus-user', password: 'account-password', returnTo: '/create/image' })
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/studio/api/new-api/login', '/api/account/session', '/api/session'])
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ username: 'octopus-user', password: 'account-password' })
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ returnTo: '/create/image' })
+    expect(session.user).toEqual(user)
+  })
+  it('does not claim a successful login when account-to-community synchronization fails', async () => {
+    fetchMock.mockImplementation((path: string) => path === '/studio/api/new-api/login'
+      ? response({ success: true, data: { authenticated: true } })
+      : response({ message: 'Account mapping unavailable' }, 503))
+    const { login, session } = await import('./state')
+    await expect(login({ login: 'octopus-user', password: 'account-password' })).rejects.toThrow('Account mapping unavailable')
+    expect(session.user).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+  it('silently synchronizes an existing account login and treats a normal guest as anonymous', async () => {
+    fetchMock.mockImplementation((path: string) => path === '/api/session'
+      ? response({ user: null, csrfToken: 'visitor-csrf', authentication: 'zhangyu', accountUrl: 'https://accounts.example' })
+      : response({ message: 'Login required' }, 401))
+    const { loadSession, session, accountCenterUrl } = await import('./state')
+    await Promise.all([loadSession(), loadSession()])
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/session', '/api/account/session'])
+    expect(session.user).toBeNull()
+    expect(session.error).toBe('')
+    expect(accountCenterUrl('forgot-password')).toBe('https://accounts.example/forgot-password')
+  })
+  it('does not restore an old identity from an in-flight session read after logout', async () => {
+    let finishRead!: (value: Response) => void
+    fetchMock.mockImplementation((path: string) => path === '/api/session'
+      ? new Promise<Response>(done => { finishRead = done })
+      : response({ success: true }))
+    const { loadSession, logout, session } = await import('./state')
+    const pending = loadSession()
+    await logout()
+    finishRead(response({ user, csrfToken: 'old-csrf' }))
+    await pending
+    expect(session.user).toBeNull()
+    expect(session.csrfToken).toBe('')
+    expect(fetchMock.mock.calls[0]![1].signal.aborted).toBe(true)
+  })
+  it('does not let an old unauthorized response clear a newly logged-in identity', async () => {
+    let finishOldRequest!: (value: Response) => void
+    fetchMock.mockImplementation((path: string) => path === '/api/library'
+      ? new Promise<Response>(done => { finishOldRequest = done })
+      : path === '/studio/api/new-api/login'
+        ? response({ success: true, data: { authenticated: true } })
+        : response({ user }))
+    const { api, login, session } = await import('./state')
+    const old = api('/api/library')
+    await login({ login: 'octopus-user', password: 'account-password' })
+    finishOldRequest(response({ message: 'Expired' }, 401))
+    await expect(old).rejects.toThrow('Expired')
+    expect(session.user).toEqual(user)
+  })
+  it('uses upstream verification only when requested and keeps community registration out of the flow', async () => {
+    fetchMock.mockImplementation((path: string) => path === '/studio/api/new-api/login'
+      ? response({ success: true, data: { requires2fa: true } })
+      : path === '/studio/api/new-api/login-2fa'
+        ? response({ success: true, data: { authenticated: true } })
+        : response({ user }))
+    const { login, session } = await import('./state')
+    expect(await login({ login: 'octopus-user', password: 'account-password' })).toEqual({ requires2fa: true })
+    expect(session.user).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await login({ login: '', password: '', code: '123456' })
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/studio/api/new-api/login', '/studio/api/new-api/login-2fa', '/api/account/session', '/api/session',
+    ])
+    expect(session.user).toEqual(user)
+  })
+  it('clears the displayed identity even when part of logout fails', async () => {
+    fetchMock.mockImplementation((path: string) => path === '/api/session/logout'
+      ? response({ message: 'Unavailable' }, 503) : response({ success: true }))
+    const { logout, session } = await import('./state')
+    session.user = user
+    await expect(logout()).rejects.toThrow('部分登录状态')
+    expect(session.user).toBeNull()
+    expect(session.ready).toBe(true)
+  })
 })
 
 describe('reused Studio bridge trust boundary', () => {

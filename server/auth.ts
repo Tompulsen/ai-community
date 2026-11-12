@@ -3,12 +3,11 @@
  * SPDX-FileCopyrightText: 2026 Community contributors
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Redis } from 'ioredis'
-import bcrypt from 'bcryptjs'
-import * as OTPAuth from 'otpauth'
-import type { AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser, TwoFactorProfile } from './types.ts'
+import { accountCenter, accountSessionHash, studioAccountVerifier } from './account-session.ts'
+import type { AccountSessionBinding, AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser } from './types.ts'
 
 interface RoleUser {
   id: string
@@ -48,12 +47,7 @@ export interface StoredSession {
   createdAt?: string
   ip?: string | null
   userAgent?: string
-}
-
-interface LoginProfile extends TwoFactorProfile {
-  id: string
-  password: string | null
-  token: string | null
+  account?: AccountSessionBinding
 }
 
 export const sessionCookie = 'community_session'
@@ -137,43 +131,20 @@ export async function getUser(db: Queryable, userId: string): Promise<SessionUse
   return { ...profile, isAdmin, isModerator, tokenHash: hash(token) }
 }
 
-export async function authenticateFactor(db: Queryable, redis: Redis, profile: TwoFactorProfile, token: unknown): Promise<void> {
-  if (!profile.twoFactorEnabled) return
-  if (typeof token !== 'string' || !token.trim()) throw httpError(401, '请输入两步验证码或备用码。', 'MFA_REQUIRED')
-  const normalizedToken = token.trim()
-  const backup = profile.twoFactorBackupSecret?.some(value => {
-    const expected = Buffer.from(value), actual = Buffer.from(normalizedToken)
-    return expected.length === actual.length && timingSafeEqual(expected, actual)
-  })
-  if (backup) {
-    const used = await db.query(`UPDATE user_profile SET "twoFactorBackupSecret"=array_remove("twoFactorBackupSecret",$2)
-      WHERE "userId"=$1 AND $2=ANY("twoFactorBackupSecret") RETURNING "userId"`, [profile.userId, normalizedToken])
-    if (used.rowCount === 1) return
-    throw httpError(401, '备用码已使用。', 'MFA_INVALID')
-  }
-  if (!/^\d{6}$/.test(normalizedToken) || !profile.twoFactorSecret) throw httpError(401, '两步验证码无效。', 'MFA_INVALID')
-  const now = Date.now()
-  const totp = new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(profile.twoFactorSecret), digits: 6, period: 30 })
-  const delta = totp.validate({ token: normalizedToken, window: 1, timestamp: now })
-  if (delta === null) throw httpError(401, '两步验证码无效。', 'MFA_INVALID')
-  const key = `2fa:used:${profile.userId}:${createHash('sha256').update(profile.twoFactorSecret).digest('base64url')}:${totp.counter({ timestamp: now }) + delta}`
-  if (await redis.set(key, normalizedToken, 'EX', 90, 'NX') !== 'OK') throw httpError(401, '验证码已使用，请等待下一个验证码。', 'MFA_REPLAY')
-}
-
 export function authServices({ db, redis, config }: { db: Database; redis: Redis; config: AppConfig }) {
   const secure = new URL(config.url).protocol === 'https:' ? '; Secure' : ''
-  const dummy = bcrypt.hashSync(randomBytes(24).toString('base64url'), 10)
+  const verifyAccount = studioAccountVerifier(config)
   function cookie(res: ServerResponse, value: string, maxAge: number): void {
     appendCookie(res, `${sessionCookie}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`)
   }
-  async function createSession(userId: string, res: ServerResponse, req?: IncomingMessage, expectedTokenHash?: string): Promise<PublicUser> {
+  async function createSession(userId: string, res: ServerResponse, req?: IncomingMessage, expectedTokenHash?: string, account?: AccountSessionBinding): Promise<PublicUser> {
     const user = await getUser(db, userId)
     if (!user) throw httpError(403, '此账号当前不可用。')
     if (expectedTokenHash && user.tokenHash !== expectedTokenHash) throw httpError(409, '账号安全设置已变化，请重新登录。', 'CREDENTIAL_CHANGED')
     const token = randomBytes(32).toString('base64url')
     const sessionHash = hash(token)
     const stored: StoredSession = { userId, tokenHash: user.tokenHash, createdAt: new Date().toISOString(),
-      ip: req?.socket.remoteAddress || null, userAgent: String(req?.headers['user-agent'] || '').slice(0, 512) }
+      ip: req?.socket.remoteAddress || null, userAgent: String(req?.headers['user-agent'] || '').slice(0, 512), ...(account ? { account } : {}) }
     await redis.set(`community-next:session:${sessionHash}`, JSON.stringify(stored), 'EX', ttl)
     await redis.zadd(`community-next:sessions:${userId}`, Date.now(), sessionHash)
     await redis.expire(`community-next:sessions:${userId}`, ttl)
@@ -181,6 +152,9 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
     return publicUser(user)
   }
   async function authenticate(req: IncomingMessage): Promise<{ user: SessionUser | null; sessionHash: string | null }> {
+    if (req.method === 'POST' && new URL(req.url || '/', config.url).pathname === '/api/session/logout') {
+      return { user: null, sessionHash: null }
+    }
     const token = readCookies(req.headers.cookie)[sessionCookie]
     if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) return { user: null, sessionHash: null }
     const sessionHash = hash(token)
@@ -193,8 +167,27 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
         || !('tokenHash' in parsed) || typeof parsed.tokenHash !== 'string') return { user: null, sessionHash: null }
       session = parsed as StoredSession
     } catch { return { user: null, sessionHash: null } }
+    if (!session.account || session.account.issuer !== accountCenter(config)
+      || session.account.sessionHash !== accountSessionHash(req)) {
+      await redis.del(`community-next:session:${sessionHash}`)
+      return { user: null, sessionHash: null }
+    }
+    try {
+      const fresh = req.url?.startsWith('/api/session') || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/')
+      const account = await verifyAccount(req, fresh)
+      if (account.binding.subject !== session.account.subject || account.binding.issuer !== session.account.issuer) {
+        await redis.del(`community-next:session:${sessionHash}`)
+        return { user: null, sessionHash: null }
+      }
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode !== 401) throw error
+      await redis.del(`community-next:session:${sessionHash}`)
+      return { user: null, sessionHash: null }
+    }
     const user = await getUser(db, session.userId)
-    if (!user || user.tokenHash !== session.tokenHash) {
+    const mapping = user && await db.query('SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3',
+      [session.account.issuer, session.account.subject, user.id])
+    if (!user || user.tokenHash !== session.tokenHash || !mapping?.rows.length) {
       await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
@@ -202,108 +195,32 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
   }
   async function handleAuth(ctx: RequestContext): Promise<boolean> {
     const { req, res, url, body, user } = ctx
-    const recordSignin = (userId: string, success: boolean) => db.query(
-      'INSERT INTO signin(id,"userId",ip,headers,success) VALUES($1,$2,$3,$4,$5)',
-      [newId(), userId, req.socket.remoteAddress || null, JSON.stringify({ 'user-agent': String(req.headers['user-agent'] || '').slice(0, 512) }), success])
     if (url.pathname === '/api/session' && req.method === 'GET') {
-      ctx.json(200, { user: publicUser(user) })
+      ctx.json(200, { user: publicUser(user), authentication: 'zhangyu', accountUrl: accountCenter(config) })
       return true
     }
-    if (url.pathname === '/api/registration' || url.pathname === '/api/session/register') {
-      const meta = (await db.query<{
-        rootUserId: string | null; disableRegistration: boolean; emailRequiredForSignup: boolean;
-        enableEmail: boolean; enableActiveEmailValidation: boolean; preservedUsernames: string[];
-        prohibitedWordsForNameOfUser: string[]; bannedEmailDomains: string[];
-        enableHcaptcha: boolean; enableRecaptcha: boolean; enableMcaptcha: boolean; enableTurnstile: boolean; enableTestcaptcha: boolean;
-      }>(`SELECT "rootUserId","disableRegistration","emailRequiredForSignup","enableEmail","enableActiveEmailValidation",
-        "preservedUsernames","prohibitedWordsForNameOfUser","bannedEmailDomains",
-        "enableHcaptcha","enableRecaptcha","enableMcaptcha","enableTurnstile","enableTestcaptcha" FROM meta LIMIT 1`)).rows[0]
-      const captcha = meta && [meta.enableHcaptcha, meta.enableRecaptcha, meta.enableMcaptcha, meta.enableTurnstile, meta.enableTestcaptcha].some(Boolean)
-      const verification = Boolean(meta?.enableEmail && meta.enableActiveEmailValidation)
-      if (url.pathname === '/api/registration' && req.method === 'GET') {
-        ctx.json(200, { enabled: Boolean(meta?.rootUserId && !captcha && !(verification && meta.emailRequiredForSignup)),
-          inviteRequired: meta?.disableRegistration !== false, emailRequired: Boolean(meta?.emailRequiredForSignup),
-          emailVerificationRequired: verification, captchaRequired: Boolean(captcha) })
-        return true
-      }
-      if (url.pathname !== '/api/session/register' || req.method !== 'POST') return false
-      if (user) throw httpError(409, '请先退出当前账号。')
-      if (!meta?.rootUserId || captcha) throw httpError(503, '注册暂不可用，请使用章鱼账号登录。')
-      const username = typeof body.username === 'string' ? body.username.trim() : ''
-      const lower = username.toLowerCase()
-      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-      if (!/^[a-zA-Z0-9_]{1,20}$/.test(username) || meta.preservedUsernames?.some(name => name.toLowerCase() === lower) ||
-        meta.prohibitedWordsForNameOfUser?.some(word => word && lower.includes(word.toLowerCase()))) throw httpError(400, '用户名不可用，请使用 1–20 位字母、数字或下划线。')
-      if (typeof body.password !== 'string' || body.password.length < 8 || body.password.length > 128) throw httpError(400, '密码长度应为 8–128 字符。')
-      if ((meta.emailRequiredForSignup && !email) || (email && (email.length > 128 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))) throw httpError(400, '请填写有效邮箱。')
-      if (email && meta.bannedEmailDomains?.some(domain => email.endsWith(`@${domain.toLowerCase()}`) || email.split('@')[1]?.endsWith(`.${domain.toLowerCase()}`))) throw httpError(400, '此邮箱域名不可用。')
-      if (verification && email) throw httpError(503, '邮箱验证服务尚未接入，请使用章鱼账号登录。')
-      const limit = `community-next:signup:${hash(req.socket.remoteAddress || '')}`
-      const attempts = await redis.incr(limit)
-      if (attempts === 1) await redis.expire(limit, 3600)
-      if (attempts > 10) throw httpError(429, '注册尝试过于频繁，请稍后重试。')
-      const password = await bcrypt.hash(body.password, 12)
-      const userId = newId()
-      const client = await db.connect()
-      try {
-        await client.query('BEGIN')
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`signup:username:${lower}`])
-        const policy = (await client.query<{ disableRegistration: boolean }>('SELECT "disableRegistration" FROM meta LIMIT 1 FOR SHARE')).rows[0]
-        let ticketId: string | undefined
-        if (policy?.disableRegistration !== false) {
-          if (typeof body.invite !== 'string' || body.invite.length > 128) throw httpError(403, '注册需要有效邀请码。')
-          const ticket = (await client.query<{ id: string }>('SELECT id FROM registration_ticket WHERE code=$1 AND "usedAt" IS NULL AND "pendingUserId" IS NULL AND ("expiresAt" IS NULL OR "expiresAt">NOW()) FOR UPDATE', [body.invite.trim()])).rows[0]
-          if (!ticket) throw httpError(403, '邀请码已使用或过期。')
-          ticketId = ticket.id
-        }
-        if ((await client.query('SELECT 1 FROM "user" WHERE "usernameLower"=$1 AND host IS NULL UNION ALL SELECT 1 FROM used_username WHERE username=$1 LIMIT 1', [lower])).rows.length) throw httpError(409, '用户名已使用。')
-        await client.query('INSERT INTO "user"(id,username,"usernameLower",host,token,name) VALUES($1,$2,$3,NULL,$4,$2)', [userId, username, lower, randomBytes(12).toString('base64url')])
-        await client.query('INSERT INTO user_profile("userId","autoAcceptFollowed",password,email,"emailVerified") VALUES($1,true,$2,$3,false)', [userId, password, email || null])
-        await client.query('INSERT INTO used_username(username,"createdAt") VALUES($1,NOW())', [lower])
-        if (ticketId) await client.query('UPDATE registration_ticket SET "usedAt"=NOW(),"usedById"=$2 WHERE id=$1', [ticketId, userId])
-        if (typeof body.lotteryInviterId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(body.lotteryInviterId)) {
-          await client.query(`INSERT INTO community_lottery_referral("userId","inviterId","createdAt")
-            SELECT $1,id,NOW() FROM "user" WHERE id=$2 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended"`, [userId, body.lotteryInviterId])
-        }
-        await client.query('COMMIT')
-      } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
-      ctx.json(201, { user: await createSession(userId, res) })
+    if (url.pathname === '/api/registration' && req.method === 'GET') {
+      ctx.json(200, { enabled: false, authentication: 'zhangyu', accountUrl: accountCenter(config) })
       return true
     }
-    if (url.pathname === '/api/session/login' && req.method === 'POST') {
-      const identifier = typeof body.login === 'string' ? body.login.trim().toLowerCase() : ''
-      if (!identifier || identifier.length > 128 || typeof body.password !== 'string' || !body.password || body.password.length > 1024) throw httpError(400, '请输入账号和密码。')
-      const limiter = `community-next:login:${hash(identifier + ':' + req.socket.remoteAddress)}`
-      const attempts = await redis.incr(limiter)
-      if (attempts === 1) await redis.expire(limiter, 600)
-      if (attempts > 20) throw httpError(429, '登录尝试过于频繁，请稍后重试。')
-      const result = await db.query<LoginProfile>(`SELECT u.id,u.token,p.password,p."userId",p."twoFactorEnabled",p."twoFactorSecret",p."twoFactorBackupSecret"
-        FROM "user" u JOIN user_profile p ON p."userId"=u.id WHERE u.host IS NULL
-        AND NOT u."isSuspended" AND NOT u."isDeleted" AND u."movedToUri" IS NULL
-        AND ${identifier.includes('@') ? 'LOWER(BTRIM(p.email))=$1' : 'u."usernameLower"=$1'} LIMIT 1`, [identifier])
-      const profile = result.rows[0]
-      const same = await bcrypt.compare(body.password, profile?.password || dummy)
-      if (!profile?.password || !profile.token || !same) {
-        if (profile) await recordSignin(profile.id, false)
-        throw httpError(401, '账号或密码不正确。', 'INVALID_CREDENTIALS')
-      }
-      if (!profile.twoFactorEnabled) {
-        const policy = (await db.query<Record<string, boolean>>('SELECT "enableHcaptcha","enableRecaptcha","enableMcaptcha","enableTurnstile","enableTestcaptcha" FROM meta LIMIT 1')).rows[0]
-        // shortcut: disabled legacy captcha providers stay fail-closed until their UI adapters are migrated.
-        if (policy && Object.values(policy).some(Boolean)) throw httpError(503, '请通过章鱼账号登录，当前验证码服务尚未接入。', 'CAPTCHA_REQUIRED')
-      }
-      try { await authenticateFactor(db, redis, profile, body.token || body.recoveryCode) }
-      catch (error) { await recordSignin(profile.id, false); throw error }
-      const loggedIn = await createSession(profile.id, res, req, hash(profile.token))
-      await recordSignin(profile.id, true)
-      await redis.del(limiter)
-      ctx.json(200, { user: loggedIn })
-      return true
+    if (req.method === 'POST' && ['/api/session/login', '/api/session/register'].includes(url.pathname)) {
+      throw httpError(410, '社区已统一使用章鱼账号，请在登录页继续。', 'ACCOUNT_LOGIN_REQUIRED')
     }
     if (url.pathname === '/api/session/logout' && req.method === 'POST') {
-      if (ctx.sessionHash) await redis.del(`community-next:session:${ctx.sessionHash}`)
-      if (ctx.sessionHash && user) await redis.zrem(`community-next:sessions:${user.id}`, ctx.sessionHash)
       cookie(res, '', 0)
+      appendCookie(res, `octopus_new_api_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`)
+      const token = readCookies(req.headers.cookie)[sessionCookie]
+      if (/^[A-Za-z0-9_-]{43}$/.test(token || '')) {
+        const sessionHash = hash(token)
+        const raw = await redis.get(`community-next:session:${sessionHash}`)
+        await redis.del(`community-next:session:${sessionHash}`)
+        if (raw) {
+          try {
+            const stored = JSON.parse(raw) as StoredSession
+            if (typeof stored.userId === 'string') await redis.zrem(`community-next:sessions:${stored.userId}`, sessionHash)
+          } catch { /* A malformed record must not block clearing the browser session. */ }
+        }
+      }
       ctx.json(200, { user: null })
       return true
     }
@@ -338,5 +255,5 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
     }
     return false
   }
-  return { authenticate, createSession, handleAuth, authenticateFactor: (profile: TwoFactorProfile, token: unknown, recoveryCode?: unknown) => authenticateFactor(db, redis, profile, token || recoveryCode) }
+  return { authenticate, createSession, handleAuth }
 }

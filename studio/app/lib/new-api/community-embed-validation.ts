@@ -67,10 +67,7 @@ export function embedContext(req: NextRequest): string | null {
     const mediaContext = referrer.searchParams.get("context") || "";
     if (OPAQUE.test(mediaContext)) return mediaContext;
   }
-  if (
-    embeddedReferrer ||
-    req.cookies.getAll().some((cookie) => /^__Host-octopus-embed-[A-Za-z0-9_-]{43}$/.test(cookie.name))
-  )
+  if (embeddedReferrer)
     throw new NewApiError(
       "请重新连接社区制作空间",
       401,
@@ -84,18 +81,27 @@ export function embeddedCookie(context: string): string {
   return `__Host-octopus-embed-${context}`;
 }
 
+export function bindingForRequest(
+  req: NextRequest,
+  session: AccountSession,
+): CommunityBinding | undefined {
+  const context = embedContext(req);
+  if (!context) return undefined;
+  return session.communityEmbed || session.communityBindings?.[context];
+}
+
 export function assertSessionTransport(
   req: NextRequest,
   session: AccountSession,
 ) {
   const context = embedContext(req);
-  const binding = session.communityEmbed;
+  const binding = bindingForRequest(req, session);
   if (
     context
       ? !binding ||
         binding.context !== context ||
         String(session.user?.id) !== binding.subject
-      : Boolean(binding)
+      : Boolean(session.communityEmbed)
   ) {
     throw new NewApiError(
       "社区账号已变化，请重新进入制作空间",
@@ -165,6 +171,6 @@ export async function validateEmbeddedSession(
   session: AccountSession,
 ) {
   assertSessionTransport(req, session);
-  if (session.communityEmbed)
-    await validateCommunityBinding(session.communityEmbed);
+  const binding = bindingForRequest(req, session);
+  if (binding) await validateCommunityBinding(binding);
 }

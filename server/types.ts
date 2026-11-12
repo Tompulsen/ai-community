@@ -39,11 +39,10 @@ export interface SessionUser extends Omit<PublicUser, 'name' | 'bio'> {
   host: string | null
 }
 
-export interface TwoFactorProfile {
-  userId: string
-  twoFactorEnabled: boolean
-  twoFactorSecret: string | null
-  twoFactorBackupSecret: string[] | null
+export interface AccountSessionBinding {
+  issuer: string
+  subject: string
+  sessionHash: string
 }
 
 export interface RequestContext {
@@ -62,8 +61,7 @@ export interface RequestContext {
   ip?: string
   newId(): string
   json(status: number, value: unknown): void
-  createSession(userId: string, expectedTokenHash?: string): Promise<PublicUser>
-  authenticateFactor(profile: TwoFactorProfile, token: unknown, recoveryCode?: unknown): Promise<void>
+  createSession(userId: string, expectedTokenHash?: string, account?: AccountSessionBinding): Promise<PublicUser>
   requireUser(): SessionUser
   requireAdmin(): SessionUser
 }

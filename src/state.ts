@@ -6,10 +6,14 @@ export const session = reactive({
   ready: false,
   error: '',
   csrfToken: '',
+  accountUrl: '',
 })
 export const notice = ref('')
 let noticeTimer: ReturnType<typeof setTimeout>
 let sessionRequest: Promise<void> | undefined
+let sessionController: AbortController | undefined
+let sessionVersion = 0
+let automaticAccountSync = true
 
 export function notify(message: string) {
   notice.value = message
@@ -27,6 +31,7 @@ export async function api<T>(path: string, options: {
   signal?: AbortSignal
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
+  const version = sessionVersion
   const headers: Record<string, string> = { Accept: 'application/json' }
   const multipart = options.body instanceof FormData
   if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
@@ -48,9 +53,9 @@ export async function api<T>(path: string, options: {
   if (!response.ok) {
     const payload = result as { message?: string; code?: string; error?: string | { message?: string; code?: string } } | null
     const code = typeof payload?.error === 'object' ? payload.error?.code || payload.code : payload?.code
-    if (response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
+    if (version === sessionVersion && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
     const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message
-    throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code })
+    throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code, status: response.status })
   }
   if (result === null) throw new Error('服务器返回了无效的数据，请稍后重试。')
   return result as T
@@ -97,36 +102,131 @@ export function rememberLotteryInvite(value?: unknown): string | undefined {
   } catch { return valid(value) ? value : undefined }
 }
 
+export interface AccountStatus {
+  enabled: boolean
+  configured: boolean
+  publicUrl: string
+  passwordLoginEnabled: boolean
+  turnstileSiteKey: string
+}
+
+export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '') {
+  try {
+    const url = new URL(session.accountUrl)
+    if (url.protocol !== 'https:' || url.username || url.password) return ''
+    return new URL(`/${path}`, url.origin).href
+  } catch { return '' }
+}
+
+export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'logout', body?: object): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(`/studio/api/new-api/${route}`, {
+      method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
+      headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(20000),
+    })
+  } catch { throw new Error('无法连接章鱼账号，请稍后重试。') }
+  const result = await response.json().catch(() => null)
+  if (!response.ok || result?.success !== true) {
+    throw Object.assign(new Error(typeof result?.message === 'string' ? result.message : '章鱼账号服务暂时不可用，请稍后重试。'), {
+      status: response.status, code: typeof result?.code === 'string' ? result.code : undefined,
+    })
+  }
+  return result.data as T
+}
+
+export async function syncAccountSession(returnTo?: string, signal?: AbortSignal) {
+  return api<{ user: SessionUser; returnTo?: string }>('/api/account/session', {
+    method: 'POST', signal, body: { lotteryInviterId: rememberLotteryInvite(), ...(returnTo ? { returnTo } : {}) },
+  })
+}
+
+function invalidateSessionRead() {
+  sessionVersion++
+  sessionController?.abort()
+  sessionController = undefined
+  sessionRequest = undefined
+}
+
 export async function loadSession(force = false) {
   if (sessionRequest) return sessionRequest
   if (session.ready && !force) return
+  const version = sessionVersion
+  const controller = new AbortController()
+  sessionController = controller
   sessionRequest = (async () => {
     session.error = ''
     try {
-      const result = await api<{ user: SessionUser | null; csrfToken?: string }>('/api/session')
+      type SessionResult = { user: SessionUser | null; csrfToken?: string; authentication?: string; accountUrl?: string }
+      let result = await api<SessionResult>('/api/session', { signal: controller.signal })
+      if (version !== sessionVersion) return
+      session.csrfToken = result.csrfToken || ''
+      session.accountUrl = result.accountUrl || session.accountUrl
+      if (!result.user && result.authentication === 'zhangyu' && automaticAccountSync) {
+        try {
+          await syncAccountSession(undefined, controller.signal)
+          if (version !== sessionVersion) return
+          result = await api<SessionResult>('/api/session', { signal: controller.signal })
+        } catch (error) {
+          if (version !== sessionVersion) return
+          if ((error as { status?: number })?.status !== 401) throw error
+        }
+      }
+      if (version !== sessionVersion) return
       session.user = result.user
       session.csrfToken = result.csrfToken || ''
     } catch (error) {
+      if (version !== sessionVersion) return
       session.user = null
       session.error = errorMessage(error)
     } finally {
-      session.ready = true
-      sessionRequest = undefined
+      if (version === sessionVersion) {
+        session.ready = true
+        sessionRequest = undefined
+        sessionController = undefined
+      }
     }
   })()
   return sessionRequest
 }
 
-export async function login(credentials: { login: string; password: string; token?: string; recoveryCode?: string }) {
-  await api('/api/session/login', { method: 'POST', body: credentials })
+export async function login(credentials: { login: string; password: string; turnstileToken?: string; code?: string; returnTo?: string }) {
+  invalidateSessionRead()
+  const version = sessionVersion
+  session.user = null
+  const result = credentials.code
+    ? await accountApi<{ requires2fa?: boolean }>('login-2fa', { code: credentials.code })
+    : await accountApi<{ requires2fa?: boolean }>('login', {
+      username: credentials.login, password: credentials.password,
+      ...(credentials.turnstileToken ? { turnstile_token: credentials.turnstileToken } : {}),
+    })
+  if (version !== sessionVersion) throw new Error('登录状态已变化，请重新登录。')
+  if (result?.requires2fa) return { requires2fa: true }
+  automaticAccountSync = true
+  await syncAccountSession(credentials.returnTo)
+  if (version !== sessionVersion) throw new Error('登录状态已变化，请重新登录。')
+  invalidateSessionRead()
   await loadSession(true)
   if (!session.user) throw new Error(session.error || '登录未完成，请重新尝试。')
+  return { requires2fa: false }
 }
 
 export async function logout() {
-  await api('/api/session/logout', { method: 'POST', body: {} })
+  invalidateSessionRead()
+  automaticAccountSync = false
+  session.user = null
+  const results = await Promise.allSettled([
+    api('/api/session/logout', { method: 'POST', body: {} }),
+    accountApi('logout', {}),
+  ])
   session.user = null
   session.csrfToken = ''
+  session.error = ''
+  session.ready = true
+  const failed = results.find(result => result.status === 'rejected')
+  if (failed?.status === 'rejected') throw new Error('部分登录状态未能退出，请重试。')
 }
 
 export const pendingActions = reactive(new Set<string>())
