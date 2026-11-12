@@ -28,6 +28,28 @@ npm run test:e2e
 浏览器测试使用当前 Windows 电脑安装的 Microsoft Edge；其他环境需先调整
 `playwright.config.ts` 中的浏览器路径。
 
+## 容器镜像
+
+推送 `main` 分支会通过 GitHub Actions 的 `Build container` 工作流构建并发布
+`linux/amd64` 镜像，也可以在 Actions 页面手动运行该工作流。
+
+```sh
+docker pull ghcr.io/tompulsen/ai-community:latest
+```
+
+每次构建同时保留 `sha-<完整提交 SHA>` 标签，便于固定版本和回退。
+首次发布后请在 GitHub Packages 检查镜像可见性：公开镜像可直接拉取；
+私有镜像需要先登录 GHCR，密码使用有 `read:packages` 权限的 GitHub 令牌。
+
+```sh
+docker login ghcr.io -u <GitHub用户名>
+docker pull ghcr.io/tompulsen/ai-community:latest
+```
+
+在容器管理面板中更新镜像并重建服务，沿用现有数据库、Redis、配置文件和附件挂载。
+该镜像包含社区前端和后端；Studio 与文档服务继续使用各自已有镜像。
+配置路径、附件路径和 Studio 上游设置见下文。
+
 ## 后端运行
 
 后端使用 Node.js 24 直接运行 TypeScript；`npm run build` 包含严格后端类型检查。
