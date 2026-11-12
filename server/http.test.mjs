@@ -174,6 +174,25 @@ test('static assets and SPA routes preserve HEAD and never expose paths outside 
   }
 })
 
+test('account page policy permits Turnstile without allowing arbitrary scripts or frames', async t => {
+  const { app } = await fixture(t)
+  for (const method of ['GET', 'HEAD']) {
+    const page = await app.inject({ method, url: '/account?returnTo=/create/image' })
+    assert.equal(page.statusCode, 200)
+    const directives = new Map(page.headers['content-security-policy'].split(';').map(value => {
+      const [name, ...sources] = value.trim().split(/\s+/)
+      return [name, sources]
+    }))
+    for (const name of ['script-src', 'connect-src', 'frame-src']) {
+      assert(directives.get(name).includes('https://challenges.cloudflare.com'), `${name} must allow account verification`)
+      assert(!directives.get(name).some(value => ['*', 'https:', "'unsafe-inline'", "'unsafe-eval'"].includes(value)))
+    }
+    assert.deepEqual(directives.get('default-src'), ["'self'"])
+    assert.deepEqual(directives.get('frame-ancestors'), ["'self'"])
+    assert.deepEqual(directives.get('object-src'), ["'none'"])
+  }
+})
+
 test('temporary media keeps original, HEAD, range and thumbnail permission semantics', async t => {
   const { app, denyMedia } = await fixture(t)
   const full = await app.inject({ method: 'GET', url: '/legacy-files/file1' })
