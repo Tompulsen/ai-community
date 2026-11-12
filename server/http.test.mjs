@@ -9,7 +9,9 @@ import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { createApplication } from './runtime.ts'
+import Fastify from 'fastify'
+import { AccountRequest, AccountResponse } from './native-account/http.ts'
+import { applicationRequest, sendWebResponse } from './web-request.ts'
 
 const origin = 'https://community.example'
 const jsonHeaders = { origin, 'content-type': 'application/json' }
@@ -54,7 +56,8 @@ function fakeStores() {
   return { db, redis, queries, denyMedia() { allowMedia = false } }
 }
 
-async function fixture(t, options = {}) {
+async function fixture(t) {
+  const { createApplication } = await import('./runtime.ts')
   const root = await mkdtemp(path.join(tmpdir(), 'community-fastify-http-'))
   assert.equal(path.dirname(root), path.resolve(tmpdir()))
   const filesRoot = path.join(root, 'files')
@@ -71,7 +74,7 @@ async function fixture(t, options = {}) {
   const app = createApplication({
     db: stores.db, redis: stores.redis,
     config: { url: origin, db: { host: 'unused', user: 'unused', db: 'unused' }, redis: { host: 'unused' } },
-    filesRoot, distRoot, ...options,
+    filesRoot, distRoot,
   })
   t.after(async () => {
     await app.close()
@@ -85,17 +88,6 @@ function assertJsonError(response, statusCode) {
   assert.match(response.headers['content-type'], /application\/json/)
   assert.equal(typeof response.json().error?.message, 'string')
   assert(response.json().error.message.length > 0)
-}
-
-async function listen(server) {
-  server.listen(0, '127.0.0.1')
-  await once(server, 'listening')
-  return `http://127.0.0.1:${server.address().port}`
-}
-
-async function closeServer(server) {
-  server.closeAllConnections()
-  await new Promise(resolve => server.close(resolve))
 }
 
 test('Fastify keeps JSON errors, same-origin writes, guest session and logout cookies', async t => {
@@ -231,93 +223,120 @@ test('temporary media keeps original, HEAD, range and thumbnail permission seman
   }
 })
 
-test('Studio forwards raw bodies, public Host, cookies, Set-Cookie and OAuth callback path', async t => {
-  const seen = []
-  const upstream = http.createServer(async (req, res) => {
-    const chunks = []
-    for await (const chunk of req) chunks.push(chunk)
-    seen.push({ url: req.url, headers: req.headers, body: Buffer.concat(chunks) })
-    if (req.url.startsWith('/studio/api/new-api/community/callback')) {
-      res.writeHead(302, { Location: '/create/image' })
-      res.end()
-      return
-    }
-    res.writeHead(200, {
-      'Content-Type': 'application/octet-stream',
-      'Set-Cookie': ['studio_one=1; Path=/studio; HttpOnly', 'studio_two=2; Path=/studio; SameSite=Lax'],
+test('native account adapters preserve the public URL, JSON body, cookies and separate Set-Cookie headers', async t => {
+  const app = Fastify()
+  t.after(() => app.close())
+  app.post('/account-contract', async (request, reply) => {
+    const req = new AccountRequest(applicationRequest(request, reply, origin))
+    assert.equal(req.nextUrl.origin, origin)
+    assert.equal(req.nextUrl.searchParams.get('returnTo'), '/create/image')
+    assert.equal(req.headers.get('content-length'), null)
+    assert.equal(req.cookies.get('octopus_new_api_session')?.value, 'session/value')
+    assert.equal(req.cookies.get('pref')?.value, 'dark')
+    assert.deepEqual(await req.json(), { username: 'root', password: 'opaque-test-only' })
+    const response = AccountResponse.json({ success: true }, { status: 201 })
+    response.cookies.set('octopus_new_api_session', 'new/session', {
+      path: '/', httpOnly: true, secure: true, sameSite: 'lax', maxAge: 600,
     })
-    res.end(Buffer.concat(chunks))
+    response.cookies.set('community_session', 'community/session', {
+      path: '/', httpOnly: true, secure: true, sameSite: 'lax', maxAge: 600,
+    })
+    response.headers.append('Set-Cookie', 'pref=dark; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Path=/')
+    return sendWebResponse(reply, response)
   })
-  const studioUpstream = await listen(upstream)
-  t.after(() => closeServer(upstream))
-  const { app } = await fixture(t, { studioUpstream })
-  const body = Buffer.from([0, 255, 1, 2, 123, 10])
-  const proxied = await app.inject({
-    method: 'POST', url: '/studio/api/raw-check?value=1',
-    headers: { 'content-type': 'application/octet-stream', cookie: 'octopus_new_api_session=opaque; pref=dark' },
-    payload: body,
+  const response = await app.inject({
+    method: 'POST', url: '/account-contract?returnTo=%2Fcreate%2Fimage',
+    headers: { 'content-type': 'application/json', cookie: 'octopus_new_api_session=session%2Fvalue; pref=dark' },
+    payload: { username: 'root', password: 'opaque-test-only' },
   })
-  assert.equal(proxied.statusCode, 200)
-  assert.deepEqual(proxied.rawPayload, body)
-  assert.equal(seen[0].url, '/studio/api/raw-check?value=1')
-  assert.equal(seen[0].headers.host, 'community.example')
-  assert.equal(seen[0].headers['x-forwarded-host'], 'community.example')
-  assert.equal(seen[0].headers['x-forwarded-proto'], 'https')
-  assert.equal(seen[0].headers.cookie, 'octopus_new_api_session=opaque; pref=dark')
-  assert.deepEqual(seen[0].body, body)
-  assert.deepEqual([].concat(proxied.headers['set-cookie'] || []), [
-    'studio_one=1; Path=/studio; HttpOnly', 'studio_two=2; Path=/studio; SameSite=Lax',
+  assert.equal(response.statusCode, 201)
+  assert.deepEqual(response.json(), { success: true })
+  assert.deepEqual([].concat(response.headers['set-cookie'] || []), [
+    'octopus_new_api_session=new%2Fsession; Path=/; HttpOnly; Secure; SameSite=lax; Max-Age=600',
+    'community_session=community%2Fsession; Path=/; HttpOnly; Secure; SameSite=lax; Max-Age=600',
+    'pref=dark; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Path=/',
   ])
-  const callback = await app.inject({ method: 'GET', url: '/api/new-api/community/callback?code=opaque&state=test-state' })
-  assert.equal(callback.statusCode, 302)
-  assert.equal(callback.headers.location, '/create/image')
-  assert.equal(seen[1].url, '/studio/api/new-api/community/callback?code=opaque&state=test-state')
 })
 
-test('Studio sends the first chunk before upstream completion and propagates client cancellation', { timeout: 10000 }, async t => {
+test('native account response sends the first chunk before completion and aborts on client disconnect', { timeout: 10000 }, async t => {
   const finish = deferred()
-  const cancelled = deferred()
-  let upstreamEnded = false
-  const upstream = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' })
-    res.flushHeaders()
-    res.write('first-chunk\n')
-    if (req.url === '/studio/cancel') {
-      res.once('close', () => cancelled.resolve(res.writableEnded))
-      return
-    }
-    void finish.promise.then(() => {
-      upstreamEnded = true
-      res.end('last-chunk\n')
+  const requestAborted = deferred()
+  const bodyCancelled = deferred()
+  let streamEnded = false
+  const app = Fastify({ forceCloseConnections: true })
+  app.get('/native/:mode', async (request, reply) => {
+    const req = new AccountRequest(applicationRequest(request, reply, origin))
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('first-chunk\n'))
+        if (request.params.mode === 'cancel') {
+          req.signal.addEventListener('abort', () => requestAborted.resolve(req.signal.aborted), { once: true })
+          return
+        }
+        void finish.promise.then(() => {
+          streamEnded = true
+          controller.enqueue(encoder.encode('last-chunk\n'))
+          controller.close()
+        })
+      },
+      cancel() { bodyCancelled.resolve() },
     })
+    return sendWebResponse(reply, new AccountResponse(stream, {
+      headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
+    }))
   })
-  const studioUpstream = await listen(upstream)
-  t.after(() => { finish.resolve(); return closeServer(upstream) })
-  const { app } = await fixture(t, { studioUpstream })
+  t.after(async () => { finish.resolve(); await app.close() })
   const address = await app.listen({ host: '127.0.0.1', port: 0 })
   const openResponse = url => new Promise((resolve, reject) => {
     const request = http.get(url, res => { res.pause(); resolve(res) })
     request.once('error', reject)
   })
-  const response = await openResponse(new URL('/studio/stream', address))
+  const response = await openResponse(new URL('/native/stream', address))
   t.after(() => response.destroy())
   const chunks = []
   response.on('data', chunk => chunks.push(chunk))
   const first = once(response, 'data')
   response.resume()
   await first
-  assert.equal(upstreamEnded, false, 'proxy must not wait for upstream end before sending data')
+  assert.equal(streamEnded, false, 'native response must deliver data before its body has completed')
   assert(Buffer.concat(chunks).length > 0)
   const ended = once(response, 'end')
   finish.resolve()
   await ended
   assert.equal(Buffer.concat(chunks).toString(), 'first-chunk\nlast-chunk\n')
 
-  const cancelResponse = await openResponse(new URL('/studio/cancel', address))
+  const cancelResponse = await openResponse(new URL('/native/cancel', address))
   t.after(() => cancelResponse.destroy())
   const cancelFirst = once(cancelResponse, 'data')
   cancelResponse.resume()
   await cancelFirst
   cancelResponse.destroy()
-  assert.equal(await cancelled.promise, false, 'upstream response must close before its body was completed')
+  assert.equal(await requestAborted.promise, true, 'client disconnect must terminate the native account request')
+  await bodyCancelled.promise
+})
+
+test('legacy Studio pages redirect to native creation and old POST requests are not proxied', async t => {
+  const { app } = await fixture(t)
+  for (const method of ['GET', 'HEAD']) {
+    for (const url of ['/studio', '/studio/', '/studio/image?model=old', '/studio/api/raw-check']) {
+      const response = await app.inject({ method, url })
+      assert.equal(response.statusCode, 302)
+      assert.equal(response.headers.location, '/create')
+      if (method === 'HEAD') assert.equal(response.payload, '')
+    }
+  }
+  for (const url of ['/studio', '/studio/image', '/studio/api/raw-check']) {
+    assertJsonError(await app.inject({ method: 'POST', url, headers: jsonHeaders, payload: '{}' }), 405)
+  }
+})
+
+test('native creation endpoints require the community account before upstream access', async t => {
+  const { app } = await fixture(t)
+  for (const url of ['/api/creation/models', '/api/creation/tasks/image/job_1',
+    '/api/creation/tasks/video/job_1', '/api/creation/media?path=videos/job_1/content']) {
+    assertJsonError(await app.inject({ method: 'GET', url }), 401)
+  }
+  assertJsonError(await app.inject({ method: 'POST', url: '/api/creation/generate', headers: jsonHeaders,
+    payload: '{"kind":"image","model":"gpt-image-2","prompt":"Guest generation must be blocked"}' }), 401)
 })

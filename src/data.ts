@@ -50,6 +50,7 @@ export interface Work {
 
 export interface SessionUser {
   id: string
+  accountId?: string
   username: string
   name: string
   bio: string

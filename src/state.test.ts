@@ -121,19 +121,19 @@ describe('real API state', () => {
   })
   it('logs into the account service once and only accepts a confirmed community session', async () => {
     fetchMock.mockImplementation((path: string) => {
-      if (path === '/studio/api/new-api/login') return response({ success: true, data: { authenticated: true } })
+      if (path === '/api/new-api/login') return response({ success: true, data: { authenticated: true } })
       if (path === '/api/account/session') return response({ user })
       return response({ user, csrfToken: 'signed-in' })
     })
     const { login, session } = await import('./state')
     await login({ login: 'octopus-user', password: 'account-password', returnTo: '/create/image' })
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/studio/api/new-api/login', '/api/account/session', '/api/session'])
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/new-api/login', '/api/account/session', '/api/session'])
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ username: 'octopus-user', password: 'account-password' })
     expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ returnTo: '/create/image' })
     expect(session.user).toEqual(user)
   })
   it('does not claim a successful login when account-to-community synchronization fails', async () => {
-    fetchMock.mockImplementation((path: string) => path === '/studio/api/new-api/login'
+    fetchMock.mockImplementation((path: string) => path === '/api/new-api/login'
       ? response({ success: true, data: { authenticated: true } })
       : response({ message: 'Account mapping unavailable' }, 503))
     const { login, session } = await import('./state')
@@ -170,7 +170,7 @@ describe('real API state', () => {
     let finishOldRequest!: (value: Response) => void
     fetchMock.mockImplementation((path: string) => path === '/api/library'
       ? new Promise<Response>(done => { finishOldRequest = done })
-      : path === '/studio/api/new-api/login'
+      : path === '/api/new-api/login'
         ? response({ success: true, data: { authenticated: true } })
         : response({ user }))
     const { api, login, session } = await import('./state')
@@ -181,9 +181,9 @@ describe('real API state', () => {
     expect(session.user).toEqual(user)
   })
   it('uses upstream verification only when requested and keeps community registration out of the flow', async () => {
-    fetchMock.mockImplementation((path: string) => path === '/studio/api/new-api/login'
+    fetchMock.mockImplementation((path: string) => path === '/api/new-api/login'
       ? response({ success: true, data: { requires2fa: true } })
-      : path === '/studio/api/new-api/login-2fa'
+      : path === '/api/new-api/login-2fa'
         ? response({ success: true, data: { authenticated: true } })
         : response({ user }))
     const { login, session } = await import('./state')
@@ -192,7 +192,7 @@ describe('real API state', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     await login({ login: '', password: '', code: '123456' })
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      '/studio/api/new-api/login', '/studio/api/new-api/login-2fa', '/api/account/session', '/api/session',
+      '/api/new-api/login', '/api/new-api/login-2fa', '/api/account/session', '/api/session',
     ])
     expect(session.user).toEqual(user)
   })

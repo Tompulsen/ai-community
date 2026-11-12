@@ -60,8 +60,8 @@ test('password signs into the account service and synchronizes community without
   await page.goto('/account')
   await fillAccountLogin(page)
   await expect(page).toHaveURL(/\/discover$/)
-  expect(fixture.mutations.filter(item => item.path === '/studio/api/new-api/login')).toEqual([
-    { path: '/studio/api/new-api/login', body: { username: 'octopus-user', password: 'fixture-password' } },
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/login')).toEqual([
+    { path: '/api/new-api/login', body: { username: 'octopus-user', password: 'fixture-password' } },
   ])
   expect(fixture.mutations.some(item => ['/api/session/login', '/api/session/register', '/api/account/connect'].includes(item.path))).toBe(false)
   expect(popups).toEqual([])

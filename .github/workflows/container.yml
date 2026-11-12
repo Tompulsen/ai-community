@@ -26,10 +26,6 @@ jobs:
             context: .
             file: ./Dockerfile
             image: ghcr.io/tompulsen/ai-community
-          - name: studio
-            context: ./studio
-            file: ./studio/Dockerfile
-            image: ghcr.io/tompulsen/ai-community-studio
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

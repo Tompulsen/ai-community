@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Redis } from 'ioredis'
-import { accountCenter, accountSessionHash, studioAccountVerifier } from './account-session.ts'
+import { accountCenter, accountSessionHash, accountSessionVerifier } from './account-session.ts'
 import type { AccountSessionBinding, AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser } from './types.ts'
 
 interface RoleUser {
@@ -77,6 +77,7 @@ export function publicUser(user: SessionUser | null | undefined): PublicUser | n
 export function publicUser(user: SessionUser | null | undefined): PublicUser | null {
   return user ? {
     id: user.id, name: user.name || user.username, username: user.username, bio: user.bio || '',
+    ...(user.accountId ? { accountId: user.accountId } : {}),
     isAdmin: user.isAdmin, isModerator: user.isModerator, avatarId: user.avatarId || null, bannerId: user.bannerId || null,
     avatarUrl: user.avatarId ? `/legacy-files/${encodeURIComponent(user.avatarId)}?variant=thumbnail` : null,
     bannerUrl: user.bannerId ? `/legacy-files/${encodeURIComponent(user.bannerId)}?variant=web` : null,
@@ -133,7 +134,7 @@ export async function getUser(db: Queryable, userId: string): Promise<SessionUse
 
 export function authServices({ db, redis, config }: { db: Database; redis: Redis; config: AppConfig }) {
   const secure = new URL(config.url).protocol === 'https:' ? '; Secure' : ''
-  const verifyAccount = studioAccountVerifier(config)
+  const verifyAccount = accountSessionVerifier(config)
   function cookie(res: ServerResponse, value: string, maxAge: number): void {
     appendCookie(res, `${sessionCookie}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`)
   }
@@ -172,9 +173,10 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
+    let account
     try {
       const fresh = req.url?.startsWith('/api/session') || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/')
-      const account = await verifyAccount(req, fresh)
+      account = await verifyAccount(req, fresh)
       if (account.binding.subject !== session.account.subject || account.binding.issuer !== session.account.issuer) {
         await redis.del(`community-next:session:${sessionHash}`)
         return { user: null, sessionHash: null }
@@ -191,7 +193,7 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
-    return { user, sessionHash }
+    return { user: { ...user, accountId: account.binding.subject, username: account.username }, sessionHash }
   }
   async function handleAuth(ctx: RequestContext): Promise<boolean> {
     const { req, res, url, body, user } = ctx

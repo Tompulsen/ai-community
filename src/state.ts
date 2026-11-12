@@ -121,7 +121,7 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '')
 export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'logout', body?: object): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`/studio/api/new-api/${route}`, {
+    response = await fetch(`/api/new-api/${route}`, {
       method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
       headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),

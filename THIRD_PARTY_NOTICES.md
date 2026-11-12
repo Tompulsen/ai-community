@@ -20,6 +20,9 @@ Runtime packages and their upstream declared licenses:
 - yaml: ISC.
 - bcryptjs: BSD-3-Clause.
 - ioredis: MIT.
+- iron-session 8.0.4: MIT, Copyright (c) 2021 Vincent Voyer. Its installed
+  `LICENSE.md` is retained with the runtime dependency. The existing Studio
+  encrypted session format is reused without adding a Next.js runtime.
 - Fastify and @fastify/multipart: MIT.
 - Sharp: Apache-2.0; its packaged libvips dependencies retain their own notices.
 - Nodemailer: MIT-0.
@@ -28,8 +31,42 @@ Runtime packages and their upstream declared licenses:
 
 The adapted authentication, content, account and lottery services retain AGPL
 notices. The repository LICENSE is retained from the reused community source.
-`studio/` retains its MIT/NextChat notices. `services/documents/` retains its
-AGPL service declarations and QXChat MIT / GenOffice Apache-2.0 provenance.
+`studio/` retains its MIT/NextChat notices as reference source, and is excluded
+from the community image. Its account bridge was ported to
+`server/native-account/`; request parsing, pricing, public-media fetching,
+proxy lifecycle and generation/task protocol rules were also adapted from
+Studio utilities and routes. Exact source paths are listed in `REUSE.md`.
+These ports retain the Studio MIT/NextChat provenance; moving them into the
+community service does not remove the original notice below.
+`services/documents/` remains an independent service and retains its AGPL
+service declarations and QXChat MIT / GenOffice Apache-2.0 provenance.
+
+MIT notice for the reused Studio sources, retained here so it is distributed
+with the community image even though `studio/` is not:
+
+```text
+MIT License
+
+Copyright (c) 2023-2025 NextChat
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 Development tools retain their own package licenses, including Vite, TypeScript,
 Vitest, Playwright and axe-core. Consult `package-lock.json` and installed package

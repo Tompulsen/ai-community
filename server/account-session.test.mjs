@@ -3,51 +3,76 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { accountSessionHash, readStudioAccount, studioAccountVerifier } from './account-session.ts'
-import { authServices, hash } from './auth.ts'
+import test, { after, beforeEach } from 'node:test'
+import { accountSessionHash, readAccountSession, accountSessionVerifier } from './account-session.ts'
+import { authServices, hash, publicUser } from './auth.ts'
 import { handleAccount } from './account.ts'
+import { saveSession, removeSessionById } from './native-account/index.ts'
 
 const opaque = 's'.repeat(43)
-const config = { url: 'https://community.test', communityStudioUpstream: 'http://studio:3000',
-  newApiSso: { issuer: 'https://accounts.test' } }
+const config = { url: 'https://community.test', newApiSso: { issuer: 'https://accounts.test' } }
 const request = (id = opaque) => ({ headers: { cookie: `community_session=private; octopus_new_api_session=${id}` } })
 const envelope = (user = { id: 7, username: 'creator', display_name: 'Creator' }) =>
-  new Response(JSON.stringify({ success: true, data: { authenticated: true, user,
-    accessToken: 'must-not-leak', refreshToken: 'must-not-leak', selectedKey: 'must-not-leak' } }),
+  new Response(JSON.stringify({ success: true, data: user }),
   { headers: { 'Content-Type': 'application/json' } })
+const environment = {
+  NODE_ENV: 'test', NEW_API_BASE_URL: 'https://native-accounts.test',
+  NEW_API_PUBLIC_URL: 'https://accounts.test', NEW_API_SESSION_SECRET: 'native-account-fixture'.repeat(3),
+  NEW_API_REDIS_URL: '',
+}
+const previousEnvironment = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]))
+Object.assign(process.env, environment)
+async function seedAccountSession() {
+  const now = Date.now() / 1000
+  await saveSession(opaque, { user: { id: 7, username: 'creator', display_name: 'Creator',
+    quota: 1, used_quota: 0, request_count: 0, group: '' },
+  accessToken: 'must-not-leak', refreshToken: 'must-not-leak', upstreamSessionId: 'must-not-leak',
+  accessExpiresAt: now + 3600, createdAt: now, expiresAt: now + 3600, version: 1 })
+}
+beforeEach(seedAccountSession)
+after(async () => {
+  await removeSessionById(opaque)
+  for (const [key, value] of Object.entries(previousEnvironment)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+})
 
-test('account bridge forwards only the normal HttpOnly cookie and keeps upstream credentials private', async () => {
-  const account = await readStudioAccount(config, request(), async (url, options) => {
-    assert.equal(url.href, 'http://studio:3000/studio/api/new-api/session')
-    assert.equal(options.headers.Cookie, `octopus_new_api_session=${opaque}`)
-    assert.equal(options.headers.Origin, config.url)
+test('account bridge reads the native sealed session and only sends account authentication upstream', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(String(url), 'https://native-accounts.test/api/user/self')
+    assert.equal(options.headers.get('Cookie'), null)
+    assert.equal(options.headers.get('Authorization'), 'Bearer must-not-leak')
     assert.equal(options.redirect, 'error')
     return envelope()
   })
+  const account = await readAccountSession(config, request())
   assert.deepEqual(account, { binding: { issuer: 'https://accounts.test', subject: '7', sessionHash: accountSessionHash(request()) },
     username: 'creator', name: 'Creator' })
   assert.doesNotMatch(JSON.stringify(account), /must-not-leak|accessToken|refreshToken|selectedKey/)
 })
 
-test('account bridge rejects missing, duplicate and malformed normal cookies before making a request', async () => {
+test('account bridge rejects missing, duplicate and malformed normal cookies before making a request', async t => {
+  t.mock.method(globalThis, 'fetch', () => assert.fail('Untrusted cookies must not be forwarded'))
   for (const cookie of ['', `octopus_new_api_session=short`, `octopus_new_api_session=${opaque}; octopus_new_api_session=${opaque}`,
     `__Host-octopus-embed-${opaque}=${opaque}`]) {
-    await assert.rejects(readStudioAccount(config, { headers: { cookie } }, () => assert.fail('Untrusted cookies must not be forwarded')),
+    await assert.rejects(readAccountSession(config, { headers: { cookie } }),
       { statusCode: 401, code: 'NEW_API_LOGIN_REQUIRED' })
   }
 })
 
-test('account bridge requires an authenticated stable numeric user and a bounded JSON response', async () => {
+test('account bridge requires an authenticated stable numeric user and a bounded JSON response', async t => {
+  let response = () => envelope()
+  t.mock.method(globalThis, 'fetch', () => response())
   for (const id of ['7', 0, -1, Number.MAX_SAFE_INTEGER + 1]) {
-    await assert.rejects(readStudioAccount(config, request(), async () => envelope({ id, username: 'creator' })),
-      { statusCode: 502, code: 'SSO_IDENTITY' })
+    response = () => envelope({ id, username: 'creator' })
+    await assert.rejects(readAccountSession(config, request()), { statusCode: 502 })
   }
-  await assert.rejects(readStudioAccount(config, request(), async () => new Response('{"success":true,"data":{"authenticated":false}}',
-    { headers: { 'Content-Type': 'application/json' } })), { statusCode: 401 })
-  await assert.rejects(readStudioAccount(config, request(), async () => new Response('x'.repeat(65537),
-    { headers: { 'Content-Type': 'application/json' } })), { statusCode: 502 })
-  await assert.rejects(readStudioAccount(config, request(), async () => new Response('{}', { status: 401 })), { statusCode: 401 })
+  response = () => new Response('x'.repeat(65537), { headers: { 'Content-Type': 'application/json' } })
+  await assert.rejects(readAccountSession(config, request()), { statusCode: 502 })
+  response = () => new Response('{}', { status: 401 })
+  await assert.rejects(readAccountSession(config, request()), { statusCode: 401 })
+  await assert.rejects(readAccountSession(config, request()), { statusCode: 401 })
 })
 
 test('only successful account checks are cached and explicit session checks bypass the cache', async t => {
@@ -56,14 +81,14 @@ test('only successful account checks are cached and explicit session checks bypa
     calls++
     return expired ? new Response('{}', { status: 401 }) : envelope()
   })
-  const verify = studioAccountVerifier(config)
+  const verify = accountSessionVerifier(config)
   await verify(request())
   await verify(request())
   assert.equal(calls, 1)
   expired = true
   await assert.rejects(verify(request(), true), { statusCode: 401 })
   await assert.rejects(verify(request()), { statusCode: 401 })
-  assert.equal(calls, 3)
+  assert.equal(calls, 2, 'A revoked native session is not sent upstream again')
 })
 
 function authenticationFixture() {
@@ -95,7 +120,26 @@ test('community authentication retains identity only while the same real account
   assert.deepEqual(fixture.deleted, [`community-next:session:${fixture.sessionHash}`])
 })
 
-test('changing the Studio cookie or presenting a legacy unbound session immediately clears old community identity', async () => {
+test('verified account number and username replace the private profile handle without changing ownership or roles', async t => {
+  let username = 'root'
+  t.mock.method(globalThis, 'fetch', async () => envelope({ id: 7, username }))
+  const fixture = authenticationFixture()
+  fixture.user.username = 'na_internal_profile'
+  const first = (await fixture.auth.authenticate(fixture.req)).user
+  assert.equal(first.id, fixture.user.id)
+  assert.equal(first.accountId, '7')
+  assert.equal(first.username, 'root')
+  assert.equal(first.isAdmin, false, 'An upstream name must never grant the old root profile privileges')
+  assert.equal(publicUser(first).accountId, '7')
+  assert.doesNotMatch(JSON.stringify(publicUser(first)), /na_internal_profile|native-generation|sessionHash/)
+  username = 'renamed-account'
+  const refreshed = (await fixture.auth.authenticate(fixture.req)).user
+  assert.equal(refreshed.id, first.id)
+  assert.equal(refreshed.accountId, first.accountId)
+  assert.equal(refreshed.username, username)
+})
+
+test('changing the account cookie or presenting a legacy unbound session immediately clears old community identity', async () => {
   for (const mode of ['changed', 'unbound']) {
     const fixture = authenticationFixture()
     if (mode === 'changed') fixture.req.headers.cookie = fixture.req.headers.cookie.replace(opaque, 'b'.repeat(43))
@@ -135,6 +179,8 @@ test('existing external subject reuses the original local user and binds a crede
   const { ctx, response, sessions, inserts, user } = synchronizationFixture()
   assert.equal(await handleAccount(ctx), true)
   assert.equal(response.value.user.id, 'existing123')
+  assert.equal(response.value.user.accountId, '7')
+  assert.equal(response.value.user.username, 'creator')
   assert.equal(response.value.returnTo, '/create/image')
   assert.deepEqual(sessions, [[user.id, hash(user.token),
     { issuer: 'https://accounts.test', subject: '7', sessionHash: accountSessionHash(ctx.req) }]])
@@ -152,4 +198,6 @@ test('a new external subject never takes over an existing same-name community pr
   assert.notEqual(created.values[1], 'creator')
   assert.deepEqual(binding.values, ['https://accounts.test', '7', 'new123'])
   assert.equal(response.value.user.id, 'new123')
+  assert.equal(response.value.user.accountId, '7')
+  assert.equal(response.value.user.username, 'creator')
 })

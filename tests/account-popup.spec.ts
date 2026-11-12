@@ -3,11 +3,11 @@ import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 
 test('an existing account login enters community without another password or authorization', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page)
-  fixture.state.studioAuthenticated = true
+  fixture.state.accountAuthenticated = true
   await page.goto('/account?returnTo=%2Flibrary')
   await expect(page).toHaveURL(/\/library$/)
   expect(fixture.mutations.filter(item => item.path === '/api/account/session')).toHaveLength(1)
-  expect(fixture.mutations.some(item => item.path === '/studio/api/new-api/login' || item.path === '/api/account/connect')).toBe(false)
+  expect(fixture.mutations.some(item => item.path === '/api/new-api/login' || item.path === '/api/account/connect')).toBe(false)
 })
 
 test('upstream account verification completes before community session synchronization', async ({ page }) => {
@@ -19,8 +19,8 @@ test('upstream account verification completes before community session synchroni
   await page.getByRole('textbox', { name: '账号验证码或恢复码', exact: true }).fill('123456')
   await page.getByRole('button', { name: '验证并登录', exact: true }).click()
   await expect(page).toHaveURL(/\/discover$/)
-  expect(fixture.mutations.filter(item => item.path === '/studio/api/new-api/login-2fa')).toEqual([
-    { path: '/studio/api/new-api/login-2fa', body: { code: '123456' } },
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/login-2fa')).toEqual([
+    { path: '/api/new-api/login-2fa', body: { code: '123456' } },
   ])
 })
 
@@ -45,7 +45,7 @@ test('a configured human verification token goes to the existing account login e
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeEnabled()
   await fillAccountLogin(page)
   await expect(page).toHaveURL(/\/discover$/)
-  expect(fixture.mutations.find(item => item.path === '/studio/api/new-api/login')?.body).toEqual({
+  expect(fixture.mutations.find(item => item.path === '/api/new-api/login')?.body).toEqual({
     username: 'octopus-user', password: 'fixture-password', turnstile_token: 'fixture-verification-token',
   })
 })
@@ -53,8 +53,8 @@ test('a configured human verification token goes to the existing account login e
 test('returning to the account page refreshes an account changed in another tab', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
   await page.goto('/account')
-  await expect(page.locator('.account-identity')).toHaveText('@octopusfixture')
+  await expect(page.getByLabel('章鱼账号', { exact: true })).toHaveText('账号ID:17 @octopusfixture')
   fixture.state.user = { ...fixture.state.user, id: 'secondAccountUser', username: 'secondaccount' }
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.locator('.account-identity')).toHaveText('@secondaccount')
+  await expect(page.getByLabel('章鱼账号', { exact: true })).toHaveText('账号ID:17 @secondaccount')
 })

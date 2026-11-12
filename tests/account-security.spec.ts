@@ -19,7 +19,7 @@ test('current device logout clears both logins without invoking retired revocati
   await page.getByRole('button', { name: '退出当前设备', exact: true }).click()
   await expect(page.getByRole('form', { name: '登录章鱼账号', exact: true })).toBeVisible()
   expect(fixture.mutations.filter(item => item.path === '/api/security/sessions/revoke')).toEqual([])
-  expect(fixture.mutations.some(item => item.path === '/studio/api/new-api/logout')).toBe(true)
+  expect(fixture.mutations.some(item => item.path === '/api/new-api/logout')).toBe(true)
 })
 
 test('an old community reset link leads to the account center without sending a reset mutation', async ({ page }) => {

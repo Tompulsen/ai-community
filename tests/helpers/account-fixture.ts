@@ -1,13 +1,13 @@
 import type { Page } from '@playwright/test'
 
-export const accountUser = { id: 'fixtureAccountUser', username: 'octopusfixture', name: '测试创作者', bio: '', isAdmin: false, isModerator: false }
+export const accountUser = { id: 'fixtureAccountUser', accountId: '17', username: 'octopusfixture', name: '测试创作者', bio: '', isAdmin: false, isModerator: false }
 export const currentDevice = 'a'.repeat(64), otherDevice = 'b'.repeat(64)
 const accountUrl = 'https://accounts.example'
 export interface AccountMutation { path: string; body: Record<string, unknown> }
 
 export async function mockUnifiedAccount(page: Page, authenticated = false) {
   const state = {
-    user: { ...accountUser }, authenticated, studioAuthenticated: authenticated,
+    user: { ...accountUser }, authenticated, accountAuthenticated: authenticated,
     requiresVerification: false, passwordLoginEnabled: true, turnstileSiteKey: '', syncFailure: false,
     devices: [
       { id: currentDevice, current: true, createdAt: '2026-11-13T00:00:00Z', ip: '127.0.0.1', userAgent: 'Fixture current device' },
@@ -24,22 +24,22 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
       user: state.authenticated ? state.user : null, csrfToken: 'unified-account-fixture',
       authentication: 'zhangyu', accountUrl,
     } })
-    if (path === '/studio/api/new-api/status') return route.fulfill({ json: { success: true, data: {
+    if (path === '/api/new-api/status') return route.fulfill({ json: { success: true, data: {
       enabled: true, configured: true, publicUrl: accountUrl, passwordLoginEnabled: state.passwordLoginEnabled,
       turnstileSiteKey: state.turnstileSiteKey,
     } } })
-    if (path === '/studio/api/new-api/login') {
+    if (path === '/api/new-api/login') {
       if (state.requiresVerification) return route.fulfill({ json: { success: true, data: { requires2fa: true } } })
-      state.studioAuthenticated = true
+      state.accountAuthenticated = true
       return route.fulfill({ json: { success: true, data: { authenticated: true } } })
     }
-    if (path === '/studio/api/new-api/login-2fa') {
-      state.studioAuthenticated = true
+    if (path === '/api/new-api/login-2fa') {
+      state.accountAuthenticated = true
       return route.fulfill({ json: { success: true, data: { authenticated: true } } })
     }
     if (path === '/api/account/session') {
       if (state.syncFailure) return route.fulfill({ status: 503, json: { message: '账号同步暂时不可用。' } })
-      if (!state.studioAuthenticated) return route.fulfill({ status: 401, json: { message: '请先登录章鱼账号。', code: 'ACCOUNT_LOGIN_REQUIRED' } })
+      if (!state.accountAuthenticated) return route.fulfill({ status: 401, json: { message: '请先登录章鱼账号。', code: 'ACCOUNT_LOGIN_REQUIRED' } })
       state.authenticated = true
       return route.fulfill({ json: { user: state.user, returnTo: '/discover' } })
     }
@@ -59,8 +59,8 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
       state.authenticated = false
       return route.fulfill({ json: { user: null } })
     }
-    if (path === '/studio/api/new-api/logout') {
-      state.studioAuthenticated = false
+    if (path === '/api/new-api/logout') {
+      state.accountAuthenticated = false
       return route.fulfill({ json: { success: true } })
     }
     return route.fulfill({ json: { items: [], nextCursor: null, limits: { maxFileSizeMb: 20 } } })

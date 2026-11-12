@@ -144,7 +144,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" aria-label="章鱼社区首页"><img class="auth-brand-mark" src="/assets/brand/octopus-community.jpg" width="36" height="36" alt="" /><span>章鱼社区</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user" class="account-identity">@{{ session.user.username }}</span></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId" class="account-identity" aria-label="章鱼账号">账号ID:{{ session.user.accountId }} @{{ session.user.username }}</span></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
@@ -177,7 +177,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         </div>
         <label class="field"><span>显示名称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label><label class="field"><span>个人简介</span><textarea v-model="bio" class="control" rows="4" maxlength="1500" :disabled="busy" @input="saved = false" /></label><div class="section-heading"><button class="button primary btn" :disabled="busy"><Save :size="16" />{{ busy ? '正在保存…' : '保存资料' }}</button><span v-if="saved" class="form-note" role="status"><Check :size="14" />资料已保存</span></div></form></section><section class="panel-section"><RouterLink to="/library" class="button subtle btn">管理我的作品<ArrowUpRight :size="15" /></RouterLink></section></template>
       <AccountSecurity v-else-if="tab === 'security'" />
-      <template v-else><section class="panel-section"><div class="section-heading"><h2>章鱼账号</h2><span class="status" :class="{ pending: !account?.linked }">{{ account?.linked ? '已登录' : '需要重新登录' }}</span></div><dl v-if="account?.linked" class="info-list"><div><dt>账号编号</dt><dd>{{ account.subject }}</dd></div><div><dt>账号服务</dt><dd>{{ account.issuer }}</dd></div></dl><p v-else class="muted">请退出当前会话后，使用章鱼账号重新登录。</p></section><section class="panel-section"><div class="section-heading"><h2>账户余额</h2><Wallet :size="18" /></div><p class="account-balance">{{ account?.balance != null ? `${account.balance.toFixed(2)} ${account.currency || 'USD'}` : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><a v-if="centerUrl" :href="centerUrl" class="button btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></section></template>
+      <template v-else><section class="panel-section"><div class="section-heading"><h2>章鱼账号</h2><span class="status" :class="{ pending: !account?.linked }">{{ account?.linked ? '已登录' : '需要重新登录' }}</span></div><dl v-if="account?.linked" class="info-list"><div><dt>账号ID</dt><dd>{{ account.subject }}</dd></div><div><dt>账号服务</dt><dd>{{ account.issuer }}</dd></div></dl><p v-else class="muted">请退出当前会话后，使用章鱼账号重新登录。</p></section><section class="panel-section"><div class="section-heading"><h2>账户余额</h2><Wallet :size="18" /></div><p class="account-balance">{{ account?.balance != null ? `${account.balance.toFixed(2)} ${account.currency || 'USD'}` : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><a v-if="centerUrl" :href="centerUrl" class="button btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></section></template>
     </div></div>
     </div></div>
   </div>
@@ -185,7 +185,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 
 <style scoped>
 .settings-page { max-width: 1168px; }
-.account-identity { color: var(--muted); font-size: 14px; }
+.account-identity { min-width: 0; max-width: 100%; color: var(--muted); font-size: 14px; text-align: right; overflow-wrap: anywhere; }
 .settings-page .split-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
 .account-tabs { position: static; display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 0 0 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .account-tabs .tab { padding: 8px 16px; min-height: 44px; }

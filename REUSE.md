@@ -13,19 +13,21 @@
 | 广告配置清洗 | 已迁出到 `server/business/ads.ts` | 接入本项目配置存储 |
 | 抽奖事务、发放、重试与审计 | 保留业务，替换适配接口 | 用户/权限、关系计数、账号映射、HTTP、ID与日志 |
 | 投稿、修改、标签、审核及违规治理 | 保留业务，替换适配接口 | 用户、内容、媒体、权限、封禁与事件 |
-| 章鱼账号登录与身份映射 | 复用 Studio 账号登录和服务端会话校验 | 按 issuer/subject 复用原绑定，关闭社区独立密码与注册，不按同名或邮箱合并 |
-| Studio 聊天、图片/视频生成、图库、任务恢复与备份 | 复用业务及可保留的 Next.js/React 模块 | 替换旧社区接口、会话和必要的跨页面桥接，不为统一框架重写成熟逻辑 |
+| 章鱼账号登录与身份映射 | 将 Studio 账号模块迁入 `server/native-account/` | 保留 Cookie、Redis、密封密钥及刷新链；按 issuer/subject 复用原绑定 |
+| 文本、图片/视频生成、图库与任务恢复 | 复用协议、媒体与任务规则，接入原生 Vue/Fastify | 本地 `/api/creation/*`；当前账号历史按精确命名空间读取，旧数据不清除 |
 | Word/Excel 文档引擎与版本处理 | 复用现有实现 | 从可信会话派生 owner，接入新后端；按实际来源保留声明 |
 
-Studio 是独立 Next.js/React 模块，通过 HTTP 接入本项目；
-身份、会话与跨页面通信遵循统一接口契约。
-章鱼账号登录成功后，社区后端校验 Studio 会话并建立对应的社区会话。
-各创作 context 共用原 Studio 登录 ID、刷新链和锁，并继续验证各自的社区身份绑定；
-不为不同创作页面复制刷新令牌或要求再次授权。
+社区与创作台同用 Vue 3，由一个 Fastify 进程承接页面、账号与创作 API。
+`server/native-account/` 直接读取原普通登录 Cookie `octopus_new_api_session`，
+沿用 `octopus:new-api:` Redis 会话、原 `NEW_API_SESSION_SECRET` 和原刷新锁。
+社区登录后进入创作无需再次登录、授权或手动配置模型密钥；
+密钥由服务端按当前账号取得，无可用选择时复用或恢复该账号的系统 Auto 密钥。
+不回退到管理员或共享模型密钥，不向浏览器返回访问、刷新或模型令牌。
 `src/turnstile.ts` 复用 `studio/app/utils/turnstile.ts` 的账号验证码脚本加载逻辑，
 避免社区开发页面跨 `/studio` 源码路径加载，并保留原有超时、重试和单次加载规则。
-“一个项目”要求统一仓库、账号、API、入口和发布，不强制单一前端框架、
-进程或容器。模块保留方式按实际依赖确定，避免把框架转换扩大为业务重写。
+当前构建只发布社区镜像，旧 `/studio` 页面跳转 `/create`，
+旧 iframe 启动、交换与上下文接口返回 410。`studio/` 保留为源码及来源参考，
+不进入社区镜像，也不再单独构建；数据库、Redis、文档及 New API 服务继续独立。
 
 ## 第一批代码来源
 
@@ -41,6 +43,23 @@ Studio 是独立 Next.js/React 模块，通过 HTTP 接入本项目；
 相邻 `*.test.ts` 来自旧项目对应测试，仅调整模块路径和测试运行器导入。
 与旧接口 schema/Ajv 包装耦合的两个用例没有直接搬入，
 后续实现新接口时需补对应输入边界测试；业务算法用例保留。
+
+## 原生创作代码来源
+
+| 当前代码 | 原 Studio 来源 | 适配内容 |
+| --- | --- | --- |
+| `server/native-account/{config,client,session,model-groups,model-pricing,relay}.ts` | `studio/app/lib/new-api/` 同名模块 | 标准 Request/Response、同进程鉴权，保留加密、锁、分组及额度规则 |
+| `server/native-account/routes.ts` | `studio/app/api/new-api/[...path]/route.ts` | 本地 `/api/new-api/*`，移除 iframe/SSO 交换与账户中心支付路由 |
+| `server/native-account/{pricing,request-body}.ts` | `studio/app/utils/{model-pricing,request-body}.ts` | 保留价格计算与有界请求读取 |
+| `server/creation/{public-media,proxy-lifecycle}.ts` | `studio/app/utils/{public-image-fetch,proxy-lifecycle}.ts` | 复用媒体访问边界与请求取消生命周期 |
+| `server/creation-contract.ts` | `studio/app/utils/{video-api,local-tasks}.ts` | 复用生成协议、任务地址及状态规则 |
+| `src/native-studio.ts` | 原 Studio 的账号命名空间、图库和视频结果数据契约 | Vue 任务状态、精确账号历史读取与本地持久化 |
+
+移植模块沿用 Studio 的 MIT/NextChat 来源。完整 NextChat MIT 通知也写入
+会随社区镜像分发的 `THIRD_PARTY_NOTICES.md`，不依赖镜像外的 `studio/LICENSE`。
+`iron-session@8.0.4`（MIT）保留旧会话密封格式，不引入 Next.js 或 React 运行时。
+历史导入仅限已验证 `accountId` 的 `octopus:user-<accountId>:` 及
+`octopus-gallery-user-<accountId>`，不清空或合并其他账号、访客和旧聊天存储。
 
 ## 保持不变的业务约束
 
@@ -64,10 +83,12 @@ GenOffice Apache-2.0 和新增服务的 AGPL-3.0-only，不能按“后加”统
 纯算法仍在 `server/business/`；`auth.ts`、`content.ts`、`account.ts`、
 `lottery.ts` 和 `runtime.ts` 提供 TypeScript + Fastify 后端及原表适配。
 `types.ts` 统一请求上下文，构建时执行严格类型检查；事务、锁顺序与业务规则沿用。
-`studio/` 与 `services/documents/` 源码归入同一项目，当前复用既有健康镜像。
-前端使用真实 API，移除演示数据与伪造成功状态。统一登录变更需同时发布社区与 Studio 镜像。
+`studio/` 与 `services/documents/` 源码保留在项目中，
+其中 Studio 不参与当前运行镜像，文档服务继续独立复用。
+前端使用真实 API，移除演示数据与伪造成功状态。统一登录与原生创作只需发布社区镜像。
 上传限制 20 MB，时间限制隐私
-暂时保守隐藏。付费生成、真实 OAuth 与完整业务验收没有用单元测试替代。
+暂时保守隐藏。当前文档描述源码实现；是否已部署以实际发布记录为准。
+付费生成、真实账号登录与完整业务验收没有用本地或模拟接口测试替代。
 完整迁移契约及验收条件见 MIGRATION.md。
 
 ## 界面资产

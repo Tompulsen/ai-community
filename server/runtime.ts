@@ -2,8 +2,7 @@
  * SPDX-FileCopyrightText: 2026 Community contributors
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-import http, { type IncomingMessage } from 'node:http'
-import https from 'node:https'
+import type { IncomingMessage } from 'node:http'
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
@@ -21,13 +20,16 @@ import { handleSocial } from './social.ts'
 import { handleAdmin } from './admin.ts'
 import { handleSecurity } from './security.ts'
 import { startMediaWorker } from './media.ts'
+import { handleAccountRequest } from './native-account/index.ts'
+import { handleCreation } from './creation.ts'
+import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { AppConfig, Database, RequestContext } from './types.ts'
 export { compareStreamIds } from './social.ts'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.mp4': 'video/mp4', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' }
 const bodyLimit = 28 * 1024 * 1024
-const internalPaths = new Set(['/api/newapi/studio/exchange', '/api/newapi/studio/validate'])
+const nativeAccountPath = (pathname: string) => /^\/(?:studio\/)?api\/new-api\//.test(pathname)
 const objectBody = { type: 'object', additionalProperties: true } as const
 
 export function requireSameOrigin(req: Pick<IncomingMessage, 'method' | 'headers'>, origin: string, allowMultipart = false) {
@@ -46,51 +48,19 @@ export function staticPath(root: string, pathname: string) {
   return filename
 }
 
-function proxyStudio(request: FastifyRequest, reply: FastifyReply, config: AppConfig, upstream: string) {
-  const destination = new URL(upstream)
-  if (!['http:', 'https:'].includes(destination.protocol) || destination.username || destination.password || destination.pathname !== '/' || destination.search || destination.hash) throw httpError(503, '创作空间配置无效。')
-  const req = request.raw
-  const res = reply.raw
-  const publicUrl = new URL(config.url)
-  const originalPath = req.url || '/'
-  const callback = originalPath.startsWith('/api/new-api/community/callback')
-  const requestPath = callback ? originalPath.replace('/api/new-api/community/callback', '/studio/api/new-api/community/callback') : originalPath
-  // Studio owns its body formats and streaming protocol, before Fastify parses JSON.
-  reply.hijack()
-  const outgoing = (destination.protocol === 'https:' ? https : http).request({
-    protocol: destination.protocol, hostname: destination.hostname, port: destination.port,
-    method: req.method, path: requestPath, timeout: 600000,
-    headers: { ...req.headers, host: publicUrl.host, 'x-forwarded-host': publicUrl.host, 'x-forwarded-proto': publicUrl.protocol.slice(0, -1) },
-  }, response => {
-    res.writeHead(response.statusCode || 502, response.headers)
-    response.pipe(res)
-  })
-  outgoing.on('timeout', () => outgoing.destroy(new Error('Upstream timeout')))
-  outgoing.on('error', () => {
-    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
-    if (!res.writableEnded) res.end('创作空间暂时不可用。')
-  })
-  req.on('aborted', () => outgoing.destroy())
-  res.on('close', () => { if (!res.writableEnded) outgoing.destroy() })
-  req.pipe(outgoing)
-}
-
 interface ApplicationOptions {
   db: Database
   redis: Redis
   config: AppConfig
   filesRoot: string
   distRoot?: string
-  studioUpstream?: string
 }
 
 type ModuleHandler = (ctx: RequestContext) => Promise<boolean>
 type RouteGroup = [HTTPMethods | HTTPMethods[], string[]]
 
-export function createApplication({ db, redis, config, filesRoot, distRoot = path.join(projectRoot, 'dist'), studioUpstream }: ApplicationOptions): FastifyInstance {
+export function createApplication({ db, redis, config, filesRoot, distRoot = path.join(projectRoot, 'dist') }: ApplicationOptions): FastifyInstance {
   const origin = new URL(config.url).origin
-  const upstream = studioUpstream || config.communityStudioUpstream || process.env.COMMUNITY_STUDIO_UPSTREAM || 'http://studio:3000'
-  config = { ...config, communityStudioUpstream: upstream }
   const auth = authServices({ db, redis, config })
   const app = Fastify({
     bodyLimit, requestTimeout: 120000, exposeHeadRoutes: false,
@@ -108,16 +78,12 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   app.addHook('onRequest', async (request, reply) => {
     let url: URL
     try { url = new URL(request.raw.url || '/', origin) } catch { throw httpError(400, '地址格式无效。') }
-    if (url.pathname === '/studio' || url.pathname.startsWith('/studio/') || url.pathname === '/api/new-api/community/callback') {
-      proxyStudio(request, reply, config, upstream)
-      return reply
-    }
-    if (url.pathname !== '/healthz' && !internalPaths.has(url.pathname)) requireSameOrigin(request.raw, origin, url.pathname === '/api/uploads' && request.method === 'POST')
+    if (url.pathname !== '/healthz') requireSameOrigin(request.raw, origin, url.pathname === '/api/uploads' && request.method === 'POST')
   })
   app.addHook('preHandler', async (request, reply) => {
     const url = new URL(request.raw.url || '/', origin)
-    if (url.pathname === '/healthz') return
-    const identity = internalPaths.has(url.pathname) ? { user: null, sessionHash: null } : await auth.authenticate(request.raw)
+    if (url.pathname === '/healthz' || nativeAccountPath(url.pathname)) return
+    const identity = await auth.authenticate(request.raw)
     const requireUser = () => {
       if (!identity.user) throw httpError(401, '请先登录。', 'AUTH_REQUIRED')
       return identity.user
@@ -174,10 +140,17 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   const health = async (_request: FastifyRequest, reply: FastifyReply) => {
     await Promise.all([db.query('SELECT 1'), redis.ping()])
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff')
-    return { status: 'ok', backend: 'community-next', framework: 'fastify', database: 'ready' }
+    return { status: 'ok', backend: 'community-next', framework: 'fastify', database: 'ready', creation: 'native' }
   }
   app.route({ method: ['GET', 'HEAD'], url: '/healthz', handler: health })
-  for (const url of ['/studio', '/studio/*', '/api/new-api/community/callback']) app.all(url, async () => { throw httpError(502, '创作空间暂时不可用。') })
+  for (const url of ['/api/new-api/*', '/studio/api/new-api/*']) app.all(url, async (request, reply) =>
+    sendWebResponse(reply, await handleAccountRequest(applicationRequest(request, reply, origin))))
+  for (const url of ['/studio', '/studio/*']) app.route({ method: ['GET', 'HEAD'], url,
+    handler: async (_request, reply) => reply.redirect('/create', 302) })
+  register(handleCreation, [
+    ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media']],
+    ['POST', ['/api/creation/generate']],
+  ])
   register(auth.handleAuth, [
     ['GET', ['/api/session', '/api/registration']],
     ['POST', ['/api/session/login', '/api/session/logout', '/api/session/register']],

@@ -5,12 +5,14 @@
 来源及适配边界见 [REUSE.md](REUSE.md)。TypeScript + Fastify 后端直接复用原
 PostgreSQL 表、Redis 命名空间和附件，保留原账号、作品及抽奖记录 ID。
 
-项目统一包含社区前后端、`studio/` 工作台和 `services/documents/` 文档服务。
-当前按测试开发环境快速替换网页服务，继续使用现有 Studio 与文档镜像。
-业务范围及数据契约见 [MIGRATION.md](MIGRATION.md)。
+社区页面与创作台统一使用 Vue，由同一个 Fastify 进程提供接口和构建后的前端，
+只发布一个社区镜像。旧 `studio/` Next.js/React 源码保留为业务和来源参考，
+不参与当前构建，也不复制进社区镜像。文档服务、PostgreSQL、Redis 和
+New API 账户与模型网关继续独立保留。业务及数据契约见 [MIGRATION.md](MIGRATION.md)。
 
 社区入口为 `https://www.zhangyuapi.com`，创作台位于 `/create`，
-内部工作台通过同源 `/studio` 代理。账号中心继续使用 `https://zhangyuapi.com`。
+创作页面直接调用本地 `/api/creation/*` 与 `/api/new-api/*`。
+账号中心继续使用 `https://zhangyuapi.com`。
 旧社区域名 `zaiduyu.top` 已停用，不再跳转至新入口。
 
 ## 本地运行
@@ -35,11 +37,10 @@ npm run test:e2e
 ## 容器镜像
 
 推送 `main` 分支会通过 GitHub Actions 的 `Build container` 工作流构建并发布
-社区和创作台的 `linux/amd64` 镜像，也可以在 Actions 页面手动运行该工作流。
+一个社区 `linux/amd64` 镜像，也可以在 Actions 页面手动运行该工作流。
 
 ```sh
 docker pull ghcr.io/tompulsen/ai-community:latest
-docker pull ghcr.io/tompulsen/ai-community-studio:latest
 ```
 
 每次构建同时保留 `sha-<完整提交 SHA>` 标签，便于固定版本和回退。
@@ -52,16 +53,17 @@ docker pull ghcr.io/tompulsen/ai-community:latest
 ```
 
 在容器管理面板中更新镜像并重建服务，沿用现有数据库、Redis、配置文件和附件挂载。
-社区镜像包含社区前端和后端，Studio 镜像由同一次工作流构建并使用相同提交标签；
-文档服务继续沿用现有镜像。
-配置路径、附件路径和 Studio 上游设置见下文。
+社区镜像包含社区前端、原生创作台与 Fastify 后端。工作流不再构建 Studio 镜像；
+文档服务继续沿用现有独立镜像。切换旧服务的步骤见 [MIGRATION.md](MIGRATION.md)，
+镜像发布本身不代表服务器已完成更新。
 
 ## 后端运行
 
 后端使用 Node.js 24 直接运行 TypeScript；`npm run build` 包含严格后端类型检查。
 入口为 `server/runtime.ts`，业务模块统一使用 `server/types.ts` 的请求上下文。
 Fastify 管理路由、JSON 解析、对象校验、鉴权钩子和错误响应。
-Studio 在请求解析前转发原始流；媒体通过 Fastify Reply 保留 HEAD 和 Range。
+原生创作接口在服务端验证账号、参数与任务归属，再请求模型网关；
+媒体通过 Fastify Reply 处理 HEAD 和 Range。
 
 将服务器原配置只读挂载到 `/app/.config/default.yml`，附件卷挂载到
 `/app/files`。原配置中的 `url`、`db`、`redis` 和 `newApiSso` 继续使用；
@@ -71,8 +73,22 @@ Studio 在请求解析前转发原始流；媒体通过 Fastify Reply 保留 HEA
 CONFIG_PATH=/app/.config/default.yml FILES_ROOT=/app/files npm start
 ```
 
-`COMMUNITY_STUDIO_UPSTREAM` 默认为 `http://studio:3000`。`/studio` 和原 OAuth
-回调继续由同源入口代理。健康接口 `/healthz` 检查数据库和 Redis。
+将原 Studio 的下列账号配置移到社区容器，保持值不变：
+
+| 配置 | 用途 |
+| --- | --- |
+| `NEW_API_BASE_URL` | 账户及模型网关内部地址 |
+| `NEW_API_PUBLIC_URL` | 章鱼账户中心公开来源 |
+| `NEW_API_SESSION_SECRET` | 原加密会话密钥，切换时不能重新生成 |
+| `NEW_API_REDIS_URL` | 原账号会话使用的 Redis 数据库 |
+| `NEW_API_IMAGE_BASE_URL`、`NEW_API_ASYNC_BASE_URL` | 已配置时沿用图片或异步任务专用上游 |
+
+`server/native-account/` 原地读取 `octopus_new_api_session` Cookie 和
+`octopus:new-api:` Redis 记录，保留原刷新锁及 `iron-session@8.0.4` 密封格式。
+不需要 `COMMUNITY_STUDIO_UPSTREAM`，也不需要启动 Next.js 服务。
+旧 `/studio` 页面 GET/HEAD 跳转 `/create`；`/studio/api/new-api/*` 仅作为本地
+账号接口兼容别名。旧 iframe 启动、交换和上下文接口返回 410。
+健康接口 `/healthz` 检查数据库和 Redis。
 
 ## 当前业务
 
@@ -80,7 +96,7 @@ CONFIG_PATH=/app/.config/default.yml FILES_ROOT=/app/files npm start
 | --- | --- |
 | 发现 | 五列桌面、两列手机网格，分类、搜索、标签、排序 |
 | 作品详情 | 原比例图片、实际视频播放、文本资源、收藏、点赞、带入创作 |
-| 创作 | 复用 Studio 文本、图片、视频、统一账号会话、同款带入与分享投稿 |
+| 创作 | 原生 Vue 文本、图片、视频工作台，统一账号会话、同款带入与分享投稿 |
 | 我的作品 | 草稿、待审核、已公开、未通过、收藏，编辑与删除 |
 | 活动 | 原抽奖次数、任务、奖池、记录、幂等发奖与重试 |
 | 社区 | 创作者、关注、个人作品、公告 |
@@ -88,21 +104,26 @@ CONFIG_PATH=/app/.config/default.yml FILES_ROOT=/app/files npm start
 | 管理 | 服务端权限、投稿审核、待审改稿、审计与违规处理 |
 
 社区业务写入原数据库；没有示例作品、假生成或固定中奖结果。
-原 Studio 浏览器聊天、草稿和图库不清除。上传当前单文件最多 20 MB。
+原 Studio 浏览器聊天、草稿和图库不清除。原生创作只读取当前已验证章鱼账号的
+精确历史命名空间；无归属记录与其他账号数据不自动导入。上传当前单文件最多 20 MB。
+内嵌图片结果保存在当前浏览器；超过 1 MiB 的结果不进入服务端响应缓存。
+若这类响应中断且没有上游任务编号，记录会要求核对，不会自动再次付费生成。
 
 ## 统一登录
 
-社区仅使用章鱼账号。登录表单调用现有 Studio 账号接口，成功后由社区后端
-核实该会话并按 `(issuer, subject)` 复用原账号映射；首次使用自动建立社区资料。
-已有 Studio 登录可直接恢复社区身份，不再打开独立授权窗口。
+社区仅使用章鱼账号。登录表单调用同一 Fastify 进程中的 `/api/new-api/*`，
+成功后由社区后端核实会话并按 `(issuer, subject)` 复用原账号映射；
+首次使用自动建立社区资料。配置保持一致时，已有普通 Studio 登录 Cookie
+继续使用，不建立第二条刷新链，也不打开独立授权窗口。
 社区不保存章鱼密码，也不向浏览器返回模型密钥或账号访问、刷新令牌。
 
-创作台的不同页面通过受验证的 context 共用同一 Studio 会话和刷新锁，
-不复制刷新令牌、不重复请求授权。账号切换后旧社区身份和创作上下文失效。
+社区登录后可直接进入创作，无需再次登录、授权或手动配置模型密钥。
+服务端读取当前账号的可用密钥；未选择密钥时复用或恢复该账号的系统 Auto 密钥，
+不回退到管理员或共享密钥。账号切换后旧身份、请求和本地创作视图失效。
 注册、找回密码和密码设置统一到账户中心；社区原密码与注册接口已关闭，
 原数据库记录保留，未绑定的旧账号不会按同名或邮箱自动合并。
 
-此变更同时涉及社区和 `studio/` 源码，发布时需协调更新两个服务镜像。
+此版本仅需构建社区镜像；完成服务器切换后可停用独立 Studio 容器。
 本地测试和隔离接口测试不等于服务器已部署，也不替代真实账号及付费生成验收。
 
 ## 开发边界
@@ -112,7 +133,7 @@ CONFIG_PATH=/app/.config/default.yml FILES_ROOT=/app/files npm start
 余额仅在同一章鱼账号会话可验证时显示，无法核验时返回空值。
 
 抽奖 API 会实际扣次数并按原幂等规则发放，不能将测试请求当作无副作用操作。
-候选环境禁用发奖密钥及自动重试；实际 OAuth 与付费生成需单独实测。
+候选环境禁用发奖密钥及自动重试；真实账号登录与付费生成需单独实测。
 
 部署前保留数据库快照和配置；回退使用新系统的上一版本镜像。
 数据卷不能随容器重建删除。

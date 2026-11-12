@@ -15,12 +15,12 @@ export interface AppConfig {
   id?: string
   db: { host: string; port?: number; user: string; pass?: string; db: string }
   redis: { host: string; port?: number; pass?: string; username?: string; db?: number; prefix?: string }
-  newApiSso?: { issuer?: string; studioSecret?: string; lotterySecret?: string }
-  communityStudioUpstream?: string
+  newApiSso?: { issuer?: string; lotterySecret?: string }
 }
 
 export interface PublicUser {
   id: string
+  accountId?: string
   username: string
   name: string
   bio: string

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountHash, bindExternalAccount, handleAccount, newApiIdentity, newApiOrigin, newApiReturnPath, readAccountBalance, readFlowCookie, verifyStudioBearer } from './account.ts'
+import { accountHash, bindExternalAccount, handleAccount, newApiIdentity, newApiOrigin, newApiReturnPath, readAccountBalance, readFlowCookie } from './account.ts'
 
 test('issuer permits only an HTTPS origin without credentials, path or query', () => {
   assert.equal(newApiOrigin('https://accounts.test/'), 'https://accounts.test')
@@ -45,14 +45,6 @@ test('return paths preserve only current SPA destinations and their own query pa
     '/discover?q=' + 'x'.repeat(2048)]) assert.equal(newApiReturnPath(path), '/account', String(path))
 })
 
-test('Studio bearer comparison requires the configured secret and exact prefix', () => {
-  const secret = 'x'.repeat(32)
-  assert.equal(verifyStudioBearer(`Bearer ${secret}`, secret), true)
-  assert.equal(verifyStudioBearer(`Basic ${secret}`, secret), false)
-  assert.equal(verifyStudioBearer('Bearer short', secret), false)
-  assert.equal(verifyStudioBearer('Bearer x', ''), false)
-})
-
 test('binding refuses to reassign an existing external identity and rolls back', async () => {
   const statements = []
   const user = { id: 'local-owner', username: 'owner', token: 'native-token-1234', password: 'hash' }
@@ -71,25 +63,32 @@ test('binding refuses to reassign an existing external identity and rolls back',
 })
 
 test('balance uses the authoritative configured ratio and refuses another account session', async () => {
-  const ctx = { config: { url: 'https://community.test/', communityStudioUpstream: 'http://studio:3000/' },
+  const ctx = { config: { url: 'https://community.test/' },
     req: { headers: { cookie: `community_session=must-not-forward; octopus_new_api_session=${'x'.repeat(43)}` } } }
+  const paths = []
   const fetcher = async (url, options) => {
-    assert.equal(options.headers.Cookie.includes('community_session'), false)
+    assert.equal(url.origin, 'https://community.test')
+    assert(['/api/new-api/session', '/api/new-api/status'].includes(url.pathname))
+    paths.push(url.pathname)
+    assert.equal(options.headers.Cookie, `octopus_new_api_session=${'x'.repeat(43)}`)
     return new Response(JSON.stringify({ success: true, data: url.pathname.endsWith('/session')
       ? { authenticated: true, user: { id: 7, quota: 1250000 } } : { quotaPerUnit: 250000, currencySymbol: '$' } }))
   }
   assert.deepEqual(await readAccountBalance(ctx, '7', fetcher), { balance: 5, quota: 1250000, quotaPerUnit: 250000, currencySymbol: '$' })
   assert.equal(await readAccountBalance(ctx, '8', fetcher), null)
+  assert.deepEqual(paths, ['/api/new-api/session', '/api/new-api/status', '/api/new-api/session', '/api/new-api/status'])
 })
 
-test('Studio launch cannot be exchanged after its community session was revoked', async () => {
-  const secret = 's'.repeat(32), code = 'a'.repeat(43)
-  const ctx = { req: { method: 'POST', headers: { authorization: `Bearer ${secret}` }, socket: { remoteAddress: '127.0.0.1' } },
-    url: new URL('https://community.test/api/newapi/studio/exchange'), body: { code },
-    config: { url: 'https://community.test/', newApiSso: { issuer: 'https://accounts.test/', studioSecret: secret } },
-    redis: { eval: async () => 1, get: async () => JSON.stringify({ issuer: 'https://accounts.test', studio: 'https://community.test', sessionHash: 'revoked' }), exists: async () => 0 },
-    db: { query() { assert.fail('Revoked launches must not read credentials') } } }
-  await assert.rejects(handleAccount(ctx), /STUDIO_ACCOUNT/)
+test('retired Studio launch, exchange and embed endpoints reject requests before reading credentials', async () => {
+  for (const endpoint of ['start', 'exchange', 'context', 'validate']) {
+    for (const method of ['GET', 'POST']) {
+      await assert.rejects(handleAccount({
+        req: { method }, url: new URL(`/api/newapi/studio/${endpoint}`, 'https://community.test'),
+        db: { query() { assert.fail('Retired Studio routes must not read accounts') } },
+        redis: { get() { assert.fail('Retired Studio routes must not read sessions') } },
+      }), { statusCode: 410, code: 'STUDIO_EMBED_REMOVED' })
+    }
+  }
 })
 
 test('obsolete popup and OAuth completion endpoints cannot bypass the unified account login', async () => {

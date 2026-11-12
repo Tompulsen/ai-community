@@ -9,14 +9,12 @@ web
 ## Stack
 
 The frontend uses Vue 3, TypeScript, Vite and Vue Router, scaffolded from
-the official Vite `vue-ts` template. The unified application direction is one
-repository with a shared account and API boundary, one community entry and a
-coordinated release. Existing Next.js/React Studio code can remain an internal
-module; one project does not require one frontend framework, process or container.
-Choose the backend runtime and hosting arrangement from actual reuse dependencies
-rather than rewriting mature modules for framework uniformity. The independent
-Node.js backend now reuses the original PostgreSQL tables, Redis prefix and file
-storage. Studio and document source are included and their running services reused.
+the official Vite `vue-ts` template. Community and native creation now share one
+Vue frontend, Fastify backend, application process and container. Existing Studio
+account and generation rules are adapted into framework-independent server
+modules; its Next.js source remains a reference outside the runtime image.
+PostgreSQL, Redis, the document service and New API remain separate services.
+The backend preserves the original tables, IDs, Redis namespaces and file storage.
 
 ## Users
 
@@ -53,13 +51,13 @@ delivery now includes the frontend and an independent community backend.
   changing feed order. Covers fill and crop; clicking opens the detail page directly,
   where the complete media remains available.
   Smaller desktop widths use four columns, tablet two, phone one.
-  The user also requested concentric, iOS style continuous corners on nested card surfaces.
+  Work cards retain one iOS style continuous outer corner without an inner frame.
 - Existing feature scope is preserved. No new business capability is proposed.
 - Run independent community foundation services. Reuse the existing business
   modules and adapt their integration points.
 - Reuse provenance, dependencies and source declarations are tracked in REUSE.md.
 - The runtime uses actual account and work data; synthetic state is removed.
-- Creation reuses the authenticated Studio; lottery uses real transaction and
+- Native creation reuses the authenticated Octopus account; lottery uses real transaction and
   receipt logic. Do not replay paid requests as harmless tests.
 - The user confirmed a development environment with no active users and requested
   a fast container replacement. Keep data volumes and a recoverable snapshot.
@@ -70,12 +68,17 @@ delivery now includes the frontend and an independent community backend.
 - Migration must preserve identity, permissions, work/file relationships,
   interactions and reward receipts; include Redis and browser-local data.
 - External account balance stays authoritative in the account service.
-- Community sign-in uses the Octopus account exclusively. Reuse the Studio
-  account login, verify its session server-side, and map issuer plus subject to
+- Community sign-in uses the Octopus account exclusively. Reuse the original
+  account login and encrypted session in the Fastify process, and map issuer plus subject to
   existing community profiles. Keep old unlinked profiles without matching by
   username or email. Registration and password management belong to the account
-  centre. Embedded creation contexts share the verified Studio session and its
-  refresh lock instead of requesting another authorization.
+  centre. Opening creation after community login uses that same account, balance
+  and refresh lock immediately, without a second login, authorization or key setup.
+  Account-owned browser history remains local; recovery only queries the original
+  task and token, and never repeats an uncertain paid submission.
+- Account settings show the existing numeric Octopus account ID as the Octopus
+  number and use its verified username. Internal community profile IDs remain
+  unchanged to preserve ownership; no additional public account number is issued.
 - Detailed migration gates are recorded in MIGRATION.md. Licensing of newly
   authored source and final deployment details remain open decisions.
 

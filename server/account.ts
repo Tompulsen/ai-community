@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { PoolClient } from 'pg'
-import type { Redis } from 'ioredis'
 import bcrypt from 'bcryptjs'
 import { lotteryInviter } from './business/lottery.ts'
 import { readStudioAccount } from './account-session.ts'
+import { handleAccountRequest, getNewApiConfig } from './native-account/index.ts'
 import { hash as sessionTokenHash, publicUser } from './auth.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
@@ -22,18 +22,6 @@ interface LinkProof {
   userId: string
   tokenHash: string
   credentialHash: string
-  sessionHash: string | null
-}
-
-interface StudioLaunch {
-  userId: string
-  issuer: string
-  subject: string
-  tokenHash: string
-  returnTo: string
-  kind: 'text' | 'image' | 'video'
-  studio: string
-  context?: string
   sessionHash: string | null
 }
 
@@ -125,23 +113,15 @@ export function newApiReturnPath(value: unknown): string {
   return value
 }
 
-export function verifyStudioBearer(authorization: string | undefined, secret: unknown): boolean {
-  return typeof secret === 'string' && secret.length >= 32
-    && timingSafeEqual(Buffer.from(accountHash(authorization ?? '')), Buffer.from(accountHash(`Bearer ${secret}`)))
-}
-
 function issuer(ctx: RequestContext): string {
   if (!ctx.config.newApiSso?.issuer) fail('SSO_UNAVAILABLE', 503)
   newApiOrigin(ctx.config.url)
   return newApiOrigin(ctx.config.newApiSso.issuer)
 }
 
-function studio(ctx: RequestContext): { origin: string; secret: string } {
-  const origin = newApiOrigin(ctx.config.url)
-  const secret = ctx.config.newApiSso?.studioSecret
-  issuer(ctx)
-  if (typeof secret !== 'string' || secret.length < 32) fail('STUDIO_UNAVAILABLE', 503)
-  return { origin, secret }
+function nativeReady(ctx: RequestContext): boolean {
+  const account = getNewApiConfig()
+  return account.enabled && account.configured && account.publicUrl === issuer(ctx)
 }
 
 export function readFlowCookie(header: string = ''): string | null {
@@ -154,10 +134,6 @@ export function readFlowCookie(header: string = ''): string | null {
 function redirect(ctx: RequestContext, path: string): void {
   void ctx.reply.headers(ctx.res.getHeaders()).code(303).header('Location', path)
     .header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer').send()
-}
-
-async function consume(redis: Redis, key: string, expected: string): Promise<boolean> {
-  return await redis.eval('if redis.call("GET",KEYS[1])==ARGV[1] then return redis.call("DEL",KEYS[1]) else return 0 end', 1, key, expected) === 1
 }
 
 async function rateLimit(ctx: RequestContext, key: string, maximum: number, seconds = 60): Promise<void> {
@@ -264,107 +240,22 @@ async function synchronizeSession(ctx: RequestContext) {
       [ctx.newId(), user.id, ctx.ip || ctx.req.socket.remoteAddress || null,
         JSON.stringify({ 'user-agent': String(ctx.req.headers['user-agent'] || '').slice(0, 512) })])
   }
-  return { user: result, returnTo: newApiReturnPath(ctx.body.returnTo ?? '/discover') }
+  return { user: { ...result, accountId: account.binding.subject, username: account.username },
+    returnTo: newApiReturnPath(ctx.body.returnTo ?? '/discover') }
 }
 
-async function studioStart(ctx: RequestContext) {
-  const currentUser = ctx.requireUser()
-  const sessionHash = ctx.sessionHash
-  if (!sessionHash) fail('STUDIO_ACCOUNT')
-  await rateLimit(ctx, 'studio-start', 30)
-  const { origin } = studio(ctx)
-  const { kind, context } = ctx.body
-  if (typeof kind !== 'string' || !['text', 'image', 'video'].includes(kind) || (context !== undefined && (typeof context !== 'string' || !OPAQUE.test(context)))) fail('STUDIO_REQUEST', 400)
-  const user = await availableUser(ctx.db, currentUser.id), accountIssuer = issuer(ctx)
-  const { rows } = await ctx.db.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [accountIssuer, user.id])
-  if (!rows.length) fail('NEW_API_ACCOUNT_REQUIRED', 409)
-  if (context) {
-    const owner = `${user.id}:${accountHash(user.token)}`
-    const accepted = await ctx.redis.eval('local v=redis.call("GET",KEYS[1]); if v and v~=ARGV[1] then return 0 end; redis.call("SET",KEYS[1],ARGV[1],"EX",900); return 1',
-      1, `newapi:context:${accountHash(context)}`, owner)
-    if (accepted !== 1) fail('STUDIO_CONTEXT_EXPIRED', 409)
-    await ctx.redis.set(`community-next:studio-session:${accountHash(context)}`, sessionHash, 'EX', 900)
-  }
-  const code = random()
-  const returnTo = newApiReturnPath(ctx.body.returnTo).startsWith(`/create/${kind}`) ? newApiReturnPath(ctx.body.returnTo) : `/create/${kind}`
-  await ctx.redis.set(`newapi:studio:${accountHash(code)}`, JSON.stringify({
-    userId: user.id, issuer: accountIssuer, subject: rows[0].subject,
-    tokenHash: accountHash(user.token), returnTo, kind, studio: origin, context, sessionHash,
-  }), 'EX', 120)
-  if (context) return { code, origin, subject: rows[0].subject, userId: user.id }
-  const target = new URL('/studio/api/new-api/community/start', origin)
-  target.searchParams.set('code', code)
-  return { url: target.href }
-}
-
-async function studioExchange(ctx: RequestContext) {
-  const { origin, secret } = studio(ctx)
-  if (!verifyStudioBearer(ctx.req.headers.authorization, secret)) fail('STUDIO_AUTH')
-  await rateLimit(ctx, 'studio-exchange', 300)
-  if (typeof ctx.body.code !== 'string' || !OPAQUE.test(ctx.body.code)) fail('STUDIO_CODE')
-  const key = `newapi:studio:${accountHash(ctx.body.code)}`, raw = await ctx.redis.get(key)
-  if (!raw) fail('STUDIO_CODE')
-  const launch = JSON.parse(raw) as StudioLaunch
-  if (launch.issuer !== issuer(ctx) || launch.studio !== origin) fail('STUDIO_CONFIG')
-  if (!launch.sessionHash || !await ctx.redis.exists(`community-next:session:${launch.sessionHash}`)) fail('STUDIO_ACCOUNT')
-  const user = await availableUser(ctx.db, launch.userId)
-  const { rows } = await ctx.db.query('SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3', [launch.issuer, launch.subject, user.id])
-  if (accountHash(user.token) !== launch.tokenHash || !rows.length || !await consume(ctx.redis, key, raw)) fail('STUDIO_ACCOUNT')
-  return {
-    issuer: launch.issuer, subject: launch.subject, kind: launch.kind, studio: origin,
-    returnTo: launch.returnTo, ...(launch.context ? { context: launch.context, userId: user.id, tokenHash: launch.tokenHash } : {}),
-  }
-}
-
-async function studioContext(ctx: RequestContext) {
-  const currentUser = ctx.requireUser()
-  const { context, action } = ctx.body
-  if (typeof context !== 'string' || !OPAQUE.test(context) || typeof action !== 'string' || !['renew', 'revoke'].includes(action)) fail('STUDIO_REQUEST', 400)
-  await rateLimit(ctx, 'studio-context', 300)
-  const user = await availableUser(ctx.db, currentUser.id), key = `newapi:context:${accountHash(context)}`
-  const owner = `${user.id}:${accountHash(user.token)}`
-  const sessionKey = `community-next:studio-session:${accountHash(context)}`
-  if (action === 'renew' && await ctx.redis.get(sessionKey) !== ctx.sessionHash) fail('STUDIO_CONTEXT_EXPIRED')
-  const changed = await ctx.redis.eval('local v=redis.call("GET",KEYS[1]); if v~=ARGV[1] and not (ARGV[2]=="revoked" and (not v or v=="revoked")) then return 0 end; redis.call("SET",KEYS[1],ARGV[2],"EX",ARGV[3]); return 1',
-    1, key, owner, action === 'revoke' ? 'revoked' : owner, action === 'revoke' ? 604800 : 120)
-  if (changed !== 1) fail('STUDIO_CONTEXT_EXPIRED')
-  if (action === 'revoke') await ctx.redis.del(sessionKey)
-  else await ctx.redis.expire(sessionKey, 120)
-  return { valid: true }
-}
-
-async function studioValidate(ctx: RequestContext) {
-  const { secret } = studio(ctx)
-  if (!verifyStudioBearer(ctx.req.headers.authorization, secret)) fail('STUDIO_AUTH')
-  const input = ctx.body
-  if (typeof input.userId !== 'string' || !/^[a-zA-Z0-9]{1,32}$/.test(input.userId) || input.issuer !== issuer(ctx)
-    || typeof input.subject !== 'string' || !/^[1-9]\d{0,18}$/.test(input.subject)
-    || typeof input.tokenHash !== 'string' || !OPAQUE.test(input.tokenHash)
-    || typeof input.context !== 'string' || !OPAQUE.test(input.context)) fail('STUDIO_REQUEST')
-  const user = await availableUser(ctx.db, input.userId)
-  const owner = `${user.id}:${input.tokenHash}`, contextHash = accountHash(input.context)
-  if (accountHash(user.token) !== input.tokenHash || await ctx.redis.get(`newapi:context:${contextHash}`) !== owner) fail('STUDIO_ACCOUNT_CHANGED')
-  const sessionHash = await ctx.redis.get(`community-next:studio-session:${contextHash}`)
-  if (!sessionHash || !await ctx.redis.exists(`community-next:session:${sessionHash}`)) fail('STUDIO_ACCOUNT_CHANGED')
-  const { rows } = await ctx.db.query('SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3', [input.issuer, input.subject, user.id])
-  if (!rows.length) fail('STUDIO_ACCOUNT_CHANGED')
-  return { valid: true }
-}
-
-export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'req'>, subject: string | null | undefined, fetcher: typeof fetch = fetch): Promise<AccountBalance | null> {
-  const upstream = ctx.config.communityStudioUpstream || process.env.COMMUNITY_STUDIO_UPSTREAM
-  if (!upstream || !subject) return null
+export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'req'>, subject: string | null | undefined, fetcher?: typeof fetch): Promise<AccountBalance | null> {
+  if (!subject) return null
   const cookies = String(ctx.req.headers.cookie ?? '').split(';').map(value => value.trim())
     .filter(value => value.startsWith('octopus_new_api_session='))
   if (cookies.length !== 1 || !OPAQUE.test(cookies[0].slice('octopus_new_api_session='.length))) return null
   try {
-    const destination = new URL(upstream), origin = new URL(ctx.config.url)
-    if (!['http:', 'https:'].includes(destination.protocol) || destination.username || destination.password
-      || destination.pathname !== '/' || destination.search || destination.hash) return null
+    const origin = new URL(ctx.config.url)
     const headers = { Cookie: cookies[0], Host: origin.host, Origin: origin.origin,
       'x-forwarded-host': origin.host, 'x-forwarded-proto': origin.protocol.slice(0, -1) }
     const read = async (path: string): Promise<Record<string, unknown>> => {
-      const response = await fetcher(new URL(path, destination), { headers, redirect: 'error', signal: AbortSignal.timeout(8000) })
+      const request = new Request(new URL(path, origin), { headers, redirect: 'error', signal: AbortSignal.timeout(8000) })
+      const response = fetcher ? await fetcher(new URL(request.url), { headers, signal: request.signal }) : await handleAccountRequest(request)
       if (!response.ok || !response.body) throw new Error()
       const length = Number(response.headers.get('content-length'))
       if (length > 65536) throw new Error()
@@ -379,7 +270,7 @@ export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'r
       if (!isRecord(value)) throw new Error()
       return value
     }
-    const [session, status] = await Promise.all([read('/studio/api/new-api/session'), read('/studio/api/new-api/status')])
+    const [session, status] = await Promise.all([read('/api/new-api/session'), read('/api/new-api/status')])
     const sessionData = isRecord(session.data) ? session.data : null
     const statusData = isRecord(status.data) ? status.data : null
     const user = isRecord(sessionData?.user) ? sessionData.user : null
@@ -397,25 +288,22 @@ export async function handleAccount(ctx: RequestContext): Promise<boolean> {
   if (method === 'POST' && ['/api/account/connect', '/api/newapi/start', '/api/account/finish', '/api/newapi/finish'].includes(path)) {
     fail('ACCOUNT_LOGIN_REQUIRED', 410)
   }
+  if (path.startsWith('/api/newapi/studio/')) fail('STUDIO_EMBED_REMOVED', 410)
   if (method === 'GET' && ['/api/newapi/callback', '/auth/newapi'].includes(path)) { redirect(ctx, '/account'); return true }
   if (!path.startsWith('/api/account') && !path.startsWith('/api/newapi/')) return false
   let result: unknown
   if (method === 'GET' && path === '/api/newapi/config') {
-    try { result = { enabled: true, authentication: 'zhangyu', issuer: issuer(ctx), accountUrl: issuer(ctx), studioOrigin: studio(ctx).origin, studioPath: '/studio' } }
+    try { result = { enabled: nativeReady(ctx), authentication: 'zhangyu', issuer: issuer(ctx), accountUrl: issuer(ctx), studioOrigin: new URL(ctx.config.url).origin, studioPath: '/create', creation: 'native' } }
     catch { result = { enabled: false } }
   } else if (method === 'GET' && path === '/api/account') {
     const accountIssuer = issuer(ctx)
     const { rows } = ctx.user ? await ctx.db.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [accountIssuer, ctx.user.id]) : { rows: [] }
     let studioReady = false
-    try { studio(ctx); studioReady = true } catch {}
+    try { studioReady = nativeReady(ctx) } catch {}
     const balance = rows.length ? await readAccountBalance(ctx, rows[0].subject) : null
     result = { linked: rows.length > 0, issuer: accountIssuer, subject: rows[0]?.subject ?? null,
       balance: null, ...balance, accountUrl: accountIssuer, studioReady }
   } else if (method === 'POST' && path === '/api/account/session') result = await synchronizeSession(ctx)
-  else if (method === 'POST' && path === '/api/newapi/studio/start') result = await studioStart(ctx)
-  else if (method === 'POST' && path === '/api/newapi/studio/exchange') result = await studioExchange(ctx)
-  else if (method === 'POST' && path === '/api/newapi/studio/context') result = await studioContext(ctx)
-  else if (method === 'POST' && path === '/api/newapi/studio/validate') result = await studioValidate(ctx)
   else return false
   ctx.json(200, result)
   return true
