@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, Bookmark, CheckCheck, ChevronDown, House, Gift, Images, LogIn, LogOut, MessageSquare, Plus, RefreshCw, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
+import { Bell, Bookmark, CheckCheck, ChevronDown, House, Gift, Images, LogOut, MessageSquare, Plus, RefreshCw, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import type { Work } from './data'
@@ -12,11 +12,10 @@ const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const links = [
   { path: '/discover', label: '首页', icon: House },
-  { path: '/create', label: '创作台', icon: WandSparkles },
   { path: '/activities', label: '推广中心', icon: Gift },
   { path: '/community', label: '社区', icon: Users },
+  { path: '/create', label: '创作台', icon: WandSparkles },
 ]
-const mainLinks = links.filter(link => link.path !== '/create')
 function isCurrent(path: string) {
   return route.path === path || (path === '/create' && route.path.startsWith('/create/')) || (path === '/discover' && route.path.startsWith('/work/'))
 }
@@ -87,16 +86,17 @@ function dismissMenus(event: Event) {
     <a href="#main" class="skip-link">跳至内容</a>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" aria-label="章鱼社区首页"><img class="brand-mark" src="/assets/brand/octopus-community.jpg" width="32" height="32" alt="" /><span>章鱼社区</span></RouterLink>
-      <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in mainLinks" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
-      <div class="header-actions"><RouterLink to="/create" class="button btn header-create" :class="{ active: isCurrent('/create') }" :aria-current="isCurrent('/create') ? 'page' : undefined"><WandSparkles :size="17" />创作台</RouterLink><template v-if="session.user">
+      <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
+      <div class="header-tools"><div id="header-search" class="header-search-slot" />
+      <div class="header-actions"><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink><template v-if="session.user">
         <RouterLink to="/messages" class="icon-button header-messages" aria-label="私信" title="私信"><MessageSquare :size="19" /></RouterLink>
         <details class="header-menu notifications" @toggle="toggleHeaderMenu"><summary class="icon-button notification-trigger" :aria-label="unreadCount ? `通知，${unreadCount} 条未读` : '通知'" title="通知"><Bell :size="19" /><span v-if="unreadCount" class="notification-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary><div class="menu-popover notification-popover"><div class="menu-title"><strong>通知</strong><div><button class="icon-button" aria-label="刷新通知" title="刷新通知" :disabled="notificationsLoading" @click="loadNotifications"><RefreshCw :size="16" /></button><button class="icon-button" aria-label="全部标记已读" title="全部标记已读" :disabled="markingRead || !unreadCount" @click="markRead(notifications.filter(item => !item.isRead).map(item => item.id))"><CheckCheck :size="17" /></button></div></div><p v-if="notificationsLoading && !notifications.length" role="status">正在加载…</p><p v-if="notificationError" class="form-error" role="alert">{{ notificationError }}</p><div v-if="notifications.length" class="notification-list"><article v-for="item in notifications" :key="item.id" class="notification-item" :class="{ unread: !item.isRead }"><RouterLink v-if="item.actor" :to="{ path: '/community', query: { creator: item.actor.id } }" class="notification-actor" @click="!item.isRead && markRead([item.id])"><span class="avatar blue"><img v-if="item.actor.avatarUrl" :src="item.actor.avatarUrl" :alt="item.actor.name || item.actor.username" /><span v-else>{{ (item.actor.name || item.actor.username || '用').slice(0, 1) }}</span></span></RouterLink><RouterLink :to="destination(item)" class="notification-content" @click="!item.isRead && markRead([item.id])"><strong v-if="item.title">{{ item.title }}</strong><span>{{ item.text || item.body }}</span><time v-if="item.createdAt" class="caption-5">{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time></RouterLink></article></div><p v-else-if="!notificationsLoading && !notificationError">暂无通知</p></div></details>
-        <RouterLink :to="{ path: route.path, query: { ...route.query, publish: '1' } }" class="button primary publish-button btn" aria-label="发布作品" title="发布作品"><Plus :size="17" /><span>发布作品</span></RouterLink>
+        <RouterLink v-if="route.path !== '/discover'" :to="{ path: route.path, query: { ...route.query, publish: '1' } }" class="button primary publish-button btn" aria-label="发布作品" title="发布作品"><Plus :size="17" /><span>发布作品</span></RouterLink>
         <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span class="caption-5">@{{ session.user.username }}</span></div>
           <RouterLink to="/library" :aria-current="route.path === '/library' && route.query.tab !== 'saved' ? 'page' : undefined"><Images :size="16" />我的作品</RouterLink>
           <RouterLink to="/library?tab=saved" :aria-current="route.path === '/library' && route.query.tab === 'saved' ? 'page' : undefined"><Bookmark :size="16" />我的收藏</RouterLink>
           <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/messages"><MessageSquare :size="16" />私信</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
-      </template><RouterLink v-else to="/account" class="button primary btn"><LogIn :size="17" />登录</RouterLink></div>
+      </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
     </div></header>
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="`${route.path}:${session.user?.id || 'guest'}`" /></main>
@@ -109,13 +109,54 @@ function dismissMenus(event: Event) {
 </template>
 
 <style scoped>
+.header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 32px; }
+.brand { justify-self: start; }
+.desktop-nav { align-items: center; justify-self: center; gap: 24px; }
+.header-tools { display: flex; align-items: center; justify-self: end; min-width: 0; gap: 8px; }
+.header-actions { margin-left: 0; gap: 8px; }
+.header-submission { display: flex; align-items: center; justify-content: center; flex: none; gap: 6px; width: max-content; height: 36px; margin-right: 14px; color: var(--muted); white-space: nowrap; }
+.header-submission:hover { color: var(--ink); }
+.submission-icon { flex: none; }
+.submission-label { font-size: 14px; line-height: 20px; font-weight: 500; }
+.nav-link { align-self: center; padding: 10px 0; min-height: 44px; }
+.nav-link::after { display: none; }
+.header-actions > .button { border-radius: 24px; min-height: 44px; padding-inline: 16px; }
+.header-actions > .header-login { min-height: 36px; padding-block: 6px; border-radius: 18px; }
+.header-actions > .button.primary { background: var(--ink); color: var(--canvas); border-color: transparent; }
+.header-actions > .button.primary:hover { background: #ffffff; }
+.header-search-slot { position: relative; width: 44px; height: 44px; min-width: 0; --gooey-expanded-width: clamp(180px, calc(100vw - 1056px), 280px); }
+.header-search-slot:empty { display: none; }
+@media (min-width: 1000px) and (max-width: 1279px) {
+  .header-inner { grid-template-columns: auto minmax(0, 1fr) auto; gap: 24px; }
+}
+@media (min-width: 640px) and (max-width: 999px) {
+  .header-inner { grid-template-columns: auto minmax(0, 1fr); gap: 24px; }
+  .header-search-slot { --gooey-expanded-width: clamp(180px, calc(100vw - 460px), 280px); }
+}
+@media (max-width: 639px) {
+  .header-inner { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .header-tools { gap: 4px; }
+  .header-actions { justify-self: end; }
+  .header-submission { width: 44px; height: 44px; margin-right: 0; }
+  .header-actions:has(.header-login) { gap: 18px; }
+  .submission-icon { width: 22px; height: 22px; }
+  .submission-label { display: none; }
+  :global(:root:has(#header-search .expanded)) { --header-height: 120px; }
+  .app-header:has(#header-search .expanded) { height: 120px; }
+  .header-inner:has(#header-search .expanded) { grid-template-rows: 64px 56px; row-gap: 0; }
+  .header-inner:has(#header-search .expanded) .header-tools { display: contents; }
+  .header-inner:has(#header-search .expanded) .brand { grid-column: 1; grid-row: 1; }
+  .header-inner:has(#header-search .expanded) .header-actions { grid-column: 2; grid-row: 1; }
+  .header-search-slot { --gooey-expanded-width: 100%; }
+  .header-search-slot:has(.expanded) { grid-column: 1 / -1; grid-row: 2; width: 100%; align-self: start; }
+}
+@media (max-width: 639px) { .header-actions > .publish-button { padding: 0; } }
 :global(#app:has(.account-entry-shell)) { padding-bottom: 0; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
-.header-create.active, .account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }
-@media (max-width: 999px) { .header-create { display: none; } }
+.account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }
 .notification-trigger { position: relative; }.notification-count { position: absolute; right: -3px; top: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; padding: 0 3px; }
 .notification-popover { width: min(360px, calc(100vw - 32px)); }.menu-title > div { display: flex; align-items: center; }.notification-list { max-height: min(480px, 65svh); overflow-y: auto; }
 .notification-item { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }.notification-item.unread { background: var(--blue-soft); }.notification-actor { padding: 0; flex: none; }
 .notification-content { display: grid; gap: 4px; min-width: 0; padding: 0; }.notification-content span { overflow-wrap: anywhere; }.notification-content time { color: var(--muted); }
-@media (max-width: 639px) { .header-actions { gap: 8px; }.notification-popover { position: fixed; left: 16px; right: 16px; top: 64px; width: auto; } }
+@media (max-width: 639px) { .header-actions { gap: 4px; }.notification-popover { position: fixed; left: 16px; right: 16px; top: 64px; width: auto; } }
 </style>

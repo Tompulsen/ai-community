@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Tags, X, ArrowDownWideNarrow, SearchX, LayoutGrid, Image, Video, FileText } from '@lucide/vue'
+import { X, SearchX, ChevronLeft, ChevronRight } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
@@ -16,14 +16,15 @@ const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const kind = ref(typeof route.query.kind === 'string' ? route.query.kind : 'all')
 const tag = ref(typeof route.query.tag === 'string' ? route.query.tag : '')
 const order = ref('featured')
-const showTags = ref(false)
-const filterCount = computed(() => Number(kind.value !== 'all') + Number(!!tag.value))
+const browseModes = [{ value: 'featured', label: '推荐' }, { value: 'latest', label: '最新' }, { value: 'following', label: '关注' }]
+const tagRail = ref<HTMLElement>()
+const canScrollBack = ref(false), canScrollForward = ref(false)
+let railObserver: ResizeObserver | undefined
 const works = ref<Work[]>([])
 const tags = ref<{ id: string; name: string }[]>([])
 const loading = ref(false)
 const error = ref('')
 const nextCursor = ref<string | null>(null)
-const categoryIcons = { image: Image, video: Video, resource: FileText }
 let controller: AbortController | undefined
 let searchTimer: ReturnType<typeof setTimeout>
 
@@ -61,7 +62,23 @@ watch(() => route.query, value => {
   kind.value = typeof value.kind === 'string' ? value.kind : 'all'
   tag.value = typeof value.tag === 'string' ? value.tag : ''
 })
-onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort() })
+function updateRail() {
+  const rail = tagRail.value
+  if (!rail) return
+  canScrollBack.value = rail.scrollLeft > 1
+  canScrollForward.value = rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 1
+}
+function scrollTags(direction: number) {
+  const rail = tagRail.value
+  rail?.scrollBy({ left: direction * rail.clientWidth * 0.75, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+}
+onMounted(() => {
+  railObserver = new ResizeObserver(updateRail)
+  if (tagRail.value) railObserver.observe(tagRail.value)
+  updateRail()
+})
+watch(tags, async () => { await nextTick(); updateRail() })
+onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort(); railObserver?.disconnect() })
 void load()
 void api<{ items: typeof tags.value }>('/api/tags').then(result => { tags.value = result.items }).catch(() => {})
 function clearConditions() { query.value = ''; tag.value = '' }
@@ -72,19 +89,26 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
   <div class="page-container discover-page">
     <h1 class="discover-heading-sr">首页</h1>
     <div class="discovery-toolbar">
-      <div class="discover-filters">
-        <button class="tag-button all-works" :class="{ active: kind === 'all' }" :aria-pressed="kind === 'all'" aria-label="推荐" @click="kind = 'all'"><LayoutGrid :size="16" aria-hidden="true" /><span>推荐</span></button>
-        <button class="button btn subtle filter-toggle" :class="{ selected: showTags || filterCount }" :aria-expanded="showTags" aria-controls="discover-tags" @click="showTags = !showTags"><Tags :size="16" aria-hidden="true" /><span>标签</span><span v-if="filterCount" class="filter-count">{{ filterCount }}</span></button>
-        <label class="sort-control"><ArrowDownWideNarrow :size="16" aria-hidden="true" /><select v-model="order" aria-label="浏览方式"><option value="featured">推荐</option><option value="latest">最新</option><option value="following">关注</option></select></label>
+      <div class="browse-modes" role="group" aria-label="浏览方式">
+        <button v-for="mode in browseModes" :key="mode.value" class="browse-mode" :class="{ active: order === mode.value }" :aria-pressed="order === mode.value" @click="order = mode.value">{{ mode.label }}</button>
       </div>
-      <GooeyInput v-model="query" class="discover-search" />
+      <div class="tag-navigation">
+        <div ref="tagRail" class="tag-rail" role="region" aria-label="类型和标签" tabindex="0" @scroll.passive="updateRail">
+          <div class="category-tabs" role="group" aria-label="作品类型">
+            <button class="rail-option" :class="{ active: kind === 'all' && !tag }" :aria-pressed="kind === 'all' && !tag" @click="kind = 'all'; tag = ''">全部</button>
+            <button v-for="(label, value) in kindLabels" :key="value" class="rail-option" :class="{ active: kind === value }" :aria-pressed="kind === value" :aria-label="value === 'resource' ? `资源，${label}` : label" @click="kind = value">{{ value === 'resource' ? '资源' : label }}</button>
+          </div>
+          <div v-if="tags.length" class="content-tags" role="group" aria-label="内容标签">
+            <button v-for="item in tags" :key="item.id" class="rail-option" :class="{ active: tag === item.name }" :aria-pressed="tag === item.name" @click="tag = tag === item.name ? '' : item.name">{{ item.name }}</button>
+          </div>
+        </div>
+        <div v-if="canScrollBack || canScrollForward" class="tag-scroll-controls">
+          <button v-show="canScrollBack" class="icon-button" aria-label="向前浏览标签" title="向前浏览标签" :disabled="!canScrollBack" @click="scrollTags(-1)"><ChevronLeft :size="17" /></button>
+          <button v-show="canScrollForward" class="icon-button" aria-label="向后浏览标签" title="向后浏览标签" :disabled="!canScrollForward" @click="scrollTags(1)"><ChevronRight :size="17" /></button>
+        </div>
+      </div>
     </div>
-    <div v-if="showTags" id="discover-tags" class="tag-filter" aria-label="标签筛选">
-      <div class="filter-section"><span class="filter-label">作品类型</span><div class="category-tabs" role="group" aria-label="作品类型">
-        <button v-for="(label, value) in kindLabels" :key="value" class="tag-button" :class="{ active: kind === value }" :aria-pressed="kind === value" :aria-label="value === 'resource' ? `资源，${label}` : label" @click="kind = value"><component :is="categoryIcons[value]" :size="16" aria-hidden="true" /><span>{{ value === 'resource' ? '资源' : label }}</span></button>
-      </div></div>
-      <div class="filter-section"><span class="filter-label">内容标签</span><div class="content-tags"><button class="tag-button" :class="{ active: !tag }" :aria-pressed="!tag" @click="tag = ''">所有标签</button><button v-for="item in tags" :key="item.id" class="tag-button" :class="{ active: tag === item.name }" :aria-pressed="tag === item.name" @click="tag = tag === item.name ? '' : item.name">{{ item.name }}</button></div></div>
-    </div>
+    <Teleport to="#header-search"><GooeyInput v-model="query" /></Teleport>
     <div v-if="query || tag || kind !== 'all'" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />
@@ -99,29 +123,38 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 <style scoped>
 .discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .discover-page { padding-top: 24px; }
-.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(180px, 320px); justify-content: space-between; gap: 24px; padding-bottom: 16px; margin-bottom: 24px; }
-.discover-filters { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.all-works { flex: none; gap: 8px; font-size: 14px; white-space: nowrap; }
-.filter-toggle { min-height: 44px; }
-.sort-control { flex: none; width: 104px; min-height: 44px; padding-inline: 8px; }
-.sort-control select { width: 100%; min-width: 0; min-height: 42px; padding-block: 10px; }
-.tag-filter { display: grid; gap: 16px; padding: 0 0 20px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
-.filter-section { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: start; }
-.filter-label { padding-block: 12px; font-size: 12px; line-height: 20px; color: var(--muted); }
-.category-tabs, .content-tags { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.category-tabs .tag-button { gap: 8px; font-size: 14px; }
-.tag-button { min-height: 44px; }
+.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 24px; padding-bottom: 20px; margin-bottom: 24px; }
+.browse-modes { display: flex; align-items: center; padding: 3px; border: 1px solid var(--border); border-radius: 18px; }
+.browse-mode { min-height: 28px; min-width: 60px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; font-weight: 500; white-space: nowrap; }
+.browse-mode:hover { color: var(--ink); }
+.tag-navigation { display: flex; align-items: center; min-width: 0; border: 1px solid var(--border); border-radius: 18px; padding: 3px; }
+.tag-rail { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-radius: 14px; }
+.tag-rail::-webkit-scrollbar { display: none; }
+.category-tabs, .content-tags { display: flex; align-items: center; flex: none; gap: 4px; }
+.content-tags { margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--border); }
+.rail-option { min-height: 28px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; white-space: nowrap; font-weight: 500; }
+.rail-option:hover { color: var(--ink); }
+.browse-mode, .rail-option { transition: background-color .2s ease-in-out, color .2s ease-in-out, border-color .2s ease-in-out, box-shadow .2s ease-in-out; }
+.browse-mode.active, .rail-option.active { background: #202020; color: var(--ink); box-shadow: inset 4px 4px 10px #141414, inset -4px -4px 10px #2c2c2c; }
+.rail-option:focus-visible, .browse-mode:focus-visible { outline-offset: -3px; }
+.tag-scroll-controls { display: flex; flex: none; }
+.tag-scroll-controls .icon-button { width: 28px; height: 28px; min-height: 28px; min-width: 28px; border-radius: 50%; }
+.tag-scroll-controls .icon-button:disabled { opacity: .3; }
 .search-result { gap: 12px; margin-bottom: 20px; }
 .active-conditions { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; overflow-wrap: anywhere; }
 .search-result .text-link { flex-shrink: 0; min-height: 44px; }
 .feed-end { padding-top: 32px; }
+@media (prefers-reduced-motion: reduce) {
+  .browse-mode, .rail-option { transition: none; }
+}
+@media (pointer: coarse), (max-width: 639px) {
+  .browse-modes, .tag-navigation { padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--border); }
+  .browse-mode, .rail-option { min-height: 36px; border-radius: 18px; }
+  .tag-rail { border-radius: 18px; }
+  .tag-scroll-controls .icon-button { width: 36px; height: 36px; min-height: 36px; min-width: 36px; }
+}
 @media (max-width: 639px) {
   .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 20px; }
-  .all-works { padding-inline: 8px; }
-  .discover-filters .filter-toggle { min-width: 88px; padding-inline: 8px; }
-  .sort-control { margin-left: auto; }
-  .discover-search { --gooey-collapsed-width: 100%; }
-  .filter-section { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .filter-label { padding-block: 0; }
+  .browse-modes { grid-column: 1 / -1; justify-self: start; }
 }
 </style>

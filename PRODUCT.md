@@ -33,13 +33,14 @@ delivery now includes the frontend and an independent community backend.
 
 ## Capabilities and Constraints
 
-- Public navigation groups home (首页), the promotion center and community.
-  The creation desk has a separate desktop entry and a mobile navigation tab.
+- Public navigation groups home (首页), the promotion center, community and the
+  creation desk in that order on desktop and mobile.
   Personal works and saved works live in the account menu.
-- Home begins with recommendations (推荐), search, tags and a browse-mode selector.
-  The recommendations button retains the all-types filtering behavior.
-  Image, video and resource types live inside the expandable tag panel,
-  grouped separately from content tags; active types remain visible when collapsed.
+- Home begins with segmented recommendations, latest and following modes, a
+  horizontal type/tag rail. The top header contains expandable icon search and a
+  submission entry that opens the existing work editor for members or login for guests.
+  Types and content tags filter independently;
+  the all option clears both. The rail supports touch, keyboard and scroll arrows.
   Its page heading remains available to screen readers; the visible heading and
   work count are omitted. Clearing conditions preserves content type and browse
   mode; restoring defaults resets the complete selection. Following requires login.

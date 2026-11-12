@@ -55,7 +55,7 @@ function clear() {
       <div class="gooey-bubble" />
     </div>
     <Search class="gooey-search-icon" :size="16" aria-hidden="true" />
-    <button v-show="!expanded" ref="trigger" type="button" class="gooey-trigger" aria-label="展开搜索" title="展开搜索" :aria-controls="inputId" :aria-expanded="expanded" @click="expand">搜索作品</button>
+    <button v-show="!expanded" ref="trigger" type="button" class="gooey-trigger" aria-label="展开搜索作品" title="展开搜索作品" :aria-controls="inputId" :aria-expanded="expanded" @click="expand" />
     <div class="gooey-field">
       <input :id="inputId" ref="input" v-model="model" type="search" aria-label="搜索作品" :placeholder="placeholder" :disabled="!expanded" enterkeyhint="search" autocomplete="off" />
       <button v-if="model" type="button" class="gooey-clear" aria-label="清除搜索" title="清除搜索" @click="clear"><X :size="16" /></button>
@@ -64,27 +64,29 @@ function clear() {
 </template>
 
 <style scoped>
-.gooey-input { position: relative; display: block; flex: 1; width: 100%; min-width: 0; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 22px; background: transparent; color: var(--canvas); isolation: isolate; }
+.gooey-input { position: relative; display: block; flex: 1; width: 100%; min-width: 0; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 22px; background: transparent; color: var(--ink); isolation: isolate; }
+.gooey-input.expanded { position: absolute; top: 0; right: 0; width: var(--gooey-expanded-width, 100%); }
 .gooey-input:hover, .gooey-input:focus-within { background: transparent; border-color: transparent; }
 .gooey-input:focus-within { outline: none; }
 .gooey-definitions { position: absolute; pointer-events: none; }
 .gooey-surfaces { position: absolute; inset: 0; pointer-events: none; }
-.gooey-field-surface, .gooey-bubble { position: absolute; height: 44px; background: var(--ink); border-radius: 22px; }
-.gooey-field-surface { left: calc(100% - var(--gooey-collapsed-width, 128px)); width: var(--gooey-collapsed-width, 128px); transition: left 400ms cubic-bezier(.22, 1.3, .36, 1), width 400ms cubic-bezier(.22, 1.3, .36, 1); }
-.gooey-bubble { left: calc(100% - var(--gooey-collapsed-width, 128px)); width: 44px; opacity: 0; transform: scale(0); transition: left 400ms cubic-bezier(.22, 1.3, .36, 1), opacity 300ms var(--ease), transform 400ms cubic-bezier(.22, 1.3, .36, 1); }
+.gooey-field-surface, .gooey-bubble { position: absolute; height: 44px; background: transparent; border-radius: 22px; }
+.gooey-input:focus-within .gooey-field-surface, .expanded .gooey-field-surface, .expanded .gooey-bubble { background: var(--surface-soft); }
+.gooey-field-surface { left: calc(100% - 44px); width: 44px; transition: background-color 200ms var(--ease), left 400ms cubic-bezier(.22, 1.3, .36, 1), width 400ms cubic-bezier(.22, 1.3, .36, 1); }
+.gooey-bubble { left: calc(100% - 44px); width: 44px; opacity: 0; transform: scale(0); transition: left 400ms cubic-bezier(.22, 1.3, .36, 1), opacity 300ms var(--ease), transform 400ms cubic-bezier(.22, 1.3, .36, 1); }
 .expanded .gooey-field-surface { left: 52px; width: calc(100% - 52px); }
 .expanded .gooey-bubble { left: 0; opacity: 1; transform: scale(1); }
-.gooey-search-icon { position: absolute; left: calc(100% - var(--gooey-collapsed-width, 128px) + 16px); top: 14px; pointer-events: none; transition: left 400ms cubic-bezier(.22, 1.3, .36, 1); }
+.gooey-search-icon { position: absolute; left: calc(100% - 30px); top: 14px; pointer-events: none; transition: left 400ms cubic-bezier(.22, 1.3, .36, 1); }
 .expanded .gooey-search-icon { left: 14px; }
-.gooey-trigger { position: absolute; left: calc(100% - var(--gooey-collapsed-width, 128px)); width: var(--gooey-collapsed-width, 128px); height: 44px; padding: 0 12px 0 36px; border-radius: 22px; color: var(--canvas); font-size: 14px; font-weight: 500; white-space: nowrap; text-align: left; }
+.gooey-trigger { position: absolute; left: calc(100% - 44px); width: 44px; height: 44px; padding: 0; border-radius: 22px; color: inherit; }
 .gooey-field { position: absolute; left: 52px; width: calc(100% - 52px); height: 44px; display: flex; align-items: center; border-radius: 22px; visibility: hidden; opacity: 0; }
 .expanded .gooey-field { visibility: visible; opacity: 1; transition: opacity 160ms var(--ease) 120ms; }
-.gooey-field input { width: 100%; min-width: 0; height: 44px; min-height: 44px; padding: 0 12px; border: 0; outline: none; box-shadow: none; background: transparent; color: var(--canvas); font-size: 14px; border-radius: 22px; }
-.gooey-field input::placeholder { color: var(--p-inv-muted); opacity: 1; }
+.gooey-field input { width: 100%; min-width: 0; height: 44px; min-height: 44px; padding: 0 12px; border: 0; outline: none; box-shadow: none; background: transparent; color: inherit; font-size: 14px; border-radius: 22px; }
+.gooey-field input::placeholder { color: var(--muted); opacity: 1; }
 .gooey-field input::-webkit-search-cancel-button { appearance: none; }
-.gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: var(--canvas); }
-.gooey-clear:hover { background: #00000014; }
-.gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--canvas); }
+.gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: inherit; }
+.gooey-clear:hover { background: var(--border); }
+.gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .gooey-surfaces { filter: none !important; }
   .gooey-field-surface, .gooey-bubble, .gooey-search-icon, .gooey-field { transition: none; }

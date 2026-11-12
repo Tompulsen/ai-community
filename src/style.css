@@ -7,7 +7,7 @@
 }
 
 :root {
-  --p-bg: #1c1c1c; --p-surface: #262626; --p-ink: #f1f1ef; --p-muted: #9a9b96;
+  --p-bg: #121212; --p-surface: #262626; --p-ink: #f1f1ef; --p-muted: #9a9b96;
   --p-accent: #8fa68e; --p-accent-ink: #1c1c1c; --p-action: #8fa68e; --p-action-ink: #1c1c1c;
   --p-inv-bg: #c8c5ba; --p-inv-surface: #bab8ae; --p-inv-ink: #1c1c1c; --p-inv-muted: #454442;
   --p-inv-accent: #1c1c1c; --p-inv-accent-ink: #c8c5ba; --p-inv-action: #1c1c1c; --p-inv-action-ink: #c8c5ba;
@@ -123,7 +123,7 @@ main:focus { outline: none; }
 .button.danger, .button.destructive { color: #32191d; background: var(--danger); border-color: transparent; }
 .icon-button { width: 36px; height: 36px; min-height: 36px; padding: 0; border-color: transparent; background: transparent; }
 .icon-button.danger { color: var(--danger); }
-.app-header { height: var(--header-height); flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--canvas); position: sticky; top: 0; z-index: 20; }
+.app-header { height: var(--header-height); flex-shrink: 0; background: var(--canvas); position: sticky; top: 0; z-index: 20; }
 .header-inner { max-width: 1512px; margin: auto; display: flex; gap: 56px; align-items: center; height: 100%; padding: 0 var(--page-gutter); }
 .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 18px; line-height: 28px; font-weight: 600; white-space: nowrap; }
 .brand-mark { display: grid; flex: none; place-items: center; width: 32px; height: 32px; border-radius: 6px; color: var(--canvas); background: var(--ink); }
@@ -203,7 +203,7 @@ textarea.control { line-height: 24px; }
 .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
 .tab:hover { color: var(--ink); }
 .tabs .tab:focus-visible { outline-offset: -3px; }
-.discovery-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 24px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.discovery-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 24px; margin-bottom: 24px; }
 .discovery-toolbar .tabs { margin: 0; border: 0; gap: 4px; overflow: visible; padding: 4px; border-radius: 8px; background: var(--surface-soft); }
 .category-tabs .tab { position: relative; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 4px; font-size: 14px; white-space: nowrap; isolation: isolate; }
 .category-tabs .tab::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--surface); border-radius: inherit; opacity: 0; transform: scale(.94); transition: opacity 200ms var(--ease), transform 200ms var(--ease); }
