@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { SlidersHorizontal, X, ArrowDownWideNarrow, SearchX, LayoutGrid, Image, Video, FileText } from '@lucide/vue'
+import { Tags, X, ArrowDownWideNarrow, SearchX, LayoutGrid, Image, Video, FileText } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
-import { api, errorMessage, queryString } from '../state'
+import GooeyInput from '../components/GooeyInput.vue'
+import { api, errorMessage, loadSession, queryString, session } from '../state'
 import { kindLabels, type Work } from '../data'
 
 const route = useRoute()
@@ -16,6 +17,7 @@ const kind = ref(typeof route.query.kind === 'string' ? route.query.kind : 'all'
 const tag = ref(typeof route.query.tag === 'string' ? route.query.tag : '')
 const order = ref('featured')
 const showTags = ref(false)
+const filterCount = computed(() => Number(kind.value !== 'all') + Number(!!tag.value))
 const works = ref<Work[]>([])
 const tags = ref<{ id: string; name: string }[]>([])
 const loading = ref(false)
@@ -32,6 +34,11 @@ async function load(append = false) {
   loading.value = true
   error.value = ''
   try {
+    if (order.value === 'following') {
+      await loadSession()
+      if (active.signal.aborted) return
+      if (!session.user) { works.value = []; nextCursor.value = null; return }
+    }
     const result = await api<{ items: Work[]; nextCursor: string | null }>(`/api/works${queryString({
       kind: kind.value === 'all' ? undefined : kind.value, query: query.value.trim(), tag: tag.value, sort: order.value,
       cursor: append ? nextCursor.value || undefined : undefined,
@@ -57,62 +64,64 @@ watch(() => route.query, value => {
 onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort() })
 void load()
 void api<{ items: typeof tags.value }>('/api/tags').then(result => { tags.value = result.items }).catch(() => {})
-function reset() { query.value = ''; kind.value = 'all'; tag.value = ''; order.value = 'featured' }
+function clearConditions() { query.value = ''; tag.value = '' }
+function reset() { clearConditions(); kind.value = 'all'; order.value = 'featured' }
 </script>
 
 <template>
   <div class="page-container discover-page">
-    <div class="page-heading discover-heading">
-      <div class="discover-title"><h1>发现作品</h1><span v-if="works.length" class="discover-count">{{ works.length }} 件作品</span></div>
-      <label class="search-control discover-search"><span class="search-field-label">搜索作品</span><input v-model="query" type="search" aria-label="搜索作品" placeholder="标题、提示词或创作者" /><button v-if="query" type="button" class="icon-button" aria-label="清除搜索" title="清除搜索" @click="query = ''"><X :size="16" /></button></label>
-    </div>
+    <h1 class="discover-heading-sr">首页</h1>
     <div class="discovery-toolbar">
-      <div class="tabs category-tabs" role="group" aria-label="作品类型">
-        <button class="tab" :class="{ active: kind === 'all' }" :aria-pressed="kind === 'all'" aria-label="全部作品" @click="kind = 'all'"><LayoutGrid :size="16" aria-hidden="true" /><span class="category-label">全部作品</span><span class="category-label-short" aria-hidden="true">全部</span></button>
-        <button v-for="(label, value) in kindLabels" :key="value" class="tab" :class="{ active: kind === value }" :aria-pressed="kind === value" :aria-label="value === 'resource' ? `资源，${label}` : label" @click="kind = value"><component :is="categoryIcons[value]" :size="16" aria-hidden="true" /><span class="category-label">{{ label }}</span><span class="category-label-short" aria-hidden="true">{{ value === 'resource' ? '资源' : label }}</span></button>
+      <div class="discover-filters">
+        <button class="tag-button all-works" :class="{ active: kind === 'all' }" :aria-pressed="kind === 'all'" aria-label="推荐" @click="kind = 'all'"><LayoutGrid :size="16" aria-hidden="true" /><span>推荐</span></button>
+        <button class="button btn subtle filter-toggle" :class="{ selected: showTags || filterCount }" :aria-expanded="showTags" aria-controls="discover-tags" @click="showTags = !showTags"><Tags :size="16" aria-hidden="true" /><span>标签</span><span v-if="filterCount" class="filter-count">{{ filterCount }}</span></button>
+        <label class="sort-control"><ArrowDownWideNarrow :size="16" aria-hidden="true" /><select v-model="order" aria-label="浏览方式"><option value="featured">推荐</option><option value="latest">最新</option><option value="following">关注</option></select></label>
       </div>
-      <div class="toolbar-options"><button class="button btn subtle filter-toggle" :class="{ selected: showTags || tag }" :aria-expanded="showTags" aria-controls="discover-tags" @click="showTags = !showTags"><SlidersHorizontal :size="16" /><span>筛选</span><span v-if="tag" class="filter-count">1</span></button><label class="sort-control"><ArrowDownWideNarrow :size="16" /><select v-model="order" aria-label="作品排序"><option value="featured">精选推荐</option><option value="latest">最新发布</option><option value="following">我的关注</option></select></label></div>
+      <GooeyInput v-model="query" class="discover-search" />
     </div>
-    <div v-if="showTags" id="discover-tags" class="tag-filter" aria-label="标签筛选"><button class="tag-button" :class="{ active: !tag }" :aria-pressed="!tag" @click="tag = ''">所有标签</button><button v-for="item in tags" :key="item.id" class="tag-button" :class="{ active: tag === item.name }" :aria-pressed="tag === item.name" @click="tag = tag === item.name ? '' : item.name">{{ item.name }}</button></div>
-    <div v-if="query || tag" class="search-result"><span>{{ works.length }} 件作品<span v-if="tag"> · {{ tag }}</span></span><button class="text-link" @click="reset">重置条件 <X :size="13" /></button></div>
+    <div v-if="showTags" id="discover-tags" class="tag-filter" aria-label="标签筛选">
+      <div class="filter-section"><span class="filter-label">作品类型</span><div class="category-tabs" role="group" aria-label="作品类型">
+        <button v-for="(label, value) in kindLabels" :key="value" class="tag-button" :class="{ active: kind === value }" :aria-pressed="kind === value" :aria-label="value === 'resource' ? `资源，${label}` : label" @click="kind = value"><component :is="categoryIcons[value]" :size="16" aria-hidden="true" /><span>{{ value === 'resource' ? '资源' : label }}</span></button>
+      </div></div>
+      <div class="filter-section"><span class="filter-label">内容标签</span><div class="content-tags"><button class="tag-button" :class="{ active: !tag }" :aria-pressed="!tag" @click="tag = ''">所有标签</button><button v-for="item in tags" :key="item.id" class="tag-button" :class="{ active: tag === item.name }" :aria-pressed="tag === item.name" @click="tag = tag === item.name ? '' : item.name">{{ item.name }}</button></div></div>
+    </div>
+    <div v-if="query || tag || kind !== 'all'" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />
     <BentoGrid v-else-if="works.length" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
-    <div v-else-if="!error" class="empty-state"><SearchX :size="32" /><h2>{{ order === 'following' ? '还没有关注的作品' : '没有找到相关作品' }}</h2><p>试试其他关键词，或清除筛选条件。</p><button class="button btn subtle" @click="reset">清除筛选</button></div>
+    <div v-else-if="!error && order === 'following' && session.ready && !session.user" class="empty-state"><SearchX :size="32" /><h2>登录后查看关注的作品</h2><RouterLink to="/account" class="button primary btn">登录</RouterLink></div>
+    <div v-else-if="!error" class="empty-state"><SearchX :size="32" /><h2>{{ order === 'following' ? '还没有关注的作品' : '没有找到相关作品' }}</h2><p>试试其他关键词，或恢复默认浏览。</p><button class="button btn subtle" @click="reset">恢复默认</button></div>
     <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多' }}</button></div>
     <CommunityAds :slots="['communityAd1', 'communityAd2', 'communityAd3', 'communityAd4']" />
   </div>
 </template>
 
 <style scoped>
-.discover-heading { display: grid; min-height: 48px; margin-bottom: 24px; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); gap: 24px; }
-.discover-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
-.discover-title h1 { color: var(--ink); font-size: 26px; line-height: 36px; }
-.discover-count { color: var(--muted); font-size: 12px; line-height: 20px; font-variant-numeric: tabular-nums; }
-.discover-search { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-height: 44px; padding-inline: 12px; }
-.discover-search input { min-height: 42px; padding-block: 10px; }
-.search-field-label { font-size: 12px; color: var(--muted); white-space: nowrap; padding-right: 12px; border-right: 1px solid var(--border); }
-.discover-search:hover { border-color: var(--muted); }
-.discover-search:focus-within { background: var(--surface); border-color: var(--blue); outline-color: var(--blue-soft); }
-.discovery-toolbar { padding-bottom: 20px; margin-bottom: 24px; gap: 16px; }
-.discovery-toolbar .category-tabs { background: transparent; border-radius: 0; padding: 0; gap: 8px; }
-.category-tabs .tab { min-height: 40px; padding-inline: 12px; }
-.toolbar-options { gap: 12px; }
-.tag-filter { padding: 0 0 20px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
-.search-result { margin-bottom: 20px; }
+.discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.discover-page { padding-top: 24px; }
+.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(180px, 320px); justify-content: space-between; gap: 24px; padding-bottom: 16px; margin-bottom: 24px; }
+.discover-filters { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.all-works { flex: none; gap: 8px; font-size: 14px; white-space: nowrap; }
+.filter-toggle { min-height: 44px; }
+.sort-control { flex: none; width: 104px; min-height: 44px; padding-inline: 8px; }
+.sort-control select { width: 100%; min-width: 0; min-height: 42px; padding-block: 10px; }
+.tag-filter { display: grid; gap: 16px; padding: 0 0 20px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+.filter-section { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: start; }
+.filter-label { padding-block: 12px; font-size: 12px; line-height: 20px; color: var(--muted); }
+.category-tabs, .content-tags { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.category-tabs .tag-button { gap: 8px; font-size: 14px; }
+.tag-button { min-height: 44px; }
+.search-result { gap: 12px; margin-bottom: 20px; }
+.active-conditions { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; overflow-wrap: anywhere; }
+.search-result .text-link { flex-shrink: 0; min-height: 44px; }
 .feed-end { padding-top: 32px; }
-@media (max-width: 899px) {
-  .discover-heading { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .discover-search { max-width: none; }
-  .discovery-toolbar { align-items: flex-start; }
-}
 @media (max-width: 639px) {
-  .discover-title h1 { font-size: 24px; line-height: 32px; }
-  .discover-heading { margin-bottom: 20px; gap: 16px; }
-  .discovery-toolbar { row-gap: 16px; padding-bottom: 16px; margin-bottom: 20px; }
-  .discovery-toolbar .category-tabs { gap: 4px; }
-  .category-tabs .tab { min-height: 44px; padding-inline: 8px; }
-  .toolbar-options { width: 100%; justify-content: space-between; }
-  .discover-search input, .button.filter-toggle { min-height: 44px; }
+  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 20px; }
+  .all-works { padding-inline: 8px; }
+  .discover-filters .filter-toggle { min-width: 88px; padding-inline: 8px; }
+  .sort-control { margin-left: auto; }
+  .discover-search { --gooey-collapsed-width: 100%; }
+  .filter-section { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .filter-label { padding-block: 0; }
 }
 </style>

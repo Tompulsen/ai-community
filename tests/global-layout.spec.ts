@@ -56,13 +56,13 @@ async function mockLayout(page: Page, authenticated = true) {
 }
 
 const pages = [
-  { path: '/discover', title: '发现作品' },
+  { path: '/discover', title: '首页' },
   { path: '/library', title: '我的作品' },
   { path: '/community', title: '社区' },
   { path: '/community?creator=layout-user', title: user.name },
   { path: '/community?tab=announcements', title: '社区' },
   { path: '/account', title: '账户设置' },
-  { path: '/activities', title: '活动' },
+  { path: '/activities', title: '推广中心' },
   { path: '/admin', title: '管理后台' },
   { path: `/messages/${peer.id}`, title: '私信' },
   { path: `/work/${work.id}`, title: work.title },
@@ -74,7 +74,8 @@ for (const width of [320, 390, 768, 1000, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     for (const [index, target] of pages.entries()) {
       await page.goto(target.path)
-      await expect(page.getByRole('heading', { name: target.title, exact: true }).first()).toBeVisible()
+      if (target.path === '/discover') await expect(page.getByRole('heading', { name: target.title, exact: true })).toHaveCount(1)
+      else await expect(page.getByRole('heading', { name: target.title, exact: true }).first()).toBeVisible()
       await expect(page.locator('.content-loading')).toHaveCount(0)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), target.path).toBe(true)
       const main = await page.locator('main').boundingBox()
@@ -85,12 +86,12 @@ for (const width of [320, 390, 768, 1000, 1440]) {
       expect(content!.x + content!.width, target.path).toBeLessThanOrEqual(width)
       const path = new URL(target.path, 'http://localhost:18775').pathname
       const navigationPath = path.startsWith('/work/') ? '/discover' : path
-      if (['/discover', '/library', '/community', '/activities'].includes(navigationPath)) {
+      if (['/discover', '/community', '/activities'].includes(navigationPath)) {
         const navigation = page.getByRole('navigation', { name: width >= 1000 ? '主导航' : '手机导航', exact: true })
         const active = navigation.locator('a.active')
         await expect(active).toHaveCount(1)
         await expect(active).toHaveAttribute('href', navigationPath)
-        if (width >= 1000 || navigationPath !== '/community') await expect(active).toHaveAttribute('aria-current', 'page')
+        await expect(active).toHaveAttribute('aria-current', 'page')
       }
       if (['/discover', '/library', '/community?creator=layout-user'].includes(target.path) || path.startsWith('/work/')) {
         const gallery = page.locator('.bento-grid')
@@ -221,7 +222,7 @@ test('guest account and library stay within a small viewport', async ({ page }) 
   await mockLayout(page, false)
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/account')
-  await expect(page.getByRole('heading', { name: '登录社区', exact: true })).toBeVisible()
+  await expect(page.getByRole('form', { name: '登录社区', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.goto('/library')
   await expect(page.getByRole('heading', { name: '登录后查看我的作品', exact: true })).toBeVisible()

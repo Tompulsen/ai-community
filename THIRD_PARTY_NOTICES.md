@@ -42,3 +42,10 @@ sites' brand marks, custom fonts and product implementation were not imported.
 
 Unused preview photography and the MDN CC0 video were removed from the runtime
 assets. Their historical source record is retained in `ASSETS.md`.
+
+The guest login layout, geometric characters and pointer/password interactions
+are adapted from arsh342/careercompass (Copyright (c) 2025 arsh342, MIT).
+The Vue implementation is in `src/components/LoginCharacters.vue` and the
+guest section of `src/views/AccountView.vue`. The full upstream MIT notice ships
+in `public/assets/licenses/careercompass-MIT.txt`. No CareerCompass branding,
+Firebase authentication or Google sign-in service is imported.

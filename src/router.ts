@@ -14,11 +14,11 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/discover' },
-    { path: '/discover', component: DiscoverView, meta: { title: '发现' } },
+    { path: '/discover', component: DiscoverView, meta: { title: '首页' } },
     { path: '/work/:id', component: WorkView, meta: { title: '作品详情' } },
-    { path: '/create/:kind?', component: CreateView, meta: { title: '创作' } },
+    { path: '/create/:kind?', component: CreateView, meta: { title: '创作台' } },
     { path: '/library', component: LibraryView, meta: { title: '我的作品' } },
-    { path: '/activities', component: ActivityView, meta: { title: '活动' } },
+    { path: '/activities', component: ActivityView, meta: { title: '推广中心' } },
     { path: '/community', component: CommunityView, meta: { title: '社区' } },
     { path: '/account', component: AccountView, meta: { title: '账号设置' } },
     { path: '/messages/:userId?', component: MessagesView, meta: { title: '私信' } },
@@ -32,4 +32,4 @@ export const router = createRouter({
   },
 })
 
-router.afterEach(to => { document.title = `${String(to.meta.title)} · AI 创作社区` })
+router.afterEach(to => { document.title = `${String(to.meta.title)} · 章鱼社区` })

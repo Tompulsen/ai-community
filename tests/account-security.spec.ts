@@ -91,7 +91,7 @@ test('a refused current password preserves the account session and edited passwo
   await page.getByRole('button', { name: '修改密码', exact: true }).click()
   await expect(page.getByRole('alert')).toHaveText('当前社区密码不正确。')
   await expect(page.getByRole('heading', { name: '身份验证', exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '登录社区', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('form', { name: '登录社区', exact: true })).toHaveCount(0)
   await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
   await expect(page.getByLabel('新密码', { exact: true })).toHaveValue('fixture-new-password')
   await expect(page.getByRole('button', { name: '修改密码', exact: true })).toBeEnabled()
@@ -118,7 +118,7 @@ test('revoking another session refreshes the list and revoking all returns to lo
   await page.getByLabel('当前社区密码', { exact: true }).fill('fixture-current-password')
   await page.getByRole('button', { name: '退出所有设备并重置登录凭证', exact: true }).click()
   await page.getByRole('button', { name: '确认退出所有设备', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '登录社区', exact: true })).toBeVisible()
+  await expect(page.getByRole('form', { name: '登录社区', exact: true })).toBeVisible()
   await expect(page.getByLabel('账号菜单', { exact: true })).toHaveCount(0)
   expect(fixture.mutations).toEqual([
     { path: '/api/security/sessions/revoke', body: { password: 'fixture-current-password', token: '', id: otherSession } },
@@ -145,6 +145,6 @@ test('the reset link survives URL cleanup and submits the reset token and MFA re
   expect(fixture.mutations).toEqual([{ path: '/api/security/password/reset', body: { resetToken, newPassword: 'fixture-reset-password', token: 'ABCD123400' } }])
   expect(fixture.reads.filter(path => path === '/api/session').length).toBeGreaterThanOrEqual(2)
   await page.getByRole('button', { name: '返回登录', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '登录社区', exact: true })).toBeVisible()
+  await expect(page.getByRole('form', { name: '登录社区', exact: true })).toBeVisible()
   expect(fixture.unexpected).toEqual([])
 })

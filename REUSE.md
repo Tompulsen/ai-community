@@ -81,3 +81,15 @@ Schibsted Grotesk 拉丁可变字体来自 Google Fonts，随文件保留
 展开预览复用浏览器原生 dialog 和 WAAPI，取代示例的 React、Tailwind 与 Motion 实现；
 内容 0.3s ease-in-out、黑色 0.3 遮罩，补齐键盘关闭、焦点恢复及减少动态效果。
 本轮没有新增依赖，作品详情、权限、收藏、喜欢和管理 API 契约保持原样。
+
+`src/components/GooeyInput.vue` 按用户指定的 Aceternity UI Gooey Input 适配：
+源码提供方 Manu Arora，来源 `https://ui.aceternity.com/registry/gooey-input.json`，
+于 2026-11-12 读取。沿用 SVG 模糊、颜色矩阵与分离圆泡的结构，改用现有 Vue、
+Lucide 和 CSS 过渡，不引入 React、Motion 或 Tailwind 运行时。
+输入与按钮分别保留语义，提供键盘焦点、清除、减少动态效果及原有搜索 URL/API 行为。
+此处记录来源，不为上游代码追加未核实的许可证声明。
+
+用户于 2026-11-12 确认社区品牌为“章鱼社区”，并提供蓝底章鱼图片作为品牌标识。
+原始文件为 `D:/Users/86136/Desktop/1/temu/1证书资质/个人/新章鱼logo/资源 2.jpg`；
+仓库资产为 `public/assets/brand/octopus-community.jpg`，公开路径为
+`/assets/brand/octopus-community.jpg`。

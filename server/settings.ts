@@ -25,7 +25,7 @@ export async function readSiteSettings(db: Queryable): Promise<SiteSettings> {
   const limits = options.uploadLimits as Partial<Record<'image' | 'video' | 'audio' | 'document' | 'other', number>> | undefined
   const models = options.communityDefaultModels as SiteSettings['defaultModels'] | undefined
   return {
-    brand: String(options.communityBrandName || 'AI 创作社区'), logoUrl: String(options.communityLogoUrl || ''),
+    brand: String(options.communityBrandName || '章鱼社区'), logoUrl: String(options.communityLogoUrl || ''),
     registrationOpen: row?.disableRegistration === false,
     publicationMode: options.communityPublicationMode === 'after' ? 'after' : 'before',
     autoBan: options.communityAutoBanEnabled !== false,

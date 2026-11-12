@@ -45,7 +45,7 @@ async function mockApp(page: Page, authenticated = false) {
 }
 
 test('sort changes reach the API and replace the displayed results', async ({ page }) => {
-  const unexpected = await mockApp(page)
+  const unexpected = await mockApp(page, true)
   await page.route('**/api/works?*', async route => {
     const sort = new URL(route.request().url()).searchParams.get('sort')
     if (sort === 'following') return route.fulfill({ json: { items: [], nextCursor: null } })
@@ -53,10 +53,10 @@ test('sort changes reach the API and replace the displayed results', async ({ pa
   })
   await page.goto('/discover')
   await expect(page.getByRole('link', { name: '精选结果', exact: true })).toBeVisible()
-  await page.getByLabel('作品排序', { exact: true }).selectOption('latest')
+  await page.getByLabel('浏览方式', { exact: true }).selectOption('latest')
   await expect(page.getByRole('link', { name: '最新结果', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '精选结果', exact: true })).toHaveCount(0)
-  await page.getByLabel('作品排序', { exact: true }).selectOption('following')
+  await page.getByLabel('浏览方式', { exact: true }).selectOption('following')
   await expect(page.getByRole('heading', { name: '还没有关注的作品', exact: true })).toBeVisible()
   await expect(page.locator('article.work-card')).toHaveCount(0)
   expect(unexpected).toEqual([])
@@ -76,6 +76,7 @@ test('pagination appends results and a new search discards the old cursor', asyn
   await page.getByRole('button', { name: '加载更多', exact: true }).click()
   await expect(page.locator('article.work-card')).toHaveCount(2)
   expect(queries.some(params => params.get('cursor') === 'fixture-page-2')).toBe(true)
+  await page.getByRole('button', { name: '展开搜索', exact: true }).click()
   await page.getByLabel('搜索作品', { exact: true }).fill('回归筛选')
   await expect(page.getByRole('link', { name: '筛选结果', exact: true })).toBeVisible()
   await expect(page.locator('article.work-card')).toHaveCount(1)
@@ -323,7 +324,7 @@ test('one Studio iframe survives in-app navigation and keeps background result c
   const handle = await page.locator('iframe.studio-frame').elementHandle()
   const frame = await handle!.contentFrame()
   await page.locator('nav.desktop-nav a[href="/discover"]').click()
-  await expect(page.getByRole('heading', { name: '发现作品', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '展开搜索', exact: true })).toBeVisible()
   await expect(page.locator('iframe.studio-frame')).toHaveCount(1)
   expect(await handle!.evaluate(element => element.isConnected)).toBe(true)
   await expect(page.locator('.studio-host')).toHaveAttribute('aria-hidden', 'true')
@@ -334,7 +335,7 @@ test('one Studio iframe survives in-app navigation and keeps background result c
   await expect(dialog.locator('img')).toBeVisible()
   await expect(dialog.getByRole('link', { name: '下载文件', exact: true })).toHaveAttribute('download', /creation-1/)
   await dialog.getByRole('button', { name: '关闭结果预览', exact: true }).click()
-  await page.locator('nav.desktop-nav a[href="/create"]').click()
+  await page.locator('.header-create').click()
   await expect(page.locator('.studio-host')).toHaveAttribute('aria-hidden', 'false')
   expect(await handle!.evaluate(element => element.isConnected)).toBe(true)
   expect(starts).toBe(1)

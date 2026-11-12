@@ -1,4 +1,4 @@
-# AI 创作社区
+# 章鱼社区
 
 使用 Vue 3、TypeScript、Vite、Vue Router 和 Lucide，从官方 Vite 模板开始实现。
 社区前后端与创作业务统一保留在本项目。

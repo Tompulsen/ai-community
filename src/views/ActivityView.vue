@@ -120,7 +120,7 @@ async function copyInvite() {
 
 <template>
   <div class="page-container activity-page">
-    <div class="page-heading"><h1>活动</h1><button class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" /></button></div>
+    <div class="page-heading"><h1>推广中心</h1><button class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" /></button></div>
     <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>

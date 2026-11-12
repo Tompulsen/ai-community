@@ -1,4 +1,4 @@
-# AI 创作社区
+# 章鱼社区
 
 <!-- impeccable:product-schema 1 -->
 
@@ -33,7 +33,16 @@ delivery now includes the frontend and an independent community backend.
 
 ## Capabilities and Constraints
 
-- Four main tasks: discover, create, personal works, activities.
+- Public navigation groups home (首页), the promotion center and community.
+  The creation desk has a separate desktop entry and a mobile navigation tab.
+  Personal works and saved works live in the account menu.
+- Home begins with recommendations (推荐), search, tags and a browse-mode selector.
+  The recommendations button retains the all-types filtering behavior.
+  Image, video and resource types live inside the expandable tag panel,
+  grouped separately from content tags; active types remain visible when collapsed.
+  Its page heading remains available to screen readers; the visible heading and
+  work count are omitted. Clearing conditions preserves content type and browse
+  mode; restoring defaults resets the complete selection. Following requires login.
 - Community announcements and creator profiles remain reachable.
 - Publishing, saved work, notifications and administration have distinct places.
 - The user selected the Aceternity Bento Grid reference for this redesign.
@@ -65,8 +74,9 @@ delivery now includes the frontend and an independent community backend.
 
 ## Brand Commitments
 
-Use the existing code's conservative fallback name, “AI 创作社区”, until the user
-confirms a new name. The user approved implementing the recommended combination:
+The user has confirmed the community brand as “章鱼社区”. Use the user-provided
+blue-background octopus image at `/assets/brand/octopus-community.jpg` as the brand logo.
+The user approved implementing the recommended combination:
 Linear for hierarchy, Pinterest for image emphasis, Runway for work details.
 These references inform one consistent visual system.
 
