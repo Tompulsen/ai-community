@@ -186,6 +186,64 @@ test('saved library filtering and cursor are applied in SQL before the page limi
   assert.equal(ctx.result.payload.nextCursor, null);
 });
 
+test('profile received likes share public visibility and count works without amplifying them by reactions', async () => {
+  for (const viewer of [null, { id: '17' }]) {
+    const statements = [];
+    const ctx = context({ path: '/api/users/3', user: viewer, query: async (sql, values) => {
+      statements.push({ sql, values });
+      if (sql.includes('FROM "user" u JOIN user_profile')) return { rows: [{
+        id: '3', username: 'root', name: 'Creator', bio: 'Profile',
+        followersCount: 4, followingCount: 2, followed: false,
+      }] };
+      if (sql.includes('FROM external_account')) return { rows: [] };
+      assert(sql.includes(publicVisibilitySql));
+      assert(sql.includes('s."authorId"=$2'));
+      assert.match(sql, /COUNT\(DISTINCT s\.id\)::int AS count/);
+      assert.match(sql, /COUNT\(DISTINCT r\.id\)::int AS "receivedLikesCount"/);
+      assert.match(sql, /LEFT JOIN note_reaction r ON r\."noteId"=n\.id AND r\.reaction IN \('❤','❤️'\)/);
+      assert.deepEqual(values, [viewer?.id ?? null, '3']);
+      return { rows: [{ count: 2, receivedLikesCount: 7 }] };
+    } });
+    await handleContent(ctx);
+    assert.equal(ctx.result.payload.user.worksCount, 2);
+    assert.equal(ctx.result.payload.user.receivedLikesCount, 7);
+    assert.equal(ctx.result.payload.user.isSelf, false);
+    assert.equal(statements.length, 3, 'Profile, public identity and one aggregate are sufficient');
+    assert.equal(statements.filter(item => item.sql.includes('note_reaction')).length, 1);
+  }
+});
+
+test('liked and saved libraries enforce the current viewer and public filters before category and pagination', async () => {
+  for (const selector of ['tab=liked', 'status=liked', 'tab=saved', 'status=saved']) {
+    const guest = context({ path: `/api/library?${selector}&userId=91`,
+      query() { assert.fail('Private collections must reject guests before database access'); } });
+    await assert.rejects(handleContent(guest), { statusCode: 401 });
+    let statement, parameters;
+    const ctx = context({
+      path: `/api/library?${selector}&kind=image&cursor=work8&limit=2&userId=91&authorId=91`,
+      user: { id: '17' },
+      query: async (sql, values) => { statement = sql; parameters = values; return { rows: [] }; },
+    });
+    await handleContent(ctx);
+    assert(statement.includes(publicVisibilitySql));
+    const expected = selector.endsWith('liked')
+      ? `EXISTS (SELECT 1 FROM note_reaction lr WHERE lr."noteId"=s."approvedNoteId" AND lr."userId"=$1 AND lr.reaction IN ('❤','❤️'))`
+      : 'EXISTS (SELECT 1 FROM note_favorite f WHERE f."noteId"=s."approvedNoteId" AND f."userId"=$1)';
+    assert(statement.includes(expected), selector);
+    assert(statement.indexOf(expected) < statement.indexOf('ORDER BY'));
+    assert(statement.includes('s.category = $2'));
+    assert(statement.includes('s.id<$3'));
+    assert.deepEqual(parameters, ['17', 'image', 'work8', 3]);
+    assert.equal(ctx.result.payload.nextCursor, null);
+  }
+  const publicPage = context({ path: '/api/works?authorId=3&tab=liked&sort=latest', user: { id: '17' },
+    query: async sql => {
+      assert(!sql.includes('EXISTS (SELECT 1 FROM note_reaction lr'), 'Public works must not expose whose collection is being queried');
+      return { rows: [] };
+    } });
+  await handleContent(publicPage);
+});
+
 test('legacy timestamp codecs preserve relative, absolute and expired privacy boundaries', () => {
   const now = Date.UTC(2026, 10, 12);
   const aidx = (now - 946684800000).toString(36).padStart(8, '0') + '0123456789abcdef';

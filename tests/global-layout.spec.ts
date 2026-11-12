@@ -64,7 +64,7 @@ const pages = [
   { path: '/account', title: '账户设置' },
   { path: '/activities', title: '推广中心' },
   { path: '/admin', title: '管理后台' },
-  { path: `/messages/${peer.id}`, title: '私信' },
+  { path: `/messages/${peer.id}`, title: '消息' },
   { path: `/work/${work.id}`, title: work.title },
 ]
 

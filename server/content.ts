@@ -21,7 +21,7 @@ const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
 type SubmissionStatus = 'draft' | 'pending' | 'published' | 'approved' | 'rejected' | 'removed';
 type ReviewAction = 'approve' | 'reject' | 'remove';
-type ContentScope = 'public' | 'mine' | 'saved' | 'admin';
+type ContentScope = 'public' | 'mine' | 'saved' | 'liked' | 'admin';
 type Body = Record<string, unknown>;
 
 interface Generation {
@@ -317,6 +317,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   const conditions = [scope === 'mine' ? 's."authorId" = $1' : scope === 'admin' ? 'TRUE' : `(${visibilitySql(ctx)})`];
   const add = (value: string | number | null) => { params.push(value); return `$${params.length}`; };
   if (scope === 'saved') conditions.push('EXISTS (SELECT 1 FROM note_favorite f WHERE f."noteId"=s."approvedNoteId" AND f."userId"=$1)');
+  if (scope === 'liked') conditions.push(`EXISTS (SELECT 1 FROM note_reaction lr WHERE lr."noteId"=s."approvedNoteId" AND lr."userId"=$1 AND lr.reaction IN ('${heart}','${heart}\ufe0f'))`);
   const requestedOrder = workId || scope !== 'public' ? 'latest' : ctx.url.searchParams.get('sort') || 'recommended';
   if (!['latest', 'recommended', 'featured', 'popular', 'following'].includes(requestedOrder)) fail(400, 'Invalid work order');
   const options = requestedOrder === 'recommended' && !authorId ? await settings(ctx.db) : {};
@@ -1072,14 +1073,18 @@ async function profileRow(ctx: RequestContext, userId: string): Promise<ProfileR
 
 async function profile(ctx: RequestContext, userId: string): Promise<true> {
   const row = (await publicCreators(ctx, [await profileRow(ctx, userId)]))[0]!;
-  const count = (await ctx.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM community_submission s JOIN "user" u ON u.id=s."authorId"
-    JOIN note n ON n.id=s."approvedNoteId" WHERE s."authorId"=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), userId])).rows[0]?.count ?? 0;
+  const counts = (await ctx.db.query<{ count: number; receivedLikesCount: number }>(`SELECT COUNT(DISTINCT s.id)::int AS count,
+    COUNT(DISTINCT r.id)::int AS "receivedLikesCount" FROM community_submission s JOIN "user" u ON u.id=s."authorId"
+    JOIN note n ON n.id=s."approvedNoteId"
+    LEFT JOIN note_reaction r ON r."noteId"=n.id AND r.reaction IN ('${heart}','${heart}\ufe0f')
+    WHERE s."authorId"=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), userId])).rows[0];
   return send(ctx, 200, { user: {
     id: row.id, username: row.username, name: row.name || row.username, bio: row.bio || '',
     ...(row.accountId ? { accountId: row.accountId } : {}),
     avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null,
     bannerUrl: row.bannerId ? `/legacy-files/${row.bannerId}?variant=web` : null,
-    followersCount: row.followersCount ?? 0, followingCount: row.followingCount ?? 0, worksCount: count,
+    followersCount: row.followersCount ?? 0, followingCount: row.followingCount ?? 0, worksCount: counts?.count ?? 0,
+    receivedLikesCount: counts?.receivedLikesCount ?? 0,
     followed: Boolean(row.followed), isSelf: row.id === viewer(ctx),
   } });
 }
@@ -1198,7 +1203,8 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   if (path === '/api/works' && method === 'POST') return createWork(ctx);
   if (path === '/api/library' && method === 'GET') {
     user(ctx);
-    const { rows, nextCursor } = await contentPage(ctx, { scope: ctx.url.searchParams.get('status') === 'saved' ? 'saved' : 'mine' });
+    const tab = ctx.url.searchParams.get('tab') ?? ctx.url.searchParams.get('status');
+    const { rows, nextCursor } = await contentPage(ctx, { scope: tab === 'saved' ? 'saved' : tab === 'liked' ? 'liked' : 'mine' });
     return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row, row.authorId === viewer(ctx)))), nextCursor });
   }
   if (path === '/api/admin/submissions' && method === 'GET') {

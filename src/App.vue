@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, Bookmark, CheckCheck, ChevronDown, House, Gift, Images, LogOut, MessageSquare, Plus, RefreshCw, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
+import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import type { Work } from './data'
-import { api, errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
+import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
+import { inbox, loadInbox, type InboxCategory } from './inbox'
 
-interface Notification { id: string; title?: string; text?: string; body?: string; createdAt?: string; isRead?: boolean; url?: string; actor?: { id: string; name?: string; username?: string; avatarUrl?: string } }
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const links = [
@@ -20,10 +20,15 @@ function isCurrent(path: string) {
   return route.path === path || (path === '/create' && route.path.startsWith('/create/')) || (path === '/discover' && route.path.startsWith('/work/'))
 }
 const signingOut = ref(false), publicationNavigation = ref(false)
-const notifications = ref<Notification[]>([]), notificationError = ref(''), notificationsLoading = ref(false), markingRead = ref(false)
-const unreadCount = computed(() => notifications.value.filter(item => !item.isRead).length)
+const messageLinks: { category: InboxCategory; label: string; to: string; icon: typeof Bell }[] = [
+  { category: 'announcement', label: '系统公告', to: '/messages?tab=announcement', icon: Bell },
+  { category: 'messages', label: '我的消息', to: '/messages', icon: MessageSquare },
+  { category: 'activity', label: '互动消息', to: '/messages?tab=activity', icon: Heart },
+]
+const unreadCount = computed(() => session.user ? inbox.counts.announcement + inbox.counts.messages + inbox.counts.activity : 0)
+const messageMenu = ref<HTMLDetailsElement>()
 let poll: ReturnType<typeof setInterval> | undefined
-let notificationGeneration = 0
+let messageCloseTimer: ReturnType<typeof setTimeout> | undefined
 function refreshActiveIdentity() {
   if (session.user && document.visibilityState !== 'hidden') void loadSession(true)
 }
@@ -34,18 +39,19 @@ onMounted(() => {
   document.addEventListener('visibilitychange', refreshActiveIdentity)
 })
 onBeforeUnmount(() => {
-  clearInterval(poll); notificationGeneration++
+  clearInterval(poll); clearTimeout(messageCloseTimer)
   window.removeEventListener('focus', refreshActiveIdentity)
   window.removeEventListener('pageshow', refreshActiveIdentity)
   document.removeEventListener('visibilitychange', refreshActiveIdentity)
 })
 watch(() => route.fullPath, () => document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false }))
 watch(() => session.user?.id, id => {
-  clearInterval(poll); notificationGeneration++; notifications.value = []; notificationError.value = ''; notificationsLoading.value = false
+  clearInterval(poll)
+  if (messageMenu.value) messageMenu.value.open = false
   if (!id) return
-  void loadNotifications()
-  poll = setInterval(() => { if (document.visibilityState === 'visible') void loadNotifications() }, 45000)
-})
+  void loadInbox()
+  poll = setInterval(() => { if (document.visibilityState === 'visible') void loadInbox(true) }, 45000)
+}, { immediate: true })
 function closePublish() {
   if (publicationNavigation.value || route.query.publish !== '1') return
   const { publish: _, ...query } = route.query
@@ -62,35 +68,29 @@ async function signOut() {
   catch (cause) { notify(errorMessage(cause)) }
   finally { signingOut.value = false }
 }
-async function loadNotifications() {
-  if (!session.user || notificationsLoading.value) return
-  const current = notificationGeneration
-  notificationsLoading.value = true; notificationError.value = ''
-  try { const result = await api<{ items: Notification[] }>('/api/notifications'); if (current === notificationGeneration) notifications.value = result.items }
-  catch (cause) { if (current === notificationGeneration) notificationError.value = errorMessage(cause) }
-  finally { if (current === notificationGeneration) notificationsLoading.value = false }
-}
-function destination(item: Notification) {
-  if (item.url === '/community' && !item.actor && !item.id.startsWith('redis:')) return '/community?tab=announcements'
-  if (item.url && /^\/(work\/|community(?:\?|$)|messages(?:\/|\?|$)|library(?:\?|$)|activities(?:\?|$)|account(?:\?|$))/.test(item.url)) return item.url
-  return item.actor?.id ? `/community?creator=${encodeURIComponent(item.actor.id)}` : '/library'
-}
-async function markRead(ids: string[]) {
-  if (!ids.length || markingRead.value) return
-  markingRead.value = true
-  try { await api('/api/notifications/read', { method: 'POST', body: { ids } }); notifications.value.forEach(item => { if (ids.includes(item.id)) item.isRead = true }) }
-  catch (cause) { notificationError.value = errorMessage(cause) }
-  finally { markingRead.value = false }
-}
 function toggleHeaderMenu(event: Event) {
   const opened = event.target as HTMLDetailsElement
   if (!opened.open) return
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (menu !== opened) menu.open = false })
-  if (opened.classList.contains('notifications')) void loadNotifications()
+  if (opened.classList.contains('messages-menu')) void loadInbox()
+}
+function openMessages(event: Event) {
+  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches || event instanceof PointerEvent && event.pointerType !== 'mouse') return
+  clearTimeout(messageCloseTimer)
+  if (messageMenu.value && !messageMenu.value.open) {
+    messageMenu.value.open = true
+  }
+}
+function leaveMessages(event: Event) {
+  if (event instanceof FocusEvent && event.relatedTarget instanceof Node && messageMenu.value?.contains(event.relatedTarget)) return
+  clearTimeout(messageCloseTimer)
+  messageCloseTimer = setTimeout(() => {
+    if (messageMenu.value && !messageMenu.value.contains(document.activeElement)) messageMenu.value.open = false
+  }, 120)
 }
 function dismissMenus(event: Event) {
   if (event.type === 'click' && (event.target as HTMLElement).closest('.header-menu')) return
-  document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false; if (event.type === 'keydown') menu.querySelector('summary')?.focus() })
+  document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (event.type === 'keydown') menu.querySelector('summary')?.focus(); menu.open = false })
 }
 </script>
 
@@ -101,14 +101,18 @@ function dismissMenus(event: Event) {
       <RouterLink to="/discover" class="brand" aria-label="章鱼社区首页"><img class="brand-mark" src="/assets/brand/octopus-community.jpg" width="32" height="32" alt="" /><span>章鱼社区</span></RouterLink>
       <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
       <div class="header-tools"><div id="header-search" class="header-search-slot" />
-      <div class="header-actions"><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink><template v-if="session.user">
-        <RouterLink to="/messages" class="icon-button header-messages" aria-label="私信" title="私信"><MessageSquare :size="19" /></RouterLink>
-        <details class="header-menu notifications" @toggle="toggleHeaderMenu"><summary class="icon-button notification-trigger" :aria-label="unreadCount ? `通知，${unreadCount} 条未读` : '通知'" title="通知"><Bell :size="19" /><span v-if="unreadCount" class="notification-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary><div class="menu-popover notification-popover"><div class="menu-title"><strong>通知</strong><div><button class="icon-button" aria-label="刷新通知" title="刷新通知" :disabled="notificationsLoading" @click="loadNotifications"><RefreshCw :size="16" /></button><button class="icon-button" aria-label="全部标记已读" title="全部标记已读" :disabled="markingRead || !unreadCount" @click="markRead(notifications.filter(item => !item.isRead).map(item => item.id))"><CheckCheck :size="17" /></button></div></div><p v-if="notificationsLoading && !notifications.length" role="status">正在加载…</p><p v-if="notificationError" class="form-error" role="alert">{{ notificationError }}</p><div v-if="notifications.length" class="notification-list"><article v-for="item in notifications" :key="item.id" class="notification-item" :class="{ unread: !item.isRead }"><RouterLink v-if="item.actor" :to="{ path: '/community', query: { creator: item.actor.id } }" class="notification-actor" @click="!item.isRead && markRead([item.id])"><span class="avatar blue"><img v-if="item.actor.avatarUrl" :src="item.actor.avatarUrl" :alt="item.actor.name || item.actor.username" /><span v-else>{{ (item.actor.name || item.actor.username || '用').slice(0, 1) }}</span></span></RouterLink><RouterLink :to="destination(item)" class="notification-content" @click="!item.isRead && markRead([item.id])"><strong v-if="item.title">{{ item.title }}</strong><span>{{ item.text || item.body }}</span><time v-if="item.createdAt" class="caption-5">{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time></RouterLink></article></div><p v-else-if="!notificationsLoading && !notificationError">暂无通知</p></div></details>
+      <div class="header-actions"><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
+        <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
+          <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount} 条未读` : '消息'" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+          <div class="menu-popover message-popover">
+            <template v-if="session.user"><RouterLink v-for="item in messageLinks" :key="item.category" :to="item.to" class="message-menu-link"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></RouterLink></template>
+            <div v-else class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
+          </div>
+        </details>
+        <template v-if="session.user">
         <RouterLink v-if="route.path !== '/discover'" :to="{ path: route.path, query: { ...route.query, publish: '1' } }" class="button primary publish-button btn" aria-label="发布作品" title="发布作品"><Plus :size="17" /><span>发布作品</span></RouterLink>
-        <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span class="caption-5">@{{ session.user.username }}</span></div>
-          <RouterLink to="/library" :aria-current="route.path === '/library' && route.query.tab !== 'saved' ? 'page' : undefined"><Images :size="16" />我的作品</RouterLink>
-          <RouterLink to="/library?tab=saved" :aria-current="route.path === '/library' && route.query.tab === 'saved' ? 'page' : undefined"><Bookmark :size="16" />我的收藏</RouterLink>
-          <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/messages"><MessageSquare :size="16" />私信</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
+        <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span class="caption-5">账号ID:{{ session.user.id }}</span></div>
+          <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
       </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
     </div></header>
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
@@ -167,9 +171,15 @@ function dismissMenus(event: Event) {
 :global(#app:has(.account-entry-shell)) { padding-bottom: 0; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
 .account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }
-.notification-trigger { position: relative; }.notification-count { position: absolute; right: -3px; top: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; padding: 0 3px; }
-.notification-popover { width: min(360px, calc(100vw - 32px)); }.menu-title > div { display: flex; align-items: center; }.notification-list { max-height: min(480px, 65svh); overflow-y: auto; }
-.notification-item { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }.notification-item.unread { background: var(--blue-soft); }.notification-actor { padding: 0; flex: none; }
-.notification-content { display: grid; gap: 4px; min-width: 0; padding: 0; }.notification-content span { overflow-wrap: anywhere; }.notification-content time { color: var(--muted); }
-@media (max-width: 639px) { .header-actions { gap: 4px; }.notification-popover { position: fixed; left: 16px; right: 16px; top: 64px; width: auto; } }
+.message-trigger { position: relative; }
+.message-count { position: absolute; right: -3px; top: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; padding: 0 3px; font-variant-numeric: tabular-nums; }
+.message-popover { min-width: 192px; padding: 8px; }
+.message-popover::before { content: ''; position: absolute; bottom: 100%; left: 0; right: 0; height: 12px; }
+.message-popover > .message-menu-link { min-height: 44px; gap: 10px; font-size: 14px; }
+.message-menu-link > span:first-of-type { flex: 1; }
+.message-category-count { display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 10px; padding: 0 5px; background: var(--blue); color: var(--action-ink); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.message-login { min-width: 224px; display: grid; justify-items: center; gap: 16px; padding: 20px 12px; }
+.message-login p { color: var(--muted); font-size: 14px; line-height: 24px; }
+.message-login .button { min-height: 44px; padding-inline: 24px; }
+@media (max-width: 639px) { .header-actions { gap: 4px; }.message-popover { position: fixed; right: 16px; top: 64px; max-width: calc(100vw - 32px); } }
 </style>

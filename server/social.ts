@@ -154,7 +154,7 @@ async function notifications(ctx: RequestContext): Promise<boolean> {
     })
     const actors = [...new Set(parsed.flatMap(({ data }) => typeof data.notifierId === 'string' ? [data.notifierId] : []))]
     const profiles = actors.length ? (await ctx.db.query<ChatPeer>(`SELECT id,username,name,"avatarId" FROM "user"
-      WHERE id=ANY($1::varchar[]) AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended"
+      WHERE id=ANY($1::varchar[]) AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL
       AND NOT EXISTS (SELECT 1 FROM blocking b WHERE (b."blockerId"=$2 AND b."blockeeId"="user".id) OR (b."blockerId"="user".id AND b."blockeeId"=$2))`, [actors, user.id])).rows : []
     const identities = await readPublicIdentities(ctx, profiles.map(profile => profile.id))
     const oldNotes = [...new Set(parsed.flatMap(({ data }) => typeof data.noteId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(data.noteId) ? [data.noteId] : []))]
@@ -170,14 +170,17 @@ async function notifications(ctx: RequestContext): Promise<boolean> {
       const type = String(data.type || '')
       const url = workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}`
         : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
-      return [{ id: `redis:${streamId}`, title: names[type] || '社区通知', text: typeof data.text === 'string' ? data.text : actorDto?.name || '',
+      return [{ id: `redis:${streamId}`, type: type === 'message' ? 'message' as const : 'activity' as const,
+        title: names[type] || '社区通知', text: typeof data.text === 'string' ? data.text : actorDto?.name || '',
         createdAt: new Date(Number(streamId.split('-')[0])).toISOString(),
         isRead: individual[streamId] === '1' || Boolean(lastRead && compareStreamIds(streamId, lastRead) <= 0), url, actor: actorDto }]
     })
-    const merged = [...items, ...announcements.rows.map(row => ({ id: row.id, title: row.title, text: row.text,
+    const merged = [...items, ...announcements.rows.map(row => ({ id: row.id, type: 'announcement' as const, title: row.title, text: row.text,
       createdAt: row.updatedAt?.toISOString() || null, isRead: Boolean(row.readId), url: '/community?tab=announcements' }))]
       .sort((a, b) => (b.createdAt ? Date.parse(b.createdAt) : 0) - (a.createdAt ? Date.parse(a.createdAt) : 0))
-    ctx.json(200, { items: merged })
+    const unreadCounts = { announcement: 0, activity: 0 }
+    for (const notice of merged) if (!notice.isRead && notice.type !== 'message') unreadCounts[notice.type]++
+    ctx.json(200, { items: merged, unreadCounts })
     return true
   }
   if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/notifications/read') {
@@ -205,24 +208,33 @@ export async function handleSocial(ctx: RequestContext): Promise<boolean> {
     if (!await chatAvailability(ctx, ctx.db, me.id, false)) throw httpError(403, '当前账号没有私信权限。')
     const cursor = ctx.url.searchParams.get('cursor')
     if (cursor) id(cursor)
-    const rows = (await ctx.db.query<ChatRow & ChatPeer & { messageId: string; unread: number }>(`WITH latest AS (
+    const [page, unread] = await Promise.all([
+      ctx.db.query<ChatRow & ChatPeer & { messageId: string; unread: number }>(`WITH latest AS (
       SELECT DISTINCT ON (CASE WHEN m."fromUserId"=$1 THEN m."toUserId" ELSE m."fromUserId" END) m.*
       FROM chat_message m WHERE (m."fromUserId"=$1 OR m."toUserId"=$1) AND m."toRoomId" IS NULL
       ORDER BY CASE WHEN m."fromUserId"=$1 THEN m."toUserId" ELSE m."fromUserId" END,m.id DESC)
       SELECT u.id,u.username,u.name,u."avatarId",u."chatScope",m.id AS "messageId",m.text,m."fromUserId",m."toUserId",m.reads,m."fileId",
-      (SELECT COUNT(*)::int FROM chat_message unread WHERE unread."toUserId"=$1 AND unread."fromUserId"=u.id AND NOT ($1=ANY(unread.reads))) AS unread
+      (SELECT COUNT(*)::int FROM chat_message unread WHERE unread."toUserId"=$1 AND unread."fromUserId"=u.id AND unread."toRoomId" IS NULL AND NOT ($1=ANY(unread.reads))) AS unread
       FROM latest m JOIN "user" u ON u.id=CASE WHEN m."fromUserId"=$1 THEN m."toUserId" ELSE m."fromUserId" END
       WHERE u.host IS NULL AND NOT u."isDeleted" AND NOT u."isSuspended" AND u."movedToUri" IS NULL
       AND ($2::varchar IS NULL OR m.id<$2)
       AND NOT EXISTS (SELECT 1 FROM blocking b WHERE (b."blockerId"=$1 AND b."blockeeId"=u.id) OR (b."blockerId"=u.id AND b."blockeeId"=$1))
-      ORDER BY m.id DESC LIMIT 31`, [me.id, cursor])).rows
+      ORDER BY m.id DESC LIMIT 31`, [me.id, cursor]),
+      ctx.db.query<{ unreadCount: number }>(`SELECT COUNT(*)::int AS "unreadCount"
+        FROM chat_message m JOIN "user" u ON u.id=m."fromUserId"
+        WHERE m."toUserId"=$1 AND m."toRoomId" IS NULL AND NOT ($1=ANY(m.reads))
+        AND u.host IS NULL AND NOT u."isDeleted" AND NOT u."isSuspended" AND u."movedToUri" IS NULL
+        AND NOT EXISTS (SELECT 1 FROM blocking b WHERE
+          (b."blockerId"=$1 AND b."blockeeId"=u.id) OR (b."blockerId"=u.id AND b."blockeeId"=$1))`, [me.id]),
+    ])
+    const rows = page.rows
     const files = await messageFiles(ctx, rows.slice(0, 30))
     const identities = await readPublicIdentities(ctx, rows.slice(0, 30).map(row => row.id))
     const items = await Promise.all(rows.slice(0, 30).map(async row => {
       const reason = await sending(ctx, ctx.db, row)
       return { user: peerDto(row, identities.get(row.id)), lastMessage: packedMessage(ctx, { ...row, id: row.messageId }, files), unread: row.unread, canSend: !reason, reason }
     }))
-    ctx.json(200, { items, nextCursor: rows.length > 30 ? rows[29]!.messageId : null })
+    ctx.json(200, { items, nextCursor: rows.length > 30 ? rows[29]!.messageId : null, unreadCount: unread.rows[0]?.unreadCount ?? 0 })
     return true
   }
   const match = /^\/api\/messages\/([a-zA-Z0-9]{1,32})(\/read)?$/.exec(path)

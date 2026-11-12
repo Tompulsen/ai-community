@@ -24,7 +24,7 @@ export const router = createRouter({
     { path: '/community', component: CommunityView, meta: { title: '社区' } },
     { path: '/account', component: AccountView, meta: { title: '账号设置' } },
     { path: '/account/authorize', redirect: '/account' },
-    { path: '/messages/:userId?', component: MessagesView, meta: { title: '私信' } },
+    { path: '/messages/:userId?', component: MessagesView, meta: { title: '消息' } },
     { path: '/admin', component: AdminView, meta: { title: '管理' } },
     { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { title: '页面未找到' } },
   ],

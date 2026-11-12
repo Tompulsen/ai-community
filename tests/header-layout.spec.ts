@@ -364,18 +364,33 @@ for (const [kind, label] of [['image', '图片'], ['video', '视频'], ['resourc
 }
 
 for (const width of [320, 1440]) {
-  test(`personal works remain reachable through the account menu at ${width}px`, async ({ page }) => {
+  test(`account menu uses the personal profile entry at ${width}px`, async ({ page }) => {
+    const user = { id: '3', username: 'root', name: 'root', bio: '', isAdmin: false, isModerator: false }
+    await page.route('**/api/session', route => route.request().method() === 'GET' ? route.fulfill({ json: { user } }) : route.fallback())
+    await page.route('**/api/users/3', route => route.request().method() === 'GET' ? route.fulfill({ json: {
+      user: { ...user, count: 0, followed: false, followersCount: 0, followingCount: 0, receivedLikesCount: 0 },
+    } }) : route.fallback())
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover')
     const menu = page.getByLabel('账号菜单', { exact: true })
+    const popover = page.locator('.account-popover')
     await menu.focus()
     await menu.press('Enter')
-    await expect(page.locator('.account-popover').getByRole('link', { name: '我的收藏', exact: true })).toBeVisible()
-    await page.locator('.account-popover').getByRole('link', { name: '我的作品', exact: true }).click()
-    await expect(page).toHaveURL(/\/library$/)
+    await expect(popover.getByRole('link', { name: '我的作品', exact: true })).toHaveCount(0)
+    await expect(popover.getByRole('link', { name: '我的收藏', exact: true })).toHaveCount(0)
+    await expect(popover.getByRole('link', { name: '私信', exact: true })).toHaveCount(0)
+    for (const name of ['个人主页', '账号设置']) await expect(popover.getByRole('link', { name, exact: true })).toBeVisible()
+    await expect(popover.getByRole('button', { name: '退出登录', exact: true })).toBeVisible()
+    const profile = popover.getByRole('link', { name: '个人主页', exact: true })
+    await expect(profile).toHaveAttribute('href', '/community?creator=3')
+    await profile.click()
+    await expect(page).toHaveURL('/community?creator=3')
+    await expect(page.locator('.profile-copy h1')).toHaveText('root')
     await expect(page.locator('.profile-menu')).not.toHaveAttribute('open', '')
+    await menu.focus()
     await menu.press('Enter')
-    await expect(page.locator('.account-popover').getByRole('link', { name: '我的作品', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(popover).toBeVisible()
+    await expect(profile).toHaveAttribute('href', '/community?creator=3')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await menu.press('Escape')
     await expect(menu).toBeFocused()

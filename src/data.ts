@@ -74,6 +74,7 @@ export interface Creator {
   bannerUrl?: string
   followersCount?: number
   followingCount?: number
+  receivedLikesCount?: number
   worksCount?: number
   isSelf?: boolean
 }

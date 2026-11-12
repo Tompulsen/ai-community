@@ -35,6 +35,7 @@ function fixture(path, options = {}) {
     if (sql.startsWith('SELECT 1 WHERE EXISTS (SELECT 1 FROM following')) return { rows: [], rowCount: 0 }
     if (sql.includes('WITH latest AS')) return { rows: people.map((person, index) => ({ ...person,
       messageId: `0000001${index}message`, fromUserId: user.id, toUserId: person.id, text: '', reads: [], unread: index + 1 })) }
+    if (sql.startsWith('SELECT COUNT(*)::int AS "unreadCount"')) return { rows: [{ unreadCount: 6 }] }
     if (sql.includes('FROM chat_message')) return { rows: [] }
     if (sql.includes('SELECT id,username,name,"avatarId","chatScope"')) {
       return { rows: people.filter(person => person.id === parameters[0]) }
@@ -70,6 +71,7 @@ test('message threads batch public identities while retaining local IDs and send
   assert.equal(items[1].user.name, '章鱼用户')
   assert.equal(items[0].user.avatarUrl, '/legacy-files/avatar17?variant=thumbnail')
   assert.deepEqual(items.map(item => item.unread), [1, 2, 3])
+  assert.equal(response().unreadCount, 6)
   assert(items.every(item => item.canSend === false))
   assert.equal(identityReads(statements).length, 1)
   assert.deepEqual(identityReads(statements)[0].parameters[1], people.map(person => person.id))
