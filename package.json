@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:design": "node tools/design-preview.mjs",
     "build": "npm run typecheck:server && vue-tsc -b && vite build",
     "typecheck:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
@@ -18,6 +19,7 @@
     "@lucide/vue": "^1.72.0",
     "bcryptjs": "3.0.3",
     "fastify": "5.12.8",
+    "figma-squircle": "1.1.0",
     "ioredis": "5.11.1",
     "nodemailer": "10.5.0",
     "otpauth": "9.5.2",

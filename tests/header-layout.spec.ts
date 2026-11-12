@@ -20,6 +20,8 @@ for (const width of [320, 390, 768, 1000, 1440]) {
     await expect(categories.getByRole('button')).toHaveCount(4)
     await expect(categories.getByRole('button', { name: /资源/ })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    const brand = page.locator('.brand')
+    await expect(brand).toBeVisible()
     const controls = page.locator('.brand, .header-actions, .discover-search, .category-tabs, .toolbar-options')
     for (const control of await controls.all()) {
       const bounds = await control.boundingBox()
@@ -27,18 +29,38 @@ for (const width of [320, 390, 768, 1000, 1440]) {
       expect(bounds!.x).toBeGreaterThanOrEqual(0)
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
     }
-    const brand = await page.locator('.brand').boundingBox()
+    const brandBounds = await brand.boundingBox()
     const actions = await page.locator('.header-actions').boundingBox()
-    expect(brand!.x + brand!.width).toBeLessThanOrEqual(actions!.x)
+    expect(brandBounds!.x + brandBounds!.width).toBeLessThanOrEqual(actions!.x)
+    const headerBounds = await page.locator('.app-header').boundingBox()
+    expect(headerBounds!.x).toBe(0)
+    expect(headerBounds!.width).toBe(width)
     if (width >= 1000) {
+      await expect(page.getByRole('navigation', { name: '手机导航' })).toBeHidden()
       const nav = page.getByRole('navigation', { name: '主导航', exact: true })
+      await expect(nav).toBeVisible()
       await expect(nav.getByRole('link', { name: '发现', exact: true })).toHaveAttribute('aria-current', 'page')
       const bounds = await nav.boundingBox()
+      expect(bounds!.x).toBeGreaterThanOrEqual(brandBounds!.x + brandBounds!.width)
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(actions!.x)
     } else {
-      await expect(page.getByRole('navigation', { name: '手机导航' }).getByRole('link', { name: '发现', exact: true })).toHaveAttribute('aria-current', 'page')
+      await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeHidden()
+      const nav = page.getByRole('navigation', { name: '手机导航' })
+      await expect(nav).toBeVisible()
+      await expect(nav.getByRole('link', { name: '发现', exact: true })).toHaveAttribute('aria-current', 'page')
     }
-    const accessibility = await new AxeBuilder({ page }).include('.app-header').include('.discover-heading').include('.discovery-toolbar').analyze()
+    await page.getByRole('searchbox', { name: '搜索作品' }).focus()
+    const focus = await page.locator('.discover-search').evaluate(element => {
+      const style = getComputedStyle(element)
+      return {
+        top: element.getBoundingClientRect().top - parseFloat(style.outlineWidth) - parseFloat(style.outlineOffset),
+        headerBottom: document.querySelector('.app-header')!.getBoundingClientRect().bottom,
+        outlineStyle: style.outlineStyle,
+      }
+    })
+    expect(focus.outlineStyle).not.toBe('none')
+    expect(focus.top).toBeGreaterThanOrEqual(focus.headerBottom)
+    const accessibility = await new AxeBuilder({ page }).include('.app-header').include('.mobile-nav').include('.discover-heading').include('.discovery-toolbar').analyze()
     expect(accessibility.violations).toEqual([])
   })
 }

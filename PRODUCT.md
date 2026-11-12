@@ -36,7 +36,10 @@ delivery now includes the frontend and an independent community backend.
 - Four main tasks: discover, create, personal works, activities.
 - Community announcements and creator profiles remain reachable.
 - Publishing, saved work, notifications and administration have distinct places.
-- Desktop gallery has five columns; phone gallery has two.
+- The user selected the Aceternity Bento Grid reference for this redesign.
+  Work galleries use five base columns on desktop; small cards span one, large
+  cards span two. Smaller desktop widths use four columns, tablet two, phone one.
+  The user also requested concentric, iOS style continuous corners on nested card surfaces.
 - Existing feature scope is preserved. No new business capability is proposed.
 - Run independent community foundation services. Reuse the existing business
   modules and adapt their integration points.

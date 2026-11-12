@@ -26,11 +26,11 @@ async function submit() {
 }
 </script>
 <template>
-  <section class="panel-section stack">
+  <section class="panel-section stack password-recovery">
     <h2>{{ resetToken ? '重置社区密码' : '找回社区密码' }}</h2>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <p v-if="message" class="notice-inline" role="status">{{ message }}</p>
-    <button v-if="resetToken && message" class="button" @click="emit('done')">返回登录</button>
+    <button v-if="resetToken && message" class="button btn" @click="emit('done')">返回登录</button>
     <p v-if="!checked" class="muted">正在加载…</p>
     <form v-else-if="resetToken || available" class="stack" @submit.prevent="submit">
       <template v-if="resetToken">
@@ -39,8 +39,18 @@ async function submit() {
         <label class="field"><span>二步验证码或恢复码（如已启用）</span><input v-model="factor" class="control" autocomplete="one-time-code" :disabled="busy" /></label>
       </template>
       <label v-else class="field"><span>已验证邮箱</span><input v-model="email" type="email" class="control" autocomplete="email" required :disabled="busy" /></label>
-      <button class="button primary" :disabled="busy"><KeyRound v-if="resetToken" :size="16" /><Mail v-else :size="16" />{{ busy ? '正在提交…' : resetToken ? '重置密码' : '申请重置邮件' }}</button>
+      <button class="button primary btn" :disabled="busy"><KeyRound v-if="resetToken" :size="16" /><Mail v-else :size="16" />{{ busy ? '正在提交…' : resetToken ? '重置密码' : '申请重置邮件' }}</button>
     </form>
     <p v-else class="muted">本站尚未配置发信服务，请使用章鱼账号登录、前往章鱼账户中心或联系管理员恢复社区密码。</p>
   </section>
 </template>
+
+<style scoped>
+.password-recovery { max-width: 640px; padding-block: 24px 32px; gap: 24px; }
+.password-recovery h2 { font-size: 18px; line-height: 28px; }
+.password-recovery > form { margin-top: 0; gap: 24px; }
+.password-recovery > form > .button, .password-recovery > .button { align-self: flex-start; min-width: 144px; }
+.password-recovery > .notice-inline { margin: 0; color: var(--ink); }
+.password-recovery > .muted { font-size: 14px; line-height: 24px; max-width: 56ch; }
+@media (max-width: 639px) { .password-recovery > form > .button, .password-recovery > .button { width: 100%; } }
+</style>

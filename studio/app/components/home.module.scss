@@ -1152,34 +1152,34 @@
 
 // The community shell already supplies the brand and outer navigation.
 .container.embedded-container {
-  --white: #ffffff;
-  --black: #202329;
-  --gray: #f5f6f8;
-  --primary: #245cdb;
-  --primary-rgb: 36, 92, 219;
-  --primary-vivid: #245cdb;
-  --primary-fill: #245cdb;
-  --primary-foreground: #ffffff;
-  --second: #edf3ff;
-  --second-hover: #edf3ff;
-  --second-in-gray: #686e78;
-  --sidebar-surface: #f5f6f8;
-  --list-surface: #ffffff;
-  --control-surface: #f5f6f8;
-  --control-focus-surface: #ffffff;
-  --control-border: #e7e9ed;
-  --separator-color: #e7e9ed;
-  --hover-color: #f5f6f8;
-  --state-hover-surface: #f5f6f8;
-  --state-hover-text: #202329;
-  --state-selected-surface: #edf3ff;
-  --state-selected-text: #245cdb;
-  --bubble-user-default-bg: #f5f6f8;
-  --bubble-user-default-color: #202329;
-  --composer-focused-surface: #ffffff;
+  --white: #1c1c1c;
+  --black: #f1f1ef;
+  --gray: #303030;
+  --primary: #8fa68e;
+  --primary-rgb: 143, 166, 142;
+  --primary-vivid: #aec2a8;
+  --primary-fill: #8fa68e;
+  --primary-foreground: #1c1c1c;
+  --second: #303b31;
+  --second-hover: #303b31;
+  --second-in-gray: #aaaca6;
+  --sidebar-surface: #202120;
+  --list-surface: #262626;
+  --control-surface: #303030;
+  --control-focus-surface: #262626;
+  --control-border: #4a4c46;
+  --separator-color: #3c3d3a;
+  --hover-color: #303030;
+  --state-hover-surface: #303030;
+  --state-hover-text: #f1f1ef;
+  --state-selected-surface: #303b31;
+  --state-selected-text: #d6e4d1;
+  --bubble-user-default-bg: #303b31;
+  --bubble-user-default-color: #f1f1ef;
+  --composer-focused-surface: #262626;
   --composer-focus-shadow: none;
-  --danger: #b63846;
-  --danger-text: #b63846;
+  --danger: #f1a0a7;
+  --danger-text: #f1a0a7;
   --button-height: 40px;
   --button-primary-height: 40px;
   --button-radius: 6px;
@@ -1187,9 +1187,9 @@
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 8px;
-  --workspace-chrome-surface: #f5f6f8;
-  --workspace-sidebar-surface: #f5f6f8;
-  --workspace-canvas-surface: #ffffff;
+  --workspace-chrome-surface: #262626;
+  --workspace-sidebar-surface: #202120;
+  --workspace-canvas-surface: #1c1c1c;
   --workspace-rail-width: 0px;
   --workspace-toolbar-height: 44px;
   grid-template-columns: minmax(0, 1fr);
@@ -1197,6 +1197,9 @@
   font-size: 14px;
   line-height: 1.5;
   letter-spacing: 0;
+  color-scheme: dark;
+  background: var(--white);
+  color: var(--black);
 
   .workspace-frame {
     grid-column: 1;

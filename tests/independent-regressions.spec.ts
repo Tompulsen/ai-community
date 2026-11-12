@@ -323,7 +323,7 @@ test('one Studio iframe survives in-app navigation and keeps background result c
   const handle = await page.locator('iframe.studio-frame').elementHandle()
   const frame = await handle!.contentFrame()
   await page.locator('nav.desktop-nav a[href="/discover"]').click()
-  await expect(page.getByRole('heading', { name: '发现', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '发现作品', exact: true })).toBeVisible()
   await expect(page.locator('iframe.studio-frame')).toHaveCount(1)
   expect(await handle!.evaluate(element => element.isConnected)).toBe(true)
   await expect(page.locator('.studio-host')).toHaveAttribute('aria-hidden', 'true')

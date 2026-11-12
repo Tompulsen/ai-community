@@ -14,6 +14,19 @@ const work: Work = {
 const works = Array.from({ length: 10 }, (_, index) => ({ ...work, id: index ? `layout-work${index}` : work.id }))
 const creator = { ...user, count: 10, worksCount: 10, followersCount: 12, followingCount: 8, followed: false }
 
+function gridLayout(element: Element) {
+  const style = getComputedStyle(element), bounds = element.getBoundingClientRect()
+  return {
+    columns: style.gridTemplateColumns.split(' ').length,
+    columnGap: parseFloat(style.columnGap), rowGap: parseFloat(style.rowGap),
+    left: bounds.left, right: bounds.right, width: bounds.width,
+    items: Array.from(element.children).map(child => {
+      const bounds = child.getBoundingClientRect()
+      return { id: child.getAttribute('data-work-id'), width: bounds.width, height: bounds.height }
+    }),
+  }
+}
+
 async function mockLayout(page: Page, authenticated = true) {
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url())
@@ -43,7 +56,7 @@ async function mockLayout(page: Page, authenticated = true) {
 }
 
 const pages = [
-  { path: '/discover', title: '发现' },
+  { path: '/discover', title: '发现作品' },
   { path: '/library', title: '我的作品' },
   { path: '/community', title: '社区' },
   { path: '/community?creator=layout-user', title: user.name },
@@ -64,12 +77,100 @@ for (const width of [320, 390, 768, 1000, 1440]) {
       await expect(page.getByRole('heading', { name: target.title, exact: true }).first()).toBeVisible()
       await expect(page.locator('.content-loading')).toHaveCount(0)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), target.path).toBe(true)
+      const main = await page.locator('main').boundingBox()
+      expect(main!.x, target.path).toBeGreaterThanOrEqual(0)
+      expect(main!.x + main!.width, target.path).toBeLessThanOrEqual(width)
       const content = await page.locator('.page-container').first().boundingBox()
-      expect(content!.x, target.path).toBeGreaterThanOrEqual(0)
+      expect(content!.x, target.path).toBeGreaterThanOrEqual(main!.x)
       expect(content!.x + content!.width, target.path).toBeLessThanOrEqual(width)
+      const path = new URL(target.path, 'http://localhost:18775').pathname
+      const navigationPath = path.startsWith('/work/') ? '/discover' : path
+      if (['/discover', '/library', '/community', '/activities'].includes(navigationPath)) {
+        const navigation = page.getByRole('navigation', { name: width >= 1000 ? '主导航' : '手机导航', exact: true })
+        const active = navigation.locator('a.active')
+        await expect(active).toHaveCount(1)
+        await expect(active).toHaveAttribute('href', navigationPath)
+        if (width >= 1000 || navigationPath !== '/community') await expect(active).toHaveAttribute('aria-current', 'page')
+      }
+      if (['/discover', '/library', '/community?creator=layout-user'].includes(target.path) || path.startsWith('/work/')) {
+        const gallery = page.locator('.bento-grid')
+        const expectedWorks = path.startsWith('/work/') ? works.slice(1, 6) : works
+        await expect(gallery.locator('.work-card')).toHaveCount(expectedWorks.length)
+        const layout = await gallery.evaluate(gridLayout)
+        const columns = width >= 1200 ? 5 : width >= 1000 ? 4 : width >= 640 ? 2 : 1
+        expect(layout.columns, target.path).toBe(columns)
+        expect(layout.columnGap, target.path).toBe(16)
+        expect(layout.rowGap, target.path).toBe(16)
+        expect(layout.items.map(item => item.id), target.path).toEqual(expectedWorks.map(item => item.id))
+        const header = await page.locator('.header-inner').evaluate(element => {
+          const bounds = element.getBoundingClientRect(), style = getComputedStyle(element)
+          return { left: bounds.left + parseFloat(style.paddingLeft), right: bounds.right - parseFloat(style.paddingRight) }
+        })
+        expect(layout.left, target.path).toBeCloseTo(header.left, 1)
+        expect(layout.right, target.path).toBeCloseTo(header.right, 1)
+        const columnWidth = (layout.width - (columns - 1) * 16) / columns
+        for (const [index, item] of layout.items.entries()) {
+          const wide = width >= 1200 ? index % 8 === 5 || index % 8 === 7 : width >= 1000 && index % 3 === 2
+          const span = wide ? 2 : 1
+          expect(item.width, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth * span + (span - 1) * 16, 1)
+          expect(item.height, `${target.path}: ${item.id}`).toBe(320)
+        }
+        await expect(gallery.locator('.work-card > .continuous-outline')).toHaveCount(0)
+        const corners = await gallery.locator('.work-card').evaluateAll(cards => cards.map(card => {
+          const element = card as HTMLElement, bounds = element.getBoundingClientRect()
+          const cover = element.querySelector<HTMLElement>('.work-cover')!
+          const coverBounds = cover.getBoundingClientRect(), coverStyle = getComputedStyle(cover)
+          return {
+            id: element.dataset.workId, radius: Number(element.dataset.cornerRadius), smoothing: Number(element.dataset.cornerSmoothing),
+            clipPath: getComputedStyle(element).clipPath, coverRadius: parseFloat(coverStyle.borderRadius), coverClipPath: coverStyle.clipPath,
+            coverInset: { top: coverBounds.top - bounds.top, right: bounds.right - coverBounds.right, bottom: bounds.bottom - coverBounds.bottom, left: coverBounds.left - bounds.left },
+          }
+        }))
+        for (const corner of corners) {
+          const context = `${target.path}: ${corner.id}`
+          expect(corner.radius, context).toBe(32)
+          expect(corner.smoothing, context).toBe(0.6)
+          expect(corner.clipPath, context).not.toBe('none')
+          expect(corner.coverRadius, context).toBe(0)
+          expect(corner.coverClipPath, context).toBe('none')
+          for (const inset of Object.values(corner.coverInset)) expect(inset, context).toBeCloseTo(0, 1)
+        }
+      }
       if (target.path === '/library') {
         await expect(page.locator('.cover-status')).toHaveCount(10)
         await expect(page.locator('.resource-bottom')).toHaveCount(0)
+        const actions = await page.locator('.library-grid .work-management-actions button').evaluateAll(buttons => buttons.map(button => {
+          const bounds = button.getBoundingClientRect(), owner = button.closest('.work-card')!
+          const card = owner.getBoundingClientRect()
+          return {
+            left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height,
+            card: { left: card.left, top: card.top, right: card.right, bottom: card.bottom },
+            overlaps: Array.from(owner.parentElement!.children).some(other => {
+              if (other === owner) return false
+              const adjacent = other.getBoundingClientRect()
+              return bounds.left < adjacent.right && bounds.right > adjacent.left && bounds.top < adjacent.bottom && bounds.bottom > adjacent.top
+            }),
+          }
+        }))
+        expect(actions).toHaveLength(20)
+        for (const action of actions) {
+          expect(action.width).toBeGreaterThan(0)
+          expect(action.height).toBeGreaterThan(0)
+          expect(action.left).toBeGreaterThanOrEqual(action.card.left)
+          expect(action.right).toBeLessThanOrEqual(action.card.right)
+          expect(action.top).toBeGreaterThanOrEqual(action.card.top)
+          expect(action.bottom).toBeLessThanOrEqual(action.card.bottom)
+          expect(action.overlaps).toBe(false)
+        }
+        await page.getByRole('button', { name: '列表视图', exact: true }).click()
+        await expect(page.getByRole('button', { name: '列表视图', exact: true })).toHaveAttribute('aria-pressed', 'true')
+        await expect(page.locator('.library-grid')).toHaveCount(0)
+        await expect(page.locator('.data-table tbody tr')).toHaveCount(10)
+        expect(await page.locator('.data-table tbody td:first-child a').evaluateAll(links => links.map(link => link.getAttribute('href')))).toEqual(works.map(item => `/work/${item.id}`))
+        await page.getByRole('button', { name: '网格视图', exact: true }).click()
+        await expect(page.getByRole('button', { name: '网格视图', exact: true })).toHaveAttribute('aria-pressed', 'true')
+        await expect(page.locator('.library-grid .work-card')).toHaveCount(10)
+        expect(await page.locator('.library-grid .work-card').evaluateAll(cards => cards.map(card => card.getAttribute('data-work-id')))).toEqual(works.map(item => item.id))
       }
       if (target.path === '/discover') await expect(page.locator('.resource-bottom')).toHaveCount(10)
       if (target.path === '/admin') {
@@ -98,12 +199,21 @@ test('gallery loading keeps its columns and exposes an accessible status', async
   await page.goto('/discover')
   const loading = page.getByRole('status', { name: '正在加载作品…', exact: true })
   await expect(loading).toBeVisible()
-  expect(await loading.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(5)
+  const loadingLayout = await loading.evaluate(gridLayout)
+  const width = page.viewportSize()!.width
+  expect(loadingLayout.columns).toBe(width >= 1200 ? 5 : width >= 1000 ? 4 : width >= 640 ? 2 : 1)
+  expect(loadingLayout.columnGap).toBe(16)
+  expect(loadingLayout.rowGap).toBe(16)
+  expect(loadingLayout.items.every(item => item.height === 320)).toBe(true)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await loading.locator('.skeleton').first().evaluate(element => getComputedStyle(element).animationName)).toBe('none')
   release()
   await expect(loading).toHaveCount(0)
   await expect(page.locator('.work-card')).toHaveCount(10)
+  const galleryLayout = await page.locator('.bento-grid').evaluate(gridLayout)
+  expect({ ...galleryLayout, items: galleryLayout.items.map(({ width, height }) => ({ width, height })) }).toEqual({
+    ...loadingLayout, items: loadingLayout.items.map(({ width, height }) => ({ width, height })),
+  })
 })
 
 test('guest account and library stay within a small viewport', async ({ page }) => {

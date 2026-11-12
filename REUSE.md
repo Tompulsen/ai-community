@@ -63,3 +63,21 @@ GenOffice Apache-2.0 和新增服务的 AGPL-3.0-only，不能按“后加”统
 前端使用真实 API，移除演示数据与伪造成功状态。上传限制 20 MB，时间限制隐私
 暂时保守隐藏。付费生成、真实 OAuth 与完整业务验收没有用单元测试替代。
 完整迁移契约及验收条件见 MIGRATION.md。
+
+## 界面资产
+
+`public/assets/motion/motion.css` 与 `motion.js` 原样来自用户指定的
+design-taste-frontend 2.5.1 技能，不修改其实现以通过检查。
+Schibsted Grotesk 拉丁可变字体来自 Google Fonts，随文件保留
+`public/assets/fonts/Schibsted-OFL.txt` 中的版权和 SIL OFL 1.1 声明。
+站点图标复用已安装的 Lucide Aperture（ISC）；页面操作仍使用同一 Lucide 图标库。
+作品、创作者头像及媒体来自现有公开社区数据，本次没有引入图库替代作品。
+`BentoGrid.vue` 沿用用户确定的五列及一列、两列跨列规则；作品展示与点击展开参考
+用户随后提供的 Aceternity UI Layout Grid 示例，按现有 Vue、Lucide 和 CSS 变量适配，
+保留组件来源说明；未复制示例中的虚构作品文案与房屋图片。
+连续圆角继续使用已有 `figma-squircle` 1.1.0（MIT）和 `v-continuous:clip`：
+仅保留 32px、平滑度 0.6 的单层外轮廓，直接裁切全幅媒体和底部元信息，不生成额外内框。
+不从零编写曲线算法，不宣称与 Apple UIKit 实现逐像素相同。
+展开预览复用浏览器原生 dialog 和 WAAPI，取代示例的 React、Tailwind 与 Motion 实现；
+内容 0.3s ease-in-out、黑色 0.3 遮罩，补齐键盘关闭、焦点恢复及减少动态效果。
+本轮没有新增依赖，作品详情、权限、收藏、喜欢和管理 API 契约保持原样。

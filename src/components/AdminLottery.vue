@@ -148,12 +148,13 @@ onMounted(() => {
 
 <template>
   <div class="admin-lottery">
-    <section class="panel-section">
-      <div class="section-heading"><h2>奖池与活动规则</h2><div class="table-actions"><RouterLink to="/activities" class="button subtle">预览活动</RouterLink><button class="icon-button" title="重新读取抽奖配置" aria-label="重新读取抽奖配置" :disabled="loading || saving" @click="loadConfig"><RefreshCw :size="17" /></button></div></div>
+    <section class="panel-section lottery-config">
+      <div class="section-heading"><h2>奖池与活动规则</h2><div class="table-actions"><RouterLink to="/activities" class="button subtle btn">预览活动</RouterLink><button class="icon-button" title="重新读取抽奖配置" aria-label="重新读取抽奖配置" :disabled="loading || saving" @click="loadConfig"><RefreshCw :size="17" /></button></div></div>
       <div v-if="loading" class="admin-loading" role="status" aria-label="正在读取抽奖配置"><div v-for="n in 3" :key="n" class="skeleton" /></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <form v-if="draft && !loading" class="stack" @submit.prevent="saveConfig">
         <fieldset :disabled="saving" class="fieldset stack">
+          <h3 class="config-title">活动展示</h3>
           <label class="check-label"><input v-model="draft.settings.enabled" type="checkbox" />开放抽奖</label>
           <div class="fields">
             <label class="field"><span>活动标题</span><input v-model="draft.settings.wheel.title" class="control" maxlength="32" /></label>
@@ -162,11 +163,12 @@ onMounted(() => {
             <label class="field"><span>活动简介</span><input v-model="draft.settings.wheel.subtitle" class="control" maxlength="120" /></label>
           </div>
           <label class="field"><span>活动规则</span><textarea v-model="draft.settings.wheel.rulesText" class="control" rows="3" maxlength="2000" /></label>
+          <h3 class="config-title">任务奖励</h3>
           <div class="rule-grid"><div v-for="(label, key) in ruleNames" :key="key" class="stack"><label class="check-label"><input v-model="draft.settings[key].enabled" type="checkbox" />{{ label }}</label><div class="fields"><label class="field"><span>达成数量</span><input v-model.number="draft.settings[key].threshold" class="control" type="number" min="1" max="1000000" step="1" required /></label><label class="field"><span>奖励次数</span><input v-model.number="draft.settings[key].tickets" class="control" type="number" min="1" max="1000" step="1" required /></label></div></div></div>
           <label class="field"><span>获赞统计</span><select v-model="draft.settings.likesMode" class="control"><option value="work">单件作品累计</option><option value="total">所有作品累计</option></select></label>
-          <div class="section-heading"><h3>奖项</h3><button type="button" class="button subtle" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>
+          <div class="section-heading prize-heading"><h3>奖项</h3><button type="button" class="button subtle btn" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>
           <p class="form-note">有库存且已启用的奖项参与抽取。库存填 −1 表示不限；金额单位为美元。</p>
-          <p role="status">设定概率合计：{{ probabilityTotal.toFixed(2) }}%</p>
+          <p class="probability-total" role="status">设定概率合计 <strong>{{ probabilityTotal.toFixed(2) }}%</strong></p>
           <article v-for="(prize, index) in draft.settings.prizes" :key="prize.id" class="prize-editor">
             <div class="section-heading"><label class="check-label"><input v-model="prize.enabled" type="checkbox" @change="probabilitiesEdited = true" />启用奖项</label><button type="button" class="icon-button" :title="`移除奖项 ${index + 1}`" :aria-label="`移除奖项 ${index + 1}`" @click="removePrize(index)"><Trash2 :size="16" /></button></div>
             <div class="prize-fields">
@@ -180,43 +182,71 @@ onMounted(() => {
             <label class="field"><span>说明</span><textarea v-model="prize.description" class="control" rows="2" maxlength="500" /></label>
           </article>
           <p v-if="!draft.settings.prizes.length" class="muted">暂无奖项，请先添加奖项再开放活动。</p>
-          <div class="table-actions"><button class="button primary" :disabled="saving"><Save :size="16" />{{ saving ? '正在保存…' : '保存抽奖配置' }}</button><span v-if="saved" role="status">已保存</span></div>
+          <div class="table-actions config-actions"><button class="button primary btn" :disabled="saving"><Save :size="16" />{{ saving ? '正在保存…' : '保存抽奖配置' }}</button><span v-if="saved" role="status">已保存</span></div>
         </fieldset>
       </form>
     </section>
-    <section class="panel-section">
+    <section class="panel-section lottery-chances">
       <h2>用户抽奖次数</h2>
-      <form v-if="!pending" class="search-row" @submit.prevent="findUsers"><label class="field"><span>账号或用户编号</span><input v-model="userQuery" type="search" class="control" maxlength="120" /></label><button class="button" :disabled="userBusy || chanceBusy"><Search :size="16" />查找用户</button></form>
-      <ul v-if="users.length" class="user-results"><li v-for="person in users" :key="person.id"><button class="button subtle" :disabled="chanceBusy || userBusy || !!pending" @click="chooseUser(person)">{{ person.name }} · @{{ person.username }}</button></li></ul>
-      <template v-if="selected"><p>{{ selected.name }} · @{{ selected.username }}<span v-if="account"> · 可用 {{ account.balance }} 次</span></p><form class="stack" @submit.prevent="adjust"><fieldset class="fieldset fields" :disabled="chanceBusy || userBusy || !!pending || !account"><label class="field"><span>调整方式</span><select v-model="mode" class="control"><option value="add">增加次数</option><option value="set">设置为指定次数</option></select></label><label class="field"><span>次数</span><input v-model.number="amount" class="control" type="number" :min="mode === 'add' ? 1 : 0" max="2147483647" step="1" required /></label><label class="field"><span>操作原因</span><input v-model="reason" class="control" maxlength="300" /></label><p v-if="nextBalance !== null">调整后 {{ nextBalance }} 次</p></fieldset><p v-if="pending" class="notice-inline">上次操作结果尚未确认，请使用原凭证重新核对。</p><button class="button primary" :disabled="chanceBusy || userBusy || (!pending && (!account || nextBalance === null || nextBalance > 2147483647))">{{ chanceBusy ? '正在核对…' : pending ? '核对上次调整' : '确认调整次数' }}</button></form></template>
+      <form v-if="!pending" class="search-row" @submit.prevent="findUsers"><label class="field"><span>账号或用户编号</span><input v-model="userQuery" type="search" class="control" maxlength="120" /></label><button class="button btn" :disabled="userBusy || chanceBusy"><Search :size="16" />查找用户</button></form>
+      <ul v-if="users.length" class="user-results"><li v-for="person in users" :key="person.id"><button class="button subtle btn" :disabled="chanceBusy || userBusy || !!pending" @click="chooseUser(person)">{{ person.name }} · @{{ person.username }}</button></li></ul>
+      <template v-if="selected"><p>{{ selected.name }} · @{{ selected.username }}<span v-if="account"> · 可用 {{ account.balance }} 次</span></p><form class="stack" @submit.prevent="adjust"><fieldset class="fieldset fields" :disabled="chanceBusy || userBusy || !!pending || !account"><label class="field"><span>调整方式</span><select v-model="mode" class="control"><option value="add">增加次数</option><option value="set">设置为指定次数</option></select></label><label class="field"><span>次数</span><input v-model.number="amount" class="control" type="number" :min="mode === 'add' ? 1 : 0" max="2147483647" step="1" required /></label><label class="field"><span>操作原因</span><input v-model="reason" class="control" maxlength="300" /></label><p v-if="nextBalance !== null">调整后 {{ nextBalance }} 次</p></fieldset><p v-if="pending" class="notice-inline">上次操作结果尚未确认，请使用原凭证重新核对。</p><button class="button primary btn" :disabled="chanceBusy || userBusy || (!pending && (!account || nextBalance === null || nextBalance > 2147483647))">{{ chanceBusy ? '正在核对…' : pending ? '核对上次调整' : '确认调整次数' }}</button></form></template>
       <p v-else class="muted">查找并选择需要调整次数的账号。</p><p v-if="userBusy" role="status">正在读取账号…</p><p v-if="chanceError" class="form-error" role="alert">{{ chanceError }}</p>
     </section>
-    <section class="panel-section">
+    <section class="panel-section lottery-records">
       <div class="section-heading"><h2>全员奖励记录</h2><button class="icon-button" title="刷新奖励记录" aria-label="刷新奖励记录" :disabled="recordBusy || !!retrying" @click="loadRecords()"><RefreshCw :size="17" /></button></div>
       <p v-if="recordError" class="form-error" role="alert">{{ recordError }}</p><p v-if="recordBusy" role="status">正在读取奖励记录…</p>
-      <div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间与用户</th><th scope="col">奖励</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="item in records" :key="item.id"><td>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}<p class="caption-5">@{{ item.username || item.userId }}</p></td><td><div v-for="(award, i) in item.prizes" :key="i">{{ award.name }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td><td><div v-for="(award, i) in item.prizes" :key="i"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.note" class="caption-5">{{ award.note }}</p></div></td><td><template v-if="item.prizes.some(award => award.status === 'pending')"><button v-if="confirmRetry !== item.id" class="button subtle" :disabled="!!retrying" @click="confirmRetry = item.id">重试发放</button><template v-else><p class="caption-5">核对并重试此笔奖励？</p><div class="table-actions"><button class="button" :disabled="!!retrying" @click="retryCredit(item.id)">{{ retrying === item.id ? '核对中…' : '确认' }}</button><button class="button subtle" :disabled="!!retrying" @click="confirmRetry = ''">取消</button></div></template></template></td></tr></tbody></table></div>
-      <p v-else-if="!recordBusy && !recordError" class="muted">暂无奖励记录。</p><button v-if="nextCursor" class="button" :disabled="recordBusy" @click="loadRecords(true)">加载更多</button>
+      <div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间与用户</th><th scope="col">奖励</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="item in records" :key="item.id"><td>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}<p class="caption-5">@{{ item.username || item.userId }}</p></td><td><div v-for="(award, i) in item.prizes" :key="i">{{ award.name }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td><td><div v-for="(award, i) in item.prizes" :key="i"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.note" class="caption-5">{{ award.note }}</p></div></td><td><template v-if="item.prizes.some(award => award.status === 'pending')"><button v-if="confirmRetry !== item.id" class="button subtle btn" :disabled="!!retrying" @click="confirmRetry = item.id">重试发放</button><template v-else><p class="caption-5">核对并重试此笔奖励？</p><div class="table-actions"><button class="button btn" :disabled="!!retrying" @click="retryCredit(item.id)">{{ retrying === item.id ? '核对中…' : '确认' }}</button><button class="button subtle btn" :disabled="!!retrying" @click="confirmRetry = ''">取消</button></div></template></template></td></tr></tbody></table></div>
+      <p v-else-if="!recordBusy && !recordError" class="muted">暂无奖励记录。</p><button v-if="nextCursor" class="button btn" :disabled="recordBusy" @click="loadRecords(true)">加载更多</button>
     </section>
   </div>
 </template>
 
 <style scoped>
+.admin-lottery { min-width: 0; }
+.lottery-config { padding-top: 0; }
 .fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.fieldset.stack { gap: 20px; }
+.config-title { font-size: 14px; line-height: 20px; font-weight: 600; margin-top: 8px; padding-top: 24px; border-top: 1px solid var(--border); }
+.config-title:first-child { margin: 0; padding: 0; border: 0; }
 .fields, .prize-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.rule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.fields > *, .prize-fields > * { min-width: 0; }
+.rule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .rule-grid .stack { gap: 16px; }
+.rule-grid .check-label { font-weight: 500; }
+.prize-heading { margin: 8px 0 0; padding-top: 24px; border-top: 1px solid var(--border); }
+.prize-heading h3 { font-size: 14px; line-height: 20px; font-weight: 600; }
+.probability-total { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; line-height: 20px; }
+.probability-total strong { color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
 .prize-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.prize-editor { border: 1px solid var(--border); border-radius: 8px; padding: 16px; display: grid; gap: 16px; }
+.prize-editor { border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: grid; gap: 16px; background: var(--surface); }
 .prize-editor .section-heading { margin: 0; }
-.check-label { display: flex; align-items: center; gap: 8px; }
+.prize-editor .field > strong { min-height: 40px; display: flex; align-items: center; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.check-label { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .check-label input { width: 18px; height: 18px; accent-color: var(--blue); }
-.search-row { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; margin-block: 24px 16px; }
+.config-actions { gap: 16px; flex-wrap: wrap; padding-top: 4px; }
+.config-actions > span { color: var(--green); font-size: 12px; }
+.lottery-chances > h2 { font-size: 18px; line-height: 28px; }
+.lottery-chances > p { margin-top: 16px; }
+.lottery-chances > form.stack { gap: 16px; }
+.lottery-chances form.stack > .button { align-self: flex-start; }
+.search-row { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-block: 20px 16px; }
 .search-row .field { flex: 1; min-width: 176px; }
 .user-results { list-style: none; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .admin-loading { display: grid; gap: 16px; padding-block: 24px; }
 .admin-loading .skeleton { height: 40px; max-width: 640px; }
 .data-table td { vertical-align: top; white-space: normal; min-width: 160px; overflow-wrap: anywhere; }
 .data-table td p { margin-top: 4px; }
-@media (max-width: 899px) { .rule-grid { grid-template-columns: 1fr; } .prize-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 639px) { .fields, .prize-fields { grid-template-columns: 1fr; } .search-row .button { width: 100%; } }
+.lottery-records .data-table { min-width: 640px; }
+.lottery-records .data-table td { padding: 16px 12px; }
+.lottery-records .data-table .button { white-space: nowrap; }
+.lottery-records .data-table .table-actions { flex-wrap: wrap; gap: 8px; }
+@media (max-width: 1199px) { .rule-grid { grid-template-columns: 1fr; } .prize-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 639px) {
+  .fields, .prize-fields { grid-template-columns: 1fr; }
+  .prize-editor { padding: 16px; }
+  .search-row .button, .lottery-chances form.stack > .button { width: 100%; }
+  .config-actions { align-items: stretch; }
+  .config-actions > .button { width: 100%; }
+}
 </style>

@@ -1,1 +1,2 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#245cdb"/><g fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="m9 23 12-12 3 3-12 12zM17 9V5M23 8l3-3M25 11h4M9 12V8M7 10h4"/></g></svg>
+<!-- Lucide Aperture, ISC license; @lucide/vue. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#f1f1ef"/><g transform="translate(4 4)" fill="none" stroke="#1c1c1c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48m-13.79 4 5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83m13.79-4-5.74 9.94"/></g></svg>
