@@ -5,7 +5,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, relative, resolve, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -271,6 +271,9 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
       await rename(webTemporary, webpublic);
       webType = 'image/webp';
     } else await videoThumbnail(source, temporary);
+    // A buffer avoids Sharp holding a file lock across rename on Windows.
+    const preview = await sharp(await readFile(temporary)).metadata();
+    if (preview.width && preview.height) extra.previewAspectRatio = preview.width / preview.height;
     await rename(temporary, thumbnail);
     const updated = await db.query(`UPDATE drive_file SET "thumbnailAccessKey"=$2,"thumbnailUrl"=$3,
       "webpublicAccessKey"=$4,"webpublicUrl"=$5,"webpublicType"=$6,

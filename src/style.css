@@ -47,6 +47,7 @@
   --line-strong: var(--border);
   --radius: 6px;
   --card-radius: 32px;
+  --work-cover-shade: linear-gradient(180deg, #0000 0%, #00000033 24%, #000000c2 60%, #000000d1 100%);
   --card-inset: 16px;
   --card-border: 1px;
   --card-inner-radius: calc(var(--card-radius) - var(--card-inset) - var(--card-border));

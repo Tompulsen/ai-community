@@ -24,6 +24,7 @@ export interface Work {
   avatarUrl?: string
   kind: WorkKind
   cover: string
+  coverAspectRatio?: number
   tags: string[]
   prompt: string
   model: string

@@ -38,7 +38,11 @@ delivery now includes the frontend and an independent community backend.
 - Publishing, saved work, notifications and administration have distinct places.
 - The user selected the Aceternity Bento Grid reference for this redesign.
   Work galleries use five base columns on desktop; small cards span one, large
-  cards span two. Smaller desktop widths use four columns, tablet two, phone one.
+  cards span two. Small cards use a 4:5 ratio; large cards keep the same height.
+  Known landscape covers prefer two columns when space remains in the row, without
+  changing feed order. Covers fill and crop; clicking opens the detail page directly,
+  where the complete media remains available.
+  Smaller desktop widths use four columns, tablet two, phone one.
   The user also requested concentric, iOS style continuous corners on nested card surfaces.
 - Existing feature scope is preserved. No new business capability is proposed.
 - Run independent community foundation services. Reuse the existing business

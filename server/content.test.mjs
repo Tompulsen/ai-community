@@ -106,6 +106,23 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
+test('work covers expose only valid processed preview ratios', async () => {
+  for (const ratio of [16 / 9, 9 / 16, undefined, 0, -1, NaN, '1.5']) {
+    const ctx = context({ query: async sql => {
+      if (sql.includes('FROM community_submission s')) return { rows: [{ ...workRow, category: 'image', fileIds: ['cover1'] }] };
+      if (sql.includes('FROM drive_file')) return { rows: [{
+        id: 'cover1', name: 'Cover', type: 'image/jpeg', storedInternal: true, thumbnailAccessKey: 'thumbnail1',
+        properties: { width: 900, height: 300, previewAspectRatio: ratio },
+      }] };
+      return { rows: [] };
+    } });
+    await handleContent(ctx);
+    const cover = ctx.result.payload.items[0];
+    assert.equal(cover.coverAspectRatio, typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0 ? ratio : undefined);
+    assert.equal(cover.cover, '/legacy-files/cover1?variant=thumbnail');
+  }
+});
+
 test('stale owner edits roll back without updating published content', async () => {
   const { ctx, statements } = transactionalContext({
     path: '/api/works/work1', method: 'PATCH', actor: { id: 'owner1' },

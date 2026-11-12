@@ -113,7 +113,7 @@ for (const width of [320, 390, 768, 1000, 1440]) {
           const wide = width >= 1200 ? index % 8 === 5 || index % 8 === 7 : width >= 1000 && index % 3 === 2
           const span = wide ? 2 : 1
           expect(item.width, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth * span + (span - 1) * 16, 1)
-          expect(item.height, `${target.path}: ${item.id}`).toBe(320)
+          expect(item.height, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth * 5 / 4, 1)
         }
         await expect(gallery.locator('.work-card > .continuous-outline')).toHaveCount(0)
         const corners = await gallery.locator('.work-card').evaluateAll(cards => cards.map(card => {
@@ -204,7 +204,8 @@ test('gallery loading keeps its columns and exposes an accessible status', async
   expect(loadingLayout.columns).toBe(width >= 1200 ? 5 : width >= 1000 ? 4 : width >= 640 ? 2 : 1)
   expect(loadingLayout.columnGap).toBe(16)
   expect(loadingLayout.rowGap).toBe(16)
-  expect(loadingLayout.items.every(item => item.height === 320)).toBe(true)
+  const columnWidth = (loadingLayout.width - (loadingLayout.columns - 1) * 16) / loadingLayout.columns
+  for (const item of loadingLayout.items) expect(item.height).toBeCloseTo(columnWidth * 5 / 4, 1)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await loading.locator('.skeleton').first().evaluate(element => getComputedStyle(element).animationName)).toBe('none')
   release()

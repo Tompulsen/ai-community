@@ -411,6 +411,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   const mediaUrl = (file: DriveFileRow | undefined) => file?.storedInternal ? `/legacy-files/${file.id}` : '';
   const image = ordered.find(file => file.type.startsWith('image/'));
   const video = ordered.find(file => file.type.startsWith('video/'));
+  const coverAspectRatio = (image || video)?.properties?.previewAspectRatio;
   const tagIds = content.tagIds ?? [];
   const tags = tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" AND category = $2 ORDER BY id', [tagIds, content.category])).rows : [];
   const publicStatus = ['published', 'approved'].includes(row.status) && row.approvedNoteId;
@@ -419,6 +420,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
     avatar: (row.authorName || row.authorUsername || '?').slice(0, 1), authorId: row.authorId, authorUsername: row.authorUsername,
     avatarUrl: row.authorAvatarId ? `/legacy-files/${row.authorAvatarId}?variant=thumbnail` : null,
     kind: content.category, cover: image?.thumbnailAccessKey ? `${mediaUrl(image)}?variant=thumbnail` : mediaUrl(image) || (video?.thumbnailAccessKey ? `${mediaUrl(video)}?variant=thumbnail` : ''),
+    ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
     tags: tags.map(tag => tag.name), tagIds: tags.map(tag => tag.id),
     prompt: content.generation?.prompt ?? '', model: content.model, body: content.text,
     sourceUrl: content.sourceUrl, license: content.license, generation: content.generation ?? null,
