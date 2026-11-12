@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { httpError, roleCondition } from './auth.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
 import { readSiteSettings, validateSiteSettings } from './settings.ts'
+import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 type Body = Record<string, unknown>
@@ -15,6 +16,7 @@ interface MetaRow { id: string; clientOptions: Body }
 interface TagRow { id: string; category: string; name: string }
 interface ManagedUser {
   id: string; username: string; name: string | null; host: string | null
+  createdAt: Date | string | null
   isSuspended: boolean; isDeleted: boolean; isLocked: boolean; isBot: boolean
   isCat: boolean; isExplorable: boolean; followersCount: number; followingCount: number
   notesCount: number; communityViolationCount: number; communityViolationBaseline: number
@@ -28,7 +30,7 @@ interface ReportRow {
 }
 const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityPullToRefresh', 'uploadLimits'] as const
 const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
-const userColumns = 'u.id,u.username,u.name,u.host,u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
+const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 function record(value: unknown): value is Body { return value !== null && typeof value === 'object' && !Array.isArray(value) }
@@ -179,8 +181,10 @@ async function userProtection(db: Queryable, userIds: string[]) {
     return roles.rows.some(role => role.target === 'manual' ? assigned.has(role.id) : roleCondition(role.condFormula, row, assigned))
   }
 }
-function packUser(row: ManagedUser, protectedAccount: boolean) {
-  return { id: row.id, username: row.username, name: row.name || row.username, isSuspended: row.isSuspended,
+function packUser(row: ManagedUser, protectedAccount: boolean, identity?: PublicIdentity) {
+  const username = identity?.username ?? row.username
+  return { id: row.id, username, ...(identity ? { accountId: identity.accountId } : {}),
+    name: row.name || username || '章鱼用户', isSuspended: row.isSuspended,
     violationCount: row.communityViolationCount, violationBaseline: row.communityViolationBaseline, isProtected: protectedAccount }
 }
 async function users(ctx: RequestContext, userId?: string) {
@@ -191,11 +195,13 @@ async function users(ctx: RequestContext, userId?: string) {
       AND ($3::varchar IS NULL OR u.id<$3) AND ($4='all' OR u."isSuspended"=($4='suspended'))
       ORDER BY u.id DESC LIMIT 31`, [query(ctx), search(query(ctx)), cursor(ctx), status])).rows
     const page = paginate(rows), protectedAccount = await userProtection(ctx.db, page.items.map(row => row.id))
-    return { ...page, items: page.items.map(row => packUser(row, protectedAccount(row))) }
+    const identities = await readPublicIdentities(ctx, page.items.map(row => row.id))
+    return { ...page, items: page.items.map(row => packUser(row, protectedAccount(row), identities.get(row.id))) }
   }
   keys(ctx.body, ['isSuspended', 'reason'])
   const suspended = boolean(ctx.body.isSuspended), reason = text(ctx.body.reason ?? '', 1000), id = identifier(userId)
   if (suspended && !reason) fail('封禁账号时请填写原因。')
+  const identity = (await readPublicIdentities(ctx, [id])).get(id)
   return transaction(ctx.db, async db => {
     const row = (await db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u WHERE u.id=$1 AND host IS NULL AND NOT "isDeleted" FOR UPDATE`, [id])).rows[0]
     if (!row) fail('账号不存在。', 404)
@@ -207,7 +213,7 @@ async function users(ctx: RequestContext, userId?: string) {
       row.isSuspended = suspended
       if (!suspended) row.communityViolationBaseline = row.communityViolationCount
     }
-    return { user: packUser(row, protectedAccount(row)) }
+    return { user: packUser(row, protectedAccount(row), identity) }
   })
 }
 async function recordReportViolation(ctx: RequestContext, db: Queryable, report: ReportRow) {
@@ -232,11 +238,13 @@ async function reports(ctx: RequestContext, reportId?: string) {
       WHERE ($1='all' OR r.resolved=($1='resolved')) AND ($2::varchar IS NULL OR r.id<$2)
       AND ($3='' OR r.comment ILIKE $4 OR t.username ILIKE $4 OR a.username ILIKE $4)
       ORDER BY r.id DESC LIMIT 31`, [status, cursor(ctx), query(ctx), search(query(ctx))])).rows
-    return paginate(rows)
+    const page = paginate(rows)
+    const identities = await readPublicIdentities(ctx, page.items.flatMap(row => [row.targetUserId, row.reporterId]))
+    return { ...page, items: page.items.map(row => packReport(row, identities)) }
   }
   keys(ctx.body, ['resolvedAs', 'moderationNote'])
   const decision = enumValue(ctx.body.resolvedAs, ['accept', 'reject']) as 'accept' | 'reject', note = text(ctx.body.moderationNote ?? '', 8192), id = identifier(reportId)
-  return transaction(ctx.db, async db => {
+  const result = await transaction(ctx.db, async db => {
     const report = (await db.query<ReportRow>(`SELECT ${reportColumns} FROM abuse_user_report r WHERE r.id=$1 FOR UPDATE`, [id])).rows[0]
     if (!report) fail('举报记录不存在。', 404)
     if (report.resolved) {
@@ -248,6 +256,13 @@ async function reports(ctx: RequestContext, reportId?: string) {
     await audit(ctx, db, 'resolveAbuseReport', { reportId: id, resolvedAs: decision, moderationNote: note })
     return { report: { ...report, resolved: true, resolvedAs: decision, assigneeId: ctx.requireUser().id, moderationNote: note } }
   })
+  const identities = await readPublicIdentities(ctx, [result.report.targetUserId, result.report.reporterId])
+  return { report: packReport(result.report, identities) }
+}
+function packReport(row: ReportRow, identities: Awaited<ReturnType<typeof readPublicIdentities>>) {
+  const target = identities.get(row.targetUserId), reporter = identities.get(row.reporterId)
+  return { ...row, ...(target ? { targetUsername: target.username, targetAccountId: target.accountId } : {}),
+    ...(reporter ? { reporterUsername: reporter.username, reporterAccountId: reporter.accountId } : {}) }
 }
 async function legacySettings(ctx: RequestContext) {
   if (ctx.req.method === 'GET') { const settings = await readSiteSettings(ctx.db); return { settings, version: fingerprint(settings) } }

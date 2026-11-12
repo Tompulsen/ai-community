@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import { accessibleWork, legacyIdTime, transaction } from './content.ts'
 import { getUser, httpError, roleCondition } from './auth.ts'
+import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import type { Queryable, RequestContext, SessionUser } from './types.ts'
 
 const id = (value: unknown): string => {
@@ -129,8 +130,12 @@ function packedMessage(ctx: RequestContext, row: ChatRow, files = new Map<string
     sharedWorkId: sharedId(row.text, ctx.config.url), ...(file && file.userId === row.fromUserId
       ? { file: { id: file.id, name: file.name, type: file.type, size: file.size, url: `/legacy-files/${file.id}` } } : {}) }
 }
-const peerDto = (other: ChatPeer) => ({ id: other.id, username: other.username, name: other.name || other.username,
-  avatarUrl: other.avatarId ? `/legacy-files/${other.avatarId}?variant=thumbnail` : null })
+function peerDto(other: ChatPeer, identity?: PublicIdentity) {
+  const username = identity?.username ?? other.username
+  return { id: other.id, username, ...(identity ? { accountId: identity.accountId } : {}),
+    name: other.name || username || '章鱼用户',
+    avatarUrl: other.avatarId ? `/legacy-files/${other.avatarId}?variant=thumbnail` : null }
+}
 
 async function notifications(ctx: RequestContext): Promise<boolean> {
   const user = ctx.requireUser()
@@ -151,21 +156,23 @@ async function notifications(ctx: RequestContext): Promise<boolean> {
     const profiles = actors.length ? (await ctx.db.query<ChatPeer>(`SELECT id,username,name,"avatarId" FROM "user"
       WHERE id=ANY($1::varchar[]) AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended"
       AND NOT EXISTS (SELECT 1 FROM blocking b WHERE (b."blockerId"=$2 AND b."blockeeId"="user".id) OR (b."blockerId"="user".id AND b."blockeeId"=$2))`, [actors, user.id])).rows : []
+    const identities = await readPublicIdentities(ctx, profiles.map(profile => profile.id))
     const oldNotes = [...new Set(parsed.flatMap(({ data }) => typeof data.noteId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(data.noteId) ? [data.noteId] : []))]
     const legacyWorks = oldNotes.length ? (await ctx.db.query<{ noteId: string; workId: string; rootId: string }>(`SELECT n.id AS "noteId",s.id AS "workId",s."approvedNoteId" AS "rootId"
       FROM note n JOIN community_submission s ON s."approvedNoteId" IN (n.id,n."replyId",n."threadId") WHERE n.id=ANY($1::varchar[])`, [oldNotes])).rows : []
     const items = parsed.flatMap(({ streamId, data }) => {
       const actor = profiles.find(profile => profile.id === data.notifierId)
       if (data.notifierId && !actor) return []
+      const actorDto = actor ? peerDto(actor, identities.get(actor.id)) : undefined
       const legacy = legacyWorks.find(work => work.noteId === data.noteId)
       const workId = typeof data.workId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(data.workId) ? data.workId : legacy?.workId
       const commentId = typeof data.commentId === 'string' ? data.commentId : legacy && legacy.noteId !== legacy.rootId ? legacy.noteId : null
       const type = String(data.type || '')
       const url = workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}`
         : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
-      return [{ id: `redis:${streamId}`, title: names[type] || '社区通知', text: typeof data.text === 'string' ? data.text : actor?.name || actor?.username || '',
+      return [{ id: `redis:${streamId}`, title: names[type] || '社区通知', text: typeof data.text === 'string' ? data.text : actorDto?.name || '',
         createdAt: new Date(Number(streamId.split('-')[0])).toISOString(),
-        isRead: individual[streamId] === '1' || Boolean(lastRead && compareStreamIds(streamId, lastRead) <= 0), url, actor: actor ? peerDto(actor) : undefined }]
+        isRead: individual[streamId] === '1' || Boolean(lastRead && compareStreamIds(streamId, lastRead) <= 0), url, actor: actorDto }]
     })
     const merged = [...items, ...announcements.rows.map(row => ({ id: row.id, title: row.title, text: row.text,
       createdAt: row.updatedAt?.toISOString() || null, isRead: Boolean(row.readId), url: '/community?tab=announcements' }))]
@@ -210,9 +217,10 @@ export async function handleSocial(ctx: RequestContext): Promise<boolean> {
       AND NOT EXISTS (SELECT 1 FROM blocking b WHERE (b."blockerId"=$1 AND b."blockeeId"=u.id) OR (b."blockerId"=u.id AND b."blockeeId"=$1))
       ORDER BY m.id DESC LIMIT 31`, [me.id, cursor])).rows
     const files = await messageFiles(ctx, rows.slice(0, 30))
+    const identities = await readPublicIdentities(ctx, rows.slice(0, 30).map(row => row.id))
     const items = await Promise.all(rows.slice(0, 30).map(async row => {
       const reason = await sending(ctx, ctx.db, row)
-      return { user: peerDto(row), lastMessage: packedMessage(ctx, { ...row, id: row.messageId }, files), unread: row.unread, canSend: !reason, reason }
+      return { user: peerDto(row, identities.get(row.id)), lastMessage: packedMessage(ctx, { ...row, id: row.messageId }, files), unread: row.unread, canSend: !reason, reason }
     }))
     ctx.json(200, { items, nextCursor: rows.length > 30 ? rows[29]!.messageId : null })
     return true
@@ -228,7 +236,8 @@ export async function handleSocial(ctx: RequestContext): Promise<boolean> {
       AND ($3::varchar IS NULL OR id<$3) ORDER BY id DESC LIMIT 51`, [me.id, otherId, cursor])).rows
     const reason = await sending(ctx, ctx.db, other)
     const files = await messageFiles(ctx, rows.slice(0, 50))
-    ctx.json(200, { user: peerDto(other), items: rows.slice(0, 50).map(row => packedMessage(ctx, row, files)),
+    const identity = (await readPublicIdentities(ctx, [other.id])).get(other.id)
+    ctx.json(200, { user: peerDto(other, identity), items: rows.slice(0, 50).map(row => packedMessage(ctx, row, files)),
       nextCursor: rows.length > 50 ? rows[49]!.id : null, canSend: !reason, reason })
     return true
   }

@@ -96,9 +96,10 @@ test('session mint rejects credentials from a revoked generation', async () => {
 test('legacy note notifications resolve the retained work and reply destination', async () => {
   let response
   await handleSocial({ req: { method: 'GET' }, url: new URL('https://community.test/api/notifications'), requireUser: () => ({ id: 'reader' }),
+    config: { url: 'https://community.test' },
     redis: { xrevrange: async () => [['1794435800000-1', ['data', JSON.stringify({ type: 'reply', notifierId: 'actor', noteId: 'reply' })]]],
       get: async () => null, hgetall: async () => ({}) },
-    db: { query: async sql => ({ rows: sql.includes('FROM announcement') ? [] : sql.includes('FROM note n JOIN community_submission')
+    db: { query: async sql => ({ rows: sql.includes('FROM announcement') || sql.includes('FROM external_account') ? [] : sql.includes('FROM note n JOIN community_submission')
       ? [{ noteId: 'reply', workId: 'work', rootId: 'root' }] : [{ id: 'actor', username: 'actor', name: 'Actor' }] }) },
     json: (status, value) => { assert.equal(status, 200); response = value } })
   assert.equal(response.items[0].url, '/work/work#comment-reply')

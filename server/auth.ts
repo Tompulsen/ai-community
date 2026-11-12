@@ -7,10 +7,12 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Redis } from 'ioredis'
 import { accountCenter, accountSessionHash, accountSessionVerifier } from './account-session.ts'
+import { rememberPublicIdentity } from './public-identity.ts'
 import type { AccountSessionBinding, AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser } from './types.ts'
 
 interface RoleUser {
   id: string
+  createdAt: Date | string | null
   host: string | null
   isSuspended: boolean
   isLocked: boolean
@@ -88,7 +90,9 @@ export function roleCondition(formula: unknown, user: Partial<RoleUser>, assigne
   if (!formula || typeof formula !== 'object' || depth > 12) return false
   const condition = formula as Record<string, unknown>
   const child = (value: unknown) => roleCondition(value, user, assigned, depth + 1)
-  const age = typeof user.id === 'string' ? (Date.now() - (parseInt(user.id.slice(0, 8), 36) + 946684800000)) / 1000 : NaN
+  const createdAt = user.createdAt instanceof Date ? user.createdAt.getTime()
+    : typeof user.createdAt === 'string' ? Date.parse(user.createdAt) : NaN
+  const age = (Date.now() - createdAt) / 1000
   switch (condition.type) {
     case 'and': return Array.isArray(condition.values) && condition.values.every(child)
     case 'or': return Array.isArray(condition.values) && condition.values.some(child)
@@ -114,7 +118,7 @@ export function roleCondition(formula: unknown, user: Partial<RoleUser>, assigne
 }
 
 export async function getUser(db: Queryable, userId: string): Promise<SessionUser | null> {
-  const { rows } = await db.query<UserRow>(`SELECT u.id,u.username,u.name,u.host,u.token,u."isSuspended",u."isDeleted",
+  const { rows } = await db.query<UserRow>(`SELECT u.id,u.username,u.name,u.host,u.token,u."createdAt",u."isSuspended",u."isDeleted",
     u."movedToUri",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",
     u."notesCount",u."avatarId",u."bannerId",p.description AS bio FROM "user" u JOIN user_profile p ON p."userId"=u.id WHERE u.id=$1`, [userId])
   const user = rows[0]
@@ -142,6 +146,10 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
     const user = await getUser(db, userId)
     if (!user) throw httpError(403, '此账号当前不可用。')
     if (expectedTokenHash && user.tokenHash !== expectedTokenHash) throw httpError(409, '账号安全设置已变化，请重新登录。', 'CREDENTIAL_CHANGED')
+    if (!account || account.issuer !== accountCenter(config) || userId !== account.subject
+      || !/^[1-9]\d*$/.test(account.subject) || !Number.isSafeInteger(Number(account.subject))) {
+      throw httpError(409, '社区账号必须与章鱼账号编号一致。', 'ACCOUNT_IDENTITY_REQUIRED')
+    }
     const token = randomBytes(32).toString('base64url')
     const sessionHash = hash(token)
     const stored: StoredSession = { userId, tokenHash: user.tokenHash, createdAt: new Date().toISOString(),
@@ -168,14 +176,15 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
         || !('tokenHash' in parsed) || typeof parsed.tokenHash !== 'string') return { user: null, sessionHash: null }
       session = parsed as StoredSession
     } catch { return { user: null, sessionHash: null } }
-    if (!session.account || session.account.issuer !== accountCenter(config)
+    if (!session.account || session.userId !== session.account.subject
+      || session.account.issuer !== accountCenter(config)
       || session.account.sessionHash !== accountSessionHash(req)) {
       await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
     let account
+    const fresh = req.url?.startsWith('/api/session') || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/')
     try {
-      const fresh = req.url?.startsWith('/api/session') || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/')
       account = await verifyAccount(req, fresh)
       if (account.binding.subject !== session.account.subject || account.binding.issuer !== session.account.issuer) {
         await redis.del(`community-next:session:${sessionHash}`)
@@ -193,6 +202,9 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
+    if (fresh) await rememberPublicIdentity(db, {
+      issuer: account.binding.issuer, subject: account.binding.subject, userId: user.id, username: account.username,
+    })
     return { user: { ...user, accountId: account.binding.subject, username: account.username }, sessionHash }
   }
   async function handleAuth(ctx: RequestContext): Promise<boolean> {

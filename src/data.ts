@@ -64,6 +64,7 @@ export interface SessionUser {
 
 export interface Creator {
   id: string
+  accountId?: string
   name: string
   username: string
   bio: string

@@ -14,6 +14,8 @@ import type { Database, Queryable, RequestContext, SessionUser } from './types.t
 import { notifyUser } from './social.ts';
 import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './media.ts';
 import { getUser } from './auth.ts';
+import { accountCenter } from './account-session.ts';
+import { readPublicIdentities } from './public-identity.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -47,6 +49,7 @@ interface CommunityRow extends CommunityRevision {
   authorId: string;
   authorName: string | null;
   authorUsername: string;
+  authorAccountId?: string;
   approvedNoteId: string | null;
   pendingRevision: CommunityRevision | null;
   sourceCommentId: string | null;
@@ -120,6 +123,7 @@ interface CommentRow extends IdRow {
   avatarId: string | null;
 }
 interface CreatorRow extends IdRow {
+  accountId?: string;
   name: string | null;
   username: string;
   count: number;
@@ -129,6 +133,14 @@ interface CreatorRow extends IdRow {
   bannerId?: string | null;
   followersCount?: number;
   followingCount?: number;
+}
+
+async function publicCreators<T extends CreatorRow>(ctx: RequestContext, rows: T[]): Promise<T[]> {
+  const identities = await readPublicIdentities(ctx, rows.map(row => row.id));
+  return rows.map(row => {
+    const identity = identities.get(row.id);
+    return identity ? { ...row, ...identity, name: row.name || identity.username || '章鱼用户' } : row;
+  });
 }
 interface AnnouncementRow extends IdRow {
   title: string;
@@ -332,10 +344,12 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     const query = text(ctx.url.searchParams.get('query') ?? ctx.url.searchParams.get('q') ?? '', 200);
     if (query) {
       const parameter = add(`%${query.replace(/[\\%_]/g, '\\$&')}%`);
+      const issuer = add(accountCenter(ctx.config));
       const title = privateScope ? `COALESCE(s."pendingRevision"->>'title',s.title)` : 's.title';
       const body = privateScope ? `COALESCE(s."pendingRevision"->>'text',s.text)` : 's.text';
       const prompt = privateScope ? `CASE WHEN s."pendingRevision" ? 'generation' THEN s."pendingRevision"->'generation'->>'prompt' ELSE s.generation->>'prompt' END` : `s.generation->>'prompt'`;
       conditions.push(`(${title} ILIKE ${parameter} OR ${body} ILIKE ${parameter} OR (${prompt}) ILIKE ${parameter} OR u.name ILIKE ${parameter} OR u.username ILIKE ${parameter}
+        OR EXISTS (SELECT 1 FROM external_account identity WHERE identity."userId"=u.id AND identity.issuer=${issuer} AND identity.username ILIKE ${parameter})
         OR EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND t.name ILIKE ${parameter}))`);
     }
     const tag = ctx.url.searchParams.get('tag');
@@ -394,7 +408,12 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     v: 1, id: last.id, order, ...(order === 'featured' || order === 'popular' ? { heat: Number(last.heat ?? 0) } : {}),
     ...(order === 'random' ? { seed, boundary, anchor } : {}),
   }) : null;
-  return { rows, nextCursor };
+  const identities = await readPublicIdentities(ctx, rows.map(row => row.authorId));
+  return { rows: rows.map(row => {
+    const identity = identities.get(row.authorId);
+    return identity ? { ...row, authorAccountId: identity.accountId, authorUsername: identity.username,
+      authorName: row.authorName || identity.username || '章鱼用户' } : row;
+  }), nextCursor };
 }
 
 async function contentRows(ctx: RequestContext, options: Parameters<typeof contentPage>[1] = {}): Promise<CommunityRow[]> {
@@ -418,6 +437,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   return {
     id: row.id, title: content.title, author: row.authorName || row.authorUsername || '',
     avatar: (row.authorName || row.authorUsername || '?').slice(0, 1), authorId: row.authorId, authorUsername: row.authorUsername,
+    ...(row.authorAccountId ? { authorAccountId: row.authorAccountId } : {}),
     avatarUrl: row.authorAvatarId ? `/legacy-files/${row.authorAvatarId}?variant=thumbnail` : null,
     kind: content.category, cover: image?.thumbnailAccessKey ? `${mediaUrl(image)}?variant=thumbnail` : mediaUrl(image) || (video?.thumbnailAccessKey ? `${mediaUrl(video)}?variant=thumbnail` : ''),
     ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
@@ -914,11 +934,14 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
       AND ($4::varchar IS NULL OR n.id<$4) ORDER BY n.id DESC LIMIT $5`,
     [viewer(ctx), work.approvedNoteId, parent || work.approvedNoteId, cursor || null, limit + 1]);
     const items = [];
+    const identities = await readPublicIdentities(ctx, result.rows.slice(0, limit).map(row => row.userId));
     for (const row of result.rows.slice(0, limit)) {
+      const identity = identities.get(row.userId);
       const files = row.fileIds?.length ? (await ctx.db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'size'>>('SELECT id,name,type,size FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 ORDER BY id', [row.fileIds, row.userId])).rows : [];
       const remixed = row.renoteId ? (await ctx.db.query<IdRow>(`SELECT s.id FROM community_submission s JOIN "user" u ON u.id=s."authorId"
         JOIN note n ON n.id=s."approvedNoteId" WHERE n.id=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), row.renoteId])).rows[0] : null;
-      items.push({ id: row.id, text: row.text, userId: row.userId, author: row.name || row.username,
+      items.push({ id: row.id, text: row.text, userId: row.userId, author: row.name || identity?.username || (identity ? '章鱼用户' : row.username),
+        authorUsername: identity?.username ?? row.username, ...(identity ? { authorAccountId: identity.accountId } : {}),
         parentId: row.replyId !== work.approvedNoteId ? row.replyId : null,
         authorId: row.userId, authorAvatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null,
         date: new Date(legacyIdTime(row.id, ctx.config?.id) || Date.now()).toISOString(),
@@ -952,7 +975,8 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
   });
   await inform(ctx, { recipientId: result.recipient, type: 'comment', actorId: actor.id, workId, commentId: id, text: body.slice(0, 300) });
   return send(ctx, 201, { comment: { id, text: body, parentId: result.parentId === work.approvedNoteId ? null : result.parentId,
-    userId: actor.id, authorId: actor.id, author: actor.name || actor.username, authorAvatarUrl: actor.avatarId ? `/legacy-files/${actor.avatarId}?variant=thumbnail` : null,
+    userId: actor.id, authorId: actor.id, author: actor.name || actor.username, authorUsername: actor.username,
+    ...(actor.accountId ? { authorAccountId: actor.accountId } : {}), authorAvatarUrl: actor.avatarId ? `/legacy-files/${actor.avatarId}?variant=thumbnail` : null,
     date: new Date().toISOString(), fileIds, files: result.files.map(file => ({ ...file, url: `/legacy-files/${file.id}` })), likesCount: 0, likes: 0, liked: false, repliesCount: 0,
     owned: true, removable: true } });
 }
@@ -1047,11 +1071,12 @@ async function profileRow(ctx: RequestContext, userId: string): Promise<ProfileR
 }
 
 async function profile(ctx: RequestContext, userId: string): Promise<true> {
-  const row = await profileRow(ctx, userId);
+  const row = (await publicCreators(ctx, [await profileRow(ctx, userId)]))[0]!;
   const count = (await ctx.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM community_submission s JOIN "user" u ON u.id=s."authorId"
     JOIN note n ON n.id=s."approvedNoteId" WHERE s."authorId"=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), userId])).rows[0]?.count ?? 0;
   return send(ctx, 200, { user: {
     id: row.id, username: row.username, name: row.name || row.username, bio: row.bio || '',
+    ...(row.accountId ? { accountId: row.accountId } : {}),
     avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null,
     bannerUrl: row.bannerId ? `/legacy-files/${row.bannerId}?variant=web` : null,
     followersCount: row.followersCount ?? 0, followingCount: row.followingCount ?? 0, worksCount: count,
@@ -1070,8 +1095,10 @@ async function followList(ctx: RequestContext, userId: string, mode: 'followers'
     FROM following f JOIN "user" u ON u.id=f."${mode === 'followers' ? 'followerId' : 'followeeId'}" JOIN user_profile p ON p."userId"=u.id
     WHERE f."${mode === 'followers' ? 'followeeId' : 'followerId'}"=$2 AND (${visibleAccountSql('u')})
     AND ($3::varchar IS NULL OR f.id<$3) ORDER BY f.id DESC LIMIT $4`, [viewer(ctx), userId, cursor || null, limit + 1]);
+  const rows = await publicCreators(ctx, result.rows.slice(0, limit));
   return send(ctx, 200, {
-    items: result.rows.slice(0, limit).map(row => ({ id: row.id, username: row.username, name: row.name || row.username,
+    items: rows.map(row => ({ id: row.id, username: row.username, name: row.name || row.username,
+      ...(row.accountId ? { accountId: row.accountId } : {}),
       bio: row.bio || '', avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, followed: Boolean(row.followed) })),
     nextCursor: result.rows.length > limit ? result.rows[limit - 1].relationId : null,
   });
@@ -1107,7 +1134,8 @@ async function report(ctx: RequestContext, workId: string): Promise<true> {
 function legacyWork(work: PackedWork) {
   return {
     ...work, category: work.kind, text: work.body, status: work.originalStatus,
-    author: { id: work.authorId, name: work.author, username: work.authorUsername ?? '' },
+    author: { id: work.authorId, name: work.author, username: work.authorUsername ?? '',
+      ...(work.authorAccountId ? { accountId: work.authorAccountId } : {}) },
     tags: work.tags.map((name, index) => ({ id: work.tagIds[index], category: work.kind, name })),
     approvedNoteId: work.noteId, submittedAt: work.date, likesCount: work.likes,
     sourceCommentStatus: work.sourceCommentStatus ?? 'none',
@@ -1236,7 +1264,9 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
       FROM community_submission s JOIN "user" u ON u.id=s."authorId" JOIN user_profile p ON p."userId"=u.id JOIN note n ON n.id=s."approvedNoteId"
       WHERE (${visibilitySql(ctx)}) AND ($2::varchar IS NULL OR u.id=$2)
       GROUP BY u.id,p.description ORDER BY count DESC,u.id LIMIT 100`, [viewer(ctx), ctx.url.searchParams.has('authorId') ? identifier(ctx.url.searchParams.get('authorId')) : null]);
-    return send(ctx, 200, { items: result.rows.map(row => ({ id: row.id, authorId: row.id, name: row.name || row.username, username: row.username,
+    const rows = await publicCreators(ctx, result.rows);
+    return send(ctx, 200, { items: rows.map(row => ({ id: row.id, authorId: row.id, name: row.name || row.username, username: row.username,
+      ...(row.accountId ? { accountId: row.accountId } : {}),
       avatar: (row.name || row.username).slice(0, 1), avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, count: row.count, followed: row.followed, bio: row.bio || '' })) });
   }
   if (path === '/api/announcements' && method === 'GET') {

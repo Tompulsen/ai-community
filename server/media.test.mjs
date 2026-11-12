@@ -9,7 +9,28 @@ import { mkdtemp, readdir, rmdir, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { startMediaWorker } from './media.ts';
+import { startMediaWorker, uploadLimitsFor } from './media.ts';
+
+test('numeric accounts apply age based upload limits from the independent creation timestamp', async () => {
+  let createdAt = new Date(Date.now() - 10_000);
+  const db = { async query(sql) {
+    if (sql.startsWith('SELECT policies')) return { rows: [{ policies: { maxFileSizeMb: 30 }, clientOptions: {} }] };
+    if (sql.startsWith('SELECT id,target')) return { rows: [{
+      id: 'new-account-role', target: 'conditional', condFormula: { type: 'createdLessThan', sec: 60 },
+      policies: { maxFileSizeMb: { priority: 1, useDefault: false, value: 5 } },
+    }] };
+    if (sql.startsWith('SELECT "roleId"')) return { rows: [] };
+    if (sql.startsWith('SELECT id,host')) {
+      assert.match(sql, /"createdAt"/);
+      return { rows: [{ id: '17', host: null, createdAt }] };
+    }
+    assert.fail('Unexpected upload policy query: ' + sql);
+  } };
+  const ctx = { db, config: {}, user: { id: '17' } };
+  assert.equal((await uploadLimitsFor(ctx)).maxFileSizeMb, 5);
+  createdAt = new Date(Date.now() - 7200_000);
+  assert.equal((await uploadLimitsFor(ctx)).maxFileSizeMb, 30);
+});
 
 test('preview ratio describes the rotated thumbnail rather than original EXIF dimensions', async t => {
   const root = await mkdtemp(join(tmpdir(), 'community-cover-ratio-'));

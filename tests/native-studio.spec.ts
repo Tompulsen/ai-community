@@ -7,6 +7,7 @@ const asset = 'public/assets/brand/octopus-community.jpg'
 
 async function fixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
+  account.state.user.id = '17'
   const image = await readFile(asset)
   const calls: { path: string; body: Record<string, unknown>; csrf?: string }[] = []
   let uploads = 0
@@ -174,14 +175,13 @@ test('native text results can download and publish without a separate chat accou
   expect(state.calls.find(call => call.path === '/api/works')?.body).toMatchObject({ kind: 'resource', body: '海底的灯亮了。\\n章鱼开始写作。', fileIds: ['fixture-file-1'] })
 })
 
-test('changing Octopus accounts clears the previous results and restores an isolated draft', async ({ page }) => {
+test('changing the unified account ID clears previous results and isolates drafts even with stale account metadata', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/create/image')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('账号 17 的私有提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  state.state.user.id = 'anotherAccount'
-  state.state.user.accountId = '18'
+  state.state.user.id = '18'
   state.state.user.username = 'another-user'
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.locator('.history-row')).toHaveCount(0)
@@ -193,6 +193,35 @@ test('changing Octopus accounts clears the previous results and restores an isol
   }))
   expect(JSON.parse(drafts.previous!)).toMatchObject({ prompt: '账号 17 的私有提示词' })
   expect(drafts.current || '').not.toContain('私有提示词')
+  const history = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
+    return new Promise<{ owner: string }[]>(resolve => {
+      const transaction = db.transaction('keyval', 'readonly'), request = transaction.objectStore('keyval').get('octopus:user-17:native-creation-history')
+      transaction.oncomplete = () => { db.close(); resolve(JSON.parse(request.result)) }
+    })
+  })
+  expect(history.map(task => task.owner)).toEqual(['17'])
+})
+
+test('retired composite owners are discarded instead of being migrated into the unified account history', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image')
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
+    await new Promise<void>(resolve => {
+      const transaction = db.transaction('keyval', 'readwrite')
+      transaction.objectStore('keyval').put(JSON.stringify([{
+        id: 'retired-owner-task', owner: '17:na_retired_debug_id', kind: 'image', model: 'fixture-image', prompt: '旧内部编号下的调试内容',
+        createdAt: Date.now(), phase: 'complete', protocol: 'openai', urls: ['https://media.example/old.jpg'], text: '', references: [],
+        request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 },
+      }]), 'octopus:user-17:native-creation-history')
+      transaction.oncomplete = () => { db.close(); resolve() }
+    })
+  })
+  await page.reload()
+  await expect(page.locator('.history-row')).toHaveCount(0)
+  await expect(page.locator('.creation-canvas')).toContainText('暂无生成结果')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate' || call.path.includes('/tasks/'))).toHaveLength(0)
 })
 
 test('legacy account-scoped gallery and video attachments remain readable without mutating their sources', async ({ page }) => {

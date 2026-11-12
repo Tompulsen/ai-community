@@ -18,7 +18,7 @@ const models = computed(() => creation.models.filter(item => !item.kinds?.length
 const working = computed(() => selected.value && ['submitting', 'running'].includes(selected.value.phase))
 const size = computed(() => ratio.value === '16:9' ? '1280x720' : ratio.value === '9:16' ? '720x1280' : '1024x1024')
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
-const draftKey = () => `octopus:user-${session.user?.accountId || session.user?.id}:native-creation-draft:${props.kind}`
+const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
 function chooseModel() { if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || '' }
 function loadDraft() {
   prompt.value = ''; model.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
@@ -32,7 +32,7 @@ function loadDraft() {
   } catch { /* A malformed local draft does not prevent creation. */ }
   chooseModel()
 }
-watch(() => [props.kind, session.user?.id, session.user?.accountId], loadDraft, { immediate: true })
+watch(() => [props.kind, session.user?.id], loadDraft, { immediate: true })
 watch(models, chooseModel)
 watch([prompt, model, ratio, count, duration], () => {
   if (!session.user) return
@@ -44,7 +44,7 @@ watch(() => props.source?.id, () => {
   prompt.value = props.source.prompt; model.value = props.source.model
   references.value = (props.source.referenceFiles || []).filter(file => file.type.startsWith('image/')).map(file => ({ id: file.id, url: file.url, name: file.name }))
 }, { immediate: true })
-watch(() => [session.user?.id, session.user?.accountId], async () => {
+watch(() => session.user?.id, async () => {
   if (!session.user) return
   await initializeCreation(); await loadCreationModels(); chooseModel()
 }, { immediate: true })

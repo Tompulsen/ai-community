@@ -51,8 +51,8 @@ let writes: Promise<unknown> = Promise.resolve()
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value)
 const validUpstreamId = (value: unknown): value is string => validId(value) || typeof value === 'string' && /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/.test(value)
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
-const storeKey = () => `octopus:user-${session.user?.accountId || session.user?.id}:native-creation-history`
-const activeOwner = () => session.user ? `${session.user.accountId || session.user.id}:${session.user.id}` : ''
+const activeOwner = () => session.user?.id || ''
+const storeKey = () => `octopus:user-${activeOwner()}:native-creation-history`
 
 function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -116,7 +116,7 @@ function safeResultUrl(value: unknown): string | undefined {
   try { const url = new URL(value); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href } catch { /* Invalid media is never rendered. */ }
 }
 function galleryDatabase(): Promise<IDBDatabase | undefined> {
-  const id = session.user?.accountId
+  const id = activeOwner()
   if (!id || !/^[1-9]\d*$/.test(id)) return Promise.resolve(undefined)
   return new Promise(resolve => {
     const request = indexedDB.open(`octopus-gallery-user-${id}`)
@@ -341,7 +341,7 @@ export async function submitCreation(input: CreationInput) {
 }
 
 async function importLegacy(version: number) {
-  const id = session.user?.accountId
+  const id = activeOwner()
   if (!id || !/^[1-9]\d*$/.test(id)) return
   const prefix = `octopus:user-${id}:`
   const imported: CreationTask[] = []

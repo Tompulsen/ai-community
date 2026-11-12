@@ -71,7 +71,7 @@ async function uploadPolicy(ctx: RequestContext): Promise<UploadPolicy> {
     const [roles, assignments, users] = await Promise.all([
       ctx.db.query<UploadRole>('SELECT id,target,"condFormula",policies FROM role'),
       ctx.db.query<{ roleId: string }>('SELECT "roleId" FROM role_assignment WHERE "userId"=$1 AND ("expiresAt" IS NULL OR "expiresAt">NOW())', [ctx.user.id]),
-      ctx.db.query<Parameters<typeof roleCondition>[1]>('SELECT id,host,"isSuspended","isLocked","isBot","isCat","isExplorable","followersCount","followingCount","notesCount" FROM "user" WHERE id=$1', [ctx.user.id]),
+      ctx.db.query<Parameters<typeof roleCondition>[1]>('SELECT id,host,"createdAt","isSuspended","isLocked","isBot","isCat","isExplorable","followersCount","followingCount","notesCount" FROM "user" WHERE id=$1', [ctx.user.id]),
     ]);
     const assigned = new Set(assignments.rows.map(row => row.roleId));
     applicable = roles.rows.filter(role => role.target === 'manual' ? assigned.has(role.id) : roleCondition(role.condFormula, users.rows[0] ?? ctx.user ?? {}, assigned));

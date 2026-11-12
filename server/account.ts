@@ -7,8 +7,9 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import bcrypt from 'bcryptjs'
 import { lotteryInviter } from './business/lottery.ts'
-import { readStudioAccount } from './account-session.ts'
+import { readAccountSession } from './account-session.ts'
 import { handleAccountRequest, getNewApiConfig } from './native-account/index.ts'
+import { rememberPublicIdentity } from './public-identity.ts'
 import { hash as sessionTokenHash, publicUser } from './auth.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
@@ -46,8 +47,6 @@ interface ExternalAccountRow {
 
 interface SignupMeta {
   rootUserId: string | null
-  preservedUsernames: string[]
-  prohibitedWordsForNameOfUser: string[]
 }
 
 interface AccountBalance {
@@ -79,10 +78,12 @@ export function newApiOrigin(value: string): string {
 
 export function newApiIdentity(value: unknown): Identity {
   if (!isRecord(value)
-    || typeof value.sub !== 'string' || !/^[1-9]\d{0,18}$/.test(value.sub)) throw new Error('SSO_IDENTITY')
+    || typeof value.sub !== 'string' || !/^[1-9]\d{0,18}$/.test(value.sub)
+    || !Number.isSafeInteger(Number(value.sub))) throw new Error('SSO_IDENTITY')
   for (const field of ['preferred_username', 'name']) {
     if (typeof value[field] !== 'string' || value[field].length > 128) throw new Error('SSO_IDENTITY')
   }
+  if (!value.preferred_username || /[\u0000-\u001f\u007f-\u009f]/.test(value.preferred_username as string)) throw new Error('SSO_IDENTITY')
   return { sub: value.sub, preferred_username: value.preferred_username as string, name: value.name as string }
 }
 
@@ -187,51 +188,49 @@ export async function bindExternalAccount(ctx: RequestContext, accountIssuer: st
 }
 
 async function provision(ctx: RequestContext, accountIssuer: string, identity: Identity, inviterId?: string): Promise<CredentialUser> {
-  const { rows: metaRows } = await ctx.db.query<SignupMeta>('SELECT "rootUserId","preservedUsernames","prohibitedWordsForNameOfUser" FROM meta LIMIT 1')
+  identity = newApiIdentity(identity)
+  const { rows: metaRows } = await ctx.db.query<SignupMeta>('SELECT "rootUserId" FROM meta LIMIT 1')
   const meta = metaRows[0]
   if (!meta?.rootUserId) fail('SSO_NOT_INITIALIZED', 503)
-  const fallback = `na_${createHash('sha256').update(`${accountIssuer}:${identity.sub}`).digest('hex').slice(0, 16)}`
-  const candidates = [...new Set([identity.preferred_username, fallback, `na_${randomBytes(8).toString('hex')}`])]
-  for (const username of candidates) {
-    if (!/^[a-zA-Z0-9_]{1,20}$/.test(username)) continue
-    const lower = username.toLowerCase()
-    if ((meta.preservedUsernames ?? []).some(value => value.toLowerCase() === lower)
-      || (meta.prohibitedWordsForNameOfUser ?? []).some(value => value && lower.includes(value.toLowerCase()))) continue
-    const result = await transaction(ctx.db, async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`external-account:${accountIssuer}:${identity.sub}`])
-      const { rows: mappings } = await client.query<{ userId: string | null }>('SELECT "userId" FROM external_account WHERE issuer=$1 AND subject=$2', [accountIssuer, identity.sub])
-      if (mappings.length) {
-        if (!mappings[0].userId) fail('SSO_ACCOUNT_UNAVAILABLE')
-        return availableUser(client, mappings[0].userId)
-      }
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`signup:username:${lower}`])
-      const { rows: duplicate } = await client.query('SELECT 1 FROM "user" WHERE "usernameLower"=$1 AND host IS NULL UNION ALL SELECT 1 FROM used_username WHERE username=$1 LIMIT 1', [lower])
-      if (duplicate.length) return null
-      const id = ctx.newId()
-      const nativeToken = randomBytes(12).toString('base64url')
-      const password = await bcrypt.hash(random(), 8)
-      await client.query('INSERT INTO "user" (id,username,"usernameLower",host,token,name) VALUES ($1,$2,$3,NULL,$4,$5)', [id, username, lower, nativeToken, (identity.name || username).slice(0, 50)])
-      await client.query('INSERT INTO user_profile ("userId","autoAcceptFollowed",password,email,"emailVerified") VALUES ($1,true,$2,NULL,false)', [id, password])
-      await client.query('INSERT INTO used_username (username,"createdAt") VALUES ($1,NOW())', [lower])
-      await client.query('INSERT INTO external_account (issuer,subject,"userId","createdAt") VALUES ($1,$2,$3,NOW())', [accountIssuer, identity.sub, id])
-      const inviter = lotteryInviter(inviterId)
-      if (inviter && inviter !== id) {
-        await client.query(`INSERT INTO community_lottery_referral ("userId","inviterId","createdAt")
-          SELECT $1,id,NOW() FROM "user" WHERE id=$2 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL`, [id, inviter])
-      }
-      return availableUser(client, id)
-    })
-    if (result) return result
-  }
-  fail('SSO_PROVISION', 409)
+  return transaction(ctx.db, async client => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`external-account:${accountIssuer}:${identity.sub}`])
+    const { rows: mappings } = await client.query<{ userId: string | null }>('SELECT "userId" FROM external_account WHERE issuer=$1 AND subject=$2', [accountIssuer, identity.sub])
+    if (mappings.length) {
+      if (!mappings[0].userId) fail('SSO_ACCOUNT_UNAVAILABLE')
+      if (mappings[0].userId !== identity.sub) fail('ACCOUNT_ID_MIGRATION_REQUIRED', 409)
+      return availableUser(client, mappings[0].userId)
+    }
+    const { rows: occupied } = await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [identity.sub])
+    if (occupied.length) fail('ACCOUNT_ID_CONFLICT', 409)
+    const username = identity.preferred_username, lower = username.toLowerCase()
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`signup:username:${lower}`])
+    const { rows: duplicate } = await client.query('SELECT 1 FROM "user" WHERE "usernameLower"=$1 AND host IS NULL LIMIT 1', [lower])
+    if (duplicate.length) fail('ACCOUNT_USERNAME_CONFLICT', 409)
+    const id = identity.sub
+    const nativeToken = randomBytes(12).toString('base64url')
+    const password = await bcrypt.hash(random(), 8)
+    await client.query('INSERT INTO "user" (id,username,"usernameLower",host,token,name) VALUES ($1,$2,$3,NULL,$4,$5)', [id, username, lower, nativeToken, (identity.name || username).slice(0, 50)])
+    await client.query('INSERT INTO user_profile ("userId","autoAcceptFollowed",password,email,"emailVerified") VALUES ($1,true,$2,NULL,false)', [id, password])
+    await client.query('INSERT INTO used_username (username,"createdAt") VALUES ($1,NOW()) ON CONFLICT (username) DO NOTHING', [lower])
+    await client.query('INSERT INTO external_account (issuer,subject,"userId","createdAt") VALUES ($1,$2,$3,NOW())', [accountIssuer, identity.sub, id])
+    const inviter = lotteryInviter(inviterId)
+    if (inviter && inviter !== id) {
+      await client.query(`INSERT INTO community_lottery_referral ("userId","inviterId","createdAt")
+        SELECT $1,id,NOW() FROM "user" WHERE id=$2 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL`, [id, inviter])
+    }
+    return availableUser(client, id)
+  })
 }
 
 async function synchronizeSession(ctx: RequestContext) {
   await rateLimit(ctx, 'account-session', 30)
-  const account = await readStudioAccount(ctx.config, ctx.req)
+  const account = await readAccountSession(ctx.config, ctx.req)
   const user = await provision(ctx, account.binding.issuer, {
     sub: account.binding.subject, preferred_username: account.username, name: account.name,
   }, lotteryInviter(ctx.body.lotteryInviterId))
+  await rememberPublicIdentity(ctx.db, {
+    issuer: account.binding.issuer, subject: account.binding.subject, userId: user.id, username: account.username,
+  })
   let result
   if (ctx.user?.id === user.id) result = publicUser(ctx.user)
   else {
