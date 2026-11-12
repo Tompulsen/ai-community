@@ -16,18 +16,25 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.8",
+    "@fortaine/fetch-event-source": "^3.0.6",
     "@lucide/vue": "^1.72.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "bcryptjs": "3.0.3",
+    "dompurify": "^3.4.17",
     "fastify": "5.12.8",
     "figma-squircle": "1.1.0",
+    "idb-keyval": "^6.2.1",
     "ioredis": "5.11.1",
     "iron-session": "8.0.4",
+    "marked": "^18.2.0",
+    "nanoid": "^5.1.16",
     "nodemailer": "10.5.0",
     "pg": "8.23.1",
     "sharp": "0.35.5",
     "vue": "^3.5.44",
     "vue-router": "^5.5.0",
-    "yaml": "2.9.1"
+    "yaml": "2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",

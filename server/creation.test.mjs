@@ -12,6 +12,23 @@ const headers = { origin, 'content-type': 'application/json' }
 const apiKey = 'sk-fixture-secret-for-tests'
 const imageRequest = { kind: 'image', model: 'gpt-image-2', prompt: 'A test image', requestId: 'request-1' }
 
+test('a streamed paid request persists a final recoverable result without another POST', async t => {
+  const { app, calls } = fixture(t, { fetch() {
+    return new Response('data: {"choices":[{"delta":{"content":"saved answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+  } })
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'stream-1', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  const result = await submit(app, input)
+  assert.equal(result.statusCode, 200)
+  assert.match(result.headers['content-type'], /text\/event-stream/)
+  assert.match(result.payload, /"type":"delta"/)
+  assert.match(result.payload, /"status":"succeeded"/)
+  const recovered = await app.inject('/api/creation/requests/stream-1')
+  assert.equal(recovered.json().outputs[0].text, 'saved answer')
+  assert.equal((await app.inject({ url: '/api/creation/requests/stream-1', headers: { 'x-test-account': '18' } })).statusCode, 404)
+  await submit(app, input)
+  assert.equal(calls.length, 1)
+})
+
 function deferred() {
   let resolve
   const promise = new Promise(yes => { resolve = yes })
@@ -200,4 +217,22 @@ test('media and references reject private destinations and unregistered protecte
   assert.equal(invalidReference.statusCode, 400)
   assert.equal(calls.length, 0)
   assert.equal(credentialCalls.length, 0)
+})
+
+test('model catalogs identify their selected group token and paid submissions pin the catalog token', async t => {
+  let currentToken = 71
+  const { app, credentialCalls } = fixture(t, {
+    selectedToken: () => currentToken,
+    fetch(_url, init) {
+      return Response.json(init.method === 'POST' ? { data: [{ url: 'https://media.example/result.png' }] }
+        : { data: [{ id: 'gpt-image-2' }] })
+    },
+  })
+  const catalog = await app.inject({ url: '/api/creation/models' })
+  assert.equal(catalog.json().tokenId, 71)
+  currentToken = 99
+  const generated = await submit(app, imageRequest, { 'x-new-api-token': String(catalog.json().tokenId) })
+  assert.equal(generated.json().status, 'succeeded')
+  assert.equal(generated.json().tokenId, 71)
+  assert.equal(credentialCalls.at(-1).tokenId, 71)
 })

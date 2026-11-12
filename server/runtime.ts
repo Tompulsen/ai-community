@@ -22,6 +22,7 @@ import { handleSecurity } from './security.ts'
 import { startMediaWorker } from './media.ts'
 import { handleAccountRequest } from './native-account/index.ts'
 import { handleCreation } from './creation.ts'
+import { handleStudioTools, closeMcpClients } from './studio-tools.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { AppConfig, Database, RequestContext } from './types.ts'
 export { compareStreamIds } from './social.ts'
@@ -67,6 +68,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     routerOptions: { maxParamLength: 512 },
     ajv: { customOptions: { coerceTypes: false, useDefaults: false, removeAdditional: false } },
   })
+  app.addHook('onClose', closeMcpClients)
   const contexts = new WeakMap<FastifyRequest, RequestContext>()
   app.register(multipart, { limits: { files: 1, fields: 4, parts: 5, fieldSize: 4096, fileSize: 10 * 1024 ** 3 } })
   const parseJson = app.getDefaultJsonParser('error', 'error')
@@ -148,8 +150,12 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   for (const url of ['/studio', '/studio/*']) app.route({ method: ['GET', 'HEAD'], url,
     handler: async (_request, reply) => reply.redirect('/create', 302) })
   register(handleCreation, [
-    ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media']],
+    ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media', '/api/creation/requests/:id']],
     ['POST', ['/api/creation/generate']],
+  ])
+  register(handleStudioTools, [
+    ['GET', ['/api/creation/skills/catalog', '/api/creation/mcp/status', '/api/creation/mcp/tools']],
+    ['POST', ['/api/creation/search', '/api/creation/mcp/config', '/api/creation/mcp/call']],
   ])
   register(auth.handleAuth, [
     ['GET', ['/api/session', '/api/registration']],

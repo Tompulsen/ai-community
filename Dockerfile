@@ -7,6 +7,7 @@ COPY index.html tsconfig*.json vite.config.ts ./
 COPY src ./src
 COPY public ./public
 COPY server ./server
+COPY shared ./shared
 RUN npm run build
 
 FROM node:24-alpine AS runtime
@@ -18,6 +19,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 RUN addgroup -g 991 community && adduser -D -u 991 -G community community
 COPY --from=build /app/dist ./dist
 COPY server ./server
+COPY shared ./shared
 COPY THIRD_PARTY_NOTICES.md REUSE.md LICENSE ./
 USER community
 EXPOSE 3000

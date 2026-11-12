@@ -28,6 +28,9 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
       enabled: true, configured: true, publicUrl: accountUrl, passwordLoginEnabled: state.passwordLoginEnabled,
       turnstileSiteKey: state.turnstileSiteKey,
     } } })
+    if (path === '/api/new-api/model-groups') return route.fulfill({ json: { success: true, data: {
+      selectedGroup: 'auto', selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }],
+    } } })
     if (path === '/api/new-api/login') {
       if (state.requiresVerification) return route.fulfill({ json: { success: true, data: { requires2fa: true } } })
       state.accountAuthenticated = true

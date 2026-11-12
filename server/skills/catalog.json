@@ -1,0 +1,912 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "id": "paper-search",
+      "name": "论文查找",
+      "description": "通过 Crossref 查找论文标题、作者、发表年份与 DOI。",
+      "category": "search",
+      "kind": "papers",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/paper-search/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/paper-search",
+      "license": "MIT",
+      "sha256": "5e8687f1d3e7d5ede3f9a3bc5bcfa37e5adf4ce7dd09964186ccaed3a61ae471"
+    },
+    {
+      "id": "translation",
+      "name": "翻译",
+      "description": "保留语义、语气与原文结构，输出自然译文。",
+      "category": "translation",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/translation/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/translation",
+      "license": "MIT",
+      "sha256": "114179850ca5e7a43a1adfa12c941aaa3324d17b4b2e4aa3ea0afaa505443f68"
+    },
+    {
+      "id": "academic-translation",
+      "name": "学术翻译",
+      "description": "保持术语、引用和公式一致，适合论文与技术资料。",
+      "category": "translation",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/academic-translation/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/academic-translation",
+      "license": "MIT",
+      "sha256": "72ad75b7e26f044f23f80c11ad6ccbb52adf89b80c426069a861281272cb824b"
+    },
+    {
+      "id": "product-photo",
+      "name": "产品摄影",
+      "description": "干净构图、真实材质和有层次的布光。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/product-photo/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/product-photo",
+      "license": "MIT",
+      "sha256": "565ccdd6e2a09795c9db100a238726d7fb67e04005a0199ed26c9ad2d7eeb8db"
+    },
+    {
+      "id": "watercolor",
+      "name": "水彩插画",
+      "description": "轻盈色层、纸张肌理与柔和自然的笔触。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/watercolor/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/watercolor",
+      "license": "MIT",
+      "sha256": "4d756709e40c62bfd22d355329bc669c8b72e41a40709bd06a6485017c4496cc"
+    },
+    {
+      "id": "photo-revival",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/dacnay816y62-hub/photo-revival/5574fa2f6fa8fa52b232d7836b7960bf6b5753f6/examples/01_flower_tree_paper.png",
+            "caption": "花树纸上插画"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/dacnay816y62-hub/photo-revival/5574fa2f6fa8fa52b232d7836b7960bf6b5753f6/examples/03_red_bike_dot.png",
+            "caption": "红色自行车与留白"
+          }
+        ],
+        "credit": "FANTASY / photo-revival",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/dacnay816y62-hub/photo-revival/blob/5574fa2f6fa8fa52b232d7836b7960bf6b5753f6/LICENSE"
+      },
+      "name": "照片手绘",
+      "description": "将上传照片重绘为大留白手绘插画，保留主体与场景特征。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-revival/SKILL.md",
+      "sourceUrl": "https://github.com/dacnay816y62-hub/photo-revival",
+      "license": "MIT",
+      "sha256": "46a7c9101797c6c2e4edafc2fcbfde9e321be35ad7fe78b790cd57d4b4e6d462"
+    },
+    {
+      "id": "humanizer",
+      "name": "自然化润色",
+      "description": "Humanizer：保留事实和作者语气，去掉套话、机械排比与模板化表达，可参考作者样本。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/humanizer/SKILL.md",
+      "sourceUrl": "https://github.com/blader/humanizer",
+      "license": "MIT",
+      "sha256": "af0120180ced3804ac4a9d8e98a6da682852e1d7c396612dac1e643f9bf92a51"
+    },
+    {
+      "id": "copywriting",
+      "name": "营销文案",
+      "description": "根据产品、受众和渠道，起草标题、宣传正文与行动引导。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/copywriting/SKILL.md",
+      "sourceUrl": "https://github.com/coreyhaines31/marketingskills/tree/main/skills/copywriting",
+      "license": "MIT",
+      "sha256": "a886482aa1e67829d979611d27f52f497bf48b437dd132e161ed03c59d829855"
+    },
+    {
+      "id": "copy-editing",
+      "name": "文案精修",
+      "description": "检查已有文案的结构、语气与信息密度，提供可直接使用的精修稿。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/copy-editing/SKILL.md",
+      "sourceUrl": "https://github.com/coreyhaines31/marketingskills/tree/main/skills/copy-editing",
+      "license": "MIT",
+      "sha256": "605a6ca73c14604c95827dd57ab737c0066c39c5dba33305eba31175036b8aa0"
+    },
+    {
+      "id": "brainstorming",
+      "name": "头脑风暴",
+      "description": "澄清目标、比较不同思路，将模糊想法整理成可执行方案。",
+      "category": "productivity",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/brainstorming/SKILL.md",
+      "sourceUrl": "https://github.com/obra/superpowers/tree/main/skills/brainstorming",
+      "license": "MIT",
+      "sha256": "a20aa2f49918c9d0add0d2906e18a655222877c1de053b7fbec0e63aed742353"
+    },
+    {
+      "id": "code-review",
+      "name": "代码审查",
+      "description": "分析提供的代码，按严重程度指出缺陷、边界风险与测试建议。",
+      "category": "coding",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/code-review/SKILL.md",
+      "sourceUrl": "https://github.com/obra/superpowers/tree/main/skills/requesting-code-review",
+      "license": "MIT",
+      "sha256": "8a220ab77f2d1a8423411b80f0db8a9d70e8491dd2547821408e5c501f953a98"
+    },
+    {
+      "id": "systematic-debugging",
+      "name": "问题排查",
+      "description": "结合错误、日志和复现步骤分析根因，给出最小验证与修复路径。",
+      "category": "coding",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/systematic-debugging/SKILL.md",
+      "sourceUrl": "https://github.com/obra/superpowers/tree/main/skills/systematic-debugging",
+      "license": "MIT",
+      "sha256": "ebef9ba7cfc9d279149b631d01b7ce3b692dcce88fe7b2c8c1768ddc5ef3c57e"
+    },
+    {
+      "id": "prompt-engineer",
+      "name": "提示词优化",
+      "description": "将模糊要求整理成提示词模板，明确输入变量、约束和输出格式。",
+      "category": "productivity",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/prompt-engineer/SKILL.md",
+      "sourceUrl": "https://github.com/Jeffallan/claude-skills/tree/main/skills/prompt-engineer",
+      "license": "MIT",
+      "sha256": "65a7ff27df53b3189a890570276d8af25a94fa60cb34d0af86dff37336fe00ce"
+    },
+    {
+      "id": "sql-assistant",
+      "name": "SQL 助手",
+      "description": "依据表结构编写和解释 SQL，检查查询边界并分析索引与性能。",
+      "category": "coding",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/sql-assistant/SKILL.md",
+      "sourceUrl": "https://github.com/Jeffallan/claude-skills/tree/main/skills/sql-pro",
+      "license": "MIT",
+      "sha256": "9ecf01fdbd35423bea4fefb233f99621757ef28a01bbc27af6f3c56e6cf9a0c0"
+    },
+    {
+      "id": "dreamcore-collage-poster",
+      "name": "梦核拼贴海报",
+      "description": "以重复切片、异常尺度和复古扫描纹理构建浓密的梦核拼贴。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/dreamcore-collage-poster/SKILL.md",
+      "sourceUrl": "https://github.com/AndrwewHan/dreamcore-collage-poster",
+      "license": "MIT",
+      "sha256": "d03217da362608d0210310df84b9bde0a8b415f487581201b42276917fee8cf6"
+    },
+    {
+      "id": "gc-minimal-zine-poster",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/LiamGvchi/gc-minimal-zine-poster/ddb0d66b24a94f9c4fdd1f02835a836a2db3774e/examples/night-door.jpeg",
+            "caption": "Night Door"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/LiamGvchi/gc-minimal-zine-poster/ddb0d66b24a94f9c4fdd1f02835a836a2db3774e/examples/yellow-step.jpeg",
+            "caption": "Yellow Step"
+          }
+        ],
+        "credit": "LiamGvchi",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/LiamGvchi/gc-minimal-zine-poster/blob/ddb0d66b24a94f9c4fdd1f02835a836a2db3774e/LICENSE"
+      },
+      "name": "极简纸刊海报",
+      "description": "大幅留白、纸张肌理与单一鲜明色点，制作克制的独立纸刊海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/gc-minimal-zine-poster/SKILL.md",
+      "sourceUrl": "https://github.com/LiamGvchi/gc-minimal-zine-poster",
+      "license": "MIT",
+      "sha256": "cf190297d02a528289e9e8cc5e014904056ee7f6594eea650dd94839b93d036c"
+    },
+    {
+      "id": "heytea-doodle-poster",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/Hchen1218/heytea-style/d5125372adcc945c2314cfb649c50407379a18ab/assets/examples/poster/doodle-poster.png",
+            "caption": "物件与线条小人涂鸦"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/Hchen1218/heytea-style/d5125372adcc945c2314cfb649c50407379a18ab/assets/examples/poster/typography-poster.png",
+            "caption": "手写文字海报"
+          }
+        ],
+        "credit": "heytea-style contributors",
+        "license": "CC BY 4.0",
+        "licenseUrl": "https://github.com/Hchen1218/heytea-style/blob/d5125372adcc945c2314cfb649c50407379a18ab/ASSET-NOTICE.md"
+      },
+      "name": "手写涂鸦海报",
+      "description": "将真实物件与笨拙手写线条、小人动作结合，制作轻松的涂鸦海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/heytea-doodle-poster/SKILL.md",
+      "sourceUrl": "https://github.com/Hchen1218/heytea-style",
+      "license": "MIT",
+      "sha256": "ebe47798358e6d0242c5c9808cc4bed2c7aa1562815e38100134a86c156e4516"
+    },
+    {
+      "id": "impasto-miniature-landscape",
+      "name": "厚涂微缩景观",
+      "description": "将风景转译为明亮的厚涂微缩场景，突出调色刀笔触与立体颜料质感。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/impasto-miniature-landscape/SKILL.md",
+      "sourceUrl": "https://github.com/GZ-L/photo-to-poster-skills/tree/main/skills/impasto-miniature-landscape",
+      "license": "MIT",
+      "sha256": "3ed1c25a60f866eb3a6e479f006e4caa59f2c5f332e0bd579af7c63e8ecd6be7"
+    },
+    {
+      "id": "kimi-inspired-poster",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/Fannie0715/kimi-inspired-poster/6c674f803659df20b9a76112a1cd9ab569142ede/examples/images/01-black-orbit-k3.png",
+            "caption": "黑色轨道"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/Fannie0715/kimi-inspired-poster/6c674f803659df20b9a76112a1cd9ab569142ede/examples/images/03-white-lab-k3.png",
+            "caption": "白色实验室"
+          }
+        ],
+        "credit": "kimi-inspired-poster contributors",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/Fannie0715/kimi-inspired-poster/blob/6c674f803659df20b9a76112a1cd9ab569142ede/LICENSE"
+      },
+      "name": "计算感科技海报",
+      "description": "以轨道、点阵或实验室标本构成克制而有张力的科技海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/kimi-inspired-poster/SKILL.md",
+      "sourceUrl": "https://github.com/Fannie0715/kimi-inspired-poster",
+      "license": "MIT",
+      "sha256": "06b29d830c56bca4fc50066093926154443a6ea05e0e1c852c8f9dab836e0c52"
+    },
+    {
+      "id": "photo-relic-editorial",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/wnby/photo-relic-editorial/2232da16afddc7940e2e2f280bfb85aa62da1bae/examples/paper-beijing/temple-of-heaven.png",
+            "caption": "纸上北京：天坛"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/wnby/photo-relic-editorial/2232da16afddc7940e2e2f280bfb85aa62da1bae/examples/paper-beijing/corner-tower-water.png",
+            "caption": "纸上北京：角楼水影"
+          }
+        ],
+        "credit": "wnby",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/wnby/photo-relic-editorial/blob/2232da16afddc7940e2e2f280bfb85aa62da1bae/LICENSE"
+      },
+      "name": "纸上留影",
+      "description": "将照片中的结构与光影转译为上下呼应、留白克制的纸上记忆版画。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-relic-editorial/SKILL.md",
+      "sourceUrl": "https://github.com/wnby/photo-relic-editorial",
+      "license": "MIT",
+      "sha256": "7b663c27cf79190451998af1e21961e39706e7badef04bf8b536368660b474d2"
+    },
+    {
+      "id": "photo-to-zine-postcard",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/Whiplashzeb/photo-to-zine-postcard/0091403bccb219d1be78c5be8552de29a6446f0a/assets/alpine-glow.png",
+            "caption": "山间微光明信片"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/Whiplashzeb/photo-to-zine-postcard/0091403bccb219d1be78c5be8552de29a6446f0a/assets/green-door.png",
+            "caption": "绿门纸刊明信片"
+          }
+        ],
+        "credit": "Enbozhao",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/Whiplashzeb/photo-to-zine-postcard/blob/0091403bccb219d1be78c5be8552de29a6446f0a/LICENSE"
+      },
+      "name": "纸刊明信片",
+      "description": "照片上置、手绘主元素下置，搭配三枚取色点形成留白明信片。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-to-zine-postcard/SKILL.md",
+      "sourceUrl": "https://github.com/Whiplashzeb/photo-to-zine-postcard",
+      "license": "MIT",
+      "sha256": "57d405f3e1c784b7168f8b98ee4ba283e99e9beff7cbc0b72a9ba9e9782ce636"
+    },
+    {
+      "id": "pixel-style-poster",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/v92388375-gif/pixel-style-poster-skill/b93066b52fc2f32bf9ec3a9a6d379b4088d6fd7b/examples/deep-teal-butterfly.png",
+            "caption": "深青蝴蝶点阵"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/v92388375-gif/pixel-style-poster-skill/b93066b52fc2f32bf9ec3a9a6d379b4088d6fd7b/examples/mint-night-lily.png",
+            "caption": "薄荷夜百合"
+          }
+        ],
+        "credit": "pixel-style-poster-skill contributors",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/v92388375-gif/pixel-style-poster-skill/blob/b93066b52fc2f32bf9ec3a9a6d379b4088d6fd7b/LICENSE"
+      },
+      "name": "细点阵海报",
+      "description": "用细小方形像素和网点密度塑造主体，呈现单色印刷海报质感。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/pixel-style-poster/SKILL.md",
+      "sourceUrl": "https://github.com/v92388375-gif/pixel-style-poster-skill",
+      "license": "MIT",
+      "sha256": "99ee0a06611c96c2d4ed6c3715dfd11aa9c0436112d1190342c14a700bf2b065"
+    },
+    {
+      "id": "qiaomu-mondo-poster",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/joeseesun/qiaomu-mondo-poster-design/c38591936d3fbd5edc266a6a9dac9ac29c24a6c1/examples/example-negative-space.png",
+            "caption": "负空间艺术海报"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/joeseesun/qiaomu-mondo-poster-design/c38591936d3fbd5edc266a6a9dac9ac29c24a6c1/examples/usecase-event-poster.png",
+            "caption": "活动主题海报"
+          }
+        ],
+        "credit": "joeseesun",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/joeseesun/qiaomu-mondo-poster-design/blob/c38591936d3fbd5edc266a6a9dac9ac29c24a6c1/LICENSE"
+      },
+      "name": "Mondo 艺术海报",
+      "description": "用有限油墨、象征构图和丝网印刷纹理重新诠释电影、书籍与主题。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/qiaomu-mondo-poster/SKILL.md",
+      "sourceUrl": "https://github.com/joeseesun/qiaomu-mondo-poster-design",
+      "license": "MIT",
+      "sha256": "6c49c071a9220e10631c2e34ba9e8f391fd10a71504139db2eda4d81d32bf02c"
+    },
+    {
+      "id": "surreal-pop-collage",
+      "name": "超现实波普拼贴",
+      "description": "黑白照片主体与明亮平涂色块碰撞，只用一个超现实巨物制造梦境感。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/surreal-pop-collage/SKILL.md",
+      "sourceUrl": "https://github.com/2998980-hue/surreal-pop-collage",
+      "license": "MIT",
+      "sha256": "5b0e7188f90cc1966920f554c5f6ee3e1dcefc24e374b513e50d40f644c3f097"
+    },
+    {
+      "id": "taxue-halftone",
+      "name": "限墨半调海报",
+      "description": "用一至两支墨、清晰网点和纸白构成有印刷结构的编辑型艺术海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/taxue-halftone/SKILL.md",
+      "sourceUrl": "https://github.com/taxueseek/taxue-halftone",
+      "license": "MIT",
+      "sha256": "c665a2d50bb13530e4281910fe54fdf8666c55c8b41d858071d2d616e004e806"
+    },
+    {
+      "id": "vinyl-image-generator",
+      "name": "虚构黑胶发行",
+      "description": "把情绪、故事或照片转成包含封套与 A/B 面唱片的虚构黑胶发行实物图。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/vinyl-image-generator/SKILL.md",
+      "sourceUrl": "https://github.com/liigoQi/vinyl-image-generator",
+      "license": "MIT",
+      "sha256": "02789162a20293d4ff2463ff18dcb5970d285fddd50651515f16970a3c9f02f0"
+    },
+    {
+      "id": "watercolor-travel-card",
+      "name": "水彩旅行卡片",
+      "description": "透明水彩风景搭配齿孔和旅行档案栏，形成轻盈的纸质纪念卡。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/watercolor-travel-card/SKILL.md",
+      "sourceUrl": "https://github.com/GZ-L/photo-to-poster-skills/tree/main/skills/watercolor-travel-card",
+      "license": "MIT",
+      "sha256": "d7a9dc13f12265d9e67f7f5e11d080a84dfa276614989de261f294600ce48fa2"
+    },
+    {
+      "id": "editorial-print-studio",
+      "name": "编辑印刷插画",
+      "description": "按食物、人物、产品或风景重构有留白和手工墨感的编辑插画。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/editorial-print-studio/SKILL.md",
+      "sourceUrl": "https://github.com/liuzihe849-png/ai-editorial-print-studio",
+      "license": "MIT",
+      "sha256": "350119c112ae72f3777f2f6f5550bc7303cbf034fef1c71257c01711627c8ac3"
+    },
+    {
+      "id": "neil-night",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/Nealsun1993/neil-night-skill/62ff24f4d5e5a9b99a6a0d82cd735b6e96c606cf/examples/01-hotel-before-after.jpg",
+            "caption": "酒店夜景转换对照"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/Nealsun1993/neil-night-skill/62ff24f4d5e5a9b99a6a0d82cd735b6e96c606cf/examples/03-harbor-before-after.jpg",
+            "caption": "港口夜景转换对照"
+          }
+        ],
+        "credit": "Nealsun1993",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/Nealsun1993/neil-night-skill/blob/62ff24f4d5e5a9b99a6a0d82cd735b6e96c606cf/LICENSE"
+      },
+      "name": "城市微光夜景",
+      "description": "用互补灯光、城市薄雾与真实材质重构有电影感的夜景。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/neil-night/SKILL.md",
+      "sourceUrl": "https://github.com/Nealsun1993/neil-night-skill",
+      "license": "MIT",
+      "sha256": "f47c87661295e7daa66be06f38ec1133e9d179887e462c8106195b9f657151b8"
+    },
+    {
+      "id": "neil-quentin",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/Nealsun1993/neil-quentin/4e4140eb386c005d4b1bfbfc42695c1ae93db697/examples/01-architecture-after.png",
+            "caption": "建筑的复古电影印刷效果"
+          }
+        ],
+        "credit": "Nealsun1993",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/Nealsun1993/neil-quentin/blob/4e4140eb386c005d4b1bfbfc42695c1ae93db697/LICENSE"
+      },
+      "name": "复古电影印刷",
+      "description": "高饱和纯色、硬边主体与金黄粗标题组成复古电影印刷海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/neil-quentin/SKILL.md",
+      "sourceUrl": "https://github.com/Nealsun1993/neil-quentin",
+      "license": "MIT",
+      "sha256": "8abc7c025d9af3d1d1586517d643d5ce6b6ba582333ad1e1f705652b8475a03a"
+    },
+    {
+      "id": "photo-memory-archive",
+      "name": "水彩记忆档案",
+      "description": "摄影与水彩记忆页并置，搭配三枚手绘色样和空白手记线。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-memory-archive/SKILL.md",
+      "sourceUrl": "https://github.com/sbj61188-lab/compose-photo-memory-archive",
+      "license": "MIT",
+      "sha256": "520921b1310ba0e43ff21e8e5034a9f5313c62024f9bfc58126c82ad88bb200a"
+    },
+    {
+      "id": "photo-riso-poster",
+      "name": "孔版留白海报",
+      "description": "提取照片的数量与空间节奏，以两三色孔版印刷制作留白海报。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-riso-poster/SKILL.md",
+      "sourceUrl": "https://github.com/luckdvr/photo-riso-poster",
+      "license": "MIT",
+      "sha256": "4885605830003c72cccc51c8569c5693e1fcc9b0e81554a2d76fa028bcfa652d"
+    },
+    {
+      "id": "photo-stamp-archive",
+      "name": "图章照片档案",
+      "description": "将照片与安静纸面并置，用主体专属的干墨图章留下记忆。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-stamp-archive/SKILL.md",
+      "sourceUrl": "https://github.com/Dlcccc71913/skill-make-photo-stamp-archive",
+      "license": "MIT",
+      "sha256": "6f23d16f4d5917dab15342c0a13592f37fc5277770d3e6154cf4ee56774f6f0f"
+    },
+    {
+      "id": "silhouette-group-collage",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/liuzihe849-png/silhouette-group-collage/9abc11bfb2ce18d89739436da750132dff31f7e2/silhouette-group-collage/assets/approved-style-examples/01-same-team-every-time.png",
+            "caption": "群像正负形双联拼贴"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/liuzihe849-png/silhouette-group-collage/9abc11bfb2ce18d89739436da750132dff31f7e2/silhouette-group-collage/assets/approved-style-examples/03-together-under-winter-skies.png",
+            "caption": "冬日群像剪影"
+          }
+        ],
+        "credit": "理智画 / silhouette-group-collage",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/liuzihe849-png/silhouette-group-collage/blob/9abc11bfb2ce18d89739436da750132dff31f7e2/LICENSE"
+      },
+      "name": "群像剪影拼贴",
+      "description": "同一群像在上下双联画中交换剪影与留空，形成手工纸张拼贴。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/silhouette-group-collage/SKILL.md",
+      "sourceUrl": "https://github.com/liuzihe849-png/silhouette-group-collage",
+      "license": "MIT",
+      "sha256": "a99dd2240aa605e63cc1949ac452debe41891c108037df0e0c8b86442f365e36"
+    },
+    {
+      "id": "photo-to-ink-painting",
+      "name": "水墨重绘",
+      "description": "保留照片主体与空间关系，以自然笔墨和宣纸留白重绘中国水墨画。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-to-ink-painting/SKILL.md",
+      "sourceUrl": "https://github.com/lzhandcyx/photo-to-ink-painting-skill",
+      "license": "MIT",
+      "sha256": "138fb477911d076235cd67fb7fd21ca367273bd9bec9e60b91377a78a379cf36",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/lzhandcyx/photo-to-ink-painting-skill/01fb9a1d5e13f7866e692e27a96d6f642689ffec/examples/e2.png",
+            "caption": "海滨公园水墨重绘"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/lzhandcyx/photo-to-ink-painting-skill/01fb9a1d5e13f7866e692e27a96d6f642689ffec/examples/e3.png",
+            "caption": "乡村田野水墨重绘"
+          }
+        ],
+        "credit": "lzhandcyx/photo-to-ink-painting-skill",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/lzhandcyx/photo-to-ink-painting-skill/blob/01fb9a1d5e13f7866e692e27a96d6f642689ffec/LICENSE"
+      }
+    },
+    {
+      "id": "paper-cut-illustration",
+      "name": "剪纸插画",
+      "description": "将照片变成分层卡纸与暖白模切边插画，保留人物或宠物的辨识特征。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/paper-cut-illustration/SKILL.md",
+      "sourceUrl": "https://github.com/kelegele/paper-cut-illustration-skill",
+      "license": "MIT",
+      "sha256": "7b9dc88514c0fddf56c07125f74f4629c0a28060de98bd80f2de073de93d80d1",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/kelegele/paper-cut-illustration-skill/4b73f4712c37998e0efba553b4f14140d94a9aa3/assets/readme/pet-cat-paper-cut.jpg",
+            "caption": "宠物分层剪纸插画"
+          }
+        ],
+        "credit": "kelegele/paper-cut-illustration-skill",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/kelegele/paper-cut-illustration-skill/blob/4b73f4712c37998e0efba553b4f14140d94a9aa3/LICENSE"
+      }
+    },
+    {
+      "id": "solar-polaroid",
+      "name": "节气拍立得",
+      "description": "将节气、季节短句或生活记忆变成有物证细节的拍立得与纸本编辑视觉。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/solar-polaroid/SKILL.md",
+      "sourceUrl": "https://github.com/taxueseek/taxue-solar-polaroid",
+      "license": "MIT",
+      "sha256": "600b3685eaec62776e700ece6a16ba3f7b8a63d16a02ca906563b65dd0f0afde",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/taxueseek/taxue-solar-polaroid/1c54b781de5648a9b28d74be7e14bbf4021b8f47/gallery/dongzhi-hybrid.jpg",
+            "caption": "冬至纸本档案"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/taxueseek/taxue-solar-polaroid/1c54b781de5648a9b28d74be7e14bbf4021b8f47/gallery/yushui-hybrid.jpg",
+            "caption": "雨水纸本档案"
+          }
+        ],
+        "credit": "taxueseek/taxue-solar-polaroid",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/taxueseek/taxue-solar-polaroid/blob/1c54b781de5648a9b28d74be7e14bbf4021b8f47/LICENSE"
+      }
+    },
+    {
+      "id": "commercial-poster",
+      "name": "商业海报",
+      "description": "根据活动或产品文案设计海报，支持瑞士编辑、包豪斯、极简高端与装饰艺术风格。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/commercial-poster/SKILL.md",
+      "sourceUrl": "https://github.com/howardz27/poster-generator-skill",
+      "license": "MIT",
+      "sha256": "b625855217b9b1017a204820af8cdf25378f5e34e2408927cd5e7a2ec93facc4",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/howardz27/poster-generator-skill/fa2a40bf0943c14dbcf2dfd86a2efe66fa8b4cbc/examples/zh/swiss-editorial/poster-zh-gpt-image-2.jpg",
+            "caption": "瑞士编辑式海报"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/howardz27/poster-generator-skill/fa2a40bf0943c14dbcf2dfd86a2efe66fa8b4cbc/examples/zh/art-deco-luxe/poster-zh-gpt-image-2.jpg",
+            "caption": "装饰艺术海报"
+          }
+        ],
+        "credit": "howardz27/poster-generator-skill",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/howardz27/poster-generator-skill/blob/fa2a40bf0943c14dbcf2dfd86a2efe66fa8b4cbc/LICENSE"
+      }
+    },
+    {
+      "id": "photo-to-travel-sketch",
+      "name": "旅行速写",
+      "description": "用松弛钢笔线、灰调干性马克笔和大量露纸，将照片提炼为现场旅行速写。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-to-travel-sketch/SKILL.md",
+      "sourceUrl": "https://github.com/liigoQi/photo-to-travel-sketch",
+      "license": "MIT",
+      "sha256": "6964baa211593cba7bffc386b4c7abd4ba69cc3d70362adcd6311e88944cee2e"
+    },
+    {
+      "id": "dreamy-motion-editorial",
+      "name": "梦幻慢门",
+      "description": "保留清晰主体，以可信的慢门拖影、玻璃反射与光色流动营造梦幻摄影。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/dreamy-motion-editorial/SKILL.md",
+      "sourceUrl": "https://github.com/lzs0594/dreamy-motion-editorial",
+      "license": "MIT",
+      "sha256": "0044f809d57350fad0dee1422cb1c20e5788c06448f180a5fcb01440502a3a00"
+    },
+    {
+      "id": "film-print-2383",
+      "name": "2383 胶片质感",
+      "description": "以电影印相密度、自然肤色、局部暖色光晕和细颗粒处理照片，默认全画幅。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/film-print-2383/SKILL.md",
+      "sourceUrl": "https://github.com/n1ko724/kodak-2383-film-look",
+      "license": "MIT",
+      "sha256": "2dffd066909e93d1582a804f238caaeec46e74c242a24de8afe429833bccc23b"
+    },
+    {
+      "id": "photo-to-minimal-illustration",
+      "name": "极简观察插画",
+      "description": "提取照片的姿态与空间记忆，用少量色块、稀疏墨线和干净留白生成极简插画。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-to-minimal-illustration/SKILL.md",
+      "sourceUrl": "https://github.com/iamkong/photo-to-minimal-illustration",
+      "license": "MIT",
+      "sha256": "577f4457ab0b9c97495bcb05a990cad8c785bb1af3cff65e32a1824b4d7840a9",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/iamkong/photo-to-minimal-illustration/0b0fde8a1a3783810130ba579b373c469a32ea61/examples/result-01-tent.jpg",
+            "caption": "帐篷与环境的极简观察"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/iamkong/photo-to-minimal-illustration/0b0fde8a1a3783810130ba579b373c469a32ea61/examples/result-03-horse-window.jpg",
+            "caption": "窗边马匹的极简插画"
+          }
+        ],
+        "credit": "iamkong/photo-to-minimal-illustration",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/iamkong/photo-to-minimal-illustration/blob/0b0fde8a1a3783810130ba579b373c469a32ea61/LICENSE"
+      }
+    },
+    {
+      "id": "van-gogh-oil-painting-transformation",
+      "name": "梵高油画",
+      "description": "保留照片主体与构图，以厚涂油彩、旋转笔触和鲜明蓝黄关系重绘后印象派油画。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/van-gogh-oil-painting-transformation/SKILL.md",
+      "sourceUrl": "https://github.com/KShang29/van_gogh_oil_painting_transformation",
+      "license": "MIT",
+      "sha256": "d9e9345a9b72477b9d8b4161902b613710744231ace3bb1e78fe8c8ce9906eaa",
+      "preview": {
+        "images": [
+          {
+            "url": "https://raw.githubusercontent.com/KShang29/van_gogh_oil_painting_transformation/c5ff3e4f183fab46152d64708287bae048867c0b/processed_images/sample_06_vangogh_oil.png",
+            "caption": "道路与旋转云层的厚涂油画"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/KShang29/van_gogh_oil_painting_transformation/c5ff3e4f183fab46152d64708287bae048867c0b/processed_images/sample_11_vangogh_oil.png",
+            "caption": "水岸城市的梵高油画重绘"
+          }
+        ],
+        "credit": "KShang29/van_gogh_oil_painting_transformation",
+        "license": "MIT",
+        "licenseUrl": "https://github.com/KShang29/van_gogh_oil_painting_transformation/blob/c5ff3e4f183fab46152d64708287bae048867c0b/LICENSE"
+      }
+    },
+    {
+      "id": "photo-retouch-pro",
+      "name": "照片精修",
+      "description": "上传原图，优化人像、产品与风景照片的光影、色彩和细节，保留主体特征与自然质感。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/photo-retouch-pro/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/photo-retouch-pro",
+      "license": "MIT (independent browser instructions only)",
+      "sha256": "1ac45a50b1b71587b9d4a34feebc26797d4da9d9dc9e36007ac0a83426c80e01"
+    },
+    {
+      "id": "social-card",
+      "name": "社交图文卡片",
+      "description": "将文字与参考图片整理成社交封面、教程或信息卡片，突出重点并保持清晰排版。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/social-card/SKILL.md",
+      "sourceUrl": "https://github.com/qzq00767/octopus-skills/tree/main/skills/social-card",
+      "license": "MIT (independent browser instructions only)",
+      "sha256": "90e86195483093c15f98b64290faeb0f661791ddb3dd040fe7062ee8f2e0dc8f"
+    },
+    {
+      "id": "xiutu",
+      "name": "修图提示词",
+      "description": "按需求组合去杂物、调光、自然美颜与直闪效果，只编辑指定部分。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/xiutu/SKILL.md",
+      "sourceUrl": "https://github.com/Chase-qisiai/xiutu.skill",
+      "license": "MIT",
+      "sha256": "b362d1d40d05e21ef1bd274d80e222df357392e876c2a585c124e6020bb98632"
+    },
+    {
+      "id": "flat-cartoon-photo-mashup",
+      "name": "真人卡通混搭",
+      "description": "保留实景摄影背景，将指定人物重绘为粗黑描边、平涂色块的扁平卡通。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/flat-cartoon-photo-mashup/SKILL.md",
+      "sourceUrl": "https://github.com/haomiaomou-cmd/flat-cartoon-photo-mashup",
+      "license": "MIT",
+      "sha256": "8b5176434454195ce5147c255a19f7cbd4f7a00d11c7d8cd0c53ff051730952b"
+    },
+    {
+      "id": "cloud-doodle-animal",
+      "name": "云朵动物涂鸦",
+      "description": "顺着真实云朵的轮廓，用几笔黑色细线点化出可爱的动物。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/cloud-doodle-animal/SKILL.md",
+      "sourceUrl": "https://github.com/haomiaomou-cmd/cloud-doodle-animal",
+      "license": "MIT",
+      "sha256": "f03fd6dae9a7aac9fac5577f77fa3ef38e0e4e93acda125d22c7762cbb293e58"
+    },
+    {
+      "id": "child-photo-doodle-collage",
+      "name": "互动涂鸦写真",
+      "description": "保留照片人物，让蜡笔小动物与人物动作、衣物和真实道具互动，适用于儿童与成人。",
+      "category": "image",
+      "kind": "image-style",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/child-photo-doodle-collage/SKILL.md",
+      "sourceUrl": "https://github.com/haomiaomou-cmd/child-photo-doodle-collage",
+      "license": "MIT",
+      "sha256": "7ef929999e11e66dfac22780d49159c185baf61cf01c69ca6c8f4d267ea587cb"
+    },
+    {
+      "id": "humanizer-zh",
+      "name": "Humanizer-zh",
+      "description": "清理中文空话、重复与模板句，保留事实、限定和作者声音。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/humanizer-zh/SKILL.md",
+      "sourceUrl": "https://github.com/op7418/Humanizer-zh",
+      "license": "MIT",
+      "sha256": "cb03e51490bc7cc1473011516052a64a49313a5d90b22529902bd325ecb03a6d"
+    },
+    {
+      "id": "stop-slop",
+      "name": "Stop Slop",
+      "description": "用词表与句式规则精简英文，清理空话、机械结构与冗余表达。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/stop-slop/SKILL.md",
+      "sourceUrl": "https://github.com/hardikpandya/stop-slop",
+      "license": "MIT",
+      "sha256": "4e26d433d54692cee13e327621444a2f8d5cae87b107b4c4e34a0cadd7684e39"
+    },
+    {
+      "id": "no-ai-slop",
+      "name": "No AI Slop",
+      "description": "最小必要修改，清理英文模板表达，保留个人语气；支持只检查。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/no-ai-slop/SKILL.md",
+      "sourceUrl": "https://github.com/petergyang/no-ai-slop",
+      "license": "MIT",
+      "sha256": "cea94d77440fcd99a51d9ac2dc4c7833352277e67bdb925e2496ea78108295ff"
+    },
+    {
+      "id": "lieflat-less-ai-tone",
+      "name": "Lieflat Less AI Tone",
+      "description": "中文文风诊断：先报告，再确认改写与复测。原版需本地脚本，仅提供来源入口；许可证限制非商业使用。",
+      "category": "writing",
+      "kind": "client",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/lieflat-less-ai-tone/SKILL.md",
+      "sourceUrl": "https://github.com/larashero3-dotcom/lieflat-less-ai-tone",
+      "license": "CC BY-NC 4.0 (upstream; source link only)",
+      "sha256": "b4d2e859d2ae009c027766a8bafdd06ccc4d8d6be32a7ddc5296a58dbd18a050"
+    },
+    {
+      "id": "academic-humanizer",
+      "name": "Academic Humanizer",
+      "description": "润色英文论文与基金申请，保留学术语气、证据、数字、公式和引用。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/academic-humanizer/SKILL.md",
+      "sourceUrl": "https://github.com/AIScientists-Dev/academic-humanizer",
+      "license": "MIT",
+      "sha256": "bc0ade535d841de7deecfa64021919cb914c02b4f752a0c4470cb95962a883a5"
+    },
+    {
+      "id": "shuorenhua",
+      "name": "说人话",
+      "description": "中文优先，清理套话与重复，保留原意和责任主体；支持只标问题。",
+      "category": "writing",
+      "kind": "prompt",
+      "version": "1.0.0",
+      "documentUrl": "https://raw.githubusercontent.com/qzq00767/octopus-skills/main/skills/shuorenhua/SKILL.md",
+      "sourceUrl": "https://github.com/MrGeDiao/shuorenhua",
+      "license": "MIT",
+      "sha256": "52f61b9f0fe2598e144522622a322b7b3476098db2bce232b5714522ceac12f2"
+    }
+  ]
+}

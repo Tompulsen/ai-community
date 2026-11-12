@@ -5,6 +5,12 @@
  * Path and task-state rules adapted from studio/app/utils/{video-api,local-tasks}.ts.
  */
 
+import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema, toolCallSchema, type ImageOptions, type VideoOptions, type ChatOptions } from '../shared/studio/options.ts'
+import { imageOutputParams, supportsImageOutputOptions, imageRequestSize } from '../shared/studio/image-params.ts'
+import { buildVideoRequest } from '../shared/studio/video-api.ts'
+import { validateVideoRequestParameters } from '../shared/studio/video-capabilities.ts'
+import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
+import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationProtocol = 'openai' | 'sync' | 'async'
 export type CreationTaskProtocol = CreationProtocol | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
@@ -20,6 +26,9 @@ export interface CreationInput {
   sourceWorkId?: string
   requestId?: string
   protocol?: CreationProtocol
+  imageOptions?: ImageOptions
+  videoOptions?: VideoOptions
+  chatOptions?: ChatOptions
 }
 export interface CreationOutput { url?: string; b64_json?: string; text?: string }
 export interface CreationPayload { path: string; body: string | FormData; contentType?: 'application/json' }
@@ -32,6 +41,9 @@ export interface CreationTask {
   outputs: CreationOutput[]
   error?: string
   mediaPath?: string
+  reasoning?: string
+  usage?: import('../shared/studio/types.ts').ChatResponseUsage
+  toolCalls?: import('../shared/studio/types.ts').StudioToolCall[]
 }
 
 const taskIdPattern = /^[A-Za-z0-9_-]{1,200}$/
@@ -94,6 +106,21 @@ export function validateCreationInput(value: unknown): CreationInput {
     if (result.kind === 'text' && value.protocol === 'async') invalid('文本生成不支持此异步接口。')
     result.protocol = value.protocol as CreationProtocol
   }
+  for (const [key, schema] of [['imageOptions', imageOptionsSchema], ['videoOptions', videoOptionsSchema], ['chatOptions', chatOptionsSchema]] as const) {
+    if (value[key] === undefined) continue
+    const parsed = schema.safeParse(value[key])
+    if (!parsed.success) invalid(`创作参数无效：${parsed.error.issues[0]?.message}`)
+    Object.assign(result, { [key]: parsed.data })
+  }
+  if (result.imageOptions?.imageStream && result.protocol === 'async') invalid('流式预览请使用同步接口。')
+  if (result.chatOptions) {
+    for (const message of result.chatOptions.messages) if (Array.isArray(message.content)) for (const item of message.content) {
+      const url = item.image_url?.url ?? item.video_url?.url ?? item.file?.file_data
+      // Attachments are uploaded bytes, never arbitrary URLs fetched by an upstream service.
+      if (url !== undefined && !/^data:[a-z0-9.+/-]+;base64,[A-Za-z0-9+/=\s]+$/i.test(url)) invalid('附件请上传本地文件。')
+      if (item.type === 'text' ? typeof item.text !== 'string' : item.type === 'image_url' ? !item.image_url : item.type === 'video_url' ? !item.video_url : item.type === 'file' ? !item.file : !item.input_audio) invalid('附件内容不完整。')
+    }
+  }
   return result
 }
 
@@ -111,12 +138,22 @@ function referenceFiles(input: CreationInput, prepared: CreationReference[]): Cr
 }
 
 /** Reuses the existing image-generation and video-api request shapes without provider fallback. */
-export function buildCreationPayload(input: CreationInput, preparedReferences: CreationReference[] = []): CreationPayload {
+export function buildCreationPayload(input: CreationInput, preparedReferences: CreationReference[] = [], tools: unknown[] = []): CreationPayload {
   const json = (path: string, value: Record<string, unknown>): CreationPayload => ({
     path, body: JSON.stringify(value), contentType: 'application/json',
   })
   const references = input.referenceUrls ?? []
   if (input.kind === 'text') {
+    if (input.chatOptions) {
+      const { messages, format, mcpServers: _, ...settings } = input.chatOptions
+      if (format !== 'chat-completions' && (tools.length || messages.some(message => message.tool_calls || message.role === 'tool'))) invalid('MCP 工具回合请使用 Chat Completions 接口。')
+      const config = { ...settings, model: input.model }
+      if (format !== 'chat-completions') {
+        const built = buildChatRequest(format, messages, config)
+        return json(built.endpoint.startsWith('v1beta/') ? built.endpoint : `v1/${built.endpoint}`, built.body)
+      }
+      return json('v1/chat/completions', { ...buildChatCompletions(messages, config), ...(tools.length ? { tools } : {}) })
+    }
     return json('v1/chat/completions', { model: input.model, messages: [{ role: 'user', content: input.prompt }], stream: false })
   }
   if (input.kind === 'image') {
@@ -128,7 +165,12 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
         ...references.map(url => ({ type: 'image_url', image_url: { url } }))] : input.prompt
       return json('v1/chat/completions', { model: input.model, messages: [{ role: 'user', content }], stream: false })
     }
-    const payload = { model: input.model, prompt: input.prompt, n: input.n ?? 1, size: input.size ?? 'auto', response_format: 'url' }
+    const options = input.imageOptions
+    const payload = { model: input.model, prompt: input.prompt, n: input.n ?? 1,
+      size: options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model) : input.size ?? 'auto',
+      response_format: options?.imageResponseFormat ?? 'url',
+      ...(options ? { quality: options.quality, ...(options.style ? { style: options.style } : {}),
+        ...(supportsImageOutputOptions(input.model) ? imageOutputParams(options) : {}) } : {}) }
     if (!references.length) return json(input.protocol === 'async' ? 'async-images/v1/tasks' : 'v1/images/generations', payload)
     const body = new FormData()
     for (const [key, value] of Object.entries(payload)) body.set(key, String(value))
@@ -136,6 +178,33 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
     return { path: input.protocol === 'async' ? 'async-images/v1/edits' : 'v1/images/edits', body }
   }
   if ((input.n ?? 1) !== 1) invalid('视频任务需逐个提交，不能隐式重复付费请求。')
+  if (input.videoOptions) {
+    const options = input.videoOptions
+    if (options.openaiReferenceSource === 'file_id' && options.mode !== 'image-to-video') invalid('文件 ID 参考请使用图生视频，首尾帧请上传两张图片。')
+    const expected = options.mode === 'first-last-frame' ? 2 : options.mode === 'image-to-video' ? 1 : options.mode === 'reference-to-video' ? 1 : 0
+    if (options.openaiReferenceSource === 'upload' && (references.length < expected || options.mode === 'text-to-video' && references.length)) invalid('参考图数量与生成方式不一致。')
+    if (options.openaiReferenceSource === 'upload' && ['image-to-video', 'first-last-frame'].includes(options.mode) && references.length !== expected) invalid('请按生成方式选择正确数量的参考图。')
+    const custom = options.customParameters.trim() ? (() => { try { return JSON.parse(options.customParameters) } catch { invalid('自定义参数必须是有效的 JSON。') } })() : {}
+    if (!record(custom)) invalid('自定义参数必须是 JSON 对象。')
+    const checkCustom = (value: unknown, depth = 0): void => {
+      if (depth > 16) invalid('自定义参数嵌套过深。')
+      if (typeof value === 'string' && /^https?:\/\//i.test(value)) invalid('自定义参数中的远程素材请通过参考图控件添加。')
+      if (value && typeof value === 'object') for (const item of Object.values(value)) checkCustom(item, depth + 1)
+    }
+    if (Object.keys(custom).some(key => ['model', 'prompt', 'stream', 'headers', 'api_key', 'authorization'].includes(key.toLowerCase()))) invalid('自定义参数包含受保护字段。')
+    checkCustom(custom)
+    const payload = buildVideoRequest({
+      ...options, apiFormat: 'openai', model: input.model, prompt: input.prompt,
+      aspectRatio: input.aspect_ratio ?? '16:9', duration: input.duration ?? 8, size: input.size ?? 'auto',
+      materials: references.map((url, index) => ({ id: String(index), name: `参考图 ${index + 1}`, type: 'image', url })),
+      customParams: { openai: options.customParameters },
+      protocolOptions: { openai: { seed: options.seed, generateAudio: options.generateAudio, personGeneration: options.personGeneration } },
+    }, input.model)
+    const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    if (sent.model !== input.model || sent.prompt !== input.prompt) invalid('自定义参数不能覆盖模型或提示词。')
+    validateVideoRequestParameters(payload.body, options.mode)
+    return { ...payload, path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', ...(typeof payload.body === 'string' ? { contentType: 'application/json' } as const : {}) }
+  }
   const path = input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos'
   const seconds = String(input.duration ?? 5)
   const ratio = input.aspect_ratio === 'auto' ? '16:9' : input.aspect_ratio ?? '16:9'
@@ -188,7 +257,7 @@ export function creationRelayPath(method: string, path: string): string | null {
       || /^v1beta\/files\/[A-Za-z0-9_-]{1,200}:download\?alt=media$/.test(path)) return path
     return null
   }
-  return /^(?:v1\/(?:chat\/completions|responses|images\/(?:generations|edits|variations)|videos(?:\/generations)?)|async-(?:images|videos)\/v1\/(?:tasks|edits))$/.test(path)
+  return /^(?:v1\/(?:chat\/completions|responses|messages|images\/(?:generations|edits|variations)|videos(?:\/generations)?)|v1beta\/models\/[A-Za-z0-9._-]+:(?:streamGenerateContent\?alt=sse|generateContent)|async-(?:images|videos)\/v1\/(?:tasks|edits))$/.test(path)
     && !/^async-videos\/v1\/edits$/.test(path) ? path : null
 }
 
@@ -309,4 +378,15 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     result.error = '上游任务已结束，但没有可读取的结果；请保留记录并核对，勿重复生成。'
   }
   return result
+}
+
+export function normalizeNativeChat(format: ChatOptions['format'], value: unknown): CreationTask {
+  if (format === 'chat-completions') {
+    const result = normalizeCreationTask('text', value)
+    const data = value as { choices?: { message?: { tool_calls?: unknown[]; content?: unknown } }[] }
+    const calls = data?.choices?.[0]?.message?.tool_calls
+    if (Array.isArray(calls) && calls.length) return { ...result, status: 'succeeded', toolCalls: calls.slice(0, 32).map(call => toolCallSchema.parse(call)) }
+    return result
+  }
+  return { status: 'succeeded', outputs: [{ text: extractChatResponse(format, value) }] }
 }

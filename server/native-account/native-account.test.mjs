@@ -40,6 +40,42 @@ function request(path, options = {}) {
 
 const envelope = (data, headers) => Response.json({ success: true, data }, { headers })
 
+test("group selection reuses the authenticated account, persists its key and rejects a changed account", async t => {
+  configure(t)
+  const fixture = await session(t)
+  const group = "fixture-images"
+  const token = { id: 9, user_id: user.id, group, name: "系统创建", status: 1,
+    expired_time: -1, unlimited_quota: true, remain_quota: 0 }
+  let calls = 0
+  t.mock.method(globalThis, "fetch", async url => {
+    calls++
+    const path = new URL(url).pathname
+    if (path === "/api/user/self") return envelope(user)
+    if (path === "/api/user/self/groups") return envelope({ [group]: { ratio: 0.8, desc: "Images" } })
+    if (path === "/api/token/9") return envelope(token)
+    assert.equal(path, "/api/token/9/key")
+    return envelope({ key: "group-private-key" })
+  })
+  const selected = await handleAccountRequest(fixture.request("/api/new-api/model-groups/select", {
+    method: "POST", body: JSON.stringify({ group }), headers: { "x-new-api-user": "7" },
+  }))
+  assert.equal(selected.status, 200)
+  assert.deepEqual((await selected.json()).data, { group, selectedTokenId: 9 })
+  const stored = await readSessionById(fixture.id)
+  assert.equal(stored.selectedKey, "sk-group-private-key")
+  const catalog = await handleAccountRequest(fixture.request("/api/new-api/model-groups"))
+  const data = (await catalog.json()).data
+  assert.equal(data.selectedGroup, group)
+  assert.equal(data.groups[0].ratio, 0.8)
+  assert(!JSON.stringify(data).includes("group-private-key"))
+  const before = calls
+  const mismatch = await handleAccountRequest(fixture.request("/api/new-api/model-groups/select", {
+    method: "POST", body: JSON.stringify({ group }), headers: { "x-new-api-user": "8" },
+  }))
+  assert.equal(mismatch.status, 409)
+  assert.equal(calls, before)
+})
+
 async function session(t, changes = {}) {
   const id = randomBytes(32).toString("base64url")
   const now = Math.floor(Date.now() / 1000)

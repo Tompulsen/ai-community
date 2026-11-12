@@ -61,6 +61,39 @@
 历史导入仅限已验证 `accountId` 的 `octopus:user-<accountId>:` 及
 `octopus-gallery-user-<accountId>`，不清空或合并其他账号、访客和旧聊天存储。
 
+## 2026-11-13 创作功能恢复
+
+用户指定复用来源 `qzq00767/octopus_chat`，核对的远端 `main` 为
+`0eac2b491406574cccfe29ad9252dc56bd97ae95`。本地相邻源码属于同一仓库，
+仅获取远端信息，没有覆盖其未提交修改。
+
+`shared/studio/` 的图片参数、视频能力表与序列化、聊天格式/usage、
+思考流解析、附件/视频采帧、上下文预算、对话分支和附件分离持久化，
+从现有 `studio/app/` 对应模块迁入；保留已在社区中更新的视频能力表，
+替换框架/store 类型依赖及显式 `.ts` 导入，不重新实现这些算法。
+`shared/studio/chat-completions.ts` 摘取原 `client/platforms/openai.ts` 的
+o1/o3/o4-mini/GPT-5 参数兼容分支。
+
+`server/creation/skills-retrieval.ts` 采用用户指定仓库的 Tavily 计费版本，
+没有采用 `studio/` 中旧的 SearXNG 实现。保留按用户系统 Auto 密钥检索、
+来源解析、超时和不重放规则，替换 Next Request/Response 与授权适配。
+搜索和生成分别保存请求编号及结果，回答重生成不重复搜索。
+
+`server/mcp/{client,types,logger}.ts` 和 `server/skills/` 复用旧源码，
+MCP 接入官方 SDK；SDK、Zod 和 Nano ID 更新至安装时审计已修复的版本。
+MCP 仍要求显式部署开关、账号 allowlist 及上游管理员角色；
+普通登录不获得进程管理权限。模型工具回合只在会话选择服务后启用，
+用户确认具体调用后执行，保留调用编号，不自动重放。
+
+Vue 页面是原生适配层，不加载 React 或 Next 运行时。图片/视频参数、
+图库/任务、多轮对话、技能工具以及账号价格/日志/密钥复用同一社区登录。
+旧聊天通过原 `readChatSnapshot` 还原分离附件，写入新的账号专属
+`native-chat` 键，保留旧快照和图库；原生单轮文本记录也能继续读取。
+付费生成在浏览器断开后继续记录最终结果，大型结果存入私有文件目录，
+通过受账号约束的 GET 请求恢复，不再次提交生成。
+
+具体功能范围与配置边界见 `RESTORED-STUDIO.md`。
+
 ## 保持不变的业务约束
 
 - 次数累计不会因取消点赞、重新关注或规则切换重复发放。

@@ -5,18 +5,23 @@
  * Reuses the Studio account relay, media import and generation protocol rules.
  */
 import { createHash } from 'node:crypto'
+import { mkdir, writeFile, readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { httpError } from './auth.ts'
 import {
   AccountRequest, NewApiError, getNewApiConfig, relayHeaders, resolveRelayCredentials,
 } from './native-account/index.ts'
 import {
-  buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, validateCreationInput,
+  buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, normalizeNativeChat, validateCreationInput,
   type CreationInput, type CreationKind, type CreationReference, type CreationTask, type CreationTaskProtocol,
 } from './creation-contract.ts'
 import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
+import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
+import { imageResultUrls } from '../shared/studio/image-response.ts'
+import { modelMcpTools } from './studio-tools.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -171,7 +176,14 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
   return files
 }
 
-async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices) {
+async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>) {
+  if (typeof cached.file === 'string' && /^[a-f0-9]{64}\.json$/.test(cached.file) && ctx.filesRoot) {
+    try { return JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
+    catch { return cached.result }
+  }
+  return cached.result
+}
+async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}) {
   const input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
   const key = `community-next:creation:request:${accountNamespace(ctx)}:${input.requestId}`
@@ -180,10 +192,16 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   if (existing) {
     const cached: unknown = JSON.parse(existing)
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cached.result
+    return cachedResult(ctx, cached)
+  }
+  if (input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'image_url') {
+    input.referenceUrls = [input.videoOptions.openaiImageUrl || '', ...(input.videoOptions.mode === 'first-last-frame' ? [input.videoOptions.openaiLastImageUrl || ''] : [])]
+    if (input.referenceUrls.some(value => { try { const url = new URL(value); return !['http:', 'https:'].includes(url.protocol) || !!url.username || !!url.password } catch { return true } })) throw httpError(400, '请填写有效的参考图片 URL。')
+    input.videoOptions.openaiReferenceSource = 'upload'
   }
   const files = await references(ctx, req, input, svc)
-  const payload = buildCreationPayload(input, files)
+  const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
+  const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })))
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   const credentials = await svc.credentials(req, payload.path)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
@@ -193,7 +211,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     const previous = await ctx.redis.get(key)
     const cached: unknown = previous ? JSON.parse(previous) : null
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cached.result
+    return cachedResult(ctx, cached)
   }
   let result: Result
   try {
@@ -206,23 +224,43 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       method: 'POST', headers, body: payload.body, redirect: 'error', cache: 'no-store',
       signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : 180000),
     })
-    const data = await readJson(response, 40 * MiB)
-    if (!response.ok) {
+    if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+      result = { ...await readGenerationStream(response, input, emit), tokenId: credentials.tokenId, protocol }
+    } else {
+      const data = await readJson(response, 40 * MiB)
+      if (!response.ok) {
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
       result = { status: response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
         error: message(typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`, credentials.apiKey),
         tokenId: credentials.tokenId, protocol }
-    } else {
-      result = responseResult(input.kind, data, credentials, protocol)
-      if (result.status === 'pending' && !result.upstreamId) result = { ...result, ...uncertain }
+      } else {
+        result = input.kind === 'text' && input.chatOptions
+          ? { ...normalizeNativeChat(input.chatOptions.format, data), tokenId: credentials.tokenId, protocol }
+          : responseResult(input.kind, data, credentials, protocol)
+        if (input.kind === 'text' && input.chatOptions) {
+          const format = input.chatOptions.format
+          result.reasoning = format === 'chat-completions' ? (data as { choices?: { message?: { reasoning_content?: string } }[] })?.choices?.[0]?.message?.reasoning_content : extractChatReasoning(format, data)
+          result.usage = extractResponseUsage(format, data)
+        }
+        if (input.kind === 'image' && result.status === 'succeeded' && record(data) && Array.isArray(data.data)) {
+          result.outputs = imageResultUrls(data).map(url => ({ url }))
+        }
+        if (result.status === 'pending' && !result.upstreamId) result = { ...result, ...uncertain }
+      }
     }
     await remember(ctx, input.kind, result)
   } catch {
     result = { ...uncertain, tokenId: credentials.tokenId, protocol }
   }
   const serialized = JSON.stringify({ fingerprint, result })
-  // shortcut: large inline results stay in browser history until server media storage is introduced.
-  await ctx.redis.set(key, serialized.length <= MiB ? serialized : JSON.stringify(pending), 'EX', requestTtl)
+  if (serialized.length > MiB && ctx.filesRoot) {
+    try {
+      const directory = path.join(ctx.filesRoot, '.creation-results'), file = hash(key) + '.json'
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await writeFile(path.join(directory, file), JSON.stringify(result), { mode: 0o600 })
+      await ctx.redis.set(key, JSON.stringify({ ...pending, file }), 'EX', requestTtl)
+    } catch { await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl) }
+  } else await ctx.redis.set(key, serialized.length <= MiB ? serialized : JSON.stringify(pending), 'EX', requestTtl)
   return result
 }
 
@@ -290,18 +328,36 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
   const svc = { ...services, ...overrides }
   const user = ctx.requireUser()
   if (!user.accountId || !/^[1-9]\d{0,18}$/.test(user.accountId)) throw httpError(409, '请先用章鱼账号登录社区。')
+  const expected = ctx.req.headers['x-new-api-user']
+  if (expected !== undefined && expected !== user.accountId) throw httpError(409, '账号已切换，请重新操作。')
   const req = new AccountRequest(applicationRequest(ctx.request, ctx.reply, new URL(ctx.config.url).origin))
   req.headers.set('x-new-api-user', user.accountId)
   try {
     if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
       await rateLimit(ctx, 'generate', 12)
-      ctx.json(200, await generate(ctx, req, svc))
+      const input = validateCreationInput(ctx.body)
+      if (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream) {
+        // A disconnected browser stops receiving events; the paid job still finishes and is recoverable.
+        ctx.reply.hijack()
+        ctx.res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' })
+        const emit = (event: CreationEvent) => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(`data: ${JSON.stringify(event)}\n\n`) }
+        const heartbeat = setInterval(() => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(': keepalive\n\n') }, 15000)
+        try { emit({ type: 'result', ...await generate(ctx, req, svc, emit) as object }) }
+        catch (error) { emit({ type: 'error', error: message(error) }) }
+        finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
+      } else ctx.json(200, await generate(ctx, req, svc))
+    } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
+      await rateLimit(ctx, 'tasks', 180)
+      const id = ctx.url.pathname.split('/').pop()!
+      const stored = await ctx.redis.get(`community-next:creation:request:${accountNamespace(ctx)}:${id}`)
+      if (!stored) throw httpError(404, '没有找到此请求记录。')
+      ctx.json(200, await cachedResult(ctx, JSON.parse(stored)))
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/models') {
       await rateLimit(ctx, 'models', 60)
       const credentials = await svc.credentials(req, 'v1/models')
       const data = await upstreamJson(req, credentials, 'v1/models', svc)
       const items = record(data) && Array.isArray(data.data) ? data.data : []
-      ctx.json(200, { items: items.flatMap(item => {
+      ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const kind = id.length <= 200 && id.trim() ? classifyModel(id) : null
         return kind ? [{ id, name: id, kinds: [kind], protocol: 'openai' }] : []

@@ -29,10 +29,12 @@ export async function api<T>(path: string, options: {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  expectedAccount?: string
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
   const version = sessionVersion
   const headers: Record<string, string> = { Accept: 'application/json' }
+  if (options.expectedAccount) headers['X-New-Api-User'] = options.expectedAccount
   const multipart = options.body instanceof FormData
   if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
   if (options.method && options.method !== 'GET' && session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken
@@ -118,12 +120,13 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '')
   } catch { return '' }
 }
 
-export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'logout', body?: object): Promise<T> {
+export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'logout' | 'model-groups' | 'model-groups/select', body?: object, expectedUser?: string): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/new-api/${route}`, {
       method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
-      headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(expectedUser ? { 'X-New-Api-User': expectedUser } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(20000),
     })

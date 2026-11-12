@@ -126,7 +126,11 @@ test('an uncertain paid request stays in history and is never automatically subm
   await page.reload()
   await expect(page.locator('.task-status')).toContainText('需要核对')
   expect(submissions).toBe(1)
-  await expect(page.getByRole('button', { name: '继续查询', exact: true })).toHaveCount(0)
+  let recoveries = 0
+  await page.route('**/api/creation/requests/**', route => { recoveries++; return route.fulfill({ json: { status: 'indeterminate', outputs: [] } }) })
+  await page.getByRole('button', { name: '继续查询', exact: true }).click()
+  await expect.poll(() => recoveries).toBe(1)
+  expect(submissions).toBe(1)
 })
 
 test('legacy tasks without the original token stay untouched while base64 image results still render', async ({ page }) => {
@@ -163,14 +167,14 @@ test('native text results can download and publish without a separate chat accou
     status: 'succeeded', tokenId: 41, protocol: 'openai', outputs: [{ text: '海底的灯亮了。\\n章鱼开始写作。' }],
   } }))
   await page.goto('/create/text')
-  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('写一个海底故事')
-  await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.creation-text')).toContainText('章鱼开始写作')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('写一个海底故事')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.message-content')).toContainText('章鱼开始写作')
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: '下载文本', exact: true }).click()
   expect((await download).suggestedFilename()).toMatch(/\.md$/)
+  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: '作品已提交审核' })).toBeVisible()
   expect(state.calls.find(call => call.path === '/api/works')?.body).toMatchObject({ kind: 'resource', body: '海底的灯亮了。\\n章鱼开始写作。', fileIds: ['fixture-file-1'] })
 })
