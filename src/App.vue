@@ -10,6 +10,7 @@ import { inbox, loadInbox, type InboxCategory } from './inbox'
 
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
+const studioPage = computed(() => Boolean(session.user) && (route.path === '/create' || route.path.startsWith('/create/')))
 const links = [
   { path: '/discover', label: '首页', icon: House },
   { path: '/activities', label: '推广中心', icon: Gift },
@@ -95,7 +96,7 @@ function dismissMenus(event: Event) {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount }" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" aria-label="章鱼社区首页"><img class="brand-mark" src="/assets/brand/octopus-community.jpg" width="32" height="32" alt="" /><span>章鱼社区</span></RouterLink>
@@ -118,7 +119,7 @@ function dismissMenus(event: Event) {
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
-    <footer v-if="!guestAccount" class="app-footer"><span>章鱼社区</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
+    <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>章鱼社区</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
     <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
     <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
@@ -126,6 +127,8 @@ function dismissMenus(event: Event) {
 </template>
 
 <style scoped>
+.studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
+.studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 32px; }
 .brand { justify-self: start; }
 .desktop-nav { align-items: center; justify-self: center; gap: 24px; }

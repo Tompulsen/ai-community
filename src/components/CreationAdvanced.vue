@@ -6,13 +6,13 @@ import { videoCapabilities } from '../../shared/studio/video-capabilities'
 const image = defineModel<ImageOptions>('image', { required: true })
 const video = defineModel<VideoOptions>('video', { required: true })
 const protocol = defineModel<string>('protocol', { required: true })
-const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string }>()
+const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string; embedded?: boolean }>()
 const capabilities = computed(() => videoCapabilities(props.model, video.value.mode))
 const modes = { 'text-to-video': '文生视频', 'image-to-video': '图生视频', 'first-last-frame': '首尾帧', 'reference-to-video': '多图参考' }
 </script>
 <template>
-  <details class="advanced-options">
-    <summary>高级参数</summary>
+  <details class="advanced-options" :class="{ embedded }" :open="embedded">
+    <summary v-show="!embedded">高级参数</summary>
     <div class="advanced-fields">
       <label class="field"><span>请求方式</span><select v-model="protocol" class="control" @change="image.imageStream = false"><option value="openai">同步</option><option value="async">异步任务</option></select></label>
       <template v-if="kind === 'image'">
@@ -45,6 +45,10 @@ const modes = { 'text-to-video': '文生视频', 'image-to-video': '图生视频
 </template>
 <style scoped>
 .advanced-options { border-top: 1px solid var(--border); padding-top: 16px; }
+.advanced-options.embedded { border-top: 0; padding-top: 0; }
+.embedded .advanced-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.embedded .field:has(textarea), .embedded .muted, .embedded .form-error { grid-column: 1 / -1; }
+@media (max-width: 399px) { .embedded .advanced-fields { grid-template-columns: minmax(0, 1fr); } }
 summary { cursor: pointer; font-size: 14px; padding-block: 4px; }
 .advanced-fields { display: grid; gap: 16px; padding-top: 16px; }
 .control { width: 100%; min-width: 0; }

@@ -4,7 +4,7 @@ import { Play, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
-const props = defineProps<{ chat: NativeChat }>()
+const props = defineProps<{ chat: NativeChat; embedded?: boolean }>()
 const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(false), servers = ref<{ id: string; status: string }[]>([])
 const server = ref(''), tool = ref(''), tools = ref<{ name: string; description?: string; inputSchema?: unknown }[]>([]), args = ref('{}'), result = ref(''), busy = ref(false), config = ref('{"mcpServers":{}}')
 let revision = 0
@@ -58,7 +58,7 @@ async function saveConfig() {
 }
 </script>
 <template>
-  <details class="skills-panel"><summary>技能与工具<span v-if="chat.skillIds.length"> · {{ chat.skillIds.length }}</span></summary>
+  <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="chat.skillIds.length"> · {{ chat.skillIds.length }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><input type="checkbox" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span></label></div>
@@ -80,4 +80,6 @@ async function saveConfig() {
 </template>
 <style scoped>
 .skills-panel { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }summary { cursor: pointer; font-size: 14px; }.skills-heading { display: flex; gap: 8px; margin-block: 16px; }.skills-heading input { min-width: 0; width: 100%; }.skill-list { max-height: 320px; overflow-y: auto; }.skill-row { display: flex; align-items: flex-start; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--border); }.skill-row input { margin-top: 4px; }.skill-row > span { min-width: 0; display: grid; gap: 4px; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }.skill-row strong { color: var(--ink); font-size: 14px; font-weight: 500; }.skill-row span span { color: var(--muted); }h3 { font-size: 14px; margin-block: 24px 12px; }.field { margin-block: 16px; }pre { max-height: 320px; overflow: auto; font-size: 12px; background: var(--surface); padding: 12px; }.muted { font-size: 12px; line-height: 20px; }
+.skills-panel.embedded { margin: 0; padding: 0; border: 0; }
+.embedded .skills-heading { margin-top: 0; }
 </style>

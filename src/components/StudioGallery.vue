@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Download, Maximize, Minus, Plus, RefreshCw, RotateCcw, Trash2, X } from '@lucide/vue'
 import { creation, downloadCreation, mediaSource, removeCreationTasks, resumeCreation, type CreationTask } from '../native-studio'
 import { errorMessage, session } from '../state'
-const props = defineProps<{ kind?: string }>()
+const props = defineProps<{ kind?: string; embedded?: boolean }>()
 const emit = defineEmits<{ reuse: [task: CreationTask] }>()
 const view = ref('gallery'), filter = ref('all'), query = ref(''), limit = ref(60), selected = ref<string[]>([]), error = ref(''), busy = ref(false)
 const preview = ref<{ task: CreationTask; index: number }>(), dialog = ref<HTMLDialogElement>(), scale = ref(1), offset = ref({ x: 0, y: 0 })
@@ -27,8 +27,8 @@ async function removeSelected() {
 async function downloadSelected() { await run(async () => { for (const task of items.value.filter(item => selected.value.includes(item.id))) for (let index = 0; index < Math.max(1, task.urls.length); index++) await downloadCreation(task, index) }) }
 </script>
 <template>
-  <details class="studio-gallery">
-    <summary>图库与任务管理</summary>
+  <details class="studio-gallery" :class="{ embedded }" :open="embedded">
+    <summary v-show="!embedded">图库与任务管理</summary>
     <div class="gallery-toolbar">
       <div class="tabs"><button class="tab" :class="{ active: view === 'gallery' }" type="button" @click="view = 'gallery'; filter = 'all'">图库</button><button class="tab" :class="{ active: view === 'tasks' }" type="button" @click="view = 'tasks'; filter = 'all'">任务</button></div>
       <input v-model="query" class="control gallery-search" type="search" aria-label="搜索生成记录" placeholder="搜索提示词或模型" />
@@ -54,6 +54,8 @@ async function downloadSelected() { await run(async () => { for (const task of i
 </template>
 <style scoped>
 .studio-gallery { border-top: 1px solid var(--border); padding-block: 24px; margin-top: 24px; }
+.studio-gallery.embedded { border: 0; padding: 0; margin: 0; }
+.embedded .gallery-toolbar { margin-top: 0; }
 summary { cursor: pointer; font-size: 16px; font-weight: 600; }
 .gallery-toolbar, .batch-toolbar, .item-actions, .item-heading { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .gallery-toolbar { margin-top: 24px; }.gallery-search { flex: 1; min-width: 160px; }.gallery-toolbar select { width: auto; }

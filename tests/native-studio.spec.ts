@@ -224,7 +224,7 @@ test('retired composite owners are discarded instead of being migrated into the 
   })
   await page.reload()
   await expect(page.locator('.history-row')).toHaveCount(0)
-  await expect(page.locator('.creation-canvas')).toContainText('暂无生成结果')
+  await expect(page.locator('.creation-canvas')).toContainText('开始图片创作')
   expect(state.calls.filter(call => call.path === '/api/creation/generate' || call.path.includes('/tasks/'))).toHaveLength(0)
 })
 
