@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Check, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/vue'
-import { api, errorMessage, notify } from '../state'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Check, Image, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/vue'
+import { api, errorMessage, notify, uploadFile } from '../state'
+import { updateSite, type SiteBranding } from '../site'
 
-const props = defineProps<{ view: 'settings' | 'tags' | 'ads' }>()
+const props = defineProps<{ view: 'site' | 'settings' | 'tags' | 'ads' }>()
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
@@ -13,29 +14,88 @@ interface Tag { id: string; category: 'image' | 'video' | 'resource'; name: stri
 interface Ad { id: string; enabled: boolean; title: string; imageUrl: string; linkUrl: string }
 const config = ref<Config | null>(null), tags = ref<Tag[]>([]), ads = ref<Ad[]>([])
 const loading = ref(true), busy = ref(false), error = ref('')
+const branding = ref<SiteBranding | null>(null), version = ref(''), loaded = ref(false), baseline = ref('')
+const uploading = ref(false), logoFailed = ref(false), reloadPrompt = ref(false)
+let active = true
+let logoUpload: AbortController | undefined
+const snapshot = () => JSON.stringify(props.view === 'site' ? branding.value : props.view === 'settings' ? config.value : ads.value)
+const dirty = computed(() => loaded.value && props.view !== 'tags' && snapshot() !== baseline.value)
+const previewLogo = computed(() => /^(?:https:\/\/|\/(?:assets|files|legacy-files)\/)/i.test(branding.value?.logoUrl || '') ? branding.value!.logoUrl : '')
 const category = ref<Tag['category']>('image'), newName = ref(''), editing = ref(''), editName = ref(''), deleting = ref('')
 const categoryNames = { image: '图片', video: '视频', resource: '资源' }
 const uploadNames = { image: '图片', video: '视频', audio: '音频', document: '文档', other: '其他文件' }
 const filteredTags = computed(() => tags.value.filter(tag => tag.category === category.value))
-const title = computed(() => ({ settings: '社区设置', tags: '内容标签', ads: '广告位' })[props.view])
+const title = computed(() => ({ site: '站点设置', settings: '社区设置', tags: '内容标签', ads: '广告位' })[props.view])
+function readVersion(value: { version: string }) {
+  if (!value.version) throw new Error('未能读取配置版本，请刷新后重试。')
+  version.value = value.version
+}
 async function load() {
-  loading.value = true; error.value = ''
+  loading.value = true; error.value = ''; reloadPrompt.value = false
   try {
-    if (props.view === 'settings') config.value = (await api<{ config: Config }>('/api/admin/community/config')).config
-    else if (props.view === 'tags') tags.value = (await api<{ items: Tag[] }>('/api/admin/tags')).items
-    else ads.value = (await api<{ items: Ad[] }>('/api/admin/community/ads')).items
+    if (props.view === 'site') {
+      const result = await api<{ settings: SiteBranding; version: string }>('/api/admin/settings')
+      if (!active) return
+      readVersion(result)
+      branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
+      updateSite(branding.value)
+    } else if (props.view === 'settings') {
+      const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
+      if (!active) return
+      readVersion(result); config.value = result.config
+    } else if (props.view === 'tags') {
+      const result = await api<{ items: Tag[] }>('/api/admin/tags')
+      if (!active) return
+      tags.value = result.items; newName.value = ''; editing.value = ''; deleting.value = ''
+    } else {
+      const result = await api<{ items: Ad[]; version: string }>('/api/admin/community/ads')
+      if (!active) return
+      readVersion(result); ads.value = result.items
+    }
+    loaded.value = true; baseline.value = snapshot()
   } catch (cause) { error.value = errorMessage(cause) }
   finally { loading.value = false }
 }
+function refresh() {
+  if (dirty.value || editing.value || newName.value.trim()) reloadPrompt.value = true
+  else void load()
+}
 async function save() {
-  if (busy.value) return
+  if (busy.value || !loaded.value || !version.value) return
   busy.value = true; error.value = ''
   try {
-    if (props.view === 'settings' && config.value) config.value = (await api<{ config: Config }>('/api/admin/community/config', { method: 'PATCH', body: config.value })).config
-    else if (props.view === 'ads') ads.value = (await api<{ items: Ad[] }>('/api/admin/community/ads', { method: 'PATCH', body: { items: ads.value } })).items
-    notify(props.view === 'ads' ? '广告位已保存。' : '社区设置已保存。')
-  } catch (cause) { error.value = errorMessage(cause) }
+    if (props.view === 'site' && branding.value) {
+      const result = await api<{ settings: SiteBranding; version: string }>('/api/admin/settings', { method: 'PATCH', body: { settings: { brand: branding.value.brand.trim(), logoUrl: branding.value.logoUrl.trim() }, version: version.value } })
+      if (!active) return
+      updateSite(result.settings)
+      readVersion(result); branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
+    } else if (props.view === 'settings' && config.value) {
+      const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...config.value, version: version.value } })
+      if (!active) return
+      readVersion(result); config.value = result.config
+    } else if (props.view === 'ads') {
+      const result = await api<{ items: Ad[]; version: string }>('/api/admin/community/ads', { method: 'PATCH', body: { items: ads.value, version: version.value } })
+      if (!active) return
+      readVersion(result); ads.value = result.items
+    }
+    baseline.value = snapshot(); reloadPrompt.value = false
+    notify(`${title.value}已保存。`)
+  } catch (cause) {
+    error.value = (cause as { status?: number }).status === 409 ? '配置已被其他管理员修改，你的输入仍保留。请先复制需要的内容，再刷新核对最新配置。' : errorMessage(cause)
+  }
   finally { busy.value = false }
+}
+async function uploadLogo(event: Event) {
+  const input = event.target as HTMLInputElement, file = input.files?.[0]
+  if (!file || busy.value || !branding.value) return
+  busy.value = true; uploading.value = true; error.value = ''
+  const controller = new AbortController(); logoUpload = controller
+  try {
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'].includes(file.type)) throw new Error('请选择 JPG、PNG、WebP、GIF 或 AVIF 图片。')
+    const uploaded = await uploadFile(file, controller.signal)
+    if (active && branding.value) branding.value.logoUrl = uploaded.url
+  } catch (cause) { if (active) error.value = errorMessage(cause) }
+  finally { logoUpload = undefined; busy.value = false; uploading.value = false; input.value = '' }
 }
 async function changeTag(action: 'create' | 'rename' | 'delete', tag?: Tag) {
   if (busy.value) return
@@ -57,13 +117,25 @@ async function changeTag(action: 'create' | 'rename' | 'delete', tag?: Tag) {
   finally { busy.value = false }
 }
 onMounted(() => { void load() })
+onBeforeUnmount(() => { active = false; logoUpload?.abort() })
+watch(() => branding.value?.logoUrl, () => { logoFailed.value = false })
 </script>
 
 <template>
   <section class="panel-section admin-community">
-    <div class="section-heading"><h2>{{ title }}</h2><button class="icon-button" :aria-label="`刷新${title}`" :title="`刷新${title}`" :disabled="loading || busy" @click="load"><RefreshCw :size="17" /></button></div>
+    <div class="section-heading"><h2>{{ title }}</h2><button class="icon-button" :aria-label="`刷新${title}`" :title="`刷新${title}`" :disabled="loading || busy" @click="refresh"><RefreshCw :size="17" /></button></div>
     <div v-if="loading" class="admin-loading" role="status" :aria-label="`正在加载${title}`"><div v-for="n in 3" :key="n" class="skeleton" /></div>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <div v-if="reloadPrompt" class="reload-prompt" role="status"><p>重新读取会放弃当前未保存的修改。</p><div class="table-actions"><button class="button btn" :disabled="busy || loading" @click="load">放弃修改并刷新</button><button class="button subtle btn" @click="reloadPrompt = false">继续编辑</button></div></div>
+    <form v-if="view === 'site' && branding && !loading" class="stack site-form" @submit.prevent="save">
+      <p class="form-note">设置社区名称与标识，保存后应用于导航、登录页和页面标题。</p>
+      <fieldset class="fieldset stack" :disabled="busy">
+        <label class="field"><span>站点名称</span><input v-model="branding.brand" class="control" maxlength="80" required /></label>
+        <div class="site-logo-layout"><div class="site-logo-preview"><img v-if="previewLogo && !logoFailed" :src="previewLogo" alt="站点 Logo 预览" referrerpolicy="no-referrer" @error="logoFailed = true" /><span v-else><Image :size="26" /><span>{{ logoFailed ? '图片暂时无法加载' : '未设置 Logo' }}</span></span></div><div class="stack"><label class="field"><span>Logo 图片地址</span><input v-model="branding.logoUrl" class="control" maxlength="2048" placeholder="https:// 或本站图片路径" aria-describedby="site-logo-help" /></label><label class="field"><span>上传 Logo</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" @change="uploadLogo" /></label><button v-if="branding.logoUrl" type="button" class="button subtle btn" @click="branding.logoUrl = ''">移除 Logo</button></div></div>
+        <p id="site-logo-help" class="form-note">支持 HTTPS 图片地址，或上传 JPG、PNG、WebP、GIF、AVIF。上传后请保存；留空时仅显示站点名称。</p>
+        <button class="button primary btn" :disabled="busy"><Save :size="16" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存站点设置' }}</button>
+      </fieldset>
+    </form>
     <form v-if="view === 'settings' && config && !loading" class="stack" @submit.prevent="save">
       <fieldset class="fieldset stack" :disabled="busy">
         <h3 class="config-title">发布与推荐</h3>
@@ -73,7 +145,7 @@ onMounted(() => { void load() })
         <button class="button primary btn" :disabled="busy"><Save :size="16" />{{ busy ? '正在保存…' : '保存社区设置' }}</button>
       </fieldset>
     </form>
-    <template v-if="view === 'tags' && !loading">
+    <template v-if="view === 'tags' && loaded && !loading">
       <div class="tabs" aria-label="标签分类"><button v-for="(label, value) in categoryNames" :key="value" class="tab" :class="{ active: category === value }" :aria-pressed="category === value" :disabled="busy || !!editing" @click="category = value; deleting = ''">{{ label }} · {{ tags.filter(tag => tag.category === value).length }}</button></div>
       <form class="tag-form" @submit.prevent="changeTag('create')"><label class="field"><span>添加{{ categoryNames[category] }}标签</span><input v-model="newName" class="control" maxlength="48" required :disabled="busy || !!editing" /></label><button class="button btn" :disabled="busy || !newName.trim() || !!editing"><Plus :size="16" />添加标签</button></form>
       <div v-if="!filteredTags.length" class="empty-state"><h3>此分类暂无标签</h3></div>
@@ -82,7 +154,7 @@ onMounted(() => { void load() })
         <template v-else><strong>{{ tag.name }}</strong><div v-if="deleting === tag.id" class="table-actions"><span class="caption-5">确认删除？</span><button class="button btn" :disabled="busy" @click="changeTag('delete', tag)">删除</button><button class="button subtle btn" :disabled="busy" @click="deleting = ''">取消</button></div><div v-else class="table-actions"><button class="icon-button" :aria-label="`修改标签 ${tag.name}`" title="修改标签" :disabled="busy || !!editing" @click="editing = tag.id; editName = tag.name"><Pencil :size="16" /></button><button class="icon-button" :aria-label="`删除标签 ${tag.name}`" title="删除标签" :disabled="busy || !!editing" @click="deleting = tag.id"><Trash2 :size="16" /></button></div></template>
       </li></ul>
     </template>
-    <form v-if="view === 'ads' && !loading" class="stack" @submit.prevent="save">
+    <form v-if="view === 'ads' && loaded && !loading" class="stack" @submit.prevent="save">
       <fieldset :disabled="busy" class="fieldset stack">
         <article v-for="(ad, index) in ads" :key="ad.id" class="ad-editor">
           <div class="section-heading"><h3>广告位 {{ index + 1 }}</h3><label class="check-label"><input v-model="ad.enabled" type="checkbox" />启用</label></div>
@@ -91,11 +163,22 @@ onMounted(() => { void load() })
         <button class="button primary btn" :disabled="busy"><Save :size="16" />{{ busy ? '正在保存…' : '保存广告位' }}</button>
       </fieldset>
     </form>
+    <p v-if="dirty && !loading" class="form-note" role="status">有未保存的修改</p>
   </section>
 </template>
 
 <style scoped>
 .admin-community { padding-top: 0; }
+.site-form { max-width: 760px; }
+.site-logo-layout { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: start; gap: 24px; }
+.site-logo-layout .stack { min-width: 0; }
+.site-logo-layout input[type="file"] { max-width: 100%; min-width: 0; font: inherit; }
+.site-logo-layout .button { align-self: start; }
+.site-logo-preview { width: 128px; aspect-ratio: 1; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.site-logo-preview img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
+.site-logo-preview > span { display: grid; justify-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
+.reload-prompt { padding: 16px; margin-bottom: 24px; border: 1px solid var(--border); border-radius: 6px; }
+.reload-prompt .table-actions { flex-wrap: wrap; margin-top: 12px; }
 .fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .fieldset.stack { gap: 20px; }
 .config-title { font-size: 14px; line-height: 20px; font-weight: 600; margin-top: 8px; padding-top: 24px; border-top: 1px solid var(--border); }
@@ -128,7 +211,7 @@ onMounted(() => { void load() })
 .admin-loading .skeleton { height: 40px; max-width: 640px; }
 @media (max-width: 899px) { .upload-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 639px) {
-  .fields, .upload-fields, .ad-layout { grid-template-columns: 1fr; }
+  .fields, .upload-fields, .ad-layout, .site-logo-layout { grid-template-columns: 1fr; }
   .ad-preview { max-width: 160px; }
   .tag-form > .button, .fieldset > .button { width: 100%; }
   .tag-list > li { flex-wrap: wrap; }

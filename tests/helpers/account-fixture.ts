@@ -49,6 +49,10 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
     if (path === '/api/account') return route.fulfill({ json: {
       linked: true, issuer: accountUrl, subject: '17', balance: 12.5, currencySymbol: 'USD', accountUrl, studioReady: true,
     } })
+    if (path === '/api/profile' && request.method() === 'PATCH') {
+      Object.assign(state.user, request.postDataJSON())
+      return route.fulfill({ json: { user: state.user } })
+    }
     if (path === '/api/security/status') return route.fulfill({ json: { external: true, accountUrl } })
     if (path === '/api/security/sessions') return route.fulfill({ json: { items: state.devices } })
     if (path === '/api/security/logins') return route.fulfill({ json: { items: [], nextCursor: null } })

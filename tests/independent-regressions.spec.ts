@@ -29,9 +29,10 @@ async function mockApp(page: Page, authenticated = false) {
     if (!url.pathname.startsWith('/api/')) return route.continue()
     if (request.method() === 'GET') {
       if (url.pathname === '/api/session') return route.fulfill({ json: { user: authenticated ? user : null, csrfToken: 'fixture-csrf' } })
+      if (url.pathname === '/api/site') return route.fulfill({ json: { brand: '章鱼社区', logoUrl: '' } })
       if (url.pathname === '/api/works') return route.fulfill({ json: { items: [work], nextCursor: null } })
       if (url.pathname === `/api/works/${work.id}`) return route.fulfill({ json: { work } })
-      if (['/api/tags', '/api/creators', '/api/announcements', '/api/community/ads', '/api/notifications', `/api/works/${work.id}/comments`].includes(url.pathname)) {
+      if (['/api/tags', '/api/creators', '/api/announcements', '/api/community/ads', '/api/notifications', '/api/messages/threads', `/api/works/${work.id}/comments`].includes(url.pathname)) {
         return route.fulfill({ json: { items: [], nextCursor: null } })
       }
     }
@@ -184,12 +185,12 @@ test('new administrator sections use their real contracts and preserve a refused
     const request = route.request(), pathname = new URL(request.url()).pathname
     if (pathname === '/api/admin/submissions') return route.fulfill({ json: { items: [] } })
     if (pathname === '/api/admin/community/config') {
-      if (request.method() === 'GET') return route.fulfill({ json: { config } })
+      if (request.method() === 'GET') return route.fulfill({ json: { config, version: 'config-v1' } })
       writes.push({ body: request.postDataJSON(), csrf: request.headers()['x-csrf-token'] })
       return route.fulfill({ status: 503, json: { error: '设置服务暂不可用' } })
     }
     if (pathname === '/api/admin/tags') return route.fulfill({ json: { items: [{ id: 'fixture-tag', category: 'image', name: '保留标签' }] } })
-    if (pathname === '/api/admin/community/ads') return route.fulfill({ json: { items: [{ id: 'communityAd1', enabled: false, title: '', imageUrl: '', linkUrl: '' }] } })
+    if (pathname === '/api/admin/community/ads') return route.fulfill({ json: { items: [{ id: 'communityAd1', enabled: false, title: '', imageUrl: '', linkUrl: '' }], version: 'ads-v1' } })
     if (pathname === '/api/admin/users') return route.fulfill({ json: { items: [{ ...user, isSuspended: false, isProtected: true, violationCount: 0, violationBaseline: 0 }], nextCursor: null } })
     if (pathname === '/api/admin/reports') return route.fulfill({ json: { items: [], nextCursor: null } })
     return route.fallback()

@@ -38,6 +38,48 @@ describe('real API state', () => {
     await Promise.all([loadSession(), loadSession()])
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+  it('preserves the last identity on temporary session failure but clears a confirmed expired session', async () => {
+    const { session, loadSession } = await import('./state')
+    session.user = { ...user }
+    fetchMock.mockResolvedValueOnce(response({ message: 'Temporary outage' }, 503))
+    await loadSession(true)
+    expect(session.user).toEqual(user)
+    expect(session.error).toBe('Temporary outage')
+    fetchMock.mockResolvedValueOnce(response({ message: 'Session expired' }, 401))
+    await loadSession(true)
+    expect(session.user).toBeNull()
+  })
+  it('does not retain the old identity when a confirmed sign-out is followed by a sync failure', async () => {
+    const { session, loadSession } = await import('./state')
+    session.user = { ...user }
+    fetchMock.mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockResolvedValueOnce(response({ message: 'Sync unavailable' }, 503))
+    await loadSession(true)
+    expect(session.user).toBeNull()
+  })
+  it('never uploads into another account after waiting for upload limits', async () => {
+    let resolve!: (value: Response) => void
+    fetchMock.mockReturnValue(new Promise<Response>(done => { resolve = done }))
+    const { session, uploadFile } = await import('./state')
+    session.user = { ...user }
+    const pending = uploadFile(new File(['image'], 'picture.png', { type: 'image/png' }))
+    session.user = { ...user, id: 'otherUser' }
+    resolve(response({ imagesMb: 20, maxFileSizeMb: 20 }))
+    await expect(pending).rejects.toThrow('账号已变化')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('does not begin a cancelled upload when its delayed limit read resolves', async () => {
+    let resolve!: (value: Response) => void
+    fetchMock.mockReturnValue(new Promise<Response>(done => { resolve = done }))
+    const { session, uploadFile } = await import('./state')
+    session.user = { ...user }
+    const controller = new AbortController()
+    const pending = uploadFile(new File(['image'], 'picture.png', { type: 'image/png' }), controller.signal)
+    controller.abort()
+    resolve(response({ imagesMb: 20, maxFileSizeMb: 20 }))
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
   it('adds JSON and CSRF headers to mutations without exposing a token in the body', async () => {
     fetchMock.mockResolvedValue(response({ work: makeWork() }))
     const { session, api } = await import('./state')
@@ -66,6 +108,17 @@ describe('real API state', () => {
     const { api } = await import('./state')
     await expect(api('/api/lottery/draw', { method: 'POST', body: { requestId: 'same-id', count: 1 } })).rejects.toThrow('网络')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('ignores a previous account request returning 401 after a background identity change', async () => {
+    let resolve!: (value: Response) => void
+    fetchMock.mockReturnValue(new Promise<Response>(done => { resolve = done }))
+    const { session, api } = await import('./state')
+    session.user = { ...user }
+    const pending = api('/api/profile', { method: 'PATCH', body: { name: 'Saved' } })
+    session.user = { ...user, id: 'newAccount' }
+    resolve(response({ message: 'Expired', code: 'AUTH_REQUIRED' }, 401))
+    await expect(pending).rejects.toThrow('Expired')
+    expect(session.user?.id).toBe('newAccount')
   })
   it('does not change likes or claim success when the server refuses a mutation', async () => {
     fetchMock.mockResolvedValue(response({ message: 'Not allowed' }, 403))

@@ -32,7 +32,7 @@ export async function api<T>(path: string, options: {
   expectedAccount?: string
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
-  const version = sessionVersion
+  const version = sessionVersion, owner = session.user?.id
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (options.expectedAccount) headers['X-New-Api-User'] = options.expectedAccount
   const multipart = options.body instanceof FormData
@@ -55,7 +55,7 @@ export async function api<T>(path: string, options: {
   if (!response.ok) {
     const payload = result as { message?: string; code?: string; error?: string | { message?: string; code?: string } } | null
     const code = typeof payload?.error === 'object' ? payload.error?.code || payload.code : payload?.code
-    if (version === sessionVersion && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
+    if (version === sessionVersion && owner === session.user?.id && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
     const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message
     throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code, status: response.status })
   }
@@ -75,12 +75,17 @@ export async function getUploadLimits(): Promise<UploadLimits> {
   return value
 }
 export async function uploadFile(file: File, signal?: AbortSignal): Promise<WorkFile & { size: number }> {
+  const owner = session.user?.id, version = sessionVersion
   const limits = await getUploadLimits()
+  signal?.throwIfAborted()
+  if (owner !== session.user?.id || version !== sessionVersion) throw new Error('账号已变化，请重新选择文件。')
   const mb = file.type.startsWith('image/') ? limits.imagesMb : file.type.startsWith('video/') ? limits.videosMb : limits.filesMb
   if (!file.size || file.size > mb * 1024 * 1024) throw new Error(`请选择非空文件，大小不超过 ${mb} MB。`)
   const body = new FormData()
   body.append('file', file, file.name)
-  return (await api<{ file: WorkFile & { size: number } }>('/api/uploads', { method: 'POST', body, signal })).file
+  const result = await api<{ file: WorkFile & { size: number } }>('/api/uploads', { method: 'POST', body, signal })
+  if (owner !== session.user?.id || version !== sessionVersion) throw new Error('账号已变化，请重新选择文件。')
+  return result.file
 }
 
 export function safeExternalUrl(value?: string) {
@@ -167,6 +172,7 @@ export async function loadSession(force = false) {
       if (version !== sessionVersion) return
       session.csrfToken = result.csrfToken || ''
       session.accountUrl = result.accountUrl || session.accountUrl
+      if (!result.user) session.user = null
       if (!result.user && result.authentication === 'zhangyu' && automaticAccountSync) {
         try {
           await syncAccountSession(undefined, controller.signal)
@@ -182,7 +188,7 @@ export async function loadSession(force = false) {
       session.csrfToken = result.csrfToken || ''
     } catch (error) {
       if (version !== sessionVersion) return
-      session.user = null
+      if ((error as { status?: number }).status === 401) session.user = null
       session.error = errorMessage(error)
     } finally {
       if (version === sessionVersion) {

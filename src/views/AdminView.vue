@@ -17,10 +17,10 @@ const reason = ref('')
 const selected = ref<Work | null>(null)
 const action = ref<'approve' | 'reject' | 'remove'>('approve')
 const recordViolation = ref(false)
-const tab = ref<'review' | 'lottery' | 'settings' | 'tags' | 'ads' | 'users' | 'reports'>('review')
+const tab = ref<'review' | 'lottery' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports'>('review')
 const adminTabs = computed(() => [
   { id: 'review' as const, label: '作品审核' },
-  ...(session.user?.isAdmin ? [{ id: 'lottery' as const, label: '抽奖管理' }, { id: 'settings' as const, label: '社区设置' }, { id: 'tags' as const, label: '内容标签' }, { id: 'ads' as const, label: '广告位' }, { id: 'users' as const, label: '用户管理' }] : []),
+  ...(session.user?.isAdmin ? [{ id: 'lottery' as const, label: '抽奖管理' }, { id: 'site' as const, label: '站点设置' }, { id: 'settings' as const, label: '社区设置' }, { id: 'tags' as const, label: '内容标签' }, { id: 'ads' as const, label: '广告位' }, { id: 'users' as const, label: '用户管理' }] : []),
   { id: 'reports' as const, label: '举报处理' },
 ])
 const reviewDialog = ref<HTMLDialogElement>()
@@ -72,7 +72,7 @@ async function review() {
       <nav class="settings-nav admin-nav" aria-label="管理分类"><button v-for="item in adminTabs" :key="item.id" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></nav>
       <div class="admin-content">
       <AdminLottery v-if="tab === 'lottery' && session.user?.isAdmin" />
-      <AdminCommunity v-else-if="(tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="tab" :view="tab" />
+      <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="tab" :view="tab" />
       <AdminPeople v-else-if="tab === 'reports' || (tab === 'users' && session.user?.isAdmin)" :key="tab" :view="tab" />
       <section v-else class="panel-section review-section">
         <div class="section-heading"><div class="review-title"><h2>作品审核</h2><span class="caption-5">{{ pending }} 件待审核</span></div><button class="button subtle btn" @click="load">刷新</button></div>

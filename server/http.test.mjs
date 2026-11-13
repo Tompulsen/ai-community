@@ -166,6 +166,29 @@ test('static assets and SPA routes preserve HEAD and never expose paths outside 
   }
 })
 
+test('pages and static assets remain available during an account-store outage without weakening API or media checks', async t => {
+  const { app, redis, queries } = await fixture(t)
+  let reads = 0
+  t.mock.method(redis, 'get', async () => { reads++; throw new Error('account store unavailable') })
+  t.mock.method(console, 'error', () => {})
+  const headers = { cookie: `community_session=${'a'.repeat(43)}` }
+  for (const url of ['/account', '/discover', '/assets/app.js']) {
+    for (const method of ['GET', 'HEAD']) {
+      const result = await app.inject({ method, url, headers })
+      assert.equal(result.statusCode, 200, `${method} ${url}`)
+      if (method === 'HEAD') assert.equal(result.payload, '')
+    }
+  }
+  assert.equal(reads, 0, 'serving static content must not read account sessions')
+  assert.equal(queries.length, 0)
+  for (const url of ['/api/library', '/api/admin/settings', '/legacy-files/file1', '/files/original-key']) {
+    const result = await app.inject({ method: 'GET', url, headers })
+    assertJsonError(result, 500)
+  }
+  assert.equal(reads, 4, 'private APIs and media still verify the caller')
+  assert.equal(queries.length, 0, 'an unavailable session must not fall through to content access')
+})
+
 test('account page policy permits Turnstile without allowing arbitrary scripts or frames', async t => {
   const { app } = await fixture(t)
   for (const method of ['GET', 'HEAD']) {

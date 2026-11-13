@@ -7,6 +7,7 @@ import BackgroundStudio from './components/BackgroundStudio.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
+import { loadSite, site } from './site'
 
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
@@ -35,6 +36,7 @@ function refreshActiveIdentity() {
 }
 onMounted(() => {
   rememberLotteryInvite(route.query.invite); void loadSession()
+  void loadSite()
   window.addEventListener('focus', refreshActiveIdentity)
   window.addEventListener('pageshow', refreshActiveIdentity)
   document.addEventListener('visibilitychange', refreshActiveIdentity)
@@ -46,6 +48,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', refreshActiveIdentity)
 })
 watch(() => route.fullPath, () => document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false }))
+watch([() => route.meta.title, () => site.brand], () => { document.title = `${String(route.meta.title || '首页')} · ${site.brand}` }, { immediate: true })
 watch(() => session.user?.id, id => {
   clearInterval(poll)
   if (messageMenu.value) messageMenu.value.open = false
@@ -99,7 +102,7 @@ function dismissMenus(event: Event) {
   <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
-      <RouterLink to="/discover" class="brand" aria-label="章鱼社区首页"><img class="brand-mark" src="/assets/brand/octopus-community.jpg" width="32" height="32" alt="" /><span>章鱼社区</span></RouterLink>
+      <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
       <div class="header-tools"><div id="header-search" class="header-search-slot" />
       <div class="header-actions"><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
@@ -119,7 +122,7 @@ function dismissMenus(event: Event) {
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
-    <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>章鱼社区</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
+    <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
     <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
     <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
@@ -130,7 +133,9 @@ function dismissMenus(event: Event) {
 .studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
 .studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 32px; }
-.brand { justify-self: start; }
+.brand { justify-self: start; min-width: 0; max-width: min(280px, 100%); }
+.brand > span { overflow: hidden; text-overflow: ellipsis; }
+.app-footer > span { min-width: 0; overflow-wrap: anywhere; }
 .desktop-nav { align-items: center; justify-self: center; gap: 24px; }
 .header-tools { display: flex; align-items: center; justify-self: end; min-width: 0; gap: 8px; }
 .header-actions { margin-left: 0; gap: 8px; }

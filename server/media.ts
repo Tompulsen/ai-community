@@ -172,6 +172,7 @@ export async function uploadMedia(ctx: RequestContext) {
   await mkdir(root, { recursive: true });
   const accessKey = randomBytes(24).toString('hex'), target = resolve(root, accessKey);
   let size = 0, name = '', requested = 'application/octet-stream', wrote = false;
+  let commitAttempted = false, fileId: string | undefined;
   const checksum = createHash('md5');
   const consume = async (stream: Readable) => {
     const counter = new Transform({
@@ -211,9 +212,11 @@ export async function uploadMedia(ctx: RequestContext) {
     if (size > limit) throw httpError(413, `文件超过当前分类限额（${limit / MiB} MiB）。`);
     if (!policy.mimeTypes.some(pattern => pattern === '*/*' || pattern === type || pattern.endsWith('/*') && type.startsWith(pattern.slice(0, -1)))) throw httpError(400, '当前角色不允许上传此文件类型。');
     const id = ctx.newId(), url = new URL(`/legacy-files/${id}`, ctx.config.url).href;
+    fileId = id;
     const processing = type.startsWith('image/') || type.startsWith('video/') || type === 'application/ogg';
     const properties: Values = processing ? { communityMedia: { version: 1, state: 'pending', attempts: 0, updatedAt: Date.now() } } : {};
     const client = await ctx.db.connect();
+    let discardClient = false;
     try {
       await client.query('BEGIN');
       const owner = await client.query('SELECT id FROM "user" WHERE id=$1 AND NOT "isDeleted" AND NOT "isSuspended" FOR UPDATE', [actor.id]);
@@ -222,11 +225,18 @@ export async function uploadMedia(ctx: RequestContext) {
       if (Number(used?.size ?? 0) + size > policy.capacity) throw httpError(413, '文件空间已不足。');
       await client.query(`INSERT INTO drive_file (id,"userId",md5,name,type,size,"storedInternal",url,"accessKey",properties)
         VALUES ($1,$2,$3,$4,$5,$6,true,$7,$8,$9)`, [id, actor.id, checksum.digest('hex'), name, type, size, url, accessKey, properties]);
+      commitAttempted = true;
       await client.query('COMMIT');
-    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    } catch (error) {
+      discardClient = commitAttempted;
+      try { await client.query('ROLLBACK'); } catch { discardClient = true; }
+      throw error;
+    } finally { client.release(discardClient); }
     return fileDto({ id, name, type, size, url, thumbnailAccessKey: null, properties });
   } catch (error) {
-    if (wrote) await unlink(target).catch(() => {});
+    // A lost commit response does not prove the file is unreferenced.
+    if (commitAttempted) console.error(JSON.stringify({ code: 'UPLOAD_COMMIT_UNCERTAIN', fileId, storageKeys: [accessKey] }));
+    else if (wrote) await unlink(target).catch(() => {});
     throw error;
   }
 }
@@ -259,6 +269,7 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
   const thumbnail = resolve(root, thumb), webpublic = resolve(root, web);
   const temporary = `${thumbnail}.part`, webTemporary = `${webpublic}.part`;
   let webType: string | null = null;
+  let publishAttempted = false;
   const extra: Values = {};
   try {
     if (file.type.startsWith('image/')) {
@@ -275,17 +286,20 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
     const preview = await sharp(await readFile(temporary)).metadata();
     if (preview.width && preview.height) extra.previewAspectRatio = preview.width / preview.height;
     await rename(temporary, thumbnail);
+    publishAttempted = true;
     const updated = await db.query(`UPDATE drive_file SET "thumbnailAccessKey"=$2,"thumbnailUrl"=$3,
       "webpublicAccessKey"=$4,"webpublicUrl"=$5,"webpublicType"=$6,
       properties=jsonb_set(COALESCE(properties,'{}')||$7::jsonb,'{communityMedia}',(properties->'communityMedia')||jsonb_build_object('state','ready','updatedAt',$8::bigint))
       WHERE id=$1 AND properties->'communityMedia'->>'lease'=$9 RETURNING id`,
     [file.id, thumb, `${file.url}?variant=thumbnail`, webType ? web : null, webType ? `${file.url}?variant=webpublic` : null, webType, extra, Date.now(), file.lease]);
     if (!updated.rowCount) {
+      publishAttempted = false;
       await unlink(thumbnail).catch(() => {});
       if (webType) await unlink(webpublic).catch(() => {});
     }
   } catch (error) {
-    await Promise.all([temporary, webTemporary, thumbnail, webpublic].map(path => unlink(path).catch(() => {})));
+    await Promise.all([temporary, webTemporary, ...(!publishAttempted ? [thumbnail, webpublic] : [])].map(path => unlink(path).catch(() => {})));
+    if (publishAttempted) console.error(JSON.stringify({ code: 'MEDIA_PUBLISH_UNCERTAIN', fileId: file.id, storageKeys: [thumb, ...(webType ? [web] : [])] }));
     throw error;
   }
 }
@@ -316,7 +330,8 @@ export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: s
       try { await processFile(db, root, file); } catch {
         const attempts = record(file.properties?.communityMedia) ? Number(file.properties.communityMedia.attempts ?? 1) : 1;
         await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityMedia}',(properties->'communityMedia')||jsonb_build_object(
-          'state','failed','updatedAt',$2::bigint,'retryAt',$3::bigint,'error','Media processing failed')) WHERE id=$1 AND properties->'communityMedia'->>'lease'=$4`,
+          'state','failed','updatedAt',$2::bigint,'retryAt',$3::bigint,'error','Media processing failed')) WHERE id=$1 AND properties->'communityMedia'->>'lease'=$4
+          AND properties->'communityMedia'->>'state'='processing'`,
         [file.id, Date.now(), Date.now() + attempts * 30000, lease]);
       }
     }

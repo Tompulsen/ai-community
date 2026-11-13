@@ -8,7 +8,7 @@ COPY src ./src
 COPY public ./public
 COPY server ./server
 COPY shared ./shared
-RUN npm run build
+RUN npm test && npm run test:server && npm run build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app

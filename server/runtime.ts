@@ -30,7 +30,6 @@ export { compareStreamIds } from './social.ts'
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.mp4': 'video/mp4', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' }
 const bodyLimit = 28 * 1024 * 1024
-const nativeAccountPath = (pathname: string) => /^\/(?:studio\/)?api\/new-api\//.test(pathname)
 const objectBody = { type: 'object', additionalProperties: true } as const
 
 export function requireSameOrigin(req: Pick<IncomingMessage, 'method' | 'headers'>, origin: string, allowMultipart = false) {
@@ -82,9 +81,8 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     try { url = new URL(request.raw.url || '/', origin) } catch { throw httpError(400, '地址格式无效。') }
     if (url.pathname !== '/healthz') requireSameOrigin(request.raw, origin, url.pathname === '/api/uploads' && request.method === 'POST')
   })
-  app.addHook('preHandler', async (request, reply) => {
+  const authenticateRequest = async (request: FastifyRequest, reply: FastifyReply) => {
     const url = new URL(request.raw.url || '/', origin)
-    if (url.pathname === '/healthz' || nativeAccountPath(url.pathname)) return
     const identity = await auth.authenticate(request.raw)
     const requireUser = () => {
       if (!identity.user) throw httpError(401, '请先登录。', 'AUTH_REQUIRED')
@@ -109,7 +107,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
         return user
       },
     })
-  })
+  }
   app.setErrorHandler((error, request, reply) => {
     const failure = error as Error & { status?: number; statusCode?: number; code?: string; validation?: unknown }
     const status = failure.code === '23505' ? 409 : failure.statusCode || failure.status || 500
@@ -128,7 +126,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   const register = (handler: ModuleHandler, groups: RouteGroup[]) => {
     for (const [methods, urls] of groups) for (const method of Array.isArray(methods) ? methods : [methods]) for (const url of urls) {
       app.route({
-        method, url,
+        method, url, preHandler: authenticateRequest,
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
           const ctx = contexts.get(request)

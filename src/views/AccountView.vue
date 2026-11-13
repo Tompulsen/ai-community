@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, Save, UserRound, Wallet, ArrowUpRight, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, Image, Save, UserRound, Wallet, ArrowUpRight, ShieldCheck } from '@lucide/vue'
+import type { SessionUser } from '../data'
+import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, session, uploadFile, type AccountStatus } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import PasswordRecovery from '../components/PasswordRecovery.vue'
@@ -34,11 +36,26 @@ const recoveryUrl = computed(() => accountCenterUrl('forgot-password'))
 let active = true
 const saved = ref(false)
 const account = ref<Account | null>(null)
-watch(() => session.user, user => {
+const uploading = ref<'avatar' | 'banner' | null>(null)
+const baseline = ref(JSON.stringify(['', '', null, null]))
+let profileOwner: string | undefined, profileOperation = 0
+let profileUpload: AbortController | undefined
+const profileValue = () => JSON.stringify([name.value, bio.value, avatarId.value, bannerId.value])
+const dirty = computed(() => profileValue() !== baseline.value)
+function restoreProfile(user: SessionUser | null) {
   name.value = user?.name || user?.username || ''; bio.value = user?.bio || ''
   avatarId.value = user?.avatarId || null; bannerId.value = user?.bannerId || null
   avatarUrl.value = user?.avatarUrl || ''; bannerUrl.value = user?.bannerUrl || ''
-}, { immediate: true })
+  baseline.value = profileValue()
+}
+watch(() => session.user, user => {
+  if (user?.id !== profileOwner) {
+    profileUpload?.abort(); profileUpload = undefined
+    profileOwner = user?.id; profileOperation++
+    account.value = null; saved.value = false; error.value = ''; busy.value = false; uploading.value = null
+    restoreProfile(user)
+  } else if (!busy.value && !dirty.value) restoreProfile(user)
+}, { immediate: true, flush: 'sync' })
 watch(() => route.query.tab, value => { tab.value = value === 'balance' ? 'balance' : value === 'security' ? 'security' : 'profile' })
 watch(() => session.user?.id, (id, previous) => {
   if (!id && previous && active && !statusReady.value) void loadStatus()
@@ -83,7 +100,7 @@ onMounted(async () => {
     else await loadStatus()
   } catch (cause) { error.value = errorMessage(cause) }
 })
-onBeforeUnmount(() => { active = false; window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
+onBeforeUnmount(() => { active = false; profileOperation++; profileUpload?.abort(); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
 async function signIn() {
   if (busy.value) return
   busy.value = true
@@ -111,39 +128,51 @@ function restartLogin() {
   challengeToken.value = ''; challengeVersion.value++
 }
 async function saveProfile() {
-  if (busy.value || !name.value.trim()) return
+  if (busy.value || !session.user || !name.value.trim()) return
+  const owner = session.user.id, operation = ++profileOperation
+  const current = () => active && operation === profileOperation && session.user?.id === owner
   busy.value = true
   saved.value = false
   error.value = ''
   try {
-    await api('/api/profile', { method: 'PATCH', body: { name: name.value.trim(), bio: bio.value.trim(), avatarId: avatarId.value, bannerId: bannerId.value } })
+    const result = await api<{ user: SessionUser }>('/api/profile', { method: 'PATCH', body: { name: name.value.trim(), bio: bio.value.trim(), avatarId: avatarId.value, bannerId: bannerId.value } })
+    if (!current()) return
     await loadSession(true)
+    if (!current()) return
+    const updated = result.user
+    session.user = { ...session.user!, name: updated.name, bio: updated.bio, avatarId: updated.avatarId, bannerId: updated.bannerId, avatarUrl: updated.avatarUrl, bannerUrl: updated.bannerUrl }
+    restoreProfile(session.user)
     saved.value = true
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { busy.value = false }
+  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  finally { if (current()) busy.value = false }
 }
 async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
   const input = event.target as HTMLInputElement, file = input.files?.[0]
-  if (!file || busy.value) return
-  busy.value = true; error.value = ''; saved.value = false
+  if (!file || busy.value || !session.user) return
+  const owner = session.user.id, operation = ++profileOperation
+  const current = () => active && operation === profileOperation && session.user?.id === owner
+  busy.value = true; uploading.value = field; error.value = ''; saved.value = false
+  const controller = new AbortController(); profileUpload = controller
   try {
     if (!file.type.startsWith('image/')) throw new Error('请选择图片。')
-    const uploaded = await uploadFile(file)
+    const uploaded = await uploadFile(file, controller.signal)
+    if (!current()) return
     if (field === 'avatar') { avatarId.value = uploaded.id; avatarUrl.value = uploaded.url }
     else { bannerId.value = uploaded.id; bannerUrl.value = uploaded.url }
-  } catch (cause) { error.value = errorMessage(cause) } finally { busy.value = false; input.value = '' }
+  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  finally { if (profileUpload === controller) profileUpload = undefined; if (current()) { busy.value = false; uploading.value = null }; input.value = '' }
 }
 </script>
 
 <template>
   <div :class="session.user ? 'page-container settings-page' : 'auth-page'">
     <aside v-if="!session.user" class="auth-visual">
-      <RouterLink to="/discover" class="auth-brand" aria-label="章鱼社区首页"><img class="auth-brand-mark" src="/assets/brand/octopus-community.jpg" width="36" height="36" alt="" /><span>章鱼社区</span></RouterLink>
+      <RouterLink to="/discover" class="auth-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <LoginCharacters :is-typing="isTyping" :show-password="showPassword" :password-length="password.length" />
       <div class="auth-visual-footer"><RouterLink to="/discover">发现作品</RouterLink><RouterLink to="/community?tab=announcements">社区公告</RouterLink></div>
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
-    <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" aria-label="章鱼社区首页"><img class="auth-brand-mark" src="/assets/brand/octopus-community.jpg" width="36" height="36" alt="" /><span>章鱼社区</span></RouterLink>
+    <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
     <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId" class="account-identity" aria-label="章鱼账号">账号ID:{{ session.user.accountId }} @{{ session.user.username }}</span></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
@@ -172,10 +201,10 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     <div v-else class="split-layout"><nav class="settings-nav account-tabs" aria-label="账户设置"><button class="tab" :class="{ active: tab === 'profile' }" :aria-pressed="tab === 'profile'" @click="tab = 'profile'"><UserRound :size="17" />个人资料</button><button class="tab" :class="{ active: tab === 'balance' }" :aria-pressed="tab === 'balance'" @click="tab = 'balance'"><Wallet :size="17" />账户与余额</button><button class="tab" :class="{ active: tab === 'security' }" :aria-pressed="tab === 'security'" @click="tab = 'security'"><ShieldCheck :size="17" />账号安全</button></nav><div class="settings-main">
       <template v-if="tab === 'profile'"><section class="panel-section profile-section"><div class="section-heading"><h2>个人资料</h2></div><form class="stack profile-form" @submit.prevent="saveProfile">
         <div class="profile-images">
-          <label class="field"><span>头像</span><img v-if="avatarUrl" :src="avatarUrl" alt="当前头像" class="profile-avatar" /><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" /><button v-if="avatarId" type="button" class="button subtle btn" :disabled="busy" @click="avatarId = null; avatarUrl = ''; saved = false">移除头像</button></label>
-          <label class="field"><span>主页封面</span><img v-if="bannerUrl" :src="bannerUrl" alt="当前主页封面" class="profile-banner" /><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" /><button v-if="bannerId" type="button" class="button subtle btn" :disabled="busy" @click="bannerId = null; bannerUrl = ''; saved = false">移除封面</button></label>
+          <div class="field"><label for="profile-avatar">头像</label><img v-if="avatarUrl" :src="avatarUrl" alt="当前头像" class="profile-avatar" /><div v-else class="profile-avatar profile-placeholder" aria-label="尚未设置头像"><UserRound :size="28" /></div><input id="profile-avatar" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" /><button v-if="avatarId" type="button" class="button subtle btn" :disabled="busy" @click="avatarId = null; avatarUrl = ''; saved = false">移除头像</button></div>
+          <div class="field"><label for="profile-banner">主页封面</label><img v-if="bannerUrl" :src="bannerUrl" alt="当前主页封面" class="profile-banner" /><div v-else class="profile-banner profile-placeholder"><Image :size="24" /><span>尚未设置封面</span></div><input id="profile-banner" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" /><button v-if="bannerId" type="button" class="button subtle btn" :disabled="busy" @click="bannerId = null; bannerUrl = ''; saved = false">移除封面</button></div>
         </div>
-        <label class="field"><span>显示名称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label><label class="field"><span>个人简介</span><textarea v-model="bio" class="control" rows="4" maxlength="1500" :disabled="busy" @input="saved = false" /></label><div class="section-heading"><button class="button primary btn" :disabled="busy"><Save :size="16" />{{ busy ? '正在保存…' : '保存资料' }}</button><span v-if="saved" class="form-note" role="status"><Check :size="14" />资料已保存</span></div></form></section><section class="panel-section"><RouterLink to="/library" class="button subtle btn">管理我的作品<ArrowUpRight :size="15" /></RouterLink></section></template>
+        <label class="field"><span>显示名称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label><label class="field"><span>个人简介</span><textarea v-model="bio" class="control" rows="4" maxlength="1500" :disabled="busy" @input="saved = false" /></label><div class="section-heading"><button class="button primary btn" :disabled="busy"><Save :size="16" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存资料' }}</button><span class="form-note" role="status"><template v-if="uploading">正在上传{{ uploading === 'avatar' ? '头像' : '封面' }}…</template><template v-else-if="saved"><Check :size="14" />资料已保存</template><template v-else-if="dirty">有未保存的修改</template></span></div></form></section><section class="panel-section"><RouterLink to="/library" class="button subtle btn">管理我的作品<ArrowUpRight :size="15" /></RouterLink></section></template>
       <AccountSecurity v-else-if="tab === 'security'" />
       <template v-else><section class="panel-section"><div class="section-heading"><h2>章鱼账号</h2><span class="status" :class="{ pending: !account?.linked }">{{ account?.linked ? '已登录' : '需要重新登录' }}</span></div><dl v-if="account?.linked" class="info-list"><div><dt>账号ID</dt><dd>{{ account.subject }}</dd></div><div><dt>账号服务</dt><dd>{{ account.issuer }}</dd></div></dl><p v-else class="muted">请退出当前会话后，使用章鱼账号重新登录。</p></section><section class="panel-section"><div class="section-heading"><h2>账户余额</h2><Wallet :size="18" /></div><p class="account-balance">{{ account?.balance != null ? `${account.balance.toFixed(2)} ${account.currency || 'USD'}` : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><a v-if="centerUrl" :href="centerUrl" class="button btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></section></template>
     </div></div>
@@ -199,6 +228,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .profile-images input { max-width: 100%; min-width: 0; font: inherit; }
 .profile-avatar { width: 80px; height: 80px; object-fit: cover; border-radius: 50%; border: 1px solid var(--border); }
 .profile-banner { width: 100%; max-height: 144px; aspect-ratio: 3 / 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.profile-placeholder { display: flex; align-items: center; justify-content: center; gap: 12px; background: var(--surface); color: var(--muted); font-size: 12px; }
 .settings-main:has(.account-balance) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; }
 .settings-main:has(.account-balance) > .panel-section { padding-top: 0; border: 0; }
 .settings-main:has(.account-balance) > .panel-section + .panel-section { padding-left: 32px; border-left: 1px solid var(--border); }
@@ -207,8 +237,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .settings-main .info-list dd { overflow-wrap: anywhere; min-width: 0; }
 .auth-page { --canvas: #fff; --surface: #fff; --surface-soft: #f8fafc; --ink: #101828; --muted: #667085; --border: #e4e7ec; --blue: #3f51b5; --blue-hover: #34449b; --blue-soft: #eef0fb; --action: var(--blue); --action-ink: #fff; --bg: #fff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100svh; background: #fff; color: var(--ink); color-scheme: light; }
 .auth-visual { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; min-width: 0; gap: 40px; padding: 48px; overflow: hidden; background: linear-gradient(135deg, #87909f, #6b7280 50%, #4b5563); color: #fff; }
-.auth-brand { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; font-size: 20px; font-weight: 700; line-height: 28px; }
-.auth-brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: #ffffff1a; }
+.auth-brand { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; max-width: 100%; font-size: 20px; font-weight: 700; line-height: 28px; }
+.auth-brand > span { min-width: 0; overflow-wrap: anywhere; }
+.auth-brand-mark { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: #ffffff1a; }
 .auth-visual > :deep(.login-characters) { align-self: center; margin-block: 40px; }
 .auth-visual-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 32px; font-size: 12px; }
 .auth-visual-footer a { display: inline-flex; align-items: center; min-height: 44px; }

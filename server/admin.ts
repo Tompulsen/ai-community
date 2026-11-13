@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import { httpError, roleCondition } from './auth.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
-import { readSiteSettings, validateSiteSettings } from './settings.ts'
+import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './settings.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
@@ -33,6 +33,9 @@ const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
 const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+function checkVersion(body: Body, current: unknown, required = false) {
+  if ((required || Object.hasOwn(body, 'version')) && body.version !== fingerprint(current)) fail('设置已变化，请刷新后重新核对。', 409)
+}
 function record(value: unknown): value is Body { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function fail(message: string, status = 400): never { throw httpError(status, message) }
 function keys(body: Body, allowed: readonly string[]) {
@@ -74,7 +77,12 @@ async function audit(ctx: RequestContext, db: Queryable, type: string, info: Bod
   await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4::jsonb)', [ctx.newId(), ctx.requireUser().id, type, JSON.stringify(info)])
 }
 function publicConfig(options: Body) {
-  const uploadLimits = Object.fromEntries(uploadKinds.map(kind => [kind, record(options.uploadLimits) && Number.isInteger(options.uploadLimits[kind]) && Number(options.uploadLimits[kind]) >= 1 && Number(options.uploadLimits[kind]) <= 10240 ? Number(options.uploadLimits[kind]) : 20]))
+  const currentLimits = record(options.uploadLimits) ? options.uploadLimits : {}
+  const legacyLimits = record(options.communityUploadLimits) ? options.communityUploadLimits : {}
+  const uploadLimits = Object.fromEntries(uploadKinds.map(kind => {
+    const value = currentLimits[kind] ?? legacyLimits[kind === 'document' ? 'resource' : kind]
+    return [kind, typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 10240 ? value : 20]
+  }))
   return {
     communityPublicationMode: options.communityPublicationMode === 'after' ? 'after' : 'before',
     communityAutoBanEnabled: options.communityAutoBanEnabled !== false,
@@ -101,27 +109,32 @@ export function validateCommunityConfig(input: Body): Body {
   return next
 }
 async function config(ctx: RequestContext) {
-  if (ctx.req.method === 'GET') return { config: publicConfig((await meta(ctx.db)).clientOptions) }
-  const patch = validateCommunityConfig(ctx.body)
+  if (ctx.req.method === 'GET') { const config = publicConfig((await meta(ctx.db)).clientOptions); return { config, version: fingerprint(config) } }
+  const { version: _version, ...input } = ctx.body
+  const patch = validateCommunityConfig(input)
   return transaction(ctx.db, async db => {
     const row = await meta(db, true)
+    checkVersion(ctx.body, publicConfig(row.clientOptions))
     await db.query('UPDATE meta SET "clientOptions"=COALESCE("clientOptions",\'{}\'::jsonb)||$2::jsonb WHERE id=$1', [row.id, JSON.stringify(patch)])
     await audit(ctx, db, 'updateCommunityConfig', { config: patch })
-    return { config: publicConfig({ ...row.clientOptions, ...patch }) }
+    const config = publicConfig({ ...row.clientOptions, ...patch })
+    return { config, version: fingerprint(config) }
+  })
+}
+function adItems(options: Body, url: string) {
+  return communityAdKeys.map(id => {
+    const value = options[id]
+    const valid = record(value) ? normalizeCommunityAd(value as unknown as CommunityAd, url) : null
+    return { id, ...(valid ?? { enabled: false, title: '', imageUrl: '', linkUrl: '' }) }
   })
 }
 async function readAds(ctx: RequestContext, publicOnly: boolean) {
-  const options = (await meta(ctx.db)).clientOptions
-  const items = communityAdKeys.map(id => {
-    const value = options[id]
-    const valid = record(value) ? normalizeCommunityAd(value as unknown as CommunityAd, ctx.config.url) : null
-    return { id, ...(valid ?? { enabled: false, title: '', imageUrl: '', linkUrl: '' }) }
-  })
-  return { items: publicOnly ? items.filter(ad => ad.enabled).map(({ enabled: _enabled, ...ad }) => ad) : items }
+  const items = adItems((await meta(ctx.db)).clientOptions, ctx.config.url)
+  return publicOnly ? { items: items.filter(ad => ad.enabled).map(({ enabled: _enabled, ...ad }) => ad) } : { items, version: fingerprint(items) }
 }
 async function ads(ctx: RequestContext) {
   if (ctx.req.method === 'GET') return readAds(ctx, false)
-  keys(ctx.body, ['items'])
+  keys(ctx.body, ['items', 'version'])
   if (!Array.isArray(ctx.body.items) || !ctx.body.items.length || ctx.body.items.length > 4) fail('广告位数量无效。')
   const patch: Body = {}
   for (const item of ctx.body.items) {
@@ -133,12 +146,14 @@ async function ads(ctx: RequestContext) {
     if (!normalized) fail('启用的广告需要标题、有效的 HTTPS 图片和 HTTP(S) 链接。')
     patch[id] = normalized
   }
-  await transaction(ctx.db, async db => {
+  return transaction(ctx.db, async db => {
     const row = await meta(db, true)
+    checkVersion(ctx.body, adItems(row.clientOptions, ctx.config.url))
     await db.query('UPDATE meta SET "clientOptions"=COALESCE("clientOptions",\'{}\'::jsonb)||$2::jsonb WHERE id=$1', [row.id, JSON.stringify(patch)])
     await audit(ctx, db, 'updateCommunityAds', { slots: Object.keys(patch) })
+    const items = adItems({ ...row.clientOptions, ...patch }, ctx.config.url)
+    return { items, version: fingerprint(items) }
   })
-  return readAds(ctx, false)
 }
 export function normalizeTagName(value: unknown): string {
   const name = text(value, 96).normalize('NFC')
@@ -264,21 +279,57 @@ function packReport(row: ReportRow, identities: Awaited<ReturnType<typeof readPu
   return { ...row, ...(target ? { targetUsername: target.username, targetAccountId: target.accountId } : {}),
     ...(reporter ? { reporterUsername: reporter.username, reporterAccountId: reporter.accountId } : {}) }
 }
+async function logoReference(ctx: RequestContext, db: Queryable, logoUrl: string) {
+  const local = /^\/(legacy-files|files)\/([^?]+)(?:\?variant=(original|web|webpublic|thumbnail))?$/.exec(logoUrl)
+  if (!local) return { logoUrl, fileId: null }
+  const byKey = local[1] === 'files'
+  const file = (await db.query<{ id: string; accessKey: string | null; thumbnailAccessKey: string | null; webpublicAccessKey: string | null; webpublicType: string | null }>(`
+    SELECT id,"accessKey","thumbnailAccessKey","webpublicAccessKey","webpublicType" FROM drive_file
+    WHERE ${byKey ? '("accessKey"=$1 OR "thumbnailAccessKey"=$1 OR "webpublicAccessKey"=$1)' : 'id=$1'}
+    AND "userId"=$2 AND "storedInternal" AND NOT "isLink" AND NOT "isSensitive"
+    AND type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif') FOR SHARE`, [local[2], ctx.requireUser().id])).rows[0]
+  if (!file) fail('请上传属于当前管理员的非敏感图片作为站点 Logo。')
+  const usable = (key: string | null) => typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(key)
+  const web = usable(file.webpublicAccessKey) && ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'].includes(file.webpublicType ?? '')
+  let variant = byKey ? local[2] === file.thumbnailAccessKey ? 'thumbnail' : local[2] === file.webpublicAccessKey ? 'web' : 'original' : local[3] ?? 'original'
+  if (variant === 'webpublic') variant = 'web'
+  if ((variant === 'thumbnail' && !usable(file.thumbnailAccessKey)) || (variant === 'web' && !web)) variant = 'original'
+  if (variant === 'original' && !usable(file.accessKey)) { if (web) variant = 'web'; else fail('Logo 图片文件不可用，请重新上传。') }
+  return { logoUrl: `/legacy-files/${file.id}${variant === 'original' ? '' : `?variant=${variant}`}`, fileId: file.id }
+}
 async function legacySettings(ctx: RequestContext) {
-  if (ctx.req.method === 'GET') { const settings = await readSiteSettings(ctx.db); return { settings, version: fingerprint(settings) } }
-  const settings = validateSiteSettings(ctx.body.settings, ctx.config.url)
+  if (ctx.req.method === 'GET') { const settings = await readSiteSettings(ctx.db, ctx.config.url); return { settings, version: fingerprint(settings) } }
+  keys(ctx.body, ['settings', 'version'])
+  const input = ctx.body.settings
+  if (!record(input) || !Object.keys(input).length) fail('请检查站点设置。')
+  const brandingOnly = Object.keys(input).every(key => ['brand', 'logoUrl'].includes(key))
+  if (!brandingOnly) keys(input, ['brand', 'logoUrl', 'registrationOpen', 'publicationMode', 'autoBan', 'violationThreshold', 'uploadLimits', 'defaultModels', 'ads'])
   return transaction(ctx.db, async db => {
     const row = await meta(db, true)
-    if (fingerprint(await readSiteSettings(db)) !== ctx.body.version) fail('设置已变化，请刷新后重新核对。', 409)
-    const patch: Body = { communityBrandName: settings.brand, communityLogoUrl: settings.logoUrl, communityPublicationMode: settings.publicationMode,
-      communityAutoBanEnabled: settings.autoBan, communityViolationThreshold: settings.violationThreshold,
-      uploadLimits: { ...(record(row.clientOptions.uploadLimits) ? row.clientOptions.uploadLimits : {}),
-        image: settings.uploadLimits.image, video: settings.uploadLimits.video, document: settings.uploadLimits.resource, other: settings.uploadLimits.other },
-      communityDefaultModels: settings.defaultModels }
-    for (const [index, key] of communityAdKeys.entries()) patch[key] = settings.ads[index] || null
-    await db.query('UPDATE meta SET "clientOptions"=COALESCE("clientOptions",\'{}\'::jsonb)||$2::jsonb,"disableRegistration"=$3 WHERE id=$1', [row.id, JSON.stringify(patch), !settings.registrationOpen])
-    await audit(ctx, db, 'communitySettings', { settings })
-    const current = await readSiteSettings(db)
+    const previous = await readSiteSettings(db, ctx.config.url)
+    checkVersion(ctx.body, previous, true)
+    const settings = brandingOnly
+      ? { ...previous, ...validateSiteBranding({ brand: previous.brand, logoUrl: previous.logoUrl, ...input }, ctx.config.url, previous.logoUrl) }
+      : validateSiteSettings(input, ctx.config.url, previous.logoUrl)
+    const patch: Body = { communityBrandName: settings.brand, communityLogoUrl: settings.logoUrl }
+    if (settings.logoUrl !== previous.logoUrl) {
+      const logo = await logoReference(ctx, db, settings.logoUrl)
+      settings.logoUrl = logo.logoUrl
+      patch.communityLogoUrl = logo.logoUrl
+      patch.communityLogoFileId = logo.fileId
+    }
+    if (!brandingOnly) {
+      Object.assign(patch, { communityPublicationMode: settings.publicationMode,
+        communityAutoBanEnabled: settings.autoBan, communityViolationThreshold: settings.violationThreshold,
+        uploadLimits: { ...(record(row.clientOptions.uploadLimits) ? row.clientOptions.uploadLimits : {}),
+          image: settings.uploadLimits.image, video: settings.uploadLimits.video, document: settings.uploadLimits.resource, other: settings.uploadLimits.other },
+        communityDefaultModels: settings.defaultModels })
+      for (const [index, key] of communityAdKeys.entries()) patch[key] = settings.ads[index] || null
+    }
+    await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb,name=$3,"iconUrl"=$4${brandingOnly ? '' : ',"disableRegistration"=$5'} WHERE id=$1`,
+      [row.id, JSON.stringify(patch), settings.brand, settings.logoUrl || null, ...(!brandingOnly ? [!settings.registrationOpen] : [])])
+    await audit(ctx, db, 'communitySettings', { settings: brandingOnly ? { brand: settings.brand, logoUrl: settings.logoUrl } : settings })
+    const current = await readSiteSettings(db, ctx.config.url)
     return { settings: current, version: fingerprint(current) }
   })
 }
@@ -303,7 +354,7 @@ async function announcements(ctx: RequestContext, announcementId?: string) {
 export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   const path = ctx.url.pathname, method = ctx.req.method
   if (path === '/api/community/ads' && method === 'GET') { ctx.json(200, await readAds(ctx, true)); return true }
-  if (path === '/api/site' && method === 'GET') { const settings = await readSiteSettings(ctx.db); ctx.json(200, { ...settings, ads: settings.ads.filter(ad => ad.enabled) }); return true }
+  if (path === '/api/site' && method === 'GET') { const { brand, logoUrl } = await readSiteSettings(ctx.db, ctx.config.url); ctx.json(200, { brand, logoUrl }); return true }
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements'].includes(path) || tag || person || report || announcement

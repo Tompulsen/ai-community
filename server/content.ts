@@ -844,7 +844,16 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   const result = await ctx.db.query<MediaRow>(`
     SELECT f.id,f.name,f.type,f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType"
     FROM drive_file f WHERE ${keyWhere} AND f."storedInternal" AND NOT f."isLink"
-    AND (f."userId"=$1 OR $3::boolean OR EXISTS (
+    AND (f."userId"=$1 OR $3::boolean
+      OR (NOT f."isSensitive" AND f.type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif')
+        AND EXISTS (SELECT 1 FROM meta m WHERE m."clientOptions"->>'communityLogoFileId'=f.id
+          OR (NOT (COALESCE(m."clientOptions",'{}'::jsonb) ? 'communityLogoFileId')
+            AND regexp_replace(COALESCE(m."clientOptions"->>'communityLogoUrl',m."iconUrl",''),
+              '[?]variant=(original|web|webpublic|thumbnail)$','')=ANY(ARRAY[
+                '/legacy-files/'||f.id, '/files/'||f."accessKey", '/files/'||f."thumbnailAccessKey", '/files/'||f."webpublicAccessKey",
+                $4||'/legacy-files/'||f.id, $4||'/files/'||f."accessKey", $4||'/files/'||f."thumbnailAccessKey", $4||'/files/'||f."webpublicAccessKey"
+              ]))))
+      OR EXISTS (
       SELECT 1 FROM community_submission s JOIN "user" u ON u.id=s."authorId"
       JOIN note n ON n.id=s."approvedNoteId" WHERE (${visibilitySql(ctx)}) AND f."userId"=s."authorId"
       AND (f.id=ANY(s."fileIds") OR (s.generation->'referenceFileIds') ? f.id))
@@ -862,7 +871,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
         AND NOT sender."isDeleted" AND NOT sender."isSuspended" AND NOT recipient."isDeleted" AND NOT recipient."isSuspended"
         AND NOT EXISTS (SELECT 1 FROM blocking blocked WHERE
           (blocked."blockerId"=sender.id AND blocked."blockeeId"=recipient.id) OR (blocked."blockeeId"=sender.id AND blocked."blockerId"=recipient.id))))`,
-  [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator)]);
+  [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin]);
   const file = result.rows[0];
   if (!file) fail(404, 'File not found');
   const preferred = byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;

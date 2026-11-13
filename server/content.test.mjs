@@ -77,7 +77,7 @@ test('unauthorized legacy media lookup remains a 404 without touching filesystem
   await assert.rejects(handleContent(ctx), error => error.statusCode === 404);
   assert(statement.includes('f."userId"=$1'));
   assert(statement.includes(publicVisibilitySql));
-  assert.deepEqual(parameters, [null, 'file1', false]);
+  assert.deepEqual(parameters, [null, 'file1', false, 'https://community.example']);
 });
 
 test('unknown API is not claimed by content handler', async () => {

@@ -41,4 +41,3 @@ router.beforeEach((to, from) => {
     return { path: to.path, query: { ...to.query, returnTo: loginReturnPath(from.fullPath) } }
   }
 })
-router.afterEach(to => { document.title = `${String(to.meta.title)} · 章鱼社区` })
