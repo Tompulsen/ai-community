@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
 import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
@@ -67,8 +67,12 @@ async function published(work: Work) {
   finally { publicationNavigation.value = false }
 }
 async function signOut() {
+  if (signingOut.value) return
   signingOut.value = true
-  try { await logout(); await router.push('/discover'); notify('已退出登录。') }
+  try {
+    if (route.path !== '/discover' && isNavigationFailure(await router.push('/discover'))) return
+    await logout(); notify('已退出登录。')
+  }
   catch (cause) { notify(errorMessage(cause)) }
   finally { signingOut.value = false }
 }
