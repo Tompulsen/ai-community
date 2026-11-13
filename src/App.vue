@@ -4,6 +4,7 @@ import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
 import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
+import CommunityTools from './components/CommunityTools.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
@@ -109,9 +110,9 @@ function dismissMenus(event: Event) {
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
       <div class="header-tools"><div id="header-search" class="header-search-slot" />
-      <div class="header-actions"><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
+      <div class="header-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
-          <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount} 条未读` : '消息'" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+          <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
           <div class="menu-popover message-popover">
             <template v-if="session.user"><RouterLink v-for="item in messageLinks" :key="item.category" :to="item.to" class="message-menu-link"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></RouterLink></template>
             <div v-else class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
@@ -167,7 +168,7 @@ function dismissMenus(event: Event) {
   .header-tools { gap: 4px; }
   .header-actions { justify-self: end; }
   .header-submission { width: 44px; height: 44px; margin-right: 0; }
-  .header-actions:has(.header-login) { gap: 18px; }
+  .header-actions:has(.header-login) { gap: 4px; }
   .submission-icon { width: 22px; height: 22px; }
   .submission-label { display: none; }
   :global(:root:has(#header-search .expanded)) { --header-height: 120px; }
@@ -180,6 +181,10 @@ function dismissMenus(event: Event) {
   .header-search-slot:has(.expanded) { grid-column: 1 / -1; grid-row: 2; width: 100%; align-self: start; }
 }
 @media (max-width: 639px) { .header-actions > .publish-button { padding: 0; } }
+@media (max-width: 379px) {
+  .brand > span { display: none; }
+  .header-actions > .header-login { padding-inline: 10px; }
+}
 :global(#app:has(.account-entry-shell)) { padding-bottom: 0; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
 .account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }

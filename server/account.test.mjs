@@ -34,13 +34,15 @@ test('return paths preserve only current SPA destinations and their own query pa
     '/discover?kind=image&q=%E7%AB%A0%E9%B1%BC+AI&tag=Skill&sort=latest',
     '/create?from=old123', '/create/video?remix=old123', '/library?tab=saved&publish=1',
     '/community?creator=creator123&tab=creators', '/community?tab=announcements',
-    '/account?tab=security', '/messages?peer=creator123', '/activities?invite=inviter123']) assert.equal(newApiReturnPath(path), path)
+    '/account?tab=security', '/messages?peer=creator123', '/activities?invite=inviter123',
+    '/messages?tab=messages', '/messages?tab=announcement', '/messages?tab=activity']) assert.equal(newApiReturnPath(path), path)
   for (const path of [null, {}, 'https://other.test/discover', '//other.test/discover', '/\\other.test',
     '/discover#//other.test', '/discover/../account', '/%64iscover', '/work/%2e%2e', '/work/old_123',
     '/account/authorize', '/admin', '/community/lottery', '/discover?redirect=https://other.test',
     '/discover?returnTo=%2Faccount', '/discover?kind=unknown', '/discover?kind=image&kind=video',
     '/discover?creator=creator123', '/library?tab=unknown', '/account?reset=secret', '/account?newapi=complete',
-    '/create?remix=old/123', '/discover?q=%', '/discover?q=%FF', '/discover?q=%5C',
+    '/create?remix=old/123', '/messages?tab=unknown', '/messages?tab=activity&tab=announcement',
+    '/discover?q=%', '/discover?q=%FF', '/discover?q=%5C',
     '/discover?q=%00', '/activities?invite=inviter123%0A', '/discover?constructor=anything',
     '/discover?q=' + 'x'.repeat(2048)]) assert.equal(newApiReturnPath(path), '/account', String(path))
 })

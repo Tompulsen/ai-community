@@ -44,6 +44,11 @@ delivery now includes the frontend and an independent community backend.
   mode; restoring defaults resets the complete selection. Following requires login.
 - Community announcements and creator profiles remain reachable.
 - Publishing, saved work, notifications and administration have distinct places.
+- A header community-tools launcher groups existing destinations in an icon grid,
+  including work search, discovery, announcements, creators, saved work, messages,
+  creation, promotions and account tools. Unread badges reuse the shared inbox;
+  private destinations resume after sign-in and management remains role-gated.
+  Reload and navigation retain existing unsaved-edit protection.
 - The user selected the Aceternity Bento Grid reference for this redesign.
   Work galleries use five base columns on desktop; small cards span one, large
   cards span two. Small cards use a 4:5 ratio; large cards keep the same height.

@@ -11,6 +11,7 @@ describe('login return destinations agree with the OAuth backend', () => {
       '/discover?q=', '/create?from=old123', '/create/video?remix=old123',
       '/library?tab=saved&publish=1', '/community?creator=creator123&tab=creators',
       '/community?tab=announcements', '/account?tab=security', '/messages?peer=creator123',
+      '/messages?tab=activity', '/messages?tab=announcement', '/messages?tab=messages',
       '/activities?invite=inviter123', '/discover?q=' + 'q'.repeat(500),
       '/discover?tag=' + 't'.repeat(100), '/work/' + 'a'.repeat(32),
     ]
@@ -31,6 +32,7 @@ describe('login return destinations agree with the OAuth backend', () => {
       '/discover?creator=creator123', '/work/old123?tag=Skill', '/library?tab=unknown',
       '/community?tab=security', '/account?tab=saved', '/account?reset=secret',
       '/account?newapi=complete', '/messages?peer=invalid_id', '/create?remix=old/123',
+      '/messages?tab=unknown', '/messages?tab=activity&tab=announcement',
       '/activities?publish=0', '/discover?q=%', '/discover?q=%FF', '/discover?q=%5C',
       '/discover?q=%00', '/activities?invite=inviter123%0A', '/discover?constructor=value',
       '/discover?q=' + 'q'.repeat(501), '/discover?tag=' + 't'.repeat(101),

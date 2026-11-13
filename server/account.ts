@@ -104,7 +104,7 @@ export function newApiReturnPath(value: unknown): string {
     case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
     case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/ }); break
     case 'account': allowed.tab = /^(profile|balance|security)$/; break
-    case 'messages': allowed.peer = id; break
+    case 'messages': Object.assign(allowed, { peer: id, tab: /^(messages|announcement|activity)$/ }); break
   }
   const seen = new Set<string>()
   for (const [key, item] of new URLSearchParams(query)) {

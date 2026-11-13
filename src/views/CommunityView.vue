@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, UserCheck, UserPlus, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
@@ -9,6 +9,7 @@ import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { kindLabels, type Announcement, type Creator, type Work } from '../data'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 const route = useRoute()
+const router = useRouter()
 const tab = ref(route.query.tab === 'announcements' ? 'announcements' : 'creators')
 const creatorId = computed(() => typeof route.query.creator === 'string' ? route.query.creator : '')
 const creators = ref<Creator[]>([]), announcements = ref<Announcement[]>([]), creator = ref<Creator | null>(null), works = ref<Work[]>([])
@@ -88,6 +89,7 @@ function closePeople() { ++peopleId; peopleLoading.value = false; peopleError.va
 watch([creatorId, () => session.user?.id], () => { void load() }, { immediate: true })
 watch([profileTab, kind], () => { if (!loading.value) void loadCollection() })
 watch(() => route.query.tab, value => { tab.value = value === 'announcements' ? 'announcements' : 'creators' })
+function selectTab(value: 'creators' | 'announcements') { void router.push({ path: '/community', query: { tab: value } }) }
 async function follow(item: Creator) {
   if (!session.user) { notify('请先登录后关注创作者。'); return }
   if (following.value) return
@@ -108,7 +110,7 @@ async function follow(item: Creator) {
   <div class="page-container community-page">
     <div v-if="!creatorId" class="community-toolbar">
       <h1>社区</h1>
-      <div class="tabs" aria-label="社区分类"><button class="tab" :class="{ active: tab === 'creators' }" :aria-pressed="tab === 'creators'" @click="tab = 'creators'"><Users :size="16" />创作者</button><button class="tab" :class="{ active: tab === 'announcements' }" :aria-pressed="tab === 'announcements'" @click="tab = 'announcements'"><Megaphone :size="16" />社区公告</button></div>
+      <div class="tabs" aria-label="社区分类"><button class="tab" :class="{ active: tab === 'creators' }" :aria-pressed="tab === 'creators'" @click="selectTab('creators')"><Users :size="16" />创作者</button><button class="tab" :class="{ active: tab === 'announcements' }" :aria-pressed="tab === 'announcements'" @click="selectTab('announcements')"><Megaphone :size="16" />社区公告</button></div>
     </div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
     <template v-else-if="creatorId"><RouterLink to="/community" class="back-link profile-back"><ArrowLeft :size="16" />全部创作者</RouterLink>
