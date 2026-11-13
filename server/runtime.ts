@@ -185,10 +185,10 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   ])
   register(handleSocial, [
     ['GET', ['/api/notifications', '/api/messages', '/api/messages/threads', '/api/messages/:userId']],
-    ['POST', ['/api/notifications/read', '/api/messages/:userId', '/api/messages/:userId/read']],
+    ['POST', ['/api/notifications/read', '/api/notifications/read-all', '/api/messages/:userId', '/api/messages/:userId/read']],
   ])
   register(handleAdmin, [
-    ['GET', ['/api/site', '/api/admin/settings', '/api/admin/announcements', '/api/admin/community/config', '/api/admin/community/ads', '/api/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports']],
+    ['GET', ['/api/site', '/api/admin/overview', '/api/admin/logs', '/api/admin/settings', '/api/admin/announcements', '/api/admin/community/config', '/api/admin/community/ads', '/api/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports']],
     ['PATCH', ['/api/admin/settings', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags/:id', '/api/admin/users/:id', '/api/admin/reports/:id']],
     ['POST', ['/api/admin/tags', '/api/admin/announcements']],
     ['DELETE', ['/api/admin/tags/:id', '/api/admin/announcements/:id']],

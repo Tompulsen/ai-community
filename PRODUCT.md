@@ -44,6 +44,20 @@ delivery now includes the frontend and an independent community backend.
   mode; restoring defaults resets the complete selection. Following requires login.
 - Community announcements and creator profiles remain reachable.
 - Publishing, saved work, notifications and administration have distinct places.
+- Work editing and report resolution protect unsaved input when closing, navigating
+  or refreshing. Successful saves release the guard; account changes clear the
+  previous account's editor and ignore its delayed responses. This is leave
+  protection, not automatic draft storage across reloads.
+- Activity and announcement notifications have independent 30-item cursor pages
+  and unread totals. Activity totals cover the retained Redis stream (approximately
+  1,000 entries), not unlimited history. Category mark-all uses a captured stream
+  boundary or a five-minute, account-bound announcement snapshot; new arrivals
+  stay unread. Refresh starts at the newest page and rechecks visibility.
+- The admin overview aggregates the complete submission dataset and open reports,
+  with 7/30-day new-work counts and administrator-only local-user counts. Pending
+  revisions can overlap published totals. The pending queue queries pending work
+  directly. Administrator-only operation logs support actor, type, date and cursor
+  filters, exposing safe summaries without raw configuration or credentials.
 - A header community-tools launcher groups existing destinations in an icon grid,
   including work search, discovery, announcements, creators, saved work, messages,
   creation, promotions and account tools. Unread badges reuse the shared inbox;

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ArrowDown, ArrowUp, ArrowLeftRight, FileText, ImagePlus, Save, Trash2, Upload, X } from '@lucide/vue'
 import { kindLabels, type Work, type WorkFile, type WorkKind } from '../data'
-import { api, errorMessage, notify, safeExternalUrl, uploadFile } from '../state'
+import { api, errorMessage, notify, safeExternalUrl, session, uploadFile } from '../state'
 
 const props = defineProps<{ open: boolean; work?: Work | null }>()
 const emit = defineEmits<{ close: []; saved: [work: Work] }>()
 const dialog = ref<HTMLDialogElement>()
+const leaveDialog = ref<HTMLDialogElement>()
+const router = useRouter()
 const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: '', model: '', sourceUrl: '', license: '' })
 const files = ref<WorkFile[]>([])
 const references = ref<WorkFile[]>([])
@@ -18,17 +21,22 @@ const saving = ref(false)
 const requestId = ref(crypto.randomUUID())
 let controller: AbortController | undefined
 let loadId = 0
+let resolveLeave: ((leave: boolean) => void) | undefined
+const baseline = ref('')
+const snapshot = () => JSON.stringify({ ...draft, files: files.value.map(file => file.id), references: references.value.map(file => file.id) })
+const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
 function fill(work?: Work | null) {
   Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: work?.tags.join('，') || '', model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
   files.value = [...(work?.files || [])]
   references.value = [...(work?.referenceFiles || [])]
   version.value = work?.version || 0
+  baseline.value = snapshot()
 }
 watch(() => [props.open, props.work?.id] as const, async ([open]) => {
   const current = ++loadId
   if (!open) { dialog.value?.close(); return }
-  error.value = ''; fill(props.work)
+  error.value = ''; loading.value = false; fill(props.work)
   await nextTick()
   if (!dialog.value?.open) dialog.value?.showModal()
   if (!props.work) return
@@ -40,7 +48,30 @@ watch(() => [props.open, props.work?.id] as const, async ([open]) => {
   finally { if (current === loadId) loading.value = false }
 }, { immediate: true })
 
-function close() { if (!saving.value && !uploading.value) emit('close') }
+function confirmLeave() {
+  if (!props.open) return true
+  if (saving.value || uploading.value || resolveLeave) return false
+  if (!dirty.value) return true
+  leaveDialog.value?.showModal()
+  return new Promise<boolean>(resolve => { resolveLeave = resolve })
+}
+function finishLeave(discard: boolean) {
+  leaveDialog.value?.close()
+  if (discard) baseline.value = snapshot()
+  resolveLeave?.(discard); resolveLeave = undefined
+}
+async function close() { if (await confirmLeave()) emit('close') }
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (dirty.value || props.open && (saving.value || uploading.value)) { event.preventDefault(); event.returnValue = '' }
+}
+const removeGuard = router.beforeEach(confirmLeave)
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+watch(() => session.user?.id, (_owner, previous) => {
+  if (!previous && !session.ready) return
+  loadId++; controller?.abort(); finishLeave(false); fill(); loading.value = false
+  saving.value = false; uploading.value = false; requestId.value = crypto.randomUUID()
+  if (props.open) emit('close')
+}, { flush: 'sync' })
 async function choose(event: Event, reference = false) {
   const input = event.target as HTMLInputElement
   const selected = [...(input.files || [])]
@@ -50,11 +81,16 @@ async function choose(event: Event, reference = false) {
   if (target.value.length + selected.length > 16) { error.value = '作品文件和参考图各最多 16 个。'; return }
   if (reference && selected.some(file => !file.type.startsWith('image/'))) { error.value = '参考素材请选择图片。'; return }
   uploading.value = true; error.value = ''
-  controller = new AbortController()
+  const current = loadId, owner = session.user?.id, request = new AbortController()
+  controller = request
   try {
-    for (const file of selected) target.value.push(await uploadFile(file, controller.signal))
-  } catch (cause) { if (!controller.signal.aborted) error.value = errorMessage(cause) }
-  finally { uploading.value = false }
+    for (const file of selected) {
+      const uploaded = await uploadFile(file, request.signal)
+      if (current !== loadId || session.user?.id !== owner) return
+      target.value.push(uploaded)
+    }
+  } catch (cause) { if (current === loadId && !request.signal.aborted) error.value = errorMessage(cause) }
+  finally { if (current === loadId) uploading.value = false }
 }
 function move(index: number, reference: boolean, direction: number) {
   const target = reference ? references.value : files.value
@@ -77,6 +113,7 @@ async function save(status: 'draft' | 'pending') {
   if (draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
   if (draft.kind === 'resource' && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
   saving.value = true; error.value = ''
+  const current = loadId, owner = session.user?.id
   try {
     const body = {
       ...draft, title: draft.title.trim(), tags: [...new Set(draft.tags.split(/[,，\s]+/).filter(Boolean))].slice(0, 10),
@@ -84,14 +121,17 @@ async function save(status: 'draft' | 'pending') {
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
     }
     const result = await api<{ work: Work }>(props.work ? `/api/works/${encodeURIComponent(props.work.id)}` : '/api/works', { method: props.work ? 'PATCH' : 'POST', body })
+    if (current !== loadId || session.user?.id !== owner) return
+    baseline.value = snapshot()
+    saving.value = false
     emit('saved', result.work)
     notify(result.work.revisionPending || result.work.status === 'pending' ? '作品已提交审核。' : result.work.status === 'draft' ? '草稿已保存。' : '作品已保存。')
     requestId.value = crypto.randomUUID()
     emit('close')
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { saving.value = false }
+  } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
+  finally { if (current === loadId) saving.value = false }
 }
-onBeforeUnmount(() => controller?.abort())
+onBeforeUnmount(() => { loadId++; controller?.abort(); removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
 </script>
 
 <template>
@@ -113,6 +153,10 @@ onBeforeUnmount(() => controller?.abort())
       <p v-if="uploading" role="status">正在上传文件…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <div class="dialog-footer"><span class="caption-5">{{ work?.revisionPending ? '本次保存将更新待审核修改。' : '' }}</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || uploading" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || uploading"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交作品' }}</button></div></div>
     </form>
+  </dialog>
+  <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">
+    <div class="dialog-heading"><h2 id="work-discard-heading">保留作品修改？</h2><button class="icon-button" aria-label="关闭作品离开提示" @click="finishLeave(false)"><X :size="20" /></button></div>
+    <div class="dialog-body stack"><p>作品尚未保存。你可以继续编辑并存为草稿，或放弃这次输入。</p><div class="table-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div>
   </dialog>
 </template>
 

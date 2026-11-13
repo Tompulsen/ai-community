@@ -183,7 +183,7 @@ export function hiddenByTime(rule: number | null | undefined, createdAt: number,
   return rule == null ? false : rule <= 0 ? (now - createdAt) / 1000 >= Math.abs(rule) : createdAt / 1000 <= rule;
 }
 
-function idTimeSql(column: string, method = 'aidx'): string {
+export function idTimeSql(column: string, method = 'aidx'): string {
   method = method.toLowerCase();
   const number = (alphabet: string, start: number, length: number) => `(SELECT SUM((strpos('${alphabet}',substring(${column} FROM digit FOR 1))-1)::numeric*power(${alphabet.length}::numeric,${start + length - 1}-digit)) FROM generate_series(${start},${start + length - 1}) digit)`;
   const aid = `(${number('0123456789abcdefghijklmnopqrstuvwxyz', 1, 8)}+946684800000)`;

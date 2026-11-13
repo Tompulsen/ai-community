@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, Check, Flag, Gift, Globe, LayoutDashboard, Megaphone, RefreshCw, Search, Settings2, ShieldCheck, Tags, Trash2, Users, X } from '@lucide/vue'
+import { ArrowUpRight, Check, ClipboardList, Flag, Gift, Globe, LayoutDashboard, Megaphone, RefreshCw, Search, Settings2, ShieldCheck, Tags, Trash2, Users, X } from '@lucide/vue'
 import AdminOverview from '../components/AdminOverview.vue'
 import AdminLottery from '../components/AdminLottery.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminPeople from '../components/AdminPeople.vue'
+import AdminLogs from '../components/AdminLogs.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
-import { kindLabels, statusLabels, type Work, type WorkStatus } from '../data'
+import { kindLabels, statusLabels, type AdminOverviewData, type Work, type WorkStatus } from '../data'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-type Tab = 'overview' | 'review' | 'lottery' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports'
+type Tab = 'overview' | 'review' | 'lottery' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports' | 'logs'
+const overview = ref<AdminOverviewData | null>(null), days = ref<7 | 30>(7)
 const status = ref<WorkStatus | 'all'>('pending'), query = ref(''), search = ref('')
 const works = ref<Work[]>([]), nextCursor = ref<string | null>(null), updatedAt = ref('')
 const booting = ref(true), loading = ref(false), loadingMore = ref(false)
@@ -23,6 +25,7 @@ const adminTabs = computed(() => [
   { id: 'reports' as const, label: '举报处理', icon: Flag, group: '内容管理' },
   ...(session.user?.isAdmin ? [
     { id: 'users' as const, label: '用户管理', icon: Users, group: '内容管理' },
+    { id: 'logs' as const, label: '操作日志', icon: ClipboardList, group: '内容管理' },
     { id: 'tags' as const, label: '内容标签', icon: Tags, group: '内容管理' },
     { id: 'site' as const, label: '站点设置', icon: Globe, group: '运营设置' },
     { id: 'settings' as const, label: '社区设置', icon: Settings2, group: '运营设置' },
@@ -32,7 +35,7 @@ const adminTabs = computed(() => [
 ])
 const tab = computed(() => adminTabs.value.find(item => item.id === route.query.tab)?.id ?? 'overview')
 const groups = computed(() => ['工作台', '内容管理', '运营设置'].map(label => ({ label, items: adminTabs.value.filter(item => item.group === label) })).filter(group => group.items.length))
-const editor = ref<{ hasUnsavedChanges: boolean } | null>(null)
+const editor = ref<{ hasUnsavedChanges: boolean; busy?: boolean } | null>(null)
 const reviewDialog = ref<HTMLDialogElement>(), leaveDialog = ref<HTMLDialogElement>()
 const adminNav = ref<HTMLElement>()
 const allowed = computed(() => session.user?.isAdmin || session.user?.isModerator)
@@ -49,9 +52,20 @@ async function load(more = false) {
   else { loading.value = true; loadingMore.value = false; works.value = []; nextCursor.value = null }
   error.value = ''
   try {
+    if (tab.value === 'overview') {
+      overview.value = null
+      const [summary, queue] = await Promise.all([
+        api<AdminOverviewData>(`/api/admin/overview?days=${days.value}`),
+        api<{ items: Work[] }>('/api/admin/submissions?status=pending&limit=5'),
+      ])
+      if (id !== requestId) return
+      overview.value = summary; works.value = queue.items
+      updatedAt.value = new Date(summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      return
+    }
     const result = await api<{ items: Work[]; nextCursor?: string | null }>('/api/admin/submissions' + queryString({
-      status: tab.value === 'review' ? status.value : 'all', query: tab.value === 'review' ? search.value || undefined : undefined,
-      cursor: more ? nextCursor.value || undefined : undefined, limit: tab.value === 'overview' ? '100' : '30',
+      status: status.value, query: search.value || undefined,
+      cursor: more ? nextCursor.value || undefined : undefined, limit: '30',
     }))
     if (id !== requestId) return
     works.value = more ? [...works.value, ...result.items] : result.items
@@ -60,22 +74,24 @@ async function load(more = false) {
   } catch (cause) { if (id === requestId) error.value = errorMessage(cause) }
   finally { if (id === requestId) { loading.value = false; loadingMore.value = false } }
 }
-watch([tab, status, search], () => { requestId++; if (!booting.value) void load() })
+watch([tab, status, search, days, () => session.user?.id], () => { requestId++; if (!booting.value) void load() })
+watch(() => session.user?.id, () => { requestId++; overview.value = null; works.value = []; finishLeave(false); reviewDialog.value?.close() }, { flush: 'sync' })
 watch([tab, booting], async () => {
   await nextTick()
   const nav = adminNav.value, item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
   if (nav && item && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = item.offsetLeft - nav.offsetLeft - 8
 })
 function confirmLeave() {
+  if (editor.value?.busy) return false
   if (!editor.value?.hasUnsavedChanges) return true
   if (resolveLeave) return false
   leaveDialog.value?.showModal()
   return new Promise<boolean>(resolve => { resolveLeave = resolve })
 }
 function finishLeave(discard: boolean) { leaveDialog.value?.close(); resolveLeave?.(discard); resolveLeave = undefined }
-onBeforeRouteUpdate(confirmLeave)
+onBeforeRouteUpdate((to, from) => to.query.tab === from.query.tab ? true : confirmLeave())
 onBeforeRouteLeave(confirmLeave)
-function beforeUnload(event: BeforeUnloadEvent) { if (editor.value?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = '' } }
+function beforeUnload(event: BeforeUnloadEvent) { if (editor.value?.hasUnsavedChanges || editor.value?.busy) { event.preventDefault(); event.returnValue = '' } }
 onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnload)
   try { await loadSession() } finally { booting.value = false }
@@ -110,10 +126,11 @@ async function review() {
         <nav ref="adminNav" class="admin-nav" aria-label="管理分类"><div v-for="group in groups" :key="group.label" class="admin-nav-group"><p>{{ group.label }}</p><button v-for="item in group.items" :key="item.id" class="admin-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigate(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span></button></div></nav>
       </aside>
       <div class="admin-content">
-        <AdminOverview v-if="tab === 'overview'" :works="works" :loading="loading" :error="error" :updated-at="updatedAt" :is-admin="!!session.user?.isAdmin" @refresh="load()" @review="openQueue" @navigate="navigate" />
+        <AdminOverview v-if="tab === 'overview'" :works="works" :overview="overview" :days="days" :loading="loading" :error="error" :updated-at="updatedAt" :is-admin="!!session.user?.isAdmin" @refresh="load()" @period="days = $event" @review="openQueue" @navigate="navigate" />
+        <AdminLogs v-else-if="tab === 'logs' && session.user?.isAdmin" :key="session.user.id" />
         <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" ref="editor" />
         <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="tab" ref="editor" :view="tab" />
-        <AdminPeople v-else-if="tab === 'reports' || (tab === 'users' && session.user?.isAdmin)" :key="tab" :view="tab" />
+        <AdminPeople v-else-if="tab === 'reports' || (tab === 'users' && session.user?.isAdmin)" :key="`${tab}:${session.user?.id}`" ref="editor" :view="tab" :confirm-leave="confirmLeave" />
         <section v-else class="panel-section review-section" :aria-busy="loading">
           <div class="section-heading"><div class="review-title"><h2>作品审核</h2><p class="form-note">审核新投稿与作品修改，管理公开内容。</p></div><button class="button subtle btn" :disabled="loading || loadingMore" @click="load()"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
           <div class="review-toolbar">

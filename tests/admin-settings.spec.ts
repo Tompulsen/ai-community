@@ -33,6 +33,7 @@ async function adminFixture(page: Page) {
       if (path.endsWith('/ads')) state.ads = body.items
     } else if (state.failRead && path.endsWith(state.failRead)) return route.fulfill({ status: 503, json: { message: '配置加载失败，请重试' } })
     const version = `version-${state.revision}`
+    if (path === '/api/admin/overview') return route.fulfill({ json: { counts: { pending: 135, published: 3240, rejected: 48, reports: 6 }, period: { days: 7, newWorks: 215, newUsers: 38 }, updatedAt: '2026-11-13T10:00:00Z' } })
     if (path === '/api/admin/settings') return route.fulfill({ json: { settings: state.settings, version } })
     if (path.endsWith('/config')) return route.fulfill({ json: { config: state.config, version } })
     if (path.endsWith('/ads')) return route.fulfill({ json: { items: state.ads, version } })
@@ -271,7 +272,7 @@ test('admin overview and editor layouts fit desktop, tablet and narrow phones wi
     for (const tab of ['overview', 'settings', 'ads', 'review']) {
       await page.goto('/admin?tab=' + tab)
       await expect(page.locator('.admin-layout')).toBeVisible()
-      if (tab === 'overview') await expect(page.getByText('最近载入 5 条', { exact: false })).toBeVisible()
+      if (tab === 'overview') await expect(page.getByText('全量统计', { exact: false })).toBeVisible()
       else if (tab === 'settings') await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('3')
       else if (tab === 'ads') await expect(page.locator('.ad-editor')).toHaveCount(4)
       else await expect(page.locator('.review-table')).toBeVisible()

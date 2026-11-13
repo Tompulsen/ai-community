@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 import { createHash } from 'node:crypto'
+import { handleNotifications } from './notification-inbox.ts'
+export { compareStreamIds } from './notification-inbox.ts'
 import { accessibleWork, legacyIdTime, transaction } from './content.ts'
 import { getUser, httpError, roleCondition } from './auth.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
@@ -13,16 +15,7 @@ const id = (value: unknown): string => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9]{1,32}$/.test(value)) throw httpError(400, '编号无效。')
   return value
 }
-const names: Record<string, string> = {
-  follow: '有新的关注', mention: '有人提到了你', reply: '有新的回复', reaction: '收到点赞', like: '作品收到点赞',
-  comment: '有新的评论', commentLike: '评论收到点赞', repost: '作品被转发', review: '作品审核结果',
-  renote: '作品被转发', login: '账号登录提醒', receiveFollowRequest: '有新的关注请求', message: '收到私信',
-}
 interface NoticeInput { recipientId: string; type: string; actorId?: string; workId?: string; commentId?: string; text?: string }
-export function compareStreamIds(a: string, b: string): number {
-  const aa = a.split('-').map(BigInt), bb = b.split('-').map(BigInt)
-  return aa[0] === bb[0] ? aa[1]! < bb[1]! ? -1 : aa[1]! > bb[1]! ? 1 : 0 : aa[0]! < bb[0]! ? -1 : 1
-}
 export async function notifyUser(ctx: RequestContext, input: NoticeInput): Promise<void> {
   if (input.recipientId === input.actorId) return
   try {
@@ -137,71 +130,9 @@ function peerDto(other: ChatPeer, identity?: PublicIdentity) {
     avatarUrl: other.avatarId ? `/legacy-files/${other.avatarId}?variant=thumbnail` : null }
 }
 
-async function notifications(ctx: RequestContext): Promise<boolean> {
-  const user = ctx.requireUser()
-  if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/notifications') {
-    const [stream, lastRead, individual, announcements] = await Promise.all([
-      ctx.redis.xrevrange(`notificationTimeline:${user.id}`, '+', '-', 'COUNT', 50),
-      ctx.redis.get(`latestReadNotification:${user.id}`), ctx.redis.hgetall(`community-next:notification-read:${user.id}`),
-      ctx.db.query<{ id: string; title: string; text: string; updatedAt: Date | null; readId: string | null }>(`SELECT a.id,a.title,a.text,a."updatedAt",r.id AS "readId"
-        FROM announcement a LEFT JOIN announcement_read r ON r."announcementId"=a.id AND r."userId"=$1
-        WHERE (a."userId"=$1 OR a."userId" IS NULL) AND a."isActive" AND (a."autoArchiveAt" IS NULL OR a."autoArchiveAt">NOW())
-        ORDER BY a.id DESC LIMIT 30`, [user.id]),
-    ])
-    const parsed = stream.flatMap(([streamId, fields]) => {
-      try { return [{ streamId, data: JSON.parse(fields[fields.indexOf('data') + 1]!) as Record<string, unknown> }] }
-      catch { return [] }
-    })
-    const actors = [...new Set(parsed.flatMap(({ data }) => typeof data.notifierId === 'string' ? [data.notifierId] : []))]
-    const profiles = actors.length ? (await ctx.db.query<ChatPeer>(`SELECT id,username,name,"avatarId" FROM "user"
-      WHERE id=ANY($1::varchar[]) AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL
-      AND NOT EXISTS (SELECT 1 FROM blocking b WHERE (b."blockerId"=$2 AND b."blockeeId"="user".id) OR (b."blockerId"="user".id AND b."blockeeId"=$2))`, [actors, user.id])).rows : []
-    const identities = await readPublicIdentities(ctx, profiles.map(profile => profile.id))
-    const oldNotes = [...new Set(parsed.flatMap(({ data }) => typeof data.noteId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(data.noteId) ? [data.noteId] : []))]
-    const legacyWorks = oldNotes.length ? (await ctx.db.query<{ noteId: string; workId: string; rootId: string }>(`SELECT n.id AS "noteId",s.id AS "workId",s."approvedNoteId" AS "rootId"
-      FROM note n JOIN community_submission s ON s."approvedNoteId" IN (n.id,n."replyId",n."threadId") WHERE n.id=ANY($1::varchar[])`, [oldNotes])).rows : []
-    const items = parsed.flatMap(({ streamId, data }) => {
-      const actor = profiles.find(profile => profile.id === data.notifierId)
-      if (data.notifierId && !actor) return []
-      const actorDto = actor ? peerDto(actor, identities.get(actor.id)) : undefined
-      const legacy = legacyWorks.find(work => work.noteId === data.noteId)
-      const workId = typeof data.workId === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(data.workId) ? data.workId : legacy?.workId
-      const commentId = typeof data.commentId === 'string' ? data.commentId : legacy && legacy.noteId !== legacy.rootId ? legacy.noteId : null
-      const type = String(data.type || '')
-      const url = workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}`
-        : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
-      return [{ id: `redis:${streamId}`, type: type === 'message' ? 'message' as const : 'activity' as const,
-        title: names[type] || '社区通知', text: typeof data.text === 'string' ? data.text : actorDto?.name || '',
-        createdAt: new Date(Number(streamId.split('-')[0])).toISOString(),
-        isRead: individual[streamId] === '1' || Boolean(lastRead && compareStreamIds(streamId, lastRead) <= 0), url, actor: actorDto }]
-    })
-    const merged = [...items, ...announcements.rows.map(row => ({ id: row.id, type: 'announcement' as const, title: row.title, text: row.text,
-      createdAt: row.updatedAt?.toISOString() || null, isRead: Boolean(row.readId), url: '/community?tab=announcements' }))]
-      .sort((a, b) => (b.createdAt ? Date.parse(b.createdAt) : 0) - (a.createdAt ? Date.parse(a.createdAt) : 0))
-    const unreadCounts = { announcement: 0, activity: 0 }
-    for (const notice of merged) if (!notice.isRead && notice.type !== 'message') unreadCounts[notice.type]++
-    ctx.json(200, { items: merged, unreadCounts })
-    return true
-  }
-  if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/notifications/read') {
-    if (!Array.isArray(ctx.body.ids) || ctx.body.ids.length > 100 || ctx.body.ids.some(value => typeof value !== 'string' || !/^(redis:\d+-\d+|[a-zA-Z0-9]{1,32})$/.test(value))) throw httpError(400, '通知编号无效。')
-    const ids = ctx.body.ids as string[]
-    for (const notice of ids) {
-      if (notice.startsWith('redis:')) await ctx.redis.hset(`community-next:notification-read:${user.id}`, notice.slice(6), '1')
-      else await ctx.db.query(`INSERT INTO announcement_read(id,"userId","announcementId")
-        SELECT $1,$2,a.id FROM announcement a WHERE a.id=$3 AND (a."userId" IS NULL OR a."userId"=$2)
-        ON CONFLICT ("userId","announcementId") DO NOTHING`, [ctx.newId(), user.id, notice])
-    }
-    if (ids.some(value => value.startsWith('redis:'))) await ctx.redis.expire(`community-next:notification-read:${user.id}`, 30 * 86400)
-    ctx.json(200, { ok: true })
-    return true
-  }
-  return false
-}
-
 export async function handleSocial(ctx: RequestContext): Promise<boolean> {
   const path = ctx.url.pathname, method = ctx.req.method
-  if (path.startsWith('/api/notifications')) return notifications(ctx)
+  if (path.startsWith('/api/notifications')) return handleNotifications(ctx)
   if (!path.startsWith('/api/messages')) return false
   const me = ctx.requireUser()
   if ((path === '/api/messages/threads' || path === '/api/messages') && method === 'GET') {

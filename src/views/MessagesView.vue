@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { ArrowLeft, ArrowUpRight, Bell, CheckCheck, Images, MessageSquare, RefreshCw, Search, Send, X } from '@lucide/vue'
 import type { Creator, Work, WorkFile } from '../data'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
-import { inbox, loadInbox, markDirectRead, markInboxRead, notificationCategory, notificationDestination } from '../inbox'
+import { inbox, loadInbox, loadMoreNotifications, markAllInboxRead, markDirectRead, markInboxRead, notificationCategory, notificationDestination } from '../inbox'
 
 interface Message { id: string; text: string; date: string; owned: boolean; read?: boolean; file?: WorkFile; sharedWorkId?: string }
 interface Thread { user: Creator; lastMessage?: Message | null; unread: number; canSend?: boolean; reason?: string }
@@ -18,7 +18,6 @@ const categories = [
 const activeTab = computed(() => !userId.value && (route.query.tab === 'announcement' || route.query.tab === 'activity') ? route.query.tab : 'messages')
 const currentCategory = computed(() => categories.find(item => item.value === activeTab.value)!)
 const notifications = computed(() => inbox.notifications.filter(item => notificationCategory(item) === activeTab.value))
-const unreadNotifications = computed(() => notifications.value.filter(item => !item.isRead))
 const threads = ref<Thread[]>([]), threadCursor = ref<string | null>(null), threadLoading = ref(false)
 const user = ref<Creator | null>(null), messages = ref<Message[]>([]), messageCursor = ref<string | null>(null), messageLoading = ref(false)
 const canSend = ref(false), reason = ref(''), error = ref(''), sendError = ref(''), sending = ref(false)
@@ -117,7 +116,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 </script>
 
 <template>
-  <div class="page-container messages-page"><div class="page-heading"><h1>消息</h1><div v-if="session.user" class="inbox-actions"><button v-if="activeTab !== 'messages'" class="button subtle btn" :disabled="inbox.markingRead || !unreadNotifications.length" @click="markInboxRead(unreadNotifications.map(item => item.id))"><CheckCheck :size="17" />全部标记已读</button><button class="icon-button" aria-label="刷新消息" title="刷新消息" :disabled="inbox.loading || activeTab === 'messages' && (threadLoading || messageLoading)" @click="refresh"><RefreshCw :size="18" /></button></div></div>
+  <div class="page-container messages-page"><div class="page-heading"><h1>消息</h1><div v-if="session.user" class="inbox-actions"><button v-if="activeTab !== 'messages'" class="button subtle btn" :disabled="inbox.markingRead || inbox.loading || !inbox.counts[activeTab] || !inbox.readThrough[activeTab]" @click="markAllInboxRead(activeTab)"><CheckCheck :size="17" />全部标记已读</button><button class="icon-button" aria-label="刷新消息" title="刷新消息" :disabled="inbox.loading || activeTab === 'messages' && (threadLoading || messageLoading)" @click="refresh"><RefreshCw :size="18" /></button></div></div>
     <nav v-if="session.user" class="tabs inbox-categories" aria-label="消息分类"><RouterLink v-for="item in categories" :key="item.value" :to="item.to" class="tab" :class="{ active: activeTab === item.value }" :aria-current="activeTab === item.value ? 'page' : undefined"><span>{{ item.label }}</span><span v-if="inbox.counts[item.value]" class="unread-badge" :aria-label="`${inbox.counts[item.value]} 条未读`">{{ inbox.counts[item.value] > 99 ? '99+' : inbox.counts[item.value] }}</span></RouterLink></nav>
     <div v-if="!session.user && session.ready" class="empty-state"><MessageSquare :size="28" /><h2>登录后查看消息</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
     <section v-else-if="activeTab !== 'messages'" class="inbox-panel" :aria-label="currentCategory.label">
@@ -129,6 +128,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
         <RouterLink :to="notificationDestination(item)" class="inbox-notification-link" @click="!item.isRead && markInboxRead([item.id])"><strong>{{ item.title || currentCategory.label }}</strong><p v-if="item.text || item.body">{{ item.text || item.body }}</p><time v-if="item.createdAt" class="caption-5">{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time></RouterLink>
         <span v-if="!item.isRead" class="inbox-unread" aria-label="未读">未读</span>
       </article>
+      <div class="notification-pagination"><button v-if="inbox.nextCursors[activeTab]" class="button btn" :disabled="inbox.loadingMore[activeTab] || inbox.loading || inbox.markingRead" @click="loadMoreNotifications(activeTab)">{{ inbox.loadingMore[activeTab] ? '正在加载…' : '加载更早通知' }}</button><p v-if="activeTab === 'activity' && notifications.length" class="form-note">显示当前保留的互动通知；全部已读仅处理本次查看时已有的通知。</p></div>
     </section>
     <div v-else class="messages-layout" :class="{ 'has-conversation': !!userId }"><aside class="thread-pane" aria-label="私信会话"><div v-if="threadLoading && !threads.length" class="empty-state" role="status">正在加载会话…</div><RouterLink v-for="thread in threads" :key="thread.user.id" :to="`/messages/${thread.user.id}`" class="thread-row" :class="{ active: thread.user.id === userId }"><span class="avatar blue"><img v-if="thread.user.avatarUrl" :src="thread.user.avatarUrl" :alt="thread.user.name || thread.user.username" /><span v-else>{{ (thread.user.name || thread.user.username).slice(0, 1) }}</span></span><div><strong>{{ thread.user.name || thread.user.username }}</strong><p>{{ thread.lastMessage?.sharedWorkId ? '分享了一件作品' : thread.lastMessage?.text || '暂无消息' }}</p></div><span v-if="thread.unread" class="unread-badge">{{ thread.unread }}</span></RouterLink><p v-if="!threadLoading && !threads.length" class="form-note">暂无私信会话</p><button v-if="threadCursor" class="button subtle btn" :disabled="threadLoading" @click="loadThreads(true)">更多会话</button><RouterLink to="/community" class="text-link">查找创作者<ArrowUpRight :size="15" /></RouterLink></aside>
       <section class="conversation-pane" aria-label="私信内容"><template v-if="userId"><div class="conversation-heading"><RouterLink to="/messages" class="icon-button conversation-back" aria-label="返回会话列表"><ArrowLeft :size="18" /></RouterLink><RouterLink v-if="user" :to="{ path: '/community', query: { creator: user.id } }" class="person-link"><span class="avatar blue"><img v-if="user.avatarUrl" :src="user.avatarUrl" :alt="user.name || user.username" /><span v-else>{{ (user.name || user.username).slice(0, 1) }}</span></span><strong>{{ user.name || user.username }}</strong></RouterLink></div>
@@ -142,6 +142,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 
 <style scoped>
 .messages-page { max-width: 1280px; }
+.notification-pagination { display: grid; justify-items: center; gap: 12px; padding-block: 24px; }
 .inbox-actions { display: flex; align-items: center; gap: 8px; }
 .inbox-categories { gap: 32px; }
 .inbox-panel { min-height: 480px; border-top: 1px solid var(--border); }

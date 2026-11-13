@@ -2,15 +2,15 @@
 import { computed } from 'vue'
 import { ArrowRight, ArrowUpRight, ChevronRight, Flag, Gift, Globe, Image, Megaphone, RefreshCw, Settings2, ShieldCheck, Tags, Users } from '@lucide/vue'
 import ContentSkeleton from './ContentSkeleton.vue'
-import { kindLabels, type Work, type WorkStatus } from '../data'
+import { kindLabels, type AdminOverviewData, type Work, type WorkStatus } from '../data'
 
-const props = defineProps<{ works: Work[]; loading: boolean; error: string; updatedAt: string; isAdmin: boolean }>()
-const emit = defineEmits<{ refresh: []; review: [status: WorkStatus | 'all']; navigate: [tab: 'reports' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'lottery'] }>()
+const props = defineProps<{ works: Work[]; overview: AdminOverviewData | null; days: 7 | 30; loading: boolean; error: string; updatedAt: string; isAdmin: boolean }>()
+const emit = defineEmits<{ refresh: []; period: [days: 7 | 30]; review: [status: WorkStatus | 'all']; navigate: [tab: 'reports' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'lottery'] }>()
 const pending = computed(() => props.works.filter(work => work.status === 'pending' || work.revisionPending))
 const summary = computed(() => [
-  { label: '待审核', value: pending.value.length, status: 'pending' as const, hint: '含作品修改' },
-  { label: '已公开', value: props.works.filter(work => work.status === 'published').length, status: 'published' as const, hint: '正在社区展示' },
-  { label: '未通过', value: props.works.filter(work => work.status === 'rejected').length, status: 'rejected' as const, hint: '含已撤下作品' },
+  { label: '待审核', value: props.overview?.counts.pending ?? 0, status: 'pending' as const, hint: '含作品修改' },
+  { label: '已公开', value: props.overview?.counts.published ?? 0, status: 'published' as const, hint: '以审核列表状态为准' },
+  { label: '未通过', value: props.overview?.counts.rejected ?? 0, status: 'rejected' as const, hint: '含已撤下作品' },
 ])
 const shortcuts = computed(() => [
   { id: 'reports' as const, label: '举报处理', description: '核对举报与处理结果', icon: Flag },
@@ -27,19 +27,20 @@ const shortcuts = computed(() => [
 
 <template>
   <section class="panel-section admin-overview" :aria-busy="loading">
-    <div class="section-heading"><div><h2>管理概览</h2><p class="form-note">查看近期投稿与待办，快速进入常用管理。</p></div><button class="button subtle btn" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
+    <div class="section-heading"><div><h2>管理概览</h2><p class="form-note">查看全量待办与近期新增，快速进入常用管理。</p></div><button class="button subtle btn" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="emit('refresh')">重试</button></p>
     <ContentSkeleton v-if="loading" label="正在加载管理概览…" />
-    <template v-else-if="!error">
+    <template v-else-if="!error && overview">
       <div class="overview-summary">
-        <div class="summary-heading"><h3>近期投稿</h3><span>最近载入 {{ works.length }} 条 · {{ updatedAt }} 更新</span></div>
-        <div class="overview-metrics"><button v-for="metric in summary" :key="metric.label" class="overview-metric" @click="emit('review', metric.status)"><span>{{ metric.label }}<ArrowUpRight :size="16" aria-hidden="true" /></span><strong :class="metric.status">{{ metric.value }}</strong><small>{{ metric.hint }}</small></button></div>
-        <p class="form-note">统计仅基于最近载入的投稿，待审核包含已公开作品的修改。</p>
+        <div class="summary-heading"><h3>当前社区状态</h3><span>全量统计 · {{ updatedAt }} 更新</span></div>
+        <div class="overview-metrics"><button v-for="metric in summary" :key="metric.label" class="overview-metric" @click="emit('review', metric.status)"><span>{{ metric.label }}<ArrowUpRight :size="16" aria-hidden="true" /></span><strong :class="metric.status">{{ metric.value.toLocaleString('zh-CN') }}</strong><small>{{ metric.hint }}</small></button><button class="overview-metric" @click="emit('navigate', 'reports')"><span>待处理举报<ArrowUpRight :size="16" aria-hidden="true" /></span><strong>{{ overview.counts.reports.toLocaleString('zh-CN') }}</strong><small>尚未作出处理结果</small></button></div>
+        <p class="form-note">覆盖审核列表全部作品。修改待审与已公开状态可重叠，以上数字不能相加作为总量。</p>
       </div>
+      <section class="overview-period"><div class="summary-heading"><h3>近期新增</h3><div class="tabs" role="group" aria-label="统计时间"><button v-for="period in ([7, 30] as const)" :key="period" class="tab" :class="{ active: days === period }" :aria-pressed="days === period" :disabled="loading" @click="emit('period', period)">近 {{ period }} 天</button></div></div><dl><div><dt>新增作品</dt><dd>{{ overview.period.newWorks.toLocaleString('zh-CN') }}</dd></div><div v-if="isAdmin && overview.period.newUsers !== undefined"><dt>新增本地用户</dt><dd>{{ overview.period.newUsers.toLocaleString('zh-CN') }}</dd></div></dl><p class="form-note">按创建时间统计；作品包含草稿与来源评论，用户不含远程及已删除账号。</p></section>
       <div class="overview-columns">
         <section class="overview-queue"><div class="section-heading"><h3>待办作品</h3><button class="text-link" @click="emit('review', 'pending')">进入审核<ArrowRight :size="15" aria-hidden="true" /></button></div>
           <ul v-if="pending.length" class="queue-list"><li v-for="work in pending.slice(0, 5)" :key="work.id"><RouterLink :to="'/work/' + work.id" class="queue-work"><span class="queue-cover"><img v-if="work.cover" :src="work.cover" alt="" loading="lazy" /><Image v-else :size="20" aria-hidden="true" /></span><span><strong>{{ work.title }}</strong><small>{{ work.author }} · {{ kindLabels[work.kind] }}</small><small v-if="work.revisionPending" class="revision-label">修改待审核</small><small v-else>{{ new Date(work.date).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</small></span><ChevronRight :size="16" aria-hidden="true" /></RouterLink></li></ul>
-          <div v-else class="overview-empty"><ShieldCheck :size="28" aria-hidden="true" /><h3>近期投稿中没有待办</h3><p>进入审核列表，检查更早的待审核内容。</p><button class="button btn" @click="emit('review', 'pending')">查看审核队列</button></div>
+          <div v-else class="overview-empty"><ShieldCheck :size="28" aria-hidden="true" /><h3>暂无待审核作品</h3><p>新投稿和待审核修改会显示在这里。</p><button class="button btn" @click="emit('review', 'pending')">查看审核队列</button></div>
         </section>
         <section class="overview-shortcuts"><h3>常用管理</h3><button v-for="item in shortcuts" :key="item.id" class="shortcut" @click="emit('navigate', item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><ChevronRight :size="16" aria-hidden="true" /></button></section>
       </div>
@@ -56,7 +57,11 @@ const shortcuts = computed(() => [
 .summary-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 h3 { font-size: 16px; font-weight: 500; }
 .summary-heading > span { color: var(--muted); font-size: 12px; }
-.overview-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding-block: 24px; }
+.overview-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; padding-block: 24px; }
+.overview-period { margin-top: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.overview-period dl { display: flex; gap: 64px; margin: 20px 0 16px; }
+.overview-period dt { color: var(--muted); font-size: 14px; }
+.overview-period dd { margin: 8px 0 0; font-size: 24px; font-variant-numeric: tabular-nums; }
 .overview-metric { display: grid; gap: 8px; text-align: left; border-radius: 4px; }
 .overview-metric > span { display: flex; align-items: center; gap: 12px; color: var(--muted); }
 .overview-metric:hover > span { color: var(--ink); }
@@ -89,7 +94,7 @@ small { color: var(--muted); font-size: 12px; line-height: 20px; }
 @media (max-width: 1100px) { .overview-columns { grid-template-columns: minmax(0, 1fr); } .overview-shortcuts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } .overview-shortcuts h3 { grid-column: 1 / -1; } }
 @media (max-width: 639px) {
   .overview-summary { padding: 16px; }
-  .overview-metrics { gap: 12px; }
+  .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
   .overview-metric strong { font-size: 28px; }
   .overview-metric > span svg { display: none; }
   .overview-shortcuts { grid-template-columns: minmax(0, 1fr); }

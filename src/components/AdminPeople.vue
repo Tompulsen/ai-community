@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Ban, Check, RefreshCw, Search, ShieldCheck, X } from '@lucide/vue'
-import { api, errorMessage, notify, queryString } from '../state'
+import { api, errorMessage, notify, queryString, session } from '../state'
 
-const props = defineProps<{ view: 'users' | 'reports' }>()
+const props = defineProps<{ view: 'users' | 'reports'; confirmLeave: () => boolean | Promise<boolean> }>()
 interface User { id: string; username: string; name: string; isSuspended: boolean; isProtected: boolean; violationCount: number; violationBaseline: number }
 interface Report { id: string; targetUserId: string; targetUsername: string; reporterId: string; reporterUsername: string; resolved: boolean; resolvedAs: 'accept' | 'reject' | null; comment: string; contentKey: string | null; contentSnapshot: string | null; moderationNote: string }
 const users = ref<User[]>([]), reports = ref<Report[]>([]), query = ref('')
@@ -11,19 +11,33 @@ const status = ref(props.view === 'users' ? 'all' : 'open'), nextCursor = ref<st
 const loading = ref(true), busy = ref(false), error = ref('')
 const selectedUser = ref<User | null>(null), reason = ref(''), userDialog = ref<HTMLDialogElement>()
 const selectedReport = ref(''), decision = ref<'accept' | 'reject'>('accept'), note = ref('')
+const originalNote = ref('')
+let appliedStatus = status.value, appliedQuery = ''
+const owner = session.user?.id
+let active = true
+const isCurrent = () => active && session.user?.id === owner
+const hasUnsavedChanges = computed(() => !!selectedReport.value && (note.value !== originalNote.value || decision.value !== 'accept'))
+defineExpose({ hasUnsavedChanges, busy })
 async function load(more = false) {
+  if (!more && hasUnsavedChanges.value) {
+    if (!await props.confirmLeave()) { status.value = appliedStatus; return }
+    selectedReport.value = ''
+  }
   loading.value = true; error.value = ''
   try {
-    const path = `/api/admin/${props.view}${queryString({ query: query.value.trim(), status: status.value, cursor: more ? nextCursor.value || undefined : undefined })}`
+    if (!more) { appliedStatus = status.value; appliedQuery = query.value.trim() }
+    const path = `/api/admin/${props.view}${queryString({ query: appliedQuery, status: appliedStatus, cursor: more ? nextCursor.value || undefined : undefined })}`
     if (props.view === 'users') {
       const data = await api<{ items: User[]; nextCursor: string | null }>(path)
+      if (!isCurrent()) return
       users.value = more ? [...users.value, ...data.items] : data.items; nextCursor.value = data.nextCursor
     } else {
       const data = await api<{ items: Report[]; nextCursor: string | null }>(path)
+      if (!isCurrent()) return
       reports.value = more ? [...reports.value, ...data.items] : data.items; nextCursor.value = data.nextCursor
     }
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { loading.value = false }
+  } catch (cause) { if (isCurrent()) error.value = errorMessage(cause) }
+  finally { if (isCurrent()) loading.value = false }
 }
 function openUser(user: User) {
   selectedUser.value = user; reason.value = ''; error.value = ''
@@ -35,21 +49,28 @@ async function changeUser() {
   try {
     const suspended = !selectedUser.value.isSuspended
     await api(`/api/admin/users/${encodeURIComponent(selectedUser.value.id)}`, { method: 'PATCH', body: { isSuspended: suspended, reason: reason.value.trim() } })
+    if (!isCurrent()) return
     userDialog.value?.close(); notify(suspended ? '账号已封禁。' : '账号已解封，后续违规重新计算。'); await load()
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { busy.value = false }
+  } catch (cause) { if (isCurrent()) error.value = errorMessage(cause) }
+  finally { if (isCurrent()) busy.value = false }
 }
-function openReport(report: Report) { selectedReport.value = report.id; note.value = report.moderationNote; decision.value = 'accept'; error.value = '' }
+async function openReport(report: Report) {
+  if (hasUnsavedChanges.value && !await props.confirmLeave()) return
+  selectedReport.value = report.id; note.value = report.moderationNote; originalNote.value = note.value; decision.value = 'accept'; error.value = ''
+}
+async function cancelReport() { if (!hasUnsavedChanges.value || await props.confirmLeave()) selectedReport.value = '' }
 async function resolveReport() {
   if (!selectedReport.value || busy.value) return
   busy.value = true; error.value = ''
   try {
     await api(`/api/admin/reports/${encodeURIComponent(selectedReport.value)}`, { method: 'PATCH', body: { resolvedAs: decision.value, moderationNote: note.value.trim() } })
-    selectedReport.value = ''; notify('举报已处理。'); await load()
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { busy.value = false }
+    if (!isCurrent()) return
+    selectedReport.value = ''; busy.value = false; notify('举报已处理。'); await load()
+  } catch (cause) { if (isCurrent()) error.value = errorMessage(cause) }
+  finally { if (isCurrent()) busy.value = false }
 }
 onMounted(() => { void load() })
+onBeforeUnmount(() => { active = false })
 </script>
 
 <template>
@@ -68,7 +89,7 @@ onMounted(() => { void load() })
         <p class="report-text">{{ report.comment }}</p><p v-if="report.contentKey" class="caption-5">相关内容：{{ report.contentKey }}</p>
         <details v-if="report.contentSnapshot" class="report-snapshot"><summary>举报时的内容</summary><pre>{{ report.contentSnapshot }}</pre></details>
         <p v-if="report.resolved && report.moderationNote" class="form-note">处理说明：{{ report.moderationNote }}</p>
-        <form v-if="selectedReport === report.id && !report.resolved" class="stack report-resolution" @submit.prevent="resolveReport"><fieldset class="fieldset stack" :disabled="busy"><label class="field"><span>处理结果</span><select v-model="decision" class="control"><option value="accept">举报成立，记录内容违规</option><option value="reject">举报不成立</option></select></label><label class="field"><span>处理说明</span><textarea v-model="note" class="control" rows="3" maxlength="8192" /></label><div class="table-actions"><button class="button primary btn" :disabled="busy"><Check :size="16" />{{ busy ? '正在提交…' : '确认处理' }}</button><button type="button" class="button subtle btn" :disabled="busy" @click="selectedReport = ''">取消</button></div></fieldset></form>
+        <form v-if="selectedReport === report.id && !report.resolved" class="stack report-resolution" @submit.prevent="resolveReport"><fieldset class="fieldset stack" :disabled="busy"><label class="field"><span>处理结果</span><select v-model="decision" class="control"><option value="accept">举报成立，记录内容违规</option><option value="reject">举报不成立</option></select></label><label class="field"><span>处理说明</span><textarea v-model="note" class="control" rows="3" maxlength="8192" /></label><div class="table-actions"><button class="button primary btn" :disabled="busy"><Check :size="16" />{{ busy ? '正在提交…' : '确认处理' }}</button><button type="button" class="button subtle btn" :disabled="busy" @click="cancelReport">取消</button></div></fieldset></form>
         <button v-else-if="!report.resolved" class="button subtle btn" :disabled="busy" @click="openReport(report)">处理举报</button>
       </article>
       <div v-if="!reports.length && !loading && !error" class="empty-state"><ShieldCheck :size="28" /><h3>{{ status === 'open' ? '暂无待处理举报' : '没有符合条件的举报' }}</h3></div>

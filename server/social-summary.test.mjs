@@ -22,16 +22,19 @@ test('notification categories count only visible unread items and exclude direct
     req: { method: 'GET' }, url: new URL('/api/notifications', config.url), config,
     requireUser: () => ({ id: '17' }),
     redis: {
-      async xrevrange(key, end, start, count, maximum) {
-        assert.deepEqual([key, end, start, count, maximum], ['notificationTimeline:17', '+', '-', 'COUNT', 50])
+      async xrevrange(...args) {
+        assert.deepEqual(args, ['notificationTimeline:17', '+', '-'])
         return events
       },
       async get(key) { assert.equal(key, 'latestReadNotification:17'); return streamId(3) },
       async hgetall(key) { assert.equal(key, 'community-next:notification-read:17'); return { [streamId(10)]: '1' } },
+      async persist(key) { assert.equal(key, 'community-next:notification-read:17'); return 1 },
+      async set() { return 'OK' },
     },
     db: { async query(sql, values) {
       if (sql.includes('FROM announcement')) {
-        assert.deepEqual(values, ['17'])
+        if (sql.includes('COUNT(*)')) { assert.deepEqual(values, ['17']); return { rows: [{ unread: 1, unreadIds: ['notice1'] }] } }
+        assert.deepEqual(values, ['17', null])
         return { rows: [
           { id: 'notice1', title: 'System update', text: '', updatedAt: null, readId: null },
           { id: 'notice2', title: 'Already read', text: '', updatedAt: null, readId: 'read2' },
@@ -56,7 +59,7 @@ test('notification categories count only visible unread items and exclude direct
   assert.equal(item(8).type, 'activity')
   assert.equal(item(9).type, 'activity')
   assert.equal(item(11).type, 'activity')
-  assert.equal(item(12).type, 'message')
+  assert.equal(item(12), undefined)
   assert.equal(item(13), undefined)
   assert.equal(item(10).isRead, true)
   assert(response.items.filter(notice => !notice.id.startsWith('redis:')).every(notice => notice.type === 'announcement'))

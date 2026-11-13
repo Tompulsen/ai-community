@@ -1,6 +1,12 @@
 export type WorkKind = 'image' | 'video' | 'resource'
 export type WorkStatus = 'draft' | 'pending' | 'approved' | 'published' | 'rejected'
 
+export interface AdminOverviewData {
+  counts: { pending: number; published: number; rejected: number; reports: number }
+  period: { days: number; from: string; to: string; newWorks: number; newUsers?: number }
+  updatedAt: string
+}
+
 export interface WorkFile {
   id: string
   name: string

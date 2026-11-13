@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 import { createHash } from 'node:crypto'
+import { handleAdminInsights } from './admin-insights.ts'
 import { httpError, roleCondition } from './auth.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
 import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './settings.ts'
@@ -352,6 +353,7 @@ async function announcements(ctx: RequestContext, announcementId?: string) {
 }
 
 export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
+  if (await handleAdminInsights(ctx)) return true
   const path = ctx.url.pathname, method = ctx.req.method
   if (path === '/api/community/ads' && method === 'GET') { ctx.json(200, await readAds(ctx, true)); return true }
   if (path === '/api/site' && method === 'GET') { const { brand, logoUrl } = await readSiteSettings(ctx.db, ctx.config.url); ctx.json(200, { brand, logoUrl }); return true }

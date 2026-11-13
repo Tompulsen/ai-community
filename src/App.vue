@@ -63,9 +63,10 @@ function closePublish() {
   void router.replace({ path: route.path, query, hash: route.hash })
 }
 async function published(work: Work) {
+  const owner = session.user?.id
   publicationNavigation.value = true
   try { await router.push({ path: '/library', query: { tab: work.status === 'draft' ? 'draft' : work.status === 'pending' ? 'pending' : 'all' } }) }
-  finally { publicationNavigation.value = false }
+  finally { publicationNavigation.value = false; if (owner === session.user?.id) closePublish() }
 }
 async function signOut() {
   if (signingOut.value) return
