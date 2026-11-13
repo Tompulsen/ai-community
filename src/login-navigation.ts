@@ -18,7 +18,7 @@ export function loginReturnPath(value: unknown, fallback = '/discover'): string 
     case 'create': Object.assign(allowed, { from: id, remix: id }); break
     case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
     case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/ }); break
-    case 'account': allowed.tab = /^(profile|balance|security)$/; break
+    case 'account': allowed.tab = /^(profile|balance|security|privacy|following|theme)$/; break
     case 'messages': Object.assign(allowed, { peer: id, tab: /^(messages|announcement|activity)$/ }); break
   }
   const seen = new Set<string>()

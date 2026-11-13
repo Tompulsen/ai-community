@@ -43,6 +43,17 @@ delivery now includes the frontend and an independent community backend.
   work count are omitted. Clearing conditions preserves content type and browse
   mode; restoring defaults resets the complete selection. Following requires login.
 - Community announcements and creator profiles remain reachable.
+- Follow authors from work details, creator cards, profiles and follower lists.
+  Relationships include following, mutual following and pending approval. Owners
+  can approve/reject received requests, cancel sent requests and remove followers.
+  Privacy settings control approval, newcomer age and list visibility; age uses
+  the community joining timestamp. Existing pending requests remain manual after
+  a rule change. Mutations bind the expected account and reuse existing tables.
+- Account settings include six built-in palettes, separately selected for light
+  and dark mode, plus system and local-time scheduled switching. The existing
+  charcoal/sage theme remains the default. Preferences apply before app rendering
+  and persist per browser, with same-browser tab synchronization and an explicit
+  error when storage is unavailable. They do not synchronize across devices.
 - Publishing, saved work, notifications and administration have distinct places.
 - Work editing and report resolution protect unsaved input when closing, navigating
   or refreshing. Successful saves release the guard; account changes clear the

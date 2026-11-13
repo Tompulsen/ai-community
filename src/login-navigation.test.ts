@@ -11,6 +11,7 @@ describe('login return destinations agree with the OAuth backend', () => {
       '/discover?q=', '/create?from=old123', '/create/video?remix=old123',
       '/library?tab=saved&publish=1', '/community?creator=creator123&tab=creators',
       '/community?tab=announcements', '/account?tab=security', '/messages?peer=creator123',
+      '/account?tab=privacy', '/account?tab=following', '/account?tab=theme',
       '/messages?tab=activity', '/messages?tab=announcement', '/messages?tab=messages',
       '/activities?invite=inviter123', '/discover?q=' + 'q'.repeat(500),
       '/discover?tag=' + 't'.repeat(100), '/work/' + 'a'.repeat(32),

@@ -17,6 +17,7 @@ import { handleContent } from './content.ts'
 import { handleLottery, startPendingWorker } from './lottery.ts'
 import { handleAccount } from './account.ts'
 import { handleSocial } from './social.ts'
+import { handleFollowing } from './following.ts'
 import { handleAdmin } from './admin.ts'
 import { handleSecurity } from './security.ts'
 import { startMediaWorker } from './media.ts'
@@ -182,6 +183,11 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['POST', ['/api/community/submissions/create', '/api/community/submissions/update', '/api/community/submissions/delete',
       '/api/community/submissions/show', '/api/community/submissions/mine', '/api/community/works', '/api/community/works/show',
       '/api/community/tags', '/api/community/comments/delete', '/api/admin/community/submissions', '/api/admin/community/submissions/review']],
+  ])
+  register(handleFollowing, [
+    ['GET', ['/api/account/privacy', '/api/follow-requests', '/api/users/:id/relationship']],
+    ['PATCH', ['/api/account/privacy']],
+    ['POST', ['/api/follow-requests/:id', '/api/users/:id/remove-follower']],
   ])
   register(handleSocial, [
     ['GET', ['/api/notifications', '/api/messages', '/api/messages/threads', '/api/messages/:userId']],

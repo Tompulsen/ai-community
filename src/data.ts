@@ -76,6 +76,11 @@ export interface Creator {
   bio: string
   count: number
   followed: boolean
+  requested?: boolean
+  followsYou?: boolean
+  isLocked?: boolean
+  canViewFollowers?: boolean
+  canViewFollowing?: boolean
   avatarUrl?: string
   bannerUrl?: string
   followersCount?: number

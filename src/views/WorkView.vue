@@ -5,6 +5,7 @@ import { ArrowLeft, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, 
 import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork, uploadFile } from '../state'
 import { kindLabels, type Creator, type Work, type WorkComment, type WorkFile } from '../data'
 import WorkCard from '../components/WorkCard.vue'
+import FollowButton from '../components/FollowButton.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
@@ -118,6 +119,7 @@ async function share() {
     <div class="detail-topbar"><RouterLink to="/discover" class="back-link"><ArrowLeft :size="16" />返回发现</RouterLink></div>
     <div class="detail-layout"><WorkMedia class="detail-visual" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
       <aside class="detail-info"><div class="detail-title"><h1>{{ work.title }}</h1></div><RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="creator-line"><span class="avatar blue"><img v-if="work.avatarUrl" :src="work.avatarUrl" :alt="work.author" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></span><div><strong>{{ work.author }}</strong><span class="caption-5">{{ new Date(work.date).toLocaleDateString('zh-CN') }} 发布</span></div></RouterLink>
+        <FollowButton :user-id="work.authorId" author />
         <div class="detail-actions"><button class="button btn subtle" :class="{ selected: work.liked }" :aria-label="`喜欢作品，${work.likes} 赞`" :aria-pressed="work.liked" :disabled="pendingActions.has(`liked:${work.id}`)" @click="toggleWork(work, 'liked')"><Heart :size="17" />{{ work.likes }}</button><button class="button btn subtle" :class="{ selected: work.saved }" :aria-pressed="work.saved" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" />{{ work.saved ? '已收藏' : '收藏' }}</button><button class="button btn subtle" :aria-pressed="!!work.renoted" :disabled="reposting" @click="repost"><Repeat2 :size="17" />{{ work.renotesCount || 0 }}</button><button class="icon-button" aria-label="通过私信分享作品" title="私信分享" @click="openShare"><Send :size="17" /></button><button v-if="session.user" class="icon-button" aria-label="举报作品" title="举报作品" @click="openReport()"><Flag :size="17" /></button></div>
         <p v-if="work.viewsCount !== undefined" class="muted view-count"><Eye :size="15" />{{ work.viewsCount }} 次浏览</p><section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2>创作说明</h2><p class="work-body">{{ work.body }}</p></section>
         <section class="prompt-section"><div class="section-heading"><h2>提示词</h2><button class="icon-button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" /></button></div><p>{{ work.prompt || '作者未公开提示词。' }}</p></section>

@@ -135,7 +135,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 .rail-option { min-height: 28px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; white-space: nowrap; font-weight: 500; }
 .rail-option:hover { color: var(--ink); }
 .browse-mode, .rail-option { transition: background-color .2s ease-in-out, color .2s ease-in-out, border-color .2s ease-in-out, box-shadow .2s ease-in-out; }
-.browse-mode.active, .rail-option.active { background: #202020; color: var(--ink); box-shadow: inset 4px 4px 10px #141414, inset -4px -4px 10px #2c2c2c; }
+.browse-mode.active, .rail-option.active { background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--border); }
 .rail-option:focus-visible, .browse-mode:focus-visible { outline-offset: -3px; }
 .tag-scroll-controls { display: flex; flex: none; }
 .tag-scroll-controls .icon-button { width: 28px; height: 28px; min-height: 28px; min-width: 28px; border-radius: 50%; }

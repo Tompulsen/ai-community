@@ -87,7 +87,8 @@ function measureCover(event: Event) {
 
 <style scoped>
 .work-card { display: flex; flex-direction: column; justify-content: flex-end; gap: 0; min-width: 0; min-height: 0; height: 100%; padding: 0; border: 0; border-radius: var(--card-radius); background: var(--surface); box-shadow: none; color: var(--ink); }
-.work-card-content { position: relative; display: flex; flex-direction: column; justify-content: flex-end; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.work-card-content { --work-ink: #fff; --work-muted: #e2e2df; --work-accent: #aec2a8; position: relative; display: flex; flex-direction: column; justify-content: flex-end; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.work-card-content:has(.resource-cover) { --work-ink: var(--ink); --work-muted: var(--muted); --work-accent: var(--blue-hover); }
 /* Overdraw the shared clip edge so composited media cannot form a subpixel seam. */
 .work-card-content::before { content: ""; position: absolute; inset: auto -1px -1px; height: calc(160px + 1px); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
 .work-card-content:has(.resource-cover)::before { display: none; }
@@ -96,18 +97,18 @@ function measureCover(event: Event) {
 .work-cover:not(.resource-cover) { clip-path: inset(0 0 1px); }
 .work-cover:focus-visible { outline-offset: -4px; }
 .work-cover > img, .work-cover > video { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
-.work-information { position: relative; z-index: 2; flex: 0 0 auto; min-width: 0; padding: 12px 16px; color: #fff; }
+.work-information { position: relative; z-index: 2; flex: 0 0 auto; min-width: 0; padding: 12px 16px; color: var(--work-ink); }
 .work-title { min-width: 0; padding-top: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
-.work-title:hover { color: #fff; text-decoration: underline; text-underline-offset: 3px; }
-.work-meta { margin-top: 4px; gap: 8px; min-height: 32px; color: #e2e2df; }
+.work-title:hover { color: var(--work-ink); text-decoration: underline; text-underline-offset: 3px; }
+.work-meta { margin-top: 4px; gap: 8px; min-height: 32px; color: var(--work-muted); }
 .work-author { flex: 1; min-width: 0; min-height: 32px; }
 .work-author > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.work-author:hover { color: #fff; }
+.work-author:hover { color: var(--work-ink); }
 .work-title:focus-visible, .work-author:focus-visible { outline-offset: -2px; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
-.like-button { min-width: 36px; min-height: 32px; justify-content: center; color: #e2e2df; transition: color 200ms var(--ease); }
-.like-button:hover, .like-button:focus-visible { color: #fff; }
-.like-button.selected { color: var(--blue-hover); }
+.like-button { min-width: 36px; min-height: 32px; justify-content: center; color: var(--work-muted); transition: color 200ms var(--ease); }
+.like-button:hover, .like-button:focus-visible { color: var(--work-ink); }
+.like-button.selected { color: var(--work-accent); }
 .save-work { top: 16px; right: 16px; z-index: 2; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; }
 .save-work.selected { background: var(--blue); color: var(--action-ink); border-color: var(--blue); }
 .resource-cover { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 20px 20px 112px; border: 0; }
@@ -119,7 +120,7 @@ function measureCover(event: Event) {
 .video-badge { top: 16px; bottom: auto; left: 16px; right: auto; background: var(--canvas); color: var(--ink); }
 .work-card-managed .work-information { padding-bottom: 8px; }
 .work-card-managed .work-card-content::before { height: calc(224px + 1px); }
-.work-card-managed .work-card-content > :deep(.work-management-actions) { position: relative; z-index: 2; margin: 0; padding: 0 16px 16px; color: #fff; }
+.work-card-managed .work-card-content > :deep(.work-management-actions) { position: relative; z-index: 2; margin: 0; padding: 0 16px 16px; color: var(--work-ink); }
 @media (max-width: 639px) {
   .work-card-content::before { height: calc(192px + 1px); }
   .work-card-managed .work-card-content::before { height: calc(288px + 1px); }

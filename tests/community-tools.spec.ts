@@ -18,12 +18,13 @@ test('tools use real destinations and category counts without writing data', asy
   await page.goto('/community')
   await launcher(page).click()
   await expect(panel(page)).toBeVisible()
-  await expect(panel(page).locator('.tool-item')).toHaveCount(16)
+  await expect(panel(page).locator('.tool-item')).toHaveCount(18)
   const destinations = {
     '发现': '/discover', '公告，2 条未读': '/community?tab=announcements', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
     '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '推广中心': '/activities',
     '账号设置': '/account?tab=profile', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
+    '主题外观': '/account?tab=theme', '关注申请': '/account?tab=following',
   }
   for (const [name, path] of Object.entries(destinations)) await expect(panel(page).getByRole('link', { name, exact: true })).toHaveAttribute('href', path)
   await expect(panel(page).getByRole('link', { name: '消息，99+ 条未读', exact: true }).locator('.tool-count')).toHaveText('99+')

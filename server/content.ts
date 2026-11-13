@@ -12,6 +12,7 @@ import type { IncomingMessage } from 'node:http';
 import type { PoolClient } from 'pg';
 import type { Database, Queryable, RequestContext, SessionUser } from './types.ts';
 import { notifyUser } from './social.ts';
+import { handleFollowing } from './following.ts';
 import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './media.ts';
 import { getUser } from './auth.ts';
 import { accountCenter } from './account-session.ts';
@@ -128,6 +129,9 @@ interface CreatorRow extends IdRow {
   username: string;
   count: number;
   followed: boolean;
+  requested?: boolean;
+  followsYou?: boolean;
+  isLocked?: boolean;
   bio: string | null;
   avatarId?: string | null;
   bannerId?: string | null;
@@ -788,29 +792,6 @@ async function syncReactions(db: Queryable, noteId: string): Promise<void> {
     (SELECT reaction,COUNT(*)::int AS amount FROM note_reaction WHERE "noteId"=$1 GROUP BY reaction) counted),'{}'::jsonb) WHERE id=$1`, [noteId]);
 }
 
-async function follow(ctx: RequestContext, targetId: string): Promise<true> {
-  const actor = user(ctx);
-  if (actor.id === targetId || typeof ctx.body?.active !== 'boolean') fail(400, 'Invalid follow request');
-  const changed = await transaction(ctx.db, async db => {
-    const targets = await db.query<IdRow & { isLocked: boolean }>(`SELECT id,"isLocked" FROM "user" WHERE id=ANY($1::varchar[]) AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" ORDER BY id FOR UPDATE`, [[actor.id, targetId]]);
-    const target = targets.rows.find(row => row.id === targetId);
-    if (!target || targets.rows.length !== 2) fail(404, 'Account not found');
-    if ((await db.query('SELECT 1 FROM blocking WHERE ("blockerId"=$1 AND "blockeeId"=$2) OR ("blockerId"=$2 AND "blockeeId"=$1)', [actor.id, targetId])).rows.length) fail(403, 'Following is unavailable');
-    if (ctx.body.active && target.isLocked) fail(409, 'This account requires follow approval');
-    let changed: number | null;
-    if (ctx.body.active) changed = (await db.query('INSERT INTO following (id,"followerId","followeeId") VALUES ($1,$2,$3) ON CONFLICT ("followerId","followeeId") DO NOTHING RETURNING id', [newId(ctx), actor.id, targetId])).rowCount;
-    else changed = (await db.query('DELETE FROM following WHERE "followerId"=$1 AND "followeeId"=$2 RETURNING id', [actor.id, targetId])).rowCount;
-    if (changed) {
-      const delta = ctx.body.active ? 1 : -1;
-      await db.query('UPDATE "user" SET "followingCount"=GREATEST(0,"followingCount"+$2) WHERE id=$1', [actor.id, delta]);
-      await db.query('UPDATE "user" SET "followersCount"=GREATEST(0,"followersCount"+$2) WHERE id=$1', [targetId, delta]);
-    }
-    return Boolean(changed);
-  });
-  if (changed && ctx.body.active) await inform(ctx, { recipientId: targetId, type: 'follow', actorId: actor.id });
-  return send(ctx, 200, { followed: ctx.body.active });
-}
-
 async function upload(ctx: RequestContext): Promise<true> {
   user(ctx);
   return send(ctx, 201, { file: await uploadMedia(ctx) });
@@ -1076,7 +1057,9 @@ interface ProfileRow extends CreatorRow {
 async function profileRow(ctx: RequestContext, userId: string): Promise<ProfileRow> {
   const result = await ctx.db.query<ProfileRow>(`SELECT u.id,u.name,u.username,u."avatarId",u."bannerId",u."followersCount",u."followingCount",
     p.description AS bio,p."followingVisibility",p."followersVisibility",
-    EXISTS (SELECT 1 FROM following f WHERE f."followerId"=$1 AND f."followeeId"=u.id) AS followed
+    EXISTS (SELECT 1 FROM following f WHERE f."followerId"=$1 AND f."followeeId"=u.id) AS followed,u."isLocked",
+    EXISTS (SELECT 1 FROM follow_request pending WHERE pending."followerId"=$1 AND pending."followeeId"=u.id) AS requested,
+    EXISTS (SELECT 1 FROM following reverse WHERE reverse."followerId"=u.id AND reverse."followeeId"=$1) AS "followsYou"
     FROM "user" u JOIN user_profile p ON p."userId"=u.id WHERE u.id=$2 AND (${visibleAccountSql('u')})`, [viewer(ctx), userId]);
   if (!result.rows[0]) fail(404, 'Account not found');
   return result.rows[0];
@@ -1096,18 +1079,22 @@ async function profile(ctx: RequestContext, userId: string): Promise<true> {
     bannerUrl: row.bannerId ? `/legacy-files/${row.bannerId}?variant=web` : null,
     followersCount: row.followersCount ?? 0, followingCount: row.followingCount ?? 0, worksCount: counts?.count ?? 0,
     receivedLikesCount: counts?.receivedLikesCount ?? 0,
-    followed: Boolean(row.followed), isSelf: row.id === viewer(ctx),
+    followed: Boolean(row.followed), requested: Boolean(row.requested), followsYou: Boolean(row.followsYou), isLocked: Boolean(row.isLocked), isSelf: row.id === viewer(ctx),
+    canViewFollowers: row.id === viewer(ctx) || row.followersVisibility === 'public' || row.followersVisibility === 'followers' && Boolean(row.followed),
+    canViewFollowing: row.id === viewer(ctx) || row.followingVisibility === 'public' || row.followingVisibility === 'followers' && Boolean(row.followed),
   } });
 }
 
 async function followList(ctx: RequestContext, userId: string, mode: 'followers' | 'following'): Promise<true> {
   const account = await profileRow(ctx, userId), privacy = mode === 'followers' ? account.followersVisibility : account.followingVisibility;
-  if (userId !== viewer(ctx) && privacy !== 'public' && !(privacy === 'followers' && account.followed)) fail(403, 'This list is private');
+  if (userId !== viewer(ctx) && privacy !== 'public' && !(privacy === 'followers' && account.followed)) fail(403, '作者已限制此列表的公开范围。');
   const cursor = ctx.url.searchParams.get('cursor');
   if (cursor) identifier(cursor);
   const limit = ctx.url.searchParams.has('limit') ? integer(Number(ctx.url.searchParams.get('limit')), 1, 100) : 50;
   const result = await ctx.db.query<CreatorRow & { relationId: string }>(`SELECT u.id,u.name,u.username,u."avatarId",p.description AS bio,f.id AS "relationId",
-    EXISTS (SELECT 1 FROM following own WHERE own."followerId"=$1 AND own."followeeId"=u.id) AS followed
+    EXISTS (SELECT 1 FROM following own WHERE own."followerId"=$1 AND own."followeeId"=u.id) AS followed,u."isLocked",
+    EXISTS (SELECT 1 FROM follow_request pending WHERE pending."followerId"=$1 AND pending."followeeId"=u.id) AS requested,
+    EXISTS (SELECT 1 FROM following reverse WHERE reverse."followerId"=u.id AND reverse."followeeId"=$1) AS "followsYou"
     FROM following f JOIN "user" u ON u.id=f."${mode === 'followers' ? 'followerId' : 'followeeId'}" JOIN user_profile p ON p."userId"=u.id
     WHERE f."${mode === 'followers' ? 'followeeId' : 'followerId'}"=$2 AND (${visibleAccountSql('u')})
     AND ($3::varchar IS NULL OR f.id<$3) ORDER BY f.id DESC LIMIT $4`, [viewer(ctx), userId, cursor || null, limit + 1]);
@@ -1115,7 +1102,7 @@ async function followList(ctx: RequestContext, userId: string, mode: 'followers'
   return send(ctx, 200, {
     items: rows.map(row => ({ id: row.id, username: row.username, name: row.name || row.username,
       ...(row.accountId ? { accountId: row.accountId } : {}),
-      bio: row.bio || '', avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, followed: Boolean(row.followed) })),
+      bio: row.bio || '', avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, followed: Boolean(row.followed), requested: Boolean(row.requested), followsYou: Boolean(row.followsYou), isLocked: Boolean(row.isLocked) })),
     nextCursor: result.rows.length > limit ? result.rows[limit - 1].relationId : null,
   });
 }
@@ -1231,7 +1218,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   if (path === '/api/reports' && method === 'POST') return report(ctx, identifier(ctx.body.workId));
   if ((match = /^\/api\/users\/([a-zA-Z0-9]+)$/.exec(path)) && method === 'GET') return profile(ctx, identifier(match[1]));
   if ((match = /^\/api\/users\/([a-zA-Z0-9]+)\/(followers|following)$/.exec(path)) && method === 'GET') return followList(ctx, identifier(match[1]), match[2] as 'followers' | 'following');
-  if ((match = /^\/api\/users\/([a-zA-Z0-9]+)\/follow$/.exec(path)) && method === 'POST') return follow(ctx, identifier(match[1]));
+  if ((match = /^\/api\/users\/([a-zA-Z0-9]+)\/follow$/.exec(path)) && method === 'POST') return handleFollowing(ctx);
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments$/.exec(path)) && (method === 'GET' || method === 'POST')) return comments(ctx, identifier(match[1]));
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments\/([a-zA-Z0-9]+)\/like$/.exec(path)) && method === 'POST') return commentLike(ctx, identifier(match[1]), identifier(match[2]));
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments\/([a-zA-Z0-9]+)$/.exec(path)) && method === 'DELETE') {
@@ -1277,14 +1264,16 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   }
   if (path === '/api/creators' && method === 'GET') {
     const result = await ctx.db.query<CreatorRow>(`SELECT u.id,u.name,u.username,u."avatarId",p.description AS bio,COUNT(s.id)::int AS count,
-      EXISTS (SELECT 1 FROM following f WHERE f."followerId"=$1 AND f."followeeId"=u.id) AS followed
+      EXISTS (SELECT 1 FROM following f WHERE f."followerId"=$1 AND f."followeeId"=u.id) AS followed,u."isLocked",
+    EXISTS (SELECT 1 FROM follow_request pending WHERE pending."followerId"=$1 AND pending."followeeId"=u.id) AS requested,
+    EXISTS (SELECT 1 FROM following reverse WHERE reverse."followerId"=u.id AND reverse."followeeId"=$1) AS "followsYou"
       FROM community_submission s JOIN "user" u ON u.id=s."authorId" JOIN user_profile p ON p."userId"=u.id JOIN note n ON n.id=s."approvedNoteId"
       WHERE (${visibilitySql(ctx)}) AND ($2::varchar IS NULL OR u.id=$2)
       GROUP BY u.id,p.description ORDER BY count DESC,u.id LIMIT 100`, [viewer(ctx), ctx.url.searchParams.has('authorId') ? identifier(ctx.url.searchParams.get('authorId')) : null]);
     const rows = await publicCreators(ctx, result.rows);
     return send(ctx, 200, { items: rows.map(row => ({ id: row.id, authorId: row.id, name: row.name || row.username, username: row.username,
       ...(row.accountId ? { accountId: row.accountId } : {}),
-      avatar: (row.name || row.username).slice(0, 1), avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, count: row.count, followed: row.followed, bio: row.bio || '' })) });
+      avatar: (row.name || row.username).slice(0, 1), avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, count: row.count, followed: row.followed, requested: Boolean(row.requested), followsYou: Boolean(row.followsYou), isLocked: Boolean(row.isLocked), bio: row.bio || '' })) });
   }
   if (path === '/api/announcements' && method === 'GET') {
     const result = await ctx.db.query<AnnouncementRow>(`SELECT id,title,text,icon,display,"updatedAt" FROM announcement

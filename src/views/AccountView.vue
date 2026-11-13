@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, Eye, EyeOff, FolderOpen, Image, LogOut, MessageCircle, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, X } from '@lucide/vue'
+import { ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, Eye, EyeOff, FolderOpen, Image, LogOut, MessageCircle, Palette, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, UserPlus, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
+import AccountPrivacy from '../components/AccountPrivacy.vue'
+import FollowRequests from '../components/FollowRequests.vue'
+import AccountTheme from '../components/AccountTheme.vue'
 import PasswordRecovery from '../components/PasswordRecovery.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import LoginCharacters from '../components/LoginCharacters.vue'
@@ -15,7 +18,10 @@ import { loginReturnPath } from '../login-navigation'
 interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean }
 const route = useRoute()
 const router = useRouter()
-const tab = ref(route.query.tab === 'balance' ? 'balance' : route.query.tab === 'security' ? 'security' : 'profile')
+const settingTabs = ['profile', 'privacy', 'following', 'theme', 'security', 'balance']
+const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'profile'
+const tab = ref(readTab(route.query.tab))
+const privacyPanel = ref<InstanceType<typeof AccountPrivacy>>(), privacyDirty = ref(false)
 const settingsQuery = ref(''), settingsNav = ref<HTMLElement>()
 const avatarInput = ref<HTMLInputElement>(), bannerInput = ref<HTMLInputElement>()
 const avatarFailed = ref(false), bannerFailed = ref(false)
@@ -23,15 +29,18 @@ const leaveDialog = ref<HTMLDialogElement>()
 let resolveLeave: ((discard: boolean) => void) | undefined
 const settingsItems = [
   { id: 'profile', label: '个人资料', icon: UserRound, group: '账号设置', keywords: '昵称 名称 头像 封面 简介 profile', to: '/account?tab=profile' },
+  { id: 'privacy', label: '关注与隐私', icon: LockKeyhole, group: '账号设置', keywords: '关注 审批 粉丝 隐私 公开 privacy', to: '/account?tab=privacy' },
+  { id: 'following', label: '关注申请', icon: UserPlus, group: '社区内容', keywords: '粉丝 关注 接受 拒绝 撤回 following', to: '/account?tab=following' },
   { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security', to: '/account?tab=security' },
   { id: 'balance', label: '账户与余额', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance', to: '/account?tab=balance' },
+  { id: 'theme', label: '主题与外观', icon: Palette, group: '偏好设置', keywords: '明亮 暗色 主题 配色 外观 定时 跟随系统 theme', to: '/account?tab=theme' },
   { id: 'works', label: '我的作品', icon: FolderOpen, group: '社区内容', keywords: '作品 草稿 投稿', to: '/library' },
   { id: 'saved', label: '我的收藏', icon: Bookmark, group: '社区内容', keywords: '收藏 喜欢 saved', to: '/library?tab=saved' },
   { id: 'messages', label: '私信', icon: MessageCircle, group: '社区内容', keywords: '消息 联系 messages', to: '/messages' },
 ]
 const settingsGroups = computed(() => {
   const query = settingsQuery.value.trim().toLocaleLowerCase()
-  return ['账号设置', '社区内容'].map(label => ({ label, items: settingsItems.filter(item => item.group === label && (!query || (item.label + item.keywords).toLocaleLowerCase().includes(query))) })).filter(group => group.items.length)
+  return ['账号设置', '偏好设置', '社区内容'].map(label => ({ label, items: settingsItems.filter(item => item.group === label && (!query || (item.label + item.keywords).toLocaleLowerCase().includes(query))) })).filter(group => group.items.length)
 })
 const resetToken = ref(typeof route.query.reset === 'string' ? route.query.reset : undefined)
 const avatarId = ref<string | null>(null), bannerId = ref<string | null>(null)
@@ -63,13 +72,14 @@ function navigateTab(value: string) {
   if (value !== tab.value) void router.push({ path: '/account', query: { tab: value } })
 }
 function confirmLeave() {
-  if (!session.user || (!dirty.value && !uploading.value)) return true
+  if (!session.user || (!dirty.value && !uploading.value && !privacyDirty.value)) return true
   if (resolveLeave) return false
   leaveDialog.value?.showModal()
   return new Promise<boolean>(resolve => { resolveLeave = resolve })
 }
 function finishLeave(discard: boolean) {
   if (discard) {
+    privacyPanel.value?.discard(); privacyDirty.value = false
     profileOperation++; profileUpload?.abort(); profileUpload = undefined
     restoreProfile(session.user); busy.value = false; uploading.value = null; saved.value = false
   }
@@ -78,7 +88,7 @@ function finishLeave(discard: boolean) {
 onBeforeRouteLeave(confirmLeave)
 onBeforeRouteUpdate(confirmLeave)
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (session.user && (dirty.value || uploading.value)) { event.preventDefault(); event.returnValue = '' }
+  if (session.user && (dirty.value || uploading.value || privacyDirty.value)) { event.preventDefault(); event.returnValue = '' }
 }
 async function signOutFromSettings() {
   if (busy.value || !(await confirmLeave())) return
@@ -101,7 +111,7 @@ watch(() => session.user, user => {
     restoreProfile(user)
   } else if (!busy.value && !dirty.value) restoreProfile(user)
 }, { immediate: true, flush: 'sync' })
-watch(() => route.query.tab, value => { tab.value = value === 'balance' ? 'balance' : value === 'security' ? 'security' : 'profile' })
+watch(() => route.query.tab, value => { tab.value = readTab(value) })
 watch([tab, () => session.user?.id, settingsQuery], async () => {
   await nextTick()
   const nav = settingsNav.value, item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
@@ -256,7 +266,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
-            <button v-if="['profile', 'security', 'balance'].includes(item.id)" class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
+            <button v-if="settingTabs.includes(item.id)" class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
             <RouterLink v-else :to="item.to" class="settings-nav-item"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><ArrowUpRight :size="14" aria-hidden="true" /></RouterLink>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
@@ -279,6 +289,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
             <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved" :size="15" aria-hidden="true" /><span v-else class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传' + (uploading === 'avatar' ? '头像…' : '封面…') : busy ? '正在保存资料…' : saved ? '资料已保存' : dirty ? '有未保存的修改' : '资料已同步' }}</p><button class="button primary btn" :disabled="busy"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存资料' }}</button></footer>
           </form>
         </section>
+        <AccountPrivacy v-else-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
+        <FollowRequests v-else-if="tab === 'following'" />
+        <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">
           <section class="panel-section"><div class="section-heading"><h2>章鱼账号</h2><span class="status" :class="{ pending: !account?.linked }">{{ account?.linked ? '已登录' : '需要重新登录' }}</span></div><p class="form-note">社区与创作台使用同一个章鱼账号。</p><dl v-if="account?.linked" class="info-list"><div><dt>账号ID</dt><dd>{{ account.subject }}</dd></div><div><dt>账号服务</dt><dd>{{ account.issuer }}</dd></div></dl><p v-else class="muted">请退出当前会话后，使用章鱼账号重新登录。</p></section>
@@ -286,7 +299,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         </div>
       </div>
     </div>
-    <dialog v-if="session.user" ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">保留资料修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>资料尚未确认保存。离开后，未保存的文字和图片选择将丢失。</p><div class="table-actions profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
+    <dialog v-if="session.user" ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">{{ privacyDirty ? '保留隐私设置修改？' : '保留资料修改？' }}</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>{{ privacyDirty ? '隐私设置尚未保存。离开后，未保存的修改将丢失。' : '资料尚未确认保存。离开后，未保存的文字和图片选择将丢失。' }}</p><div class="table-actions profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
     </div></div>
   </div>
 </template>

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { Work } from '../src/data'
+import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const origin = process.env.COMMUNITY_REGRESSION_ORIGIN || 'http://localhost:18775'
 if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname)) {
@@ -183,6 +184,7 @@ test('new administrator sections use their real contracts and preserve a refused
   const writes: { body: Record<string, unknown>; csrf: string | undefined }[] = []
   await page.route('**/api/admin/**', route => {
     const request = route.request(), pathname = new URL(request.url()).pathname
+    if (pathname === '/api/admin/overview') return route.fulfill({ json: { counts: { pending: 0, published: 0, rejected: 0, reports: 0 }, period: { days: 7, newWorks: 0, newUsers: 0 }, updatedAt: '2026-11-14T00:00:00Z' } })
     if (pathname === '/api/admin/submissions') return route.fulfill({ json: { items: [] } })
     if (pathname === '/api/admin/community/config') {
       if (request.method() === 'GET') return route.fulfill({ json: { config, version: 'config-v1' } })
@@ -287,63 +289,18 @@ test('messages enforce mutual-follow permission, paginate, and retry the same em
   expect(unexpected).toEqual([])
 })
 
-test('one Studio iframe survives in-app navigation and keeps background result controls', async ({ page }) => {
-  const unexpected = await mockApp(page, true)
-  const contexts: { action: string; context: string }[] = []
-  let starts = 0
-  await page.route('**/api/newapi/studio/start', route => {
-    starts++
-    return route.fulfill({ json: { code: 'a'.repeat(43), origin: new URL(origin).origin, subject: 'fixture-subject', userId: user.id } })
-  })
-  await page.route('**/api/newapi/studio/context', route => {
-    contexts.push(route.request().postDataJSON())
-    return route.fulfill({ json: { ok: true } })
-  })
-  await page.route('**/studio/community-embed?*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><p>Isolated Studio fixture</p><script>
-    const params = new URLSearchParams(location.search);
-    const identity = {context:params.get('context'),attempt:params.get('attempt'),subject:'fixture-subject',userId:${JSON.stringify(user.id)}};
-    const task = {id:'00111111-1111-4111-8111-111111111111',sessionId:'fixture-session',kind:'image',title:'后台任务回归',model:'fixture-model',createdAt:1,state:'running'};
-    const send = value => parent.postMessage({type:'community-studio',...identity,...value},location.origin);
-    window.completeFixtureTask = () => {task.state='complete';send({status:'background-tasks',tasks:[task]})};
-    addEventListener('message', event => {
-      if(event.source!==parent || event.origin!==location.origin) return;
-      const data=event.data;
-      if(data.type==='community-launch') send({status:'ready'});
-      if(data.type==='community-workspace') send({status:'workspace-ready',requestId:data.requestId,kind:data.kind});
-      if(data.type==='community-background' && data.action==='list') send({status:'background-tasks',tasks:[task]});
-      if(data.type==='community-background' && data.action==='open') send({status:'background-opened',requestId:data.requestId});
-      if(data.type==='community-background' && data.action==='result') {
-        const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='),char=>char.charCodeAt(0));
-        send({status:'background-result',requestId:data.requestId,files:[new Blob([bytes],{type:'image/png'})]});
-      }
-    });
-    send({status:'hello'});
-  </script></body></html>` }))
+test('native creation uses the community account without retired iframe launch endpoints', async ({ page }) => {
+  const state = await mockUnifiedAccount(page, true)
+  const retired: string[] = []
+  await page.route('**/api/newapi/studio/**', route => { retired.push(route.request().url()); return route.abort() })
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { items: [{ id: 'fixture-image', name: '图片测试模型', kinds: ['image'], protocol: 'openai' }] } }))
   await page.goto('/create/image')
-  await expect(page.locator('.studio-stage')).toHaveAttribute('data-state', 'ready')
-  await expect(page.locator('iframe.studio-frame')).toHaveCount(1)
-  await expect(page.locator('main iframe')).toHaveCount(0)
-  await expect(page.locator('.background-dock')).toContainText('后台任务回归')
-  const handle = await page.locator('iframe.studio-frame').elementHandle()
-  const frame = await handle!.contentFrame()
-  await page.locator('nav.desktop-nav a[href="/discover"]').click()
-  await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeVisible()
-  await expect(page.locator('iframe.studio-frame')).toHaveCount(1)
-  expect(await handle!.evaluate(element => element.isConnected)).toBe(true)
-  await expect(page.locator('.studio-host')).toHaveAttribute('aria-hidden', 'true')
-  await frame!.evaluate(() => (window as unknown as { completeFixtureTask: () => void }).completeFixtureTask())
-  await expect(page.locator('.background-dock')).toContainText('生成完成')
-  await page.getByRole('button', { name: '查看结果', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '生成结果预览', exact: true })
-  await expect(dialog.locator('img')).toBeVisible()
-  await expect(dialog.getByRole('link', { name: '下载文件', exact: true })).toHaveAttribute('download', /creation-1/)
-  await dialog.getByRole('button', { name: '关闭结果预览', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-image')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeVisible()
+  await expect(page.locator('iframe')).toHaveCount(0)
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '首页', exact: true }).click()
   await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '创作台', exact: true }).click()
-  await expect(page.locator('.studio-host')).toHaveAttribute('aria-hidden', 'false')
-  expect(await handle!.evaluate(element => element.isConnected)).toBe(true)
-  expect(starts).toBe(1)
-  await page.getByRole('button', { name: '关闭工作台', exact: true }).click()
-  await expect(page.locator('iframe.studio-frame')).toHaveCount(0)
-  await expect.poll(() => contexts.filter(value => value.action === 'revoke').length).toBe(1)
-  expect(unexpected).toEqual([])
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeVisible()
+  expect(retired).toEqual([])
+  expect(state.mutations).toEqual([])
 })

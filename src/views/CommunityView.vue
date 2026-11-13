@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, UserCheck, UserPlus, Users, X } from '@lucide/vue'
+import { ArrowLeft, ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { kindLabels, type Announcement, type Creator, type Work } from '../data'
-import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
+import { api, errorMessage, loadSession, queryString, session } from '../state'
+import FollowButton from '../components/FollowButton.vue'
+import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
 const route = useRoute()
 const router = useRouter()
 const tab = ref(route.query.tab === 'announcements' ? 'announcements' : 'creators')
@@ -16,32 +18,35 @@ const creators = ref<Creator[]>([]), announcements = ref<Announcement[]>([]), cr
 const profileTabs = [{ value: 'works', label: '作品' }, { value: 'saved', label: '收藏' }, { value: 'liked', label: '喜欢' }] as const
 const profileTab = ref<'works' | 'saved' | 'liked'>('works'), kind = ref('all'), people = ref<Creator[]>([])
 const nextCursor = ref<string | null>(null), worksCursor = ref<string | null>(null), collectionLoading = ref(false)
-const loading = ref(true), error = ref(''), collectionError = ref(''), following = ref('')
+const loading = ref(true), error = ref(''), collectionError = ref('')
 const peopleDialog = ref<HTMLDialogElement>(), peopleMode = ref<'followers' | 'following'>('followers')
 const peopleLoading = ref(false), peopleError = ref('')
+const removeDialog = ref<HTMLDialogElement>(), removing = ref<Creator | null>(null), removeBusy = ref(false)
 const isOwnProfile = computed(() => Boolean(creator.value && creator.value.id === session.user?.id))
 const collectionPrivate = computed(() => profileTab.value !== 'works' && !isOwnProfile.value)
 const collectionLabel = computed(() => profileTabs.find(item => item.value === profileTab.value)!.label)
 const collectionTitle = computed(() => profileTab.value === 'works' ? '公开作品' : `${collectionLabel.value}的作品`)
 let loadId = 0, collectionId = 0, peopleId = 0
+onBeforeUnmount(() => { loadId++; collectionId++; peopleId++ })
 function creatorIdentity(item: Creator) { return `账号ID:${item.id}` }
 async function load() {
-  const current = ++loadId
-  ++collectionId; ++peopleId; peopleDialog.value?.close()
+  const current = ++loadId, captured = followRevision.value
+  ++collectionId; ++peopleId; peopleDialog.value?.close(); removeDialog.value?.close(); removing.value = null
   loading.value = true; error.value = ''; creator.value = null; works.value = []; people.value = []; profileTab.value = 'works'; kind.value = 'all'
   worksCursor.value = null; nextCursor.value = null; collectionError.value = ''; peopleError.value = ''
   try {
     await loadSession()
     if (current !== loadId) return
+    const owner = session.user?.id
     if (creatorId.value) {
       const result = await api<{ user: Creator }>(`/api/users/${encodeURIComponent(creatorId.value)}`)
-      if (current !== loadId) return
-      creator.value = { ...result.user, count: result.user.worksCount ?? result.user.count ?? 0 }
+      if (current !== loadId || owner !== session.user?.id) return
+      creator.value = { ...result.user, count: result.user.worksCount ?? result.user.count ?? 0 }; seedRelationships([creator.value], captured)
       await loadCollection()
     } else {
       const [peopleResult, news] = await Promise.all([api<{ items: Creator[] }>('/api/creators'), api<{ items: Announcement[] }>('/api/announcements')])
-      if (current !== loadId) return
-      creators.value = peopleResult.items; announcements.value = news.items
+      if (current !== loadId || owner !== session.user?.id) return
+      creators.value = peopleResult.items; seedRelationships(peopleResult.items, captured); announcements.value = news.items
     }
   } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
   finally { if (current === loadId) loading.value = false }
@@ -71,12 +76,12 @@ async function loadCollection(append = false) {
 }
 async function loadPeople(append = false) {
   if (!creator.value) return
-  const current = ++peopleId
+  const current = ++peopleId, captured = followRevision.value, owner = session.user?.id
   peopleLoading.value = true; peopleError.value = ''
   if (!append) { people.value = []; nextCursor.value = null }
   try {
     const result = await api<{ items: Creator[]; nextCursor?: string | null }>(`/api/users/${encodeURIComponent(creatorId.value)}/${peopleMode.value}${queryString({ cursor: append ? nextCursor.value || undefined : undefined })}`)
-    if (current === peopleId) { people.value = append ? [...people.value, ...result.items] : result.items; nextCursor.value = result.nextCursor || null }
+    if (current === peopleId && owner === session.user?.id) { seedRelationships(result.items, captured); people.value = append ? [...people.value, ...result.items] : result.items; nextCursor.value = result.nextCursor || null }
   } catch (cause) { if (current === peopleId) peopleError.value = errorMessage(cause) }
   finally { if (current === peopleId) peopleLoading.value = false }
 }
@@ -90,20 +95,28 @@ watch([creatorId, () => session.user?.id], () => { void load() }, { immediate: t
 watch([profileTab, kind], () => { if (!loading.value) void loadCollection() })
 watch(() => route.query.tab, value => { tab.value = value === 'announcements' ? 'announcements' : 'creators' })
 function selectTab(value: 'creators' | 'announcements') { void router.push({ path: '/community', query: { tab: value } }) }
-async function follow(item: Creator) {
-  if (!session.user) { notify('请先登录后关注创作者。'); return }
-  if (following.value) return
-  following.value = item.id
-  try {
-    await api(`/api/users/${encodeURIComponent(item.id)}/follow`, { method: 'POST', body: { active: !item.followed } })
-    item.followed = !item.followed
-    if (item.followersCount !== undefined) item.followersCount = Math.max(0, item.followersCount + (item.followed ? 1 : -1))
-    if (isOwnProfile.value && creator.value && item.id !== creator.value.id) {
-      creator.value.followingCount = Math.max(0, (creator.value.followingCount ?? 0) + (item.followed ? 1 : -1))
-    }
-  } catch (cause) { notify(errorMessage(cause)) }
-  finally { following.value = '' }
+function updateRelationship(result: Relationship) {
+  for (const item of [...creators.value, ...people.value, ...(creator.value ? [creator.value] : [])]) if (item.id === result.id) Object.assign(item, result)
+  if (isOwnProfile.value && creator.value) {
+    if (result.viewerFollowingCount !== undefined) creator.value.followingCount = result.viewerFollowingCount
+    if (result.viewerFollowersCount !== undefined) creator.value.followersCount = result.viewerFollowersCount
+    if (peopleMode.value === 'following' && !result.followed) people.value = people.value.filter(item => item.id !== result.id)
+  }
 }
+async function removeFollower() {
+  const person = removing.value, owner = session.user?.id, current = loadId
+  if (!person || removeBusy.value || !isOwnProfile.value) return
+  removeBusy.value = true; peopleError.value = ''
+  try {
+    const result = await changeRelationship(person.id, false, true)
+    if (result && current === loadId && owner === session.user?.id) {
+      updateRelationship(result); people.value = people.value.filter(item => item.id !== person.id)
+      removeDialog.value?.close(); removing.value = null
+    }
+  } catch (cause) { if (current === loadId) peopleError.value = errorMessage(cause) }
+  finally { removeBusy.value = false }
+}
+
 </script>
 
 <template>
@@ -119,8 +132,8 @@ async function follow(item: Creator) {
           <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.username || creator.name" /><span v-else>{{ (creator.username || creator.name || '用').slice(0, 1) }}</span></span>
           <div class="profile-copy">
             <div class="profile-heading"><h1>{{ creator.username || creator.name }}</h1><div class="profile-actions">
-              <RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink>
-              <template v-else><button class="button btn" :aria-pressed="creator.followed" :disabled="!!following" @click="follow(creator)"><component :is="creator.followed ? UserCheck : UserPlus" :size="16" />{{ creator.followed ? '已关注' : '关注' }}</button><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
+              <RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/account?tab=following" class="button btn subtle">关注申请</RouterLink>
+              <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
             </div></div>
             <div class="profile-stats" aria-label="创作者统计">
               <button class="profile-stat" aria-label="查看关注" aria-haspopup="dialog" @click="openPeople('following')"><span>关注</span><strong>{{ creator.followingCount ?? 0 }}</strong></button>
@@ -146,11 +159,12 @@ async function follow(item: Creator) {
           <div class="profile-people-body">
             <p v-if="peopleError" class="form-error" role="alert">{{ peopleError }} <button class="text-link" @click="loadPeople()">重试</button></p>
             <div v-if="peopleLoading && !people.length" class="profile-people-status" role="status">正在加载列表…</div>
-            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="person.avatarUrl" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><button v-if="person.id !== session.user?.id" class="button btn subtle" :aria-pressed="person.followed" :disabled="!!following" @click="follow(person)"><component :is="person.followed ? UserCheck : UserPlus" :size="15" />{{ person.followed ? '已关注' : '关注' }}</button></article></div>
+            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="person.avatarUrl" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><div class="person-actions"><FollowButton :person="person" @changed="updateRelationship" /><button v-if="isOwnProfile && peopleMode === 'followers'" class="button btn subtle" @click="removing = person; removeDialog?.showModal()">移除粉丝</button></div></article></div>
             <p v-if="!peopleLoading && !people.length && !peopleError" class="profile-people-status">暂无{{ peopleMode === 'followers' ? '粉丝' : '关注' }}</p>
             <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="peopleLoading" @click="loadPeople(true)">加载更多</button></div>
           </div>
         </dialog>
+        <dialog ref="removeDialog" class="compact-dialog" aria-labelledby="remove-follower-heading"><div class="dialog-heading"><h2 id="remove-follower-heading">移除这位粉丝？</h2></div><div class="dialog-body stack"><p>{{ removing?.name }} 将从你的粉丝列表中移除，对方仍可重新关注或申请。</p><p v-if="peopleError" role="alert" class="form-error">{{ peopleError }}</p><div class="table-actions"><button class="button btn subtle" :disabled="removeBusy" @click="removeDialog?.close()">取消</button><button class="button btn" :disabled="removeBusy" @click="removeFollower">{{ removeBusy ? '正在移除…' : '确认移除' }}</button></div></div></dialog>
       </template><div v-else-if="!error" class="empty-state"><Users :size="28" /><h1>未找到这位创作者</h1></div>
     </template>
     <template v-else>
@@ -158,7 +172,7 @@ async function follow(item: Creator) {
         <article v-for="item in creators" :key="item.id" class="creator-card card">
           <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="item.avatarUrl" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
           <p v-if="item.bio" class="creator-summary">{{ item.bio }}</p>
-          <div class="creator-footer"><span class="caption-5">{{ item.count }} 件公开作品</span><button v-if="item.id !== session.user?.id" class="button btn subtle" :aria-pressed="item.followed" :disabled="!!following" @click="follow(item)"><component :is="item.followed ? UserCheck : UserPlus" :size="15" />{{ item.followed ? '已关注' : '关注' }}</button></div>
+          <div class="creator-footer"><span class="caption-5">{{ item.count }} 件公开作品</span><FollowButton :person="item" @changed="updateRelationship" /></div>
         </article>
         <div v-if="!creators.length && !error" class="empty-state"><Users :size="28" /><h2>暂无创作者</h2></div>
       </section>
@@ -169,6 +183,8 @@ async function follow(item: Creator) {
 </template>
 
 <style scoped>
+.person-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.person-actions > button { min-height: 44px; }
 .community-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
 .community-toolbar h1, .profile-copy h1 { margin: 0; color: var(--ink); font-size: 28px; line-height: 36px; font-weight: 600; }
 .community-toolbar .tabs { margin: 0; }

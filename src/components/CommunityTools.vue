@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, MessageSquare, RefreshCw, Search, Settings, ShieldCheck, UserRound, Users, Video, Wallet, WandSparkles, X } from '@lucide/vue'
+import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, MessageSquare, Palette, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, WandSparkles, X } from '@lucide/vue'
 import { inbox, loadInbox } from '../inbox'
 import { session } from '../state'
 
@@ -25,6 +25,8 @@ const tools = computed<Tool[]>(() => [
   { label: session.user ? '个人主页' : '个人资料', icon: UserRound, to: session.user ? `/community?creator=${encodeURIComponent(session.user.id)}` : '/account?tab=profile', member: true },
   { label: '账号设置', icon: Settings, to: '/account?tab=profile', member: true },
   { label: '账户余额', icon: Wallet, to: '/account?tab=balance', member: true },
+  { label: '主题外观', icon: Palette, to: '/account?tab=theme', member: true },
+  { label: '关注申请', icon: UserPlus, to: '/account?tab=following', member: true },
   { label: '刷新', icon: RefreshCw, action: 'refresh' },
 ])
 function destination(tool: Tool) {

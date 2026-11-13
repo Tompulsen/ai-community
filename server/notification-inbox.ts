@@ -12,7 +12,7 @@ const streamPattern = /^\d{1,20}-\d{1,20}$/
 const pageSize = 30
 const announcementScope = `(a."userId"=$1 OR a."userId" IS NULL) AND a."isActive" AND (a."autoArchiveAt" IS NULL OR a."autoArchiveAt">NOW())`
 const names: Record<string, string> = {
-  follow: '有新的关注', mention: '有人提到了你', reply: '有新的回复', reaction: '收到点赞', like: '作品收到点赞',
+  follow: '有新的关注', followRequestAccepted: '关注申请已通过', mention: '有人提到了你', reply: '有新的回复', reaction: '收到点赞', like: '作品收到点赞',
   comment: '有新的评论', commentLike: '评论收到点赞', repost: '作品被转发', review: '作品审核结果',
   renote: '作品被转发', login: '账号登录提醒', receiveFollowRequest: '有新的关注请求', message: '收到私信',
 }
@@ -68,7 +68,7 @@ async function packActivity(ctx: RequestContext, entries: Awaited<ReturnType<typ
     const workId = typeof data.workId === 'string' && idPattern.test(data.workId) ? data.workId : old?.workId
     const commentId = typeof data.commentId === 'string' ? data.commentId : old && old.noteId !== old.rootId ? old.noteId : null
     const type = String(data.type || '')
-    const url = workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}` : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
+    const url = type === 'receiveFollowRequest' ? '/account?tab=following' : workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}` : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
     const timestamp = Number(streamId.split('-')[0])
     return { id: `redis:${streamId}`, type: type === 'message' ? 'message' : 'activity', title: names[type] || '社区通知',
       text: typeof data.text === 'string' ? data.text : actorDto?.name || '', isRead, url, actor: actorDto,

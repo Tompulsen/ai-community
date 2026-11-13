@@ -124,6 +124,16 @@ GenOffice Apache-2.0 和新增服务的 AGPL-3.0-only，不能按“后加”统
 
 ## 当前完成范围
 
+2026-11-14 的关注与主题设置继续参考 `D:/ip/新社区汇总平台/community-studio-ui`：
+`packages/backend/src/core/UserFollowingService.ts`、账号年龄审批辅助函数及
+`packages/frontend/src/pages/settings/privacy.vue` 的规则适配到 `server/following.ts`，
+复用原 `following`、`follow_request`、`user_profile` 表，无数据库迁移。
+`pages/settings/theme.vue`、`appearance.vue` 和 `utility/appearance.ts`、
+`theme-schedule.ts` 的模式/跨夜/休眠恢复逻辑适配到 `public/theme-preload.js`；
+保留 AGPL-3.0-only 来源声明。主题预览用现有 CSS 变量与 Lucide，持久化使用原生
+localStorage / storage 事件 / matchMedia，不引入新依赖或任意主题脚本执行。
+验证包含隔离 PostgreSQL 的并发与权限测试，以及浏览器关注、隐私、主题、移动端与 axe 检查。
+
 纯算法仍在 `server/business/`；`auth.ts`、`content.ts`、`account.ts`、
 `lottery.ts` 和 `runtime.ts` 提供 TypeScript + Fastify 后端及原表适配。
 `types.ts` 统一请求上下文，构建时执行严格类型检查；事务、锁顺序与业务规则沿用。
