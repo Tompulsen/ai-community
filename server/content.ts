@@ -358,6 +358,8 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     const status = ctx.url.searchParams.get('status');
     if ((scope === 'mine' || scope === 'admin') && status && status !== 'all') {
       if (status === 'pending') conditions.push(`(s.status = 'pending' OR s."pendingRevision" IS NOT NULL)`);
+      else if (scope === 'admin' && status === 'published') conditions.push(`(s.status = 'published' OR (s.status = 'approved' AND s."approvedNoteId" IS NOT NULL))`);
+      else if (scope === 'admin' && status === 'rejected') conditions.push(`s.status IN ('rejected', 'removed')`);
       else if (['draft', 'published', 'approved', 'rejected', 'removed'].includes(status)) conditions.push(`s.status = ${add(status)}`);
       else fail(400, 'Invalid work status');
     }

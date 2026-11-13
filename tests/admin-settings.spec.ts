@@ -1,5 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
+import { defaultLotterySettings } from '../server/business/lottery'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3YQAAAAASUVORK5CYII=', 'base64')
@@ -166,7 +168,9 @@ test('a save response from a closed settings tab cannot overwrite a newer saved 
   await page.getByLabel('站点名称', { exact: true }).fill('第一次保存')
   await page.getByRole('button', { name: '保存站点设置', exact: true }).click()
   await expect.poll(() => delayed).toBe(true)
-  await openTab(page, '内容标签'); await openTab(page, '站点设置')
+  await openTab(page, '内容标签')
+  await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
+  await openTab(page, '站点设置')
   await page.getByLabel('站点名称', { exact: true }).fill('第二次保存')
   await page.getByRole('button', { name: '保存站点设置', exact: true }).click()
   await expect(page.locator('.brand')).toHaveText('第二次保存')
@@ -174,4 +178,120 @@ test('a save response from a closed settings tab cannot overwrite a newer saved 
   release(); await completed; await page.waitForTimeout(100)
   await expect(page.locator('.brand')).toHaveText('第二次保存')
   await expect(page).toHaveTitle('管理 · 第二次保存')
+})
+
+test('direct links, browser back and leaving a dirty editor preserve the intended draft', async ({ page }) => {
+  await adminFixture(page)
+  await page.goto('/admin?tab=settings')
+  await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('3')
+  await page.getByLabel('违规次数阈值', { exact: true }).fill('7')
+  await openTab(page, '站点设置')
+  await expect(page.getByRole('dialog', { name: '保留这次修改？' })).toBeVisible()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page).toHaveURL(/tab=settings/)
+  await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('7')
+  expect(await page.evaluate(() => window.dispatchEvent(new Event('beforeunload', { cancelable: true })))).toBe(false)
+  await openTab(page, '站点设置')
+  await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
+  await expect(page.getByLabel('站点名称', { exact: true })).toBeVisible()
+  await page.goBack()
+  await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('3')
+  await page.getByLabel('违规次数阈值', { exact: true }).fill('8')
+  await page.getByRole('link', { name: '访问社区', exact: true }).click()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('8')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.locator('.editor-savebar')).toContainText('修改已保存')
+  await openTab(page, '站点设置')
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+})
+
+test('unfinished tag names prompt before leaving and survive cancel', async ({ page }) => {
+  await adminFixture(page)
+  await page.goto('/admin?tab=tags')
+  await page.getByLabel('添加图片标签', { exact: true }).fill('还没添加的标签')
+  await openTab(page, '管理概览')
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('添加图片标签', { exact: true })).toHaveValue('还没添加的标签')
+})
+
+test('lottery configuration changes survive cancelled refresh and cancelled navigation', async ({ page }) => {
+  await adminFixture(page)
+  await page.route('**/api/admin/lottery/config', route => route.fulfill({ json: { version: 1, settings: defaultLotterySettings() } }))
+  await page.goto('/admin?tab=lottery')
+  await page.getByLabel('活动标题', { exact: true }).fill('秋日创作活动')
+  await page.getByRole('button', { name: '重新读取抽奖配置', exact: true }).click()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('活动标题', { exact: true })).toHaveValue('秋日创作活动')
+  await openTab(page, '管理概览')
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('活动标题', { exact: true })).toHaveValue('秋日创作活动')
+  await page.getByRole('button', { name: '重新读取抽奖配置', exact: true }).click()
+  await page.getByRole('button', { name: '放弃修改并刷新', exact: true }).click()
+  await expect(page.getByLabel('活动标题', { exact: true })).toHaveValue('')
+})
+
+const pendingWork = { id: 'work1', title: '山海之间的光', author: '木白', kind: 'image', status: 'pending', version: 1, date: '2026-11-13T02:20:00Z', cover: '' }
+
+test('review requests server filters, loads the next page and keeps revision review semantics', async ({ page }) => {
+  await adminFixture(page)
+  const requests: URL[] = []
+  await page.route('**/api/admin/submissions?**', route => {
+    const url = new URL(route.request().url()); requests.push(url)
+    if (url.searchParams.get('query')) return route.fulfill({ json: { items: [{ ...pendingWork, id: 'older', title: '更早的匹配作品' }], nextCursor: null } })
+    if (url.searchParams.get('cursor')) return route.fulfill({ json: { items: [{ ...pendingWork, id: 'work2', title: '第二页作品' }], nextCursor: null } })
+    return route.fulfill({ json: { items: [{ ...pendingWork, status: 'published', revisionPending: true }], nextCursor: 'next-page' } })
+  })
+  await page.goto('/admin?tab=review')
+  await expect(page.getByText('修改待审核', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '通过：山海之间的光' })).toBeVisible()
+  expect(requests.at(-1)!.searchParams.get('status')).toBe('pending')
+  await page.getByRole('button', { name: '加载更多作品', exact: true }).click()
+  await expect(page.getByRole('link', { name: '第二页作品', exact: true })).toBeVisible()
+  expect(requests.at(-1)!.searchParams.get('cursor')).toBe('next-page')
+  await page.getByRole('button', { name: '已公开', exact: true }).click()
+  await expect.poll(() => requests.at(-1)!.searchParams.get('status')).toBe('published')
+  expect(requests.at(-1)!.searchParams.has('cursor')).toBe(false)
+  await page.getByLabel('搜索作品或作者', { exact: true }).fill('更早')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByRole('link', { name: '更早的匹配作品', exact: true })).toBeVisible()
+  expect(requests.at(-1)!.searchParams.get('query')).toBe('更早')
+  await expect(page.getByRole('link', { name: '第二页作品', exact: true })).toHaveCount(0)
+})
+
+test('admin overview and editor layouts fit desktop, tablet and narrow phones with accessible controls', async ({ page }) => {
+  await adminFixture(page)
+  await page.route('**/api/admin/submissions?**', route => route.fulfill({ json: { items: [pendingWork,
+    { ...pendingWork, id: 'work2', title: '微缩城市 · 雨后的街道', author: '阿树', kind: 'video' },
+    { ...pendingWork, id: 'work3', title: '创作灵感整理', kind: 'resource', status: 'published', revisionPending: true },
+    { ...pendingWork, id: 'work4', status: 'published' }, { ...pendingWork, id: 'work5', status: 'rejected' }], nextCursor: 'more' } }))
+  await mkdir('.impeccable/review/admin-panel', { recursive: true })
+  for (const width of [1440, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    for (const tab of ['overview', 'settings', 'ads', 'review']) {
+      await page.goto('/admin?tab=' + tab)
+      await expect(page.locator('.admin-layout')).toBeVisible()
+      if (tab === 'overview') await expect(page.getByText('最近载入 5 条', { exact: false })).toBeVisible()
+      else if (tab === 'settings') await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('3')
+      else if (tab === 'ads') await expect(page.locator('.ad-editor')).toHaveCount(4)
+      else await expect(page.locator('.review-table')).toBeVisible()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await page.screenshot({ path: '.impeccable/review/admin-panel/' + tab + '-' + width + '.png', fullPage: true })
+      if (width === 1440 && ['overview', 'settings'].includes(tab)) {
+        const result = await new AxeBuilder({ page }).include('.admin-page').analyze()
+        expect(result.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([])
+      }
+    }
+  }
+})
+
+test('a moderator deep link to site settings does not issue privileged reads', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.account.state.user.isAdmin = false; fixture.account.state.user.isModerator = true
+  const privileged: string[] = []
+  page.on('request', request => { if (/\/api\/admin\/(settings|community|users|tags|lottery)/.test(request.url())) privileged.push(request.url()) })
+  await page.goto('/admin?tab=site')
+  await expect(page.getByRole('heading', { name: '管理概览', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '站点设置', exact: true })).toHaveCount(0)
+  expect(privileged).toEqual([])
 })

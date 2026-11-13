@@ -35,6 +35,16 @@ test('public content query preserves visitor, visibility, account and blocking c
   assert(publicVisibilitySql.includes("s.status IN ('published', 'approved')"));
 });
 
+test('admin status filters include the stored states displayed as published and rejected', async () => {
+  for (const [status, expected] of [['published', 'approved'], ['rejected', 'removed']]) {
+    let statement = '';
+    const ctx = context({ path: `/api/admin/submissions?status=${status}`, user: { id: 'admin1', isAdmin: true },
+      query: async (sql) => { statement = sql; return { rows: [] }; } });
+    await handleContent(ctx);
+    assert.match(statement.split('WHERE').slice(1).join('WHERE'), new RegExp(`s\\.status[^;]*'${expected}'`));
+  }
+});
+
 test('an arbitrary account id never grants access to private library', async () => {
   let queried = false;
   const ctx = context({ path: '/api/library?userId=anotheruser', query: async () => { queried = true; return { rows: [] }; } });

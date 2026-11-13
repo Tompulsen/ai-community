@@ -208,6 +208,8 @@ test('new administrator sections use their real contracts and preserve a refused
   expect(writes[0]!.csrf).toBe('fixture-csrf')
   expect(writes[0]!.body.communityViolationThreshold).toBe(4)
   await tabs.getByRole('button', { name: '内容标签', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '保留这次修改？' })).toBeVisible()
+  await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
   await expect(page.getByText('保留标签', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '添加标签', exact: true })).toBeDisabled()
   await tabs.getByRole('button', { name: '广告位', exact: true }).click()

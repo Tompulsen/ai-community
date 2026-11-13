@@ -14,6 +14,11 @@ const draft = ref<Config | null>(null)
 const loading = ref(true), saving = ref(false), error = ref(''), saved = ref(false)
 const percentages = ref<Record<string, number>>({})
 const probabilitiesEdited = ref(false)
+const baseline = ref('')
+const reloadPrompt = ref(false)
+const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value })
+const hasUnsavedChanges = computed(() => !!baseline.value && configSnapshot() !== baseline.value)
+defineExpose({ hasUnsavedChanges })
 const ruleNames = { invites: '有效邀请', followers: '获得关注', likes: '作品获赞' }
 const probabilityTotal = computed(() => draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((total, prize) => total + Number(percentages.value[prize.id] || 0), 0) || 0)
 const userQuery = ref(''), users = ref<User[]>([]), selected = ref<User | null>(null), account = ref<Account | null>(null)
@@ -39,12 +44,17 @@ function setDraft(value: Config) {
   for (const entry of entries.sort((a, b) => (b.exact % 1) - (a.exact % 1))) if (remaining-- > 0) basisPoints[entry.id] = basisPoints[entry.id]! + 1
   percentages.value = Object.fromEntries(Object.entries(basisPoints).map(([id, points]) => [id, points / 100]))
   probabilitiesEdited.value = false
+  baseline.value = configSnapshot()
 }
 async function loadConfig() {
-  loading.value = true; error.value = ''
+  loading.value = true; error.value = ''; reloadPrompt.value = false
   try { setDraft(await api<Config>('/api/admin/lottery/config')) }
   catch (cause) { error.value = message(cause) }
   finally { loading.value = false }
+}
+function refreshConfig() {
+  if (hasUnsavedChanges.value) reloadPrompt.value = true
+  else void loadConfig()
 }
 function addPrize() {
   draft.value?.settings.prizes.push({ id: crypto.randomUUID(), name: '', description: '', weight: 1, stock: -1, enabled: true, amountCents: 50, kind: 'balance' })
@@ -149,7 +159,8 @@ onMounted(() => {
 <template>
   <div class="admin-lottery">
     <section class="panel-section lottery-config">
-      <div class="section-heading"><h2>奖池与活动规则</h2><div class="table-actions"><RouterLink to="/activities" class="button subtle btn">预览活动</RouterLink><button class="icon-button" title="重新读取抽奖配置" aria-label="重新读取抽奖配置" :disabled="loading || saving" @click="loadConfig"><RefreshCw :size="17" /></button></div></div>
+      <div class="section-heading"><h2>奖池与活动规则</h2><div class="table-actions"><RouterLink to="/activities" class="button subtle btn">预览活动</RouterLink><button class="icon-button" title="重新读取抽奖配置" aria-label="重新读取抽奖配置" :disabled="loading || saving" @click="refreshConfig"><RefreshCw :size="17" /></button></div></div>
+      <div v-if="reloadPrompt" class="notice-inline" role="status"><p>重新读取会放弃当前未保存的抽奖配置。</p><div class="table-actions"><button class="button btn" :disabled="loading || saving" @click="loadConfig">放弃修改并刷新</button><button class="button subtle btn" @click="reloadPrompt = false">继续编辑</button></div></div>
       <div v-if="loading" class="admin-loading" role="status" aria-label="正在读取抽奖配置"><div v-for="n in 3" :key="n" class="skeleton" /></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <form v-if="draft && !loading" class="stack" @submit.prevent="saveConfig">
