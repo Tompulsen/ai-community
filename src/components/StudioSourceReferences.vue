@@ -14,7 +14,7 @@ function apply() { emit('select', files.value.filter(file => chosen.value.includ
 <template>
   <StudioPopover ref="menu" label="选择原作参考图" :width="520" @toggle="opened">
     <template #trigger><ImagePlus :size="17" /><span>参考图</span></template>
-    <p class="reference-help">默认仅带入提示词。可选择作者公开的参考图，也可在输入区上传自己的图片。</p>
+    <p class="reference-help">可选择作者公开的参考图，也可在输入区上传自己的图片。</p>
     <div v-if="files.length" class="source-reference-grid"><label v-for="file in files" :key="file.id"><img :src="file.url" alt="" loading="lazy" /><span><input v-model="chosen" type="checkbox" :value="file.id" :disabled="disabled" />{{ file.name }}</span></label></div>
     <p v-else class="reference-help">作者没有公开参考图。</p>
     <button class="button primary btn" :disabled="disabled" @click="apply">{{ chosen.length ? `使用选中的 ${chosen.length} 张参考图` : '不使用原作参考图' }}</button>

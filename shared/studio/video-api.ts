@@ -36,6 +36,11 @@ export function videoBuiltinParameters(draft: VideoDraft) {
   const format = videoParameterFormat(draft.apiFormat, draft.model);
   const options = draft.protocolOptions?.[draft.apiFormat] ?? {};
   const result: Record<string, unknown> = {};
+  if (options.seed?.trim()) {
+    const seed = Number(options.seed);
+    if (!Number.isSafeInteger(seed) || seed < 0) throw new Error("随机种子必须是非负整数");
+    result.seed = seed;
+  }
   if (
     (format === "xai" || format === "seedance") &&
     typeof options.generateAudio === "boolean"
@@ -374,6 +379,7 @@ export function buildVideoRequest(
     };
   }
   let compatibleMetadata: unknown = customMetadata;
+  const compatibleSize = videoSizeParameters(draft, "openai").size;
   if (
     customMetadata === undefined ||
     (customMetadata &&
@@ -381,6 +387,7 @@ export function buildVideoRequest(
       !Array.isArray(customMetadata))
   ) {
     const values: Record<string, unknown> = {
+      ...builtin,
       ...(draft.resolution !== "auto" ? { resolution: draft.resolution } : {}),
       ...(!["auto", "adaptive"].includes(draft.aspectRatio)
         ? { aspect_ratio: draft.aspectRatio }
@@ -429,6 +436,7 @@ export function buildVideoRequest(
         model,
         prompt: draft.prompt,
         seconds: String(draft.duration),
+        size: compatibleSize,
         images: references,
         ...(reference ? { input_reference: reference } : {}),
         ...custom,
@@ -464,6 +472,7 @@ export function buildVideoRequest(
             model,
             prompt: draft.prompt,
             seconds: String(draft.duration),
+            size: compatibleSize,
             input_reference: referenceObject,
             ...custom,
             metadata: compatibleMetadata,
@@ -476,6 +485,7 @@ export function buildVideoRequest(
   body.set("model", model);
   body.set("prompt", draft.prompt);
   body.set("seconds", String(draft.duration));
+  body.set("size", compatibleSize);
   if (images[0]) {
     const image = imageData(images[0]);
     const bytes = Uint8Array.from(atob(image.bytesBase64Encoded), (c) =>

@@ -32,8 +32,6 @@ async function select(kind: StudioKind) {
 
 <style scoped>
 .studio-mode-control { flex: none; min-width: 0; }
-.studio-mode-control :deep(> .studio-tool) { gap: 8px; color: var(--blue); background: var(--blue-soft); font-size: 14px; border-radius: 8px; }
-.studio-mode-control :deep(> .studio-tool:hover) { background: var(--surface-soft); }
 .studio-mode-options { display: grid; gap: 4px; }
 .studio-mode-options .studio-command { min-height: 48px; padding: 12px; border-radius: 8px; gap: 12px; }
 .studio-mode-options .studio-command > span { flex: 1; }

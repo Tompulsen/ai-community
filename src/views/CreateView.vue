@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowUpRight, Images, Receipt, KeyRound, CircleDollarSign, MoreHorizontal, PanelLeft, SquarePen, Settings, RefreshCw, MessageSquare } from '@lucide/vue'
+import { ArrowLeft, Images, Receipt, KeyRound, CircleDollarSign, MoreHorizontal, PanelLeft, SquarePen } from '@lucide/vue'
 import { api, errorMessage, loadSession, session } from '../state'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
@@ -10,7 +10,9 @@ import StudioPopover from '../components/StudioPopover.vue'
 import StudioGallery from '../components/StudioGallery.vue'
 import StudioSourceReferences from '../components/StudioSourceReferences.vue'
 import StudioPublishDialog from '../components/StudioPublishDialog.vue'
-import { creation, loadCreationModels, type CreationTask, type CreationDestination } from '../native-studio'
+import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
+import { readRemixParameters } from '../../shared/studio/remix-parameters'
+import { modelKind } from '../model-preferences'
 import '../studio-composer.css'
 const StudioChat = defineAsyncComponent(() => import('../components/StudioChat.vue'))
 const StudioAccountTools = defineAsyncComponent(() => import('../components/StudioAccountTools.vue'))
@@ -18,25 +20,53 @@ import ContentSkeleton from '../components/ContentSkeleton.vue'
 import type { StudioKind } from '../studio-state'
 const route = useRoute(), router = useRouter()
 const source = ref<Work | null>(null), error = ref('')
+const sourceLoading = ref(false), sourceIssue = ref(''), sourceRetry = ref(0)
+const sourceBlocked = computed(() => sourceLoading.value || Boolean(sourceIssue.value))
 const accountTool = ref<'' | 'prices' | 'logs' | 'keys'>('')
 const accountMenu = ref<InstanceType<typeof StudioPopover>>()
+const sidebarMedia = window.matchMedia('(min-width: 1000px)')
+const menuInSidebar = ref(sidebarMedia.matches)
+function moveMenu() { accountMenu.value?.close(); menuInSidebar.value = sidebarMedia.matches }
+onMounted(() => sidebarMedia.addEventListener('change', moveMenu))
+onBeforeUnmount(() => { revision++; sidebarMedia.removeEventListener('change', moveMenu) })
 const navigationMenu = ref<InstanceType<typeof StudioPopover>>(), mobileGallery = ref<InstanceType<typeof StudioPopover>>()
 const mobileLibraryLoaded = ref(false), pendingNew = ref(false)
 const workspace = ref<InstanceType<typeof StudioWorkspace>>(), chat = ref<InstanceType<typeof StudioChat>>()
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
 let revision = 0
-watch(() => [route.params.kind, route.query.from, route.query.remix, session.user?.id], async () => {
+watch(() => [route.params.kind, route.query.from, route.query.remix, session.user?.id, sourceRetry.value], async () => {
   const current = ++revision
+  const sourceId = typeof route.query.from === 'string' ? route.query.from : typeof route.query.remix === 'string' ? route.query.remix : ''
+  sourceLoading.value = Boolean(sourceId); sourceIssue.value = ''
   await loadSession()
   if (!session.user || current !== revision) return
-  const sourceId = typeof route.query.from === 'string' ? route.query.from : typeof route.query.remix === 'string' ? route.query.remix : ''
   source.value = null; error.value = ''
   if (sourceId) {
+    let next: Work | null = null
     try {
       const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(sourceId)}`)
-      if (current === revision) source.value = result.work
-    } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
+      if (current !== revision) return
+      next = result.work
+      const parameters = readRemixParameters(next.generation?.parameters)
+      if (next.generation?.parameters !== undefined && (!parameters || parameters.kind !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error('原作生成参数无效，请使用当前配置。')
+      await initializeCreation(); await waitCreationGroup()
+      if (current !== revision) return
+      await loadCreationGroups()
+      if (current !== revision) return
+      if (creation.groupsError) throw new Error(creation.groupsError)
+      if (parameters?.group && creation.selectedGroup !== parameters.group) {
+        if (!creation.groups.some(group => group.id === parameters.group)) throw new Error(`当前账号无法使用原作分组“${parameters.group}”，请选择可用配置。`)
+        await selectCreationGroup(parameters.group)
+        if (current !== revision) return
+        if (creation.groupsError || creation.selectedGroup !== parameters.group) throw new Error(creation.groupsError || '未能恢复原作分组，请确认当前配置。')
+      } else await loadCreationModels()
+      if (current !== revision) return
+      if (creation.modelsError) throw new Error(creation.modelsError)
+      const originalModel = creation.models.find(model => model.id === next!.model)
+      if (next.model && (!originalModel || modelKind(originalModel) !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error(`原作模型“${next.model}”在当前分组不可用，请选择替代模型。`)
+    } catch (cause) { if (current === revision) sourceIssue.value = errorMessage(cause) }
+    finally { if (current === revision) { source.value = next; sourceLoading.value = false } }
   }
 }, { immediate: true })
 function switchKind(value: StudioKind) { navigationMenu.value?.close(); accountTool.value = ''; void router.replace({ path: `/create/${value}`, query: route.query }) }
@@ -81,11 +111,16 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
       <h1>{{ accountTool ? '账户工具' : kind === 'text' ? '对话' : '今天' }}</h1>
       <div v-if="session.user" class="mobile-studio-navigation"><StudioPopover ref="navigationMenu" label="创作导航" :width="280"><template #trigger><PanelLeft :size="19" /></template><p class="navigation-current">当前：{{ kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : '对话' }}</p><RouterLink to="/discover" class="studio-command" @click="navigationMenu?.close()"><ArrowLeft :size="17" />返回社区</RouterLink></StudioPopover></div>
       <div v-if="session.user" class="mobile-studio-destinations"><StudioPopover ref="mobileGallery" label="作品库" :width="880" @toggle="mobileLibraryLoaded ||= $event"><template #trigger><Images :size="18" /><span>作品库</span></template><StudioGallery v-if="mobileLibraryLoaded" embedded @reuse="reuse" @publish="share" /></StudioPopover><button class="studio-tool" @click="openAccount('prices')"><CircleDollarSign :size="18" /><span>模型定价</span></button><button class="studio-tool mobile-new-creation" title="新建创作" aria-label="新建创作" @click="newCreation"><SquarePen :size="19" /></button></div>
-      <StudioPopover v-if="session.user" ref="accountMenu" label="创作台菜单" :width="260"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button><button class="studio-command" @click="loadCreationModels(); accountMenu?.close()"><RefreshCw :size="17" />刷新模型</button><RouterLink to="/library" class="studio-command"><ArrowUpRight :size="17" />我的作品</RouterLink><RouterLink to="/messages" class="studio-command"><MessageSquare :size="17" />消息</RouterLink><RouterLink to="/account" class="studio-command"><Settings :size="17" />账号设置</RouterLink></StudioPopover>
+      <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar"><StudioPopover ref="accountMenu" label="创作台菜单" :width="260"><template #trigger><MoreHorizontal :size="20" /><span v-if="menuInSidebar">更多</span></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button></StudioPopover></Teleport>
     </header>
     <ContentSkeleton v-if="!session.ready" layout="form" label="正在加载账号…" />
     <div v-else-if="!session.user" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
-    <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view"><button class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" /></div><StudioChat v-if="kind === 'text'" v-show="!accountTool" ref="chat" :source="source" @prices="openAccount('prices')" @publish="share" @source="syncSource" /><StudioWorkspace v-else v-show="!accountTool" ref="workspace" :kind="kind" :source="source" @prices="openAccount('prices')" @publish="share" @source="syncSource" /></template><StudioPublishDialog ref="publisher" />
+    <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view"><button class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" /></div>
+      <p v-if="sourceLoading" role="status">正在恢复原作配置…</p>
+      <p v-if="sourceIssue" class="form-error" role="alert">{{ sourceIssue }} <button v-if="source" type="button" class="text-link" @click="sourceIssue = ''">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
+      <StudioChat v-if="kind === 'text'" v-show="!accountTool" ref="chat" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+      <StudioWorkspace v-else v-show="!accountTool" ref="workspace" :kind="kind" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+    </template><StudioPublishDialog ref="publisher" />
   </div>
 </template>
 

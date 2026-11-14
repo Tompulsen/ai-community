@@ -1,6 +1,7 @@
 import { reactive, watch } from 'vue'
 import { api, errorMessage, session } from './state'
 import { creation, resumeCreation, stopCreation, submitCreation } from './native-studio'
+import { modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
 import { initializeBranches, createAnswerBranch, createEditedMessageBranch, selectAnswerBranch, deleteBranchMessage, cloneBranchMessages } from '../shared/studio/chat-branches'
 import { prepareContext } from '../shared/studio/context-budget'
@@ -10,6 +11,7 @@ import { buildWebSearchContext } from '../shared/studio/web-search-context'
 import { verifySkillDocument } from '../shared/studio/catalog'
 import { chatOptionsSchema, type ChatOptions } from '../shared/studio/options'
 import type { ChatMessage, ChatSession, RequestMessage } from '../shared/studio/types'
+import type { ChatApiFormat } from '../shared/studio/chat-api-format'
 export interface Skill { id: string; name: string; description: string; body: string; sha256: string }
 export interface NativeMessage extends ChatMessage { taskId?: string; sources?: { title: string; url: string; snippet: string }[]; searchMode?: 'quick' | 'deep'; toolRounds?: RequestMessage[]; toolStatus?: string }
 export interface NativeChat extends ChatSession {
@@ -26,6 +28,7 @@ export interface NativeChat extends ChatSession {
   draft?: string
   draftFiles?: ParsedFile[]
   sourceWorkId?: string
+  formatOverride?: ChatApiFormat
 }
 const defaults = () => {
   const { messages: _, ...settings } = chatOptionsSchema.parse({ messages: [{ role: 'user', content: 'initial' }] })
@@ -122,6 +125,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   if (!model || !text.trim() && !files.length) throw new Error('请选择模型并输入内容。')
   const version = epoch
   const tokenId = creation.modelTokenId
+  const accountGroup = creation.selectedGroup
   const acceptedAccount = /^[1-9]\d*$/.test(owner()) ? owner() : session.user?.accountId
   const runId = crypto.randomUUID()
   runs.set(chat.id, runId)
@@ -136,6 +140,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   chats.busy[chat.id] = true; chats.error = ''
   let searchMode = chat.search
   const settings = JSON.parse(JSON.stringify(chat.settings)), system = chat.system, skillIds = [...chat.skillIds]
+  settings.format = chat.formatOverride || modelFormat(model) || settings.format
   const sourceWorkId = chat.sourceWorkId
   const references = typeof user.content === 'string' ? [] : user.content.flatMap((part, index) => part.type === 'image_url' && part.image_url?.url ? [{ name: `参考图 ${index + 1}`, url: part.image_url.url }] : [])
   try {
@@ -175,7 +180,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       config: { ...settings, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory },
       summarize: async messages => {
         if (!current()) throw new Error('对话已停止。')
-        const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
+        const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
           chatOptions: { ...settings, mcpServers: [], stream: false, max_tokens: 2048, messages: [{ role: 'system', content: '将对话整理为准确简洁的历史摘要，不超过2000 tokens，保留用户目标、约束和关键事实。' }, ...messages.map(message => ({ role: message.role === 'tool' ? 'user' as const : message.role, content: message.content }))] } }, task => { if (current()) result.taskId = task.id }, current)
         if (task.phase !== 'complete') throw new Error(task.error || '历史摘要生成失败。')
         return task.text
@@ -188,7 +193,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     const toolHistory: RequestMessage[] = []
     for (let round = 0; round < 8; round++) {
       if (!current()) return
-      const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, sourceWorkId, references, prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
+      const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, sourceWorkId, references, prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
         if (!current()) return
         result.taskId = task.id; result.content = task.text; result.reasoning = task.reasoning; result.usage = task.usage; result.streaming = true
         if (Date.now() - lastSave > 2000) { lastSave = Date.now(); void saveChats() }

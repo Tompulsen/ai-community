@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
-import { ArrowUp, Check, Clock, Copy, Download, History, Images, LoaderCircle, Maximize, Pencil, Play, Plus, RefreshCw, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
+import { ArrowUp, Check, Clock, Copy, Download, LoaderCircle, Maximize, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, notify, session, uploadFile } from '../state'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
@@ -10,22 +10,25 @@ import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
+import StudioModelPicker from './StudioModelPicker.vue'
+import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
-import { IMAGE_RATIOS, imageRequestSize } from '../../shared/studio/image-params'
+import { IMAGE_RATIOS, imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
+import { readRemixParameters } from '../../shared/studio/remix-parameters'
 
-const props = defineProps<{ kind: 'text' | 'image' | 'video'; source?: Work | null }>()
-const emit = defineEmits<{ prices: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
+const props = defineProps<{ kind: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>()
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
 const imageOptions = reactive(imageOptionsSchema.parse({}))
 const videoOptions = reactive(videoOptionsSchema.parse({ mode: 'text-to-video' }))
 const protocol = ref('openai')
+const manualSize = ref(''), restoringParameters = ref(false)
 const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode))
 const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
 const uploading = ref(false), submissions = ref<Record<string, boolean>>({}), error = ref('')
-const historyMenu = ref<InstanceType<typeof StudioPopover>>(), galleryMenu = ref<InstanceType<typeof StudioPopover>>()
 const gallery = ref<InstanceType<typeof StudioGallery>>(), canvas = ref<HTMLElement>(), promptInput = ref<HTMLTextAreaElement>()
 const blank = ref(false), now = ref(Date.now())
 const submitting = computed(() => Boolean(submissions.value[props.kind]))
@@ -33,15 +36,12 @@ const referenceUrls = computed(() => references.value.map(file => file.url))
 const selected = computed(() => blank.value ? undefined : creation.tasks.find(task => task.id === creation.selectedId && task.kind === props.kind) || creation.tasks.find(task => task.kind === props.kind))
 const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind))
 const activeTask = computed(() => tasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
-const groupKind = computed(() => {
-  const group = creation.selectedGroup?.trim().toLowerCase()
-  if (['生图', '生圖', '绘图', '繪圖', 'image', 'images'].includes(group || '')) return 'image'
-  if (['视频', '視頻', 'video', 'videos'].includes(group || '')) return 'video'
-})
-const models = computed(() => creation.models.filter(item => groupKind.value ? groupKind.value === props.kind : !item.kinds?.length || item.kinds.includes(props.kind)))
+const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 const working = computed(() => selected.value && ['submitting', 'running'].includes(selected.value.phase))
-const canGenerate = computed(() => !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && Boolean(model.value && prompt.value.trim()))
+const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
+const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
+const canGenerate = computed(() => !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
 const elapsed = computed(() => {
   const task = selected.value
   if (!task || !Number.isFinite(task.createdAt) || !working.value && !Number.isFinite(task.settledAt)) return ''
@@ -57,21 +57,29 @@ let timer: ReturnType<typeof setInterval> | undefined
 watch(working, value => { clearInterval(timer); now.value = Date.now(); if (value) timer = setInterval(() => { now.value = Date.now() }, 1000) }, { immediate: true })
 onUnmounted(() => clearInterval(timer))
 watch(() => selected.value?.id, async () => { await nextTick(); if (canvas.value) canvas.value.scrollTop = 0 })
-const size = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
+const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
+const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
-function chooseModel() { if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || '' }
+function chooseModel() {
+  if (!creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  const choice = takeModelChoice(props.kind, models.value)
+  if (choice) model.value = choice
+  else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
+}
 function loadDraft() {
+  restoringParameters.value = true; void nextTick(() => { restoringParameters.value = false })
   blank.value = false
   sourceWorkId.value = undefined
-  prompt.value = ''; model.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
+  prompt.value = ''; model.value = ''; manualSize.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
   Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' })); protocol.value = 'openai'
   try {
     const saved = JSON.parse(localStorage.getItem(draftKey()) || 'null')
     if (saved && typeof saved.prompt === 'string') {
       prompt.value = saved.prompt; model.value = typeof saved.model === 'string' ? saved.model : ''
-      ratio.value = (IMAGE_RATIOS as readonly string[]).includes(saved.ratio) ? saved.ratio : ratio.value
-      count.value = Math.min(16, Math.max(1, Number(saved.count) || 1)); duration.value = Math.min(30, Math.max(1, Number(saved.duration) || 8))
+      ratio.value = typeof saved.ratio === 'string' && /^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/.test(saved.ratio) ? saved.ratio : ratio.value
+      manualSize.value = typeof saved.manualSize === 'string' && /^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|[124]K)$/.test(saved.manualSize) ? saved.manualSize : ''
+      count.value = Math.min(16, Math.max(1, Number(saved.count) || 1)); duration.value = Math.min(3600, Math.max(1, Number(saved.duration) || 8))
       const image = imageOptionsSchema.safeParse(saved.imageOptions || {}), video = videoOptionsSchema.safeParse(saved.videoOptions || { mode: 'text-to-video' })
       if (image.success) Object.assign(imageOptions, image.data)
       if (video.success) Object.assign(videoOptions, video.data)
@@ -83,14 +91,16 @@ function loadDraft() {
   chooseModel()
 }
 watch(() => [props.kind, session.user?.id], loadDraft, { immediate: true })
-watch(models, chooseModel)
-watch([prompt, model, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId], () => {
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching], chooseModel)
+watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
+watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId], () => {
   if (!session.user) return
-  try { localStorage.setItem(draftKey(), JSON.stringify({ prompt: prompt.value, model: model.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value })) }
+  try { localStorage.setItem(draftKey(), JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value })) }
   catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
 }, { deep: true })
 watch(videoLimits, limits => {
   if (!limits || props.kind !== 'video') return
+  if (props.source?.generation?.parameters?.kind === 'video' && sourceWorkId.value === props.source.id) return
   if (!limits.resolutions.includes(videoOptions.resolution) && videoOptions.resolution !== 'auto') videoOptions.resolution = limits.resolutions[0]!
   if (!limits.durations.includes(duration.value)) duration.value = limits.durations.reduce((best, value) => Math.abs(value - duration.value) < Math.abs(best - duration.value) ? value : best)
 })
@@ -98,13 +108,26 @@ watch(() => props.source?.id, () => {
   if (!props.source || sourceWorkId.value === props.source.id) return
   sourceWorkId.value = props.source.id
   blank.value = true; prompt.value = props.source.prompt; references.value = []
+  restoringParameters.value = true
+  const parameters = readRemixParameters(props.source.generation?.parameters)
+  if (models.value.some(item => item.id === props.source!.model)) model.value = props.source.model
+  if (parameters?.kind === props.kind) {
+    if (parameters.aspect_ratio !== undefined) ratio.value = parameters.aspect_ratio
+    if (parameters.n !== undefined) count.value = parameters.n
+    if (parameters.duration !== undefined) duration.value = parameters.duration
+    if (parameters.protocol !== undefined) protocol.value = parameters.protocol === 'async' ? 'async' : 'openai'
+    if (parameters.imageOptions) Object.assign(imageOptions, parameters.imageOptions)
+    Object.assign(videoOptions, { openaiReferenceSource: 'upload', openaiImageUrl: undefined, openaiLastImageUrl: undefined, openaiFileId: undefined }, parameters.videoOptions || {})
+    if (parameters.size !== undefined) manualSize.value = parameters.size
+  }
+  void nextTick(() => { restoringParameters.value = false })
 }, { immediate: true })
 function applySourceReferences(files: WorkFile[]) {
   if (!props.source) return
   const own = references.value.filter(file => file.fromWorkId !== props.source!.id)
   if (own.length + files.length > (props.kind === 'video' ? 10 : 16)) { error.value = '参考图数量超过当前创作类型上限，请减少所选图片。'; return }
   references.value = [...own, ...files.map(file => ({ name: file.name, url: file.url, fromWorkId: props.source!.id }))]
-  if (props.kind === 'video') videoOptions.mode = references.value.length > 1 ? 'reference-to-video' : references.value.length ? 'image-to-video' : 'text-to-video'
+  if (props.kind === 'video') videoOptions.mode = videoOptions.mode === 'first-last-frame' && references.value.length === 2 ? 'first-last-frame' : references.value.length > 1 ? 'reference-to-video' : references.value.length ? 'image-to-video' : 'text-to-video'
   error.value = ''
 }
 watch(() => session.user?.id, async () => {
@@ -139,7 +162,7 @@ async function generate() {
   blank.value = false
   error.value = ''; submissions.value[kind] = true
   try {
-    const pending = submitCreation({ kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value.map(file => ({ ...file })), sourceWorkId: sourceWorkId.value,
+    const pending = submitCreation({ kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value.map(file => ({ ...file })), sourceWorkId: sourceWorkId.value,
       ...(props.kind === 'image' ? { imageOptions: { ...imageOptions } } : props.kind === 'video' ? { videoOptions: { ...videoOptions } } : {}) })
     await pending
   } catch (cause) { if (owner === session.user?.id && kind === props.kind) error.value = errorMessage(cause) }
@@ -150,9 +173,9 @@ async function download(task: CreationTask, index = 0) {
 }
 function openPublish(destination: CreationDestination = 'community') { if (selected.value) emit('publish', selected.value, destination) }
 function useTask(task: CreationTask) {
-  historyMenu.value?.close(); galleryMenu.value?.close()
   blank.value = false
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
+  restoringParameters.value = true; manualSize.value = task.request.size; void nextTick(() => { restoringParameters.value = false })
   sourceWorkId.value = task.sourceWorkId
   ratio.value = task.request.aspect_ratio; count.value = task.request.n; duration.value = task.request.duration
   const image = imageOptionsSchema.safeParse(task.request.imageOptions || {}), video = videoOptionsSchema.safeParse(task.request.videoOptions || { mode: 'text-to-video' })
@@ -183,7 +206,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 <template>
   <section class="native-studio" aria-label="创作工作台">
     <div class="creation-output">
-      <div class="creation-output-toolbar"><h2>{{ kind === 'video' ? '视频创作' : '图片创作' }}</h2><div><button v-if="selected?.phase === 'complete'" class="studio-tool" @click="openPublish()"><Upload :size="16" />发布作品</button><StudioPopover ref="historyMenu" label="生成历史" :width="480"><template #trigger><History :size="18" /></template><section class="creation-history" aria-label="生成历史"><p v-if="!tasks.length" class="muted">暂无记录</p><button v-for="task in tasks" :key="task.id" class="history-row" :class="{ selected: selected?.id === task.id }" @click="useTask(task)"><img v-if="task.kind === 'image' && task.urls[0]" :src="mediaSource(task.urls[0], true)" alt="" loading="lazy" /><span v-else class="history-kind">{{ task.kind === 'video' ? '视频' : task.kind === 'text' ? '文本' : '图片' }}</span><span class="history-content"><strong>{{ task.prompt || task.model }}</strong><span>{{ task.model }} · {{ new Date(task.createdAt).toLocaleString('zh-CN') }}</span></span><span class="history-status">{{ phases[task.phase] }}</span></button></section></StudioPopover><StudioPopover ref="galleryMenu" label="图库与任务管理" :width="880"><template #trigger><Images :size="18" /></template><StudioGallery ref="gallery" :kind="kind" embedded @reuse="useTask" @publish="(task, destination) => emit('publish', task, destination)" /></StudioPopover><button class="studio-tool" aria-label="刷新模型" title="刷新模型" :disabled="creation.modelsLoading" @click="loadCreationModels"><RefreshCw :size="18" /></button></div></div>
+      <div class="creation-output-toolbar"><h2>{{ kind === 'video' ? '视频创作' : '图片创作' }}</h2><button v-if="selected?.phase === 'complete'" class="studio-tool" @click="openPublish()"><Upload :size="16" />发布作品</button></div>
       <div ref="canvas" class="creation-canvas" :class="{ 'has-result': selected?.phase === 'complete' }" tabindex="0" aria-label="创作对话">
         <div v-if="selected" class="creation-conversation">
           <article class="creation-request" aria-label="已发送的创作请求">
@@ -208,22 +231,21 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
             <div v-if="selected.phase === 'complete'" class="creation-message-actions"><button class="studio-tool mobile-result-publish" @click="openPublish()"><Upload :size="15" />发布作品</button><button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish('source-comment')"><Upload :size="15" />发送到源作品评论区</button><button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />复用参数</button><button class="studio-tool" @click="newCreation"><Plus :size="15" />新的创作</button></div>
           </article>
         </div>
-        <div v-else class="canvas-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>{{ kind === 'video' ? '开始视频创作' : '开始图片创作' }}</p><span>写下你的想法，也可以添加参考图。</span><button class="button subtle btn" @click="promptInput?.focus()"><Pencil :size="16" />写下创作描述</button></div>
+        <div v-else class="canvas-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>{{ kind === 'video' ? '开始视频创作' : '开始图片创作' }}</p><span>写下你的想法，也可以添加参考图。</span></div>
       </div>
     </div>
+    <StudioBilling :model="model" :quantity="kind === 'image' ? count : undefined" :refresh-key="selected?.settledAt" @prices="emit('prices')"><StudioModePicker /></StudioBilling>
     <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate">
-      <StudioBilling :model="model" :quantity="kind === 'image' ? count : undefined" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
       <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="file.url" :alt="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="references.splice(index, 1)"><X :size="14" /></button></li></ul>
       <label class="field prompt-field"><span class="studio-sr-only">提示词</span><textarea ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="kind === 'video' ? '描述你想生成的视频…' : '发消息，描述你的想法…'" required @keydown.enter="handleEnter" /></label>
       <div class="studio-composer-tools">
-        <StudioModePicker />
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
-            <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="30" step="1" required /></label></div>
+            <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-if="!(IMAGE_RATIOS as readonly string[]).includes(ratio)" :value="ratio">{{ ratio }}</option><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-if="!videoLimits.durations.includes(duration)" :value="duration">{{ duration }}（当前模型不支持）</option><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="3600" step="1" required /></label><label class="field"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required /></label></div>
             <CreationAdvanced :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" :kind="kind" :model="model" embedded @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
-        <div class="studio-composer-models"><label class="studio-select studio-model-select"><span class="studio-sr-only">模型</span><select v-model="model" :disabled="creation.modelsLoading || creation.groupSwitching || !models.length"><option v-if="!models.length" value="">{{ creation.modelsLoading || creation.groupSwitching ? '正在读取模型…' : '暂无可用模型' }}</option><option v-for="item in models" :key="item.id" :value="item.id">{{ item.name || item.id }}</option></select></label>
+        <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" />
           <label class="studio-select studio-group-select"><span class="studio-sr-only">模型分组</span><select aria-label="模型分组" :aria-description="selectedGroup?.description" :title="selectedGroup?.description" :value="creation.selectedGroup ?? ''" :disabled="creation.groupsLoading || creation.groupSwitching || !creation.groups.length" @change="switchGroup"><option v-if="creation.selectedGroup === null" value="" disabled>{{ creation.groupsLoading ? '正在读取分组…' : '选择分组' }}</option><option v-for="group in creation.groups" :key="group.id" :value="group.id">{{ group.name }}{{ typeof group.ratio === 'number' && group.ratio !== 1 ? ` · ${group.ratio}×` : '' }}</option></select></label>
         </div>
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
@@ -231,20 +253,22 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>
       <p v-if="creation.groupSwitching" class="group-description" role="status">正在切换模型分组…</p>
-      <p v-if="activeTask" class="composer-hint">生成期间可以继续编辑。停止等待不会取消上游任务。</p><p v-else class="composer-hint keyboard-hint">Enter 发送 · Shift + Enter 换行</p>
+      <p v-if="activeTask" class="composer-hint">生成期间可以继续编辑。停止等待不会取消上游任务。</p>
       <p v-if="creation.groupsError" class="form-error" role="alert">{{ creation.groupsError }} <button type="button" class="text-link" :disabled="creation.groupSwitching" @click="loadCreationGroups">重试</button></p>
       <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels">重试</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="creation.storageError" class="form-error" role="alert">{{ creation.storageError }}</p>
+      <p v-if="videoParameterIssue" class="form-error" role="alert">{{ videoParameterIssue }}</p>
+      <p v-if="imageParameterIssue" class="form-error" role="alert">{{ imageParameterIssue }}</p>
     </form>
 
+    <StudioGallery ref="gallery" :kind="kind" preview-only />
   </section>
 </template>
 
 <style scoped>
 .native-studio { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-.creation-section-heading, .creation-output-toolbar, .creation-output-toolbar > div, .task-status, .task-status > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.creation-section-heading h2, .creation-output-toolbar h2, .creation-section-heading h3 { margin: 0; font-size: 16px; line-height: 24px; }
-.creation-section-heading > span { color: var(--muted); }
+.creation-output-toolbar, .task-status, .task-status > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.creation-output-toolbar h2 { margin: 0; font-size: 16px; line-height: 24px; }
 .group-description { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; margin: 4px 8px 0; }
 .parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .parameter-row .control { width: 100%; min-width: 0; }
@@ -259,7 +283,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .stream-preview { display: block; max-width: 100%; max-height: 480px; margin: auto; }
 .creation-output-toolbar { min-height: 44px; flex: none; }
 .creation-output-toolbar h2 { font-size: 14px; font-weight: 500; }
-.creation-output-toolbar > div { gap: 8px; }
 .creation-canvas { flex: 1; min-height: 0; display: block; margin: 0; background: transparent; overflow-y: auto; overscroll-behavior: contain; padding: 16px 8px; scrollbar-color: var(--border) transparent; }
 .canvas-empty { min-height: 160px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); text-align: center; }
 .canvas-empty img { border-radius: 10px; }.canvas-empty p { margin: 0; }
@@ -317,16 +340,5 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
   .creation-output-toolbar h2 { color: var(--muted); }
 }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0 0 16px; max-width: 72ch; }
-.creation-history { padding-block: 0; }
-.creation-history > .creation-section-heading { margin-bottom: 16px; }
-.history-row { display: flex; align-items: center; gap: 12px; padding: 12px 8px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--ink); width: 100%; min-width: 0; text-align: left; cursor: pointer; }
-.history-row:hover, .history-row.selected { background: var(--surface-soft); }
-.history-row > img, .history-kind { width: 48px; height: 48px; flex: none; object-fit: cover; border-radius: 4px; }
-.history-kind { display: grid; place-items: center; font-size: 12px; background: var(--surface-soft); }
-.history-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-.history-content strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
-.history-content > span, .history-status { font-size: 12px; color: var(--muted); }
-.history-content > span { overflow-wrap: anywhere; }
-.history-status { white-space: nowrap; }
-@media (max-width: 639px) { .history-row { gap: 8px; }.creation-output-toolbar { gap: 8px; }.creation-output-toolbar > div { gap: 0; }.creation-canvas { padding: 16px 0; }.creation-media img, .creation-media video { max-height: 44dvh; } }
+@media (max-width: 639px) { .creation-output-toolbar { gap: 8px; }.creation-canvas { padding: 16px 0; }.creation-media img, .creation-media video { max-height: 44dvh; } }
 </style>

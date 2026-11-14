@@ -5,11 +5,13 @@ import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
 import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/options'
 import type { ChatResponseUsage, StudioToolCall } from '../shared/studio/types'
+import { readRemixParameters } from '../shared/studio/remix-parameters'
+import { usesGeminiImageChat } from '../shared/studio/image-params'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
-export interface CreationModel { id: string; name?: string; kinds?: CreationKind[]; protocol?: 'openai' | 'sync' | 'async' }
+export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; protocol?: 'openai' | 'sync' | 'async' }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {
@@ -24,6 +26,7 @@ export interface CreationTask {
   protocol: string
   upstreamId?: string
   tokenId?: number | null
+  group?: string
   progress?: number
   urls: string[]
   text: string
@@ -37,16 +40,18 @@ export interface CreationTask {
   publicationFiles?: string[]
   publicationReferences?: string[]
   publications?: Partial<Record<CreationDestination, { title: string; text: string; work?: Work }>>
-  request: { size: string; aspect_ratio: string; n: number; duration: number; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
+  request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; protocol?: 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
 }
 export interface CreationInput {
   accountTokenId?: number | null
+  accountGroup?: string | null
   kind: CreationKind
   model: string
   prompt: string
   size: string
+  exactSize?: boolean
   aspect_ratio: string
   n: number
   duration: number
@@ -58,7 +63,7 @@ export interface CreationInput {
   chatOptions?: ChatOptions
 }
 export const creation = reactive({
-  models: [] as CreationModel[], modelsLoading: false, modelsError: '',
+  models: [] as CreationModel[], modelsLoading: false, modelsLoaded: false, modelsError: '',
   groups: [] as CreationGroup[], selectedGroup: null as string | null, modelTokenId: null as number | null,
   groupsLoading: false, groupSwitching: false, groupsError: '',
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '',
@@ -68,6 +73,7 @@ const localMedia = reactive<Record<string, string>>({})
 const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
 let modelRevision = 0
+let groupRead: Promise<void> | undefined, groupSelection: Promise<void> | undefined
 let writes: Promise<unknown> = Promise.resolve()
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value)
 const validUpstreamId = (value: unknown): value is string => validId(value) || typeof value === 'string' && /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/.test(value)
@@ -298,7 +304,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
 export async function loadCreationModels() {
   if (!session.user) return
   const version = epoch, revision = ++modelRevision
-  creation.modelsLoading = true; creation.modelsError = ''
+  creation.modelsLoading = true; creation.modelsLoaded = false; creation.modelsError = ''
   try {
     const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models')
     if (version !== epoch || revision !== modelRevision) return
@@ -308,29 +314,34 @@ export async function loadCreationModels() {
     if (version === epoch && revision === modelRevision) {
       creation.models = []; creation.modelTokenId = null; creation.modelsError = errorMessage(error)
     }
-  } finally { if (version === epoch && revision === modelRevision) creation.modelsLoading = false }
+  } finally { if (version === epoch && revision === modelRevision) { creation.modelsLoading = false; creation.modelsLoaded = true } }
 }
-export async function loadCreationGroups() {
-  if (!session.user || creation.groupsLoading) return
+export function loadCreationGroups(): Promise<void> {
+  if (!session.user) return Promise.resolve()
+  if (groupRead) return groupRead
   const version = epoch, accountId = session.user.accountId || session.user.id
   creation.groupsLoading = true; creation.groupsError = ''
-  try {
+  groupRead = (async () => { try {
     const result = await accountApi<CreationGroups>('model-groups', undefined, accountId)
     if (version !== epoch) return
     if (!Array.isArray(result?.groups)) throw new Error('模型分组返回无效，请重试。')
     creation.groups = result.groups
     creation.selectedGroup = result.selectedGroup
   } catch (error) { if (version === epoch) creation.groupsError = errorMessage(error) }
-  finally { if (version === epoch) creation.groupsLoading = false }
+  finally { if (version === epoch) { creation.groupsLoading = false; groupRead = undefined } }
+  })()
+  return groupRead
 }
-export async function selectCreationGroup(group: string) {
-  if (!session.user || creation.groupSwitching || creation.groupsLoading || group === creation.selectedGroup) return
-  if (!creation.groups.some(item => item.id === group)) return
+export async function waitCreationGroup() { await groupSelection }
+export function selectCreationGroup(group: string): Promise<void> {
+  if (groupSelection) return groupSelection
+  if (!session.user || creation.groupsLoading || group === creation.selectedGroup) return Promise.resolve()
+  if (!creation.groups.some(item => item.id === group)) return Promise.resolve()
   const version = epoch, accountId = session.user.accountId || session.user.id
   creation.groupSwitching = true; creation.groupsError = ''; creation.modelsError = ''
   ++modelRevision
-  creation.models = []; creation.modelTokenId = null
-  try {
+  creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false
+  groupSelection = (async () => { try {
     const result = await accountApi<{ group: string; selectedTokenId: number }>('model-groups/select', { group }, accountId)
     if (version !== epoch) return
     creation.selectedGroup = result.group
@@ -342,7 +353,9 @@ export async function selectCreationGroup(group: string) {
     if (version !== epoch) return
     await loadCreationModels()
     if (version === epoch) creation.groupsError = errorMessage(error)
-  } finally { if (version === epoch) creation.groupSwitching = false }
+  } finally { if (version === epoch) { creation.groupSwitching = false; groupSelection = undefined } }
+  })()
+  return groupSelection
 }
 export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
@@ -374,6 +387,7 @@ export function stopCreation(task: CreationTask) {
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void, isCurrent: () => boolean = () => true) {
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
   const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
+  const selectedGroup = input.accountGroup === undefined ? creation.selectedGroup : input.accountGroup
   const version = epoch, acceptedOwner = activeOwner(), acceptedAccount = /^[1-9]\d*$/.test(acceptedOwner) ? acceptedOwner : session.user?.accountId
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
@@ -381,8 +395,9 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   const task: CreationTask = reactive({
     id: crypto.randomUUID(), owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
-    sourceWorkId: input.sourceWorkId, references: input.references || [],
-    request: { size: input.size, aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
+    sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
+    request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
+      protocol: input.protocol === 'async' ? 'async' : 'openai',
       ...(input.imageOptions ? { imageOptions: JSON.parse(JSON.stringify(input.imageOptions)) } : {}),
       ...(input.videoOptions ? { videoOptions: JSON.parse(JSON.stringify(input.videoOptions)) } : {}),
       ...(input.chatOptions ? { chatOptions: JSON.parse(JSON.stringify(input.chatOptions)) } : {}) },
@@ -403,7 +418,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       headers: { 'Content-Type': 'application/json', ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}) },
-      body: JSON.stringify({ ...input, accountTokenId: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
+      body: JSON.stringify({ ...input, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
@@ -629,7 +644,9 @@ async function preparePublication(task: CreationTask, title: string, destination
   const result = await api<{ work: Work }>('/api/works', { method: 'POST', body: {
     title: publication.title, kind: task.kind === 'text' ? 'resource' : task.kind,
     body: publication.text, prompt: task.prompt,
-    model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [] },
+    model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
+      parameters: task.legacy ? undefined : readRemixParameters({ version: 1, kind: task.kind, group: task.group,
+        ...(task.kind === 'image' && usesGeminiImageChat(task.model) ? { protocol: task.request.protocol, n: task.request.n } : task.request) }) },
     fileIds: task.publicationFiles, tags: [], status: 'pending', destination,
     requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })
@@ -643,8 +660,9 @@ watch(() => activeOwner(), next => {
   for (const key of Object.keys(localMedia)) { if (localMedia[key]?.startsWith('blob:')) URL.revokeObjectURL(localMedia[key]); delete localMedia[key] }
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
-  creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.storageError = ''
+  creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.modelsLoaded = false; creation.storageError = ''
   ++modelRevision
+  groupRead = undefined; groupSelection = undefined
   creation.groups = []; creation.selectedGroup = null; creation.modelTokenId = null
   creation.groupsLoading = false; creation.groupSwitching = false; creation.groupsError = ''
   if (next) void initializeCreation()

@@ -225,11 +225,12 @@ test('model catalogs identify their selected group token and paid submissions pi
     selectedToken: () => currentToken,
     fetch(_url, init) {
       return Response.json(init.method === 'POST' ? { data: [{ url: 'https://media.example/result.png' }] }
-        : { data: [{ id: 'gpt-image-2' }] })
+        : { data: [{ id: 'gpt-image-2', name: '图像模型', description: '账号模型说明', owned_by: 'OpenAI', secret: 'must-not-forward' }] })
     },
   })
   const catalog = await app.inject({ url: '/api/creation/models' })
   assert.equal(catalog.json().tokenId, 71)
+  assert.deepEqual(catalog.json().items, [{ id: 'gpt-image-2', name: '图像模型', description: '账号模型说明', provider: 'OpenAI', kinds: ['image'], protocol: 'openai' }])
   currentToken = 99
   const generated = await submit(app, imageRequest, { 'x-new-api-token': String(catalog.json().tokenId) })
   assert.equal(generated.json().status, 'succeeded')

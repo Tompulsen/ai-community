@@ -1,3 +1,4 @@
+import type { RemixParameters } from '../shared/studio/remix-parameters'
 export type WorkKind = 'image' | 'video' | 'resource'
 export type WorkStatus = 'draft' | 'pending' | 'approved' | 'published' | 'rejected'
 
@@ -52,6 +53,7 @@ export interface Work {
   sourceUrl?: string
   license?: string
   referenceFiles?: WorkFile[]
+  generation?: { prompt?: string; model?: string; sourceWorkId?: string; parameters?: RemixParameters } | null
 }
 
 export interface SessionUser {

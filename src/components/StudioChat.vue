@@ -15,16 +15,20 @@ import StudioSkills from './StudioSkills.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
-const props = defineProps<{ source?: Work | null }>()
-const emit = defineEmits<{ prices: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
+import StudioModelPicker from './StudioModelPicker.vue'
+import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
+import { readRemixParameters } from '../../shared/studio/remix-parameters'
+const props = defineProps<{ source?: Work | null; sourceBlocked?: boolean }>()
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
 const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
+const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
 const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), query = ref(''), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>()
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
-const models = computed(() => creation.models.filter(item => !item.kinds?.length || item.kinds.includes('text')))
+const models = computed(() => modelsForKind('text'))
 const busy = computed(() => current.value && chats.busy[current.value.id])
 const latestTask = computed(() => creation.tasks.find(task => task.id === current.value?.messages.at(-1)?.taskId))
 const visible = computed(() => chats.sessions.filter(chat => `${chat.topic} ${chat.messages.map(message => messageText(message)).join(' ')}`.toLowerCase().includes(query.value.toLowerCase())))
@@ -33,8 +37,21 @@ function messageText(message: NativeMessage) { return typeof message.content ===
 function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
 function branch(message: NativeMessage) { return current.value ? answerBranches(current.value, message.id) : { index: 0, total: 1, messageIds: [] } }
 watch(() => session.user?.id, async () => { if (!session.user) return; await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); await loadChats() }, { immediate: true })
-function chooseModel() { model.value = models.value.some(item => item.id === current.value?.model) ? current.value!.model! : models.value[0]?.id || '' }
-watch(models, chooseModel)
+function chooseModel() {
+  if (!current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  const next = takeModelChoice('text', models.value) || (models.value.some(item => item.id === current.value?.model) ? current.value!.model! : models.value[0]?.id || '')
+  model.value = next
+  if (next && current.value.model !== next) { current.value.model = next; void saveChats() }
+}
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching], chooseModel)
+function changeFormat(event: Event) {
+  if (!current.value) return
+  const format = (event.target as HTMLSelectElement).value as typeof current.value.settings.format
+  if (current.value.formatOverride) { current.value.formatOverride = format; void saveChats() }
+  else if (modelFormat(model.value)) {
+    try { setModelFormat(model.value, format) } catch (cause) { error.value = errorMessage(cause) }
+  } else { current.value.settings.format = format; void saveChats() }
+}
 watch(() => current.value?.id, () => { chooseModel(); files.value = current.value?.draftFiles || []; prompt.value = current.value?.draft || ''; edited.value = undefined; nearBottom.value = true; void nextTick(scrollToBottom) }, { immediate: true })
 let appliedSource = ''
 watch([() => props.source?.id, ready], () => {
@@ -43,6 +60,12 @@ watch([() => props.source?.id, ready], () => {
   appliedSource = props.source.id
   if (current.value?.sourceWorkId === props.source.id) return
   const next = newChat(); next.sourceWorkId = props.source.id; next.draft = props.source.prompt
+  if (models.value.some(item => item.id === props.source!.model)) { next.model = props.source.model; model.value = props.source.model }
+  const parameters = readRemixParameters(props.source.generation?.parameters)
+  if (parameters?.kind === 'text' && parameters.chatOptions) {
+    Object.assign(next.settings, parameters.chatOptions)
+    next.formatOverride = parameters.chatOptions.format
+  }
   prompt.value = props.source.prompt; files.value = []
   void saveChats()
 }, { immediate: true })
@@ -85,7 +108,7 @@ async function applySourceReferences(selected: WorkFile[]) {
   finally { uploading.value = false }
 }
 async function send() {
-  if (!current.value || busy.value || uploading.value) return
+  if (!current.value || props.sourceBlocked || busy.value || uploading.value || !models.value.some(item => item.id === model.value)) return
   nearBottom.value = true
   const text = prompt.value, attached = [...files.value], original = edited.value
   error.value = ''; prompt.value = ''; files.value = []; edited.value = undefined
@@ -93,7 +116,7 @@ async function send() {
   catch (cause) { error.value = errorMessage(cause); prompt.value = text; files.value = attached }
 }
 async function regenerate(message: NativeMessage) {
-  if (!current.value || busy.value) return
+  if (!current.value || props.sourceBlocked || busy.value || !models.value.some(item => item.id === model.value)) return
   const index = current.value.messages.indexOf(message)
   const user = current.value.messages.slice(0, index + 1).reverse().find(item => item.role === 'user')
   if (user) await sendChat(current.value, messageText(user), [], model.value, user)
@@ -124,24 +147,31 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index"><img v-if="part.type === 'image_url'" :src="part.image_url?.url" alt="图片附件" /><span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : '音频附件') }}</span></template></div>
           <ol v-if="message.sources?.length" class="search-sources"><li v-for="source in message.sources" :key="source.url"><a :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title }}</a></li></ol>
           <p v-if="message.toolStatus" class="message-tool-status" role="status">{{ message.toolStatus }}</p><p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p><div v-if="message.role === 'assistant' && message.taskId && !message.streaming && !message.interrupted" class="message-actions"><button class="button subtle btn" @click="download(message)">下载文本</button><button class="button subtle btn" @click="publish(message)">发布作品</button><button v-if="creation.tasks.find(task => task.id === message.taskId)?.sourceWorkId" class="button subtle btn" @click="publish(message, 'source-comment')">发送到源作品评论区</button></div>
-          <div class="message-actions"><button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="15" /></button><button v-if="message.role === 'user'" class="icon-button" title="编辑提问" aria-label="编辑提问" :disabled="busy" @click="edit(message)"><Pencil :size="15" /></button><button v-if="message.role === 'assistant'" class="icon-button" title="重新生成回答" aria-label="重新生成回答" :disabled="busy" @click="regenerate(message)"><RefreshCw :size="15" /></button><button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="15" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="15" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="15" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span></div>
+          <div class="message-actions">
+            <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="15" /></button><button v-if="message.role === 'user'" class="icon-button" title="编辑提问" aria-label="编辑提问" :disabled="busy" @click="edit(message)"><Pencil :size="15" /></button>
+            <button v-if="message.role === 'assistant'" class="icon-button" title="重新生成回答" aria-label="重新生成回答" :disabled="sourceBlocked || busy || !models.some(item => item.id === model)" @click="regenerate(message)"><RefreshCw :size="15" /></button>
+            <button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="15" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="15" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="15" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
+          </div>
         </article>
       </div><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
+      <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /></StudioBilling>
       <form class="chat-composer studio-composer" @submit.prevent="send">
-        <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')" />
         <p v-if="edited" class="editing-state">正在编辑提问<button class="icon-button" type="button" title="取消编辑" aria-label="取消编辑" @click="edited = undefined; prompt = ''"><X :size="14" /></button></p>
         <label class="field"><span class="studio-sr-only">{{ edited ? '编辑内容' : '消息' }}</span><textarea v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
         <ul v-if="files.length" class="composer-files"><li v-for="(file, index) in files" :key="index"><span>{{ file.name }}</span><button class="icon-button" type="button" :aria-label="`移除附件 ${file.name}`" title="移除附件" @click="files.splice(index, 1)"><X :size="14" /></button></li></ul>
         <div class="studio-composer-tools">
-          <StudioModePicker />
           <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*`" :disabled="busy || uploading" @change="addFiles" /></label><label class="studio-select search-mode"><Globe :size="17" /><select v-model="current.search" aria-label="联网搜索" :disabled="busy" @change="saveChats()"><option value="off">联网</option><option value="quick">快速搜索</option><option value="deep">深度搜索</option></select></label><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="18" /></template>
-              <div class="mobile-chat-tools"><label class="field"><span>联网搜索</span><select v-model="current.search" class="control" aria-label="联网搜索" :disabled="busy" @change="saveChats()"><option value="off">关闭联网</option><option value="quick">快速搜索</option><option value="deep">深度搜索</option></select></label><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" embedded /></details></div><div class="settings-grid"><label class="field"><span>接口格式</span><select v-model="current.settings.format" class="control" @change="saveChats()"><option v-for="format in CHAT_API_FORMATS" :key="format" :value="format">{{ format }}</option></select></label><label class="field"><span>温度 {{ current.settings.temperature }}</span><input v-model.number="current.settings.temperature" type="range" min="0" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>Top P</span><input v-model.number="current.settings.top_p" class="control" type="number" min="0" max="1" step="0.05" @change="saveChats()" /></label><label class="field"><span>最大输出 Tokens</span><input v-model.number="current.settings.max_tokens" class="control" type="number" min="1" max="1000000" @change="saveChats()" /></label><label class="field"><span>话题惩罚</span><input v-model.number="current.settings.presence_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>重复惩罚</span><input v-model.number="current.settings.frequency_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>推理强度</span><select v-model="current.settings.reasoningEffort" class="control" @change="saveChats()"><option v-for="option in REASONING_EFFORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><label class="field"><span>历史压缩阈值</span><input v-model.number="current.compressionThreshold" class="control" type="number" min="500" max="2000000" @change="saveChats()" /></label><label class="field"><span>停止序列（每行一项）</span><textarea v-model="current.settings.stop" class="control" rows="2" @change="saveChats()" /></label><label class="field"><span>系统提示词</span><textarea v-model="current.system" class="control" rows="3" @change="saveChats()" /></label><label class="check-field"><input v-model="current.settings.stream" type="checkbox" @change="saveChats()" />流式输出</label><label class="check-field"><input v-model="current.sendMemory" type="checkbox" @change="saveChats()" />保留历史摘要</label></div>
+              <div class="mobile-chat-tools"><label class="field"><span>联网搜索</span><select v-model="current.search" class="control" aria-label="联网搜索" :disabled="busy" @change="saveChats()"><option value="off">关闭联网</option><option value="quick">快速搜索</option><option value="deep">深度搜索</option></select></label><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" embedded /></details></div>
+              <div class="settings-grid">
+                <label class="field"><span>接口格式</span><select :value="currentFormat" class="control" @change="changeFormat"><option v-for="format in CHAT_API_FORMATS" :key="format" :value="format">{{ format }}</option></select></label>
+                <label class="field"><span>温度 {{ current.settings.temperature }}</span><input v-model.number="current.settings.temperature" type="range" min="0" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>Top P</span><input v-model.number="current.settings.top_p" class="control" type="number" min="0" max="1" step="0.05" @change="saveChats()" /></label><label class="field"><span>最大输出 Tokens</span><input v-model.number="current.settings.max_tokens" class="control" type="number" min="1" max="1000000" @change="saveChats()" /></label><label class="field"><span>话题惩罚</span><input v-model.number="current.settings.presence_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>重复惩罚</span><input v-model.number="current.settings.frequency_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>推理强度</span><select v-model="current.settings.reasoningEffort" class="control" @change="saveChats()"><option v-for="option in REASONING_EFFORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><label class="field"><span>历史压缩阈值</span><input v-model.number="current.compressionThreshold" class="control" type="number" min="500" max="2000000" @change="saveChats()" /></label><label class="field"><span>停止序列（每行一项）</span><textarea v-model="current.settings.stop" class="control" rows="2" @change="saveChats()" /></label><label class="field"><span>系统提示词</span><textarea v-model="current.system" class="control" rows="3" @change="saveChats()" /></label><label class="check-field"><input v-model="current.settings.stream" type="checkbox" @change="saveChats()" />流式输出</label><label class="check-field"><input v-model="current.sendMemory" type="checkbox" @change="saveChats()" />保留历史摘要</label>
+              </div>
             </StudioPopover>
           </div>
-          <div class="studio-composer-models chat-models"><label class="studio-select studio-model-select"><span class="studio-sr-only">模型</span><select v-model="model" :disabled="creation.modelsLoading || creation.groupSwitching"><option v-if="!models.length" value="">暂无可用模型</option><option v-for="item in models" :key="item.id" :value="item.id">{{ item.name || item.id }}</option></select></label><label class="studio-select studio-group-select"><span class="studio-sr-only">模型分组</span><select aria-label="模型分组" :value="creation.selectedGroup ?? ''" :disabled="creation.groupsLoading || creation.groupSwitching" @change="selectCreationGroup(($event.target as HTMLSelectElement).value)"><option v-for="group in creation.groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label></div>
+          <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /><label class="studio-select studio-group-select"><span class="studio-sr-only">模型分组</span><select aria-label="模型分组" :value="creation.selectedGroup ?? ''" :disabled="creation.groupsLoading || creation.groupSwitching" @change="selectCreationGroup(($event.target as HTMLSelectElement).value)"><option v-for="group in creation.groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label></div>
           <button v-if="busy" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stopChat(current)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-          <button v-else class="composer-submit send-button" :title="edited ? '提交修改' : '发送'" :aria-label="edited ? '提交修改' : '发送'" :disabled="uploading || !model || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><Check v-if="edited" :size="19" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">{{ edited ? '提交修改' : '发送' }}</span></button>
+          <button v-else class="composer-submit send-button" :title="edited ? '提交修改' : '发送'" :aria-label="edited ? '提交修改' : '发送'" :disabled="sourceBlocked || uploading || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><Check v-if="edited" :size="19" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">{{ edited ? '提交修改' : '发送' }}</span></button>
         </div>
         <p v-if="current.search !== 'off'" class="search-cost">搜索与回答分别按章鱼账号配置计费。</p><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>

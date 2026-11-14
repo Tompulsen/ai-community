@@ -1,5 +1,8 @@
 import type { DalleQuality } from "./types.ts";
 import type { ModelConfig } from "./types.ts";
+export function usesGeminiImageChat(model: string) {
+  return /^gemini-(?:.*-)?(?:image|nano-banana)(?:-|$)/.test(model.toLowerCase().split("/").pop() ?? "");
+}
 
 const IMAGE_GENERATION_CONFIG_KEYS = [
   "providerName",

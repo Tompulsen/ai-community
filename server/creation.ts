@@ -360,7 +360,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const kind = id.length <= 200 && id.trim() ? classifyModel(id) : null
-        return kind ? [{ id, name: id, kinds: [kind], protocol: 'openai' }] : []
+        const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
+        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], protocol: 'openai' }] : []
       }) })
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/media') {
       await rateLimit(ctx, 'media', 120)

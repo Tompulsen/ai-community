@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Download, Maximize, Minus, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from '@lucide/vue'
 import { creation, downloadCreation, mediaSource, removeCreationTasks, resumeCreation, type CreationTask, type CreationDestination } from '../native-studio'
 import { errorMessage, session } from '../state'
-const props = defineProps<{ kind?: string; embedded?: boolean }>()
+const props = defineProps<{ kind?: string; embedded?: boolean; previewOnly?: boolean }>()
 const emit = defineEmits<{ reuse: [task: CreationTask]; publish: [task: CreationTask, destination: CreationDestination] }>()
 const view = ref('gallery'), filter = ref('all'), query = ref(''), limit = ref(60), selected = ref<string[]>([]), error = ref(''), busy = ref(false)
 const preview = ref<{ task: CreationTask; index: number }>(), dialog = ref<HTMLDialogElement>(), scale = ref(1), offset = ref({ x: 0, y: 0 })
@@ -28,7 +28,7 @@ async function removeSelected() {
 async function downloadSelected() { await run(async () => { for (const task of items.value.filter(item => selected.value.includes(item.id))) for (let index = 0; index < Math.max(1, task.urls.length); index++) await downloadCreation(task, index) }) }
 </script>
 <template>
-  <details class="studio-gallery" :class="{ embedded }" :open="embedded">
+  <details v-if="!previewOnly" class="studio-gallery" :class="{ embedded }" :open="embedded">
     <summary v-show="!embedded">图库与任务管理</summary>
     <div class="gallery-toolbar">
       <div class="tabs"><button class="tab" :class="{ active: view === 'gallery' }" type="button" @click="view = 'gallery'; filter = 'all'">图库</button><button class="tab" :class="{ active: view === 'tasks' }" type="button" @click="view = 'tasks'; filter = 'all'">任务</button></div>
@@ -48,10 +48,10 @@ async function downloadSelected() { await run(async () => { for (const task of i
       </article>
     </div>
     <button v-if="items.length > limit" class="button subtle btn" type="button" @click="limit += 60">加载更多</button>
+  </details>
     <Teleport to="body"><dialog ref="dialog" class="media-lightbox" aria-label="原始媒体预览" @close="preview = undefined" @click="($event.target === dialog) && dialog?.close()">
       <template v-if="preview"><header><span>{{ preview.task.model }}</span><div><button class="icon-button" aria-label="缩小" title="缩小" @click="zoom(scale - 0.25)"><Minus :size="18" /></button><output>{{ Math.round(scale * 100) }}%</output><button class="icon-button" aria-label="放大" title="放大" @click="zoom(scale + 0.25)"><Plus :size="18" /></button><button class="icon-button" aria-label="重置缩放" title="重置缩放" @click="reset"><RotateCcw :size="18" /></button><button class="icon-button" aria-label="关闭媒体预览" title="关闭" @click="dialog?.close()"><X :size="20" /></button></div></header><div class="lightbox-stage" @pointerdown="startPan" @pointermove="pan" @pointerup="dragging = undefined" @pointercancel="dragging = undefined" @wheel.prevent="zoom(scale + ($event.deltaY < 0 ? 0.1 : -0.1))"><img v-if="preview.task.kind === 'image'" draggable="false" :src="mediaSource(preview.task.urls[preview.index]!)" :alt="preview.task.prompt" :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }" /><video v-else controls playsinline :src="mediaSource(preview.task.urls[preview.index]!, false, 'video')" /></div><footer><select v-if="preview.task.urls.length > 1" v-model.number="preview.index" class="control" aria-label="预览图片序号" @change="reset"><option v-for="(_, index) in preview.task.urls" :key="index" :value="index">第 {{ index + 1 }} 张</option></select><p>{{ preview.task.prompt }}</p><button class="button subtle btn" @click="run(() => downloadCreation(preview!.task, preview!.index))"><Download :size="16" />下载原文件</button></footer></template>
     </dialog></Teleport>
-  </details>
 </template>
 <style scoped>
 .studio-gallery { border-top: 1px solid var(--border); padding-block: 24px; margin-top: 24px; }

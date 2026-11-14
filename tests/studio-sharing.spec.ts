@@ -2,12 +2,13 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import type { Work } from '../src/data'
 
-async function fixture(page: Page, kind = 'image') {
+async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image') {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
-  const source = { id: 'source42', title: '原作海底城市', authorId: '26', author: '原作者', avatar: '原', kind, prompt: '海底城市与发光的水母', model: 'authors-old-model', version: 1, tags: [], status: 'published', date: '2026-11-13', likes: 0, owned: false, saved: false, liked: false,
+  const source: Work = { id: 'source42', title: '原作海底城市', authorId: '26', author: '原作者', avatar: '原', kind, prompt: '海底城市与发光的水母', model: `fixture-${kind === 'resource' ? 'text' : kind}`, version: 1, tags: [], status: 'published', date: '2026-11-13', likes: 0, owned: false, saved: false, liked: false,
     fileIds: ['authorResult'], cover: '/legacy-files/authorResult', files: [{ id: 'authorResult', name: '原作成品.jpg', type: 'image/jpeg', url: '/legacy-files/authorResult' }],
     referenceFiles: [1, 2].map(n => ({ id: `authorRef${n}`, name: `作者参考图${n}.jpg`, type: 'image/jpeg', url: `/legacy-files/authorRef${n}` })) }
   const generated: any[] = [], submitted: any[] = [], saved = new Map<string, any>()
@@ -133,8 +134,7 @@ test('reusing image history synchronizes the source and a new creation clears it
   await expect(page.locator('.task-status')).toContainText('生成完成')
   await page.goto('/create/image?remix=sourceB')
   await expect(prompt).toHaveValue('森林里的萤火虫')
-  await page.getByRole('button', { name: '生成历史', exact: true }).click()
-  await page.locator('.history-row').filter({ hasText: state.source.prompt }).click()
+  await page.locator('.studio-sidebar .studio-record').filter({ hasText: state.source.prompt }).click()
   await expect(page).toHaveURL(/create\/image\?remix=source42$/)
   await expect(page.locator('.source-label')).toContainText(state.source.title)
   await expect(prompt).toHaveValue(state.source.prompt)
@@ -165,7 +165,7 @@ test('chat history restores its own source and preserves an edited draft', async
   await page.goto('/create/text?remix=sourceB')
   await expect(prompt).toHaveValue('森林里的萤火虫')
   await page.getByRole('button', { name: '历史对话', exact: true }).click()
-  await page.getByRole('button', { name: '海底同款对话', exact: true }).click()
+  await page.getByRole('navigation', { name: '历史对话', exact: true }).getByRole('button', { name: '海底同款对话', exact: true }).click()
   await expect(page).toHaveURL(/create\/text\?remix=source42$/)
   await expect(page.locator('.source-label')).toContainText(state.source.title)
   await expect(prompt).toHaveValue('保留我的海底草稿')
@@ -274,4 +274,139 @@ test('switching accounts during result upload cannot publish under the new ident
   await page.waitForLoadState('networkidle')
   expect(state.submitted).toHaveLength(0)
   expect(state.generated).toHaveLength(1)
+})
+
+test('image remix restores model, group and full public settings, then republishes its generation snapshot', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = 'gpt-image-2'
+  state.source.generation = { parameters: { version: 1, kind: 'image', group: '生图', protocol: 'async',
+    size: '1200x900', aspect_ratio: '4:3', n: 3, duration: 8,
+    imageOptions: { resolution: '2k', quality: 'high', seed: '42', style: 'vivid', imageOutputFormat: 'webp', imageBackground: 'transparent', imageOutputCompression: 85 } } }
+  let group = 'auto'
+  await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图', ratio: 0.6 }] } } }))
+  await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } }))
+  await page.goto('/create/image?remix=source42')
+  await expect(page.getByRole('combobox', { name: '模型分组', exact: true })).toHaveValue('生图')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveValue('1200x900')
+  await expect(page.getByRole('combobox', { name: '画面比例', exact: true })).toHaveValue('4:3')
+  await expect(page.getByLabel('图片数量', { exact: true })).toHaveValue('3')
+  await expect(page.getByLabel('随机种子', { exact: true })).toHaveValue('42')
+  await expect(page.getByRole('combobox', { name: '画质', exact: true })).toHaveValue('high')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
+    await expect(page.getByRole('dialog', { name: '高级参数', exact: true })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: `.taste-skill/remix-parameters-20261114/image-settings-${width}.png`, fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.keyboard.press('Escape')
+  await page.screenshot({ path: '.taste-skill/remix-parameters-20261114/image.png', fullPage: true })
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.generated[0]).toMatchObject({ model: 'gpt-image-2', size: '1200x900', aspect_ratio: '4:3', n: 3, protocol: 'async', imageOptions: { seed: '42', quality: 'high' } })
+  // Publishing after a later group switch must keep the generation-time group.
+  await page.getByRole('combobox', { name: '模型分组', exact: true }).selectOption('auto')
+  await page.getByRole('button', { name: '发布作品', exact: true }).last().click()
+  await page.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect.poll(() => state.submitted.length).toBe(1)
+  expect(state.submitted[0].generation.parameters).toMatchObject({ version: 1, kind: 'image', group: '生图', size: '1200x900', n: 3, protocol: 'async', imageOptions: { seed: '42', imageOutputCompression: 85 } })
+  expect(JSON.stringify(state.submitted[0].generation.parameters)).not.toMatch(/tokenId|accountTokenId|apiKey/)
+})
+
+test('video remix restores duration, size, seed and advanced parameters without silently normalizing them', async ({ page }) => {
+  const state = await fixture(page, 'video')
+  state.source.model = 'sora-2'
+  state.source.generation = { parameters: { version: 1, kind: 'video', group: 'auto', size: '720x1280', aspect_ratio: '9:16', n: 1, duration: 8,
+    videoOptions: { mode: 'text-to-video', resolution: '720p', seed: '42', negativePrompt: '模糊', generateAudio: true, customParameters: '{"fps":24}' } } }
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'sora-2', kinds: ['video'] }] } }))
+  await page.goto('/create/video?remix=source42')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '时长（秒）', exact: true })).toHaveValue('8')
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveValue('720x1280')
+  await expect(page.getByLabel('随机种子', { exact: true })).toHaveValue('42')
+  await expect(page.getByLabel('负面提示词', { exact: true })).toHaveValue('模糊')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ model: 'sora-2', duration: 8, size: '720x1280', aspect_ratio: '9:16', videoOptions: { seed: '42', generateAudio: true, customParameters: '{"fps":24}' } })
+})
+
+test('unavailable original model requires an explicit fallback and never submits on entry', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = 'retired-model'
+  await page.goto('/create/image?remix=source42')
+  await expect(page.getByRole('alert')).toContainText('retired-model')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect(state.generated).toHaveLength(0)
+  await page.getByRole('button', { name: '使用当前配置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+})
+
+test('failed original group selection does not replay its POST or silently generate with a different group', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original' } }
+  let attempts = 0
+  await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
+  await page.route('**/api/new-api/model-groups/select', route => { attempts++; return route.fulfill({ status: 409, json: { success: false, message: '原作分组不可用。' } }) })
+  await page.goto('/create/image?remix=source42')
+  await expect(page.getByRole('alert').filter({ hasText: '原作分组不可用' }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect(attempts).toBe(1); expect(state.generated).toEqual([])
+})
+
+test('text remix restores public chat settings without importing the authors conversation', async ({ page }) => {
+  const state = await fixture(page, 'resource')
+  state.source.generation = { parameters: { version: 1, kind: 'text', group: 'auto',
+    chatOptions: { format: 'responses', temperature: 0.2, max_tokens: 1234, reasoningEffort: 'high', stop: 'END' } } }
+  await page.goto('/create/text?remix=source42')
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.prompt)
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0].chatOptions).toMatchObject({ format: 'responses', temperature: 0.2, max_tokens: 1234, reasoningEffort: 'high', stop: 'END' })
+  expect(state.generated[0].chatOptions.messages.map((message: { role: string; content: unknown }) => ({ role: message.role, content: message.content }))).toEqual([{ role: 'user', content: state.source.prompt }])
+})
+
+test('pending source restoration blocks regenerating an old answer', async ({ page }) => {
+  const state = await fixture(page, 'resource')
+  await page.goto('/create/text')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('原有对话')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant .message-content')).toContainText('水母点亮')
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/works/source42', async route => { await gate; await route.fallback() })
+  await page.goto('/create/text?remix=source42')
+  await expect(page.getByRole('button', { name: '重新生成回答', exact: true })).toBeDisabled()
+  expect(state.generated).toHaveLength(1)
+  release()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.prompt)
+})
+
+test('switching source during a slow group restore leaves the newer source and group authoritative', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original', aspect_ratio: '4:3', n: 3 } }
+  let group = 'auto', release!: () => void, started = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
+  await page.route('**/api/new-api/model-groups/select', async route => {
+    started = true; await gate; group = route.request().postDataJSON().group
+    return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'auto' ? 41 : 52 } } })
+  })
+  await page.route('**/api/works/sourceB', route => route.fulfill({ json: { work: { ...state.source, id: 'sourceB', title: '原作森林', prompt: '森林里的萤火虫',
+    generation: { parameters: { version: 1, kind: 'image', group: 'auto', aspect_ratio: '1:1', n: 1 } } } } }))
+  await page.goto('/create/image?remix=source42')
+  await expect.poll(() => started).toBe(true)
+  await page.evaluate(() => {
+    history.pushState({ ...history.state, current: '/create/image?remix=sourceB' }, '', '/create/image?remix=sourceB')
+    dispatchEvent(new PopStateEvent('popstate', { state: history.state }))
+  })
+  release()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('森林里的萤火虫')
+  await expect(page.locator('.source-label')).toContainText('原作森林')
+  await expect(page.getByRole('combobox', { name: '模型分组', exact: true })).toHaveValue('auto')
+  expect(state.generated).toEqual([])
 })

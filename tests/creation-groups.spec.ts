@@ -108,9 +108,6 @@ test('video group aliases work and existing task polling retains its original to
 
 test('an older model refresh cannot replace the selected group catalog', async ({ page }) => {
   await fixture(page)
-  await page.goto('/create/image')
-  const model = page.getByRole('combobox', { name: '模型', exact: true })
-  await expect(model).toHaveValue('gpt-image-2')
   let release!: () => void
   let delayed = false
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -122,12 +119,14 @@ test('an older model refresh cannot replace the selected group catalog', async (
     }
     return route.fallback()
   })
-  await page.getByRole('button', { name: '刷新模型', exact: true }).click()
+  await page.goto('/create/image')
+  const model = page.getByRole('combobox', { name: '模型', exact: true })
   await expect.poll(() => delayed).toBe(true)
   await page.getByRole('combobox', { name: '模型分组', exact: true }).selectOption('生图')
   await expect(model).toHaveValue('image-alias')
   release()
   await expect(page.getByRole('combobox', { name: '模型分组', exact: true })).toHaveValue('生图')
   await expect(model).toHaveValue('image-alias')
-  await expect(model.locator('option[value=stale-model]')).toHaveCount(0)
+  await model.click()
+  await expect(page.getByRole('dialog', { name: '选择模型' }).getByRole('button', { name: 'stale-model', exact: true })).toHaveCount(0)
 })

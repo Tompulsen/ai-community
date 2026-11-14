@@ -41,7 +41,7 @@ function selectConversation(id: string) {
         <template v-else><button v-for="task in tasks" :key="task.id" class="studio-record" :class="{ active: task.id === creation.selectedId }" :title="task.prompt || task.model" @click="emit('reuse', task)"><img v-if="task.kind === 'image' && task.urls[0]" :src="mediaSource(task.urls[0], true)" alt="" loading="lazy" /><Video v-else-if="task.kind === 'video'" :size="17" /><FileText v-else :size="17" /><span>{{ task.prompt || task.model }}</span><LoaderCircle v-if="task.phase === 'running' || task.phase === 'submitting'" :size="14" /></button><p v-if="!tasks.length" class="studio-sidebar-empty">{{ query ? '没有匹配的记录' : '暂无创作记录' }}</p></template>
       </div>
     </section>
-    <div class="studio-sidebar-bottom"><button @click="emit('prices')"><CircleDollarSign :size="18" />模型定价</button><RouterLink to="/discover"><ArrowLeft :size="18" />返回社区</RouterLink></div>
+    <div class="studio-sidebar-bottom"><button @click="emit('prices')"><CircleDollarSign :size="18" />模型定价</button><div id="studio-sidebar-menu" /><RouterLink to="/discover"><ArrowLeft :size="18" />返回社区</RouterLink></div>
   </aside>
 </template>
 
@@ -50,8 +50,8 @@ function selectConversation(id: string) {
 .studio-sidebar-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; margin-bottom: 32px; }
 .studio-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }.studio-brand img { flex: none; border-radius: 8px; }.studio-brand strong { font-size: 18px; font-weight: 600; white-space: nowrap; }
 .studio-sidebar-links { display: grid; gap: 4px; }
-.studio-sidebar-links a, .studio-sidebar-create, .studio-sidebar-bottom > * { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 12px; font-size: 14px; text-align: left; color: var(--muted); border: 0; border-radius: 8px; }
-.studio-sidebar-links a:hover, .studio-sidebar-create:hover, .studio-sidebar-bottom > *:hover { background: var(--surface-soft); color: var(--ink); }
+.studio-sidebar-links a, .studio-sidebar-create, .studio-sidebar-bottom > :is(button, a) { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 12px; font-size: 14px; text-align: left; color: var(--muted); border: 0; border-radius: 8px; }
+.studio-sidebar-links a:hover, .studio-sidebar-create:hover, .studio-sidebar-bottom > :is(button, a):hover { background: var(--surface-soft); color: var(--ink); }
 .studio-sidebar-create.active { color: var(--ink); }
 .studio-sidebar-history { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 32px; }
 .studio-sidebar-history h2 { padding: 0 12px; margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 20px; }
@@ -63,5 +63,7 @@ function selectConversation(id: string) {
 .studio-record.active, .studio-record:hover { color: var(--ink); background: var(--surface-soft); }
 .studio-sidebar-empty { padding: 8px 12px; font-size: 12px; line-height: 20px; color: var(--muted); }
 .studio-sidebar-bottom { display: grid; gap: 4px; padding-top: 16px; }
+#studio-sidebar-menu:empty { display: none; }
+#studio-sidebar-menu :deep(> .studio-tool) { justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 12px; font-size: 14px; border-radius: 8px; }
 @media (max-width: 999px) { .studio-sidebar { display: none; } }
 </style>

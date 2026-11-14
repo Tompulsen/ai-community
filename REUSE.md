@@ -157,8 +157,6 @@ Lucide 适配布局，没有移植其积分服务或引入 Next.js 运行时。
 价格和余额复用本项目账号只读接口，大图复用 StudioGallery，停止/恢复复用原请求，
 未用参考截图中的数值冒充当前账号数据。
 
-`public/assets/motion/motion.css` 与 `motion.js` 原样来自用户指定的
-design-taste-frontend 2.5.1 技能，不修改其实现以通过检查。
 Schibsted Grotesk 拉丁可变字体来自 Google Fonts，随文件保留
 `public/assets/fonts/Schibsted-OFL.txt` 中的版权和 SIL OFL 1.1 声明。
 站点图标复用已安装的 Lucide Aperture（ISC）；页面操作仍使用同一 Lucide 图标库。
@@ -187,7 +185,38 @@ Lucide 和 CSS 过渡，不引入 React、Motion 或 Tailwind 运行时。
 
 2026-11-14 同款与发布流程继续参考旧社区 `packages/frontend/src/components/MkStudioRemix.vue`、
 `packages/frontend/src/utility/studio-remix.ts`、`studio/app/components/community-share-button.tsx` 与
-`studio/app/utils/community-share.ts`：默认仅带提示词，参考图只来自作者显式公开的 referenceFiles；
+`studio/app/utils/community-share.ts`：保留来源归属，参考图只来自作者显式公开的 referenceFiles；
 适配为 Vue 选择弹层，可与用户上传混用。发布复用现有 `/api/works` 的 community/source-comment、
 附件归属、审核和防重规则，不新增发布通道或数据库结构。参考图发布前复制上传到当前账号；
 结果上传与提交内容持久化，断网重试复用同一结果，不再调用生成接口。
+
+2026-11-14 模型选择复用用户指定 `D:/Users/86136/Desktop/1/仓库代码/octopus_chat`，
+参考提交 `0eac2b491406574cccfe29ad9252dc56bd97ae95` 的
+`app/components/model-select.tsx`、`app/utils/model.ts`、`app/utils/model-metadata.ts`、
+`app/utils/model-preferences.ts` 与 `app/store/model-preferences.ts`。
+保留厂商分类计数、名称/说明/厂商搜索、收藏、模型类型覆盖和对话接口格式选择规则，
+适配为 `StudioModelPicker.vue`、`src/model-preferences.ts`、`shared/studio/model-catalog.ts`。
+八个厂商图标沿用源项目 `app/icons` 资产，MIT 版权及许可保存在
+`public/assets/model-vendors/LICENSE.txt`；不引入 React、Next.js 或 Zustand。
+仅使用现有章鱼账号目录和分组接口，不接入参考项目的自定义 API 密钥来源；
+设置按社区身份、章鱼账号与实际目录令牌编号隔离保存在本浏览器。
+仅提供当前创作后端支持的对话、生图、视频分类；接口覆盖只作用于对话请求，
+保留历史对话格式作为默认，不将某个模型格式写入所有会话。
+跨类型选择切换原生创作路由，分组变更与任务查询仍复用既有令牌固定和过期响应防护。
+
+分组展示进一步复用同提交 `app/components/account-model-source.tsx` 和
+`account-model-source.module.scss`：整行触发、完整分组滚动列表、Auto 系统标识、
+倍率与选中状态，适配 Vue 和现有主题。请求仍走社区已有分组选择方法，
+失败后读取服务端实际状态，不自动重放分组 POST 或生成请求。
+
+2026-11-14 同款参数扩展复用现有 `task.request`、`shared/studio/options.ts`、
+图片尺寸计算及视频参数序列化/能力校验；旧 Studio 发布逻辑只包含提示词与模型，
+故增加共享白名单 `shared/studio/remix-parameters.ts`。版本化参数保存在已有
+`generation.parameters` JSON 中，不改变数据库表。模型、分组、尺寸、比例、数量、
+时长、seed、请求方式和公开高级参数来自生成时快照，分组在异步准备前与令牌一起固定。
+图片固定尺寸和 seed 进入实际 Images JSON/multipart；OpenAI Video 尺寸及 seed
+元信息进入实际请求。当前 Gemini 图片 Chat Completions 兼容分支不支持固定尺寸/seed，
+明确拒绝相关请求，其作品不发布未实际使用的图片参数。
+公开参数在写入与读取时均校验；不携带账号/令牌、聊天历史、MCP、私有素材地址或文件 ID。
+视频自定义 JSON 只保留受控生成参数，素材继续通过公开参考图列表单独选择。
+同款先恢复当前账号可用分组再核实模型；失败需用户确认使用当前配置，不自动付费生成。

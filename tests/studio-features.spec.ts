@@ -53,7 +53,8 @@ test('image advanced settings survive reload, reach the request, and streaming r
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(state.calls[0]?.body.imageOptions).toMatchObject({ resolution: '2k', quality: 'high', imageOutputFormat: 'webp', imageStream: true })
-  await page.getByRole('button', { name: '图库与任务管理', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: '作品库', exact: true }).click()
   await expect(page.locator('.gallery-item')).toHaveCount(1)
   await page.locator('.gallery-cover').click()
   await expect(page.getByRole('dialog', { name: '原始媒体预览' })).toBeVisible()
@@ -141,7 +142,7 @@ test('stopping during persistence and switching identity during initialization p
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   state.state.user.id = '18'; state.state.user.accountId = '18'
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.locator('.history-row')).toHaveCount(0)
+  await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(0)
   await page.evaluate(() => { (window as unknown as { slowWrites: boolean }).slowWrites = false })
   await expect.poll(() => page.evaluate(() => (window as unknown as { pendingWrites: number }).pendingWrites)).toBe(0)
   expect(state.calls.filter(call => ['/api/creation/search', '/api/creation/generate'].includes(call.path))).toHaveLength(0)

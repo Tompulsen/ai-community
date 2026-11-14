@@ -56,6 +56,27 @@ test('generation payloads preserve explicit sync/async and multipart reference u
   assert.throws(() => buildCreationPayload({ ...input, referenceUrls: ['http://internal/reference'] }), { statusCode: 400 })
 })
 
+test('remix image requests retain exact size and an explicit seed through JSON and multipart', () => {
+  const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: '同款',
+    size: '1200x900', aspect_ratio: '4:3', n: 3, imageOptions: { resolution: '2k', quality: 'high', seed: '0' } })
+  const body = JSON.parse(buildCreationPayload(input).body)
+  assert.equal(body.size, '1200x900')
+  assert.equal(body.seed, 0)
+  assert.equal(body.n, 3)
+  const edit = buildCreationPayload({ ...input, protocol: 'async', referenceUrls: ['https://media.example/ref.png'] }, [{ blob: new Blob(['image'], { type: 'image/png' }) }])
+  assert.equal(edit.body.get('size'), '1200x900')
+  assert.equal(edit.body.get('seed'), '0')
+  assert.throws(() => validateCreationInput({ ...input, imageOptions: { seed: '9007199254740992' } }), { statusCode: 400 })
+})
+
+test('remix compatible video requests retain exact size and seed metadata', () => {
+  const input = validateCreationInput({ kind: 'video', model: 'sora-2', prompt: '同款视频',
+    size: '720x1280', aspect_ratio: '9:16', duration: 8, videoOptions: { mode: 'text-to-video', resolution: '720p', seed: '42' } })
+  const payload = buildCreationPayload(input)
+  assert.equal(payload.body.get('size'), '720x1280')
+  assert.equal(JSON.parse(payload.body.get('metadata')).seed, 42)
+})
+
 test('Gemini image models retain their existing single chat-completions transport with image references', () => {
   const reference = `data:${'image/jpeg'};base64,/9j/2Q==`
   const input = { kind: 'image', model: 'gemini-3.1-flash-image-preview', prompt: 'Image', referenceUrls: [reference] }
@@ -70,6 +91,8 @@ test('Gemini image models retain their existing single chat-completions transpor
   assert.equal(buildCreationPayload({ ...input, model: 'gpt-image-2', referenceUrls: [] }).path, 'v1/images/generations')
   assert.throws(() => buildCreationPayload({ ...input, protocol: 'async' }), { statusCode: 400 })
   assert.throws(() => buildCreationPayload({ ...input, n: 2 }), { statusCode: 400 })
+  assert.throws(() => buildCreationPayload({ ...input, imageOptions: { seed: '42' } }), { statusCode: 400 })
+  assert.throws(() => buildCreationPayload({ ...input, size: '1200x900', exactSize: true }), { statusCode: 400 })
 })
 
 test('OpenAI video uses existing multipart transport while compatible model families retain JSON metadata', () => {

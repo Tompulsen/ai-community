@@ -1,5 +1,7 @@
 import { z } from 'zod'
+export const seedSchema = z.string().max(30).refine(value => value === '' || /^\d+$/.test(value) && Number.isSafeInteger(Number(value)), '随机种子须为非负安全整数')
 export const imageOptionsSchema = z.object({
+  seed: seedSchema.default(''),
   resolution: z.enum(['auto', '1k', '2k', '4k']).default('auto'),
   quality: z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']).default('auto'),
   style: z.enum(['natural', 'vivid']).optional(),
@@ -19,7 +21,7 @@ export const videoOptionsSchema = z.object({
   openaiLastImageUrl: z.string().max(8192).optional(),
   openaiFileId: z.string().max(200).optional(),
   customParameters: z.string().max(32000).default(''),
-  seed: z.string().max(30).default(''),
+  seed: seedSchema.default(''),
   generateAudio: z.boolean().optional(),
   personGeneration: z.enum(['', 'allow_all', 'allow_adult', 'dont_allow']).default(''),
 })

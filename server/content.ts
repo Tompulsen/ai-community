@@ -17,6 +17,7 @@ import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './
 import { getUser } from './auth.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
+import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -31,6 +32,7 @@ interface Generation {
   referenceFileIds: string[];
   sourceWorkId?: string;
   shareToSource?: boolean;
+  parameters?: RemixParameters;
 }
 
 interface CommunityRevision {
@@ -441,6 +443,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   const tagIds = content.tagIds ?? [];
   const tags = tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" AND category = $2 ORDER BY id', [tagIds, content.category])).rows : [];
   const publicStatus = ['published', 'approved'].includes(row.status) && row.approvedNoteId;
+  const publicParameters = readRemixParameters(content.generation?.parameters);
   return {
     id: row.id, title: content.title, author: row.authorName || row.authorUsername || '',
     avatar: (row.authorName || row.authorUsername || '?').slice(0, 1), authorId: row.authorId, authorUsername: row.authorUsername,
@@ -450,7 +453,11 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
     ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
     tags: tags.map(tag => tag.name), tagIds: tags.map(tag => tag.id),
     prompt: content.generation?.prompt ?? '', model: content.model, body: content.text,
-    sourceUrl: content.sourceUrl, license: content.license, generation: content.generation ?? null,
+    sourceUrl: content.sourceUrl, license: content.license, generation: content.generation ? {
+      prompt: content.generation.prompt, model: content.generation.model, referenceFileIds: referenceIds,
+      ...(content.generation.sourceWorkId ? { sourceWorkId: content.generation.sourceWorkId } : {}),
+      ...(publicParameters ? { parameters: publicParameters } : {}),
+    } : null,
     referenceFiles: referenceIds.flatMap(id => references.filter(file => file.id === id && file.storedInternal && file.type.startsWith('image/')).map(file => ({ id: file.id, name: file.name, type: file.type, url: new URL(`/legacy-files/${file.id}`, ctx.config.url).href }))),
     fileIds: ids, files: ordered.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
     likes: Number(row.likes ?? 0), liked: Boolean(row.liked), saved: Boolean(row.saved),
@@ -509,11 +516,13 @@ export function normalizeRevision(body: Body, previous: Partial<CommunityRevisio
   if (!Array.isArray(rawReferences) || rawReferences.length > 16 || new Set(rawReferences).size !== rawReferences.length) fail(400, 'Invalid reference files');
   const references = rawReferences.map(identifier);
   const sourceWorkId = generation?.sourceWorkId ? identifier(generation.sourceWorkId) : undefined;
+  const parameters = generation?.parameters === undefined ? undefined : readRemixParameters(generation.parameters);
+  if (generation?.parameters !== undefined && (!parameters || parameters.kind !== (category === 'resource' ? 'text' : category))) fail(400, 'Invalid generation parameters');
   return {
     category, title, text: text(body.body ?? body.text, 20000, previous.text ?? ''), model, sourceUrl,
     license: text(body.license, 200, previous.license ?? ''), fileIds,
     generation: body.generation === null ? null : prompt || references.length || sourceWorkId ? {
-      prompt, model, referenceFileIds: references, ...(sourceWorkId ? { sourceWorkId, ...(generation?.shareToSource === true ? { shareToSource: true } : {}) } : {}),
+      prompt, model, referenceFileIds: references, ...(parameters ? { parameters } : {}), ...(sourceWorkId ? { sourceWorkId, ...(generation?.shareToSource === true ? { shareToSource: true } : {}) } : {}),
     } : null,
   };
 }

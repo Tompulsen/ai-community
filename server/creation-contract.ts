@@ -6,7 +6,7 @@
  */
 
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema, toolCallSchema, type ImageOptions, type VideoOptions, type ChatOptions } from '../shared/studio/options.ts'
-import { imageOutputParams, supportsImageOutputOptions, imageRequestSize } from '../shared/studio/image-params.ts'
+import { imageOutputParams, supportsImageOutputOptions, imageRequestSize, usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { buildVideoRequest } from '../shared/studio/video-api.ts'
 import { validateVideoRequestParameters } from '../shared/studio/video-capabilities.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
@@ -19,6 +19,7 @@ export interface CreationInput {
   model: string
   prompt: string
   size?: string
+  exactSize?: boolean
   aspect_ratio?: string
   n?: number
   duration?: number
@@ -75,6 +76,10 @@ export function validateCreationInput(value: unknown): CreationInput {
   if (value.size !== undefined) {
     if (typeof value.size !== 'string' || !/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|(?:1|2|4)K)$/.test(value.size)) invalid('图片或视频尺寸无效。')
     result.size = value.size
+  }
+  if (value.exactSize !== undefined) {
+    if (typeof value.exactSize !== 'boolean') invalid('尺寸覆盖标识无效。')
+    result.exactSize = value.exactSize
   }
   if (value.aspect_ratio !== undefined) {
     if (typeof value.aspect_ratio !== 'string' || !/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/.test(value.aspect_ratio)) invalid('画面比例无效。')
@@ -158,8 +163,9 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
   }
   if (input.kind === 'image') {
     if (Array.from(input.prompt).length > 32000) invalid('生图提示词不能超过 32,000 个字符。')
-    if (/^gemini-(?:.*-)?(?:image|nano-banana)(?:-|$)/.test(input.model.toLowerCase().split('/').pop() ?? '')) {
+    if (usesGeminiImageChat(input.model)) {
       if (input.protocol === 'async') invalid('此 Gemini 图片模型使用对话接口，不支持异步图片协议。')
+      if (input.imageOptions?.seed || input.exactSize && input.size !== 'auto') invalid('当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。')
       if ((input.n ?? 1) !== 1) invalid('此 Gemini 图片接口每次只能提交一张，不能隐式重复付费请求。')
       const content = references.length ? [{ type: 'text', text: input.prompt },
         ...references.map(url => ({ type: 'image_url', image_url: { url } }))] : input.prompt
@@ -167,8 +173,9 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
     }
     const options = input.imageOptions
     const payload = { model: input.model, prompt: input.prompt, n: input.n ?? 1,
-      size: options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model) : input.size ?? 'auto',
+      size: input.size && input.size !== 'auto' ? input.size : options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model) : input.size ?? 'auto',
       response_format: options?.imageResponseFormat ?? 'url',
+      ...(options?.seed ? { seed: Number(options.seed) } : {}),
       ...(options ? { quality: options.quality, ...(options.style ? { style: options.style } : {}),
         ...(supportsImageOutputOptions(input.model) ? imageOutputParams(options) : {}) } : {}) }
     if (!references.length) return json(input.protocol === 'async' ? 'async-images/v1/tasks' : 'v1/images/generations', payload)
