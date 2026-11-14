@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Download, Maximize, Minus, Plus, RefreshCw, RotateCcw, Trash2, X } from '@lucide/vue'
-import { creation, downloadCreation, mediaSource, removeCreationTasks, resumeCreation, type CreationTask } from '../native-studio'
+import { Download, Maximize, Minus, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from '@lucide/vue'
+import { creation, downloadCreation, mediaSource, removeCreationTasks, resumeCreation, type CreationTask, type CreationDestination } from '../native-studio'
 import { errorMessage, session } from '../state'
 const props = defineProps<{ kind?: string; embedded?: boolean }>()
-const emit = defineEmits<{ reuse: [task: CreationTask] }>()
+const emit = defineEmits<{ reuse: [task: CreationTask]; publish: [task: CreationTask, destination: CreationDestination] }>()
 const view = ref('gallery'), filter = ref('all'), query = ref(''), limit = ref(60), selected = ref<string[]>([]), error = ref(''), busy = ref(false)
 const preview = ref<{ task: CreationTask; index: number }>(), dialog = ref<HTMLDialogElement>(), scale = ref(1), offset = ref({ x: 0, y: 0 })
 let dragging: { x: number; y: number; left: number; top: number } | undefined
@@ -16,6 +16,7 @@ const items = computed(() => creation.tasks.filter(task => (!props.kind || task.
 const visible = computed(() => items.value.slice(0, limit.value))
 async function run(action: () => Promise<unknown>) { if (busy.value) return; busy.value = true; error.value = ''; try { await action() } catch (cause) { error.value = errorMessage(cause) } finally { busy.value = false } }
 function open(task: CreationTask, index = 0) { preview.value = { task, index }; reset(); dialog.value?.showModal() }
+defineExpose({ open })
 function reset() { scale.value = 1; offset.value = { x: 0, y: 0 } }
 function zoom(value: number) { scale.value = Math.min(5, Math.max(0.25, value)) }
 function startPan(event: PointerEvent) { if (event.button !== 0 || scale.value <= 1) return; dragging = { x: event.clientX, y: event.clientY, left: offset.value.x, top: offset.value.y }; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId) }
@@ -43,7 +44,7 @@ async function downloadSelected() { await run(async () => { for (const task of i
         <button v-if="view === 'gallery'" class="gallery-cover" type="button" :aria-label="`预览 ${task.prompt}`" @click="open(task)"><img v-if="task.kind === 'image'" :src="mediaSource(task.urls[0]!, true)" :alt="task.prompt" loading="lazy" /><video v-else :src="mediaSource(task.urls[0]!, false, 'video')" preload="metadata" muted /><Maximize :size="16" /></button>
         <p class="task-prompt">{{ task.prompt }}</p><p class="task-meta">{{ task.model }} · {{ new Date(task.createdAt).toLocaleString('zh-CN') }}</p>
         <p v-if="view === 'tasks' && task.error" class="form-error">{{ task.error }}</p>
-        <div class="item-actions"><button class="button subtle btn" type="button" @click="emit('reuse', task)"><RotateCcw :size="14" />复用参数</button><button v-if="task.phase === 'complete'" class="icon-button" type="button" title="下载" aria-label="下载此记录" @click="run(() => downloadCreation(task))"><Download :size="16" /></button><button v-if="['paused', 'attention'].includes(task.phase)" class="icon-button" type="button" title="查询结果" aria-label="查询此任务" @click="run(() => resumeCreation(task))"><RefreshCw :size="16" /></button></div>
+        <div class="item-actions"><template v-if="task.phase === 'complete'"><button class="button subtle btn" type="button" @click="emit('publish', task, 'community')"><Upload :size="14" />发布到社区</button><button v-if="task.kind !== 'video' && task.sourceWorkId" class="button subtle btn" type="button" @click="emit('publish', task, 'source-comment')">发送到源作品评论区</button></template><button class="button subtle btn" type="button" @click="emit('reuse', task)"><RotateCcw :size="14" />复用参数</button><button v-if="task.phase === 'complete'" class="icon-button" type="button" title="下载" aria-label="下载此记录" @click="run(() => downloadCreation(task))"><Download :size="16" /></button><button v-if="['paused', 'attention'].includes(task.phase)" class="icon-button" type="button" title="查询结果" aria-label="查询此任务" @click="run(() => resumeCreation(task))"><RefreshCw :size="16" /></button></div>
       </article>
     </div>
     <button v-if="items.length > limit" class="button subtle btn" type="button" @click="limit += 60">加载更多</button>

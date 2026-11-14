@@ -89,6 +89,15 @@ delivery now includes the frontend and an independent community backend.
 - The runtime uses actual account and work data; synthetic state is removed.
 - Native creation reuses the authenticated Octopus account; lottery uses real transaction and
   receipt logic. Do not replay paid requests as harmless tests.
+- Image and video creation display the submitted prompt, references and parameters
+  beside a model response with real status and elapsed time. Inputs stay editable
+  during generation, and the send control can stop local waiting. Existing gallery
+  preview, downloads, publication and history are reused. Recovery reads the original
+  request and continues polling its task, without submitting another paid generation.
+- Mobile creation uses one compact workspace toolbar and a two-row composer below
+  real account balance/pricing metadata. Community navigation remains reachable
+  through the workspace menu. The composer follows visual viewport resizing, and
+  unknown pricing or balance is never represented as a zero charge or balance.
 - The user confirmed a development environment with no active users and requested
   a fast container replacement. Keep data volumes and a recoverable snapshot.
 - This is a development release with focused checks, not full production acceptance.
@@ -145,3 +154,9 @@ normalization; they retain their source notices.
 Chinese is the initial interface language. Support keyboard navigation, visible
 focus, labelled form controls, reduced motion and readable contrast. Mobile is a
 responsive web view, not a separate native app.
+
+制作同款默认仅填入公开提示词，模型仍由当前账号选择，不自动触发生成或带入原作成品。
+作者公开的参考图通过“参考图”选择，用户也能自行上传、移除；图片/视频草稿刷新后保留选择。
+已完成结果可从创作台或作品库发布到社区；带来源的图片、文本另可发送到源作品评论区，
+视频沿用旧社区规则仅发布社区。提交前可编辑标题和说明，按现有审核设置显示结果与查看入口。
+发布过程中不会重发生成请求，网络中断后重试沿用已上传文件和原提交内容。

@@ -13,6 +13,8 @@ import { loadSite, site } from './site'
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const studioPage = computed(() => Boolean(session.user) && (route.path === '/create' || route.path.startsWith('/create/')))
+const viewportHeight = ref(window.visualViewport?.height || window.innerHeight)
+function resizeViewport() { viewportHeight.value = window.visualViewport?.height || window.innerHeight }
 const links = [
   { path: '/discover', label: '首页', icon: House },
   { path: '/activities', label: '推广中心', icon: Gift },
@@ -41,12 +43,16 @@ onMounted(() => {
   window.addEventListener('focus', refreshActiveIdentity)
   window.addEventListener('pageshow', refreshActiveIdentity)
   document.addEventListener('visibilitychange', refreshActiveIdentity)
+  window.visualViewport?.addEventListener('resize', resizeViewport)
+  window.addEventListener('resize', resizeViewport)
 })
 onBeforeUnmount(() => {
   clearInterval(poll); clearTimeout(messageCloseTimer)
   window.removeEventListener('focus', refreshActiveIdentity)
   window.removeEventListener('pageshow', refreshActiveIdentity)
   document.removeEventListener('visibilitychange', refreshActiveIdentity)
+  window.visualViewport?.removeEventListener('resize', resizeViewport)
+  window.removeEventListener('resize', resizeViewport)
 })
 watch(() => route.fullPath, () => document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false }))
 watch([() => route.meta.title, () => site.brand], () => { document.title = `${String(route.meta.title || '首页')} · ${site.brand}` }, { immediate: true })
@@ -105,7 +111,7 @@ function dismissMenus(event: Event) {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px` } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
@@ -138,6 +144,11 @@ function dismissMenus(event: Event) {
 <style scoped>
 .studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
 .studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+@media (max-width: 639px) {
+  :global(#app:has(.studio-shell)) { padding-bottom: 0; }
+  .studio-shell { height: var(--studio-visible-height, 100dvh); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .studio-shell > .app-header, .studio-shell > .mobile-nav { display: none; }
+}
 .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 32px; }
 .brand { justify-self: start; min-width: 0; max-width: min(280px, 100%); }
 .brand > span { overflow: hidden; text-overflow: ellipsis; }

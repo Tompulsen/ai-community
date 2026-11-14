@@ -68,4 +68,29 @@
   .studio-popover .settings-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 359px) { .studio-composer-actions { gap: 2px; }.studio-composer-actions .search-mode { max-width: 80px; } }
+.mobile-send-label, .mobile-chat-tools, .mobile-result-publish { display: none; }
+@media (max-width: 639px) {
+  .studio-composer { display: grid; grid-template-columns: minmax(0, 1fr) 44px 64px; gap: 4px 8px; padding: 4px 0 0; margin-top: 0; background: var(--canvas); border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+  .studio-composer:focus-within { border-color: var(--border); }
+  .studio-composer > .field { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin: 0; }
+  .studio-composer .composer-input { min-height: 44px; max-height: min(120px, 22dvh); padding: 10px 12px; line-height: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .studio-composer .composer-input:focus { border-color: var(--blue); outline: 1px solid var(--blue); outline-offset: 0; }
+  .studio-composer-tools { display: contents; }
+  .studio-composer .composer-submit { grid-column: 3; grid-row: 2; align-self: end; width: 64px; height: 46px; min-height: 44px; border-radius: 12px; margin: 0; font-size: 15px; }
+  .studio-composer .composer-submit > svg { display: none; }.mobile-send-label { display: inline; }
+  .studio-composer-models { grid-column: 1; grid-row: 3; display: flex; gap: 0; justify-content: flex-start; background: var(--surface); border-radius: 10px; padding-inline: 4px; overflow: hidden; }
+  .studio-model-select { flex: 1; min-width: 0; max-width: none; }.studio-select select { max-width: 100%; }
+  .studio-group-select { flex: 0 1 62px; max-width: 62px; }
+  .studio-composer-actions { grid-column: 2 / 4; grid-row: 3; justify-content: flex-end; gap: 8px; }
+  .studio-composer-actions > .studio-tool { min-width: 44px; padding: 8px; }
+  .studio-composer-actions > .studio-tool > span, .studio-composer-actions > .search-mode, .chat-skills-desktop { display: none; }
+  .studio-composer > ul, .studio-composer > p { grid-column: 1 / -1; }
+  .studio-composer > .reference-list, .studio-composer > .composer-files { grid-row: 4; margin: 4px 0; }
+  .studio-composer .form-error { margin: 4px 0; }
+  .studio-composer > .group-description:not([role]), .studio-composer > .composer-hint { display: none; }
+  .mobile-chat-tools { display: grid; gap: 12px; margin-bottom: 16px; }
+  .mobile-chat-tools > details > summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
+  .mobile-result-publish { display: inline-flex; }
+  .native-studio .creation-output-toolbar { display: none; }
+}
 .studio-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

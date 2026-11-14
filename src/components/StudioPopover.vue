@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, ref, useId } from 'vue'
 import { X } from '@lucide/vue'
 
 const props = withDefaults(defineProps<{ label: string; width?: number }>(), { width: 360 })
+const emit = defineEmits<{ toggle: [open: boolean] }>()
 const id = `studio-${useId()}`
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), opened = ref(false)
 function position() {
@@ -19,6 +20,7 @@ function position() {
 }
 async function toggle(event: Event) {
   opened.value = (event as ToggleEvent).newState === 'open'
+  emit('toggle', opened.value)
   window.removeEventListener('resize', position)
   window.visualViewport?.removeEventListener('resize', position)
   if (opened.value) {

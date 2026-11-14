@@ -1,5 +1,6 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const screenshotDirectory = '.impeccable/review/native-studio'
@@ -36,6 +37,198 @@ async function fixture(page: Page) {
   return { ...account, calls, image, uploads: () => uploads }
 }
 
+test('a slow image request keeps the sent prompt, elapsed time and editor usable', async ({ page }) => {
+  await fixture(page)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  let submissions = 0
+  await page.route('**/api/creation/generate', async route => {
+    submissions++
+    await pending
+    await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/creation.jpg' }] } }).catch(() => {})
+  })
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只坐在窗边的小猫')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  try {
+    await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
+    await expect(page.locator('.creation-response')).toContainText('fixture-image')
+    await expect(page.locator('.task-elapsed')).toContainText(/已等待/)
+    await page.getByRole('textbox', { name: '提示词', exact: true }).fill('下一幅想画海边的小狗')
+    await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
+    await expect(page.locator('.generation-button')).toHaveAccessibleName('停止等待')
+    expect(submissions).toBe(1)
+    await mkdir(screenshotDirectory, { recursive: true })
+    for (const width of [1440, 768, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await page.screenshot({ path: `${screenshotDirectory}/waiting-${width}.png`, fullPage: true })
+    }
+    expect((await new AxeBuilder({ page }).include('.native-studio').analyze()).violations).toEqual([])
+  } finally { release() }
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('下一幅想画海边的小狗')
+  const elapsed = await page.locator('.task-elapsed').innerText()
+  await page.reload()
+  await expect(page.locator('.task-elapsed')).toHaveText(elapsed)
+})
+
+test('recovering an unknown request persists its task ID, can stop and only polls the original task', async ({ page }) => {
+  await fixture(page)
+  let submissions = 0, recoveries = 0, queries = 0
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/generate', route => { submissions++; return route.fulfill({ status: 503, json: { message: '连接中断' } }) })
+  await page.route('**/api/creation/requests/**', route => {
+    recoveries++
+    return route.fulfill({ json: { status: 'pending', upstreamId: 'recovered-task', tokenId: 83, protocol: 'async', progress: 25, outputs: [] } })
+  })
+  await page.route('**/api/creation/tasks/image/recovered-task?*', async route => {
+    queries++
+    expect(new URL(route.request().url()).searchParams.get('tokenId')).toBe('83')
+    if (queries === 1) await pending
+    await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/recovered.jpg' }] } }).catch(() => {})
+  })
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('找回小猫图片')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('需要核对')
+  await page.getByRole('button', { name: '继续查询', exact: true }).click()
+  try {
+    await expect.poll(() => queries).toBe(1)
+    await expect(page.getByRole('progressbar', { name: '模型返回的生成进度' })).toHaveAttribute('value', '25')
+    const saved = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
+      return new Promise<string>(resolve => {
+        const transaction = db.transaction('keyval', 'readonly'), request = transaction.objectStore('keyval').get('octopus:user-17:native-creation-history')
+        transaction.oncomplete = () => { db.close(); resolve(request.result) }
+      })
+    })
+    expect(JSON.parse(saved)[0]).toMatchObject({ upstreamId: 'recovered-task', tokenId: 83, protocol: 'async' })
+    await page.getByRole('button', { name: '停止等待', exact: true }).click()
+    await expect(page.locator('.task-status')).toContainText('等待已暂停')
+  } finally { release() }
+  await page.getByRole('button', { name: '继续查询', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect({ submissions, recoveries, queries }).toEqual({ submissions: 1, recoveries: 1, queries: 2 })
+})
+
+test('stopping a recovery before its response cannot revive the task', async ({ page }) => {
+  await fixture(page)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  let queries = 0
+  await page.route('**/api/creation/generate', route => route.fulfill({ status: 503, json: { message: '连接中断' } }))
+  await page.route('**/api/creation/requests/**', async route => {
+    await pending
+    await route.fulfill({ json: { status: 'pending', upstreamId: 'late-task', tokenId: 83, protocol: 'async', outputs: [] } }).catch(() => {})
+  })
+  await page.route('**/api/creation/tasks/**', route => { queries++; return route.fulfill({ json: { status: 'succeeded', outputs: [] } }) })
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('停止查询测试')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await page.getByRole('button', { name: '继续查询', exact: true }).click()
+  await page.getByRole('button', { name: '停止等待', exact: true }).click()
+  release()
+  await expect(page.locator('.task-status')).toContainText('需要核对')
+  await expect(page.getByRole('button', { name: '继续查询', exact: true })).toBeVisible()
+  expect(queries).toBe(0)
+})
+
+test('completed requests support copy, reuse, preview and a fresh draft without deleting history', async ({ page }) => {
+  const state = await fixture(page)
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/create/image')
+  const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
+  await prompt.fill('可复用的小猫提示词')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await page.getByRole('button', { name: '复制提示词', exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('可复用的小猫提示词')
+  await prompt.fill('临时修改')
+  await page.getByRole('button', { name: '编辑提示词', exact: true }).click()
+  await expect(prompt).toHaveValue('可复用的小猫提示词')
+  await expect(prompt).toBeFocused()
+  await page.getByRole('button', { name: '查看大图：预览生成图片 1', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '原始媒体预览' })).toBeVisible()
+  await page.getByRole('button', { name: '放大', exact: true }).click()
+  await expect(page.locator('.media-lightbox output')).toHaveText('125%')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '新的创作', exact: true }).click()
+  await expect(prompt).toHaveValue('')
+  await expect(page.locator('.canvas-empty')).toContainText('开始图片创作')
+  await page.getByRole('button', { name: '生成历史', exact: true }).click()
+  await page.locator('.history-row').click()
+  await expect(page.locator('.creation-request')).toContainText('可复用的小猫提示词')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(1)
+})
+
+test('Enter submits once, while Shift Enter and IME composition preserve editing', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image')
+  const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
+  await prompt.fill('小猫')
+  await prompt.press('Shift+Enter')
+  await expect(prompt).toHaveValue('小猫\n')
+  await prompt.dispatchEvent('keydown', { key: 'Enter', isComposing: true })
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(0)
+  await prompt.press('Enter')
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(1)
+})
+
+test('a failed generation keeps its request and allows an explicit edited retry in the light theme', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/account?tab=theme')
+  await page.getByRole('radio', { name: '明亮模式', exact: true }).check()
+  await page.goto('/create/image')
+  let submissions = 0
+  await page.route('**/api/creation/generate', route => {
+    submissions++
+    return route.fulfill({ json: submissions === 1
+      ? { status: 'failed', error: '模型暂时不可用，请调整参数后重试。', outputs: [] }
+      : { status: 'succeeded', outputs: [{ url: 'https://media.example/retried.jpg' }] } })
+  })
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('小猫和阳光')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成失败')
+  await expect(page.locator('.creation-request')).toContainText('小猫和阳光')
+  await page.getByRole('button', { name: '编辑后重试', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeFocused()
+  expect(submissions).toBe(1)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('小猫和海边的阳光')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(submissions).toBe(2)
+  await expect(page.locator('html')).toHaveAttribute('data-color-scheme', 'light')
+  await mkdir(screenshotDirectory, { recursive: true })
+  await page.screenshot({ path: `${screenshotDirectory}/completed-light-1440.png`, fullPage: true })
+  expect((await new AxeBuilder({ page }).include('.native-studio').analyze()).violations).toEqual([])
+})
+
+test('switching accounts while recovering never displays the previous account result', async ({ page }) => {
+  const state = await fixture(page)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/generate', route => route.fulfill({ status: 503, json: { message: '连接中断' } }))
+  await page.route('**/api/creation/requests/**', async route => {
+    await pending
+    await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/private.jpg' }] } }).catch(() => {})
+  })
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('旧账号的私有创作')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await page.getByRole('button', { name: '继续查询', exact: true }).click()
+  try {
+    state.state.user.id = '18'
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await expect(page.locator('.canvas-empty')).toBeVisible()
+  } finally { release() }
+  await expect(page.locator('.creation-request')).toHaveCount(0)
+  await expect(page.locator('.creation-media')).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
+})
+
 test('native image generation uses the existing account, uploads references and publishes to the community', async ({ page }) => {
   const state = await fixture(page)
   const errors: string[] = []
@@ -63,10 +256,11 @@ test('native image generation uses the existing account, uploads references and 
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
   await page.getByRole('textbox', { name: '作品标题', exact: true }).fill('海底图书馆')
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '作品已提交审核' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: '发布作品', exact: true }).getByRole('status')).toHaveText('作品已提交审核。')
   const publication = state.calls.find(call => call.path === '/api/works')!
   expect(publication.body).toMatchObject({ kind: 'image', title: '海底图书馆', fileIds: ['fixture-file-2'], requestId: generation.body.requestId })
-  expect(state.uploads()).toBe(2)
+  expect(state.uploads()).toBe(3)
+  expect(publication.body.generation).toMatchObject({ referenceFileIds: ['fixture-file-3'] })
   expect(errors).toEqual([])
 })
 
@@ -173,9 +367,9 @@ test('native text results can download and publish without a separate chat accou
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: '下载文本', exact: true }).click()
   expect((await download).suggestedFilename()).toMatch(/\.md$/)
-  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '作品已提交审核' })).toBeVisible()
+  await page.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '发布作品', exact: true }).getByRole('status')).toHaveText('作品已提交审核。')
   expect(state.calls.find(call => call.path === '/api/works')?.body).toMatchObject({ kind: 'resource', body: '海底的灯亮了。\\n章鱼开始写作。', fileIds: ['fixture-file-1'] })
 })
 

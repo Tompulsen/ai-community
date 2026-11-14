@@ -8,6 +8,7 @@ import type { ChatResponseUsage, StudioToolCall } from '../shared/studio/types'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
+export type CreationDestination = 'community' | 'source-comment'
 export interface CreationModel { id: string; name?: string; kinds?: CreationKind[]; protocol?: 'openai' | 'sync' | 'async' }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
@@ -18,6 +19,7 @@ export interface CreationTask {
   model: string
   prompt: string
   createdAt: number
+  settledAt?: number
   phase: CreationPhase
   protocol: string
   upstreamId?: string
@@ -31,7 +33,10 @@ export interface CreationTask {
   toolCalls?: StudioToolCall[]
   error?: string
   sourceWorkId?: string
-  references: { name: string; url: string; id?: string }[]
+  references: { name: string; url: string; id?: string; fromWorkId?: string }[]
+  publicationFiles?: string[]
+  publicationReferences?: string[]
+  publications?: Partial<Record<CreationDestination, { title: string; text: string; work?: Work }>>
   request: { size: string; aspect_ratio: string; n: number; duration: number; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
@@ -233,6 +238,7 @@ function resultText(data: Record<string, unknown>): string {
 }
 function applyResult(task: CreationTask, value: unknown): boolean {
   const data = resultData(value)
+  task.settledAt = Date.now()
   if (typeof data.reasoning === 'string') task.reasoning = data.reasoning
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
@@ -262,6 +268,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     return true
   }
   task.phase = task.upstreamId ? 'running' : 'attention'
+  if (task.phase === 'running') task.settledAt = undefined
   if (!task.upstreamId) task.error = '未收到可恢复的任务编号，请核对账号使用记录，勿重复提交。'
   return !task.upstreamId
 }
@@ -286,7 +293,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
     await delay(controller.signal, 5000)
   }
-  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.error = '等待时间较长，任务记录已保留，可继续查询。'; await persist() }
+  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，任务记录已保留，可继续查询。'; await persist() }
 }
 export async function loadCreationModels() {
   if (!session.user) return
@@ -338,29 +345,30 @@ export async function selectCreationGroup(group: string) {
   } finally { if (version === epoch) creation.groupSwitching = false }
 }
 export async function resumeCreation(task: CreationTask) {
-  if (task.owner !== activeOwner() || controllers.has(task.id)) return
-  if (!task.upstreamId) {
-    if (task.legacy) return
-    const version = epoch
-    try {
-      const data = await api<unknown>(`/api/creation/requests/${encodeURIComponent(task.id)}`)
-      if (version === epoch) { applyResult(task, data); await persist() }
-    } catch (error) { if (version === epoch) { task.error = errorMessage(error); await persist() } }
-    return
-  }
+  if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
+  if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
   const controller = new AbortController(), version = epoch
-  controllers.set(task.id, controller); task.phase = 'running'; task.error = ''
-  try { await poll(task, controller, version) }
+  controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.settledAt = undefined
+  try {
+    if (!task.upstreamId) {
+      const data = await api<unknown>(`/api/creation/requests/${encodeURIComponent(task.id)}`, { signal: controller.signal })
+      if (epoch !== version || controller.signal.aborted) return
+      const finished = applyResult(task, data)
+      await persist()
+      if (finished) return
+    }
+    await poll(task, controller, version)
+  }
   catch (error) {
-    if (epoch === version) { task.phase = 'paused'; task.error = controller.signal.aborted ? '已停止本页等待，上游任务可能仍在执行。' : errorMessage(error); await persist() }
+    if (epoch === version) { task.phase = task.upstreamId ? 'paused' : 'attention'; task.settledAt ??= Date.now(); task.error = controller.signal.aborted ? '已停止本页等待，上游任务可能仍在执行。' : errorMessage(error); await persist() }
   } finally { if (controllers.get(task.id) === controller) controllers.delete(task.id) }
 }
 export function stopCreation(task: CreationTask) {
-  if (task.owner !== activeOwner()) return
+  if (task.owner !== activeOwner() || !['submitting', 'running'].includes(task.phase)) return
   controllers.get(task.id)?.abort()
-  task.phase = 'paused'; task.error = '已停止本页等待，上游任务可能仍在执行。'
+  task.phase = 'paused'; task.settledAt = Date.now(); task.error = '已停止本页等待，上游任务可能仍在执行。'
   void persist()
 }
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void, isCurrent: () => boolean = () => true) {
@@ -381,10 +389,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   })
   creation.tasks.unshift(task); creation.selectedId = task.id
   try { await persist(true) }
-  catch (error) { task.phase = 'error'; task.error = errorMessage(error); throw error }
+  catch (error) { task.phase = 'error'; task.settledAt = Date.now(); task.error = errorMessage(error); throw error }
   if (epoch !== version || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   if (!isCurrent() || task.phase !== 'submitting') {
-    task.phase = 'error'; task.error = '操作已停止，未向上游提交生成。'; await persist(); return task
+    task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未向上游提交生成。'; await persist(); return task
   }
   const controller = new AbortController()
   controllers.set(task.id, controller)
@@ -431,10 +439,13 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     } else data = await response.json()
     if (epoch !== version || controller.signal.aborted) return task
     if (record(data)) { task.reasoning = typeof data.reasoning === 'string' ? data.reasoning : task.reasoning; task.usage = data.usage as ChatResponseUsage | undefined }
-    if (!applyResult(task, data)) await poll(task, controller, version)
+    const finished = applyResult(task, data)
+    await persist()
+    if (!finished) await poll(task, controller, version)
   } catch (error) {
     if (epoch === version) {
       task.phase = task.upstreamId ? 'paused' : 'attention'
+      task.settledAt ??= Date.now()
       task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : `${errorMessage(error)} 任务记录已保留，请勿自动重复提交。`
     }
   } finally {
@@ -570,31 +581,60 @@ export async function downloadCreation(task: CreationTask, index = 0) {
   link.href = objectUrl; link.download = `creation-${task.id}-${index + 1}.${extension}`
   link.click(); setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
 }
-export async function publishCreation(task: CreationTask, title: string) {
+const sharing = new Set<string>()
+export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string) {
+  const key = `${task.owner}:${task.id}`
+  if (sharing.has(key)) throw new Error('这条作品正在提交，请稍后查看结果。')
+  sharing.add(key)
+  try { return await preparePublication(task, title, destination, text) }
+  finally { sharing.delete(key) }
+}
+async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string) {
   if (task.owner !== activeOwner() || task.phase !== 'complete') throw new Error('请先完成生成。')
-  const files: { id: string; role?: string }[] = []
+  if (destination === 'source-comment' && (task.kind === 'video' || !task.sourceWorkId || !task.model)) throw new Error('图片或文本同款作品才能发送到源作品评论区。')
+  const previous = task.publications?.[destination]
+  if (previous?.work) return { work: previous.work }
   const version = epoch
-  for (let index = 0; index < task.urls.length; index++) {
-    const response = await fetch(await readableMedia(task.urls[index]!, task.kind), { credentials: 'same-origin' })
+  const checkOwner = () => { if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。') }
+  async function uploadMedia(url: string, kind: CreationKind, name: string) {
+    const response = await fetch(await readableMedia(url, kind), { credentials: 'same-origin' })
     if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
     const blob = await response.blob()
-    if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-    const uploaded = await uploadFile(new File([blob], `creation-${index + 1}.${task.kind === 'video' ? 'mp4' : 'png'}`, { type: blob.type || (task.kind === 'video' ? 'video/mp4' : 'image/png') }))
-    if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-    files.push({ id: uploaded.id })
+    checkOwner()
+    if (!blob.size || !blob.type.startsWith(`${kind}/`)) throw new Error('作品文件格式无效，请重新获取生成结果。')
+    const extension = blob.type.split('/')[1]!.split(';')[0]!.replace(/[^a-z0-9]/g, '')
+    const uploaded = await uploadFile(new File([blob], `${name}.${extension}`, { type: blob.type }))
+    checkOwner()
+    return uploaded.id
   }
-  if (task.kind === 'text') {
+  task.publicationFiles ??= []
+  for (let index = task.publicationFiles.length; index < task.urls.length; index++) {
+    task.publicationFiles.push(await uploadMedia(task.urls[index]!, task.kind, `creation-${index + 1}`))
+    await persist(true); checkOwner()
+  }
+  if (task.kind === 'text' && !task.publicationFiles.length) {
     const uploaded = await uploadFile(new File([task.text], 'creation.md', { type: 'text/markdown' }))
-    files.push({ id: uploaded.id })
+    checkOwner(); task.publicationFiles.push(uploaded.id); await persist(true); checkOwner()
   }
-  if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-  return api<{ work: Work }>('/api/works', { method: 'POST', body: {
-    title: title.trim().slice(0, 100), kind: task.kind === 'text' ? 'resource' : task.kind,
-    text: task.prompt.slice(0, 2500), body: task.kind === 'text' ? task.text : '', prompt: task.prompt,
-    model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: task.references.flatMap(file => file.id ? [file.id] : []) },
-    fileIds: files.map(file => file.id), tags: [], status: 'pending', destination: 'community',
-    requestId: task.id, idempotencyKey: task.id,
+  if (destination === 'community') {
+    task.publicationReferences ??= []
+    for (let index = task.publicationReferences.length; index < task.references.length; index++) {
+      task.publicationReferences.push(await uploadMedia(task.references[index]!.url, 'image', `reference-${index + 1}`))
+      await persist(true); checkOwner()
+    }
+  }
+  task.publications ??= {}
+  const publication = task.publications[destination] ??= { title: title.trim().slice(0, 100), text: (text ?? (task.kind === 'text' ? task.text : task.prompt)).slice(0, 2500) }
+  await persist(true); checkOwner()
+  const result = await api<{ work: Work }>('/api/works', { method: 'POST', body: {
+    title: publication.title, kind: task.kind === 'text' ? 'resource' : task.kind,
+    body: publication.text, prompt: task.prompt,
+    model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [] },
+    fileIds: task.publicationFiles, tags: [], status: 'pending', destination,
+    requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })
+  checkOwner(); publication.work = result.work; await persist()
+  return result
 }
 watch(() => activeOwner(), next => {
   epoch++

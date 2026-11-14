@@ -147,6 +147,16 @@ localStorage / storage 事件 / matchMedia，不引入新依赖或任意主题�
 
 ## 界面资产
 
+2026-11-14 创作交互与移动端优化参考用户指定的两个本地项目：
+`D:/ip/QXChat(积分)/app/components/chat.module.scss` 的手机输入/发送及模型工具排列，
+`app/components/chat.tsx` 的输入行为；该项目声明 MIT。本项目用既有 Vue、CSS 和
+Lucide 适配布局，没有移植其积分服务或引入 Next.js 运行时。
+顶部作品库、模型定价与新建入口参考旧社区
+`studio/app/components/workspace-navigation.tsx`；请求回显与耗时参考同目录
+`chat.tsx`、`image-request-time.tsx`，继续遵守已有 AGPL-3.0-only 来源约定。
+价格和余额复用本项目账号只读接口，大图复用 StudioGallery，停止/恢复复用原请求，
+未用参考截图中的数值冒充当前账号数据。
+
 `public/assets/motion/motion.css` 与 `motion.js` 原样来自用户指定的
 design-taste-frontend 2.5.1 技能，不修改其实现以通过检查。
 Schibsted Grotesk 拉丁可变字体来自 Google Fonts，随文件保留
@@ -174,3 +184,10 @@ Lucide 和 CSS 过渡，不引入 React、Motion 或 Tailwind 运行时。
 原始文件为 `D:/Users/86136/Desktop/1/temu/1证书资质/个人/新章鱼logo/资源 2.jpg`；
 仓库资产为 `public/assets/brand/octopus-community.jpg`，公开路径为
 `/assets/brand/octopus-community.jpg`。
+
+2026-11-14 同款与发布流程继续参考旧社区 `packages/frontend/src/components/MkStudioRemix.vue`、
+`packages/frontend/src/utility/studio-remix.ts`、`studio/app/components/community-share-button.tsx` 与
+`studio/app/utils/community-share.ts`：默认仅带提示词，参考图只来自作者显式公开的 referenceFiles；
+适配为 Vue 选择弹层，可与用户上传混用。发布复用现有 `/api/works` 的 community/source-comment、
+附件归属、审核和防重规则，不新增发布通道或数据库结构。参考图发布前复制上传到当前账号；
+结果上传与提交内容持久化，断网重试复用同一结果，不再调用生成接口。

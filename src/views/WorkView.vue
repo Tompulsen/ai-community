@@ -9,7 +9,6 @@ import FollowButton from '../components/FollowButton.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
-import { queueBackgroundWork } from '../studio-state'
 
 const route = useRoute()
 const work = ref<Work | null>(null)
@@ -124,7 +123,7 @@ async function share() {
         <p v-if="work.viewsCount !== undefined" class="muted view-count"><Eye :size="15" />{{ work.viewsCount }} 次浏览</p><section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2>创作说明</h2><p class="work-body">{{ work.body }}</p></section>
         <section class="prompt-section"><div class="section-heading"><h2>提示词</h2><button class="icon-button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" /></button></div><p>{{ work.prompt || '作者未公开提示词。' }}</p></section>
         <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ kindLabels[work.kind] }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>来源</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">查看原始来源</a></dd></div></dl>
-        <div class="work-tags"><RouterLink v-for="tag in work.tags" :key="tag" :to="{ path: '/discover', query: { tag } }" class="tag-button">{{ tag }}</RouterLink></div><div class="detail-create"><RouterLink :to="{ path: '/create', query: { from: work.id } }" class="button btn primary remix-button"><WandSparkles :size="18" />带入创作</RouterLink><button v-if="work.kind !== 'resource' && work.prompt" class="button btn subtle remix-button" @click="queueBackgroundWork(work)"><WandSparkles :size="18" />后台生成同款</button></div>
+        <div class="work-tags"><RouterLink v-for="tag in work.tags" :key="tag" :to="{ path: '/discover', query: { tag } }" class="tag-button">{{ tag }}</RouterLink></div><div class="detail-create"><RouterLink :to="{ path: `/create/${work.kind === 'resource' ? 'text' : work.kind}`, query: { remix: work.id } }" class="button btn primary remix-button"><WandSparkles :size="18" />制作同款</RouterLink></div>
       </aside>
     <section v-if="['published', 'approved'].includes(work.status)" class="related-section work-comments" aria-labelledby="comments-heading">
       <div class="section-heading"><h2 id="comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2><MessageSquare :size="18" /></div>

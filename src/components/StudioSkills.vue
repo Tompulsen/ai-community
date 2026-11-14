@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onUnmounted, ref, watch } from 'vue'
 import { Play, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats, type NativeChat, type Skill } from '../native-chat'
@@ -8,6 +8,7 @@ const props = defineProps<{ chat: NativeChat; embedded?: boolean }>()
 const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(false), servers = ref<{ id: string; status: string }[]>([])
 const server = ref(''), tool = ref(''), tools = ref<{ name: string; description?: string; inputSchema?: unknown }[]>([]), args = ref('{}'), result = ref(''), busy = ref(false), config = ref('{"mcpServers":{}}')
 let revision = 0
+onUnmounted(() => revision++)
 async function load() {
   const current = ++revision, owner = session.user?.id
   loading.value = true; error.value = ''
@@ -18,7 +19,7 @@ async function load() {
   } catch (cause) { if (current === revision && owner === session.user?.id) error.value = errorMessage(cause) }
   finally { if (current === revision) loading.value = false }
 }
-watch(() => session.user?.id, () => { chats.skills = []; result.value = ''; server.value = ''; tools.value = []; enabled.value = false; void load() }, { immediate: true })
+watch(() => session.user?.id, () => { result.value = ''; server.value = ''; tools.value = []; enabled.value = false; void load() }, { immediate: true })
 async function toggle(skill: Skill, event: Event) {
   const input = event.target as HTMLInputElement
   const chat = props.chat, owner = session.user?.id
