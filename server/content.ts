@@ -1207,8 +1207,12 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   }
   if (path === '/api/admin/submissions' && method === 'GET') {
     moderator(ctx);
-    const { rows, nextCursor } = await contentPage(ctx, { scope: 'admin' });
-    return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row, true))), nextCursor });
+    const { rows, nextCursor } = await contentPage(ctx, { scope: 'admin', limit: 30 });
+    const pending = await ctx.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count
+      FROM community_submission s JOIN "user" u ON u.id=s."authorId"
+      WHERE s.status='pending' OR s."pendingRevision" IS NOT NULL`);
+    return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row, true))),
+      nextCursor, pendingCount: Number(pending.rows[0]?.count ?? 0) });
   }
   if ((match = /^\/api\/admin\/submissions\/([a-zA-Z0-9]+)\/review$/.exec(path)) && method === 'POST') return reviewWork(ctx, identifier(match[1]));
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/(like|save)$/.exec(path)) && method === 'POST') return interaction(ctx, identifier(match[1]), match[2] as 'like' | 'save');

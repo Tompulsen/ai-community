@@ -7,15 +7,17 @@ import AdminLottery from '../components/AdminLottery.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminPeople from '../components/AdminPeople.vue'
 import AdminLogs from '../components/AdminLogs.vue'
+import AdminOperations from '../components/AdminOperations.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { kindLabels, statusLabels, type AdminOverviewData, type Work, type WorkStatus } from '../data'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-type Tab = 'overview' | 'review' | 'lottery' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports' | 'logs'
+type Tab = 'overview' | 'review' | 'lottery' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
 const overview = ref<AdminOverviewData | null>(null), days = ref<7 | 30>(7)
 const status = ref<WorkStatus | 'all'>('pending'), query = ref(''), search = ref('')
 const works = ref<Work[]>([]), nextCursor = ref<string | null>(null), updatedAt = ref('')
+const pendingCount = ref<number | null>(null)
 const booting = ref(true), loading = ref(false), loadingMore = ref(false)
 const error = ref(''), reviewError = ref(''), busy = ref(false), reason = ref('')
 const selected = ref<Work | null>(null), action = ref<'approve' | 'reject' | 'remove'>('approve'), recordViolation = ref(false)
@@ -26,10 +28,13 @@ const adminTabs = computed(() => [
   ...(session.user?.isAdmin ? [
     { id: 'users' as const, label: '用户管理', icon: Users, group: '内容管理' },
     { id: 'logs' as const, label: '操作日志', icon: ClipboardList, group: '内容管理' },
+    { id: 'audit' as const, label: '操作审计', icon: ClipboardList, group: '内容管理' },
+    { id: 'roles' as const, label: '管理授权', icon: ShieldCheck, group: '内容管理' },
     { id: 'tags' as const, label: '内容标签', icon: Tags, group: '内容管理' },
     { id: 'site' as const, label: '站点设置', icon: Globe, group: '运营设置' },
     { id: 'settings' as const, label: '社区设置', icon: Settings2, group: '运营设置' },
     { id: 'ads' as const, label: '广告位', icon: Megaphone, group: '运营设置' },
+    { id: 'announcements' as const, label: '公告管理', icon: Megaphone, group: '运营设置' },
     { id: 'lottery' as const, label: '抽奖管理', icon: Gift, group: '运营设置' },
   ] : []),
 ])
@@ -40,14 +45,21 @@ const reviewDialog = ref<HTMLDialogElement>(), leaveDialog = ref<HTMLDialogEleme
 const adminNav = ref<HTMLElement>()
 const allowed = computed(() => session.user?.isAdmin || session.user?.isModerator)
 let resolveLeave: ((value: boolean) => void) | undefined, requestId = 0
+let identityGeneration = 0
+let controller: AbortController | undefined
+let searchTimer: ReturnType<typeof setTimeout> | undefined
 const filters: { value: WorkStatus | 'all'; label: string }[] = [{ value: 'pending', label: '待审核' }, { value: 'published', label: '已公开' }, { value: 'rejected', label: '未通过' }, { value: 'all', label: '全部内容' }]
 const needsReview = (work: Work) => work.status === 'pending' || work.revisionPending === true
 function navigate(id: Tab) { void router.push({ path: '/admin', query: { ...route.query, tab: id } }) }
 function openQueue(value: WorkStatus | 'all' = 'pending') { status.value = value; query.value = ''; search.value = ''; navigate('review') }
-function submitSearch() { if (search.value === query.value.trim()) void load(); else search.value = query.value.trim() }
+function submitSearch() { clearTimeout(searchTimer); if (search.value === query.value.trim()) void load(); else search.value = query.value.trim() }
 async function load(more = false) {
-  if (!allowed.value || !['overview', 'review'].includes(tab.value)) return
-  const id = ++requestId
+  if (!allowed.value || !['overview', 'review'].includes(tab.value) || more && (loading.value || loadingMore.value || !nextCursor.value)) return
+  const id = ++requestId, owner = session.user?.id
+  controller?.abort()
+  const request = new AbortController()
+  controller = request
+  const active = () => id === requestId && owner === session.user?.id && allowed.value
   if (more) loadingMore.value = true
   else { loading.value = true; loadingMore.value = false; works.value = []; nextCursor.value = null }
   error.value = ''
@@ -55,27 +67,41 @@ async function load(more = false) {
     if (tab.value === 'overview') {
       overview.value = null
       const [summary, queue] = await Promise.all([
-        api<AdminOverviewData>(`/api/admin/overview?days=${days.value}`),
-        api<{ items: Work[] }>('/api/admin/submissions?status=pending&limit=5'),
+        api<AdminOverviewData>(`/api/admin/overview?days=${days.value}`, { signal: request.signal }),
+        api<{ items: Work[] }>('/api/admin/submissions?status=pending&limit=5', { signal: request.signal }),
       ])
-      if (id !== requestId) return
+      if (!active()) return
       overview.value = summary; works.value = queue.items
       updatedAt.value = new Date(summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       return
     }
-    const result = await api<{ items: Work[]; nextCursor?: string | null }>('/api/admin/submissions' + queryString({
+    const result = await api<{ items: Work[]; nextCursor?: string | null; pendingCount?: number }>('/api/admin/submissions' + queryString({
       status: status.value, query: search.value || undefined,
       cursor: more ? nextCursor.value || undefined : undefined, limit: '30',
-    }))
-    if (id !== requestId) return
-    works.value = more ? [...works.value, ...result.items] : result.items
+    }), { signal: request.signal })
+    if (!active()) return
+    works.value = more ? [...works.value, ...result.items.filter(item => !works.value.some(work => work.id === item.id))] : result.items
     nextCursor.value = result.nextCursor ?? null
+    pendingCount.value = typeof result.pendingCount === 'number' && Number.isSafeInteger(result.pendingCount) && result.pendingCount >= 0
+      ? result.pendingCount : null
     updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  } catch (cause) { if (id === requestId) error.value = errorMessage(cause) }
-  finally { if (id === requestId) { loading.value = false; loadingMore.value = false } }
+  } catch (cause) { if (!request.signal.aborted && active()) error.value = errorMessage(cause) }
+  finally { if (active()) { loading.value = false; loadingMore.value = false } }
 }
-watch([tab, status, search, days, () => session.user?.id], () => { requestId++; if (!booting.value) void load() })
-watch(() => session.user?.id, () => { requestId++; overview.value = null; works.value = []; finishLeave(false); reviewDialog.value?.close() }, { flush: 'sync' })
+watch([tab, status, search, days], () => { controller?.abort(); requestId++; if (!booting.value) void load() })
+watch(query, () => {
+  clearTimeout(searchTimer)
+  if (tab.value !== 'review') return
+  controller?.abort(); requestId++; loading.value = false; loadingMore.value = false; works.value = []; nextCursor.value = null
+  searchTimer = setTimeout(submitSearch, 250)
+})
+watch([() => session.user?.id, () => session.user?.isAdmin, () => session.user?.isModerator], () => {
+  controller?.abort(); requestId++; identityGeneration++; clearTimeout(searchTimer)
+  overview.value = null; works.value = []; pendingCount.value = null; nextCursor.value = null; updatedAt.value = ''
+  selected.value = null; busy.value = false; error.value = ''; reviewError.value = ''; loading.value = false; loadingMore.value = false
+  finishLeave(false); reviewDialog.value?.close()
+  if (!booting.value && allowed.value) void load()
+}, { flush: 'sync' })
 watch([tab, booting], async () => {
   await nextTick()
   const nav = adminNav.value, item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
@@ -97,21 +123,25 @@ onMounted(async () => {
   try { await loadSession() } finally { booting.value = false }
   await load()
 })
-onBeforeUnmount(() => { requestId++; window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
+onBeforeUnmount(() => { requestId++; identityGeneration++; controller?.abort(); clearTimeout(searchTimer); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
 function openReview(work: Work, next: 'approve' | 'reject' | 'remove') {
   selected.value = work; action.value = next; reason.value = ''; recordViolation.value = false; reviewError.value = ''
   reviewDialog.value?.showModal()
 }
 async function review() {
   if (!selected.value || busy.value) return
+  const owner = session.user?.id, current = identityGeneration, work = selected.value, decision = action.value
+  const active = () => current === identityGeneration && owner === session.user?.id && allowed.value
   busy.value = true; reviewError.value = ''
   try {
-    await api('/api/admin/submissions/' + encodeURIComponent(selected.value.id) + '/review', { method: 'POST', body: { action: action.value, reason: reason.value.trim(), version: selected.value.version, recordViolation: recordViolation.value } })
+    await api(`/api/admin/submissions/${encodeURIComponent(work.id)}/review`, { method: 'POST', expectedAccount: owner,
+      body: { action: decision, reason: reason.value.trim(), version: work.version, recordViolation: recordViolation.value } })
+    if (!active()) return
     reviewDialog.value?.close()
-    notify(action.value === 'approve' ? '作品已通过审核。' : action.value === 'remove' ? '作品已撤下。' : '作品已驳回。')
+    notify(decision === 'approve' ? '作品已通过审核。' : decision === 'remove' ? '作品已撤下。' : '作品已驳回。')
     await load()
-  } catch (cause) { reviewError.value = errorMessage(cause) }
-  finally { busy.value = false }
+  } catch (cause) { if (active()) reviewError.value = errorMessage(cause) }
+  finally { if (active()) busy.value = false }
 }
 </script>
 
@@ -128,20 +158,21 @@ async function review() {
       <div class="admin-content">
         <AdminOverview v-if="tab === 'overview'" :works="works" :overview="overview" :days="days" :loading="loading" :error="error" :updated-at="updatedAt" :is-admin="!!session.user?.isAdmin" @refresh="load()" @period="days = $event" @review="openQueue" @navigate="navigate" />
         <AdminLogs v-else-if="tab === 'logs' && session.user?.isAdmin" :key="session.user.id" />
-        <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" ref="editor" />
-        <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="tab" ref="editor" :view="tab" />
+        <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
+        <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" ref="editor" :view="tab" />
         <AdminPeople v-else-if="tab === 'reports' || (tab === 'users' && session.user?.isAdmin)" :key="`${tab}:${session.user?.id}`" ref="editor" :view="tab" :confirm-leave="confirmLeave" />
+        <AdminOperations v-else-if="(tab === 'announcements' || tab === 'audit' || tab === 'roles') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" :view="tab" />
         <section v-else class="panel-section review-section" :aria-busy="loading">
-          <div class="section-heading"><div class="review-title"><h2>作品审核</h2><p class="form-note">审核新投稿与作品修改，管理公开内容。</p></div><button class="button subtle btn" :disabled="loading || loadingMore" @click="load()"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
+          <div class="section-heading"><div class="review-title"><h2>作品审核</h2><span v-if="pendingCount !== null" class="caption-5" role="status">{{ pendingCount }} 件待审核</span><p class="form-note">审核新投稿与作品修改，管理公开内容。</p></div><button class="button subtle btn" :disabled="loading || loadingMore || busy" @click="submitSearch"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
           <div class="review-toolbar">
             <div class="tabs" aria-label="作品状态"><button v-for="filter in filters" :key="filter.value" class="tab" :class="{ active: status === filter.value }" :aria-pressed="status === filter.value" @click="status = filter.value">{{ filter.label }}</button></div>
-            <form class="review-search" role="search" @submit.prevent="submitSearch"><label class="search-control"><Search :size="16" aria-hidden="true" /><input v-model="query" type="search" maxlength="200" placeholder="搜索作品或作者" aria-label="搜索作品或作者" /></label><button class="button btn">搜索</button></form>
+            <form class="review-search" role="search" @submit.prevent="submitSearch"><label class="search-control"><Search :size="16" aria-hidden="true" /><input v-model="query" type="search" maxlength="200" placeholder="搜索作品或作者" aria-label="搜索作品或作者" /></label><button class="button btn" :disabled="busy">搜索</button></form>
           </div>
-          <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load(!!works.length)">重试</button></p>
-          <ContentSkeleton v-if="loading" label="正在加载审核队列…" />
-          <div v-else-if="works.length" class="table-wrap" role="region" aria-label="作品审核列表，可横向滚动" tabindex="0"><table class="data-table review-table"><thead><tr><th scope="col">作品</th><th scope="col">类型</th><th scope="col">作者</th><th scope="col">更新时间</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="work in works" :key="work.id"><td><RouterLink :to="'/work/' + work.id">{{ work.title }}</RouterLink></td><td>{{ kindLabels[work.kind] }}</td><td>{{ work.author }}</td><td>{{ new Date(work.date).toLocaleString('zh-CN') }}</td><td><span class="status" :class="needsReview(work) ? 'pending' : work.status">{{ work.revisionPending ? '修改待审核' : statusLabels[work.status] }}</span></td><td><div class="table-actions"><template v-if="needsReview(work)"><button class="icon-button" :aria-label="'通过：' + work.title" title="通过审核" @click="openReview(work, 'approve')"><Check :size="17" /></button><button class="icon-button" :aria-label="'驳回：' + work.title" title="驳回作品" @click="openReview(work, 'reject')"><X :size="17" /></button></template><button v-if="work.status === 'published'" class="icon-button" :aria-label="'撤下：' + work.title" title="撤下作品并记录违规" @click="openReview(work, 'remove')"><Trash2 :size="17" /></button><RouterLink :to="'/work/' + work.id" class="icon-button" :aria-label="'查看作品：' + work.title" title="查看作品"><ArrowUpRight :size="17" /></RouterLink></div></td></tr></tbody></table></div>
+          <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" :disabled="loading || loadingMore || busy" @click="load(!!works.length)">重试</button></p>
+          <ContentSkeleton v-if="loading" layout="rows" label="正在加载审核队列…" />
+          <div v-else-if="works.length" class="table-wrap" role="region" aria-label="作品审核列表，可横向滚动" tabindex="0"><table class="data-table review-table"><thead><tr><th scope="col">作品</th><th scope="col">类型</th><th scope="col">作者</th><th scope="col">更新时间</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="work in works" :key="work.id"><td><RouterLink :to="'/work/' + work.id">{{ work.title }}</RouterLink></td><td>{{ kindLabels[work.kind] }}</td><td>{{ work.author }}</td><td>{{ new Date(work.date).toLocaleString('zh-CN') }}</td><td><span class="status" :class="needsReview(work) ? 'pending' : work.status">{{ work.revisionPending ? '修改待审核' : statusLabels[work.status] }}</span></td><td><div class="table-actions"><template v-if="needsReview(work)"><button class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'通过：' + work.title" title="通过审核" @click="openReview(work, 'approve')"><Check :size="17" /></button><button class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'驳回：' + work.title" title="驳回作品" @click="openReview(work, 'reject')"><X :size="17" /></button></template><button v-if="work.status === 'published'" class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'撤下：' + work.title" title="撤下作品并记录违规" @click="openReview(work, 'remove')"><Trash2 :size="17" /></button><RouterLink :to="'/work/' + work.id" class="icon-button" :aria-label="'查看作品：' + work.title" title="查看作品"><ArrowUpRight :size="17" /></RouterLink></div></td></tr></tbody></table></div>
           <div v-else-if="!error" class="empty-state"><ShieldCheck :size="28" aria-hidden="true" /><h3>{{ search ? '没有找到匹配的作品' : '当前状态下暂无作品' }}</h3><button v-if="search" class="button btn" @click="query = ''; search = ''">清除搜索</button></div>
-          <div v-if="works.length && !loading" class="review-pagination"><span>已载入 {{ works.length }} 条{{ nextCursor ? '' : ' · 已全部载入' }}</span><button v-if="nextCursor" class="button btn" :disabled="loadingMore" @click="load(true)">{{ loadingMore ? '正在加载…' : '加载更多作品' }}</button></div>
+          <div v-if="works.length && !loading" class="review-pagination"><span>已载入 {{ works.length }} 条{{ nextCursor ? '' : ' · 已全部载入' }}</span><button v-if="nextCursor" class="button btn" :disabled="loadingMore || busy" @click="load(true)">{{ loadingMore ? '正在加载…' : '加载更多作品' }}</button></div>
         </section>
       </div>
     </div>
@@ -175,7 +206,7 @@ async function review() {
 .review-toolbar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-bottom: 24px; padding-block: 8px 16px; border-bottom: 1px solid var(--border); }
 .review-toolbar .tabs { margin: 0; border: 0; gap: 20px; }
 .review-toolbar .tab { min-height: 44px; }
-.review-search { display: flex; gap: 8px; min-width: 0; }
+.review-search { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .review-search .search-control { width: 220px; min-height: 44px; }
 .review-table { min-width: 720px; }
 .review-table td:first-child { max-width: 280px; overflow-wrap: anywhere; }

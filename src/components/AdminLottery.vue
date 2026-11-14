@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, toRaw } from 'vue'
-import { Plus, RefreshCw, Save, Search, Trash2 } from '@lucide/vue'
-import type { LotterySettings, LotteryPrize } from '../../server/business/lottery'
+import { computed, onBeforeUnmount, onMounted, ref, toRaw } from 'vue'
+import { ChevronDown, ChevronUp, Plus, RefreshCw, Save, Search, Trash2 } from '@lucide/vue'
+import type { LotteryCreditReceipt, LotterySettings, LotteryPrize } from '../../server/business/lottery'
 import { api, errorMessage, notify, queryString, session } from '../state'
 
 interface Config { version: number; settings: LotterySettings }
 interface User { id: string; name: string; username: string }
 interface Account { userId: string; balance: number }
-interface Award { name: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note: string }
-interface Draw { id: string; username: string; userId: string; createdAt: string; creditAttempts: number; prizes: Award[] }
+type DeliveryStatus = 'pending' | 'fulfilled' | 'empty' | 'blocked'
+interface Award {
+  name: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note: string
+  reference: string; deliveryStatus: DeliveryStatus; blockedReason: 'UPSTREAM_REJECTED_OR_INVALID_RECEIPT' | 'RETRY_LIMIT' | null
+  receiptStatus: 'verified' | 'missing' | 'invalid' | 'not-required'; creditReceipt: LotteryCreditReceipt | null; amountMatches: true | null
+}
+interface Draw {
+  id: string; username: string; userId: string; createdAt: string; creditAttempts: number; prizes: Award[]
+  creditPending: boolean; creditAccountId: number | null; creditRetryAt: string | null
+}
 interface Adjustment { userId: string; mode: 'add' | 'set'; amount: number; expectedBalance: number; requestId: string; reason: string }
 const draft = ref<Config | null>(null)
 const loading = ref(true), saving = ref(false), error = ref(''), saved = ref(false)
@@ -26,9 +34,16 @@ const userBusy = ref(false), chanceBusy = ref(false), chanceError = ref(''), mod
 const amount = ref(1), reason = ref(''), pending = ref<Adjustment | null>(null)
 const recordBusy = ref(false), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), recordError = ref(''), retrying = ref('')
 const confirmRetry = ref('')
+const expandedRecord = ref(''), recordUserId = ref(''), recordStatus = ref<DeliveryStatus | 'all'>('all')
+const recordFilters = ref({ userId: '', status: 'all' as DeliveryStatus | 'all' })
+let recordGeneration = 0, recordsClosed = false
+let recordController: AbortController | undefined
 const adjustmentKey = computed(() => `ai-community-next:admin-adjustment:${session.user?.id}`)
 const nextBalance = computed(() => !account.value || !Number.isInteger(amount.value) || amount.value < (mode.value === 'add' ? 1 : 0) ? null : mode.value === 'add' ? account.value.balance + amount.value : amount.value)
-const awardLabels = { pending: '待发放', fulfilled: '已到账', empty: '未中奖' }
+const awardLabels = { pending: '待发放', fulfilled: '已到账', empty: '未中奖', blocked: '已暂停' }
+const receiptLabels = { verified: '金额一致', missing: '缺少凭证，无法核对', invalid: '凭证校验未通过', 'not-required': '无需发放' }
+const blockedReasons = { UPSTREAM_REJECTED_OR_INVALID_RECEIPT: '上游拒绝或回执校验失败，原记录未留存具体原因。', RETRY_LIMIT: '自动重试次数已用尽。' }
+const dateTime = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '未安排'
 function message(cause: unknown) {
   const value = errorMessage(cause)
   return ({ LOTTERY_CONFLICT: '配置或次数已变化，请重新读取后再提交。', LOTTERY_INVALID: '奖项、概率或次数参数无效，请检查后重试。', LOTTERY_UNAVAILABLE: '奖励发放服务暂不可用，请检查章鱼账号的发放配置。' } as Record<string, string>)[value] || value
@@ -126,19 +141,35 @@ async function adjust() {
   finally { chanceBusy.value = false }
 }
 async function loadRecords(more = false) {
+  if (recordsClosed || more && recordBusy.value) return
+  const current = ++recordGeneration
+  recordController?.abort()
+  const controller = new AbortController()
+  recordController = controller
   recordBusy.value = true; recordError.value = ''
+  if (!more) { records.value = []; nextCursor.value = null; confirmRetry.value = ''; expandedRecord.value = '' }
   try {
-    const data = await api<{ items: Draw[]; nextCursor: string | null }>(`/api/admin/lottery/records${queryString({ cursor: more ? nextCursor.value || undefined : undefined })}`)
+    const data = await api<{ items: Draw[]; nextCursor: string | null }>(`/api/admin/lottery/records${queryString({
+      userId: recordFilters.value.userId || undefined, status: recordFilters.value.status,
+      cursor: more ? nextCursor.value || undefined : undefined,
+    })}`, { signal: controller.signal })
+    if (current !== recordGeneration || recordsClosed) return
     records.value = more ? [...records.value, ...data.items] : data.items; nextCursor.value = data.nextCursor
-  } catch (cause) { recordError.value = message(cause) }
-  finally { recordBusy.value = false }
+  } catch (cause) { if (!controller.signal.aborted && current === recordGeneration) recordError.value = message(cause) }
+  finally { if (current === recordGeneration) recordBusy.value = false }
+}
+function applyRecordFilters() {
+  recordFilters.value = { userId: recordUserId.value.trim(), status: recordStatus.value }
+  void loadRecords()
 }
 async function retryCredit(id: string) {
+  if (retrying.value || confirmRetry.value !== id) return
   retrying.value = id; recordError.value = ''
   try { await api('/api/admin/lottery/retry', { method: 'POST', body: { drawId: id } }); confirmRetry.value = ''; await loadRecords(); notify('已重新核对发放结果。') }
   catch (cause) { recordError.value = message(cause) }
   finally { retrying.value = '' }
 }
+onBeforeUnmount(() => { recordsClosed = true; recordGeneration++; recordController?.abort() })
 onMounted(() => {
   void loadConfig(); void loadRecords()
   try {
@@ -206,9 +237,55 @@ onMounted(() => {
     </section>
     <section class="panel-section lottery-records">
       <div class="section-heading"><h2>全员奖励记录</h2><button class="icon-button" title="刷新奖励记录" aria-label="刷新奖励记录" :disabled="recordBusy || !!retrying" @click="loadRecords()"><RefreshCw :size="17" /></button></div>
+      <form class="record-filters" @submit.prevent="applyRecordFilters">
+        <label class="field"><span>用户编号</span><input v-model="recordUserId" class="control" type="search" maxlength="32" pattern="[a-zA-Z0-9]{1,32}" :disabled="!!retrying" /></label>
+        <label class="field"><span>奖项状态</span><select v-model="recordStatus" class="control" :disabled="!!retrying"><option value="all">全部状态</option><option value="fulfilled">已到账</option><option value="pending">待发放</option><option value="blocked">已暂停</option><option value="empty">未中奖</option></select></label>
+        <button class="button btn" :disabled="!!retrying"><Search :size="16" />筛选记录</button>
+      </form>
       <p v-if="recordError" class="form-error" role="alert">{{ recordError }}</p><p v-if="recordBusy" role="status">正在读取奖励记录…</p>
-      <div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间与用户</th><th scope="col">奖励</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="item in records" :key="item.id"><td>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}<p class="caption-5">@{{ item.username || item.userId }}</p></td><td><div v-for="(award, i) in item.prizes" :key="i">{{ award.name }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td><td><div v-for="(award, i) in item.prizes" :key="i"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.note" class="caption-5">{{ award.note }}</p></div></td><td><template v-if="item.prizes.some(award => award.status === 'pending')"><button v-if="confirmRetry !== item.id" class="button subtle btn" :disabled="!!retrying" @click="confirmRetry = item.id">重试发放</button><template v-else><p class="caption-5">核对并重试此笔奖励？</p><div class="table-actions"><button class="button btn" :disabled="!!retrying" @click="retryCredit(item.id)">{{ retrying === item.id ? '核对中…' : '确认' }}</button><button class="button subtle btn" :disabled="!!retrying" @click="confirmRetry = ''">取消</button></div></template></template></td></tr></tbody></table></div>
-      <p v-else-if="!recordBusy && !recordError" class="muted">暂无奖励记录。</p><button v-if="nextCursor" class="button btn" :disabled="recordBusy" @click="loadRecords(true)">加载更多</button>
+      <div v-if="records.length" class="table-wrap"><table class="data-table" role="table">
+        <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">时间与用户</th><th scope="col" role="columnheader">奖励</th><th scope="col" role="columnheader">状态</th><th scope="col" role="columnheader">操作</th></tr></thead>
+        <tbody role="rowgroup"><template v-for="item in records" :key="item.id">
+          <tr :data-draw-id="item.id" class="record-summary-row" role="row">
+            <td role="cell">{{ dateTime(item.createdAt) }}<p class="caption-5">@{{ item.username || item.userId }}</p><p class="caption-5">用户编号 {{ item.userId || '已删除' }}</p></td>
+            <td role="cell"><div v-for="(award, i) in item.prizes" :key="i" class="record-award">{{ award.name }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td>
+            <td role="cell"><div v-for="(award, i) in item.prizes" :key="i" class="record-award"><span class="status" :class="{ pending: award.deliveryStatus === 'pending', rejected: award.deliveryStatus === 'blocked', published: award.deliveryStatus === 'fulfilled' }">{{ awardLabels[award.deliveryStatus] }}</span><p v-if="award.note" class="caption-5">{{ award.note }}</p></div></td>
+            <td role="cell"><div class="record-actions">
+              <button class="button subtle btn" :aria-label="`查看对账：${item.id}`" :aria-expanded="expandedRecord === item.id" :aria-controls="`lottery-record-${item.id}`" @click="expandedRecord = expandedRecord === item.id ? '' : item.id"><component :is="expandedRecord === item.id ? ChevronUp : ChevronDown" :size="16" />查看对账</button>
+              <template v-if="item.prizes.some(award => award.status === 'pending')"><button v-if="confirmRetry !== item.id" class="button subtle btn" :disabled="!!retrying || recordBusy" @click="confirmRetry = item.id">重试发放</button><template v-else><p class="caption-5">核对并重试此笔奖励？</p><div class="table-actions"><button class="button btn" :disabled="!!retrying || recordBusy" @click="retryCredit(item.id)">{{ retrying === item.id ? '核对中…' : '确认' }}</button><button class="button subtle btn" :disabled="!!retrying" @click="confirmRetry = ''">取消</button></div></template></template>
+            </div></td>
+          </tr>
+          <tr v-if="expandedRecord === item.id" class="record-evidence-row" role="row"><td colspan="4" role="cell">
+            <section :id="`lottery-record-${item.id}`" class="record-detail" :aria-label="`发放对账：${item.id}`">
+              <dl class="record-metadata">
+                <div><dt>记录编号</dt><dd><code>{{ item.id }}</code></dd></div>
+                <div><dt>原发放章鱼账号</dt><dd>{{ item.creditAccountId ? `账号 ID：${item.creditAccountId}` : '未记录有效账号' }}</dd></div>
+                <div><dt>发放尝试</dt><dd>{{ item.creditAttempts }} / 3 次</dd></div>
+                <div><dt>后台发放</dt><dd>{{ !item.creditPending ? '已完成' : item.prizes.some(award => award.deliveryStatus === 'pending') ? '等待处理' : '自动重试已暂停' }}</dd></div>
+                <div><dt>记录的重试时间</dt><dd>{{ dateTime(item.creditRetryAt) }}</dd></div>
+                <div><dt>核对依据</dt><dd>已保存的到账凭证</dd></div>
+              </dl>
+              <ol class="receipt-list"><li v-for="(award, index) in item.prizes" :key="index">
+                <div class="receipt-heading"><h3>{{ award.name }}</h3><span class="status" :class="{ published: award.receiptStatus === 'verified', rejected: award.receiptStatus === 'invalid' }">{{ receiptLabels[award.receiptStatus] }}</span></div>
+                <dl class="receipt-data">
+                  <div><dt>奖励金额</dt><dd>${{ (award.amountCents / 100).toFixed(2) }} USD</dd></div>
+                  <div v-if="award.status !== 'empty'" class="receipt-reference"><dt>原始发放参考号</dt><dd><code>{{ award.reference }}</code></dd></div>
+                  <template v-if="award.creditReceipt">
+                    <div><dt>到账凭证编号</dt><dd>{{ award.creditReceipt.id }}</dd></div>
+                    <div><dt>实际添加额度</dt><dd>{{ award.creditReceipt.quotaAdded.toLocaleString('en-US') }} quota</dd></div>
+                    <div class="receipt-ratio"><dt>发放时兑换比例</dt><dd>{{ award.creditReceipt.quotaPerUsd }} quota / USD</dd></div>
+                  </template>
+                  <div><dt>金额核对</dt><dd>{{ award.amountMatches === true ? '金额与凭证兑换比例一致' : award.receiptStatus === 'not-required' ? '无需核对' : '无法确认实际到账金额' }}</dd></div>
+                </dl>
+                <p v-if="award.receiptStatus === 'missing'" class="receipt-note">此记录未保存到账凭证，无法核对实际额度。</p>
+                <p v-else-if="award.receiptStatus === 'invalid'" class="receipt-note receipt-invalid">已保存的凭证未通过校验，无法确认到账金额。</p>
+                <p v-if="award.blockedReason" class="receipt-note receipt-invalid">暂停原因：{{ blockedReasons[award.blockedReason] }}</p>
+              </li></ol>
+            </section>
+          </td></tr>
+        </template></tbody>
+      </table></div>
+      <p v-else-if="!recordBusy && !recordError" class="muted">{{ recordFilters.userId || recordFilters.status !== 'all' ? '没有符合筛选条件的奖励记录。' : '暂无奖励记录。' }}</p><button v-if="nextCursor" class="button btn" :disabled="recordBusy || !!retrying" @click="loadRecords(true)">加载更多</button>
     </section>
   </div>
 </template>
@@ -252,6 +329,26 @@ onMounted(() => {
 .lottery-records .data-table td { padding: 16px 12px; }
 .lottery-records .data-table .button { white-space: nowrap; }
 .lottery-records .data-table .table-actions { flex-wrap: wrap; gap: 8px; }
+.record-filters { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin-block: 20px; }
+.record-filters .field { flex: 1; min-width: 160px; }
+.record-filters .control { width: 100%; }
+.record-actions { display: grid; justify-items: start; gap: 8px; }
+.record-award + .record-award { margin-top: 12px; }
+.record-evidence-row > td { background: var(--surface-soft); }
+.record-detail { max-width: 100%; }
+.record-metadata, .receipt-data { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; margin: 0; font-variant-numeric: tabular-nums; }
+.record-metadata > div, .receipt-data > div { min-width: 0; }
+.record-detail dt { font-size: 12px; line-height: 20px; color: var(--muted); margin-bottom: 4px; }
+.record-detail dd { margin: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 22px; }
+.record-detail code { font-size: 12px; }
+.receipt-list { list-style: none; margin: 20px 0 0; padding: 0; }
+.receipt-list > li { padding-block: 20px; border-top: 1px solid var(--border); }
+.receipt-list > li:last-child { padding-bottom: 0; }
+.receipt-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.receipt-heading h3 { font-size: 14px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.receipt-reference, .receipt-ratio { grid-column: 1 / -1; }
+.record-detail .receipt-note { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 20px; }
+.record-detail .receipt-invalid { color: var(--danger); }
 @media (max-width: 1199px) { .rule-grid { grid-template-columns: 1fr; } .prize-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 639px) {
   .fields, .prize-fields { grid-template-columns: 1fr; }
@@ -259,5 +356,17 @@ onMounted(() => {
   .search-row .button, .lottery-chances form.stack > .button { width: 100%; }
   .config-actions { align-items: stretch; }
   .config-actions > .button { width: 100%; }
+  .record-filters { align-items: stretch; }
+  .record-filters .field, .record-filters > .button { flex-basis: 100%; }
+  .lottery-records .data-table, .lottery-records .data-table tbody { display: block; min-width: 0; }
+  .lottery-records .data-table thead { display: none; }
+  .lottery-records .data-table .record-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding-block: 20px; border-bottom: 1px solid var(--border); }
+  .lottery-records .data-table td { display: block; padding: 0; border: 0; min-width: 0; }
+  .record-summary-row > td:first-child, .record-summary-row > td:last-child { grid-column: 1 / -1; }
+  .record-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .lottery-records .record-evidence-row { display: block; padding: 16px; background: var(--surface-soft); border-bottom: 1px solid var(--border); }
+  .record-detail { max-width: 100%; }
+  .record-metadata, .receipt-data { grid-template-columns: 1fr; }
+  .record-actions .button { min-height: 44px; }
 }
 </style>

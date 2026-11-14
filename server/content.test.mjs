@@ -39,7 +39,7 @@ test('admin status filters include the stored states displayed as published and 
   for (const [status, expected] of [['published', 'approved'], ['rejected', 'removed']]) {
     let statement = '';
     const ctx = context({ path: `/api/admin/submissions?status=${status}`, user: { id: 'admin1', isAdmin: true },
-      query: async (sql) => { statement = sql; return { rows: [] }; } });
+      query: async (sql) => { if (/^\s*SELECT s\.\*/.test(sql)) statement = sql; return { rows: [] }; } });
     await handleContent(ctx);
     assert.match(statement.split('WHERE').slice(1).join('WHERE'), new RegExp(`s\\.status[^;]*'${expected}'`));
   }

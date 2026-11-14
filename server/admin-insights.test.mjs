@@ -73,6 +73,34 @@ test('logs paginate with parameterized filters and expose only allowlisted summa
   for (const suffix of ['type=token', 'cursor=bad%21', 'from=invalid', 'from=2020-01-01&to=2026-01-01']) await assert.rejects(f.request('/api/admin/logs?' + suffix), { statusCode: 400 })
 })
 
+test('announcement and role changes keep filterable safe summaries in the existing log DTO', async () => {
+  for (const entry of [
+    { type: 'updateAnnouncement', label: '修改公告',
+      info: { announcementId: 'a1', fields: ['title', 'text', 'isActive', 'password', 'constructor'],
+        title: 'private-title', text: 'private-body', reason: 'private-reason', token: 'secret-token' },
+      details: [{ label: '公告编号', value: 'a1' }, { label: '变更项', value: '标题、正文、启用状态' }],
+      target: { label: '公告管理', to: '/admin?tab=announcements' } },
+    { type: 'updateCommunityRoles', label: '调整管理授权',
+      info: { userId: '42', before: ['adminrole', 'invalid!', 1], after: ['modrole', 'bad/token', null],
+        reason: 'private-reason', password: 'secret-password', token: 'secret-token' },
+      details: [{ label: '用户编号', value: '42' }, { label: '原角色编号', value: 'adminrole' }, { label: '新角色编号', value: 'modrole' }],
+      target: { label: '管理授权', to: '/admin?tab=roles' } },
+  ]) {
+    const f = fixture()
+    f.logs.push({ id: `${(Date.now() - 946684800000).toString(36).padStart(8, '0')}0001`,
+      userId: 'operator', name: null, username: 'na_internal', type: entry.type, info: entry.info })
+    const result = await f.request(`/api/admin/logs?type=${entry.type}`)
+    assert.equal(f.statements[0].values[0], entry.type)
+    assert(result.types.some(option => option.value === entry.type && option.label === entry.label))
+    assert.equal(result.items[0].label, entry.label)
+    assert.deepEqual(result.items[0].details, entry.details)
+    assert.deepEqual(result.items[0].target, entry.target)
+    for (const secret of ['private-title', 'private-body', 'private-reason', 'secret-token', 'secret-password', 'invalid!', 'bad/token']) {
+      assert(!JSON.stringify(result).includes(secret))
+    }
+  }
+})
+
 test('new HTTP routes reach authentication instead of falling through to 404', async t => {
   const origin = 'https://community.test'
   const app = createApplication({ db: { query() { assert.fail('Guests must not reach data') } }, redis: {}, config: { url: origin }, filesRoot: path.resolve('files') })

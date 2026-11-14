@@ -6,7 +6,9 @@
 import { createHash } from 'node:crypto'
 import { handleAdminInsights } from './admin-insights.ts'
 import { httpError, roleCondition } from './auth.ts'
+import { accountCenter } from './account-session.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
+import { legacyIdTime } from './content.ts'
 import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './settings.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
@@ -23,6 +25,10 @@ interface ManagedUser {
   notesCount: number; communityViolationCount: number; communityViolationBaseline: number
 }
 interface RoleRow { id: string; target: string; condFormula: unknown; isAdministrator: boolean; isModerator: boolean }
+interface ManagementRole extends RoleRow { name: string }
+interface RoleAssignment { id: string; userId: string; roleId: string; expiresAt: Date | string | null }
+interface AnnouncementRow { id: string; title: string; text: string; isActive: boolean; updatedAt: Date | string | null }
+interface AuditRow { id: string; userId: string; type: string; info: unknown; actorId: string | null; actorUsername: string | null; actorName: string | null }
 interface ReportRow {
   id: string; targetUserId: string; reporterId: string; assigneeId: string | null
   resolved: boolean; resolvedAs: 'accept' | 'reject' | null; comment: string
@@ -335,21 +341,192 @@ async function legacySettings(ctx: RequestContext) {
   })
 }
 async function announcements(ctx: RequestContext, announcementId?: string) {
-  if (ctx.req.method === 'GET') return { items: (await ctx.db.query('SELECT id,title,text,"isActive","updatedAt" FROM announcement WHERE "userId" IS NULL ORDER BY id DESC LIMIT 100')).rows }
+  if (ctx.req.method === 'GET') {
+    const status = enumValue(ctx.url.searchParams.get('status') || 'all', ['all', 'active', 'inactive'])
+    const rows = (await ctx.db.query<AnnouncementRow>(`SELECT id,title,text,"isActive","updatedAt" FROM announcement
+      WHERE "userId" IS NULL AND ($1='' OR title ILIKE $2 OR text ILIKE $2)
+      AND ($3='all' OR "isActive"=($3='active')) AND ($4::varchar IS NULL OR id<$4)
+      ORDER BY id DESC LIMIT 31`, [query(ctx), search(query(ctx)), status, cursor(ctx)])).rows
+    const page = paginate(rows)
+    return { ...page, items: page.items.map(packAnnouncement) }
+  }
+  const method = ctx.req.method
+  if (method === 'POST') keys(ctx.body, ['title', 'text'])
+  else if (method === 'DELETE') {
+    if (Object.keys(ctx.body).length) keys(ctx.body, ['version', 'updatedAt'])
+  }
+  else {
+    keys(ctx.body, ['title', 'text', 'isActive', 'version', 'updatedAt'])
+    if (method === 'PATCH' && !['title', 'text', 'isActive'].some(key => Object.hasOwn(ctx.body, key))) fail('请选择需要修改的公告字段。')
+  }
+  if (method === 'PATCH' && !Object.hasOwn(ctx.body, 'version') && !Object.hasOwn(ctx.body, 'updatedAt')) fail('缺少公告版本，请刷新后重试。')
+  const title = ctx.body.title === undefined ? undefined : text(ctx.body.title, 100)
+  const content = ctx.body.text === undefined ? undefined : text(ctx.body.text, 8192)
+  const active = ctx.body.isActive === undefined ? undefined : boolean(ctx.body.isActive)
+  if (title === '' || content === '' || method === 'POST' && (!title || !content)) fail('公告标题和正文不能为空。')
   return transaction(ctx.db, async db => {
-    if (ctx.req.method === 'DELETE') {
+    if (method !== 'POST') {
       const id = identifier(announcementId)
-      if (!(await db.query('UPDATE announcement SET "isActive"=false,"updatedAt"=NOW() WHERE id=$1 AND "userId" IS NULL RETURNING id', [id])).rowCount) fail('公告不存在。', 404)
-      await audit(ctx, db, 'deleteAnnouncement', { announcementId: id })
-      return { ok: true }
+      const previous = (await db.query<AnnouncementRow>('SELECT id,title,text,"isActive","updatedAt" FROM announcement WHERE id=$1 AND "userId" IS NULL FOR UPDATE', [id])).rows[0]
+      if (!previous) fail('公告不存在。', 404)
+      const packed = packAnnouncement(previous)
+      if (Object.hasOwn(ctx.body, 'version') && ctx.body.version !== packed.version
+        || Object.hasOwn(ctx.body, 'updatedAt') && ctx.body.updatedAt !== packed.updatedAt) fail('公告已变化，请刷新后重新编辑。', 409)
+      const next = { title: title ?? previous.title, text: content ?? previous.text, isActive: method === 'DELETE' ? false : active ?? previous.isActive }
+      const fields = (['title', 'text', 'isActive'] as const).filter(key => next[key] !== previous[key])
+      if (!fields.length) return method === 'DELETE' ? { ok: true, announcement: packed } : { announcement: packed }
+      const updated = (await db.query<AnnouncementRow>(`UPDATE announcement SET title=$2,text=$3,"isActive"=$4,"updatedAt"=NOW()
+        WHERE id=$1 AND "userId" IS NULL RETURNING id,title,text,"isActive","updatedAt"`, [id, next.title, next.text, next.isActive])).rows[0]!
+      await audit(ctx, db, method === 'DELETE' ? 'deleteAnnouncement' : 'updateAnnouncement', { announcementId: id, fields })
+      return method === 'DELETE' ? { ok: true, announcement: packAnnouncement(updated) } : { announcement: packAnnouncement(updated) }
     }
-    keys(ctx.body, ['title', 'text'])
-    const title = text(ctx.body.title, 100), content = text(ctx.body.text, 8192), id = ctx.newId()
-    if (!title || !content) fail('公告标题和正文不能为空。')
-    await db.query('INSERT INTO announcement(id,title,text,"updatedAt") VALUES($1,$2,$3,NOW())', [id, title, content])
+    const id = ctx.newId()
+    const row = (await db.query<AnnouncementRow>(`INSERT INTO announcement(id,title,text,"updatedAt") VALUES($1,$2,$3,NOW())
+      RETURNING id,title,text,"isActive","updatedAt"`, [id, title, content])).rows[0]!
     await audit(ctx, db, 'createAnnouncement', { announcementId: id })
-    return { id }
+    return { id, announcement: packAnnouncement(row) }
   })
+}
+
+function packAnnouncement(row: AnnouncementRow) {
+  const updatedAt = row.updatedAt ? new Date(row.updatedAt).toISOString() : null
+  return { id: row.id, title: row.title, text: row.text, isActive: row.isActive, updatedAt,
+    version: fingerprint([row.id, row.title, row.text, row.isActive, updatedAt]) }
+}
+
+const auditLabels: Record<string, string> = {
+  createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
+  communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
+  updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
+  createCommunityTag: '创建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
+  adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
+}
+function safeAuditDetails(type: string, input: unknown): Body {
+  if (!record(input)) return {}
+  const result: Body = {}
+  const copyId = (key: string) => { const value = input[key]; if (typeof value === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(value)) result[key] = value }
+  const copyNumber = (key: string) => { const value = input[key]; if (typeof value === 'number' && Number.isSafeInteger(value)) result[key] = value }
+  const copyEnum = (key: string, values: readonly string[]) => { const value = input[key]; if (typeof value === 'string' && values.includes(value)) result[key] = value }
+  const copyList = (key: string, allowed?: readonly string[]) => {
+    if (Array.isArray(input[key])) result[key] = input[key].filter((value): value is string => typeof value === 'string' && (allowed ? allowed.includes(value) : /^[a-zA-Z0-9]{1,32}$/.test(value))).slice(0, 100)
+  }
+  if (['createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement'].includes(type)) {
+    copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive'])
+  } else if (type === 'communityReview') {
+    copyId('submissionId'); copyEnum('action', ['approve', 'reject', 'remove']); copyNumber('version')
+  } else if (type === 'suspend' || type === 'unsuspend') copyId('userId')
+  else if (type === 'resolveAbuseReport') {
+    copyId('reportId'); copyEnum('resolvedAs', ['accept', 'reject'])
+  } else if (type === 'adjustLotteryChances') {
+    copyId('userId'); copyEnum('mode', ['add', 'set'])
+    for (const key of ['amount', 'before', 'after']) copyNumber(key)
+  } else if (type === 'updateCommunityRoles') {
+    copyId('userId'); copyList('before'); copyList('after')
+  } else if (['createCommunityTag', 'updateCommunityTag', 'deleteCommunityTag'].includes(type)) {
+    copyId('tagId'); copyEnum('category', ['image', 'video', 'resource'])
+  } else if (type === 'updateCommunityAds') copyList('slots', communityAdKeys)
+  else if (type === 'updateCommunityConfig' && record(input.config)) {
+    const normalized = publicConfig(input.config)
+    result.config = Object.fromEntries(configKeys.filter(key => Object.hasOwn(input.config as Body, key)).map(key => [key, normalized[key]]))
+  } else if (type === 'communitySettings' && record(input.settings)) {
+    result.fields = ['brand', 'logoUrl', 'publicationMode', 'autoBan', 'violationThreshold', 'registrationOpen', 'uploadLimits', 'defaultModels', 'ads']
+      .filter(key => Object.hasOwn(input.settings as Body, key))
+  }
+  return result
+}
+async function auditLog(ctx: RequestContext) {
+  const type = text(ctx.url.searchParams.get('type') || '', 128)
+  if (type && !/^[a-zA-Z][a-zA-Z0-9_-]{0,127}$/.test(type)) fail('审计类型无效。')
+  const rows = (await ctx.db.query<AuditRow>(`SELECT l.id,l."userId",l.type,l.info,u.id AS "actorId",u.username AS "actorUsername",u.name AS "actorName"
+    FROM moderation_log l LEFT JOIN "user" u ON u.id=l."userId"
+    WHERE ($1='' OR l.type=$1) AND ($2::varchar IS NULL OR l.id<$2)
+    AND ($3='' OR l.id=$3 OR l.type ILIKE $4 OR u.username ILIKE $4 OR u.name ILIKE $4
+      OR EXISTS (SELECT 1 FROM external_account e WHERE e."userId"=l."userId" AND e.issuer=$5 AND (e.username ILIKE $4 OR e.subject=$3)))
+    ORDER BY l.id DESC LIMIT 31`, [type, cursor(ctx), query(ctx), search(query(ctx)), accountCenter(ctx.config)])).rows
+  const page = paginate(rows)
+  const identities = await readPublicIdentities(ctx, page.items.flatMap(row => row.actorId ? [row.actorId] : []))
+  const items = page.items.map(row => {
+    const identity = row.actorId ? identities.get(row.actorId) : undefined
+    const username = identity?.username ?? row.actorUsername ?? ''
+    const time = legacyIdTime(row.id, ctx.config.id)
+    const publicType = /^[a-zA-Z][a-zA-Z0-9_-]{0,127}$/.test(row.type) ? row.type : 'unknown'
+    return { id: row.id, date: Number.isFinite(time) && Math.abs(time) <= 8640000000000000 ? new Date(time).toISOString() : null,
+      type: publicType, label: Object.hasOwn(auditLabels, publicType) ? auditLabels[publicType] : '管理操作',
+      actor: row.actorId ? { id: row.actorId, username, name: row.actorName || username || '章鱼用户', ...(identity ? { accountId: identity.accountId } : {}) } : null,
+      details: safeAuditDetails(row.type, row.info) }
+  })
+  const types = new Map(Object.entries(auditLabels))
+  for (const item of items) if (!types.has(item.type)) types.set(item.type, item.label)
+  return { ...page, items, typeOptions: [...types].map(([value, label]) => ({ value, label })) }
+}
+
+async function managementRoles(db: Queryable, lock = false) {
+  return (await db.query<ManagementRole>(`SELECT id,name,target,"condFormula","isAdministrator","isModerator" FROM role
+    WHERE "isAdministrator" OR "isModerator" ORDER BY id${lock ? ' FOR SHARE' : ''}`)).rows
+}
+async function roleAssignments(db: Queryable, userIds: string[], lock = false) {
+  return (await db.query<RoleAssignment>(`SELECT id,"userId","roleId","expiresAt" FROM role_assignment
+    WHERE "userId"=ANY($1::varchar[]) AND ("expiresAt" IS NULL OR "expiresAt">NOW()) ORDER BY id${lock ? ' FOR UPDATE' : ''}`, [userIds])).rows
+}
+function manualRoles(roles: ManagementRole[]) { return roles.filter(role => role.target === 'manual') }
+function packRoleUser(ctx: RequestContext, row: ManagedUser, roles: ManagementRole[], assignments: RoleAssignment[], rootUserId: string | null, identity?: PublicIdentity) {
+  const manual = manualRoles(roles)
+  const owned = assignments.filter(item => item.userId === row.id)
+  const roleIds = manual.filter(role => owned.some(item => item.roleId === role.id)).map(role => role.id)
+  const isRoot = row.id === rootUserId, isSelf = row.id === ctx.requireUser().id
+  return { ...packUser(row, isRoot || isSelf, identity), roleIds, isRoot, isSelf, canEdit: manual.length > 0 && !isRoot && !isSelf,
+    version: fingerprint({ rootUserId, roles, assignments: owned }) }
+}
+async function roles(ctx: RequestContext, userId?: string) {
+  if (ctx.req.method === 'GET') {
+    const needle = query(ctx)
+    const [available, root, rows] = await Promise.all([
+      managementRoles(ctx.db),
+      ctx.db.query<{ rootUserId: string | null }>('SELECT "rootUserId" FROM meta LIMIT 1'),
+      ctx.db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u WHERE u.host IS NULL AND NOT u."isDeleted"
+        AND ($1='' OR u.id=$1 OR u.username ILIKE $2 OR u.name ILIKE $2 OR EXISTS (SELECT 1 FROM external_account e
+          WHERE e."userId"=u.id AND e.issuer=$4 AND (e.username ILIKE $2 OR e.subject=$1)))
+        AND ($3::varchar IS NULL OR u.id<$3) ORDER BY u.id DESC LIMIT 31`, [needle, search(needle), cursor(ctx), accountCenter(ctx.config)]),
+    ])
+    const page = paginate(rows.rows), ids = page.items.map(row => row.id)
+    const [assignments, identities] = await Promise.all([roleAssignments(ctx.db, ids), readPublicIdentities(ctx, ids)])
+    const manual = manualRoles(available)
+    return { ...page, items: page.items.map(row => packRoleUser(ctx, row, available, assignments, root.rows[0]?.rootUserId ?? null, identities.get(row.id))),
+      roles: manual.map(role => ({ id: role.id, name: role.name, isAdmin: role.isAdministrator, isModerator: role.isModerator })),
+      canAssign: manual.length > 0, ...(manual.length ? {} : { message: '尚未配置可分配的手动管理员或审核员角色，请联系维护人员配置角色。' }) }
+  }
+  keys(ctx.body, ['roleIds', 'version'])
+  if (!Array.isArray(ctx.body.roleIds) || ctx.body.roleIds.length > 100 || new Set(ctx.body.roleIds).size !== ctx.body.roleIds.length) fail('管理角色列表无效。')
+  const desired = ctx.body.roleIds.map(identifier)
+  if (typeof ctx.body.version !== 'string' || !/^[a-f0-9]{64}$/.test(ctx.body.version)) fail('缺少有效的授权版本，请刷新后重试。')
+  const targetId = identifier(userId), actorId = ctx.requireUser().id
+  const changed = await transaction(ctx.db, async db => {
+    const root = (await db.query<{ rootUserId: string | null }>('SELECT "rootUserId" FROM meta ORDER BY id LIMIT 1 FOR UPDATE')).rows[0]?.rootUserId ?? null
+    const people = (await db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u
+      WHERE u.id=ANY($1::varchar[]) AND u.host IS NULL AND NOT u."isDeleted" ORDER BY u.id FOR UPDATE`, [[...new Set([actorId, targetId])]])).rows
+    const target = people.find(row => row.id === targetId), actor = people.find(row => row.id === actorId)
+    const available = await managementRoles(db, true)
+    const assignments = await roleAssignments(db, people.map(row => row.id), true)
+    const actorAssigned = new Set(assignments.filter(item => item.userId === actorId).map(item => item.roleId))
+    if (!actor || actor.isSuspended || !(actorId === root || available.some(role => role.isAdministrator
+      && (role.target === 'manual' ? actorAssigned.has(role.id) : roleCondition(role.condFormula, actor, actorAssigned))))) fail('管理员权限已变化，请重新登录。', 403)
+    if (!target) fail('账号不存在。', 404)
+    const manual = manualRoles(available)
+    if (!manual.length) fail('尚未配置可分配的手动管理角色。', 409)
+    if (desired.some(id => !manual.some(role => role.id === id))) fail('只能分配已有的手动管理员或审核员角色。')
+    const before = packRoleUser(ctx, target, available, assignments, root)
+    if (before.version !== ctx.body.version) fail('管理授权已变化，请刷新后重新核对。', 409)
+    const removed = before.roleIds.filter(id => !desired.includes(id)), added = desired.filter(id => !before.roleIds.includes(id))
+    if ((before.isRoot || before.isSelf) && (removed.length || added.length)) fail('不能修改自己或根管理员的管理授权。', 403)
+    if (removed.length) await db.query(`DELETE FROM role_assignment WHERE "userId"=$1 AND "roleId"=ANY($2::varchar[])
+      AND ("expiresAt" IS NULL OR "expiresAt">NOW())`, [targetId, removed])
+    for (const id of added) await db.query(`INSERT INTO role_assignment (id,"userId","roleId","expiresAt") VALUES ($1,$2,$3,NULL)
+      ON CONFLICT ("userId","roleId") DO UPDATE SET "expiresAt"=NULL`, [ctx.newId(), targetId, id])
+    if (removed.length || added.length) await audit(ctx, db, 'updateCommunityRoles', { userId: targetId, before: before.roleIds, after: desired })
+    return { target, available, root, assignments: await roleAssignments(db, [targetId]) }
+  })
+  const identities = await readPublicIdentities(ctx, [targetId])
+  return { user: packRoleUser(ctx, changed.target, changed.available, changed.assignments, changed.root, identities.get(targetId)) }
 }
 
 export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
@@ -359,7 +536,8 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   if (path === '/api/site' && method === 'GET') { const { brand, logoUrl } = await readSiteSettings(ctx.db, ctx.config.url); ctx.json(200, { brand, logoUrl }); return true }
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
-  const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements'].includes(path) || tag || person || report || announcement
+  const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
+  const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
@@ -370,7 +548,9 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   else if ((path === '/api/admin/users' && method === 'GET') || (person && method === 'PATCH')) result = await users(ctx, person?.[1])
   else if ((path === '/api/admin/reports' && method === 'GET') || (report && method === 'PATCH')) result = await reports(ctx, report?.[1])
   else if (path === '/api/admin/settings' && ['GET', 'PATCH'].includes(method ?? '')) result = await legacySettings(ctx)
-  else if ((path === '/api/admin/announcements' && ['GET', 'POST'].includes(method ?? '')) || (announcement && method === 'DELETE')) result = await announcements(ctx, announcement?.[1])
+  else if ((path === '/api/admin/announcements' && ['GET', 'POST'].includes(method ?? '')) || (announcement && ['PATCH', 'DELETE'].includes(method ?? ''))) result = await announcements(ctx, announcement?.[1])
+  else if (path === '/api/admin/audit' && method === 'GET') result = await auditLog(ctx)
+  else if ((path === '/api/admin/roles' && method === 'GET') || (userRoles && method === 'PATCH')) result = await roles(ctx, userRoles?.[1])
   else return false
   ctx.json(200, result)
   return true

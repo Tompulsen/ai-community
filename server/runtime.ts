@@ -194,8 +194,8 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['POST', ['/api/notifications/read', '/api/notifications/read-all', '/api/messages/:userId', '/api/messages/:userId/read']],
   ])
   register(handleAdmin, [
-    ['GET', ['/api/site', '/api/admin/overview', '/api/admin/logs', '/api/admin/settings', '/api/admin/announcements', '/api/admin/community/config', '/api/admin/community/ads', '/api/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports']],
-    ['PATCH', ['/api/admin/settings', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags/:id', '/api/admin/users/:id', '/api/admin/reports/:id']],
+    ['GET', ['/api/site', '/api/admin/overview', '/api/admin/logs', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles', '/api/admin/community/config', '/api/admin/community/ads', '/api/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports']],
+    ['PATCH', ['/api/admin/settings', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags/:id', '/api/admin/users/:id', '/api/admin/users/:id/roles', '/api/admin/reports/:id', '/api/admin/announcements/:id']],
     ['POST', ['/api/admin/tags', '/api/admin/announcements']],
     ['DELETE', ['/api/admin/tags/:id', '/api/admin/announcements/:id']],
   ])

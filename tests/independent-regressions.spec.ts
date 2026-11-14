@@ -33,7 +33,8 @@ async function mockApp(page: Page, authenticated = false) {
       if (url.pathname === '/api/site') return route.fulfill({ json: { brand: '章鱼社区', logoUrl: '' } })
       if (url.pathname === '/api/works') return route.fulfill({ json: { items: [work], nextCursor: null } })
       if (url.pathname === `/api/works/${work.id}`) return route.fulfill({ json: { work } })
-      if (['/api/tags', '/api/creators', '/api/announcements', '/api/community/ads', '/api/notifications', '/api/messages/threads', `/api/works/${work.id}/comments`].includes(url.pathname)) {
+      if (url.pathname === '/api/messages/threads') return route.fulfill({ json: { items: [], nextCursor: null, unreadCount: 0 } })
+      if (['/api/tags', '/api/creators', '/api/announcements', '/api/community/ads', '/api/notifications', `/api/works/${work.id}/comments`].includes(url.pathname)) {
         return route.fulfill({ json: { items: [], nextCursor: null } })
       }
     }

@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createLotteryService, packLotteryDraw, validateLotterySettings } from './lottery.ts'
+import { createLotteryService, handleLottery, packAdminLotteryDraw, packLotteryDraw, validateLotterySettings } from './lottery.ts'
 import { defaultLotterySettings } from './business/lottery.ts'
 
 test('settings reject invalid money, overflowing weight and duplicate prize ids', () => {
@@ -27,6 +27,115 @@ test('public record never exposes delivery receipts, admin identity or blocked d
   assert.equal('creditReceipt' in result.prizes[0], false)
   assert.equal('creditBlocked' in result.prizes[0], false)
   assert.equal('fulfilledBy' in result.prizes[0], false)
+  assert.equal('creditPending' in result, false)
+  assert.equal('creditRetryAt' in result, false)
+})
+
+function recordedDraw(patch = {}) {
+  return { id: 'recordedDraw', userId: 'owner', username: 'octopus', createdAt: '2026-11-14T00:00:00Z',
+    requestId: 'private-request', creditIssuer: 'https://accounts.test', creditSubject: '17',
+    creditAttempts: 1, creditPending: false, creditRetryAt: null,
+    prizes: [{ name: 'Credit', status: 'fulfilled', amountCents: 50, fulfilledBy: 'private-admin',
+      creditReceipt: { id: 8, quotaAdded: 250000, quotaPerUsd: '500000.000000000000000000000000000001', secret: 'private-secret' } }],
+    ...patch }
+}
+
+test('admin records expose only a validated receipt and preserve the exact decimal conversion ratio', () => {
+  const result = packAdminLotteryDraw(recordedDraw())
+  assert.equal(result.prizes[0].reference, 'community_lottery_recordedDraw_0')
+  assert.equal(result.prizes[0].receiptStatus, 'verified')
+  assert.equal(result.prizes[0].amountMatches, true)
+  assert.deepEqual(result.prizes[0].creditReceipt, { id: 8, quotaAdded: 250000, quotaPerUsd: '500000.000000000000000000000000000001' })
+  assert.equal(result.prizes[0].deliveryStatus, 'fulfilled')
+  assert.equal(result.creditAccountId, 17)
+  assert.equal('fulfilledBy' in result.prizes[0], false)
+  assert.equal('requestId' in result, false)
+  assert.equal('creditIssuer' in result, false)
+  assert.equal('creditSubject' in result, false)
+  assert.equal(JSON.stringify(result).includes('private-'), false)
+  const largeAccount = packAdminLotteryDraw(recordedDraw({ creditSubject: String(Number.MAX_SAFE_INTEGER) }))
+  assert.equal(largeAccount.creditAccountId, Number.MAX_SAFE_INTEGER)
+  assert.equal(largeAccount.prizes[0].receiptStatus, 'verified')
+})
+
+test('admin records distinguish absent, invalid, blocked and empty evidence without inventing an amount match', () => {
+  const row = recordedDraw({ creditPending: true, creditAttempts: 3, creditRetryAt: '2026-11-14T00:03:00Z', prizes: [
+    { status: 'fulfilled', amountCents: 50, name: 'Legacy credit' },
+    { status: 'pending', amountCents: 50, name: 'Mismatch', creditBlocked: true, creditReceipt: { id: 8, quotaAdded: 249999, quotaPerUsd: '500000' } },
+    { status: 'pending', amountCents: 50, name: 'Retry exhausted' },
+    { status: 'empty', amountCents: 0, name: 'Empty', creditReceipt: { id: 9, quotaAdded: 1, quotaPerUsd: '1' } },
+  ] })
+  const result = packAdminLotteryDraw(row)
+  assert.equal(result.creditPending, true)
+  assert.equal(result.creditRetryAt, new Date(row.creditRetryAt).toISOString())
+  assert.deepEqual(result.prizes.map(prize => prize.receiptStatus), ['missing', 'invalid', 'missing', 'not-required'])
+  assert.deepEqual(result.prizes.map(prize => prize.creditReceipt), [null, null, null, null])
+  assert.deepEqual(result.prizes.map(prize => prize.amountMatches), [null, null, null, null])
+  assert.deepEqual(result.prizes.map(prize => prize.deliveryStatus), ['fulfilled', 'blocked', 'blocked', 'empty'])
+  assert.deepEqual(result.prizes.map(prize => prize.blockedReason), [null, 'UPSTREAM_REJECTED_OR_INVALID_RECEIPT', 'RETRY_LIMIT', null])
+  for (const subject of [null, '0', '-1', '17.5', 'not-an-account', '9007199254740992']) {
+    const invalid = packAdminLotteryDraw(recordedDraw({ creditSubject: subject })).prizes[0]
+    assert.equal(invalid.receiptStatus, 'invalid')
+    assert.equal(invalid.creditReceipt, null)
+    assert.equal(packAdminLotteryDraw(recordedDraw({ creditSubject: subject })).creditAccountId, null)
+  }
+})
+
+test('admin records combine parameterized user, award status and cursor filters with pagination', async () => {
+  const calls = []
+  const db = { async query(sql, args) {
+    calls.push({ sql, args })
+    return { rows: Array.from({ length: 21 }, (_, index) => recordedDraw({ id: `draw${index}` })) }
+  } }
+  const api = createLotteryService({ db, config: { url: 'https://community.test/' } })
+  const result = await api.records('admin', true, 'oldCursor', null, { userId: 'owner', status: 'blocked' })
+  assert.equal(result.items.length, 20)
+  assert.equal(result.nextCursor, 'draw19')
+  assert.equal(result.items[0].prizes[0].receiptStatus, 'verified')
+  assert.deepEqual(calls[0].args, ['owner', 'oldCursor'])
+  assert.match(calls[0].sql, /d\."userId"=\$1/)
+  assert.match(calls[0].sql, /d\.id<\$2/)
+  assert.match(calls[0].sql, /jsonb_array_elements\(d\.prizes\)/)
+  assert.match(calls[0].sql, /award->>'status'='pending'/)
+  assert.match(calls[0].sql, /award->>'creditBlocked'='true' OR d\."creditAttempts">=3/)
+  assert.match(calls[0].sql, /ORDER BY d\.id DESC LIMIT 21$/)
+  for (const status of ['fulfilled', 'pending', 'empty', 'all']) {
+    await api.records('admin', true, null, null, { status })
+    const sql = calls.at(-1).sql
+    if (status === 'all') assert.equal(sql.includes('jsonb_array_elements'), false)
+    else assert.match(sql, new RegExp(`award->>'status'='${status}'`))
+    if (status === 'pending') assert.match(sql, /NOT COALESCE\(award->>'creditBlocked'='true',false\) AND d\."creditAttempts"<3/)
+  }
+  const count = calls.length
+  await assert.rejects(api.records('admin', true, null, null, { status: 'unknown' }), /LOTTERY_INVALID/)
+  await assert.rejects(api.records('admin', true, null, null, { userId: "owner' OR true" }), /LOTTERY_INVALID/)
+  assert.equal(calls.length, count)
+  const publicResult = await api.records('owner', false, null, null, { userId: 'other', status: 'blocked' })
+  assert.deepEqual(calls.at(-1).args, ['owner'])
+  assert.equal(calls.at(-1).sql.includes('jsonb_array_elements'), false)
+  assert.equal('creditReceipt' in publicResult.items[0].prizes[0], false)
+  assert.equal('receiptStatus' in publicResult.items[0].prizes[0], false)
+})
+
+test('only the authorized admin records route selects the admin receipt projection', async () => {
+  const db = { async query() { return { rows: [recordedDraw()] } } }
+  const results = []
+  let adminChecks = 0
+  const context = path => ({
+    url: new URL(path, 'https://community.test'), req: { method: 'GET' }, body: {},
+    config: { url: 'https://community.test/' }, db,
+    requireUser() { return { id: 'owner' } },
+    requireAdmin() { adminChecks++; return { id: 'admin' } },
+    json(_status, body) { results.push(body) },
+  })
+  await handleLottery(context('/api/lottery/records'))
+  assert.equal(adminChecks, 0)
+  assert.equal('creditReceipt' in results[0].items[0].prizes[0], false)
+  await handleLottery(context('/api/admin/lottery/records?userId=owner&status=fulfilled'))
+  assert.equal(adminChecks, 1)
+  assert.equal(results[1].items[0].prizes[0].receiptStatus, 'verified')
+  await assert.rejects(handleLottery({ ...context('/api/admin/lottery/records'), requireAdmin() { throw new Error('FORBIDDEN') } }), /FORBIDDEN/)
+  assert.equal(results.length, 2)
 })
 
 test('same draw request returns original receipt without consuming chances or stock again', async () => {

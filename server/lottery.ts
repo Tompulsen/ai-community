@@ -9,7 +9,7 @@ import {
   emptyLotteryProgress, lotteryCreditReceipt, lotteryCredits, normalizeLotterySettings,
 } from './business/lottery.ts'
 import type {
-  LotteryAward, LotteryProgress, LotterySettings, LotterySettingsInput,
+  LotteryAward, LotteryCreditReceipt, LotteryProgress, LotterySettings, LotterySettingsInput,
 } from './business/lottery.ts'
 import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
 
@@ -46,6 +46,10 @@ interface AdjustmentReceipt {
   after: number
   requestId: string
   reason: string
+}
+interface LotteryRecordFilters {
+  userId?: string | null
+  status?: string | null
 }
 type LotteryServiceOptions = {
   db: Database
@@ -130,6 +134,40 @@ export function packLotteryDraw(row: PublicDrawSource, username = '') {
     id: row.id, userId: row.userId ?? '', username,
     createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)).toISOString(), creditAttempts: row.creditAttempts,
     prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt: _receipt, creditBlocked: _blocked, ...prize }) => prize),
+  }
+}
+
+export function packAdminLotteryDraw(row: LotteryDrawRow) {
+  const packed = packLotteryDraw(row, row.username ?? '')
+  const accountId = typeof row.creditSubject === 'string' && /^[1-9]\d{0,15}$/.test(row.creditSubject) ? Number(row.creditSubject) : NaN
+  return {
+    ...packed,
+    creditPending: row.creditPending,
+    creditAccountId: Number.isSafeInteger(accountId) ? accountId : null,
+    creditRetryAt: row.creditRetryAt ? new Date(row.creditRetryAt).toISOString() : null,
+    prizes: packed.prizes.map((prize, index) => {
+      const source = row.prizes[index]!
+      const reference = `community_lottery_${row.id}_${index}`
+      const blocked = source.status === 'pending' && (source.creditBlocked === true || row.creditAttempts >= 3)
+      const blockedReason = !blocked ? null : source.creditBlocked === true ? 'UPSTREAM_REJECTED_OR_INVALID_RECEIPT' : 'RETRY_LIMIT'
+      let receiptStatus: 'verified' | 'missing' | 'invalid' | 'not-required' = source.status === 'empty' ? 'not-required' : 'missing'
+      let receipt: LotteryCreditReceipt | null = null
+      if (source.status !== 'empty' && source.creditReceipt != null) {
+        receiptStatus = 'invalid'
+        try {
+          if (!Number.isSafeInteger(accountId) || !Number.isSafeInteger(source.amountCents) || source.amountCents <= 0 || !isRecord(source.creditReceipt)) throw new Error('LOTTERY_CREDIT_RESPONSE')
+          receipt = lotteryCreditReceipt({
+            credited: true, reference, user_id: accountId, amount_cents: source.amountCents,
+            receipt: { id: source.creditReceipt.id, quota_added: source.creditReceipt.quotaAdded, quota_per_usd: source.creditReceipt.quotaPerUsd },
+          }, reference, accountId, source.amountCents)
+          receiptStatus = 'verified'
+        } catch { /* A stored receipt is evidence only after the original quota validation passes. */ }
+      }
+      return {
+        ...prize, reference, deliveryStatus: blocked ? 'blocked' as const : source.status,
+        blockedReason, receiptStatus, creditReceipt: receipt, amountMatches: receipt ? true : null,
+      }
+    }),
   }
 }
 
@@ -318,14 +356,30 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     return receipt
   }
 
-  async function records(userId: string, admin = false, cursor?: string | null, drawId?: string | null) {
+  async function records(userId: string, admin = false, cursor?: string | null, drawId?: string | null, filters: LotteryRecordFilters = {}) {
     const parameters: string[] = []
     const where: string[] = []
     if (!admin) { parameters.push(userId); where.push(`d."userId"=$${parameters.length}`) }
+    else {
+      if (filters.userId) {
+        if (!/^[a-zA-Z0-9]{1,32}$/.test(filters.userId)) fail('LOTTERY_INVALID')
+        parameters.push(filters.userId); where.push(`d."userId"=$${parameters.length}`)
+      }
+      const status = filters.status || 'all'
+      if (!['all', 'fulfilled', 'pending', 'blocked', 'empty'].includes(status)) fail('LOTTERY_INVALID')
+      if (status !== 'all') {
+        const pending = `award->>'status'='pending'`
+        const blocked = `(award->>'creditBlocked'='true' OR d."creditAttempts">=3)`
+        const condition = status === 'blocked' ? `${pending} AND ${blocked}`
+          : status === 'pending' ? `${pending} AND NOT COALESCE(award->>'creditBlocked'='true',false) AND d."creditAttempts"<3`
+            : status === 'fulfilled' ? `award->>'status'='fulfilled'` : `award->>'status'='empty'`
+        where.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(d.prizes) AS award WHERE ${condition})`)
+      }
+    }
     if (drawId) { parameters.push(drawId); where.push(`d.id=$${parameters.length}`) }
     else if (cursor) { parameters.push(cursor); where.push(`d.id<$${parameters.length}`) }
     const { rows } = await db.query<LotteryDrawRow>(`SELECT d.*,u.username FROM community_lottery_draw d LEFT JOIN "user" u ON u.id=d."userId"${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY d.id DESC LIMIT 21`, parameters)
-    return { items: rows.slice(0, 20).map(row => packLotteryDraw(row, admin ? row.username ?? '' : '')), nextCursor: rows.length > 20 ? rows[19]?.id ?? null : null }
+    return { items: rows.slice(0, 20).map(row => admin ? packAdminLotteryDraw(row) : packLotteryDraw(row)), nextCursor: rows.length > 20 ? rows[19]?.id ?? null : null }
   }
 
   async function getConfig() {
@@ -438,7 +492,7 @@ export async function handleLottery(ctx: RequestContext): Promise<boolean> {
   let result: unknown
   if (method === 'GET' && path === '/api/lottery/status') result = await api.status(ctx.user?.id)
   else if (method === 'POST' && path === '/api/lottery/draw') result = await api.draw(ctx.requireUser().id, ctx.body.requestId, ctx.body.count)
-  else if (method === 'GET' && path.endsWith('/records')) result = await api.records(ctx.requireUser().id, admin, ctx.url.searchParams.get('cursor'), ctx.url.searchParams.get('drawId'))
+  else if (method === 'GET' && path.endsWith('/records')) result = await api.records(ctx.requireUser().id, admin, ctx.url.searchParams.get('cursor'), ctx.url.searchParams.get('drawId'), { userId: ctx.url.searchParams.get('userId'), status: ctx.url.searchParams.get('status') })
   else if (method === 'GET' && path === '/api/admin/lottery/config') result = await api.getConfig()
   else if (method === 'PATCH' && path === '/api/admin/lottery/config') result = await api.updateConfig(ctx.body.version, ctx.body.settings)
   else if (method === 'GET' && path === '/api/admin/lottery/account') result = await api.account(ctx.url.searchParams.get('userId'))

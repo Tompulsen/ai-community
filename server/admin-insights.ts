@@ -12,7 +12,8 @@ const logLabels: Record<string, string> = {
   communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解封账号', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '社区设置', communitySettings: '站点设置', updateCommunityAds: '广告位设置',
   createCommunityTag: '新建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
-  createAnnouncement: '发布公告', deleteAnnouncement: '删除公告', adjustLotteryChances: '调整抽奖次数',
+  createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '删除公告',
+  updateCommunityRoles: '调整管理授权', adjustLotteryChances: '调整抽奖次数',
 }
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(value)
 function object(value: unknown): Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
@@ -42,7 +43,20 @@ function logSummary(type: string, value: unknown) {
     add('变更项', [...new Set(Object.keys(object(info.config ?? info.settings)).flatMap(key => labels[key] ? [labels[key]] : []))].join('、'))
   } else if (type === 'updateCommunityAds') target = { label: '广告位设置', to: '/admin?tab=ads' }
   else if (type === 'createAnnouncement' || type === 'deleteAnnouncement') target = { label: '社区公告', to: '/community?tab=announcements' }
-  else if (type === 'adjustLotteryChances') {
+  else if (type === 'updateAnnouncement') {
+    if (validId(info.announcementId)) add('公告编号', info.announcementId)
+    const fields = Array.isArray(info.fields) ? info.fields : []
+    add('变更项', Object.entries({ title: '标题', text: '正文', isActive: '启用状态' })
+      .filter(([key]) => fields.includes(key)).map(([, label]) => label).join('、'))
+    target = { label: '公告管理', to: '/admin?tab=announcements' }
+  } else if (type === 'updateCommunityRoles') {
+    if (validId(info.userId)) add('用户编号', info.userId)
+    for (const [key, label] of [['before', '原角色编号'], ['after', '新角色编号']] as const) {
+      const ids = info[key]
+      if (Array.isArray(ids)) add(label, ids.filter(validId).slice(0, 100).join('、') || '无')
+    }
+    target = { label: '管理授权', to: '/admin?tab=roles' }
+  } else if (type === 'adjustLotteryChances') {
     if (Number.isSafeInteger(info.before) && Number.isSafeInteger(info.after)) add('次数变化', `${info.before} → ${info.after}`)
     add('说明', info.reason); target = { label: '抽奖管理', to: '/admin?tab=lottery' }
   }
