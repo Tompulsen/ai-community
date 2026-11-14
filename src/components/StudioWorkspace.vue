@@ -8,6 +8,7 @@ import { creation, downloadCreation, initializeCreation, loadCreationGroups, loa
 import CreationAdvanced from './CreationAdvanced.vue'
 import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
+import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
 import { IMAGE_RATIOS, imageRequestSize } from '../../shared/studio/image-params'
@@ -215,6 +216,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
       <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="file.url" :alt="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="references.splice(index, 1)"><X :size="14" /></button></li></ul>
       <label class="field prompt-field"><span class="studio-sr-only">提示词</span><textarea ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="kind === 'video' ? '描述你想生成的视频…' : '发消息，描述你的想法…'" required @keydown.enter="handleEnter" /></label>
       <div class="studio-composer-tools">
+        <StudioModePicker />
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
             <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="30" step="1" required /></label></div>
@@ -299,6 +301,21 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .creation-media figure { margin: 0; min-width: 0; }
 .creation-media img, .creation-media video { width: 100%; max-height: 600px; display: block; object-fit: contain; }
 .creation-media figcaption { margin-top: 12px; }
+@media (min-width: 1000px) {
+  .creation-conversation { width: 100%; padding-block: 8px 24px; }
+  .creation-request { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; width: 100%; max-width: none; margin: 0 0 12px; }
+  .creation-request > .creation-message-heading { display: none; }
+  .creation-request > .creation-message-actions { margin-left: auto; }
+  .creation-request-body { padding: 0; border-radius: 0; background: transparent; }
+  .creation-request-body p { font-size: 16px; line-height: 28px; }
+  .request-summary { justify-content: flex-start; margin-top: 0; }
+  .creation-response > .creation-message-heading { margin-bottom: 8px; }
+  .creation-response .task-status { min-height: 24px; margin-bottom: 12px; }
+  .creation-media { max-width: 880px; gap: 4px; }
+  .creation-media img, .creation-media video { height: min(440px, 32dvh); background: var(--surface); object-fit: contain; }
+  .creation-canvas { padding: 16px 0; }
+  .creation-output-toolbar h2 { color: var(--muted); }
+}
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0 0 16px; max-width: 72ch; }
 .creation-history { padding-block: 0; }
 .creation-history > .creation-section-heading { margin-bottom: 16px; }

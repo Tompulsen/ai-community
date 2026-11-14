@@ -5,6 +5,7 @@ import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, Set
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
+import AccountBalance from './components/AccountBalance.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
@@ -127,6 +128,7 @@ function dismissMenus(event: Event) {
         </details>
         <template v-if="session.user">
         <RouterLink v-if="route.path !== '/discover'" :to="{ path: route.path, query: { ...route.query, publish: '1' } }" class="button primary publish-button btn" aria-label="发布作品" title="发布作品"><Plus :size="17" /><span>发布作品</span></RouterLink>
+        <AccountBalance />
         <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span class="caption-5">账号ID:{{ session.user.id }}</span></div>
           <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
       </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
@@ -144,6 +146,13 @@ function dismissMenus(event: Event) {
 <style scoped>
 .studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
 .studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+@media (min-width: 1000px) {
+  .studio-shell { --studio-sidebar-width: clamp(248px, 14.6vw, 420px); --studio-sidebar-surface: color-mix(in srgb, var(--canvas) 76%, var(--surface)); }
+  .studio-shell > main { margin-left: var(--studio-sidebar-width); }
+  .studio-shell .header-inner { max-width: none; padding-left: calc(var(--studio-sidebar-width) + 32px); grid-template-columns: minmax(0, 1fr) auto; }
+  .studio-shell .brand, .studio-shell .desktop-nav { display: none; }
+  .studio-shell .header-tools { grid-column: 2; }
+}
 @media (max-width: 639px) {
   :global(#app:has(.studio-shell)) { padding-bottom: 0; }
   .studio-shell { height: var(--studio-visible-height, 100dvh); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
@@ -177,6 +186,10 @@ function dismissMenus(event: Event) {
 }
 @media (max-width: 639px) {
   .header-inner { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .header-inner:has(.account-balance) { grid-template-columns: auto minmax(0, 1fr); }
+  .header-inner:has(.account-balance) .brand > span { display: none; }
+  .header-inner:has(.account-balance) .header-tools { width: 100%; }
+  .header-inner:has(.account-balance) .header-actions { flex: 1; min-width: 0; justify-content: flex-end; }
   .header-tools { gap: 4px; }
   .header-actions { justify-self: end; }
   .header-submission { width: 44px; height: 44px; margin-right: 0; }
@@ -195,6 +208,7 @@ function dismissMenus(event: Event) {
 @media (max-width: 639px) { .header-actions > .publish-button { padding: 0; } }
 @media (max-width: 379px) {
   .brand > span { display: none; }
+  .header-inner:has(.account-balance) .header-search-slot { display: none; }
   .header-actions > .header-login { padding-inline: 10px; }
 }
 :global(#app:has(.account-entry-shell)) { padding-bottom: 0; }
