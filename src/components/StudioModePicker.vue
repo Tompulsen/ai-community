@@ -23,7 +23,7 @@ async function select(kind: StudioKind) {
 
 <template>
   <div class="studio-mode-control">
-    <StudioPopover ref="menu" label="创作模式" :width="260">
+    <StudioPopover ref="menu" label="创作模式" :trigger-label="`创作模式：${current.label}`" :width="260">
       <template #trigger><component :is="current.icon" :size="18" /><span>{{ current.label }}</span><ChevronDown :size="14" /></template>
       <div class="studio-mode-options" role="group" aria-label="创作类型"><button v-for="mode in modes" :key="mode.id" type="button" class="studio-command" :class="{ active: current.id === mode.id }" :aria-pressed="current.id === mode.id" @click="select(mode.id)"><component :is="mode.icon" :size="20" /><span>{{ mode.label }}</span><Check v-if="current.id === mode.id" :size="19" /></button></div>
     </StudioPopover>

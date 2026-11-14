@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { Check, ChevronDown, Globe } from '@lucide/vue'
 import type { NativeChat } from '../native-chat'
 import StudioPopover from './StudioPopover.vue'
@@ -12,6 +12,7 @@ const modes = [
   { id: 'quick', label: '快速搜索', trigger: '快速搜索' },
   { id: 'deep', label: '深度搜索', trigger: '深度搜索' },
 ] as const
+const current = computed(() => modes.find(mode => mode.id === props.modelValue) || modes[0])
 
 async function select(value: NativeChat['search']) {
   if (props.disabled) return
@@ -24,8 +25,8 @@ async function select(value: NativeChat['search']) {
 
 <template>
   <div ref="root" class="studio-search-control" :class="{ enabled: modelValue !== 'off' }">
-    <StudioPopover ref="menu" label="联网搜索" :width="260" :disabled="disabled">
-      <template #trigger><Globe :size="17" /><span>{{ modes.find(mode => mode.id === modelValue)?.trigger || '联网' }}</span><ChevronDown :size="14" /></template>
+    <StudioPopover ref="menu" label="联网搜索" :trigger-label="`联网搜索：${current.trigger}`" :width="260" :disabled="disabled">
+      <template #trigger><Globe :size="17" /><span>{{ current.trigger }}</span><ChevronDown :size="14" /></template>
       <div class="studio-search-options" role="group" aria-label="搜索模式">
         <button v-for="mode in modes" :key="mode.id" type="button" class="studio-command" :aria-pressed="modelValue === mode.id" :disabled="disabled" @click="select(mode.id)"><span>{{ mode.label }}</span><Check v-if="modelValue === mode.id" :size="19" /></button>
       </div>

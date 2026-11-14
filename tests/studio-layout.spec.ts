@@ -82,7 +82,7 @@ for (const width of [1440, 390, 320]) {
       await expect(sidebar.getByRole('button', { name: '创作', exact: true })).toBeVisible()
       await expect(sidebar.getByRole('button', { name: '图片', exact: true })).toHaveCount(0)
     }
-    const trigger = page.getByRole('button', { name: '创作模式', exact: true })
+    const trigger = page.getByRole('button', { name: /^创作模式：/ })
     const modeBounds = await trigger.boundingBox()
     const priceBounds = await page.getByRole('button', { name: '模型价格', exact: true }).boundingBox()
     const inputBounds = await page.locator('.studio-composer').boundingBox()

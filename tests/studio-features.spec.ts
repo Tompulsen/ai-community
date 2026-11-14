@@ -3,7 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 const screenshots = '.impeccable/review/restored-studio'
 async function selectSearch(page: Page, name: string) {
-  await page.getByRole('button', { name: '联网搜索', exact: true }).click()
+  await page.getByRole('button', { name: /^联网搜索：/ }).click()
   await page.getByRole('dialog', { name: '联网搜索', exact: true }).getByRole('button', { name, exact: true }).click()
 }
 
@@ -43,11 +43,11 @@ test('search menu matches shared popovers, preserves choices and fits desktop an
   for (const [width, theme] of [[1440, 'dark'], [390, 'light'], [320, 'dark']] as const) {
     await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
     await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), theme)
-    await page.getByRole('button', { name: '创作模式', exact: true }).click()
+    await page.getByRole('button', { name: /^创作模式：/ }).click()
     const expectedBackground = await page.getByRole('dialog', { name: '创作模式', exact: true }).evaluate(element => getComputedStyle(element).backgroundColor)
     await page.keyboard.press('Escape')
     if (width < 640) await page.getByRole('button', { name: '对话参数', exact: true }).click()
-    const trigger = page.getByRole('button', { name: '联网搜索', exact: true })
+    const trigger = page.getByRole('button', { name: /^联网搜索：/ })
     const menu = page.getByRole('dialog', { name: '联网搜索', exact: true })
     await trigger.focus(); await trigger.press('Enter')
     await expect(menu).toBeVisible()
@@ -57,6 +57,7 @@ test('search menu matches shared popovers, preserves choices and fits desktop an
     await expect(menu).not.toBeVisible()
     await expect(trigger).toBeFocused()
     await expect(trigger).toContainText('快速搜索')
+    await expect(trigger).toHaveAccessibleName('联网搜索：快速搜索')
     await trigger.click()
     const selected = menu.getByRole('button', { name: '快速搜索', exact: true })
     await expect(selected).toHaveAttribute('aria-pressed', 'true')
@@ -185,7 +186,7 @@ test('stopping during persistence and switching identity during initialization p
   await page.getByRole('button', { name: '停止等待', exact: true }).click()
   await page.evaluate(() => { (window as unknown as { slowWrites: boolean }).slowWrites = false })
   await expect.poll(() => page.evaluate(() => (window as unknown as { pendingWrites: number }).pendingWrites)).toBe(0)
-  await page.getByRole('button', { name: '创作模式', exact: true }).click()
+  await page.getByRole('button', { name: /^创作模式：/ }).click()
   await page.getByRole('button', { name: '图片生成', exact: true }).click()
   await page.getByLabel('提示词', { exact: true }).fill('旧账号的任务')
   await page.evaluate(() => { (window as unknown as { slowWrites: boolean }).slowWrites = true })
@@ -254,13 +255,14 @@ test('chat attachments keep the original PDF bytes and active skills are scoped 
 })
 test('legacy split chat attachments are hydrated into native conversation without rewriting the old snapshot', async ({ page }) => {
   const state = await fixture(page)
-  await page.goto('/create/image')
+  // Seed legacy data before Studio creates its first native conversation.
+  await page.goto('/community')
   const original = await page.evaluate(async () => {
     const key = 'octopus:user-17:chat-next-web-store'
     const value = JSON.stringify({ version: 3.5, __octopusChatAssets: { format: 'octopus-chat-assets-v1', ids: ['old-pdf'] }, state: {
       _hasHydrated: true, sessions: [{ id: 'legacy-chat', topic: '历史附件会话', messages: [{ id: 'old-message', role: 'user', content: [{ type: 'file', file: { filename: 'old-report.pdf', file_data: { __octopusChatAsset: 'old-pdf' } } }] }] }],
     } })
-    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('community-studio', 1); request.onupgradeneeded = () => { request.result.createObjectStore('keyval') }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction('keyval', 'readwrite'), store = transaction.objectStore('keyval')
       store.put(value, key); store.put('data:application/pdf;base64,' + btoa('%PDF-original-bytes'), `${key}:asset:old-pdf`)
@@ -269,6 +271,9 @@ test('legacy split chat attachments are hydrated into native conversation withou
     return value
   })
   await page.goto('/create/text')
+  await expect(page.getByLabel('对话名称')).toHaveValue('历史附件会话')
+  await expect(page.getByText('old-report.pdf', { exact: true })).toBeVisible()
+  await page.reload()
   await expect(page.getByLabel('对话名称')).toHaveValue('历史附件会话')
   await expect(page.getByText('old-report.pdf', { exact: true })).toBeVisible()
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('继续阅读原附件')
@@ -323,12 +328,17 @@ test('composer remains visible across viewports and tool popovers preserve draft
     await expect(page.getByRole('button', { name: '发送', exact: true })).toBeInViewport()
     const bounds = await page.locator('.studio-composer').boundingBox()
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height - (width >= 640 && width < 1000 ? 64 : 0) + 1)
-    if (width >= 640) expect((await page.locator('.studio-page-toolbar h1').boundingBox())!.height).toBeLessThanOrEqual(24)
+    if (width >= 640) {
+      expect(await page.locator('.studio-page-toolbar h1').evaluate(element => {
+        const title = element.getBoundingClientRect(), toolbar = element.parentElement!.getBoundingClientRect()
+        return title.height <= parseFloat(getComputedStyle(element).lineHeight) + 1 && title.top >= toolbar.top && title.bottom <= toolbar.bottom
+      })).toBe(true)
+    }
     if (width < 640) {
       const tools = await page.locator('.studio-composer-actions').boundingBox()
       const send = await page.getByRole('button', { name: '发送', exact: true }).boundingBox()
       expect(send!.y).toBeLessThan(tools!.y)
-      expect(Math.abs((await page.locator('.studio-composer-models').boundingBox())!.y - tools!.y)).toBeLessThanOrEqual(4)
+      expect((await page.locator('.studio-composer-models').boundingBox())!.y).toBeGreaterThanOrEqual(tools!.y + tools!.height - 1)
       expect(bounds!.height).toBeLessThanOrEqual(155)
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)

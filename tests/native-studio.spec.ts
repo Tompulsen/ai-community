@@ -461,7 +461,7 @@ test('legacy account-scoped gallery and video attachments remain readable withou
   await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(201)
   await expect(page.locator('.creation-media img')).toBeVisible()
   await expect.poll(() => page.locator('.creation-media img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
-  await page.getByRole('button', { name: '创作模式', exact: true }).click()
+  await page.getByRole('button', { name: /^创作模式：/ }).click()
   await page.getByRole('button', { name: '视频生成', exact: true }).click()
   await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(1)
   const videoUrl = new URL((await page.locator('.creation-media video').getAttribute('src'))!, page.url())
