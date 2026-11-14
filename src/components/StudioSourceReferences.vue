@@ -24,7 +24,7 @@ function apply() { emit('select', files.value.filter(file => chosen.value.includ
 .reference-help { color: var(--muted); font-size: 14px; line-height: 22px; margin: 0 0 16px; }
 .source-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-height: 45dvh; overflow-y: auto; margin-bottom: 16px; }
 .source-reference-grid label { cursor: pointer; min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.source-reference-grid label:has(:checked) { border-color: var(--blue); background: var(--surface); }
+.source-reference-grid label:has(:checked) { border-color: var(--focus-ring); background: var(--surface); }
 .source-reference-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
 .source-reference-grid span { display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
 .source-reference-grid input { flex: none; }

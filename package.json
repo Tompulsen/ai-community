@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "start": "node server/runtime.ts",
     "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs",
-    "test": "vitest run src/state.test.ts src/login-navigation.test.ts server/business",
+    "test": "vitest run src/state.test.ts src/login-navigation.test.ts server/business server/native-account/wallet.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

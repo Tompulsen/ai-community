@@ -56,7 +56,7 @@ function selectConversation(id: string) {
 .studio-sidebar-history { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 32px; }
 .studio-sidebar-history h2 { padding: 0 12px; margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 20px; }
 .studio-history-search { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 12px; color: var(--muted); }
-.studio-history-search input { width: 100%; min-width: 0; padding: 8px 0; border: 0; background: transparent; outline: none; font-size: 12px; }.studio-history-search:focus-within { outline: 2px solid var(--blue); border-radius: 6px; }
+.studio-history-search input { width: 100%; min-width: 0; padding: 8px 0; border: 0; background: transparent; outline: none; font-size: 12px; }.studio-history-search:focus-within { outline: 2px solid var(--focus-ring); border-radius: 6px; }
 .studio-sidebar-records { overflow-y: auto; min-height: 0; margin-top: 8px; scrollbar-color: var(--border) transparent; }
 .studio-record { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 8px 12px; text-align: left; border-radius: 8px; color: var(--muted); }
 .studio-record > img { flex: none; width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }.studio-record > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

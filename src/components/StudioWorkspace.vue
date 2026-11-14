@@ -4,7 +4,7 @@ import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Check, Clock, Copy, Download, LoaderCircle, Maximize, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, notify, session, uploadFile } from '../state'
-import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
+import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
 import CreationAdvanced from './CreationAdvanced.vue'
 import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
@@ -134,11 +134,6 @@ watch(() => session.user?.id, async () => {
   if (!session.user) return
   await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); chooseModel()
 }, { immediate: true })
-async function switchGroup(event: Event) {
-  const select = event.target as HTMLSelectElement
-  await selectCreationGroup(select.value)
-  select.value = creation.selectedGroup ?? ''
-}
 async function addReferences(event: Event) {
   const input = event.target as HTMLInputElement
   const files = [...(input.files || [])]
@@ -245,9 +240,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
             <CreationAdvanced :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" :kind="kind" :model="model" embedded @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
-        <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" />
-          <label class="studio-select studio-group-select"><span class="studio-sr-only">模型分组</span><select aria-label="模型分组" :aria-description="selectedGroup?.description" :title="selectedGroup?.description" :value="creation.selectedGroup ?? ''" :disabled="creation.groupsLoading || creation.groupSwitching || !creation.groups.length" @change="switchGroup"><option v-if="creation.selectedGroup === null" value="" disabled>{{ creation.groupsLoading ? '正在读取分组…' : '选择分组' }}</option><option v-for="group in creation.groups" :key="group.id" :value="group.id">{{ group.name }}{{ typeof group.ratio === 'number' && group.ratio !== 1 ? ` · ${group.ratio}×` : '' }}</option></select></label>
-        </div>
+        <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" /></div>
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
         <button v-else class="composer-submit generation-button" :title="submitting ? '正在准备…' : '开始生成'" :aria-label="submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
       </div>
@@ -274,7 +267,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .parameter-row .control { width: 100%; min-width: 0; }
 .reference-upload { width: fit-content; position: relative; overflow: hidden; }
 .reference-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
-.reference-upload:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+.reference-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .reference-list { display: flex; flex-wrap: wrap; list-style: none; padding: 0 8px; margin: 0 0 8px; gap: 8px; max-height: 80px; overflow-y: auto; }
 .reference-list li { position: relative; width: 64px; height: 64px; }
 .reference-list img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
@@ -313,7 +306,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .creation-response > .creation-message-actions { margin-top: 12px; }
 .creation-image-preview { position: relative; display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .creation-image-preview > span { position: absolute; right: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 6px; background: var(--canvas); color: var(--ink); padding: 6px 10px; border-radius: 6px; font-size: 12px; }
-.creation-image-preview:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+.creation-image-preview:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
 .composer-hint { color: var(--muted); font-size: 12px; line-height: 20px; margin: 4px 8px 0; }
 @media (hover: none), (pointer: coarse) { .keyboard-hint { display: none; } }
 @media (max-width: 639px) { .creation-request { max-width: 92%; margin-bottom: 28px; }.creation-request-body { padding: 12px; }.creation-message-heading { gap: 6px; }.creation-response .task-elapsed { flex-basis: 100%; padding-left: 36px; }.generation-steps { gap: 12px; }.creation-conversation { padding-bottom: 12px; }.creation-message-actions { gap: 4px; } }

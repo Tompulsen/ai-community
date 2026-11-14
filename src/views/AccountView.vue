@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, Eye, EyeOff, FolderOpen, Image, LogOut, MessageCircle, Palette, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, UserPlus, X } from '@lucide/vue'
+import { ArrowLeft, ArrowRight, Check, ChevronDown, Eye, EyeOff, Image, LogOut, Palette, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus } from '../state'
@@ -9,6 +9,7 @@ import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import FollowRequests from '../components/FollowRequests.vue'
 import AccountTheme from '../components/AccountTheme.vue'
+import AccountWallet from '../components/AccountWallet.vue'
 import PasswordRecovery from '../components/PasswordRecovery.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import LoginCharacters from '../components/LoginCharacters.vue'
@@ -28,19 +29,15 @@ const avatarFailed = ref(false), bannerFailed = ref(false)
 const leaveDialog = ref<HTMLDialogElement>()
 let resolveLeave: ((discard: boolean) => void) | undefined
 const settingsItems = [
-  { id: 'profile', label: '个人资料', icon: UserRound, group: '账号设置', keywords: '昵称 名称 头像 封面 简介 profile', to: '/account?tab=profile' },
-  { id: 'privacy', label: '关注与隐私', icon: LockKeyhole, group: '账号设置', keywords: '关注 审批 粉丝 隐私 公开 privacy', to: '/account?tab=privacy' },
-  { id: 'following', label: '关注申请', icon: UserPlus, group: '社区内容', keywords: '粉丝 关注 接受 拒绝 撤回 following', to: '/account?tab=following' },
-  { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security', to: '/account?tab=security' },
-  { id: 'balance', label: '账户与余额', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance', to: '/account?tab=balance' },
-  { id: 'theme', label: '主题与外观', icon: Palette, group: '偏好设置', keywords: '明亮 暗色 主题 配色 外观 定时 跟随系统 theme', to: '/account?tab=theme' },
-  { id: 'works', label: '我的作品', icon: FolderOpen, group: '社区内容', keywords: '作品 草稿 投稿', to: '/library' },
-  { id: 'saved', label: '我的收藏', icon: Bookmark, group: '社区内容', keywords: '收藏 喜欢 saved', to: '/library?tab=saved' },
-  { id: 'messages', label: '私信', icon: MessageCircle, group: '社区内容', keywords: '消息 联系 messages', to: '/messages' },
+  { id: 'profile', label: '个人资料', icon: UserRound, group: '账号设置', keywords: '昵称 名称 头像 封面 简介 profile' },
+  { id: 'privacy', label: '关注与隐私', icon: LockKeyhole, group: '账号设置', keywords: '关注 审批 粉丝 隐私 公开 privacy' },
+  { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security' },
+  { id: 'balance', label: '账户与余额', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance' },
+  { id: 'theme', label: '主题与外观', icon: Palette, group: '偏好设置', keywords: '明亮 暗色 主题 配色 外观 定时 跟随系统 theme' },
 ]
 const settingsGroups = computed(() => {
   const query = settingsQuery.value.trim().toLocaleLowerCase()
-  return ['账号设置', '偏好设置', '社区内容'].map(label => ({ label, items: settingsItems.filter(item => item.group === label && (!query || (item.label + item.keywords).toLocaleLowerCase().includes(query))) })).filter(group => group.items.length)
+  return ['账号设置', '偏好设置'].map(label => ({ label, items: settingsItems.filter(item => item.group === label && (!query || (item.label + item.keywords).toLocaleLowerCase().includes(query))) })).filter(group => group.items.length)
 })
 const resetToken = ref(typeof route.query.reset === 'string' ? route.query.reset : undefined)
 const avatarId = ref<string | null>(null), bannerId = ref<string | null>(null)
@@ -236,7 +233,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId" class="account-identity" aria-label="章鱼账号">账号ID:{{ session.user.accountId }} @{{ session.user.username }}</span></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId && tab !== 'balance'" class="account-identity" aria-label="章鱼账号">账号ID:{{ session.user.accountId }} @{{ session.user.username }}</span></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
@@ -266,8 +263,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
-            <button v-if="settingTabs.includes(item.id)" class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
-            <RouterLink v-else :to="item.to" class="settings-nav-item"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><ArrowUpRight :size="14" aria-hidden="true" /></RouterLink>
+            <button class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
         </nav>
@@ -294,8 +290,8 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">
-          <section class="panel-section"><div class="section-heading"><h2>章鱼账号</h2><span class="status" :class="{ pending: !account?.linked }">{{ account?.linked ? '已登录' : '需要重新登录' }}</span></div><p class="form-note">社区与创作台使用同一个章鱼账号。</p><dl v-if="account?.linked" class="info-list"><div><dt>账号ID</dt><dd>{{ account.subject }}</dd></div><div><dt>账号服务</dt><dd>{{ account.issuer }}</dd></div></dl><p v-else class="muted">请退出当前会话后，使用章鱼账号重新登录。</p></section>
-          <section class="panel-section balance-panel"><div class="section-heading"><h2>账户余额</h2><Wallet :size="20" aria-hidden="true" /></div><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p><div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button primary btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></div></section>
+          <section class="panel-section balance-panel"><div class="section-heading"><h2>账户余额</h2><Wallet :size="20" aria-hidden="true" /></div><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p><div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></div></section>
+          <AccountWallet @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
         </div>
       </div>
     </div>
@@ -360,8 +356,6 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .profile-leave-actions { justify-content: end; flex-wrap: wrap; }
 .balance-settings { display: grid; gap: 32px; }
 .balance-settings > .panel-section { padding-top: 0; }
-.balance-settings .info-list { margin-top: 24px; }
-.balance-settings .info-list dd { overflow-wrap: anywhere; min-width: 0; }
 .balance-settings .balance-panel { padding: 24px; background: var(--surface); border-radius: 8px; border: 0; }
 .account-balance { font-size: 32px; line-height: 40px; margin: 24px 0 8px; padding: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
@@ -415,7 +409,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .auth-form .field { gap: 8px; font-size: 14px; color: var(--ink); }
 .auth-form .control { width: 100%; min-width: 0; height: 48px; min-height: 48px; padding: 10px 18px; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: var(--ink); font-size: 16px; line-height: 24px; }
 .auth-form .control::placeholder { color: var(--muted); }
-.auth-form .control:focus { border-color: var(--blue); }
+.auth-form .control:focus { border-color: var(--focus-ring); }
 .auth-password { position: relative; display: block; width: 100%; }
 .auth-password .control { padding-right: 56px; }
 .auth-password-toggle { position: absolute; top: 2px; right: 5px; width: 44px; height: 44px; min-height: 44px; background: transparent; color: var(--muted); }

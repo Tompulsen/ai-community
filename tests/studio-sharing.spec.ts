@@ -4,6 +4,11 @@ import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import type { Work } from '../src/data'
 
+async function openGroupPicker(page: Page) {
+  await page.getByRole('combobox', { name: '模型', exact: true }).click()
+  return page.getByRole('dialog', { name: '选择模型', exact: true })
+}
+
 async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image') {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
@@ -287,7 +292,9 @@ test('image remix restores model, group and full public settings, then republish
   await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
   await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } }))
   await page.goto('/create/image?remix=source42')
-  await expect(page.getByRole('combobox', { name: '模型分组', exact: true })).toHaveValue('生图')
+  const groupPicker = await openGroupPicker(page)
+  await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toContainText('生图 · 0.6×')
+  await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
   await expect(page.getByLabel('尺寸', { exact: true })).toHaveValue('1200x900')
@@ -308,7 +315,11 @@ test('image remix restores model, group and full public settings, then republish
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(state.generated[0]).toMatchObject({ model: 'gpt-image-2', size: '1200x900', aspect_ratio: '4:3', n: 3, protocol: 'async', imageOptions: { seed: '42', quality: 'high' } })
   // Publishing after a later group switch must keep the generation-time group.
-  await page.getByRole('combobox', { name: '模型分组', exact: true }).selectOption('auto')
+  await openGroupPicker(page)
+  await groupPicker.getByRole('button', { name: '选择分组', exact: true }).click()
+  await groupPicker.getByRole('button', { name: 'Auto 系统', exact: true }).click()
+  await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toBeEnabled()
+  await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   await page.getByRole('button', { name: '发布作品', exact: true }).last().click()
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect.poll(() => state.submitted.length).toBe(1)
@@ -407,6 +418,8 @@ test('switching source during a slow group restore leaves the newer source and g
   release()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('森林里的萤火虫')
   await expect(page.locator('.source-label')).toContainText('原作森林')
-  await expect(page.getByRole('combobox', { name: '模型分组', exact: true })).toHaveValue('auto')
+  const groupPicker = await openGroupPicker(page)
+  await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toContainText('Auto')
+  await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   expect(state.generated).toEqual([])
 })

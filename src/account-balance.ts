@@ -3,7 +3,7 @@ import { api, session } from './state'
 
 export const accountBalance = reactive({ amount: null as number | null, currency: '', loading: false, error: '' })
 const identity = () => `${session.user?.id || ''}:${session.user?.accountId || session.user?.id || ''}`
-export const balanceNumber = computed(() => accountBalance.amount === null ? '—' : accountBalance.amount.toLocaleString('zh-CN', { maximumFractionDigits: 4 }))
+export const balanceNumber = computed(() => accountBalance.amount === null ? '—' : accountBalance.amount.toFixed(2))
 export const balanceDescription = computed(() => accountBalance.amount === null
   ? accountBalance.loading ? '正在读取可用余额' : accountBalance.error || '可用余额暂不可用'
   : `可用余额 ${accountBalance.currency} ${accountBalance.amount}`)

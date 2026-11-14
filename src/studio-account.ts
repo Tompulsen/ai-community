@@ -1,6 +1,6 @@
 import { session } from './state'
 export async function studioAccount<T>(route: string, method = 'GET', body?: unknown): Promise<T> {
-  if (!/^(?:status|session|model-pricing|logs(?:\?[\w=&-]+)?|tokens(?:\/[1-9]\d*(?:\/select)?)?(?:\?[\w=&-]+)?|groups|auto-groups)$/.test(route)) throw new Error('账号接口无效。')
+  if (!/^(?:status|session|model-pricing|wallet(?:\/(?:quote|pay|subscription|redeem))?|logs(?:\?[\w=&-]+)?|tokens(?:\/[1-9]\d*(?:\/select)?)?(?:\?[\w=&-]+)?|groups|auto-groups)$/.test(route)) throw new Error('账号接口无效。')
   const owner = session.user?.id, account = session.user?.accountId || owner
   if (!account) throw new Error('请先登录。')
   const response = await fetch(`/api/new-api/${route}`, { method, credentials: 'same-origin', cache: 'no-store',

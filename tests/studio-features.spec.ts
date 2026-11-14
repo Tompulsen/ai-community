@@ -2,6 +2,11 @@ import { test, expect, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 const screenshots = '.impeccable/review/restored-studio'
+async function selectSearch(page: Page, name: string) {
+  await page.getByRole('button', { name: '联网搜索', exact: true }).click()
+  await page.getByRole('dialog', { name: '联网搜索', exact: true }).getByRole('button', { name, exact: true }).click()
+}
+
 async function fixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
@@ -31,6 +36,51 @@ async function capture(page: Page, name: string) {
     await page.screenshot({ path: `${screenshots}/${name}-${width}.png`, fullPage: true })
   }
 }
+test('search menu matches shared popovers, preserves choices and fits desktop and phones', async ({ page }) => {
+  await fixture(page)
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/create/text')
+  for (const [width, theme] of [[1440, 'dark'], [390, 'light'], [320, 'dark']] as const) {
+    await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
+    await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), theme)
+    await page.getByRole('button', { name: '创作模式', exact: true }).click()
+    const expectedBackground = await page.getByRole('dialog', { name: '创作模式', exact: true }).evaluate(element => getComputedStyle(element).backgroundColor)
+    await page.keyboard.press('Escape')
+    if (width < 640) await page.getByRole('button', { name: '对话参数', exact: true }).click()
+    const trigger = page.getByRole('button', { name: '联网搜索', exact: true })
+    const menu = page.getByRole('dialog', { name: '联网搜索', exact: true })
+    await trigger.focus(); await trigger.press('Enter')
+    await expect(menu).toBeVisible()
+    expect(await menu.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(expectedBackground)
+    await expect(menu.getByRole('group', { name: '搜索模式' }).getByRole('button')).toHaveCount(3)
+    await menu.getByRole('button', { name: '快速搜索', exact: true }).click()
+    await expect(menu).not.toBeVisible()
+    await expect(trigger).toBeFocused()
+    await expect(trigger).toContainText('快速搜索')
+    await trigger.click()
+    const selected = menu.getByRole('button', { name: '快速搜索', exact: true })
+    await expect(selected).toHaveAttribute('aria-pressed', 'true')
+    await menu.getByRole('button', { name: '深度搜索', exact: true }).hover()
+    const selectedBackground = await selected.evaluate(element => getComputedStyle(element).backgroundColor)
+    await expect.poll(() => menu.getByRole('button', { name: '深度搜索', exact: true }).evaluate(element => getComputedStyle(element).backgroundColor)).toBe(selectedBackground)
+    expect(await menu.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
+    })).toBe(true)
+    await page.screenshot({ path: `.taste-skill/search-popover-20261114/${width}-${theme}.png`, fullPage: true })
+    await menu.getByRole('button', { name: '深度搜索', exact: true }).click()
+    if (width < 640) await expect(page.getByRole('dialog', { name: '对话参数', exact: true })).toBeVisible()
+    await page.reload()
+    if (width < 640) await page.getByRole('button', { name: '对话参数', exact: true }).click()
+    await expect(trigger).toContainText('深度搜索')
+    await trigger.click(); await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+    await expect(trigger).toBeFocused()
+    if (width < 640) await page.keyboard.press('Escape')
+  }
+  expect(errors).toEqual([])
+})
+
 test('image advanced settings survive reload, reach the request, and streaming results enter the gallery', async ({ page }) => {
   const state = await fixture(page)
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
@@ -128,7 +178,7 @@ test('stopping during persistence and switching identity during initialization p
   })
   await page.goto('/create/text')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: '联网搜索', exact: true }).selectOption('quick')
+  await selectSearch(page, '快速搜索')
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('不应该发送的搜索')
   await page.evaluate(() => { (window as unknown as { slowWrites: boolean }).slowWrites = true })
   await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -151,7 +201,7 @@ test('chat retains multi-turn context, branches, reasoning and search reuse with
   const state = await fixture(page)
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/create/text')
-  await page.getByRole('combobox', { name: '联网搜索', exact: true }).selectOption('quick')
+  await selectSearch(page, '快速搜索')
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('查询海洋信息')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.chat-message.assistant .message-content')).toContainText('回答 1')
@@ -160,7 +210,7 @@ test('chat retains multi-turn context, branches, reasoning and search reuse with
   expect(state.calls.filter(call => call.path === '/api/creation/search')).toHaveLength(1)
   await page.getByRole('button', { name: '上一个分支', exact: true }).click()
   await expect(page.locator('.chat-message.assistant .message-content')).toContainText('回答 1')
-  await page.getByRole('combobox', { name: '联网搜索', exact: true }).selectOption('off')
+  await selectSearch(page, '关闭联网')
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('继续说明')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.chat-message.assistant')).toHaveCount(2)

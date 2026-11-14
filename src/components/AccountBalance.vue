@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Coins } from '@lucide/vue'
 import { session } from '../state'
 import { accountBalance, balanceDescription, balanceNumber, refreshAccountBalance } from '../account-balance'
 
@@ -19,15 +18,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button type="button" class="account-balance" :class="{ unavailable: accountBalance.amount === null }" :aria-label="balanceDescription" :title="balanceDescription" :aria-busy="accountBalance.loading" :disabled="accountBalance.loading" @click="refreshAccountBalance">
-    <Coins :size="19" aria-hidden="true" /><span>{{ balanceNumber }}</span>
-  </button>
+  <RouterLink to="/account?tab=balance" class="account-balance" :class="{ unavailable: accountBalance.amount === null }" :aria-label="accountBalance.amount === null ? '账户与余额' : `账户与余额，${balanceDescription}`" :title="accountBalance.amount === null ? '查看账户与余额' : balanceDescription" :aria-busy="accountBalance.loading">
+    <span>{{ balanceNumber }}{{ accountBalance.amount !== null && accountBalance.currency ? ' ' + accountBalance.currency : '' }}</span>
+  </RouterLink>
 </template>
 
 <style scoped>
 .account-balance { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; min-height: 44px; max-width: 160px; padding: 8px; border-radius: 6px; color: var(--ink); }
-.account-balance > svg { flex: none; color: var(--amber); }
 .account-balance > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.account-balance:hover { background: var(--surface); }.account-balance.unavailable { color: var(--muted); }.account-balance:disabled { opacity: 1; }
-@media (max-width: 639px) { .account-balance { flex: 0 1 auto; min-width: 44px; max-width: 108px; padding-inline: 4px; }.account-balance > svg { width: 17px; height: 17px; } }
+.account-balance:hover { background: var(--surface); }.account-balance.unavailable { color: var(--muted); }
+@media (max-width: 639px) { .account-balance { flex: 0 1 auto; min-width: 44px; max-width: 108px; padding-inline: 4px; } }
 </style>

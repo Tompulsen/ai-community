@@ -93,6 +93,7 @@ onBeforeUnmount(() => dialog.value?.close())
 
 <template>
   <div class="studio-select studio-model-select studio-model-trigger">
+    <span class="model-trigger-width" aria-hidden="true">{{ modelValue || (busy ? '正在读取模型…' : '选择模型') }}</span>
     <input type="text" role="combobox" aria-label="模型" aria-haspopup="dialog" :aria-controls="id" :aria-expanded="open" :value="modelValue" :placeholder="busy ? '正在读取模型…' : '选择模型'" :title="modelValue || '选择模型'" readonly @click="show" @keydown.enter.prevent="show" @keydown.space.prevent="show" @keydown.down.prevent="show" />
     <ChevronDown :size="14" aria-hidden="true" />
   </div>
@@ -138,11 +139,12 @@ onBeforeUnmount(() => dialog.value?.close())
 </template>
 
 <style scoped>
-.studio-model-trigger { position: relative; flex: 1; min-width: 0; }
-.studio-model-trigger input { width: 100%; min-width: 0; max-width: 220px; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; outline: none; cursor: pointer; font-size: 14px; text-overflow: ellipsis; }
+.studio-model-trigger { position: relative; flex: 0 1 auto; width: max-content; max-width: min(220px, 100%); min-width: 0; }
+.model-trigger-width { visibility: hidden; pointer-events: none; min-height: 36px; padding: 8px 24px 8px 4px; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; }
+.studio-model-trigger input { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; outline: none; cursor: pointer; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
 .studio-model-trigger:focus-within { outline: 1px solid var(--muted); outline-offset: 2px; }
 .studio-model-trigger > svg { position: absolute; right: 4px; pointer-events: none; }
-.studio-model-dialog { width: min(1000px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); display: none; flex-direction: column; border-radius: 8px; }
+.studio-model-dialog { width: min(1000px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); display: none; flex-direction: column; border-radius: 12px; background: var(--surface); }
 .studio-model-dialog[open] { display: flex; }
 .studio-model-dialog::backdrop { background: #0008; }
 .model-dialog-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; }
@@ -177,7 +179,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .model-list { overflow-y: auto; min-height: 0; flex: 1; }
 .model-empty { padding: 32px 12px; text-align: center; color: var(--muted); }
 .model-item { border-radius: 6px; }
-.model-item.selected { background: var(--surface); color: var(--ink); }
+.model-item.selected { background: var(--surface-soft); color: var(--ink); }
 .model-row { display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; align-items: center; gap: 4px; padding-right: 4px; }
 .model-option { display: flex; align-items: center; gap: 16px; min-width: 0; min-height: 76px; padding: 12px; text-align: left; }
 .model-option:hover { background: var(--surface-soft); border-radius: 6px; }
@@ -194,6 +196,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .model-settings select { width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--canvas); }
 @media (max-width: 639px) {
   .studio-model-trigger input { min-height: 44px; max-width: none; font-size: 13px; }
+  .model-trigger-width { min-height: 44px; font-size: 13px; }
   .studio-model-dialog { width: calc(100vw - 16px); max-width: calc(100vw - 16px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); }
   .model-dialog-header { padding: 8px 12px; }
   .model-source { padding: 0 12px 8px; gap: 4px 12px; flex-wrap: wrap; }

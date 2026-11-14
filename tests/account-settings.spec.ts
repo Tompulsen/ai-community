@@ -20,10 +20,12 @@ test('settings search finds related controls and tabs support links, refresh and
   await expect(page).toHaveURL(/\/account\?tab=balance$/)
   await page.reload()
   await expect(nav.getByRole('button', { name: '账户与余额', exact: true })).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('.account-balance')).toHaveText('12.50 USD')
+  await expect(page.locator('.balance-panel .account-balance')).toHaveText('12.50 USD')
   await page.goBack()
   await expect(nav.getByRole('button', { name: '账号安全', exact: true })).toHaveAttribute('aria-current', 'page')
-  await expect(nav.getByRole('link', { name: '我的收藏' })).toHaveAttribute('href', '/library?tab=saved')
+  await expect(nav.getByRole('heading', { name: '社区内容' })).toHaveCount(0)
+  await expect(nav.getByRole('link')).toHaveCount(0)
+  await expect(nav.getByRole('button')).toHaveCount(5)
 })
 
 test('profile preview is plain text and unsaved edits survive cancelled navigation', async ({ page }) => {
@@ -153,7 +155,7 @@ test('account panels fit desktop, tablet and narrow phones with accessible contr
       await page.goto('/account?tab=' + tab)
       await expect(page.locator('.settings-main')).toBeVisible()
       if (tab === 'security') await expect(page.getByRole('heading', { name: '登录会话' })).toBeVisible()
-      else if (tab === 'balance') await expect(page.locator('.account-balance')).toHaveText('12.50 USD')
+      else if (tab === 'balance') await expect(page.locator('.balance-panel .account-balance')).toHaveText('12.50 USD')
       else {
         await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('测试创作者')
         await expect(page.getByLabel('头像', { exact: true })).toBeHidden()

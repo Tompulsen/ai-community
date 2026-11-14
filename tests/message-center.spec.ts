@@ -6,9 +6,9 @@ const menu = (page: Page) => page.locator('.header-menu.messages-menu')
 const trigger = (page: Page) => menu(page).locator('summary.message-trigger')
 const popover = (page: Page) => menu(page).locator('.message-popover')
 const categories = [
-  { label: '系统公告', href: '/messages?tab=announcement', unread: 2 },
-  { label: '我的消息', href: '/messages', unread: 4 },
-  { label: '互动消息', href: '/messages?tab=activity', unread: 3 },
+  { label: '公告', unread: 2 },
+  { label: '我的消息', unread: 4 },
+  { label: '互动消息', unread: 3 },
 ]
 
 function deferred() {
@@ -99,11 +99,11 @@ test('desktop message menu survives pointer entry and supports keyboard focus an
   await trigger(page).hover()
   await expect(popover(page)).toBeVisible()
   for (const category of categories) {
-    const link = popover(page).getByRole('link', { name: new RegExp(category.label) })
-    await expect(link).toHaveAttribute('href', category.href)
-    await expect(link).toContainText(String(category.unread))
+    const button = popover(page).getByRole('button', { name: new RegExp(category.label) })
+    await expect(button).toHaveAttribute('aria-haspopup', 'dialog')
+    await expect(button).toContainText(String(category.unread))
   }
-  const target = await popover(page).getByRole('link', { name: /互动消息/ }).boundingBox()
+  const target = await popover(page).getByRole('button', { name: /互动消息/ }).boundingBox()
   await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 12 })
   await expect(popover(page)).toBeVisible()
   await page.mouse.move(24, 500)
@@ -123,28 +123,71 @@ test('desktop message menu survives pointer entry and supports keyboard focus an
   await expect(popover(page)).toBeVisible()
   await expect(popover(page).getByText('登录即可查看关注动态', { exact: true })).toBeVisible()
   await expect(popover(page).getByRole('link', { name: '立即登录', exact: true })).toHaveAttribute('href', '/account')
-  await expect(popover(page).getByRole('link', { name: /系统公告|我的消息|互动消息/ })).toHaveCount(0)
+  await expect(popover(page).getByRole('button', { name: /公告|我的消息|互动消息/ })).toHaveCount(0)
   expect(fixture.privateReads).toHaveLength(authenticatedReads)
+})
+
+test('all message entries open a floating center without changing the URL or background scroll', async ({ page }) => {
+  await messageFixture(page)
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/community?tab=people')
+  await page.locator('main').evaluate(element => { element.style.minHeight = '2200px' })
+  await page.evaluate(() => window.scrollTo({ top: 360, behavior: 'instant' }))
+  const dialog = page.getByRole('dialog', { name: '消息中心', exact: true })
+  for (const [index, category] of categories.entries()) {
+    await trigger(page).hover()
+    const position = await page.evaluate(() => scrollY)
+    await popover(page).getByRole('button', { name: new RegExp(category.label) }).click()
+    await expect(dialog).toBeVisible()
+    await expect(page).toHaveURL('/community?tab=people')
+    await expect(dialog.getByRole('navigation', { name: '消息分类' }).getByRole('button', { name: new RegExp(category.label) })).toHaveAttribute('aria-current', 'page')
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).toBe('hidden')
+    expect(await page.evaluate(() => scrollY)).toBe(position)
+    await page.keyboard.press('Tab')
+    expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true)
+    await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), index === 1 ? 'light' : 'dark')
+    await page.screenshot({ path: `.taste-skill/message-center-dialog-20261114/desktop-${index}.png`, fullPage: true })
+    if (index === 0) await dialog.getByRole('button', { name: '关闭消息中心', exact: true }).click()
+    else if (index === 1) await page.keyboard.press('Escape')
+    else await page.mouse.click(2, 2)
+    await expect(dialog).not.toBeVisible()
+    await expect(trigger(page)).toBeFocused()
+    await expect(popover(page)).not.toBeVisible()
+    expect(await page.evaluate(() => scrollY)).toBe(position)
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).not.toBe('hidden')
+  }
+  expect(errors).toEqual([])
 })
 
 test.describe('touch message entry', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
-  test('a tap opens the single menu and category navigation remains usable on a phone', async ({ page }) => {
+  test('a tap opens the message center and category and conversation changes stay in the window', async ({ page }) => {
     await messageFixture(page)
     await page.goto('/community')
     await expect(trigger(page)).toHaveAttribute('aria-label', '消息，9 条未读')
     await trigger(page).tap()
     await expect(popover(page)).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await popover(page).getByRole('link', { name: /系统公告/ }).tap()
-    await expect(page).toHaveURL('/messages?tab=announcement')
-    await expect(page.getByRole('heading', { name: '消息', exact: true })).toBeVisible()
+    await popover(page).getByRole('button', { name: /公告/ }).tap()
+    await expect(page).toHaveURL('/community')
+    const dialog = page.getByRole('dialog', { name: '消息中心', exact: true })
+    await expect(dialog).toBeVisible()
     await expect(popover(page)).not.toBeVisible()
-    const navigation = page.getByRole('navigation', { name: '消息分类', exact: true })
-    await expect(navigation.getByRole('link', { name: /系统公告/ })).toHaveAttribute('href', '/messages?tab=announcement')
-    await navigation.getByRole('link', { name: /互动消息/ }).tap()
-    await expect(page).toHaveURL('/messages?tab=activity')
-    await expect(page.getByRole('region', { name: '互动消息', exact: true }).or(page.locator('section[aria-label="互动消息"]'))).toBeVisible()
+    const navigation = dialog.getByRole('navigation', { name: '消息分类', exact: true })
+    await expect(navigation.getByRole('button', { name: /公告/ })).toHaveAttribute('aria-current', 'page')
+    await navigation.getByRole('button', { name: /互动消息/ }).tap()
+    await expect(dialog.locator('section[aria-label="互动消息"]')).toBeVisible()
+    await navigation.getByRole('button', { name: /我的消息/ }).tap()
+    await dialog.locator('.thread-row').tap()
+    await expect(dialog.getByRole('region', { name: '消息记录', exact: true })).toContainText('来自海洋创作者的消息')
+    await dialog.getByRole('button', { name: '返回会话列表', exact: true }).tap()
+    await expect(dialog.locator('.thread-pane')).toBeVisible()
+    await expect(page).toHaveURL('/community')
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().bottom <= innerHeight)).toBe(true)
+    await page.screenshot({ path: '.taste-skill/message-center-dialog-20261114/mobile.png', fullPage: true })
+    await dialog.getByRole('button', { name: '关闭消息中心', exact: true }).tap()
+    await expect(dialog).not.toBeVisible()
+    await expect(trigger(page)).toBeFocused()
   })
 })
 
@@ -158,21 +201,24 @@ test('reading each message class updates the shared header without double-counti
   expect(fixture.mutations.find(item => item.path === '/api/notifications/read')?.body.ids).toEqual(['announcement1'])
 
   await trigger(page).hover()
-  await popover(page).getByRole('link', { name: /互动消息/ }).click()
-  await expect(page).toHaveURL('/messages?tab=activity')
-  await page.locator('.inbox-notification').filter({ hasText: '测试互动1' }).locator('.inbox-notification-link').click()
+  await popover(page).getByRole('button', { name: /互动消息/ }).click()
+  const dialog = page.getByRole('dialog', { name: '消息中心', exact: true })
+  await expect(dialog).toBeVisible()
+  await dialog.locator('.inbox-notification').filter({ hasText: '测试互动1' }).locator('.inbox-notification-link').click()
   await expect(page).toHaveURL('/community')
+  await expect(dialog).not.toBeVisible()
   await expect(trigger(page)).toHaveAttribute('aria-label', '消息，7 条未读')
 
   await trigger(page).hover()
-  await popover(page).getByRole('link', { name: /我的消息/ }).click()
-  await page.locator('.thread-row').click()
-  await expect(page).toHaveURL('/messages/42')
-  await expect(page.getByRole('region', { name: '消息记录', exact: true })).toContainText('来自海洋创作者的消息')
+  await popover(page).getByRole('button', { name: /我的消息/ }).click()
+  await dialog.locator('.thread-row').click()
+  await expect(page).toHaveURL('/community')
+  await expect(dialog.getByRole('region', { name: '消息记录', exact: true })).toContainText('来自海洋创作者的消息')
   await expect(trigger(page)).toHaveAttribute('aria-label', '消息，6 条未读')
   expect(fixture.mutations.filter(item => item.path === '/api/messages/42/read')).toHaveLength(1)
+  await dialog.getByRole('button', { name: '关闭消息中心', exact: true }).click()
   await trigger(page).hover()
-  await expect(popover(page).getByRole('link', { name: /我的消息/ })).toContainText('3')
+  await expect(popover(page).getByRole('button', { name: /我的消息/ })).toContainText('3')
 })
 
 test('switching accounts prevents an older inbox response from restoring another account unread counts', async ({ page }) => {
@@ -180,12 +226,17 @@ test('switching accounts prevents an older inbox response from restoring another
   try {
     await page.goto('/community')
     await fixture.oldStarted
+    await trigger(page).hover()
+    await popover(page).getByRole('button', { name: /互动消息/ }).click()
+    const dialog = page.getByRole('dialog', { name: '消息中心', exact: true })
+    await expect(dialog).toBeVisible()
     fixture.state.user.id = '18'
     fixture.state.user.accountId = '18'
     fixture.state.user.username = 'new-account'
     fixture.state.user.name = '新的章鱼用户'
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await fixture.newStarted
+    await expect(dialog).not.toBeVisible()
     await expect(trigger(page)).toHaveAttribute('aria-label', '消息')
     fixture.releaseOld()
     await fixture.oldFinished
@@ -193,7 +244,7 @@ test('switching accounts prevents an older inbox response from restoring another
     await expect(popover(page)).toBeVisible()
     await expect(trigger(page)).toHaveAttribute('aria-label', '消息')
     for (const category of categories) {
-      await expect(popover(page).getByRole('link', { name: new RegExp(category.label) })).not.toContainText(/70|80|150/)
+      await expect(popover(page).getByRole('button', { name: new RegExp(category.label) })).not.toContainText(/70|80|150/)
     }
   } finally { fixture.releaseOld() }
 })

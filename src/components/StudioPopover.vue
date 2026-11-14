@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, useId } from 'vue'
 import { X } from '@lucide/vue'
 
-const props = withDefaults(defineProps<{ label: string; width?: number }>(), { width: 360 })
+const props = withDefaults(defineProps<{ label: string; width?: number; disabled?: boolean }>(), { width: 360 })
 const emit = defineEmits<{ toggle: [open: boolean] }>()
 const id = `studio-${useId()}`
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), opened = ref(false)
@@ -38,7 +38,7 @@ defineExpose({ close })
 </script>
 
 <template>
-  <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="label" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
+  <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
   <Teleport to="body"><div :id="id" ref="panel" popover="auto" class="studio-popover" role="dialog" :aria-label="label" :style="{ width: `min(${props.width}px, calc(100vw - 24px))` }" @toggle="toggle">
     <header class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></header>
     <div class="studio-popover-content"><slot /></div>

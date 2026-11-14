@@ -50,7 +50,7 @@ function step(offset: number) { selected.value = (selected.value + offset + acti
 .material-item { width: 80px; flex: 0 0 80px; }
 .material-thumbnail { width: 80px; height: 80px; display: grid; place-items: center; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); overflow: hidden; padding: 0; cursor: pointer; transition: border-color 180ms var(--ease); }
 .material-thumbnail:hover { border-color: var(--muted); }
-.material-thumbnail.selected { border-color: var(--blue); outline: 1px solid var(--blue); outline-offset: 1px; }
+.material-thumbnail.selected { border-color: var(--focus-ring); outline: 1px solid var(--focus-ring); outline-offset: 1px; }
 .material-thumbnail img, .material-thumbnail video { width: 100%; height: 100%; object-fit: contain; }
 .file-download { display: flex; align-items: center; gap: 4px; padding: 8px 0; min-height: 36px; font-size: 12px; color: var(--muted); }
 .file-download:hover { color: var(--blue); }

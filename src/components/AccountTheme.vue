@@ -65,9 +65,10 @@ function preview(theme: Theme) {
 .theme-palettes legend svg { margin-right: 8px; }
 .mode-option { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .mode-option:hover, .palette-option:hover { border-color: var(--muted); }
-.mode-option.selected { background: var(--blue-soft); border-color: var(--blue); color: var(--ink); }
+.mode-option.selected { background: var(--surface-soft); border-color: var(--focus-ring); color: var(--ink); }
 .mode-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
-.mode-option:focus-within, .palette-option:focus-within { outline: 2px solid var(--blue); outline-offset: 3px; }
+.mode-option:has(:focus-visible), .palette-option:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.mode-option input:focus-visible, .palette-option input:focus-visible { outline: none; }
 .theme-current { margin: 16px 0 24px; color: var(--muted); font-size: 13px; }
 .theme-schedule { margin: 0 0 28px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; }
 .schedule-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -75,7 +76,7 @@ function preview(theme: Theme) {
 .theme-palette-group { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--border); }
 .theme-palettes { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .palette-option { position: relative; min-width: 0; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; }
-.palette-option.selected { border-color: var(--blue); }
+.palette-option.selected { border-color: var(--focus-ring); }
 .palette-option > input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
 .palette-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 48px; padding: 10px 12px; font-size: 13px; }
 .palette-caption > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }

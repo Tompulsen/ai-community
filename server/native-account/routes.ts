@@ -1,5 +1,6 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
 import { readModelPricing } from "./model-pricing.ts";
+import { readWallet, quoteWallet, createWalletPayment, redeemWallet } from "./wallet.ts";
 import { assertNormalRequest } from "./transport.ts";
 import { readRequestBody, RequestBodyError } from "./request-body.ts";
 import {
@@ -406,6 +407,11 @@ export async function handle(
     if (req.method === "GET" && route === "model-pricing") {
       return ok(await readModelPricing(req));
     }
+    if (req.method === "GET" && route === "wallet") return ok(await readWallet(req));
+    if (req.method === "POST" && route === "wallet/quote") return ok(await quoteWallet(req, await body(req)));
+    if (req.method === "POST" && route === "wallet/pay") return ok(await createWalletPayment(req, await body(req), "topup"));
+    if (req.method === "POST" && route === "wallet/subscription") return ok(await createWalletPayment(req, await body(req), "subscription"));
+    if (req.method === "POST" && route === "wallet/redeem") return ok(await redeemWallet(req, await body(req)));
 
     if (req.method === "POST" && route === "login") {
       const input = await body(req);

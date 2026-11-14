@@ -1,21 +1,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { ArrowLeft, ArrowUpRight, Bell, CheckCheck, Images, MessageSquare, RefreshCw, Search, Send, X } from '@lucide/vue'
 import type { Creator, Work, WorkFile } from '../data'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
-import { inbox, loadInbox, loadMoreNotifications, markAllInboxRead, markDirectRead, markInboxRead, notificationCategory, notificationDestination } from '../inbox'
+import { inbox, loadInbox, loadMoreNotifications, markAllInboxRead, markDirectRead, markInboxRead, notificationCategory, notificationDestination, type InboxCategory } from '../inbox'
 
 interface Message { id: string; text: string; date: string; owned: boolean; read?: boolean; file?: WorkFile; sharedWorkId?: string }
 interface Thread { user: Creator; lastMessage?: Message | null; unread: number; canSend?: boolean; reason?: string }
+const props = defineProps<{ embedded?: boolean; category?: InboxCategory }>()
 const route = useRoute()
-const userId = computed(() => typeof route.params.userId === 'string' ? route.params.userId : typeof route.query.peer === 'string' ? route.query.peer : '')
+const floatingTab = ref<InboxCategory>(props.category || 'messages'), floatingPeer = ref('')
+watch(() => props.category, category => { if (category) { floatingTab.value = category; floatingPeer.value = '' } })
+const userId = computed(() => props.embedded ? floatingPeer.value : typeof route.params.userId === 'string' ? route.params.userId : typeof route.query.peer === 'string' ? route.query.peer : '')
 const categories = [
-  { value: 'announcement', label: '系统公告', to: '/messages?tab=announcement' },
+  { value: 'announcement', label: '公告', to: '/messages?tab=announcement' },
   { value: 'messages', label: '我的消息', to: '/messages' },
   { value: 'activity', label: '互动消息', to: '/messages?tab=activity' },
 ] as const
-const activeTab = computed(() => !userId.value && (route.query.tab === 'announcement' || route.query.tab === 'activity') ? route.query.tab : 'messages')
+const activeTab = computed(() => props.embedded ? floatingTab.value : !userId.value && (route.query.tab === 'announcement' || route.query.tab === 'activity') ? route.query.tab : 'messages')
+function selectCategory(category: InboxCategory) { if (props.embedded) { floatingPeer.value = ''; floatingTab.value = category } }
+function selectPeer(id: string) { if (props.embedded) floatingPeer.value = id }
 const currentCategory = computed(() => categories.find(item => item.value === activeTab.value)!)
 const notifications = computed(() => inbox.notifications.filter(item => notificationCategory(item) === activeTab.value))
 const threads = ref<Thread[]>([]), threadCursor = ref<string | null>(null), threadLoading = ref(false)
@@ -77,14 +82,16 @@ watch(activeTab, tab => {
 })
 onMounted(async () => {
   await loadSession()
+  if (controller.signal.aborted) return
   await Promise.all([loadInbox(true), ...(activeTab.value === 'messages' ? [loadThreads(), loadMessages()] : [])])
+  if (controller.signal.aborted) return
   poll = setInterval(() => {
     if (document.visibilityState !== 'visible') return
     void loadInbox()
     if (activeTab.value === 'messages') { void loadThreads(); void loadMessages(false, true) }
   }, 20000)
 })
-onBeforeUnmount(() => { controller.abort(); clearInterval(poll); clearTimeout(searchTimer) })
+onBeforeUnmount(() => { pageGeneration++; searchGeneration++; controller.abort(); clearInterval(poll); clearTimeout(searchTimer); shareDialog.value?.close() })
 function refresh() {
   void loadInbox(true)
   if (activeTab.value === 'messages') { void loadThreads(); void loadMessages() }
@@ -116,8 +123,8 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 </script>
 
 <template>
-  <div class="page-container messages-page"><div class="page-heading"><h1>消息</h1><div v-if="session.user" class="inbox-actions"><button v-if="activeTab !== 'messages'" class="button subtle btn" :disabled="inbox.markingRead || inbox.loading || !inbox.counts[activeTab] || !inbox.readThrough[activeTab]" @click="markAllInboxRead(activeTab)"><CheckCheck :size="17" />全部标记已读</button><button class="icon-button" aria-label="刷新消息" title="刷新消息" :disabled="inbox.loading || activeTab === 'messages' && (threadLoading || messageLoading)" @click="refresh"><RefreshCw :size="18" /></button></div></div>
-    <nav v-if="session.user" class="tabs inbox-categories" aria-label="消息分类"><RouterLink v-for="item in categories" :key="item.value" :to="item.to" class="tab" :class="{ active: activeTab === item.value }" :aria-current="activeTab === item.value ? 'page' : undefined"><span>{{ item.label }}</span><span v-if="inbox.counts[item.value]" class="unread-badge" :aria-label="`${inbox.counts[item.value]} 条未读`">{{ inbox.counts[item.value] > 99 ? '99+' : inbox.counts[item.value] }}</span></RouterLink></nav>
+  <div class="page-container messages-page" :class="{ embedded }"><div class="page-heading"><h1>{{ embedded ? '消息中心' : '消息' }}</h1><div v-if="session.user" class="inbox-actions"><button v-if="activeTab !== 'messages'" class="button subtle btn" :disabled="inbox.markingRead || inbox.loading || !inbox.counts[activeTab] || !inbox.readThrough[activeTab]" @click="markAllInboxRead(activeTab)"><CheckCheck :size="17" />全部标记已读</button><button class="icon-button" aria-label="刷新消息" title="刷新消息" :disabled="inbox.loading || activeTab === 'messages' && (threadLoading || messageLoading)" @click="refresh"><RefreshCw :size="18" /></button><slot name="close" /></div></div>
+    <nav v-if="session.user" class="tabs inbox-categories" aria-label="消息分类"><component :is="embedded ? 'button' : RouterLink" v-for="item in categories" :key="item.value" :to="embedded ? undefined : item.to" :type="embedded ? 'button' : undefined" class="tab" :class="{ active: activeTab === item.value }" :aria-current="activeTab === item.value ? 'page' : undefined" @click="selectCategory(item.value)"><span>{{ item.label }}</span><span v-if="inbox.counts[item.value]" class="unread-badge" :aria-label="`${inbox.counts[item.value]} 条未读`">{{ inbox.counts[item.value] > 99 ? '99+' : inbox.counts[item.value] }}</span></component></nav>
     <div v-if="!session.user && session.ready" class="empty-state"><MessageSquare :size="28" /><h2>登录后查看消息</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
     <section v-else-if="activeTab !== 'messages'" class="inbox-panel" :aria-label="currentCategory.label">
       <p v-if="inbox.notificationError" class="form-error" role="alert">{{ inbox.notificationError }} <button class="text-link" :disabled="inbox.loading" @click="loadInbox(true)">重试</button></p>
@@ -130,8 +137,8 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
       </article>
       <div class="notification-pagination"><button v-if="inbox.nextCursors[activeTab]" class="button btn" :disabled="inbox.loadingMore[activeTab] || inbox.loading || inbox.markingRead" @click="loadMoreNotifications(activeTab)">{{ inbox.loadingMore[activeTab] ? '正在加载…' : '加载更早通知' }}</button><p v-if="activeTab === 'activity' && notifications.length" class="form-note">显示当前保留的互动通知；全部已读仅处理本次查看时已有的通知。</p></div>
     </section>
-    <div v-else class="messages-layout" :class="{ 'has-conversation': !!userId }"><aside class="thread-pane" aria-label="私信会话"><div v-if="threadLoading && !threads.length" class="empty-state" role="status">正在加载会话…</div><RouterLink v-for="thread in threads" :key="thread.user.id" :to="`/messages/${thread.user.id}`" class="thread-row" :class="{ active: thread.user.id === userId }"><span class="avatar blue"><img v-if="thread.user.avatarUrl" :src="thread.user.avatarUrl" :alt="thread.user.name || thread.user.username" /><span v-else>{{ (thread.user.name || thread.user.username).slice(0, 1) }}</span></span><div><strong>{{ thread.user.name || thread.user.username }}</strong><p>{{ thread.lastMessage?.sharedWorkId ? '分享了一件作品' : thread.lastMessage?.text || '暂无消息' }}</p></div><span v-if="thread.unread" class="unread-badge">{{ thread.unread }}</span></RouterLink><p v-if="!threadLoading && !threads.length" class="form-note">暂无私信会话</p><button v-if="threadCursor" class="button subtle btn" :disabled="threadLoading" @click="loadThreads(true)">更多会话</button><RouterLink to="/community" class="text-link">查找创作者<ArrowUpRight :size="15" /></RouterLink></aside>
-      <section class="conversation-pane" aria-label="私信内容"><template v-if="userId"><div class="conversation-heading"><RouterLink to="/messages" class="icon-button conversation-back" aria-label="返回会话列表"><ArrowLeft :size="18" /></RouterLink><RouterLink v-if="user" :to="{ path: '/community', query: { creator: user.id } }" class="person-link"><span class="avatar blue"><img v-if="user.avatarUrl" :src="user.avatarUrl" :alt="user.name || user.username" /><span v-else>{{ (user.name || user.username).slice(0, 1) }}</span></span><strong>{{ user.name || user.username }}</strong></RouterLink></div>
+    <div v-else class="messages-layout" :class="{ 'has-conversation': !!userId }"><aside class="thread-pane" aria-label="私信会话"><div v-if="threadLoading && !threads.length" class="empty-state" role="status">正在加载会话…</div><component :is="embedded ? 'button' : RouterLink" v-for="thread in threads" :key="thread.user.id" :to="embedded ? undefined : `/messages/${thread.user.id}`" :type="embedded ? 'button' : undefined" class="thread-row" :class="{ active: thread.user.id === userId }" @click="selectPeer(thread.user.id)"><span class="avatar blue"><img v-if="thread.user.avatarUrl" :src="thread.user.avatarUrl" :alt="thread.user.name || thread.user.username" /><span v-else>{{ (thread.user.name || thread.user.username).slice(0, 1) }}</span></span><div><strong>{{ thread.user.name || thread.user.username }}</strong><p>{{ thread.lastMessage?.sharedWorkId ? '分享了一件作品' : thread.lastMessage?.text || '暂无消息' }}</p></div><span v-if="thread.unread" class="unread-badge">{{ thread.unread }}</span></component><p v-if="!threadLoading && !threads.length" class="form-note">暂无私信会话</p><button v-if="threadCursor" class="button subtle btn" :disabled="threadLoading" @click="loadThreads(true)">更多会话</button><RouterLink to="/community" class="text-link">查找创作者<ArrowUpRight :size="15" /></RouterLink></aside>
+      <section class="conversation-pane" aria-label="私信内容"><template v-if="userId"><div class="conversation-heading"><component :is="embedded ? 'button' : RouterLink" :to="embedded ? undefined : '/messages'" :type="embedded ? 'button' : undefined" class="icon-button conversation-back" aria-label="返回会话列表" @click="selectPeer('')"><ArrowLeft :size="18" /></component><RouterLink v-if="user" :to="{ path: '/community', query: { creator: user.id } }" class="person-link"><span class="avatar blue"><img v-if="user.avatarUrl" :src="user.avatarUrl" :alt="user.name || user.username" /><span v-else>{{ (user.name || user.username).slice(0, 1) }}</span></span><strong>{{ user.name || user.username }}</strong></RouterLink></div>
         <p v-if="error" class="form-error" role="alert">{{ error }} <button class="text-link" @click="loadMessages()">重试</button></p><div class="message-history" role="region" aria-label="消息记录" tabindex="0"><div v-if="messageCursor" class="history-more"><button class="button subtle btn" :disabled="messageLoading" @click="loadMessages(true)">加载更早消息</button></div><p v-if="messageLoading && !messages.length" class="form-note" role="status">正在加载消息…</p><p v-else-if="!messages.length && !error" class="form-note">暂无消息</p><article v-for="message in orderedMessages" :key="message.id" class="message-row" :class="{ owned: message.owned }"><div class="message-bubble"><RouterLink v-if="message.sharedWorkId" :to="`/work/${message.sharedWorkId}`" class="shared-work"><Images :size="22" /><span>查看分享作品</span><ArrowUpRight :size="16" /></RouterLink><p v-if="message.text">{{ message.text }}</p><a v-if="message.file" :href="message.file.url" target="_blank" rel="noopener noreferrer"><img v-if="message.file.type.startsWith('image/')" :src="message.file.url" :alt="message.file.name" /><span v-else>{{ message.file.name }}</span></a><time class="caption-5">{{ new Date(message.date).toLocaleString('zh-CN') }}<span v-if="message.owned"> · {{ message.read ? '已读' : '未读' }}</span></time></div></article><div ref="messageEnd"></div></div>
         <div class="message-composer"><p v-if="!canSend" class="notice-inline">{{ reason || '互相关注后可分享作品和发送表情。' }}</p><p v-if="sendError" class="form-error" role="alert">{{ sendError }} <button class="text-link" :disabled="sending" @click="send(pending?.text || '', pending?.sharedWorkId)">重试发送</button><button class="text-link" :disabled="sending" @click="pending = null; sendError = ''">取消重试</button></p><div class="emoji-list" aria-label="发送表情"><button v-for="emoji in emojis" :key="emoji" class="icon-button emoji-button" :aria-label="`发送表情 ${emoji}`" :title="`发送 ${emoji}`" :disabled="!canSend || sending || !!pending" @click="send(emoji)">{{ emoji }}</button><button class="button subtle btn" :disabled="!canSend || sending || !!pending" @click="openShare"><Send :size="16" />分享作品</button></div></div>
       </template><div v-else class="empty-state"><MessageSquare :size="30" /><h2>选择一个会话</h2><p v-if="error" class="form-error" role="alert">{{ error }}</p></div></section>
@@ -142,6 +149,13 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 
 <style scoped>
 .messages-page { max-width: 1280px; }
+.messages-page.embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 24px; }
+.embedded > .page-heading { flex: none; min-height: 44px; margin-bottom: 16px; gap: 12px; }
+.embedded > .page-heading h1 { font-size: 20px; line-height: 28px; }
+.embedded > .inbox-categories { flex: none; margin-bottom: 16px; }
+.embedded > .inbox-panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.embedded > .messages-layout { flex: 1; min-height: 0; height: auto; }
+.embedded .thread-row { width: 100%; text-align: left; }
 .notification-pagination { display: grid; justify-items: center; gap: 12px; padding-block: 24px; }
 .inbox-actions { display: flex; align-items: center; gap: 8px; }
 .inbox-categories { gap: 32px; }
@@ -160,7 +174,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 .thread-pane { padding: 12px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 0; overflow-y: auto; }
 .thread-row { display: flex; align-items: center; flex-shrink: 0; gap: 12px; padding: 12px; min-height: 72px; border: 1px solid transparent; border-radius: 4px; }
 .thread-row:hover { background: var(--surface-soft); }
-.thread-row.active { background: var(--blue-soft); border-color: color-mix(in srgb, var(--blue) 35%, var(--border)); }
+.thread-row.active { background: var(--surface-soft); border-color: var(--focus-ring); }
 .thread-row > div { min-width: 0; flex: 1; }
 .thread-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 20px; font-weight: 500; }
 .thread-row p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 20px; color: var(--muted); margin-top: 4px; }
@@ -204,6 +218,9 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
   .emoji-list > .button { margin-left: 4px; }
 }
 @media (max-width: 767px) {
+  .messages-page.embedded { padding: 16px 12px; }
+  .embedded .inbox-actions { flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+  .embedded .inbox-actions > .button { font-size: 12px; padding-inline: 8px; }
   .inbox-categories { gap: 20px; }
   .inbox-categories .tab { gap: 6px; }
   .inbox-notification { gap: 12px; padding: 20px 12px; }

@@ -60,7 +60,7 @@
 | 当前代码 | 原 Studio 来源 | 适配内容 |
 | --- | --- | --- |
 | `server/native-account/{config,client,session,model-groups,model-pricing,relay}.ts` | `studio/app/lib/new-api/` 同名模块 | 标准 Request/Response、同进程鉴权，保留加密、锁、分组及额度规则 |
-| `server/native-account/routes.ts` | `studio/app/api/new-api/[...path]/route.ts` | 本地 `/api/new-api/*`，移除 iframe/SSO 交换与账户中心支付路由 |
+| `server/native-account/routes.ts` | `studio/app/api/new-api/[...path]/route.ts` | 本地 `/api/new-api/*`，移除 iframe/SSO 交换；钱包路由后续从用户指定的 octopus_chat 恢复 |
 | `server/native-account/{pricing,request-body}.ts` | `studio/app/utils/{model-pricing,request-body}.ts` | 保留价格计算与有界请求读取 |
 | `server/creation/{public-media,proxy-lifecycle}.ts` | `studio/app/utils/{public-image-fetch,proxy-lifecycle}.ts` | 复用媒体访问边界与请求取消生命周期 |
 | `server/creation-contract.ts` | `studio/app/utils/{video-api,local-tasks}.ts` | 复用生成协议、任务地址及状态规则 |
@@ -71,6 +71,25 @@
 `iron-session@8.0.4`（MIT）保留旧会话密封格式，不引入 Next.js 或 React 运行时。
 历史导入仅限已验证 `accountId` 的 `octopus:user-<accountId>:` 及
 `octopus-gallery-user-<accountId>`，不清空或合并其他账号、访客和旧聊天存储。
+
+## 2026-11-14 账户充值复用
+
+来源为用户指定的本地 `octopus_chat`，当前 HEAD 为
+`0eac2b491406574cccfe29ad9252dc56bd97ae95`，保留其 MIT / NextChat 声明。
+`server/native-account/wallet.ts` 原样迁入钱包业务后只调整 Request 类型和模块路径；
+`shared/studio/wallet.ts` 复用浏览器安全契约和支付地址检查。
+源钱包业务 SHA-256 为 `4cb803f10bd719d4dce7514df8c766ee95ae11feec16035f1a719db7860ecb46`，
+源契约 SHA-256 为 `a01191fae0ac311248785c0e27f40831df49c4733cb6504f167fa96ea338d78b`。
+`server/native-account/wallet.test.ts` 从源项目钱包测试适配至 Vitest，DNS 和上游请求均模拟。
+
+`AccountWallet.vue` 将原 React 钱包交互适配为 Vue，保留充值报价、支付宝/微信、
+兑换码、套餐价格确认和限购、已有订阅及最近 20 笔充值记录。
+支付使用浏览器原生 POST 表单打开新页，显式确认签名订单中的实际金额，
+避免嵌入外部收银台或改写签名回调；返回时仅刷新状态。
+使用当前章鱼账号 Cookie 和预期 accountId，切账号与卸载同步清理报价及支付表单，
+写操作不自动重试。金额、单位、换算、折扣和实付报价仍由 New API 提供，
+保留公网支付地址、签名字段和回调地址检查；订单、兑换码、余额和套餐数据仍归账号中心。
+社区不增加支付数据库、新账号、支付服务容器或 React 运行时。
 
 ## 2026-11-13 创作功能恢复
 

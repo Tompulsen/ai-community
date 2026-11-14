@@ -6,6 +6,7 @@ import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
 import AccountBalance from './components/AccountBalance.vue'
+import MessageCenterDialog from './components/MessageCenterDialog.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
@@ -26,13 +27,14 @@ function isCurrent(path: string) {
   return route.path === path || (path === '/create' && route.path.startsWith('/create/')) || (path === '/discover' && route.path.startsWith('/work/'))
 }
 const signingOut = ref(false), publicationNavigation = ref(false)
-const messageLinks: { category: InboxCategory; label: string; to: string; icon: typeof Bell }[] = [
-  { category: 'announcement', label: '系统公告', to: '/messages?tab=announcement', icon: Bell },
-  { category: 'messages', label: '我的消息', to: '/messages', icon: MessageSquare },
-  { category: 'activity', label: '互动消息', to: '/messages?tab=activity', icon: Heart },
+const messageLinks: { category: InboxCategory; label: string; icon: typeof Bell }[] = [
+  { category: 'announcement', label: '公告', icon: Bell },
+  { category: 'messages', label: '我的消息', icon: MessageSquare },
+  { category: 'activity', label: '互动消息', icon: Heart },
 ]
 const unreadCount = computed(() => session.user ? inbox.counts.announcement + inbox.counts.messages + inbox.counts.activity : 0)
 const messageMenu = ref<HTMLDetailsElement>()
+const messageCenter = ref<InstanceType<typeof MessageCenterDialog>>()
 let poll: ReturnType<typeof setInterval> | undefined
 let messageCloseTimer: ReturnType<typeof setTimeout> | undefined
 function refreshActiveIdentity() {
@@ -55,10 +57,14 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('resize', resizeViewport)
   window.removeEventListener('resize', resizeViewport)
 })
-watch(() => route.fullPath, () => document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false }))
+watch(() => route.fullPath, () => {
+  messageCenter.value?.close()
+  document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false })
+})
 watch([() => route.meta.title, () => site.brand], () => { document.title = `${String(route.meta.title || '首页')} · ${site.brand}` }, { immediate: true })
 watch(() => session.user?.id, id => {
   clearInterval(poll)
+  messageCenter.value?.close()
   if (messageMenu.value) messageMenu.value.open = false
   if (!id) return
   void loadInbox()
@@ -109,6 +115,15 @@ function dismissMenus(event: Event) {
   if (event.type === 'click' && (event.target as HTMLElement).closest('.header-menu')) return
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (event.type === 'keydown') menu.querySelector('summary')?.focus(); menu.open = false })
 }
+function showMessageCenter(category: InboxCategory) {
+  clearTimeout(messageCloseTimer)
+  if (messageMenu.value) messageMenu.value.open = false
+  messageCenter.value?.open(category)
+}
+function restoreMessageTrigger() {
+  messageMenu.value?.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true })
+  if (messageMenu.value) messageMenu.value.open = false
+}
 </script>
 
 <template>
@@ -122,7 +137,7 @@ function dismissMenus(event: Event) {
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
           <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
           <div class="menu-popover message-popover">
-            <template v-if="session.user"><RouterLink v-for="item in messageLinks" :key="item.category" :to="item.to" class="message-menu-link"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></RouterLink></template>
+            <template v-if="session.user"><button v-for="item in messageLinks" :key="item.category" type="button" class="message-menu-link" aria-haspopup="dialog" @click="showMessageCenter(item.category)"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></button></template>
             <div v-else class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
           </div>
         </details>
@@ -140,6 +155,7 @@ function dismissMenus(event: Event) {
     <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
     <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
+    <MessageCenterDialog v-if="session.user" ref="messageCenter" @close="restoreMessageTrigger" />
   </div>
 </template>
 
@@ -218,7 +234,8 @@ function dismissMenus(event: Event) {
 .message-count { position: absolute; right: -3px; top: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; padding: 0 3px; font-variant-numeric: tabular-nums; }
 .message-popover { min-width: 192px; padding: 8px; }
 .message-popover::before { content: ''; position: absolute; bottom: 100%; left: 0; right: 0; height: 12px; }
-.message-popover > .message-menu-link { min-height: 44px; gap: 10px; font-size: 14px; }
+.message-popover > .message-menu-link { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 8px 12px; gap: 10px; border-radius: 4px; font-size: 14px; text-align: left; }
+.message-menu-link:hover, .message-menu-link:focus-visible { background: var(--surface-soft); }
 .message-menu-link > span:first-of-type { flex: 1; }
 .message-category-count { display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 10px; padding: 0 5px; background: var(--blue); color: var(--action-ink); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .message-login { min-width: 224px; display: grid; justify-items: center; gap: 16px; padding: 20px 12px; }

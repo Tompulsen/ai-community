@@ -35,8 +35,5 @@ async function select(kind: StudioKind) {
 .studio-mode-options { display: grid; gap: 4px; }
 .studio-mode-options .studio-command { min-height: 48px; padding: 12px; border-radius: 8px; gap: 12px; }
 .studio-mode-options .studio-command > span { flex: 1; }
-.studio-mode-options .active { background: var(--surface-soft); }
-:global(.studio-popover:has(.studio-mode-options)) { background: var(--surface); border-radius: 12px; }
-:global(.studio-popover:has(.studio-mode-options) .studio-popover-heading) { border: 0; color: var(--muted); }
 :global(.studio-popover:has(.studio-mode-options) .studio-popover-content) { padding: 8px; }
 </style>
