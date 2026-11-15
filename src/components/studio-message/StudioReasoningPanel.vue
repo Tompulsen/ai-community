@@ -3,24 +3,28 @@
 import { computed, ref, useId } from 'vue'
 import { BrainCircuit, Check, ChevronDown } from '@lucide/vue'
 import StudioMarkdown from './StudioMarkdown.vue'
+import StudioCollapse from './StudioCollapse.vue'
 
 const props = defineProps<{ content?: string; streaming?: boolean; hasAnswer?: boolean; interrupted?: boolean }>()
 const id = `reasoning-${useId()}`, expanded = ref<boolean | null>(null)
 const active = computed(() => !!props.streaming && !props.hasAnswer)
 const open = computed(() => expanded.value ?? active.value)
+const trigger = ref<HTMLButtonElement>()
 </script>
 
 <template>
   <section v-if="content" class="reasoning" :data-active="active" data-chat-scroll-isolation>
-    <button type="button" class="reasoning-trigger" :aria-expanded="open" :aria-controls="open ? id : undefined" @click="expanded = !open">
+    <button ref="trigger" type="button" class="reasoning-trigger" :aria-expanded="open" :aria-controls="id" @click="expanded = !open">
       <component :is="active ? BrainCircuit : Check" :size="16" aria-hidden="true" />
       <span>思考过程</span>
       <span class="reasoning-state" role="status">{{ active ? '思考中' : interrupted ? '已停止' : '已完成' }}</span>
       <ChevronDown :size="14" class="reasoning-chevron" :data-open="open" aria-hidden="true" />
     </button>
-    <div v-if="open" :id="id" class="reasoning-content" dir="auto" tabindex="0" role="region" aria-label="思考过程">
-      <StudioMarkdown :content="content" :streaming="active" />
-    </div>
+    <StudioCollapse :id="id" :open="open" :trigger="trigger">
+      <div class="reasoning-content" dir="auto" tabindex="0" role="region" aria-label="思考过程">
+        <StudioMarkdown :content="content" :streaming="active" />
+      </div>
+    </StudioCollapse>
   </section>
 </template>
 
@@ -31,7 +35,7 @@ const open = computed(() => expanded.value ?? active.value)
 .reasoning-trigger:focus-visible, .reasoning-content:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .reasoning-trigger svg { flex: none; }
 .reasoning-state { color: var(--muted); white-space: nowrap; }
-.reasoning-chevron { margin-left: auto; }
+.reasoning-chevron { margin-left: auto; transition: transform 220ms cubic-bezier(.22, 1, .36, 1); }
 .reasoning-chevron[data-open="true"] { transform: rotate(180deg); }
 .reasoning-content { min-width: 0; max-height: 320px; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; padding: 8px 12px; border-radius: 8px; background: var(--surface-soft); font-size: 14px; line-height: 22px; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; overflow-anchor: none; }
 @media (max-width: 600px), (pointer: coarse) { .reasoning-trigger { min-height: 44px; }.reasoning-content { max-height: 240px; } }

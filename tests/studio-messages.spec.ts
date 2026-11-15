@@ -53,6 +53,51 @@ async function fixture(page: Page, messages: any[] = []) {
 const assistant = (content: string, extra = {}) => ({ id: 'answer-fixture', role: 'assistant', content, createdAt: Date.now(), ...extra })
 const user = { id: 'user-fixture', role: 'user', content: '请展示消息组件', createdAt: Date.now() }
 
+test('ELK layouts use disposable same-origin workers while parser-based diagrams still render', async ({ page }) => {
+  const errors: string[] = [], workers: string[] = [], closed: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('worker', worker => { workers.push(worker.url()); worker.on('close', () => closed.push(worker.url())) })
+  const content = [
+    '```mermaid\n---\nconfig:\n  layout: elk\n---\nflowchart LR\n A[Worker开始] --> B[Worker完成]\n```',
+    '```mermaid\n---\nconfig:\n  layout: elk\n---\nflowchart LR\n subgraph group[布局分组]\n C[再次布局] --> D[布局完成]\n end\n```',
+    '```mermaid\npie title 图表占比\n "图片": 60\n "视频": 40\n```',
+  ].join('\n\n')
+  await page.route('**/create/text', async route => {
+    const response = await route.fetch()
+    await route.fulfill({ response, headers: { ...response.headers(), 'content-security-policy': "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" } })
+  })
+  await fixture(page, [user, assistant(content)])
+  await expect(page.locator('.diagram-preview svg')).toHaveCount(3)
+  await expect(page.locator('.diagram-preview').nth(0)).toContainText('Worker完成')
+  await expect(page.locator('.diagram-preview').nth(1)).toContainText('布局分组')
+  await expect(page.locator('.diagram-preview').nth(2)).toContainText('图表占比')
+  await expect.poll(() => workers.length).toBe(2)
+  expect(workers.every(url => new URL(url).origin === new URL(page.url()).origin && url.includes('elk-worker'))).toBe(true)
+  await expect.poll(() => closed.length).toBe(2)
+  expect(errors).toEqual([])
+})
+
+test('ELK worker failures preserve source code and release the next diagram in the render queue', async ({ page }) => {
+  const errors: string[] = [], closed: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('worker', worker => worker.on('close', () => closed.push(worker.url())))
+  await page.route('**/*elk-worker*.js*', route => {
+    if (new URL(route.request().url()).searchParams.has('url')) return route.continue()
+    return route.fulfill({ contentType: 'application/javascript', body: 'throw new Error("fixture worker initialization failed")' })
+  })
+  const content = [
+    '```mermaid\n---\nconfig:\n  layout: elk\n---\nflowchart LR\n A[失败源代码] --> B[保留]\n```',
+    '```mermaid\n---\nconfig:\n  layout: dagre\n---\nflowchart LR\n C[后续图表] --> D[正常渲染]\n```',
+  ].join('\n\n')
+  await fixture(page, [user, assistant(content)])
+  await expect(page.locator('.diagram-error')).toContainText('已保留源代码')
+  await expect(page.locator('.studio-code-block').first().locator('code')).toContainText('失败源代码')
+  await expect(page.locator('.diagram-preview svg')).toHaveCount(1)
+  await expect(page.locator('.diagram-preview')).toContainText('正常渲染')
+  await expect.poll(() => closed.length).toBe(1)
+  expect(errors).toEqual([])
+})
+
 test('rich Markdown, formulas, diagrams, media and citations render safely across themes and viewports', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   const state = await fixture(page, [user, assistant(richAnswer, { sources: [source], reasoning: '先整理资料，再组织回答。' })])
@@ -67,7 +112,7 @@ test('rich Markdown, formulas, diagrams, media and citations render safely acros
   await page.keyboard.press('Escape')
   await expect(answer.locator('audio')).toHaveAttribute('controls', '')
   await expect(answer.locator('video')).toHaveAttribute('controls', '')
-  expect(await answer.locator('.studio-markdown-body').evaluate(element => !!element.querySelector('[onclick],[onerror],script,p[style]'))).toBe(false)
+  expect(await answer.locator('.message-content > .studio-markdown-body').evaluate(element => !!element.querySelector('[onclick],[onerror],script,p[style]'))).toBe(false)
   expect(await page.evaluate(() => (window as any).__escaped)).toBeUndefined()
   await answer.locator('.studio-source-citation').click()
   await expect(page.getByRole('dialog', { name: '引用来源', exact: true })).toContainText('引用摘要')

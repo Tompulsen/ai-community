@@ -1,15 +1,21 @@
 <script setup lang="ts">
 // Vue adapter of octopus_chat/app/components/markdown.tsx (MIT).
-import { computed, h, onBeforeUnmount, ref, useId, type VNode } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, ref, toRef, useId, watch, type VNode } from 'vue'
 import { ExternalLink, X } from '@lucide/vue'
 import 'katex/dist/katex.min.css'
 import { renderStudioMarkdown, safeMarkdownUrl } from '../../studio-markdown'
 import type { StudioMessageSource } from '../../studio-message-types'
 import StudioCodeBlock from './StudioCodeBlock.vue'
+import { useStudioTypewriter } from '../../use-studio-typewriter'
 
 const props = withDefaults(defineProps<{ content: string; streaming?: boolean; sources?: StudioMessageSource[] }>(), { streaming: false, sources: () => [] })
+const emit = defineEmits<{ render: [] }>()
+// Keep code/media immediately inspectable and copyable while smoothing prose.
+const instant = computed(() => /```|~~~|!\[|<img\b|data:image\/|blob:/i.test(props.content))
+const { displayed, active } = useStudioTypewriter(toRef(props, 'content'), toRef(props, 'streaming'), instant)
 const marker = useId()
-const rendered = computed(() => renderStudioMarkdown(props.content, props.streaming, props.sources, marker))
+const rendered = computed(() => renderStudioMarkdown(displayed.value, active.value, props.sources, marker))
+watch(displayed, async () => { await nextTick(); emit('render') })
 const imageDialog = ref<HTMLDialogElement>()
 const imageUrl = ref('')
 const sourceDialog = ref<HTMLDialogElement>()
@@ -23,7 +29,7 @@ function convertNode(node: Node, index: number): VNode | string {
   const codeId = node.getAttribute('data-studio-code')
   if (codeId?.startsWith(`${marker}:`)) {
     const code = rendered.value.codes[Number(codeId.slice(marker.length + 1))]
-    if (code) return h(StudioCodeBlock, { key: `code-${index}`, code: code.code, language: code.language, streaming: props.streaming })
+    if (code) return h(StudioCodeBlock, { key: `code-${index}`, code: code.code, language: code.language, streaming: active.value })
   }
   const attributes: Record<string, unknown> = { key: index }
   for (const attribute of Array.from(node.attributes)) {
@@ -72,7 +78,7 @@ function handleHover(event: MouseEvent) {
     sourceTimer = setTimeout(() => showSource(index, false), 350)
   }
 }
-function renderMarkdown() { return h('div', { class: 'studio-markdown-body', onClick: handleClick, onMouseover: handleHover }, nodes.value) }
+function renderMarkdown() { return h('div', { class: 'studio-markdown-body', 'data-output-active': active.value, onClick: handleClick, onMouseover: handleHover }, nodes.value) }
 onBeforeUnmount(() => clearTimeout(sourceTimer))
 </script>
 

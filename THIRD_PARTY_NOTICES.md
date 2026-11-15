@@ -29,6 +29,8 @@ Runtime packages and their upstream declared licenses:
 - Highlight.js: BSD-3-Clause; code highlighting uses its common-language build.
 - KaTeX: MIT; distributed fonts retain their bundled license notices.
 - Mermaid: MIT; diagram rendering is loaded on demand.
+- ELK.js: EPL-2.0 OR GPL-3.0-or-later. The upstream layout API and same-origin
+  Worker retain Kiel University, TypeFox and contributor notices in their sources.
 - vue-draggable-plus 0.6.1: MIT, Copyright (c) 2023 丶远方; conversation
   ordering uses its Vue wrapper and bundled SortableJS (MIT, RubaXa and
   contributors). Upstream license texts are retained in the installed package.

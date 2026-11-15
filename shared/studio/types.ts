@@ -10,6 +10,8 @@ export interface MultimodalContent {
 export interface StudioToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 export interface RequestMessage { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | MultimodalContent[]; tool_call_id?: string; tool_calls?: StudioToolCall[] }
 export interface ChatResponseUsage { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
+export interface ChatGenerationProgress { outputTokens: number; durationMs: number }
+export interface ChatResponseMetrics { usage: ChatResponseUsage; generationDurationMs?: number; estimatedOutputTokens?: number }
 export interface ModelConfig {
   model: string
   temperature?: number
@@ -47,6 +49,10 @@ export interface ChatMessage extends RequestMessage {
   error?: string
   createdAt?: number
   usage?: ChatResponseUsage
+  generationProgress?: ChatGenerationProgress
+  responseMetrics?: ChatResponseMetrics
+  contextCompressing?: boolean
+  contextCompressed?: boolean
 }
 export interface ChatSession {
   id: string

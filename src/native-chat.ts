@@ -74,7 +74,7 @@ const owner = () => session.user?.id || ''
 const store = () => `octopus:user-${owner()}:native-chat`
 const registeredChat = (chat: NativeChat) => chats.ready && chats.sessions.some(item => item.id === chat.id)
 function restoreMessage(message: NativeMessage): NativeMessage {
-  return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, interrupted: message.streaming ? true : message.interrupted }
+  return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
 }
 function modelMessage(message: NativeMessage): NativeMessage {
   if (message.role !== 'user' || !message.quote) return message
@@ -232,8 +232,10 @@ export function stopChat(chat: NativeChat) {
   toolControllers.get(chat.id)?.abort()
   toolControllers.delete(chat.id)
   const pending = [...chat.messages].reverse().find(message => message.streaming)
-  const task = creation.tasks.find(task => task.id === pending?.taskId)
+  const compressing = [...chat.messages].reverse().find(message => message.contextCompressing)
+  const task = creation.tasks.find(task => task.id === (pending || compressing)?.taskId)
   if (task) stopCreation(task)
+  if (compressing) { compressing.contextCompressing = false; compressing.interrupted = true }
   if (pending) { pending.streaming = false; pending.interrupted = true }
   for (const message of branchMessages(chat) as NativeMessage[]) for (const tool of message.tools || []) {
     if (tool.status === 'pending' || tool.status === 'running') { tool.status = 'stopped'; tool.error = '已停止等待，执行状态未确认，请核对原执行结果。' }
@@ -333,13 +335,16 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       config: { ...settings, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory },
       summarize: async messages => {
         if (!current()) throw new Error('对话已停止。')
+        result.contextCompressing = true
         const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
           chatOptions: { ...settings, mcpServers: [], stream: false, max_tokens: 2048, messages: [{ role: 'system', content: '将对话整理为准确简洁的历史摘要，不超过2000 tokens，保留用户目标、约束和关键事实。' }, ...messages.map(message => ({ role: message.role === 'tool' ? 'user' as const : message.role, content: message.content }))] } }, task => { if (current()) result.taskId = task.id }, current)
         if (task.phase !== 'complete') throw new Error(task.error || '历史摘要生成失败。')
         return task.text
       },
     })
+    result.contextCompressing = false
     if (!current()) return accepted
+    result.contextCompressed = !!prepared.summarizedIds.length || prepared.memory !== (chat.sendMemory ? chat.memoryPrompt : '')
     const messages = await prepareVideoMessages(prepared.messages, { model, format: settings.format, signal: AbortSignal.timeout(60000) })
     if (!current()) return accepted
     let lastSave = 0
@@ -349,10 +354,14 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, sourceWorkId, references, prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
         if (!current()) return
         result.taskId = task.id; applyAnswer(result, task.text, 'stream'); result.reasoning = task.reasoning; result.usage = task.usage; result.streaming = true
+        result.generationProgress = task.generationProgress
+        result.responseMetrics = task.responseMetrics
         if (Date.now() - lastSave > 2000) { lastSave = Date.now(); void saveChats() }
       }, current)
       if (!current()) return accepted
       result.taskId = task.id; applyAnswer(result, task.text, task.phase === 'complete' && !task.toolCalls?.length ? 'finish' : 'interrupted'); result.reasoning = task.reasoning; result.usage = task.usage; result.error = task.phase === 'complete' ? undefined : task.error; result.interrupted = task.phase !== 'complete'
+      result.generationProgress = task.generationProgress
+      result.responseMetrics = task.responseMetrics
       if (!task.toolCalls?.length || task.phase !== 'complete') break
       if (!settings.mcpServers?.length) throw new Error('模型请求调用工具，但此对话未启用工具服务。')
       toolHistory.push({ role: 'assistant', content: task.text, tool_calls: task.toolCalls })
@@ -413,6 +422,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     }
   }
   finally {
+    result.contextCompressing = false
     if (version === epoch && runs.get(chat.id) === runId) {
       runs.delete(chat.id); toolControllers.get(chat.id)?.abort(); toolControllers.delete(chat.id)
       result.streaming = false; chats.busy[chat.id] = false; await saveChats()

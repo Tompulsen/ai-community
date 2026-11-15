@@ -4,7 +4,8 @@ import { accountApi, api, errorMessage, notify, session, uploadFile } from './st
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
 import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/options'
-import type { ChatResponseUsage, StudioToolCall } from '../shared/studio/types'
+import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatResponseMetrics } from '../shared/studio/types'
+import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../shared/studio/image-params'
 
@@ -33,6 +34,8 @@ export interface CreationTask {
   text: string
   reasoning?: string
   usage?: ChatResponseUsage
+  generationProgress?: ChatGenerationProgress
+  responseMetrics?: ChatResponseMetrics
   preview?: string
   toolCalls?: StudioToolCall[]
   error?: string
@@ -435,6 +438,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (response.headers.get('content-type')?.includes('text/event-stream')) {
       if (!response.body) throw new Error('生成流为空。')
       let lastSave = 0
+      const progress = createGenerationProgress()
       const parser = getLines(getMessages(message => {
         if (!message.data || epoch !== version || controller.signal.aborted) return
         const event = JSON.parse(message.data)
@@ -444,6 +448,8 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
           task.text = typeof event.text === 'string' ? event.text : task.text
           task.reasoning = typeof event.reasoning === 'string' ? event.reasoning : ''
           task.usage = event.usage; task.phase = 'running'
+          const measured = progress(task.text, task.reasoning || '', performance.now())
+          if (measured) task.generationProgress = measured
         }
         if (event.type === 'result') data = event
         onUpdate?.(task)
@@ -460,6 +466,9 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (epoch !== version || controller.signal.aborted) return task
     if (record(data)) { task.reasoning = typeof data.reasoning === 'string' ? data.reasoning : task.reasoning; task.usage = data.usage as ChatResponseUsage | undefined }
     const finished = applyResult(task, data)
+    if (task.generationProgress) task.responseMetrics = {
+      usage: task.usage || {}, generationDurationMs: task.generationProgress.durationMs, estimatedOutputTokens: task.generationProgress.outputTokens,
+    }
     await persist()
     if (!finished) await poll(task, controller, version)
   } catch (error) {

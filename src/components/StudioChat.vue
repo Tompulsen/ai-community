@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
@@ -25,6 +25,9 @@ import StudioQuoteSelection from './studio-message/StudioQuoteSelection.vue'
 import StudioMessageEditor from './studio-message/StudioMessageEditor.vue'
 import StudioMessageOptions from './studio-message/StudioMessageOptions.vue'
 import StudioToolActivity from './studio-message/StudioToolActivity.vue'
+import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
+import { useStudioMaterials } from '../use-studio-materials'
+import { getResponseMetrics } from '../../shared/studio/chat-response-metrics'
 import type { MessageQuote } from '../../shared/studio/message-quote'
 import { conversationKind } from '../studio-conversations'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
@@ -35,10 +38,19 @@ const current = computed(() => chats.sessions.find(chat => chat.id === chats.act
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
-const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
+const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), referenceLoading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
+const materials = useStudioMaterials(files, computed(() => `${session.user?.id || ''}:${current.value?.id || ''}`))
+const uploading = computed(() => referenceLoading.value || materials.pending.value)
+const metrics = computed(() => getResponseMetrics(current.value?.messages || []))
+const speedLabel = computed(() => metrics.value.outputTokensPerSecond === undefined ? '— tok/s' : `${metrics.value.speedIsEstimated ? '约 ' : ''}${metrics.value.outputTokensPerSecond.toFixed(1)} tok/s`)
+const speedDescription = computed(() => `${metrics.value.speedIsPrevious ? '显示上一轮可用统计。' : ''}从首个到最后一个模型输出计算，不含首字前等待和工具执行时间。${metrics.value.speedIsEstimated ? '当前为客户端估算。' : ''}`)
 const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats() } } })
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
+const messagesContent = ref<HTMLElement>()
+const transcriptObserver = new ResizeObserver(() => followOutput())
+watch(messagesContent, element => { transcriptObserver.disconnect(); if (element) transcriptObserver.observe(element) }, { flush: 'post' })
+onBeforeUnmount(() => transcriptObserver.disconnect())
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const models = computed(() => modelsForKind('text'))
 const busy = computed(() => current.value && chats.busy[current.value.id])
@@ -59,6 +71,7 @@ function statusLabel(message: NativeMessage) {
   if (message.error) return '生成失败'
   if (message.interrupted && !pending(message)) return '已停止'
   const tool = message.tools?.find(tool => tool.status === 'pending' || tool.status === 'running')
+  if (message.contextCompressing) return '正在压缩上下文'
   return tool ? `正在执行 ${tool.name}` : undefined
 }
 function mediaUrl(value: string | undefined, type: 'image' | 'video' | 'audio') {
@@ -110,6 +123,7 @@ watch([() => props.source?.id, ready], () => {
 watch([prompt, files], () => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats() } }, { deep: true })
 watch(model, () => { if (current.value && model.value) { current.value.model = model.value; void saveChats() } })
 watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.reasoning, message.streaming, message.tools?.map(tool => [tool.id, tool.status])]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
+function followOutput() { if (nearBottom.value) scrollToBottom() }
 function scrollToBottom() { if (messagesElement.value) messagesElement.value.scrollTop = messagesElement.value.scrollHeight; nearBottom.value = true }
 function trackScroll() { const el = messagesElement.value; if (el) nearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
 function selectChat(id: string) { historyMenu.value?.close(); emit('conversation', id) }
@@ -117,17 +131,19 @@ function createChat() { newChat(); historyMenu.value?.close(); emit('source') }
 function handleEnter(event: KeyboardEvent) { if (event.isComposing || event.keyCode === 229 || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return; event.preventDefault(); void send() }
 async function addFiles(event: Event) {
   const input = event.target as HTMLInputElement, owner = session.user?.id
-  uploading.value = true; error.value = ''
-  try { for (const file of [...(input.files || [])]) { if (files.value.length >= 10) throw new Error('每轮最多添加 10 个附件。'); const parsed = await parseFile(file); if (owner !== session.user?.id) return; files.value.push(parsed) } }
-  catch (cause) { error.value = errorMessage(cause) }
-  finally { uploading.value = false; input.value = '' }
+  const chatId = current.value?.id
+  error.value = ''
+  try { await materials.add([...(input.files || [])]) }
+  catch (cause) { if (owner === session.user?.id && chatId === current.value?.id) error.value = errorMessage(cause) }
+  finally { input.value = '' }
 }
 async function applySourceReferences(selected: WorkFile[]) {
   if (!props.source || !current.value || uploading.value) return
+  if (materials.failed.value) { error.value = '请先重试或移除失败的附件，再选择参考图。'; return }
   const owner = session.user?.id, chatId = current.value.id, sourceId = props.source.id
   const own = () => files.value.filter(file => file.fromWorkId !== sourceId)
   if (own().length + selected.length > 10) { error.value = '每轮最多添加 10 个附件。'; return }
-  uploading.value = true; error.value = ''
+  referenceLoading.value = true; error.value = ''
   try {
     const added = []
     for (const file of selected) {
@@ -143,10 +159,10 @@ async function applySourceReferences(selected: WorkFile[]) {
     if (remaining.length + added.length > 10) throw new Error('每轮最多添加 10 个附件。')
     files.value = [...remaining, ...added]
   } catch (cause) { if (owner === session.user?.id && current.value?.id === chatId) error.value = errorMessage(cause) }
-  finally { uploading.value = false }
+  finally { referenceLoading.value = false }
 }
 async function send() {
-  if (!current.value || props.sourceBlocked || busy.value || uploading.value || !models.value.some(item => item.id === model.value)) return
+  if (!current.value || props.sourceBlocked || busy.value || uploading.value || materials.failed.value || !models.value.some(item => item.id === model.value)) return
   nearBottom.value = true
   const text = prompt.value, attached = [...files.value], quote = draftQuote.value, chat = current.value, owner = session.user?.id
   error.value = ''; prompt.value = ''; files.value = []; draftQuote.value = undefined
@@ -206,13 +222,15 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
+        <div v-else ref="messagesContent" class="chat-transcript">
         <article v-for="message in current.messages" :key="message.id" class="chat-message" :class="message.role" data-quotable-message :data-message-id="message.id" :data-message-role="message.role">
           <div class="message-heading"><img v-if="message.role === 'assistant'" src="/assets/brand/octopus-community.jpg" width="24" height="24" alt="" /><span v-else-if="message.role === 'user'" class="message-avatar" aria-hidden="true">{{ (session.user?.name || session.user?.username || '你').slice(0, 1) }}</span><strong>{{ message.role === 'user' ? '你' : message.role === 'system' ? '系统' : messageModel(message) }}</strong><time v-if="message.createdAt">{{ new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</time><LoaderCircle v-if="message.streaming" :size="15" /></div>
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
+          <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
           <StudioReasoningPanel v-if="message.reasoning" :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" />
-          <StudioAiStatus v-if="message.role === 'assistant' && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" />
+          <StudioAiStatus v-if="message.role === 'assistant' && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" />
           <StudioMessageEditor v-if="edited?.id === message.id" :initial-value="messageText(message)" :disabled="sourceBlocked || busy" :save-label="message.role === 'assistant' ? '保存修改' : '保存并重新生成'" :on-save="text => saveEdit(message, text)" @cancel="edited = undefined" />
-          <StudioMarkdown v-else-if="message.role === 'assistant'" class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" /><p v-else class="user-text">{{ messageText(message) }}</p>
+          <StudioMarkdown v-else-if="message.role === 'assistant'" class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" @render="followOutput" /><p v-else class="user-text">{{ messageText(message) }}</p>
           <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index">
             <button v-if="part.type === 'image_url' && mediaUrl(part.image_url?.url, 'image')" class="attachment-image" type="button" title="放大图片" aria-label="放大图片附件" @click="openAttachment(mediaUrl(part.image_url?.url, 'image'))"><img :src="mediaUrl(part.image_url?.url, 'image')" alt="图片附件" loading="lazy" /></button>
             <video v-else-if="part.type === 'video_url' && mediaUrl(part.video_url?.url, 'video')" :src="mediaUrl(part.video_url?.url, 'video')" controls preload="metadata" aria-label="视频附件" />
@@ -229,12 +247,13 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
             <button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="15" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="15" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="15" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </article>
+        </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="current.clearContextIndex = current.messages.length; current.memoryPrompt = ''; current.lastSummarizeIndex = 0; saveChats()"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form class="chat-composer studio-composer" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
         <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
-        <ul v-if="files.length" class="composer-files"><li v-for="(file, index) in files" :key="index"><span>{{ file.name }}</span><button class="icon-button" type="button" :aria-label="`移除附件 ${file.name}`" title="移除附件" @click="files.splice(index, 1)"><X :size="14" /></button></li></ul>
+        <StudioMaterialStatus :items="materials.snapshot.value.items" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
           <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="18" /></template>
@@ -247,9 +266,9 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           </div>
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /></div>
           <button v-if="busy" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stopChat(current)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="sourceBlocked || uploading || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
+          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="sourceBlocked || uploading || materials.failed.value || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
-        <p v-if="current.search !== 'off'" class="search-cost">搜索与回答分别按章鱼账号配置计费。</p><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
+        <div class="composer-feedback"><span v-if="current.messages.some(message => message.role === 'assistant')" class="generation-speed" :title="speedDescription" :aria-label="`输出速度 ${speedLabel}`">{{ speedLabel }}</span><p v-if="current.search !== 'off'" class="search-cost">搜索与回答分别按章鱼账号配置计费。</p></div><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
     </section>
     <p v-else class="muted" role="status">{{ chats.error || '正在读取对话…' }}</p>
@@ -274,6 +293,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 .message-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; max-width: 100%; }.message-attachments img { display: block; width: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: 6px; }.attachment-image { max-width: 100%; border: 0; padding: 0; background: transparent; cursor: zoom-in; }.message-attachments video, .message-attachments audio { width: min(480px, 100%); max-width: 100%; }.attachment-dialog { max-width: 94vw; max-height: 94dvh; padding: 40px 12px 12px; border: 0; border-radius: 8px; background: var(--canvas); color: var(--ink); }.attachment-dialog::backdrop { background: rgb(0 0 0 / 75%); }.attachment-dialog > img { display: block; max-width: 88vw; max-height: 80dvh; object-fit: contain; }.attachment-close { position: absolute; top: 4px; right: 4px; }
 .chat-message > .reasoning, .chat-message > .tool-activity, .chat-message > .message-options, .chat-message > .message-editor { width: min(75ch, 100%); }
 .chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
+.context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }.composer-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding-inline: 8px; }.composer-feedback .search-cost { margin-inline: 0; }.generation-speed { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.search-cost { margin: 4px 8px 0; font-size: 12px; color: var(--muted); }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
 .message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; }.message-actions > .button:hover { color: var(--ink); background: var(--surface); }
 @media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }

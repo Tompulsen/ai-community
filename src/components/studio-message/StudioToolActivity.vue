@@ -5,6 +5,7 @@ import { Check, ChevronDown, Copy, PencilLine, RotateCw, X } from '@lucide/vue'
 import type { StudioToolActivity } from '../../studio-message-types'
 import { formatToolValue, getToolResult, getToolTable, isToolRecord, MAX_TOOL_TEXT_LENGTH, parseToolArgumentInput } from '../../../shared/studio/tool-result'
 import StudioAiStatus from './StudioAiStatus.vue'
+import StudioDetails from './StudioDetails.vue'
 
 const props = defineProps<{ tool: StudioToolActivity; disabled?: boolean; onRerun?: (args: Record<string, unknown>) => Promise<void> }>()
 const id = `tool-${useId()}`, editing = ref(false), inputs = ref<Record<string, string>>({}), pending = ref(false), error = ref(''), copied = ref(false)
@@ -41,8 +42,8 @@ async function copy() {
 </script>
 
 <template>
-  <details class="tool-activity" :data-state="state" :open="tool.status === 'error'" data-testid="tool-result-card" data-chat-scroll-isolation>
-    <summary><StudioAiStatus :state="state" :label="label" :timer="running" /><ChevronDown :size="14" aria-hidden="true" /></summary>
+  <StudioDetails class="tool-activity" :data-state="state" :open-on="tool.status === 'error'" data-testid="tool-result-card" data-chat-scroll-isolation>
+    <template #summary><StudioAiStatus :state="state" :label="label" :timer="running" /><ChevronDown :size="14" aria-hidden="true" /></template>
     <div class="tool-content">
       <p v-if="tool.status === 'error'" class="tool-error" role="alert">{{ tool.error || '工具执行失败，请调整参数后重试。' }}</p>
       <p v-if="tool.status === 'stopped'" class="tool-notice">已停止等待，工具的执行结果尚未确认。</p>
@@ -71,13 +72,13 @@ async function copy() {
       </section>
       <p v-if="error" class="tool-error" role="alert">{{ error }}</p>
     </div>
-  </details>
+  </StudioDetails>
 </template>
 
 <style scoped>
 .tool-activity { min-width: 0; margin-block: 12px; color: var(--ink); font-size: 13px; line-height: 20px; }
-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 4px 8px; border-radius: 6px; cursor: pointer; list-style: none; }summary::-webkit-details-marker { display: none; }summary:hover { background: var(--surface-soft); }summary > svg { flex: none; color: var(--muted); }details[open] summary > svg { transform: rotate(180deg); }
-summary:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, .tool-table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+:deep(summary) { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 4px 8px; border-radius: 6px; cursor: pointer; list-style: none; }:deep(summary::-webkit-details-marker) { display: none; }:deep(summary:hover) { background: var(--surface-soft); }:deep(summary > svg) { flex: none; color: var(--muted); transition: transform 220ms cubic-bezier(.22, 1, .36, 1); }.tool-activity[data-expanded="true"] :deep(summary > svg) { transform: rotate(180deg); }
+:deep(summary:focus-visible), button:focus-visible, input:focus-visible, textarea:focus-visible, .tool-table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .tool-content { display: grid; gap: 12px; min-width: 0; padding: 8px; }.tool-content section { min-width: 0; }
 .tool-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-height: 32px; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 32px; min-height: 32px; max-width: 100%; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }button:hover:not(:disabled) { background: var(--surface-soft); }button:disabled { opacity: .55; cursor: default; }button svg { flex: none; }
@@ -88,5 +89,5 @@ button { display: inline-flex; align-items: center; justify-content: center; gap
 form { display: grid; gap: 12px; min-width: 0; }form label { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }form label > span { color: var(--muted); font-size: 12px; }form .tool-checkbox { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 input:not([type="checkbox"]), textarea { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); caret-color: var(--ink); font: inherit; }textarea { resize: vertical; }input[type="checkbox"] { appearance: auto; width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }input[type="checkbox"]::after { display: none; }input:disabled, textarea:disabled { opacity: .55; }
 .tool-form-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-@media (max-width: 600px), (pointer: coarse) { summary, button, input:not([type="checkbox"]), form .tool-checkbox { min-height: 44px; }.tool-fields { grid-template-columns: minmax(0, 1fr); gap: 4px; }.tool-fields dd { margin-bottom: 8px; }input:not([type="checkbox"]), textarea { font-size: 16px; } }
+@media (max-width: 600px), (pointer: coarse) { :deep(summary), button, input:not([type="checkbox"]), form .tool-checkbox { min-height: 44px; }.tool-fields { grid-template-columns: minmax(0, 1fr); gap: 4px; }.tool-fields dd { margin-bottom: 8px; }input:not([type="checkbox"]), textarea { font-size: 16px; } }
 </style>

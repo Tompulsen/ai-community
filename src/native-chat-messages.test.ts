@@ -50,6 +50,49 @@ function toolSource() {
   ] }
   return source
 }
+it('shows compression only during real summary calls and marks completion after context preparation succeeds', async () => {
+  const p = await fixture()
+  p.chat.compressionThreshold = 500
+  p.chat.messages.push({ id: 'old', role: 'user', content: '历史记录'.repeat(1000) })
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async () => new Promise(resolve => {
+    release = () => resolve({ id: 'summary', phase: 'complete', text: '精简摘要' })
+  }))
+  const sending = p.sendChat(p.chat, '继续', [], 'model')
+  await vi.waitFor(() => expect(p.chat.messages.at(-1)?.contextCompressing).toBe(true))
+  expect(p.chat.messages.at(-1)?.contextCompressed).toBeUndefined()
+  release()
+  await sending
+  expect(p.chat.messages.at(-1)).toMatchObject({ contextCompressing: false, contextCompressed: true })
+  expect(mocks.submit).toHaveBeenCalledTimes(2)
+})
+it('clears compression immediately when stopped and does not submit the answer after a late summary', async () => {
+  const p = await fixture()
+  p.chat.compressionThreshold = 500
+  p.chat.messages.push({ id: 'old', role: 'user', content: '历史记录'.repeat(1000) })
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async () => new Promise(resolve => {
+    release = () => resolve({ id: 'summary', phase: 'complete', text: '精简摘要' })
+  }))
+  const sending = p.sendChat(p.chat, '继续', [], 'model')
+  await vi.waitFor(() => expect(p.chat.messages.at(-1)?.contextCompressing).toBe(true))
+  p.stopChat(p.chat)
+  expect(p.chat.messages.at(-1)).toMatchObject({ contextCompressing: false, interrupted: true })
+  release()
+  await sending
+  expect(mocks.submit).toHaveBeenCalledTimes(1)
+  expect(p.chat.messages.at(-1)?.contextCompressed).toBeUndefined()
+})
+it('does not label invalid summaries as successfully compressed', async () => {
+  const p = await fixture()
+  p.chat.compressionThreshold = 500
+  p.chat.messages.push({ id: 'old', role: 'user', content: '历史记录'.repeat(1000) })
+  mocks.submit.mockResolvedValueOnce({ id: 'summary', phase: 'complete', text: '过长'.repeat(10000) })
+  await p.sendChat(p.chat, '继续', [], 'model')
+  expect(p.chat.messages.at(-1)).toMatchObject({ contextCompressing: false, interrupted: true })
+  expect(p.chat.messages.at(-1)?.contextCompressed).toBeUndefined()
+  expect(p.chat.messages[0]?.content).toBe('历史记录'.repeat(1000))
+})
 it('shows a tool-level failure even when a manually rerun MCP request returns HTTP success', async () => {
   const p = await fixture(), source = toolSource()
   p.chat.settings.mcpServers = ['original']; p.chat.messages.push(source)

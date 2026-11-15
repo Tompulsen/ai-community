@@ -15,7 +15,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN apk add --no-cache ffmpeg
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 RUN addgroup -g 991 community && adduser -D -u 991 -G community community
 COPY --from=build /app/dist ./dist
 COPY server ./server

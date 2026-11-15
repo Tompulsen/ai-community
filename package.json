@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "start": "node server/runtime.ts",
     "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs",
-    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts src/native-message-logic.test.ts src/native-chat-messages.test.ts src/studio-markdown.test.ts src/studio-conversations.test.ts server/business server/native-account/wallet.test.ts",
+    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts src/native-message-logic.test.ts src/native-chat-messages.test.ts src/studio-markdown.test.ts src/studio-conversations.test.ts src/studio-feedback.test.ts server/business server/native-account/wallet.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "bcryptjs": "3.0.3",
     "dompurify": "^3.4.17",
+    "elkjs": "0.12.1",
     "fastify": "5.12.8",
     "figma-squircle": "1.1.0",
     "highlight.js": "11.12.0",
