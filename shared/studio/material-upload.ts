@@ -230,7 +230,7 @@ export function createMaterialUpload(
 
   function add(files: File[]): Promise<void> {
     if (entries.size + files.length > (options.limit ?? 10)) {
-      return Promise.reject(new Error("每轮最多添加 10 个附件。"));
+      return Promise.reject(new Error(options.imageLimitError));
     }
     const added: MaterialEntry[] = [];
     for (const file of files) {

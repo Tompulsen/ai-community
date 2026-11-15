@@ -3,8 +3,8 @@
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
-import { errorMessage, notify, session, uploadFile } from '../state'
-import { creation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
+import { errorMessage, notify, session } from '../state'
+import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
 import { chats, newChat, saveChats } from '../native-chat'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
@@ -14,7 +14,10 @@ import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioVideoPrompt from './StudioVideoPrompt.vue'
-import { remapVideoMentions, removeVideoMention } from '../../shared/studio/video-mentions'
+import StudioReferenceAttachments from './StudioReferenceAttachments.vue'
+import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
+import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
+import { remapVideoMentions } from '../../shared/studio/video-mentions'
 import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
 import { IMAGE_RATIOS, imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
@@ -36,7 +39,7 @@ const manualSize = ref(''), restoringParameters = ref(false)
 const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode))
 const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
-const uploading = ref(false), submissions = ref<Record<string, boolean>>({}), error = ref('')
+const submissions = ref<Record<string, boolean>>({}), error = ref(''), waitingForMaterials = ref(false)
 const promptInput = ref<HTMLTextAreaElement | InstanceType<typeof StudioVideoPrompt>>()
 const blank = ref(false)
 const branchTaskId = ref<string>(), editing = ref(false)
@@ -55,10 +58,31 @@ const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
 const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
-const canGenerate = computed(() => chats.ready && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !uploading.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
+const canGenerate = computed(() => chats.ready && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
 let live = true, draftRevision = 0
-onUnmounted(() => { live = false; draftRevision++ })
+let materialSubmission: AbortController | undefined
+onUnmounted(() => { live = false; draftRevision++; materialSubmission?.abort() })
 const draftScope = () => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}:${draftRevision}`
+const referenceFiles = computed<StudioFile[]>({
+  get: () => references.value.map(file => ({
+    name: file.name, content: file.url, type: /^data:([^;,]+)/.exec(file.url)?.[1] || 'image/png', size: 0, isText: false,
+    referenceId: file.id, fromWorkId: file.fromWorkId,
+  })),
+  set: files => {
+    const next = files.map(file => ({ name: file.name, url: file.content, id: file.referenceId, fromWorkId: file.fromWorkId }))
+    if (props.kind === 'video') prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
+    references.value = next
+    if (props.kind === 'video' && references.value.length) {
+      videoOptions.mode = videoOptions.mode === 'first-last-frame' && references.value.length === 2 ? 'first-last-frame'
+        : references.value.length > 1 ? 'reference-to-video' : 'image-to-video'
+    }
+  },
+})
+const materials = useStudioMaterials(referenceFiles, computed(() => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}`), {
+  limit: computed(() => props.kind === 'video' ? 10 : 16), imagesOnly: true,
+})
+const uploading = materials.pending
+const materialIssues = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
 function finishRestore() {
   const scope = draftScope()
   void nextTick(() => { if (live && scope === draftScope()) restoringParameters.value = false })
@@ -73,6 +97,7 @@ function chooseModel() {
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
 }
 function loadDraft() {
+  materialSubmission?.abort()
   restoringParameters.value = true
   draftRevision++
   branchTaskId.value = undefined; editing.value = false; parameterModel.value = ''; skipAutomaticReference.value = false
@@ -163,20 +188,12 @@ async function addReferences(event: Event) {
   input.value = ''
 }
 async function addReferenceFiles(files: File[]) {
-  if (!files.length || uploading.value) return
-  uploading.value = true; error.value = ''
+  if (!files.length || submitting.value || busy.value || props.sourceBlocked) return
+  error.value = ''
   const scope = draftScope()
   try {
-    if (files.length + references.value.length > (props.kind === 'video' ? 10 : 16)) throw new Error('参考图数量超过上限，请减少所选图片。')
-    for (const file of files) {
-      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('参考文件请选择 PNG、JPEG 或 WebP 图片。')
-      const uploaded = await uploadFile(file)
-      if (!live || scope !== draftScope()) return
-      references.value.push({ id: uploaded.id, url: uploaded.url, name: file.name })
-      if (props.kind === 'video') videoOptions.mode = references.value.length > 1 ? 'reference-to-video' : 'image-to-video'
-    }
+    await materials.add(files)
   } catch (cause) { if (live && scope === draftScope()) error.value = errorMessage(cause) }
-  finally { uploading.value = false }
 }
 function pasteReferences(event: ClipboardEvent) {
   const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/'))
@@ -188,9 +205,8 @@ function dropReferences(event: DragEvent) {
   void addReferenceFiles([...event.dataTransfer.files])
 }
 function removeReference(index: number) {
-  if (props.kind === 'video') prompt.value = removeVideoMention(prompt.value, index + 1)
   if (!references.value.length) skipAutomaticReference.value = true
-  else references.value.splice(index, 1)
+  else materials.removeAt(index)
 }
 async function generate() {
   if (!canGenerate.value) return
@@ -198,15 +214,34 @@ async function generate() {
   const chat = currentConversation.value || ensureMediaConversation(props.kind)
   const scope = draftScope()
   const conversationId = chat.mediaConversationId || chat.id
-  const submittedPrompt = prompt.value, submittedReferences = JSON.stringify(references.value), branchId = branchTaskId.value
+  let submittedPrompt = prompt.value
+  const branchId = branchTaskId.value, initialReferenceUrls = references.value.map(file => file.url)
+  let submittedReferences = JSON.stringify(references.value)
   const branchEdited = editing.value
+  const preparation = new AbortController()
+  materialSubmission = preparation
   let preparing = true
   blank.value = false
   error.value = ''; submissions.value[kind] = true; chats.preparing[chat.id] = true
   try {
     const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
+      accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
       ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value, imageContext: buildImageContext(chat, branchId) } : { videoOptions }),
       ...(branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
+    waitingForMaterials.value = true
+    try { await materials.wait(preparation.signal) }
+    finally { if (materialSubmission === preparation) waitingForMaterials.value = false }
+    if (!live || scope !== draftScope() || owner !== session.user?.id) return
+    submittedReferences = JSON.stringify(references.value)
+    input.references = JSON.parse(JSON.stringify(kind === 'image' ? requestReferences.value : references.value))
+    if (input.videoOptions) {
+      submittedPrompt = remapVideoMentions(submittedPrompt, initialReferenceUrls, references.value.map(file => file.url))
+      input.prompt = submittedPrompt
+      input.videoOptions.mode = videoOptions.mode
+      const limits = videoCapabilities(input.model, input.videoOptions.mode)
+      if (limits && (!limits.durations.includes(input.duration) || input.videoOptions.resolution !== 'auto' && !limits.resolutions.includes(input.videoOptions.resolution)))
+        throw new Error('当前参考图模式不支持所选时长或分辨率，请在高级参数中调整。')
+    }
     await saveChats(true)
     if (owner !== session.user?.id || !chats.sessions.includes(chat)) return
     let registered = false
@@ -234,7 +269,11 @@ async function generate() {
     }
     await syncMediaConversations()
   } catch (cause) { if (owner === session.user?.id && live && scope === draftScope()) error.value = errorMessage(cause) }
-  finally { submissions.value[kind] = false; if (preparing && owner === session.user?.id) chats.preparing[chat.id] = false }
+  finally {
+    if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false }
+    submissions.value[kind] = false
+    if (preparing && owner === session.user?.id) chats.preparing[chat.id] = false
+  }
 }
 async function useTask(task: CreationTask) {
   if (restoringTask.value || task.owner !== session.user?.id || task.kind !== props.kind) return false
@@ -326,10 +365,11 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
     <StudioBilling :model="model" :quantity="kind === 'image' ? count : undefined" :refresh-key="selected?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
     <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
-      <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="mediaSource(file.url)" :alt="file.name" :title="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="removeReference(index)"><X :size="14" /></button></li></ul>
-      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
+      <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
+      <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
+      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" :disabled="submitting" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
-        <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
+        <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="submitting || busy || materials.snapshot.value.items.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
             <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-if="!(IMAGE_RATIOS as readonly string[]).includes(ratio)" :value="ratio">{{ ratio }}</option><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-if="!videoLimits.durations.includes(duration)" :value="duration">{{ duration }}（当前模型不支持）</option><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="3600" step="1" required /></label><label class="field"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required /></label></div>
             <CreationAdvanced :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" :kind="kind" :model="model" embedded @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
@@ -337,6 +377,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" /></div>
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
+        <button v-else-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
         <button v-else class="composer-submit generation-button" :title="submitting ? '正在准备…' : '开始生成'" :aria-label="submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>
@@ -361,8 +402,4 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
 .reference-upload { width: fit-content; position: relative; overflow: hidden; }
 .reference-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
 .reference-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.reference-list { display: flex; flex-wrap: wrap; list-style: none; padding: 0 8px; margin: 0 0 8px; gap: 8px; max-height: 80px; overflow-y: auto; }
-.reference-list li { position: relative; width: 64px; height: 64px; }
-.reference-list img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
-.reference-list button { position: absolute; right: 0; top: 0; min-width: 24px; width: 24px; height: 24px; min-height: 24px; background: var(--surface); }
 </style>

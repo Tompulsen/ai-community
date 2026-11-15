@@ -60,13 +60,16 @@ const icon = (chat: NativeChat) => ({ text: MessageSquare, image: ImageIcon, vid
 
 <style scoped>
 .conversation-group { min-width: 0; }
-.conversation-row { display: flex; align-items: center; gap: 0; min-width: 0; border-radius: 8px; }
+.conversation-row { --conversation-tool-size: 26px; position: relative; display: flex; align-items: center; gap: 0; min-width: 0; border-radius: 8px; }
 .conversation-record { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; min-height: 48px; padding: 8px 10px; text-align: left; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+.conversation-row > button.conversation-record { padding-inline-end: calc(var(--conversation-tool-size) * 2 + 12px); }
 .conversation-record > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-record > svg, .conversation-record > input { flex: none; }
 .conversation-record > input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
-.conversation-record.active, .conversation-record.selected, .conversation-record:hover { color: var(--ink); background: var(--surface-soft); }
-.row-tool { display: grid; place-items: center; flex: none; width: 26px; height: 36px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.conversation-record.active, .conversation-record.selected, .conversation-row:hover > .conversation-record { color: var(--ink); background: var(--surface-soft); }
+.row-tool { position: absolute; z-index: 1; inset-block: 0; margin-block: auto; display: grid; place-items: center; width: var(--conversation-tool-size); height: 36px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.conversation-rename { inset-inline-end: calc(var(--conversation-tool-size) + 6px); }
+.conversation-drag-handle { inset-inline-end: 6px; }
 .row-tool:hover { color: var(--ink); background: var(--surface-soft); }
 .conversation-drag-handle { cursor: grab; touch-action: none; }
 .conversation-drag-handle:active { cursor: grabbing; }
@@ -74,5 +77,5 @@ const icon = (chat: NativeChat) => ({ text: MessageSquare, image: ImageIcon, vid
 .conversation-drag-ghost { opacity: .45; }
 .conversation-record:focus-visible, .row-tool:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 @media (hover: hover) and (pointer: fine) { .row-tool { opacity: 0; }.conversation-row:hover .row-tool, .conversation-row:focus-within .row-tool { opacity: 1; } }
-@media (pointer: coarse), (max-width: 639px) { .row-tool { width: 36px; height: 44px; }.conversation-record { padding-inline: 8px; } }
+@media (pointer: coarse), (max-width: 639px) { .conversation-row { --conversation-tool-size: 36px; }.row-tool { height: 44px; }.conversation-record { padding-inline: 8px; } }
 </style>

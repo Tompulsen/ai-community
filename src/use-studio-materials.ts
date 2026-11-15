@@ -1,18 +1,24 @@
-import { computed, onBeforeUnmount, shallowRef, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, shallowRef, unref, watch, type Ref } from 'vue'
 import { createMaterialUpload, type MaterialUploadSnapshot } from '../shared/studio/material-upload'
 import { parseFile, type ParsedFile } from '../shared/studio/file-upload'
+import { prepareStudioImage } from './studio-image-upload'
 
-export type StudioFile = ParsedFile & { sourceUrl?: string; fromWorkId?: string }
-export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<string>) {
+export type StudioFile = ParsedFile & { sourceUrl?: string; fromWorkId?: string; referenceId?: string }
+export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<string>, options: { limit?: Ref<number>; imagesOnly?: boolean } = {}) {
   const snapshot = shallowRef<MaterialUploadSnapshot>({ items: [], files: [], images: [], pending: 0 })
   let preparation: ReturnType<typeof createMaterialUpload>, unsubscribe = () => {}, syncing = false
   function reset() {
     unsubscribe()
     preparation?.cancel()
     const key = identity.value
+    const limit = unref(options.limit) ?? 10
     const next = createMaterialUpload({
-      loadImage: async file => (await parseFile(file)).content, loadFile: parseFile,
-      imageLimitError: '每轮最多添加 10 个附件。', limit: 10,
+      loadImage: file => prepareStudioImage(file, options.imagesOnly),
+      loadFile: file => {
+        if (options.imagesOnly) throw new Error('请选择 PNG、JPEG、WebP 或 HEIC 图片。')
+        return parseFile(file)
+      },
+      imageLimitError: `每轮最多添加 ${limit} 个附件。`, limit,
     }, { images: [], files: files.value })
     preparation = next
     const update = () => {
@@ -36,7 +42,16 @@ export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<strin
   return {
     snapshot, pending: computed(() => snapshot.value.pending > 0),
     failed: computed(() => snapshot.value.items.some(item => item.status === 'failed')),
-    add: (values: File[]) => preparation.add(values), remove: (id: string) => preparation.remove(id),
+    add: (values: File[]) => preparation.add(values.map(file => {
+      const heic = /\.(heic|heif)$/i.exec(file.name)
+      return heic && !file.type.startsWith('image/') ? new File([file], file.name, { type: `image/${heic[1]!.toLowerCase()}` }) : file
+    })),
+    wait: (signal: AbortSignal) => preparation.wait(signal),
+    remove: (id: string) => preparation.remove(id),
+    removeAt: (index: number) => {
+      const item = snapshot.value.items.filter(item => item.status === 'ready')[index]
+      if (item) preparation.remove(item.id)
+    },
     retry: () => preparation.retry(), cancel: () => preparation.cancel(),
   }
 }

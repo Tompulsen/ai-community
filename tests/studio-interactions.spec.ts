@@ -57,13 +57,13 @@ test('text paste and file drop share preparation, preserve normal paste and subm
     data.items.add(new File([Uint8Array.from(atob(base64), value => value.charCodeAt(0))], 'pasted.jpg', { type: 'image/jpeg' }))
     element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
   }, state.image.toString('base64'))
-  await expect(page.locator('.material-status li[data-file-status="ready"]')).toHaveCount(1)
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
   await page.locator('.native-chat').evaluate(element => {
     const data = new DataTransfer(); data.items.add(new File(['文件内容'], 'notes.txt', { type: 'text/plain' }))
     element.dispatchEvent(new DragEvent('dragenter', { dataTransfer: data, bubbles: true, cancelable: true }))
     element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
   })
-  await expect(page.locator('.material-status li[data-file-status="ready"]')).toHaveCount(2)
+  await expect(page.locator('.material-status li[data-file-status="ready"]')).toHaveCount(1)
   expect(await input.evaluate(element => {
     const data = new DataTransfer(); data.setData('text/plain', '普通文字')
     return element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))

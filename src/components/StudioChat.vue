@@ -33,6 +33,7 @@ import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 import StudioMediaTurn from './studio-message/StudioMediaTurn.vue'
 import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
 import StudioFollowupSuggestions from './studio-message/StudioFollowupSuggestions.vue'
+import StudioReferenceAttachments from './StudioReferenceAttachments.vue'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
@@ -51,6 +52,16 @@ const sourceWorkId = computed(() => current.value?.sourceWorkId)
 const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), referenceLoading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
 const materials = useStudioMaterials(files, computed(() => `${session.user?.id || ''}:${current.value?.id || ''}`))
 const uploading = computed(() => referenceLoading.value || materials.pending.value)
+const waitingForMaterials = ref(false)
+let materialSubmission: AbortController | undefined
+const draftImages = computed(() => files.value.flatMap((file, index) => file.type.startsWith('image/') ? [{ name: file.name, url: file.content, index }] : []))
+const materialItems = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready' || !item.type.startsWith('image/')))
+function removeDraftImage(index: number) {
+  const position = draftImages.value[index]?.index
+  if (position !== undefined) materials.removeAt(position)
+}
+watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => materialSubmission?.abort())
+onBeforeUnmount(() => materialSubmission?.abort())
 const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats() } } })
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
@@ -261,10 +272,26 @@ async function applySourceReferences(selected: WorkFile[]) {
   finally { referenceLoading.value = false }
 }
 async function send() {
-  if (!current.value || props.sourceBlocked || busy.value || uploading.value || materials.failed.value || !models.value.some(item => item.id === model.value)) return
+  if (!current.value || props.sourceBlocked || busy.value || waitingForMaterials.value || referenceLoading.value || materials.failed.value || !models.value.some(item => item.id === model.value)) return
   nearBottom.value = true
-  const text = prompt.value, attached = [...files.value], quote = draftQuote.value, chat = current.value, owner = session.user?.id
-  error.value = ''; prompt.value = ''; files.value = []; draftQuote.value = undefined
+  const text = prompt.value, quote = draftQuote.value, chat = current.value, owner = session.user?.id
+  const acceptedModel = model.value, group = creation.selectedGroup, tokenId = creation.modelTokenId
+  const preparation = new AbortController()
+  materialSubmission = preparation; waitingForMaterials.value = true; chats.preparing[chat.id] = true; error.value = ''
+  try {
+    await materials.wait(preparation.signal)
+    if (preparation.signal.aborted || owner !== session.user?.id || current.value?.id !== chat.id || props.mode !== 'text') return
+    if (group !== creation.selectedGroup || tokenId !== creation.modelTokenId || acceptedModel !== model.value)
+      throw new Error('模型或分组已变化，请重新发送。')
+  } catch (cause) {
+    if (owner === session.user?.id && current.value?.id === chat.id) error.value = errorMessage(cause)
+    return
+  } finally {
+    if (owner === session.user?.id) chats.preparing[chat.id] = false
+    if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false }
+  }
+  const attached = [...files.value]
+  prompt.value = ''; files.value = []; draftQuote.value = undefined
   function restoreDraft() {
     if (owner !== session.user?.id || !chats.sessions.includes(chat) || chat.draft || chat.draftFiles?.length || chat.draftQuote) return
     chat.draft = text; chat.draftFiles = attached; chat.draftQuote = quote
@@ -272,7 +299,7 @@ async function send() {
     void saveChats()
   }
   try {
-    const submitted = await sendChat(chat, text, attached, model.value, undefined, undefined, { quote })
+    const submitted = await sendChat(chat, text, attached, acceptedModel, undefined, undefined, { quote })
     if (!submitted) restoreDraft()
   } catch (cause) { restoreDraft(); if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause) }
 }
@@ -369,10 +396,11 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
       <StudioBilling v-if="mode === 'text'" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form v-if="mode === 'text'" class="chat-composer studio-composer" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
+        <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
         <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
-        <StudioMaterialStatus :items="materials.snapshot.value.items" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
+        <StudioMaterialStatus :items="materialItems" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
-          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
+          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="18" /></template>
               <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" embedded /></details></div>
               <div class="settings-grid">
@@ -382,8 +410,9 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
             </StudioPopover>
           </div>
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /></div>
-          <button v-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="busy || sourceBlocked || uploading || materials.failed.value || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
+          <button v-if="waitingForMaterials" class="composer-submit" type="button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
+          <button v-else-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
+          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="busy || sourceBlocked || referenceLoading || materials.failed.value || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length && !materials.snapshot.value.items.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
         <div v-if="current.search !== 'off'" class="composer-feedback"><p class="search-cost">搜索与回答分别按章鱼账号配置计费。</p></div><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
