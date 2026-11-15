@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
-import { ArrowUp, Check, Clock, Copy, Download, LoaderCircle, Maximize, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
+import { ArrowUp, Check, Clock, Download, LoaderCircle, Maximize, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
-import { errorMessage, notify, session, uploadFile } from '../state'
-import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
+import { errorMessage, session, uploadFile } from '../state'
+import { creation, creationConversationId, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
 import CreationAdvanced from './CreationAdvanced.vue'
 import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
@@ -33,30 +33,35 @@ const gallery = ref<InstanceType<typeof StudioGallery>>(), canvas = ref<HTMLElem
 const blank = ref(false), now = ref(Date.now())
 const submitting = computed(() => Boolean(submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
-const selected = computed(() => blank.value ? undefined : creation.tasks.find(task => task.id === creation.selectedId && task.kind === props.kind) || creation.tasks.find(task => task.kind === props.kind))
-const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind))
+const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind && task.owner === session.user?.id))
+const selected = computed(() => blank.value ? undefined : tasks.value.find(task => task.id === creation.selectedId) || tasks.value[0])
+const conversationTasks = computed(() => selected.value ? tasks.value.filter(task => creationConversationId(task) === creationConversationId(selected.value!)).reverse() : [])
 const activeTask = computed(() => tasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
-const working = computed(() => selected.value && ['submitting', 'running'].includes(selected.value.phase))
+function working(task: CreationTask) { return ['submitting', 'running'].includes(task.phase) }
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
 const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
 const canGenerate = computed(() => !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
-const elapsed = computed(() => {
-  const task = selected.value
-  if (!task || !Number.isFinite(task.createdAt) || !working.value && !Number.isFinite(task.settledAt)) return ''
-  const seconds = Math.max(0, Math.floor(((working.value ? now.value : task.settledAt!) - task.createdAt) / 1000))
+function elapsed(task: CreationTask) {
+  if (!Number.isFinite(task.createdAt) || !working(task) && !Number.isFinite(task.settledAt)) return ''
+  const seconds = Math.max(0, Math.floor(((working(task) ? now.value : task.settledAt!) - task.createdAt) / 1000))
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
-})
-const waitingMessage = computed(() => {
-  if (selected.value?.preview) return '预览已返回，正在等待最终画面。'
-  if (selected.value?.phase === 'submitting') return '正在等待模型响应，返回后会在这里显示结果。'
+}
+function waitingMessage(task: CreationTask) {
+  if (task.preview) return '预览已返回，正在等待最终画面。'
+  if (task.phase === 'submitting') return '正在等待模型响应，返回后会在这里显示结果。'
   return props.kind === 'video' ? '视频正在生成，结果会自动更新。' : '模型正在生成画面，结果会自动更新。'
-})
+}
 let timer: ReturnType<typeof setInterval> | undefined
-watch(working, value => { clearInterval(timer); now.value = Date.now(); if (value) timer = setInterval(() => { now.value = Date.now() }, 1000) }, { immediate: true })
+watch(activeTask, value => { clearInterval(timer); now.value = Date.now(); if (value) timer = setInterval(() => { now.value = Date.now() }, 1000) }, { immediate: true })
 onUnmounted(() => clearInterval(timer))
-watch(() => selected.value?.id, async () => { await nextTick(); if (canvas.value) canvas.value.scrollTop = 0 })
+watch(() => selected.value?.id, async (id, previousId) => {
+  const current = tasks.value.find(task => task.id === id), previous = tasks.value.find(task => task.id === previousId)
+  const continuing = current && previous && creationConversationId(current) === creationConversationId(previous)
+  await nextTick()
+  if (canvas.value) canvas.value.scrollTop = continuing ? canvas.value.scrollHeight : 0
+})
 const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
@@ -154,10 +159,11 @@ async function addReferences(event: Event) {
 async function generate() {
   if (!canGenerate.value) return
   const kind = props.kind, owner = session.user?.id
+  const conversationId = selected.value ? creationConversationId(selected.value) : undefined
   blank.value = false
   error.value = ''; submissions.value[kind] = true
   try {
-    const pending = submitCreation({ kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value.map(file => ({ ...file })), sourceWorkId: sourceWorkId.value,
+    const pending = submitCreation({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value.map(file => ({ ...file })), sourceWorkId: sourceWorkId.value,
       ...(props.kind === 'image' ? { imageOptions: { ...imageOptions } } : props.kind === 'video' ? { videoOptions: { ...videoOptions } } : {}) })
     await pending
   } catch (cause) { if (owner === session.user?.id && kind === props.kind) error.value = errorMessage(cause) }
@@ -166,7 +172,7 @@ async function generate() {
 async function download(task: CreationTask, index = 0) {
   try { await downloadCreation(task, index) } catch (cause) { error.value = errorMessage(cause) }
 }
-function openPublish(destination: CreationDestination = 'community') { if (selected.value) emit('publish', selected.value, destination) }
+function openPublish(task: CreationTask, destination: CreationDestination = 'community') { emit('publish', task, destination) }
 function useTask(task: CreationTask) {
   blank.value = false
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
@@ -181,10 +187,6 @@ function useTask(task: CreationTask) {
   emit('source', sourceWorkId.value)
 }
 function editTask(task: CreationTask) { useTask(task); void nextTick(() => promptInput.value?.focus()) }
-async function copyPrompt(task: CreationTask) {
-  try { await navigator.clipboard.writeText(task.prompt); notify('提示词已复制。') }
-  catch { error.value = '复制失败，请选中提示词后复制。' }
-}
 function newCreation() {
   blank.value = true; prompt.value = ''; references.value = []; error.value = ''; sourceWorkId.value = undefined
   emit('source')
@@ -203,18 +205,18 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
     <div class="creation-output">
       <div ref="canvas" class="creation-canvas" :class="{ 'has-result': selected?.phase === 'complete' }" tabindex="0" aria-label="创作对话">
         <div v-if="selected" class="creation-conversation">
+          <div v-for="selected in conversationTasks" :key="selected.id" class="creation-turn">
           <article class="creation-request" aria-label="已发送的创作请求">
             <header class="creation-message-heading"><span class="creation-avatar" aria-hidden="true">{{ (session.user?.name || session.user?.username || '你').slice(0, 1) }}</span><strong>你</strong><time>{{ new Date(selected.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</time></header>
             <div class="creation-request-body"><p>{{ selected.prompt }}</p><div v-if="selected.references.length" class="sent-references"><img v-for="(file, index) in selected.references" :key="file.url" :src="file.url" :alt="`参考图 ${index + 1}：${file.name}`" /></div></div>
             <div class="request-summary"><span>{{ selected.request.aspect_ratio === 'auto' ? '自动比例' : selected.request.aspect_ratio }}</span><span>{{ kind === 'video' ? `${selected.request.duration} 秒视频` : `${selected.request.n} 张图片` }}</span><span v-if="selected.request.imageOptions?.resolution">{{ selected.request.imageOptions.resolution === 'auto' ? '自动分辨率' : selected.request.imageOptions.resolution.toUpperCase() }}</span></div>
-            <div class="creation-message-actions"><button class="studio-tool" @click="copyPrompt(selected)"><Copy :size="15" />复制提示词</button><button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />编辑提示词</button></div>
           </article>
           <article class="creation-response" aria-label="模型生成结果">
-            <header class="creation-message-heading"><img src="/assets/brand/octopus-community.jpg" width="28" height="28" alt="" /><strong>{{ selected.model }}</strong><span v-if="elapsed" class="task-elapsed" :title="'从首次提交起计算，包含暂停等待的时间'"><Clock :size="13" />{{ working ? '已等待' : '自提交起' }} {{ elapsed }}</span></header>
-            <div class="task-status"><div :role="selected.phase === 'error' || selected.phase === 'attention' ? 'alert' : 'status'"><LoaderCircle v-if="working" :size="18" /><Check v-else-if="selected.phase === 'complete'" :size="18" /><strong>{{ phases[selected.phase] }}</strong><span v-if="selected.progress != null && working">{{ Math.round(selected.progress) }}%</span></div><button v-if="selected.phase === 'paused' || selected.phase === 'attention'" class="button subtle btn" @click="resumeCreation(selected)"><Play :size="15" />继续查询</button><button v-else-if="selected.phase === 'error'" class="button subtle btn" @click="editTask(selected)"><Pencil :size="15" />编辑后重试</button></div>
+            <header class="creation-message-heading"><img src="/assets/brand/octopus-community.jpg" width="28" height="28" alt="" /><strong>{{ selected.model }}</strong><span v-if="elapsed(selected)" class="task-elapsed" :title="'从首次提交起计算，包含暂停等待的时间'"><Clock :size="13" />{{ working(selected) ? '已等待' : '自提交起' }} {{ elapsed(selected) }}</span></header>
+            <div class="task-status"><div :role="selected.phase === 'error' || selected.phase === 'attention' ? 'alert' : 'status'"><LoaderCircle v-if="working(selected)" :size="18" /><Check v-else-if="selected.phase === 'complete'" :size="18" /><strong>{{ phases[selected.phase] }}</strong><span v-if="selected.progress != null && working(selected)">{{ Math.round(selected.progress) }}%</span></div><button v-if="selected.phase === 'paused' || selected.phase === 'attention'" class="button subtle btn" @click="resumeCreation(selected)"><Play :size="15" />继续查询</button><button v-else-if="selected.phase === 'error'" class="button subtle btn" @click="editTask(selected)"><Pencil :size="15" />编辑后重试</button></div>
             <p v-if="selected.error" class="task-message">{{ selected.error }}</p>
-            <div v-if="working" class="generation-feedback">
-              <p>{{ waitingMessage }}</p>
+            <div v-if="working(selected)" class="generation-feedback">
+              <p>{{ waitingMessage(selected) }}</p>
               <ol class="generation-steps" aria-label="生成阶段"><li :class="{ current: selected.phase === 'submitting', done: selected.phase === 'running' }"><Check v-if="selected.phase === 'running'" :size="13" />发送请求</li><li :class="{ current: selected.phase === 'running' }">模型生成</li><li>结果就绪</li></ol>
               <progress v-if="selected.progress != null" :value="selected.progress" max="100" aria-label="模型返回的生成进度" />
               <p v-if="now - selected.createdAt >= 30000" class="long-wait">等待时间较长，你可以继续编辑提示词或停止本页等待，稍后查询这次任务。</p>
@@ -223,14 +225,14 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
             <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /><span><Maximize :size="16" />查看大图</span></button></figure></div>
             <div v-else-if="selected.text" class="creation-text"><pre>{{ selected.text }}</pre></div>
             <div v-if="selected.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
-              <button class="studio-tool" @click="openPublish()"><Upload :size="15" />发布作品</button>
+              <button class="studio-tool" @click="openPublish(selected)"><Upload :size="15" />发布作品</button>
               <button v-for="(url, index) in selected.urls" :key="url" class="studio-tool" @click="download(selected, index)"><Download :size="16" />下载{{ selected.urls.length > 1 ? ` ${index + 1}` : '' }}</button>
               <button v-if="!selected.urls.length && selected.text" class="studio-tool" @click="download(selected)"><Download :size="16" />下载文本</button>
-              <button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish('source-comment')"><Upload :size="15" />发送到源作品评论区</button>
+              <button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish(selected, 'source-comment')"><Upload :size="15" />发送到源作品评论区</button>
               <button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />复用参数</button>
-              <button class="studio-tool" @click="newCreation"><Plus :size="15" />新的创作</button>
             </div>
           </article>
+          </div>
         </div>
         <div v-else class="canvas-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>{{ kind === 'video' ? '开始视频创作' : '开始图片创作' }}</p><span>写下你的想法，也可以添加参考图。</span></div>
       </div>
@@ -284,6 +286,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .canvas-empty img { border-radius: 10px; }.canvas-empty p { margin: 0; }
 .canvas-empty > span { font-size: 14px; }
 .creation-conversation { width: min(100%, 960px); margin-inline: auto; padding-block: 8px 24px; }
+.creation-turn + .creation-turn { margin-top: 32px; }
 .creation-request { width: fit-content; max-width: min(78%, 72ch); margin-left: auto; margin-bottom: 40px; }
 .creation-message-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; min-height: 28px; font-size: 14px; color: var(--muted); }
 .creation-message-heading strong { font-weight: 500; color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
@@ -296,7 +299,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .sent-references { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }.sent-references img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; }
 .request-summary, .creation-message-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .request-summary { font-size: 12px; color: var(--muted); margin-top: 10px; justify-content: flex-end; }
-.creation-request .creation-message-actions { justify-content: flex-end; margin-top: 4px; }
 .creation-response { min-width: 0; }.creation-response > .creation-message-heading { margin-bottom: 16px; }
 .task-elapsed { display: inline-flex; align-items: center; gap: 4px; }
 .creation-response .task-status { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 12px; font-size: 14px; }
@@ -325,7 +327,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
   .creation-conversation { width: 100%; padding-block: 8px 24px; }
   .creation-request { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; width: 100%; max-width: none; margin: 0 0 12px; }
   .creation-request > .creation-message-heading { display: none; }
-  .creation-request > .creation-message-actions { margin-left: auto; }
   .creation-request-body { padding: 0; border-radius: 0; background: transparent; }
   .creation-request-body p { font-size: 16px; line-height: 28px; }
   .request-summary { justify-content: flex-start; margin-top: 0; }

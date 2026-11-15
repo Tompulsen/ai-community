@@ -16,6 +16,7 @@ export interface CreationGroup { id: string; name: string; ratio?: number; descr
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {
   id: string
+  conversationId?: string
   owner: string
   kind: CreationKind
   model: string
@@ -45,6 +46,7 @@ export interface CreationTask {
   legacy?: boolean
 }
 export interface CreationInput {
+  conversationId?: string
   accountTokenId?: number | null
   accountGroup?: string | null
   kind: CreationKind
@@ -384,6 +386,7 @@ export function stopCreation(task: CreationTask) {
   task.phase = 'paused'; task.settledAt = Date.now(); task.error = '已停止本页等待，上游任务可能仍在执行。'
   void persist()
 }
+export function creationConversationId(task: CreationTask) { return task.conversationId || task.id }
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void, isCurrent: () => boolean = () => true) {
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
   const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
@@ -392,8 +395,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
+  const id = crypto.randomUUID()
+  const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
-    id: crypto.randomUUID(), owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
+    id, conversationId: previous ? creationConversationId(previous) : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
     request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
@@ -418,7 +423,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       headers: { 'Content-Type': 'application/json', ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}) },
-      body: JSON.stringify({ ...input, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
+      body: JSON.stringify({ ...input, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
@@ -572,7 +577,8 @@ export function initializeCreation() {
     const stored = parse(localStorage.getItem(key + ':fallback')) || parse(await storedValue(key))
     if (version !== epoch) return
     creation.tasks = Array.isArray(stored) ? stored.filter(validTask).filter(task => task.owner === owner).map(task => ({
-      ...task, phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
+      ...task, conversationId: validId(task.conversationId) ? task.conversationId : undefined,
+      phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
     })) : []
     await importLegacy(version)
     if (version !== epoch) return

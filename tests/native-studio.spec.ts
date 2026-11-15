@@ -37,6 +37,76 @@ async function fixture(page: Page) {
   return { ...account, calls, image, uploads: () => uploads }
 }
 
+for (const kind of ['image', 'video'] as const) {
+  test(`${kind} sends append to the same conversation until explicitly starting a new one`, async ({ page }) => {
+    const state = await fixture(page)
+    await page.goto(`/create/${kind}`)
+    const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
+    const records = page.locator('.studio-sidebar .studio-record')
+    for (const text of ['第一张创作', '继续调整画面']) {
+      await prompt.fill(text)
+      await page.getByRole('button', { name: '开始生成', exact: true }).click()
+      await expect(page.locator('.task-status').last()).toContainText('生成完成')
+    }
+    await expect(records).toHaveCount(1)
+    await expect(records.first()).toContainText('第一张创作')
+    await expect(page.locator('.creation-request')).toHaveCount(2)
+    await expect(page.locator('.creation-request').first()).toContainText('第一张创作')
+    await expect(page.locator('.creation-request').last()).toContainText('继续调整画面')
+    await page.locator('.creation-response').first().getByRole('button', { name: '复用参数', exact: true }).click()
+    await expect(prompt).toHaveValue('第一张创作')
+    await expect(page.locator('.creation-response')).toHaveCount(2)
+    await page.reload()
+    await expect(page.locator('.creation-request')).toHaveCount(2)
+    await expect(records).toHaveCount(1)
+    await page.setViewportSize({ width: 390, height: 900 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.locator('.creation-turn').last().scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `.taste-skill/studio-conversations-20261115/${kind}-mobile.png` })
+    await page.locator('.mobile-new-creation').click()
+    await expect(page.locator('.creation-request')).toHaveCount(0)
+    await prompt.fill('独立的新创作')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect(page.locator('.task-status')).toContainText('生成完成')
+    await expect(records).toHaveCount(2)
+    await expect(page.locator('.creation-request')).toHaveCount(1)
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await records.filter({ hasText: '第一张创作' }).click()
+    await expect(page.locator('.creation-request')).toHaveCount(2)
+    await expect(prompt).toHaveValue('继续调整画面')
+    expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(3)
+    for (const call of state.calls.filter(call => call.path === '/api/creation/generate')) {
+      expect(call.body).not.toHaveProperty('conversationId')
+    }
+    await page.screenshot({ path: `.taste-skill/studio-conversations-20261115/${kind}-desktop.png` })
+  })
+}
+
+test('older independent records remain separate while new sends continue the selected record', async ({ page }) => {
+  await fixture(page)
+  await page.addInitScript(() => {
+    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify(
+      ['old-first', 'old-second'].map((id, index) => ({
+        id, owner: '17', kind: 'image', model: 'fixture-image', prompt: '相同的旧提示词',
+        createdAt: Date.now() - index * 1000, settledAt: Date.now(), phase: 'complete', protocol: 'openai', references: [],
+        urls: ['https://media.example/creation.jpg'], text: '', request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 },
+      })),
+    ))
+  })
+  await page.goto('/create/image')
+  const records = page.locator('.studio-sidebar .studio-record')
+  await expect(records).toHaveCount(2)
+  await expect(page.locator('.creation-request')).toHaveCount(1)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('接着修改旧作品')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  await expect(records).toHaveCount(2)
+  await expect(page.locator('.creation-request')).toHaveCount(2)
+  await records.last().click()
+  await expect(page.locator('.creation-request')).toHaveCount(1)
+  await expect(page.locator('.creation-request')).toContainText('相同的旧提示词')
+})
+
 test('a slow image request keeps the sent prompt, elapsed time and editor usable', async ({ page }) => {
   await fixture(page)
   let release!: () => void
@@ -135,18 +205,17 @@ test('stopping a recovery before its response cannot revive the task', async ({ 
   expect(queries).toBe(0)
 })
 
-test('completed requests support copy, reuse, preview and a fresh draft without deleting history', async ({ page }) => {
+test('completed requests support reuse, preview and a fresh draft without deleting history', async ({ page }) => {
   const state = await fixture(page)
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.goto('/create/image')
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
   await prompt.fill('可复用的小猫提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  await page.getByRole('button', { name: '复制提示词', exact: true }).click()
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('可复用的小猫提示词')
+  await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
   await prompt.fill('临时修改')
-  await page.getByRole('button', { name: '编辑提示词', exact: true }).click()
+  await page.getByRole('button', { name: '复用参数', exact: true }).click()
   await expect(prompt).toHaveValue('可复用的小猫提示词')
   await expect(prompt).toBeFocused()
   await page.getByRole('button', { name: '查看大图：预览生成图片 1', exact: true }).click()
@@ -154,7 +223,7 @@ test('completed requests support copy, reuse, preview and a fresh draft without 
   await page.getByRole('button', { name: '放大', exact: true }).click()
   await expect(page.locator('.media-lightbox output')).toHaveText('125%')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: '新的创作', exact: true }).click()
+  await page.getByRole('complementary', { name: '创作导航与历史' }).getByRole('button', { name: '新建创作', exact: true }).click()
   await expect(prompt).toHaveValue('')
   await expect(page.locator('.canvas-empty')).toContainText('开始图片创作')
   await page.locator('.studio-sidebar .studio-record').click()
@@ -197,7 +266,8 @@ test('a failed generation keeps its request and allows an explicit edited retry 
   expect(submissions).toBe(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('小猫和海边的阳光')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.locator('.task-status')).toContainText(['生成失败', '生成完成'])
+  await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(1)
   expect(submissions).toBe(2)
   await expect(page.locator('html')).toHaveAttribute('data-color-scheme', 'light')
   await mkdir(screenshotDirectory, { recursive: true })
@@ -348,7 +418,7 @@ test('legacy tasks without the original token stay untouched while base64 image 
   expect(queries).toBe(0)
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('生成可读取的图片数据')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.locator('.task-status')).toContainText(['需要核对', '生成完成'])
   await expect.poll(() => page.locator('.creation-media img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
   expect(await page.locator('.creation-media img').getAttribute('src')).toMatch(/^data:image\/png;base64,/)
   expect(queries).toBe(0)

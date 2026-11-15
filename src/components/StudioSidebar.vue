@@ -1,17 +1,34 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowLeft, CircleDollarSign, Compass, FileText, FolderOpen, LoaderCircle, Search, Sparkles, SquarePen, Video } from '@lucide/vue'
+import { CircleDollarSign, Compass, FileText, FolderOpen, LoaderCircle, Search, Sparkles, SquarePen, Video } from '@lucide/vue'
 import { session } from '../state'
 import { site } from '../site'
 import { chats, loadChats, saveChats } from '../native-chat'
-import { creation, initializeCreation, mediaSource, type CreationTask } from '../native-studio'
+import { creation, creationConversationId, initializeCreation, mediaSource, type CreationTask } from '../native-studio'
 import type { StudioKind } from '../studio-state'
 import StudioConversations from './StudioConversations.vue'
 
 const props = defineProps<{ kind: StudioKind; accountTool: string }>()
 const emit = defineEmits<{ kind: [value: StudioKind]; new: []; reuse: [task: CreationTask]; prices: []; conversation: [id: string] }>()
 const query = ref('')
-const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind && task.owner === session.user?.id && task.prompt.toLowerCase().includes(query.value.toLowerCase())))
+const conversations = computed(() => {
+  const groups = new Map<string, { task: CreationTask; title: string; active: boolean; working: boolean; matches: boolean }>()
+  const search = query.value.toLowerCase()
+  for (const task of creation.tasks) {
+    if (task.kind !== props.kind || task.owner !== session.user?.id) continue
+    const id = creationConversationId(task)
+    let group = groups.get(id)
+    if (!group) {
+      group = { task, title: '', active: false, working: false, matches: false }
+      groups.set(id, group)
+    }
+    group.title = task.prompt || task.model
+    group.active ||= task.id === creation.selectedId
+    group.working ||= task.phase === 'running' || task.phase === 'submitting'
+    group.matches ||= task.prompt.toLowerCase().includes(search)
+  }
+  return [...groups.values()].filter(group => group.matches)
+})
 watch(() => session.user?.id, async id => {
   if (id) { await initializeCreation(); await loadChats() }
 }, { immediate: true })
@@ -37,10 +54,10 @@ function selectConversation(id: string) {
       <h2>{{ kind === 'text' ? '对话记录' : '创作记录' }}</h2>
       <StudioConversations v-if="kind === 'text'" @select="selectConversation" />
       <template v-else><label class="studio-history-search"><Search :size="15" /><input v-model="query" aria-label="搜索创作记录" placeholder="搜索记录" type="search" /></label>
-        <div class="studio-sidebar-records"><button v-for="task in tasks" :key="task.id" class="studio-record" :class="{ active: task.id === creation.selectedId }" :title="task.prompt || task.model" @click="emit('reuse', task)"><img v-if="task.kind === 'image' && task.urls[0]" :src="mediaSource(task.urls[0], true)" alt="" loading="lazy" /><Video v-else-if="task.kind === 'video'" :size="17" /><FileText v-else :size="17" /><span>{{ task.prompt || task.model }}</span><LoaderCircle v-if="task.phase === 'running' || task.phase === 'submitting'" :size="14" /></button><p v-if="!tasks.length" class="studio-sidebar-empty">{{ query ? '没有匹配的记录' : '暂无创作记录' }}</p></div>
+        <div class="studio-sidebar-records"><button v-for="conversation in conversations" :key="creationConversationId(conversation.task)" class="studio-record" :class="{ active: conversation.active }" :title="conversation.title" @click="emit('reuse', conversation.task)"><img v-if="conversation.task.kind === 'image' && conversation.task.urls[0]" :src="mediaSource(conversation.task.urls[0], true)" alt="" loading="lazy" /><Video v-else-if="conversation.task.kind === 'video'" :size="17" /><FileText v-else :size="17" /><span>{{ conversation.title }}</span><LoaderCircle v-if="conversation.working" :size="14" /></button><p v-if="!conversations.length" class="studio-sidebar-empty">{{ query ? '没有匹配的记录' : '暂无创作记录' }}</p></div>
       </template>
     </section>
-    <div class="studio-sidebar-bottom"><button @click="emit('prices')"><CircleDollarSign :size="18" />模型定价</button><div id="studio-sidebar-menu" /><RouterLink to="/discover"><ArrowLeft :size="18" />返回社区</RouterLink></div>
+    <div class="studio-sidebar-bottom"><button @click="emit('prices')"><CircleDollarSign :size="18" />模型定价</button><div id="studio-sidebar-menu" /></div>
   </aside>
 </template>
 

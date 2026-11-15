@@ -46,7 +46,10 @@ for (const shape of ['portrait', 'square', 'landscape', 'multiple'] as const) {
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
       }
       const actions = page.getByRole('group', { name: '生成结果操作', exact: true })
-      for (const name of ['发布作品', '复用参数', '新的创作']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
+      for (const name of ['发布作品', '复用参数']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
+      await expect(actions.getByRole('button', { name: '新的创作', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
       await expect(actions.getByRole('button', { name: /^下载/ })).toHaveCount(images.length)
       const mediaBounds = (await page.locator('.creation-media').boundingBox())!
       const actionBounds = (await actions.boundingBox())!
@@ -94,6 +97,7 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   await expect(page.getByRole('heading', { name: '今天', exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '图片创作', exact: true })).toHaveCount(0)
   await expect(page.locator('.studio-page-toolbar')).toBeHidden()
+  await expect(page.locator('.app-header .publish-button')).toHaveCount(0)
   await expect(page.getByRole('group', { name: '生成结果操作', exact: true }).getByRole('button', { name: '发布作品', exact: true })).toBeVisible()
   await page.screenshot({ path: '.taste-skill/studio-remove-titles-20261115/desktop.png' })
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('海边的灯塔')
