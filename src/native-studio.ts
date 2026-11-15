@@ -9,6 +9,7 @@ import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
+import { captureTaskSnapshot, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot } from './studio-task-store'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -40,6 +41,7 @@ export interface CreationTask {
   generationProgress?: ChatGenerationProgress
   responseMetrics?: ChatResponseMetrics
   preview?: string
+  localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
   toolCalls?: StudioToolCall[]
   error?: string
   sourceWorkId?: string
@@ -76,9 +78,11 @@ export const creation = reactive({
   models: [] as CreationModel[], modelsLoading: false, modelsLoaded: false, modelsError: '',
   groups: [] as CreationGroup[], selectedGroup: null as string | null, modelTokenId: null as number | null,
   groupsLoading: false, groupSwitching: false, groupsError: '',
-  tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '',
+  tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
 })
+export const mediaSettings = reactive({ autoDownload: true, loaded: false })
 const controllers = new Map<string, AbortController>()
+const downloads = new Map<string, { controller: AbortController; promise: Promise<void> }>()
 const localMedia = reactive<Record<string, string>>({})
 const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
@@ -117,20 +121,17 @@ function parse(value: unknown): unknown {
 }
 async function persist(required = false) {
   if (!owner || owner !== activeOwner()) return
-  const acceptedOwner = owner, key = storeKey(), snapshot = JSON.stringify(creation.tasks)
+  const acceptedOwner = owner, key = storeKey(), snapshot = captureTaskSnapshot(owner, creation.tasks)
   writes = writes.catch(() => {}).then(async () => {
     if (acceptedOwner !== activeOwner()) return
     try {
-      const db = await database()
-      await new Promise<void>((resolve, reject) => {
-        const transaction = db.transaction('keyval', 'readwrite')
-        transaction.objectStore('keyval').put(snapshot, key)
-        transaction.oncomplete = () => { db.close(); resolve() }
-        transaction.onerror = transaction.onabort = () => { db.close(); reject(transaction.error) }
-      })
-      localStorage.removeItem(key + ':fallback')
+      await saveCapturedTaskSnapshot(acceptedOwner, snapshot)
+      if (acceptedOwner === activeOwner()) {
+        localStorage.removeItem(key + ':v2-fallback')
+        creation.historyRevision++
+      }
     } catch {
-      try { localStorage.setItem(key + ':fallback', snapshot) }
+      try { localStorage.setItem(key + ':v2-fallback', `[${[...snapshot.values()].join(',')}]`) }
       catch {
         if (acceptedOwner === activeOwner()) creation.storageError = '本地存储空间不足，刷新前请下载生成结果。'
         if (required) throw new Error('无法保存任务记录，请释放浏览器存储空间后重新操作。')
@@ -138,6 +139,22 @@ async function persist(required = false) {
     }
   })
   await writes
+}
+export async function prepareCreationHistory() {
+  await initializeCreation()
+  if (!creation.loaded || owner !== activeOwner()) throw new Error(creation.storageError || '创作记录尚未加载。')
+  await persist(true)
+}
+export function canonicalCreationTask(task: CreationTask) {
+  if (!validTask(task) || task.owner !== activeOwner()) throw new Error('生成记录不属于当前账号。')
+  let current = creation.tasks.find(item => item.id === task.id && item.owner === task.owner)
+  if (!current) { creation.tasks.push(task); current = creation.tasks.at(-1)! }
+  return current
+}
+export async function updateMediaSettings(enabled: boolean) {
+  if (!activeOwner() || typeof enabled !== 'boolean') throw new Error('当前账号不可用。')
+  localStorage.setItem(`octopus:user-${activeOwner()}:native-media-settings`, JSON.stringify({ autoDownload: enabled }))
+  mediaSettings.autoDownload = enabled; mediaSettings.loaded = true
 }
 function validTask(value: unknown): value is CreationTask {
   return record(value) && validId(value.id) && ['image', 'video', 'text'].includes(String(value.kind))
@@ -150,6 +167,7 @@ function safeResultUrl(value: unknown): string | undefined {
   if (typeof value !== 'string') return
   if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value)) return value
   if (value.startsWith('/legacy-files/') || value.startsWith('/api/creation/')) return value
+  if (/^studio-asset:[A-Za-z0-9_-]{1,200}:(?:\d{1,4}|preview)$/.test(value)) return value
   try { const url = new URL(value); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href } catch { /* Invalid media is never rendered. */ }
 }
 function galleryDatabase(): Promise<IDBDatabase | undefined> {
@@ -210,6 +228,17 @@ async function gallerySource(url: string, preview: boolean): Promise<string | un
   return loading
 }
 export function mediaSource(url: string, preview = false, kind: CreationKind = 'image'): string | undefined {
+  if (url.startsWith('studio-asset:')) {
+    const key = `${activeOwner()}:${url}:original`
+    if (!localMedia[key] && !mediaLoads.has(key)) {
+      const accepted = activeOwner(), version = epoch
+      const loading = readTaskAsset(accepted, url).then(blob => {
+        if (blob && version === epoch) return localMedia[key] = URL.createObjectURL(blob)
+      }).catch(() => undefined).finally(() => mediaLoads.delete(key))
+      mediaLoads.set(key, loading)
+    }
+    return localMedia[key]
+  }
   if (url.startsWith('legacy-gallery:')) {
     const key = `${activeOwner()}:${url}:${preview ? 'preview' : 'original'}`
     if (!localMedia[key]) void gallerySource(url, preview)
@@ -218,13 +247,17 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
   if (url.startsWith('data:') || url.startsWith('/legacy-files/') || url.startsWith('/api/creation/')) return url
   return `/api/creation/media?${new URLSearchParams({ url, kind })}`
 }
-async function readableMedia(url: string, kind: CreationKind) {
-  const source = url.startsWith('legacy-gallery:') ? await gallerySource(url, false) : mediaSource(url, false, kind)
+export async function readableMedia(url: string, kind: CreationKind, preview = false) {
+  let source = url.startsWith('legacy-gallery:') ? await gallerySource(url, preview) : mediaSource(url, false, kind)
+  if (url.startsWith('studio-asset:') && !source) {
+    const key = `${activeOwner()}:${url}:original`
+    source = await mediaLoads.get(key)
+  }
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
 }
 async function portableImage(url: string) {
-  if (!url.startsWith('legacy-gallery:') && !url.startsWith('blob:')) return url
+  if (!url.startsWith('legacy-gallery:') && !url.startsWith('studio-asset:') && !url.startsWith('blob:')) return url
   const response = await fetch(url.startsWith('blob:') ? url : await readableMedia(url, 'image'))
   if (!response.ok) throw new Error('历史图片无法读取，请重新选择参考图。')
   const blob = await response.blob()
@@ -313,6 +346,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   }
   if ((urls.length || text || task.toolCalls?.length) && (!status || ['complete', 'completed', 'success', 'succeeded'].includes(status))) {
     task.urls = urls; task.text = text; task.phase = 'complete'; task.progress = 100; task.error = ''
+    if (task.kind !== 'text') void autoDownloadCreation(task)
     return true
   }
   if (['complete', 'completed', 'success', 'succeeded'].includes(status)) {
@@ -558,6 +592,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
 export async function removeCreationTasks(ids: string[]) {
   const selected = new Set(ids)
   if (creation.tasks.some(task => selected.has(task.id) && (controllers.has(task.id) || ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))) throw new Error('进行中或需要核对的任务请保留，查询完成后再删除。')
+  for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === activeOwner())) downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
   creation.tasks = creation.tasks.filter(task => task.owner !== activeOwner() || !selected.has(task.id))
   if (selected.has(creation.selectedId)) creation.selectedId = creation.tasks[0]?.id || ''
   await persist(true)
@@ -655,13 +690,25 @@ export function initializeCreation() {
   if (!acceptedOwner) return Promise.resolve()
   owner = acceptedOwner
   booting = (async () => {
-    const stored = parse(localStorage.getItem(key + ':fallback')) || parse(await storedValue(key))
+    let saved: CreationTask[] | undefined
+    if (typeof indexedDB !== 'undefined') {
+      try { saved = await readTaskSnapshot(acceptedOwner) }
+      catch {
+        if (version === epoch) creation.storageError = '本地图库无法读取，原数据已保留。请关闭其他标签页后重试。'
+        return
+      }
+    }
+    const fallback = parse(localStorage.getItem(key + ':v2-fallback'))
+    const stored = Array.isArray(fallback)
+      ? [...new Map([...(saved || []), ...fallback.filter(validTask)].map(task => [task.id, task])).values()]
+      : saved || parse(localStorage.getItem(key + ':fallback')) || parse(await storedValue(key))
     if (version !== epoch) return
     creation.tasks = Array.isArray(stored) ? stored.filter(validTask).filter(task => task.owner === owner).map(task => ({
       ...task, conversationId: validId(task.conversationId) ? task.conversationId : undefined,
       phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
+      localSave: task.localSave?.state === 'saving' ? { ...task.localSave, state: 'failed', error: '上次下载准备已中断，可重试保存剩余文件。' } : task.localSave,
     })) : []
-    await importLegacy(version)
+    if (saved === undefined) await importLegacy(version)
     if (version !== epoch) return
     creation.loaded = true
     creation.selectedId = creation.tasks[0]?.id || ''
@@ -669,6 +716,62 @@ export function initializeCreation() {
     for (const task of creation.tasks.filter(item => item.upstreamId && item.phase === 'paused' && !item.customApiBase && (!item.legacy || item.tokenId != null)).slice(0, 4)) void resumeCreation(task)
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting
+}
+function requestDownload(blob: Blob, task: CreationTask, index: number) {
+  const extensions: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'text/markdown': 'md' }
+  const link = document.createElement('a'), objectUrl = URL.createObjectURL(blob)
+  link.href = objectUrl; link.download = `creation-${task.id}-${index + 1}.${extensions[blob.type.split(';')[0]!] || 'bin'}`
+  document.body.appendChild(link)
+  try { link.click() }
+  finally { link.remove(); setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000) }
+}
+export function saveCreationLocally(value: CreationTask): Promise<void> {
+  const task = canonicalCreationTask(value), key = `${task.owner}:${task.id}`
+  const pending = downloads.get(key)
+  if (pending) return pending.promise
+  if (task.phase !== 'complete' || task.kind === 'text' || !task.urls.length) return Promise.reject(new Error('请先完成图片或视频生成。'))
+  const version = epoch, controller = new AbortController(), urls = [...task.urls]
+  const check = () => {
+    controller.signal.throwIfAborted()
+    if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换。')
+    if (!creation.tasks.some(item => item.id === task.id && item.owner === task.owner) || urls.some((url, index) => task.urls[index] !== url)) throw new Error('生成记录已删除或原文件已变化。')
+  }
+  const promise = (async () => {
+    let completed = Math.min(task.urls.length, Math.max(0, task.localSave?.completed || 0))
+    try {
+      task.localSave = { state: 'saving', completed }
+      await persist(true); check()
+      for (let index = completed; index < task.urls.length; index++) {
+        const source = await readableMedia(task.urls[index]!, task.kind); check()
+        const response = await fetch(source, { credentials: 'same-origin', signal: controller.signal })
+        if (!response.ok) throw new Error('原文件下载失败，请重试保存。')
+        const blob = await response.blob(); check()
+        if (!blob.size || !blob.type.startsWith(`${task.kind}/`)) throw new Error('原文件格式无效，请重试保存。')
+        // Claim the file durably before handing it to the browser, which cannot confirm completion.
+        task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
+        try { await persist(true); check() }
+        catch (cause) { task.localSave.completed = completed; throw cause }
+        try { requestDownload(blob, task, index) }
+        catch (cause) { task.localSave.completed = completed; throw cause }
+        completed = index + 1
+      }
+      task.localSave = { state: 'downloadRequested', completed, requestedAt: Date.now() }
+      await persist(true)
+    } catch (cause) {
+      if (version === epoch && task.owner === activeOwner()) {
+        task.localSave = { state: 'failed', completed, error: errorMessage(cause) }
+        await persist()
+      }
+      throw cause
+    }
+  })().finally(() => { if (downloads.get(key)?.controller === controller) downloads.delete(key) })
+  downloads.set(key, { controller, promise })
+  return promise
+}
+async function autoDownloadCreation(task: CreationTask) {
+  if (typeof document === 'undefined' || !mediaSettings.autoDownload || task.localSave) return
+  try { await saveCreationLocally(task) }
+  catch { /* Save errors stay on the result; generation has already completed. */ }
 }
 export async function downloadCreation(task: CreationTask, index = 0) {
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
@@ -678,10 +781,7 @@ export async function downloadCreation(task: CreationTask, index = 0) {
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
   const blob = response ? await response.blob() : new Blob([task.text], { type: 'text/markdown' })
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-  const link = document.createElement('a'), objectUrl = URL.createObjectURL(blob)
-  const extension = blob.type.includes('webp') ? 'webp' : blob.type.includes('jpeg') ? 'jpg' : task.kind === 'video' ? 'mp4' : task.kind === 'image' ? 'png' : 'md'
-  link.href = objectUrl; link.download = `creation-${task.id}-${index + 1}.${extension}`
-  link.click(); setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  requestDownload(blob, task, index)
 }
 const sharing = new Set<string>()
 export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string) {
@@ -743,10 +843,19 @@ async function preparePublication(task: CreationTask, title: string, destination
 watch(() => activeOwner(), next => {
   epoch++
   for (const controller of controllers.values()) controller.abort()
+  for (const download of downloads.values()) download.controller.abort()
+  downloads.clear()
   controllers.clear(); owner = next; booting = undefined
   for (const key of Object.keys(localMedia)) { if (localMedia[key]?.startsWith('blob:')) URL.revokeObjectURL(localMedia[key]); delete localMedia[key] }
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
+  creation.historyRevision++
+  mediaSettings.loaded = false; mediaSettings.autoDownload = true
+  if (next) {
+    try { mediaSettings.autoDownload = JSON.parse(localStorage.getItem(`octopus:user-${next}:native-media-settings`) || 'null')?.autoDownload !== false }
+    catch { /* Invalid preferences use the original automatic-download default. */ }
+    mediaSettings.loaded = true
+  }
   creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.modelsLoaded = false; creation.storageError = ''
   ++modelRevision
   groupRead = undefined; groupSelection = undefined

@@ -117,10 +117,8 @@ test('choosing an earlier result overrides automatic reference; clearing context
   await page.reload()
   await expect(page.locator('.creation-turn')).toHaveCount(2)
   const count = await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>(resolve => { const req = indexedDB.open('community-studio', 1); req.onsuccess = () => resolve(req.result) })
-    const raw = await new Promise<string>(resolve => { const req = db.transaction('keyval').objectStore('keyval').get('octopus:user-17:native-creation-history'); req.onsuccess = () => resolve(req.result) })
-    db.close()
-    return JSON.parse(raw).length
+    const { readTaskSnapshot } = await import('/src/studio-task-store.ts')
+    return (await readTaskSnapshot('17'))?.length
   })
   expect(count).toBe(4)
 })

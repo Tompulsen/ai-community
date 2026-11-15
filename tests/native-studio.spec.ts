@@ -5,6 +5,24 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const screenshotDirectory = '.impeccable/review/native-studio'
 const asset = 'public/assets/brand/octopus-community.jpg'
+async function nativeHistory(page: Page, owner = '17') {
+  return page.evaluate(async owner => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('community-studio-media', 1)
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+    })
+    return new Promise<any[]>((resolve, reject) => {
+      const transaction = db.transaction('tasks', 'readonly')
+      const request = transaction.objectStore('tasks').index('ownerCreatedAtId').getAll(IDBKeyRange.bound([owner, 0, ''], [owner, Number.MAX_SAFE_INTEGER, '\uffff']))
+      transaction.oncomplete = () => { db.close(); resolve(request.result.reverse().map(record => record.value)) }
+      transaction.onabort = () => { db.close(); reject(transaction.error) }
+    })
+  }, owner)
+}
+async function legacyFixture(page: Page) {
+  await page.route('**/__legacy-studio-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><title>Legacy fixture</title></head><body></body></html>' }))
+  await page.goto('/__legacy-studio-fixture')
+}
 
 async function fixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
@@ -73,7 +91,7 @@ for (const kind of ['image', 'video'] as const) {
     await page.setViewportSize({ width: 1440, height: 1000 })
     await records.filter({ hasText: '第一张创作' }).click()
     await expect(page.locator('.creation-request')).toHaveCount(2)
-    await expect(prompt).toHaveValue('继续调整画面')
+    await expect(prompt).toHaveValue('第一张创作')
     expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(3)
     for (const call of state.calls.filter(call => call.path === '/api/creation/generate')) {
       expect(call.body).not.toHaveProperty('conversationId')
@@ -167,14 +185,8 @@ test('recovering an unknown request persists its task ID, can stop and only poll
   try {
     await expect.poll(() => queries).toBe(1)
     await expect(page.getByRole('progressbar', { name: '模型返回的生成进度' })).toHaveAttribute('value', '25')
-    const saved = await page.evaluate(async () => {
-      const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
-      return new Promise<string>(resolve => {
-        const transaction = db.transaction('keyval', 'readonly'), request = transaction.objectStore('keyval').get('octopus:user-17:native-creation-history')
-        transaction.oncomplete = () => { db.close(); resolve(request.result) }
-      })
-    })
-    expect(JSON.parse(saved)[0]).toMatchObject({ upstreamId: 'recovered-task', tokenId: 83, protocol: 'async' })
+    const saved = await nativeHistory(page)
+    expect(saved[0]).toMatchObject({ upstreamId: 'recovered-task', tokenId: 83, protocol: 'async' })
     await page.getByRole('button', { name: '停止等待', exact: true }).click()
     await expect(page.locator('.task-status')).toContainText('等待已暂停')
   } finally { release() }
@@ -226,7 +238,7 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await page.getByRole('complementary', { name: '创作导航与历史' }).getByRole('button', { name: '新建创作', exact: true }).click()
   await expect(prompt).toHaveValue('')
   await expect(page.locator('.canvas-empty')).toContainText('开始图片创作')
-  await page.locator('.studio-sidebar .studio-record[data-kind="image"]').click()
+  await page.locator('.studio-sidebar .studio-record[data-kind="image"]').filter({ hasText: '可复用的小猫提示词' }).click()
   await expect(page.locator('.creation-request')).toContainText('可复用的小猫提示词')
   expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(1)
 })
@@ -266,7 +278,14 @@ test('a failed generation keeps its request and allows an explicit edited retry 
   expect(submissions).toBe(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('小猫和海边的阳光')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText(['生成失败', '生成完成'])
+  await expect(page.locator('.task-status')).toHaveCount(1)
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.locator('.creation-versions output')).toHaveText('2 / 2')
+  await page.getByRole('button', { name: '上一个版本', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成失败')
+  await expect(page.locator('.creation-request')).toContainText('小猫和阳光')
+  await page.getByRole('button', { name: '下一个版本', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(1)
   expect(submissions).toBe(2)
   await expect(page.locator('html')).toHaveAttribute('data-color-scheme', 'light')
@@ -403,7 +422,7 @@ test('legacy tasks without the original token stay untouched while base64 image 
   await page.route('**/api/creation/generate', route => route.fulfill({ json: {
     status: 'succeeded', tokenId: 41, protocol: 'openai', outputs: [{ b64_json: state.image.toString('base64') }],
   } }))
-  await page.goto('/create/image')
+  await legacyFixture(page)
   await page.evaluate(() => {
     localStorage.setItem('octopus:user-17:task:missing-token', JSON.stringify({
       id: 'missing-token', kind: 'image', model: 'fixture-image', prompt: '缺少原始令牌的旧任务', upstreamId: 'legacy-upstream', protocol: 'async',
@@ -412,7 +431,7 @@ test('legacy tasks without the original token stay untouched while base64 image 
       id: 'custom-source', kind: 'video', model: 'fixture-video', prompt: '自定义接口的旧任务', upstreamId: 'custom-upstream', tokenId: 83, customApiBase: 'https://custom.example', protocol: 'openai',
     }))
   })
-  await page.reload()
+  await page.goto('/create/image')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(1)
   await expect(page.locator('.task-message')).toContainText('缺少原始令牌')
   expect(queries).toBe(0)
@@ -448,33 +467,30 @@ test('changing the unified account ID clears previous results and isolates draft
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('账号 17 的私有提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('账号 17 的未发送草稿')
   state.state.user.id = '18'
   state.state.user.username = 'another-user'
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(0)
+  await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]').filter({ hasText: '账号 17 的私有提示词' })).toHaveCount(0)
+  await expect(page.locator('.creation-request')).toHaveCount(0)
+  await expect(page.locator('.creation-media')).toHaveCount(0)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-image')
   const drafts = await page.evaluate(() => ({
     previous: localStorage.getItem('octopus:user-17:native-creation-draft:image'),
     current: localStorage.getItem('octopus:user-18:native-creation-draft:image'),
   }))
-  expect(JSON.parse(drafts.previous!)).toMatchObject({ prompt: '账号 17 的私有提示词' })
+  expect(JSON.parse(drafts.previous!)).toMatchObject({ prompt: '账号 17 的未发送草稿' })
   expect(drafts.current || '').not.toContain('私有提示词')
-  const history = await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
-    return new Promise<{ owner: string }[]>(resolve => {
-      const transaction = db.transaction('keyval', 'readonly'), request = transaction.objectStore('keyval').get('octopus:user-17:native-creation-history')
-      transaction.oncomplete = () => { db.close(); resolve(JSON.parse(request.result)) }
-    })
-  })
+  const history = await nativeHistory(page)
   expect(history.map(task => task.owner)).toEqual(['17'])
 })
 
 test('retired composite owners are discarded instead of being migrated into the unified account history', async ({ page }) => {
   const state = await fixture(page)
-  await page.goto('/create/image')
+  await legacyFixture(page)
   await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
+    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onupgradeneeded = () => request.result.createObjectStore('keyval'); request.onsuccess = () => resolve(request.result) })
     await new Promise<void>(resolve => {
       const transaction = db.transaction('keyval', 'readwrite')
       transaction.objectStore('keyval').put(JSON.stringify([{
@@ -485,7 +501,7 @@ test('retired composite owners are discarded instead of being migrated into the 
       transaction.oncomplete = () => { db.close(); resolve() }
     })
   })
-  await page.reload()
+  await page.goto('/create/image')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(0)
   await expect(page.locator('.creation-canvas')).toContainText('开始图片创作')
   expect(state.calls.filter(call => call.path === '/api/creation/generate' || call.path.includes('/tasks/'))).toHaveLength(0)
@@ -493,7 +509,7 @@ test('retired composite owners are discarded instead of being migrated into the 
 
 test('legacy account-scoped gallery and video attachments remain readable without mutating their sources', async ({ page }) => {
   const state = await fixture(page)
-  await page.goto('/create/image')
+  await legacyFixture(page)
   await page.evaluate(async bytes => {
     localStorage.setItem('octopus:guest:task:unowned', JSON.stringify({ id: 'unowned', kind: 'image', prompt: '别的账号', model: 'fixture-image' }))
     localStorage.setItem('octopus:user-18:task:unowned-other', JSON.stringify({ id: 'unowned-other', kind: 'video', prompt: '别的账号', model: 'fixture-video' }))
@@ -527,7 +543,7 @@ test('legacy account-scoped gallery and video attachments remain readable withou
       transaction.oncomplete = () => { gallery.close(); resolve() }
     })
   }, [...state.image])
-  await page.reload()
+  await page.goto('/create/image')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(201)
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="video"]')).toHaveCount(1)
   await expect(page.locator('.creation-media img')).toBeVisible()
@@ -539,15 +555,16 @@ test('legacy account-scoped gallery and video attachments remain readable withou
   const videoUrl = new URL((await page.locator('.creation-media video').getAttribute('src'))!, page.url())
   expect(videoUrl.searchParams.get('url')).toBe('https://media.example/legacy-video.mp4')
   expect(videoUrl.searchParams.get('kind')).toBe('video')
+  const native = await nativeHistory(page)
   const stored = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
-    return new Promise<{ native: unknown[]; snapshot: string; guest: boolean }>(resolve => {
+    return new Promise<{ snapshot: string; guest: boolean }>(resolve => {
       const transaction = db.transaction('keyval', 'readonly'), store = transaction.objectStore('keyval')
-      const native = store.get('octopus:user-17:native-creation-history'), snapshot = store.get('octopus:user-17:video-workspace-results')
-      transaction.oncomplete = () => { db.close(); resolve({ native: JSON.parse(native.result), snapshot: snapshot.result, guest: Boolean(localStorage.getItem('octopus:guest:task:unowned')) }) }
+      const snapshot = store.get('octopus:user-17:video-workspace-results')
+      transaction.oncomplete = () => { db.close(); resolve({ snapshot: snapshot.result, guest: Boolean(localStorage.getItem('octopus:guest:task:unowned')) }) }
     })
   })
-  expect(stored.native).toHaveLength(202)
+  expect(native).toHaveLength(202)
   expect(stored.snapshot).toContain('__octopusChatAsset')
   expect(stored.guest).toBe(true)
   expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(0)

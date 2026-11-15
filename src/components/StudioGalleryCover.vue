@@ -1,0 +1,91 @@
+<!-- Lazy cover behavior adapted from Octopus Chat's MIT gallery-video-card.tsx. -->
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Image, LoaderCircle, Maximize, Play, RefreshCw, Video } from '@lucide/vue'
+import { readableMedia, type CreationTask } from '../native-studio'
+import { session, errorMessage } from '../state'
+import { readTaskAsset, readTaskPreview, saveTaskPreview } from '../studio-task-store'
+import { imageThumbnail, mediaPreviewIdentity } from '../studio-media-previews'
+import { extractVideoPoster } from '../studio-video-poster'
+
+const props = defineProps<{ task: CreationTask }>()
+const emit = defineEmits<{ open: [] }>()
+const element = ref<HTMLElement>(), source = ref(''), duration = ref<number>(), loading = ref(false), error = ref(''), retry = ref(0)
+const identity = computed(() => mediaPreviewIdentity(props.task))
+const durationLabel = computed(() => duration.value === undefined ? '' : `${Math.floor(duration.value / 60)}:${String(Math.floor(duration.value % 60)).padStart(2, '0')}`)
+let dispose = () => {}
+watch([() => session.user?.id, () => props.task.id, identity, retry, element], () => {
+  dispose(); source.value = ''; duration.value = undefined; error.value = ''; loading.value = false
+  const owner = session.user?.id, task = props.task, acceptedIdentity = identity.value
+  if (!owner || task.owner !== owner || !element.value) return
+  const controller = new AbortController()
+  let objectUrl = '', observer: IntersectionObserver | undefined, started = false
+  const current = () => !controller.signal.aborted && session.user?.id === owner && props.task.id === task.id && identity.value === acceptedIdentity
+  const load = async () => {
+    if (started || !current()) return
+    started = true; observer?.disconnect(); loading.value = true
+    try {
+      let cached = retry.value ? undefined : await readTaskPreview(owner, task.id, acceptedIdentity)
+      if (!current()) return
+      if (!cached) {
+        const original = await readTaskAsset(owner, task.urls[0]!)
+        if (!current()) return
+        if (task.kind === 'video') {
+          const temporary = original ? URL.createObjectURL(original) : undefined
+          try { cached = await extractVideoPoster(temporary || await readableMedia(task.urls[0]!, 'video'), controller.signal) }
+          finally { if (temporary) URL.revokeObjectURL(temporary) }
+        } else {
+          let blob = original
+          if (!blob) {
+            const response = await fetch(await readableMedia(task.urls[0]!, 'image', task.urls[0]!.startsWith('legacy-gallery:')), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
+            if (!response.ok) throw new Error('缩略图加载失败，可重试或查看原图。')
+            blob = await response.blob()
+          }
+          cached = { blob: await imageThumbnail(blob, controller.signal) }
+        }
+        if (!current()) return
+        // A failed optional cover write never blocks opening or publishing the original.
+        await saveTaskPreview(owner, task.id, acceptedIdentity, cached.blob, cached.duration).catch(() => {})
+      }
+      if (!current()) return
+      objectUrl = URL.createObjectURL(cached.blob); source.value = objectUrl; duration.value = cached.duration
+    } catch (cause) { if (current()) error.value = errorMessage(cause) }
+    finally { if (current()) loading.value = false }
+  }
+  if (typeof IntersectionObserver === 'undefined') void load()
+  else {
+    observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void load() }, { rootMargin: '160px 0px' })
+    observer.observe(element.value)
+  }
+  dispose = () => { controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
+}, { flush: 'post', immediate: true })
+onBeforeUnmount(() => dispose())
+</script>
+
+<template>
+  <div ref="element" class="gallery-cover">
+    <button v-if="source" class="cover-preview" type="button" :aria-label="`预览 ${task.prompt}`" @click="emit('open')">
+      <img :src="source" :alt="task.prompt" decoding="async" @error="error = '封面无法显示，请重新加载。'; source = ''" />
+      <Play v-if="task.kind === 'video'" :size="24" class="cover-play" aria-hidden="true" /><Maximize v-else :size="16" class="cover-expand" aria-hidden="true" />
+      <span v-if="durationLabel" class="cover-duration" aria-label="实际视频时长">{{ durationLabel }}</span>
+    </button>
+    <div v-else class="cover-empty">
+      <button class="cover-await" type="button" :aria-label="`预览 ${task.prompt}`" @click="emit('open')"><LoaderCircle v-if="loading" :size="22" aria-hidden="true" /><Video v-else-if="task.kind === 'video'" :size="24" aria-hidden="true" /><Image v-else :size="24" aria-hidden="true" /></button>
+      <span v-if="loading" class="studio-sr-only" role="status">正在加载封面</span>
+      <template v-if="error"><button class="icon-button" type="button" :title="error" :aria-label="`重新加载封面：${task.prompt}`" @click="retry++"><RefreshCw :size="17" /></button><button class="cover-original" type="button" @click="emit('open')">查看原{{ task.kind === 'video' ? '视频' : '图' }}</button></template>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.gallery-cover { position: relative; width: 100%; aspect-ratio: 1; min-width: 0; overflow: hidden; background: var(--surface-soft); border-radius: 6px; margin-top: 8px; }
+.cover-preview { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: white; cursor: zoom-in; }
+.cover-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cover-play, .cover-expand { position: absolute; padding: 6px; box-sizing: content-box; border-radius: 6px; background: rgb(0 0 0 / 70%); color: white; }
+.cover-play { inset: 50% auto auto 50%; transform: translate(-50%, -50%); }.cover-expand { bottom: 8px; right: 8px; }
+.cover-duration { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; border-radius: 4px; background: rgb(0 0 0 / 75%); color: white; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cover-empty { position: absolute; inset: 0; display: flex; flex-wrap: wrap; align-content: center; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
+.cover-await { display: grid; place-items: center; width: 100%; min-height: 64px; padding: 16px; border: 0; background: transparent; color: inherit; cursor: zoom-in; }
+.cover-original { flex-basis: 100%; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12px; padding: 8px; cursor: pointer; }
+.cover-preview:focus-visible, .cover-original:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -3px; }
+</style>

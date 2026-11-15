@@ -1,0 +1,180 @@
+import { expect, test, type Page } from '@playwright/test'
+
+async function fixture(page: Page) {
+  await page.route('**/__task-store-check', route => route.fulfill({
+    contentType: 'text/html', body: '<!doctype html><html><head><title>Storage fixture</title></head><body></body></html>',
+  }))
+  await page.goto('/__task-store-check')
+}
+
+test('media snapshot migration preserves unknown metadata, original bytes and owner isolation without mutating input', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const image = `data:${'image/png'};base64,${btoa('original bytes')}`
+    const task = { id: 'one', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'image-model',
+      prompt: 'original prompt', urls: [image], preview: image, request: { seed: '42' }, references: [{ name: 'reference', url: image }],
+      publications: { community: { work: { id: 'work', original: image } } }, opaqueFutureField: { keep: [1, 2, 3] } }
+    const missing = await store.readTaskSnapshot('17')
+    await store.saveTaskSnapshot('17', [task])
+    const saved = await store.readTaskSnapshot('17')
+    const original = await store.readTaskAsset('17', saved[0].urls[0])
+    const preview = await store.readTaskAsset('17', saved[0].preview)
+    const foreign = await store.readTaskAsset('18', saved[0].urls[0])
+    const other = await store.readTaskSnapshot('18')
+    return { missing: missing === undefined, saved, original: await original?.text(), preview: await preview?.text(),
+      foreign: foreign === undefined, other: other === undefined, unchanged: task.urls[0] === image && task.preview === image }
+  })
+  expect(result.missing).toBe(true)
+  expect(result.saved[0]).toMatchObject({ prompt: 'original prompt', urls: ['studio-asset:one:0'], preview: 'studio-asset:one:preview',
+    request: { seed: '42' }, opaqueFutureField: { keep: [1, 2, 3] } })
+  expect(result.saved[0].references[0].url.startsWith('data:')).toBe(true)
+  expect(result.saved[0].publications.community.work.original.startsWith('data:')).toBe(true)
+  expect(result.original).toBe('original bytes')
+  expect(result.preview).toBe('original bytes')
+  expect(result.foreign && result.other && result.unchanged).toBe(true)
+})
+
+test('database cursor pages tie timestamps exactly and apply gallery, model, query and date filters', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const tasks = Array.from({ length: 135 }, (_, index) => ({
+      id: `task-${String(index).padStart(3, '0')}`, owner: '17', kind: index === 0 ? 'text' : 'image',
+      createdAt: 100 + Math.floor(index / 3), phase: index === 1 ? 'error' : 'complete',
+      model: index % 2 ? 'model-a' : 'model-b', prompt: index % 3 ? '猫' : '狗',
+      urls: [`https://media.example/${index}.png`],
+    }))
+    await store.saveTaskSnapshot('17', tasks)
+    const first = await store.getTaskPage('17', { gallery: true, limit: 60 })
+    const ranges = [], openCursor = IDBIndex.prototype.openCursor
+    IDBIndex.prototype.openCursor = function (query, direction) {
+      if (this.name === 'ownerCreatedAtId' && query instanceof IDBKeyRange) ranges.push({ upper: query.upper, upperOpen: query.upperOpen })
+      return Reflect.apply(openCursor, this, [query, direction])
+    }
+    let second
+    try { second = await store.getTaskPage('17', { gallery: true, after: first.after, limit: 60 }) }
+    finally { IDBIndex.prototype.openCursor = openCursor }
+    const third = await store.getTaskPage('17', { gallery: true, after: second.after, limit: 60 })
+    const filtered = await store.getTaskPage('17', { gallery: true, model: 'model-a', query: '猫', since: 130, limit: 200 })
+    const unfiltered = await store.getTaskPage('17', { phase: 'error' })
+    const foreign = await store.getTaskPage('18')
+    return { lengths: [first.tasks.length, second.tasks.length, third.tasks.length], total: first.total,
+      ids: [...first.tasks, ...second.tasks, ...third.tasks].map(task => task.id), last: third.after,
+      filtered: filtered.tasks.every(task => task.model === 'model-a' && task.createdAt >= 130 && task.prompt === '猫'),
+      filteredTotal: filtered.total, models: filtered.models, errors: unfiltered.tasks.map(task => task.id), foreign: foreign.total,
+      after: first.after, ranges }
+  })
+  expect(result.lengths).toEqual([60, 60, 13])
+  expect(result.total).toBe(133)
+  expect(new Set(result.ids).size).toBe(133)
+  expect(result.ids[0]).toBe('task-134')
+  expect(result.ids.at(-1)).toBe('task-002')
+  expect(result.last).toBeUndefined()
+  expect(result.filtered).toBe(true)
+  expect(result.filteredTotal).toBeGreaterThan(0)
+  expect(result.models).toEqual(['model-a', 'model-b'])
+  expect(result.errors).toEqual(['task-001'])
+  expect(result.foreign).toBe(0)
+  expect(result.ranges).toContainEqual({ upper: ['17', result.after.createdAt, result.after.id], upperOpen: true })
+})
+
+test('incremental snapshots preserve another tab additions, clear only known deletions and retain referenced original assets', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const first = { id: 'one', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model',
+      prompt: 'one', urls: [`data:${'image/png'};base64,${btoa('original')}`] }
+    await store.saveTaskSnapshot('17', [first])
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const opening = indexedDB.open('community-studio-media', 1)
+      opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error)
+    })
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction('tasks', 'readwrite')
+      transaction.objectStore('tasks').put({ owner: '17', id: 'another-tab', createdAt: 2, value: {
+        ...first, id: 'another-tab', createdAt: 2, prompt: 'another tab', urls: ['https://media.example/new.png'],
+      }, mediaIdentity: 'foreign-write' })
+      transaction.objectStore('tasks').put({ owner: '17', id: 'one', createdAt: 1, value: {
+        ...first, prompt: 'updated by another tab', urls: [store.taskAssetUrl('one', 0)],
+      }, mediaIdentity: 'other-tab-update' })
+      transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error)
+    })
+    db.close()
+    await store.saveTaskSnapshot('17', [first])
+    const updated = (await store.getTaskPage('17')).tasks.find(task => task.id === 'one')?.prompt
+    await store.saveTaskSnapshot('17', [])
+    const snapshot = await store.readTaskSnapshot('17')
+    const original = await store.readTaskAsset('17', store.taskAssetUrl('one', 0))
+    await store.saveTaskSnapshot('17', [])
+    const empty = await store.readTaskSnapshot('17')
+    let rejected = false
+    try { await store.saveTaskSnapshot('17', [{ ...first, owner: '18' }]) } catch { rejected = true }
+    const stillEmpty = await store.readTaskSnapshot('17')
+    return { ids: snapshot?.map(task => task.id), original: await original?.text(), empty, rejected, stillEmpty, updated }
+  })
+  expect(result.ids).toEqual(['another-tab'])
+  expect(result.original).toBe('original')
+  expect(result.updated).toBe('updated by another tab')
+  expect(result.empty).toEqual([])
+  expect(result.rejected).toBe(true)
+  expect(result.stillEmpty).toEqual([])
+})
+
+test('thumbnail identity survives inline original archival but rejects stale writers and clears on changed media', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'one', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model',
+      prompt: 'one', urls: [`data:${'image/png'};base64,${btoa('original')}`] }
+    await store.saveTaskSnapshot('17', [task])
+    const mediaIdentity = JSON.stringify(['image', store.taskAssetUrl('one', 0)])
+    const thumb = new Blob(['thumbnail'], { type: 'image/webp' })
+    await store.saveTaskPreview('17', 'one', mediaIdentity, thumb, 3.5)
+    const cached = await store.readTaskPreview('17', 'one', mediaIdentity)
+    const preview = await store.readTaskAsset('17', store.taskAssetUrl('one', 0), true)
+    task.prompt = 'metadata only'
+    await store.saveTaskSnapshot('17', [task])
+    const retained = await store.readTaskPreview('17', 'one', mediaIdentity)
+    task.urls = ['https://media.example/changed.png']
+    await store.saveTaskSnapshot('17', [task])
+    const cleared = await store.readTaskPreview('17', 'one', mediaIdentity)
+    await store.saveTaskPreview('17', 'one', mediaIdentity, thumb)
+    const stale = await store.readTaskPreview('17', 'one', mediaIdentity)
+    const foreign = await store.readTaskPreview('18', 'one', mediaIdentity)
+    return { cached: await cached?.blob.text(), duration: cached?.duration, preview: await preview?.text(),
+      retained: !!retained, cleared: !cleared, stale: !stale, foreign: !foreign }
+  })
+  expect(result).toEqual({ cached: 'thumbnail', duration: 3.5, preview: 'thumbnail', retained: true, cleared: true, stale: true, foreign: true })
+})
+
+test('captured metadata updates preserve their call-time snapshot without decoding, hashing or reading and rewriting large original blobs', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const original = 'x'.repeat(2 * 1024 ** 2)
+    const task = { id: 'large', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model',
+      prompt: 'before', urls: [`data:${'image/png'};base64,${btoa(original)}`] }
+    await store.saveTaskSnapshot('17', [task])
+    task.prompt = 'captured prompt'
+    const captured = store.captureTaskSnapshot('17', [task])
+    task.prompt = 'changed after capture'
+    const calls = { decode: 0, digest: 0, originalRead: 0, originalWrite: 0 }
+    const decode = window.atob, digest = crypto.subtle.digest, get = IDBObjectStore.prototype.get, put = IDBObjectStore.prototype.put
+    window.atob = function (...args) { calls.decode++; return Reflect.apply(decode, this, args) }
+    crypto.subtle.digest = function (...args) { calls.digest++; return Reflect.apply(digest, this, args) }
+    IDBObjectStore.prototype.get = function (...args) { if (this.name === 'originals') calls.originalRead++; return Reflect.apply(get, this, args) }
+    IDBObjectStore.prototype.put = function (...args) { if (this.name === 'originals') calls.originalWrite++; return Reflect.apply(put, this, args) }
+    try { await store.saveCapturedTaskSnapshot('17', captured) }
+    finally {
+      window.atob = decode; crypto.subtle.digest = digest
+      IDBObjectStore.prototype.get = get; IDBObjectStore.prototype.put = put
+    }
+    const saved = await store.readTaskSnapshot('17')
+    const blob = await store.readTaskAsset('17', store.taskAssetUrl('large', 0))
+    return { calls, prompt: saved[0].prompt, size: blob?.size }
+  })
+  expect(result.calls).toEqual({ decode: 0, digest: 0, originalRead: 0, originalWrite: 0 })
+  expect(result.prompt).toBe('captured prompt')
+  expect(result.size).toBe(2 * 1024 ** 2)
+})

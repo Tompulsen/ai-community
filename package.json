@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "start": "node server/runtime.ts",
     "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs",
-    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts src/native-message-logic.test.ts src/native-chat-messages.test.ts src/studio-markdown.test.ts src/studio-conversations.test.ts src/studio-feedback.test.ts src/studio-image-conversation.test.ts src/studio-image-submission.test.ts server/business server/native-account/wallet.test.ts",
+    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts src/native-message-logic.test.ts src/native-chat-messages.test.ts src/studio-markdown.test.ts src/studio-conversations.test.ts src/studio-feedback.test.ts src/studio-image-conversation.test.ts src/studio-image-submission.test.ts src/studio-video-mentions.test.ts server/business server/native-account/wallet.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

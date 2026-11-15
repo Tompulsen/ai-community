@@ -50,6 +50,18 @@ async function fixture(page: Page, mode = 'image') {
 }
 async function snapshot(page: Page, key = 'native-chat') {
   return page.evaluate(async key => {
+    if (key === 'native-creation-history') {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('community-studio-media', 1)
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+      })
+      return new Promise<any[]>((resolve, reject) => {
+        const transaction = db.transaction('tasks', 'readonly')
+        const request = transaction.objectStore('tasks').index('ownerCreatedAtId').getAll(IDBKeyRange.bound(['17', 0, ''], ['17', Number.MAX_SAFE_INTEGER, '\uffff']))
+        transaction.oncomplete = () => { db.close(); resolve(request.result.reverse().map(record => record.value)) }
+        transaction.onabort = () => { db.close(); reject(transaction.error) }
+      })
+    }
     const name = `octopus:user-17:${key}`
     const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('community-studio', 1); request.onsuccess = () => resolve(request.result) })
     const raw = await new Promise<unknown>(resolve => {
@@ -208,10 +220,11 @@ test('the background task entry opens its own media conversation rather than the
 test('reusing a text task from an active media conversation waits for storage and creates one text session', async ({ page }) => {
   const state = await fixture(page)
   const tasks = await snapshot(page, 'native-creation-history')
-  await page.evaluate(tasks => {
-    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([
+  await page.evaluate(async tasks => {
+    const { saveTaskSnapshot } = await import('/src/studio-task-store.ts')
+    await saveTaskSnapshot('17', [
       ...tasks, { ...tasks[0], id: 'text-reuse', kind: 'text', model: 'gpt-5', prompt: '复用文字任务', text: '原回答' },
-    ]))
+    ])
   }, tasks)
   await page.goto('/create/text?reuse=text-reuse')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('复用文字任务')
