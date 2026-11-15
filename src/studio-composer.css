@@ -31,6 +31,7 @@
   font-size: 16px; line-height: 26px; color: var(--ink); caret-color: var(--blue); overflow-y: auto;
 }
 .studio-composer .composer-input::placeholder { color: var(--muted); opacity: 1; }
+.studio-composer .composer-input:focus::placeholder { opacity: 0; }
 .studio-composer-tools, .studio-composer-actions, .studio-composer-models { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .studio-composer-tools { flex-wrap: wrap; padding-top: 8px; }
 .studio-composer-models { margin-left: auto; }
