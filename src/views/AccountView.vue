@@ -245,7 +245,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
             <label class="field"><span>章鱼账号</span><input v-model="identifier" class="control" autocomplete="username" placeholder="请输入章鱼账号用户名" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
             <div class="field"><label for="account-password">密码</label><span class="auth-password"><input id="account-password" v-model="password" class="control" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" required :disabled="busy" /><button type="button" class="auth-password-toggle icon-button" :aria-label="showPassword ? '隐藏密码' : '显示密码'" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showPassword" :disabled="busy" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" :size="20" /><Eye v-else :size="20" /></button></span></div>
             <div class="login-options"><a v-if="recoveryUrl" class="text-link forgot-password" :href="recoveryUrl" target="_blank" rel="noopener noreferrer">忘记密码？</a></div>
-            <AccountTurnstile v-if="status.turnstileSiteKey" :site-key="status.turnstileSiteKey" :reset-key="challengeVersion" @token="challengeToken = $event" @error="error = $event" />
+            <AccountTurnstile v-if="status.turnstileSiteKey" :site-key="status.turnstileSiteKey" :reset-key="challengeVersion" :disabled="busy" @token="challengeToken = $event" />
           </template>
           <template v-else>
             <label class="field"><span>账号验证码或恢复码</span><input v-model="verificationCode" class="control" autocomplete="one-time-code" maxlength="32" required :disabled="busy" /></label>

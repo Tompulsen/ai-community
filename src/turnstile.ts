@@ -24,10 +24,19 @@ const LOAD_TIMEOUT_MS = 15000;
 
 let pendingLoad: Promise<TurnstileApi> | undefined;
 
+export class TurnstileLoadError extends Error {
+  readonly code: "SDK_NETWORK_ERROR" | "SDK_TIMEOUT" | "SDK_UNAVAILABLE";
+
+  constructor(code: TurnstileLoadError["code"], message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 export function loadTurnstile(): Promise<TurnstileApi> {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return Promise.reject(
-      new Error("Cloudflare Turnstile requires a browser environment"),
+      new TurnstileLoadError("SDK_UNAVAILABLE", "Cloudflare Turnstile requires a browser environment"),
     );
   }
 
@@ -62,30 +71,30 @@ export function loadTurnstile(): Promise<TurnstileApi> {
     currentScript.removeEventListener("error", onError);
     if (pendingLoad === currentLoad) pendingLoad = undefined;
   };
-  const fail = (message: string) => {
+  const fail = (code: TurnstileLoadError["code"], message: string) => {
     if (settled) return;
     settled = true;
     cleanup();
     currentScript.remove();
-    rejectLoad(new Error(message));
+    rejectLoad(new TurnstileLoadError(code, message));
   };
   const onLoad = () => {
     if (settled) return;
     const api = turnstileWindow.turnstile;
     if (!api) {
-      fail("Cloudflare Turnstile SDK is unavailable");
+      fail("SDK_UNAVAILABLE", "Cloudflare Turnstile SDK is unavailable");
       return;
     }
     settled = true;
     cleanup();
     resolveLoad(api);
   };
-  const onError = () => fail("Cloudflare Turnstile SDK failed to load");
+  const onError = () => fail("SDK_NETWORK_ERROR", "Cloudflare Turnstile SDK failed to load");
 
   currentScript.addEventListener("load", onLoad);
   currentScript.addEventListener("error", onError);
   timeout = window.setTimeout(
-    () => fail("Cloudflare Turnstile SDK loading timed out"),
+    () => fail("SDK_TIMEOUT", "Cloudflare Turnstile SDK loading timed out"),
     LOAD_TIMEOUT_MS,
   );
 
@@ -97,7 +106,7 @@ export function loadTurnstile(): Promise<TurnstileApi> {
     try {
       document.head.appendChild(currentScript);
     } catch {
-      fail("Cloudflare Turnstile SDK failed to load");
+      fail("SDK_NETWORK_ERROR", "Cloudflare Turnstile SDK failed to load");
     }
   }
 
