@@ -44,7 +44,7 @@ const currentTasks = computed(() => currentConversation.value ? mediaTasksForCon
 const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
 const automaticReferences = computed(() => props.kind === 'image' && currentConversation.value && !references.value.length && !skipAutomaticReference.value
   ? imageContinuationReferences(currentConversation.value, branchTaskId.value) : [])
-const displayedReferences = computed(() => references.value.length ? references.value : automaticReferences.value)
+const requestReferences = computed(() => references.value.length ? references.value : automaticReferences.value)
 const activeTask = computed(() => currentTasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
 const busy = computed(() => currentConversation.value && isConversationBusy(currentConversation.value))
 const models = computed(() => modelsForKind(props.kind))
@@ -201,7 +201,7 @@ async function generate() {
   error.value = ''; submissions.value[kind] = true; chats.preparing[chat.id] = true
   try {
     const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
-      ...(props.kind === 'image' ? { imageOptions, references: displayedReferences.value, imageContext: buildImageContext(chat, branchId) } : { videoOptions }),
+      ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value, imageContext: buildImageContext(chat, branchId) } : { videoOptions }),
       ...(branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
     await saveChats(true)
     if (owner !== session.user?.id || !chats.sessions.includes(chat)) return
@@ -321,7 +321,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
     <StudioBilling :model="model" :quantity="kind === 'image' ? count : undefined" :refresh-key="selected?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
     <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
-      <ul v-if="displayedReferences.length" class="reference-list"><li v-for="(file, index) in displayedReferences" :key="file.url"><img :src="mediaSource(file.url)" :alt="automaticReferences.length ? '接着上一张生成图修改' : file.name" :title="automaticReferences.length ? '接着上一张生成图修改' : file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="removeReference(index)"><X :size="14" /></button></li></ul>
+      <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="mediaSource(file.url)" :alt="file.name" :title="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="removeReference(index)"><X :size="14" /></button></li></ul>
       <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown.enter="handleEnter" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
@@ -336,7 +336,6 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>
       <p v-if="creation.groupSwitching" class="group-description" role="status">正在切换模型分组…</p>
-      <p v-if="activeTask" class="composer-hint">生成期间可以继续编辑。停止等待不会取消上游任务。</p>
       <p v-if="creation.groupsError" class="form-error" role="alert">{{ creation.groupsError }} <button type="button" class="text-link" :disabled="creation.groupSwitching" @click="loadCreationGroups">重试</button></p>
       <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels">重试</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="creation.storageError" class="form-error" role="alert">{{ creation.storageError }}</p>
@@ -361,5 +360,4 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
 .reference-list li { position: relative; width: 64px; height: 64px; }
 .reference-list img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
 .reference-list button { position: absolute; right: 0; top: 0; min-width: 24px; width: 24px; height: 24px; min-height: 24px; background: var(--surface); }
-.composer-hint { color: var(--muted); font-size: 12px; line-height: 20px; margin: 4px 8px 0; }
 </style>

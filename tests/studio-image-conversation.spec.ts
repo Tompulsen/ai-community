@@ -58,7 +58,7 @@ async function send(page: Page, prompt: string, turns: number) {
 test('follow-up carries the previous image and history in one session, with independent drafts', async ({ page }) => {
   const { calls } = await fixture(page)
   await send(page, '一只白猫', 1)
-  await expect(page.locator('.reference-list img')).toHaveAttribute('alt', '接着上一张生成图修改')
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
   await send(page, '背景改成蓝色', 2)
   expect(calls[0].imageContext.turns).toEqual([])
   expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
@@ -96,21 +96,24 @@ test('regeneration and edited prompts preserve alternate versions and use the se
   await expect(page.locator('.creation-request')).toContainText('一只黑猫')
 })
 
-test('choosing an earlier result overrides automatic reference; clearing context and deleting turns keep gallery data', async ({ page }) => {
+test('automatic references follow the latest result; clearing context and deleting turns keep gallery data', async ({ page }) => {
   const { calls } = await fixture(page)
   await send(page, '第一张', 1)
   await send(page, '第二张', 2)
-  await page.getByRole('button', { name: '使用第 1 张图片继续创作', exact: true }).first().click()
-  await send(page, '修改第一张', 3)
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  await send(page, '修改第二张', 3)
+  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-2.png'])
   await page.getByRole('button', { name: '清除上下文', exact: true }).click()
   await expect(page.locator('.reference-list img')).toHaveCount(0)
   await send(page, '全新图片', 4)
   expect(calls[3].imageContext.turns).toEqual([])
   expect(calls[3].referenceUrls).toEqual([])
+  const viewport = page.viewportSize()!
+  await page.setViewportSize({ width: 800, height: viewport.height })
+  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
   await page.getByRole('button', { name: '多选消息', exact: true }).click()
+  await page.setViewportSize(viewport)
   await page.getByRole('checkbox', { name: '选择消息：第二张', exact: true }).check()
-  await page.getByRole('checkbox', { name: '选择消息：修改第一张', exact: true }).check()
+  await page.getByRole('checkbox', { name: '选择消息：修改第二张', exact: true }).check()
   page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '删除所选消息', exact: true }).click()
   await expect(page.locator('.creation-turn')).toHaveCount(2)
@@ -142,6 +145,24 @@ test('upload, clipboard and drop references share the same attachment flow', asy
   await send(page, '使用这三张参考图', 1)
   expect(uploads).toHaveLength(3)
   expect(calls[0].referenceUrls).toEqual(['/legacy-files/upload1', '/legacy-files/upload2', '/legacy-files/upload3'])
+})
+
+test('sending clears uploaded references from the composer while retaining sent images and conversation context', async ({ page }) => {
+  const { calls, image } = await fixture(page)
+  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'reference.jpg', mimeType: 'image/jpeg', buffer: image })
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
+  await send(page, '使用上传的参考图', 1)
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
+  await expect(page.locator('.creation-request .sent-references img')).toHaveCount(1)
+  expect(calls[0].referenceUrls).toEqual(['/legacy-files/upload1'])
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
+  await expect(page.locator('.creation-request .sent-references img')).toHaveCount(1)
+  await send(page, '把背景改成蓝色', 2)
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
+  expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[1].imageContext.turns[0].references).toEqual(['/legacy-files/upload1'])
 })
 
 test('model and group changes affect the next round while retaining history and image sizing on mobile', async ({ page }) => {

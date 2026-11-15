@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, ListChecks, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, stopCreation, type CreationTask, type CreationDestination } from '../native-studio'
@@ -37,7 +37,7 @@ import { isConversationBusy, mediaTasksForConversation } from '../studio-convers
 import { clearMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
-const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>(), { mode: 'text' })
+const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
@@ -257,7 +257,9 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 <template>
   <div class="native-chat" aria-label="对话工作台">
     <section v-if="current" class="chat-main">
-      <header class="chat-toolbar"><StudioConversationTitle :conversation="current" /><button v-if="mediaTasks.length" class="icon-button" type="button" :aria-pressed="selecting" aria-label="多选消息" title="多选消息" @click="selecting = !selecting; selectedTurns = []"><ListChecks :size="18" /></button><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+      <Teleport defer to="#studio-header-conversation">
+        <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+      </Teleport>
       <div v-if="selecting" class="creation-selection" role="group" aria-label="消息多选操作"><label><input type="checkbox" aria-label="全选当前消息" :checked="!!mediaTasks.length && selectedTurns.length === mediaTasks.length" @change="selectedTurns = ($event.target as HTMLInputElement).checked ? mediaTasks.map(task => task.id) : []" />全选</label><span role="status">已选 {{ selectedTurns.length }} 轮</span><button class="icon-button" type="button" :disabled="!selectedTurns.length || busy" aria-label="删除所选消息" title="删除所选消息" @click="removeTurns"><Trash2 :size="17" /></button><button class="icon-button" type="button" aria-label="退出消息多选" title="退出多选" @click="selecting = false; selectedTurns = []"><X :size="17" /></button></div>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
@@ -327,11 +329,11 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 .chat-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .chat-main :deep(.billing-controls) { flex-wrap: wrap; }
 @media (min-width: 1000px) {
-  .chat-main .chat-toolbar-actions { display: none; }
+  .chat-toolbar > .chat-toolbar-actions { display: none; }
   .chat-main .chat-messages { padding-inline: 0; }
 }
 .chat-toolbar, .chat-toolbar-actions, .message-heading, .message-actions { display: flex; align-items: center; gap: 8px; }
-.chat-toolbar { flex: none; justify-content: space-between; min-width: 0; min-height: 44px; }.chat-toolbar-actions { flex: none; }
+.chat-toolbar { flex: 1; justify-content: space-between; min-width: 0; min-height: 44px; }.chat-toolbar-actions { flex: none; }
 .chat-history { max-height: min(480px, 60dvh); }
 .chat-messages-wrap { position: relative; flex: 1; min-height: 0; }.chat-messages { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px 8px; scrollbar-color: var(--border) transparent; }.chat-empty { height: 100%; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); font-size: 16px; }.chat-empty img { border-radius: 10px; }.chat-empty p { margin: 0; }.jump-latest { position: absolute; right: 12px; bottom: 8px; border: 1px solid var(--border); border-radius: 50%; background: var(--canvas); }
 .message-usage { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }

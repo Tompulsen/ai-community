@@ -65,8 +65,8 @@
 .mobile-send-label, .mobile-chat-tools { display: none; }
 @media (min-width: 1000px) {
   .create-page .native-studio, .create-page .native-chat { width: min(100%, var(--studio-content-width, 1120px)); margin-inline: auto; }
-  .create-page .studio-composer { display: flex; flex-direction: column; margin-top: 16px; padding: 20px; border-radius: 24px; background: color-mix(in srgb, var(--surface) 88%, var(--canvas)); }
-  .create-page .studio-composer .composer-input { min-height: 80px; padding: 4px 8px 16px; }
+  .create-page .studio-composer { display: flex; flex-direction: column; margin-top: 16px; padding: 12px 16px; border-radius: 24px; background: color-mix(in srgb, var(--surface) 88%, var(--canvas)); }
+  .create-page .studio-composer .composer-input { min-height: 44px; padding: 4px 8px 8px; }
   .create-page .studio-composer-tools { gap: 8px; }
   .create-page .studio-composer-models { margin-left: 0; }
   .create-page .studio-composer .composer-submit { margin-left: auto; width: 40px; height: 40px; }
@@ -75,7 +75,7 @@
 @media (max-width: 999px) {
   .studio-composer { display: flex; flex-direction: column; gap: 4px; padding: 10px; margin-top: 4px; border-radius: 24px; background: var(--surface); }
   .studio-composer > .field { min-width: 0; margin: 0; }
-  .studio-composer .composer-input { min-height: 60px; max-height: min(160px, 26dvh); padding: 8px 10px; line-height: 26px; background: transparent; border-radius: 0; }
+  .studio-composer .composer-input { min-height: 44px; max-height: min(160px, 26dvh); padding: 8px 10px; line-height: 26px; background: transparent; border-radius: 0; }
   .studio-composer-tools { display: grid; grid-template-columns: minmax(0, 1fr) 88px 44px; gap: 4px; padding-top: 0; }
   .studio-composer-models { grid-column: 1; grid-row: 1; display: flex; margin: 0; min-width: 0; }
   .studio-composer .studio-model-select { flex: 1; min-width: 0; max-width: 100%; }

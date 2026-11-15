@@ -132,6 +132,7 @@ function restoreMessageTrigger() {
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined">{{ link.label }}</RouterLink></nav>
+      <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation" />
       <div class="header-tools"><div id="header-search" class="header-search-slot" />
       <div class="header-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="route.path === '/discover'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="18" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
@@ -162,6 +163,7 @@ function restoreMessageTrigger() {
 <style scoped>
 .studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
 .studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.studio-header-conversation { display: flex; align-items: center; min-width: 0; }
 @media (min-width: 1000px) {
   .studio-shell { --studio-sidebar-width: clamp(248px, 14.6vw, 420px); --studio-sidebar-surface: color-mix(in srgb, var(--canvas) 76%, var(--surface)); }
   .studio-shell > main { margin-left: var(--studio-sidebar-width); }
