@@ -266,6 +266,27 @@ export async function readTaskAsset(owner: string, url: string, preview = false)
   }
   return (await read<AssetRecord>(db.transaction('originals').objectStore('originals'), [owner, `${key[1]}:${key[2]}`]))?.blob
 }
+export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob): Promise<string | undefined> {
+  checkOwner(owner)
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(id) || !Number.isInteger(index) || index < 0 || index > 9999
+    || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size) throw new Error('本地原图无效。')
+  let saved: string | undefined
+  const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
+    const hash = await identity(blob), db = await database()
+    const transaction = db.transaction(['tasks', 'originals'], 'readwrite'), done = completed(transaction)
+    const request = transaction.objectStore('tasks').get([owner, id])
+    request.onsuccess = () => {
+      const task = (request.result as TaskRecord | undefined)?.value
+      if (!task || task.kind !== 'image' || task.urls[index] !== source) return
+      transaction.objectStore('originals').put({ owner, key: `${id}:${index}`, taskId: id, blob, identity: hash } satisfies AssetRecord)
+      saved = taskAssetUrl(id, index)
+    }
+    await done
+  })
+  writes.set(owner, pending)
+  await pending
+  return saved
+}
 export async function saveTaskPreview(owner: string, id: string, mediaIdentity: string, blob: Blob, duration?: number, index = 0) {
   checkOwner(owner)
   if (!Number.isInteger(index) || index < 0) throw new Error('作品序号无效。')

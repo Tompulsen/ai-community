@@ -9,7 +9,7 @@ import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { captureTaskSnapshot, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot } from './studio-task-store'
+import { captureTaskSnapshot, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -749,6 +749,22 @@ function requestDownload(blob: Blob, task: CreationTask, index: number) {
   try { link.click() }
   finally { link.remove(); setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000) }
 }
+async function cacheDownloadedImage(task: CreationTask, index: number, source: string, blob: Blob) {
+  if (task.kind !== 'image' || source.startsWith('studio-asset:')) return source
+  const version = epoch
+  try {
+    const local = await saveTaskOriginal(task.owner, task.id, index, source, blob)
+    const current = creation.tasks.find(item => item.id === task.id && item.owner === task.owner)
+    if (local && version === epoch && task.owner === activeOwner() && current?.urls[index] === source) {
+      current.urls[index] = local
+      task.urls[index] = local
+      return local
+    }
+  } catch {
+    if (version === epoch && task.owner === activeOwner()) creation.storageError = '浏览器未能缓存原图，文件仍会下载；后续预览可能需要网络。'
+  }
+  return source
+}
 export function saveCreationLocally(value: CreationTask): Promise<void> {
   const task = canonicalCreationTask(value), key = `${task.owner}:${task.id}`
   const pending = downloads.get(key)
@@ -771,6 +787,7 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
         if (!response.ok) throw new Error('原文件下载失败，请重试保存。')
         const blob = await response.blob(); check()
         if (!blob.size || !blob.type.startsWith(`${task.kind}/`)) throw new Error('原文件格式无效，请重试保存。')
+        urls[index] = await cacheDownloadedImage(task, index, urls[index]!, blob); check()
         // Claim the file durably before handing it to the browser, which cannot confirm completion.
         task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
         try { await persist(true); check() }
@@ -800,11 +817,15 @@ async function autoDownloadCreation(task: CreationTask) {
 export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal) {
   signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
+  task = creation.tasks.find(current => current.id === task.id && current.owner === task.owner) || task
   const version = epoch
   const url = task.urls[index]
   const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
   const blob = response ? await response.blob() : new Blob([task.text], { type: 'text/markdown' })
+  signal?.throwIfAborted()
+  if (version !== epoch) throw new Error('账号已切换，请重新操作。')
+  if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   requestDownload(blob, task, index)
