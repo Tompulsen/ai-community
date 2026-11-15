@@ -228,6 +228,21 @@ Lucide 和 CSS 过渡，不引入 React、Motion 或 Tailwind 运行时。
 倍率与选中状态，适配 Vue 和现有主题。请求仍走社区已有分组选择方法，
 失败后读取服务端实际状态，不自动重放分组 POST 或生成请求。
 
+2026-11-15 会话多选复用上述 Octopus Chat 提交的
+`app/components/chat-list.tsx` 与 `app/store/chat.ts` 的 `deleteSessions`：
+沿用 ID 集合选择、全选/取消、Esc 退出、删除确认、当前会话保留及邻近会话回退规则，
+适配为侧栏与手机历史列表共用的 Vue `StudioConversations.vue` 和 `removeChats`。
+搜索变更会移除不可见项的选择，账号切换清空选择；批量删除一次持久化，
+全部删除后创建空白会话。沿用当前社区正在生成时不可删除的规则，
+保存失败保留原会话；没有引入 React、Zustand、拖拽或项目管理依赖。
+
+2026-11-15 模型价格卡片复用同提交的 `app/components/account-model-pricing.tsx`
+与 `account-model-pricing.module.scss`，适配为 Vue 的 `StudioModelPrices.vue`
+和 `StudioModelPriceCard.vue`。沿用按模型合并分组、输入/输出与按次价格、缓存费用、
+阶梯详情、名称复制、当前模型置顶和三/二/一列容器响应规则；使用现有主题变量、
+Lucide、原生 select/dialog。价格与币种直接展示原生账号 `model-pricing` 返回值，
+不重复计算倍率，不修改账号当前分组；只读价格请求独立于密钥和消费记录加载。
+
 2026-11-14 同款参数扩展复用现有 `task.request`、`shared/studio/options.ts`、
 图片尺寸计算及视频参数序列化/能力校验；旧 Studio 发布逻辑只包含提示词与模型，
 故增加共享白名单 `shared/studio/remix-parameters.ts`。版本化参数保存在已有

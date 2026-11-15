@@ -30,6 +30,55 @@ async function open(page: Page) {
   await page.getByRole('combobox', { name: '模型', exact: true }).click()
   return page.getByRole('dialog', { name: '选择模型', exact: true })
 }
+test('the model selector hides its text caret after focus returns while search and keyboard entry still work', async ({ page }) => {
+  await fixture(page); await page.goto('/create/image')
+  const trigger = page.getByRole('combobox', { name: '模型', exact: true })
+  const dialog = await open(page)
+  const search = dialog.getByRole('searchbox', { name: '搜索模型', exact: true })
+  await expect(search).toBeFocused()
+  await expect(search).not.toHaveCSS('caret-color', 'rgba(0, 0, 0, 0)')
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
+  await expect(trigger).toHaveCSS('caret-color', 'rgba(0, 0, 0, 0)')
+  await expect(page.locator('.studio-model-trigger')).toHaveCSS('outline-style', 'none')
+  await expect(trigger).toHaveCSS('outline-style', 'none')
+  await expect(trigger).toHaveCSS('border-top-width', '0px')
+  await trigger.press('Enter')
+  await expect(dialog).toBeVisible()
+  await expect(search).toBeFocused()
+  await search.fill('claude')
+  await expect(dialog.locator('.model-option')).toHaveCount(1)
+})
+test('vendor icons bypass old permanent URLs and contain no blue background plate', async ({ page }) => {
+  await fixture(page)
+  const models = ['gpt-image-2', 'gemini-flash', 'claude-opus', 'deepseek-chat', 'grok-3', 'qwen-max', 'llama-3', 'mistral-large']
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: models.map(id => ({ id, kinds: ['text'] })) } }))
+  const oldRequests: string[] = []
+  await page.route('**/assets/model-vendors/*.svg', route => {
+    oldRequests.push(route.request().url())
+    return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><rect width="30" height="30" fill="#E7F8FF"/></svg>' })
+  })
+  await page.goto('/create/text')
+  const dialog = await open(page)
+  await expect(dialog.locator('.model-option img')).toHaveCount(8)
+  const icons = await dialog.locator('.model-option img').evaluateAll(async elements => Promise.all(elements.map(async element => {
+    const image = element as HTMLImageElement
+    await image.decode()
+    const svg = new DOMParser().parseFromString(await (await fetch(image.src)).text(), 'image/svg+xml')
+    const canvas = document.createElement('canvas')
+    canvas.width = 30; canvas.height = 30
+    const context = canvas.getContext('2d')!
+    context.drawImage(image, 0, 0, 30, 30)
+    return { url: image.src, backgroundRects: svg.querySelectorAll('rect').length, cornerAlpha: context.getImageData(1, 1, 1, 1).data[3] }
+  })))
+  expect(oldRequests).toEqual([])
+  for (const icon of icons) {
+    expect(new URL(icon.url).pathname.startsWith('/assets/model-vendors/')).toBe(false)
+    expect(icon.backgroundRects).toBe(0)
+    expect(icon.cornerAlpha).toBe(0)
+  }
+})
+
 test('search, vendor filters and favorites work, persist and remain isolated by group token', async ({ page }) => {
   await fixture(page); await page.goto('/create/image')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
@@ -112,6 +161,26 @@ test('cross-mode selection preserves the chosen non-default model and existing i
   await expect(page).toHaveURL(/\/create\/image$/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留图片草稿')
 })
+test('backend model types remain usable after group changes and cannot be replaced locally', async ({ page }) => {
+  const { state } = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: {
+    tokenId: state.tokenId, items: [{ id: 'custom/alias', kinds: ['image'], configuredKind: 'image' }],
+  } }))
+  await page.goto('/create/image')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('custom/alias')
+  const dialog = await open(page)
+  await dialog.getByRole('button', { name: '调整模型类型: custom/alias', exact: true }).click()
+  await expect(dialog.getByRole('combobox', { name: '模型类型（后台指定）', exact: true })).toBeDisabled()
+  await expect(dialog.getByRole('combobox', { name: '模型类型（后台指定）', exact: true })).toHaveValue('image')
+  await dialog.getByRole('button', { name: '选择分组', exact: true }).click()
+  await dialog.getByRole('button', { name: '其他分组 · 0.6×', exact: true }).click()
+  await dialog.getByRole('button', { name: 'custom/alias', exact: true }).click()
+  await expect(page).toHaveURL(/\/create\/image$/)
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('custom/alias')
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('custom/alias')
+})
+
 test('manual type and text API format are saved and used by the actual generation request', async ({ page }) => {
   const state = await fixture(page); await page.goto('/create/image')
   let dialog = await open(page)

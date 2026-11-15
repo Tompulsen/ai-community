@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Images, Receipt, KeyRound, CircleDollarSign, MoreHorizontal, PanelLeft, SquarePen } from '@lucide/vue'
+import { ArrowLeft, Images, Receipt, KeyRound, CircleDollarSign, Settings, PanelLeft, SquarePen } from '@lucide/vue'
 import { api, errorMessage, loadSession, session } from '../state'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
@@ -107,15 +107,15 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
 <template>
   <div class="page-container create-page">
     <StudioSidebar v-if="session.user" :kind="kind" :account-tool="accountTool" @kind="switchKind" @new="newCreation" @reuse="reuse" @prices="openAccount('prices')" @conversation="openConversation" />
-    <header class="studio-page-toolbar">
+    <header class="studio-page-toolbar" :class="{ 'studio-chat-toolbar': kind === 'text' && !accountTool }">
       <h1>{{ accountTool ? '账户工具' : kind === 'text' ? '对话' : '今天' }}</h1>
       <div v-if="session.user" class="mobile-studio-navigation"><StudioPopover ref="navigationMenu" label="创作导航" :width="280"><template #trigger><PanelLeft :size="19" /></template><p class="navigation-current">当前：{{ kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : '对话' }}</p><RouterLink to="/discover" class="studio-command" @click="navigationMenu?.close()"><ArrowLeft :size="17" />返回社区</RouterLink></StudioPopover></div>
       <div v-if="session.user" class="mobile-studio-destinations"><StudioPopover ref="mobileGallery" label="作品库" :width="880" @toggle="mobileLibraryLoaded ||= $event"><template #trigger><Images :size="18" /><span>作品库</span></template><StudioGallery v-if="mobileLibraryLoaded" embedded @reuse="reuse" @publish="share" /></StudioPopover><button class="studio-tool" @click="openAccount('prices')"><CircleDollarSign :size="18" /><span>模型定价</span></button><button class="studio-tool mobile-new-creation" title="新建创作" aria-label="新建创作" @click="newCreation"><SquarePen :size="19" /></button></div>
-      <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar"><StudioPopover ref="accountMenu" label="创作台菜单" :width="260"><template #trigger><MoreHorizontal :size="20" /><span v-if="menuInSidebar">更多</span></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button></StudioPopover></Teleport>
+      <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar"><StudioPopover ref="accountMenu" label="创作台菜单" :trigger-label="menuInSidebar ? '创作台菜单：设置' : undefined" :width="260"><template #trigger><Settings :size="20" /><span v-if="menuInSidebar">设置</span></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button></StudioPopover></Teleport>
     </header>
     <ContentSkeleton v-if="!session.ready" layout="form" label="正在加载账号…" />
     <div v-else-if="!session.user" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
-    <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view"><button class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" /></div>
+    <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view"><button class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p>
       <p v-if="sourceIssue" class="form-error" role="alert">{{ sourceIssue }} <button v-if="source" type="button" class="text-link" @click="sourceIssue = ''">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <StudioChat v-if="kind === 'text'" v-show="!accountTool" ref="chat" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
@@ -138,6 +138,7 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
 @media (min-width: 1000px) {
   .create-page { padding: 8px 40px 24px; --studio-content-width: 1760px; }
   .studio-page-toolbar { width: min(100%, var(--studio-content-width)); margin-inline: auto; min-height: 56px; margin-bottom: 16px; }
+  .studio-chat-toolbar { display: none; }
   .studio-page-toolbar h1 { font-size: 24px; line-height: 32px; }
   .source-label, .studio-account-view { width: min(100%, var(--studio-content-width)); margin-inline: auto; }
 }

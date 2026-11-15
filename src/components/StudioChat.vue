@@ -17,6 +17,7 @@ import StudioModePicker from './StudioModePicker.vue'
 import StudioSearchPicker from './StudioSearchPicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
+import StudioConversations from './StudioConversations.vue'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 const props = defineProps<{ source?: Work | null; sourceBlocked?: boolean }>()
@@ -25,14 +26,13 @@ const current = computed(() => chats.sessions.find(chat => chat.id === chats.act
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
-const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), query = ref(''), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>()
+const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>()
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const models = computed(() => modelsForKind('text'))
 const busy = computed(() => current.value && chats.busy[current.value.id])
 const latestTask = computed(() => creation.tasks.find(task => task.id === current.value?.messages.at(-1)?.taskId))
-const visible = computed(() => chats.sessions.filter(chat => `${chat.topic} ${chat.messages.map(message => messageText(message)).join(' ')}`.toLowerCase().includes(query.value.toLowerCase())))
 const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, { FORBID_TAGS: ['iframe', 'style', 'form'], FORBID_ATTR: ['style'] })
 function messageText(message: NativeMessage) { return typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') }
 function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
@@ -132,12 +132,12 @@ function publish(message: NativeMessage, destination: CreationDestination = 'com
   if (task) emit('publish', task, destination)
 }
 function useTask(task: CreationTask) { const next = newChat(); next.model = task.model; next.draft = task.prompt; next.sourceWorkId = task.sourceWorkId; prompt.value = task.prompt; model.value = task.model; files.value = []; void saveChats(); emit('source', task.sourceWorkId) }
-defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls, uploading, sourceWorkId })
+defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls, uploading, sourceWorkId, model })
 </script>
 <template>
   <div class="native-chat" aria-label="对话工作台">
     <section v-if="current" class="chat-main">
-      <header class="chat-toolbar"><div class="chat-title"><input v-model="current.topic" class="conversation-title" aria-label="对话名称" maxlength="100" @change="saveChats()" /><span>{{ current.messages.filter(message => message.role !== 'system').length }} 条消息</span></div><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><div class="chat-history"><input v-model="query" class="control" type="search" aria-label="搜索对话" placeholder="搜索对话" /><nav aria-label="历史对话"><button v-for="chat in visible" :key="chat.id" class="session-row" :class="{ active: chat.id === chats.activeId }" :aria-current="chat.id === chats.activeId ? 'true' : undefined" @click="selectChat(chat.id)"><span>{{ chat.topic }}</span><LoaderCircle v-if="chats.busy[chat.id]" :size="14" /></button></nav><p v-if="!visible.length" class="muted">没有匹配的对话</p></div></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command" :disabled="busy" @click="current.clearContextIndex = current.messages.length; current.memoryPrompt = ''; current.lastSummarizeIndex = 0; saveChats()"><Eraser :size="16" />清除上下文</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+      <header class="chat-toolbar"><div class="chat-title"><input v-model="current.topic" class="conversation-title" aria-label="对话名称" maxlength="100" @change="saveChats()" /><span>{{ current.messages.filter(message => message.role !== 'system').length }} 条消息</span></div><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
@@ -155,7 +155,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           </div>
         </article>
       </div><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
-      <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /></StudioBilling>
+      <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="current.clearContextIndex = current.messages.length; current.memoryPrompt = ''; current.lastSummarizeIndex = 0; saveChats()"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form class="chat-composer studio-composer" @submit.prevent="send">
         <p v-if="edited" class="editing-state">正在编辑提问<button class="icon-button" type="button" title="取消编辑" aria-label="取消编辑" @click="edited = undefined; prompt = ''"><X :size="14" /></button></p>
         <label class="field"><span class="studio-sr-only">{{ edited ? '编辑内容' : '消息' }}</span><textarea v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
@@ -183,13 +183,15 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 <style scoped>
 .native-chat { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .chat-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.chat-main :deep(.billing-controls) { flex-wrap: wrap; }
 @media (min-width: 1000px) {
+  .chat-main .chat-toolbar { display: none; }
   .chat-main .chat-messages { padding-inline: 0; }
   .chat-message.assistant > .message-content { padding-inline: 0; background: transparent; border-radius: 0; }
 }
 .chat-toolbar, .chat-toolbar-actions, .chat-title, .message-heading, .message-actions { display: flex; align-items: center; gap: 8px; }
 .chat-toolbar { flex: none; justify-content: space-between; min-height: 44px; }.chat-title { min-width: 0; gap: 12px; }.chat-title > span { color: var(--muted); font-size: 12px; white-space: nowrap; }.conversation-title { width: 176px; max-width: 35vw; border: 0; background: transparent; color: var(--ink); font-size: 14px; font-weight: 500; min-width: 0; padding: 8px 0; }
-.chat-history nav { display: grid; margin-top: 12px; gap: 4px; }.chat-history .control { width: 100%; }.session-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--muted); padding: 12px; text-align: left; cursor: pointer; min-width: 0; border-radius: 4px; }.session-row span { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }.session-row:hover, .session-row.active { background: var(--surface); color: var(--ink); }
+.chat-history { max-height: min(480px, 60dvh); }
 .chat-messages-wrap { position: relative; flex: 1; min-height: 0; }.chat-messages { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px 8px; scrollbar-color: var(--border) transparent; }.chat-empty { height: 100%; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); font-size: 16px; }.chat-empty img { border-radius: 10px; }.chat-empty p { margin: 0; }.jump-latest { position: absolute; right: 12px; bottom: 8px; border: 1px solid var(--border); border-radius: 50%; background: var(--canvas); }
 .chat-message { display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 32px; }.chat-message.user { align-items: flex-end; }.message-heading { font-size: 12px; color: var(--muted); margin-bottom: 12px; max-width: 100%; }.message-heading img { border-radius: 6px; }.message-heading strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }.message-avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--surface-soft); font-size: 12px; color: var(--ink); }.user .message-heading { flex-direction: row-reverse; }.message-usage { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .message-content, .user-text { overflow-wrap: anywhere; font-size: 16px; line-height: 28px; max-width: min(75ch, 100%); min-width: 0; }.chat-message > .message-content, .user-text { padding: 12px 16px; border-radius: 16px; background: var(--surface); }.user-text { white-space: pre-wrap; margin: 0; max-width: min(65ch, 85%); }.message-content :deep(p) { margin-block: 0 12px; }.message-content :deep(> :last-child) { margin-bottom: 0; }.message-content :deep(pre) { overflow-x: auto; max-width: 100%; padding: 12px; background: var(--canvas); border-radius: 6px; font-size: 14px; line-height: 22px; }.message-content :deep(img) { max-width: 100%; }.message-content :deep(table) { display: block; overflow-x: auto; border-collapse: collapse; }.message-content :deep(td), .message-content :deep(th) { border: 1px solid var(--border); padding: 8px; }.message-content :deep(a), .search-sources a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }.message-content :deep(blockquote) { margin-inline: 0; border-left: 1px solid var(--border); padding-left: 16px; color: var(--muted); }

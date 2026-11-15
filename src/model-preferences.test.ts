@@ -19,6 +19,7 @@ async function fixture() {
   const { session } = await import('./state')
   const { creation } = await import('./native-studio')
   const prefs = await import('./model-preferences')
+  Object.assign(creation, { models: [], modelTokenId: 41, selectedGroup: 'auto', groupSwitching: false, modelsLoading: false })
   session.user = { id: 'creator-a', accountId: '17' } as any
   return { session, creation, ...prefs }
 }
@@ -63,6 +64,17 @@ it('does not partially apply failed saves or allow settings while a group change
   p.creation.groupSwitching = true
   expect(() => p.setModelType('gpt-5', 'image')).toThrow('尚未就绪')
   expect(p.modelType('gpt-5')).toBe('auto')
+})
+it('keeps server-configured model types across group tokens and above stale personal and group overrides', async () => {
+  const p = await fixture()
+  const model = { id: 'alias', kinds: ['text' as const], configuredKind: 'image' as const }
+  p.creation.models = [model]
+  p.setModelType('alias', 'video')
+  expect(p.modelsForKind('image')).toEqual([model])
+  p.creation.modelTokenId = 52; p.creation.selectedGroup = '视频'
+  expect(p.modelKind(model)).toBe('image')
+  expect(p.modelsForKind('image')).toEqual([model])
+  expect(p.modelKind({ id: 'alias', kinds: ['text'] })).toBe('video')
 })
 it('recovers from corrupt storage and clears pending choices on identity changes', async () => {
   vi.stubGlobal('localStorage', { getItem: () => '{"overrides": {"unscoped-model": "image"}}', setItem: vi.fn() })

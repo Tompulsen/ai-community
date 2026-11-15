@@ -11,6 +11,7 @@ async function adminFixture(page: Page) {
   const state = {
     settings: { brand: '旧站点名称', logoUrl: '', registrationOpen: false, defaultModels: { image: 'kept-model' } },
     config: { communityPublicationMode: 'before', communityAutoBanEnabled: true, communityViolationThreshold: 3,
+      communityModelTypes: [] as { id: string; kind: string }[],
       communityFeedMode: 'shuffle', communityFeedPoolSize: 200, communityPullToRefresh: true,
       uploadLimits: { image: 20, video: 100, audio: 20, document: 20, other: 10 } },
     ads: Array.from({ length: 4 }, (_, i) => ({ id: `communityAd${i + 1}`, enabled: false, title: i === 1 ? '保留在第二槽' : '', imageUrl: '', linkUrl: '' })),
@@ -124,6 +125,40 @@ test('site settings remain usable on desktop and narrow phones', async ({ page }
     await expect(page.getByRole('button', { name: '保存站点设置', exact: true })).toBeVisible()
     await page.screenshot({ path: `.impeccable/review/account-admin/site-${width}.png`, fullPage: true })
   }
+})
+
+test('administrators configure model types, retain invalid drafts and save or remove them on desktop and phones', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/admin?tab=settings')
+  await page.getByRole('button', { name: '添加模型类型', exact: true }).click()
+  await page.getByLabel('模型 ID 1', { exact: true }).fill('custom/alias')
+  await page.getByRole('combobox', { name: '类型 1', exact: true }).selectOption('image')
+  await page.getByRole('button', { name: '添加模型类型', exact: true }).click()
+  await page.getByLabel('模型 ID 2', { exact: true }).fill('custom/alias')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('不重复')
+  expect(fixture.writes).toHaveLength(0)
+  await page.getByLabel('模型 ID 2', { exact: true }).fill('自定义视频模型')
+  await page.getByRole('combobox', { name: '类型 2', exact: true }).selectOption('video')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.state.config.communityModelTypes).toEqual([
+    { id: 'custom/alias', kind: 'image' }, { id: '自定义视频模型', kind: 'video' },
+  ])
+  await page.reload()
+  await expect(page.getByLabel('模型 ID 1', { exact: true })).toHaveValue('custom/alias')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await page.getByLabel('模型 ID 1', { exact: true }).scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect(page.getByRole('combobox', { name: '类型 1', exact: true })).toBeVisible()
+    await page.screenshot({ path: `.taste-skill/model-types-20261115/admin-${width}.png`, fullPage: true })
+  }
+  await page.getByRole('button', { name: '删除模型类型 1', exact: true }).click()
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.state.config.communityModelTypes).toEqual([{ id: '自定义视频模型', kind: 'video' }])
+  expect(errors).toEqual([])
 })
 
 test('moderators and ordinary accounts cannot read site settings', async ({ page }) => {

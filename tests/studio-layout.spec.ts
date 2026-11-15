@@ -14,7 +14,7 @@ test('desktop sidebar restores media history without submitting and keeps accoun
     if (route.request().method() === 'POST') submissions++
     return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
   })
-  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { rows: [], currency: '¥' } } }))
+  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: [], currency: '¥' } } }))
   await page.addInitScript(() => {
     localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
       id: 'layout-test', owner: '17', kind: 'image', model: 'gpt-image-2', prompt: '海边的灯塔',
@@ -129,12 +129,13 @@ test('studio menu moves between the sidebar and compact header while keeping its
   await page.goto('/create/image')
   const input = page.getByRole('textbox', { name: '提示词', exact: true })
   await input.fill('菜单移动后保留草稿')
-  const trigger = page.getByRole('button', { name: '创作台菜单', exact: true })
+  const trigger = page.getByRole('button', { name: /^创作台菜单/ })
   const panel = page.getByRole('dialog', { name: '创作台菜单', exact: true })
   for (const width of [1440, 768, 390, 320, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     const container = page.locator(width >= 1000 ? '#studio-sidebar-menu' : '.studio-page-toolbar')
-    await expect(container.getByRole('button', { name: '创作台菜单', exact: true })).toBeVisible()
+    await expect(container.getByRole('button', { name: /^创作台菜单/ })).toBeVisible()
+    if (width >= 1000) await expect(trigger).toHaveText('设置')
     await expect(trigger).toHaveCount(1)
     await trigger.click()
     await expect(panel).toBeVisible()

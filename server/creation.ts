@@ -22,6 +22,7 @@ import type { RequestContext } from './types.ts'
 import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
+import { readModelTypes } from '../shared/studio/model-types.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -357,11 +358,14 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       const credentials = await svc.credentials(req, 'v1/models')
       const data = await upstreamJson(req, credentials, 'v1/models', svc)
       const items = record(data) && Array.isArray(data.data) ? data.data : []
+      const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
+      const types = new Map(readModelTypes(options?.communityModelTypes).map(item => [item.id, item.kind]))
       ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
-        const kind = id.length <= 200 && id.trim() ? classifyModel(id) : null
+        const configuredKind = types.get(id)
+        const kind = id.length <= 200 && id.trim() ? configuredKind ?? classifyModel(id) : null
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
-        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], protocol: 'openai' }] : []
+        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], ...(configuredKind ? { configuredKind } : {}), protocol: 'openai' }] : []
       }) })
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/media') {
       await rateLimit(ctx, 'media', 120)

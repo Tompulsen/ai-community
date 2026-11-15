@@ -3,12 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Image, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/vue'
 import { api, errorMessage, notify, uploadFile } from '../state'
 import { updateSite, type SiteBranding } from '../site'
+import { modelTypesSchema, type ModelTypeSetting } from '../../shared/studio/model-types'
 
 const props = defineProps<{ view: 'site' | 'settings' | 'tags' | 'ads' }>()
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
   uploadLimits: Record<'image' | 'video' | 'audio' | 'document' | 'other', number>
+  communityModelTypes: ModelTypeSetting[]
 }
 interface Tag { id: string; category: 'image' | 'video' | 'resource'; name: string }
 interface Ad { id: string; enabled: boolean; title: string; imageUrl: string; linkUrl: string }
@@ -46,7 +48,7 @@ async function load() {
     } else if (props.view === 'settings') {
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
       if (!active) return
-      readVersion(result); config.value = result.config
+      readVersion(result); config.value = { ...result.config, communityModelTypes: result.config.communityModelTypes || [] }
     } else if (props.view === 'tags') {
       const result = await api<{ items: Tag[] }>('/api/admin/tags')
       if (!active) return
@@ -74,6 +76,9 @@ async function save() {
       updateSite(result.settings)
       readVersion(result); branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
     } else if (props.view === 'settings' && config.value) {
+      const parsed = modelTypesSchema.safeParse(config.value.communityModelTypes.map(item => ({ ...item, id: item.id.trim() })))
+      if (!parsed.success) throw new Error('请填写完整且不重复的模型 ID（最多 200 字符），并选择模型类型；最多可设置 500 个模型。')
+      config.value.communityModelTypes = parsed.data
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...config.value, version: version.value } })
       if (!active) return
       readVersion(result); config.value = result.config
@@ -144,6 +149,15 @@ watch(dirty, value => { if (value) saved.value = false })
     </form>
     <form v-if="view === 'settings' && config && !loading" id="admin-settings-form" @submit.prevent="save">
       <fieldset class="fieldset" :disabled="busy">
+        <section class="editor-section"><div class="editor-section-title"><h3>模型类型</h3><p>手动指定无法自动识别的模型。</p></div><div class="editor-fields">
+          <p id="model-type-help" class="form-note">填写完整模型 ID，所有分组共用。未配置的模型沿用原有识别方式。</p>
+          <div v-for="(item, index) in config.communityModelTypes" :key="index" class="model-type-row">
+            <label class="field"><span>模型 ID {{ index + 1 }}</span><input v-model="item.id" class="control" maxlength="200" required aria-describedby="model-type-help" placeholder="如 custom/model-name" /></label>
+            <label class="field"><span>类型 {{ index + 1 }}</span><select v-model="item.kind" class="control"><option value="text">对话</option><option value="image">生图</option><option value="video">视频</option></select></label>
+            <button type="button" class="icon-button" :aria-label="'删除模型类型 ' + (index + 1)" title="删除模型类型" @click="config.communityModelTypes.splice(index, 1)"><Trash2 :size="16" /></button>
+          </div>
+          <button type="button" class="button subtle btn model-type-add" :disabled="config.communityModelTypes.length >= 500" @click="config.communityModelTypes.push({ id: '', kind: 'image' })"><Plus :size="16" aria-hidden="true" />添加模型类型</button>
+        </div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>内容发布</h3><p>决定投稿何时出现在社区。</p></div><div class="editor-fields"><label class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label><p id="publication-help" class="form-note">{{ config.communityPublicationMode === 'before' ? '新投稿通过管理员或审核员审核后公开展示。' : '新投稿直接公开，管理员可在审核列表中处理。' }}</p></div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>首页推荐</h3><p>控制作品排序与浏览体验。</p></div><div class="editor-fields"><div class="fields"><label class="field"><span>首页推荐排序</span><select v-model="config.communityFeedMode" class="control"><option value="shuffle">随机推荐</option><option value="latest">最新发布</option></select></label><label class="field"><span>推荐候选池</span><input v-model.number="config.communityFeedPoolSize" type="number" min="20" max="1000" step="1" required class="control" aria-describedby="feed-pool-help" /></label></div><p id="feed-pool-help" class="form-note">随机推荐从最近 20–1000 条候选作品中选取；最新发布按时间排序。</p><label class="switch-row"><span><strong>手机下拉刷新</strong><small>允许用户下拉刷新社区作品。</small></span><input v-model="config.communityPullToRefresh" type="checkbox" role="switch" aria-label="手机下拉刷新" /></label></div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>违规处理</h3><p>设置累计违规的处理规则。</p></div><div class="editor-fields"><label class="switch-row"><span><strong>达到阈值自动封禁</strong><small>根据已记录的内容违规执行。</small></span><input v-model="config.communityAutoBanEnabled" type="checkbox" role="switch" aria-label="达到阈值自动封禁" /></label><label class="field"><span>违规次数阈值</span><input v-model.number="config.communityViolationThreshold" type="number" min="1" max="1000" step="1" required class="control" aria-describedby="violation-help" /></label><p id="violation-help" class="form-note">可设置 1–1000 次。关闭自动封禁后保留阈值设置。</p></div></section>
@@ -182,6 +196,10 @@ watch(dirty, value => { if (value) saved.value = false })
 .editor-section-title h3 { font-size: 16px; line-height: 24px; font-weight: 500; }
 .editor-section-title p { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 20px; max-width: 24ch; }
 .editor-fields { display: grid; gap: 16px; min-width: 0; align-content: start; }
+.model-type-row { display: grid; grid-template-columns: minmax(0, 1fr) 112px 44px; gap: 12px; align-items: end; }
+.model-type-row .field { min-width: 0; }
+.model-type-row .icon-button { width: 44px; height: 44px; }
+.model-type-add { justify-self: start; min-height: 44px; }
 .site-logo-layout { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: start; gap: 24px; }
 .site-logo-layout .stack { min-width: 0; gap: 12px; }
 .site-logo-layout input[type="file"] { max-width: 100%; min-width: 0; font: inherit; }
@@ -236,6 +254,8 @@ watch(dirty, value => { if (value) saved.value = false })
 .admin-loading .skeleton { height: 44px; max-width: 640px; }
 @media (max-width: 1100px) { .editor-section { grid-template-columns: 1fr; gap: 16px; } .editor-section-title p { max-width: none; } }
 @media (max-width: 639px) {
+  .model-type-row { grid-template-columns: minmax(0, 1fr) 44px; }
+  .model-type-row .field:first-child { grid-column: 1 / -1; }
   .editor-heading .form-note { font-size: 12px; }
   .fields, .ad-layout, .site-logo-layout { grid-template-columns: 1fr; }
   .upload-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

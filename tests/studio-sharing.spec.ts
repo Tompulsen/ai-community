@@ -161,6 +161,7 @@ test('reusing image history synchronizes the source and a new creation clears it
 })
 
 test('chat history restores its own source and preserves an edited draft', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 })
   const state = await fixture(page, 'resource')
   await page.goto('/create/text?remix=source42')
   const prompt = page.getByRole('textbox', { name: '消息', exact: true })

@@ -82,6 +82,37 @@ test('search menu matches shared popovers, preserves choices and fits desktop an
   expect(errors).toEqual([])
 })
 
+test('clear context sits above the composer and excludes old messages without deleting them', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/text')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('旧的上下文内容')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(1)
+  const clear = page.getByRole('button', { name: '清除上下文', exact: true })
+  await expect(page.locator('.studio-page-toolbar')).toBeHidden()
+  await expect(page.locator('.chat-toolbar')).toBeHidden()
+  await expect(page.locator('.studio-sidebar-history')).toContainText('旧的上下文内容')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 844 })
+    await expect(clear).toBeVisible()
+    if (width < 1000) await expect(page.locator('.chat-toolbar')).toBeVisible()
+    const bounds = await clear.boundingBox(), composer = await page.locator('.chat-composer').boundingBox()
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(composer!.y)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: `.taste-skill/chat-clear-context-20261115/toolbar-${width}.png` })
+  }
+  await clear.click()
+  await expect(page.locator('.chat-message')).toHaveCount(2)
+  await page.reload()
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('新的提问内容')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(2)
+  const messages = state.calls.filter(call => call.body.kind === 'text').at(-1)!.body.chatOptions.messages
+  expect(JSON.stringify(messages)).not.toContain('旧的上下文内容')
+  expect(JSON.stringify(messages)).toContain('新的提问内容')
+})
+
 test('image advanced settings survive reload, reach the request, and streaming results enter the gallery', async ({ page }) => {
   const state = await fixture(page)
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
@@ -248,7 +279,7 @@ test('chat attachments keep the original PDF bytes and active skills are scoped 
   await expect(page.locator('.chat-message.assistant .message-content').last()).toContainText('回答 2')
   const restored = state.calls.filter(call => call.path === '/api/creation/generate').at(-1)!.body.chatOptions.messages
   expect(restored.some((message: any) => message.role === 'system' && message.content.includes('Use short sentences.'))).toBe(true)
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.locator('.studio-sidebar').getByRole('button', { name: '新建创作', exact: true }).click()
   await page.getByRole('button', { name: '技能与工具', exact: true }).click()
   await expect(page.getByLabel('编辑技能')).not.toBeChecked()
   await expect(page.getByText('当前账号未启用 MCP 工具。', { exact: true })).toBeVisible()
@@ -295,15 +326,15 @@ test('account tools use the configured quota ratio for logs and key budgets', as
       logs: { items: [{ id: 1, created_at: 1700000000, model_name: 'gpt-5', token_name: '系统创建', prompt_tokens: 12, completion_tokens: 24, quota: 62500 }], total: 1 },
       tokens: { items: [{ id: 41, name: '系统创建', group: 'auto', status: 1, expired_time: -1, unlimited_quota: true, used_quota: 250000, remain_quota: 500000 }], total: 1 },
       'model-groups': { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto', ratio: 1 }] },
-      'model-pricing': { account: 'root', currency: '¥', fetchedAt: new Date().toISOString(), rows: [{ model: 'gpt-5', group: 'auto', billing: 'Tokens', price: '¥2 / 百万输入' }] } }
+      'model-pricing': { userId: 17, account: 'root', currency: '¥', fetchedAt: new Date().toISOString(), rows: [{ model: 'gpt-5', group: 'auto', billing: 'Tokens', price: '¥2 / 百万输入' }] } }
     if (route.request().method() !== 'GET') state.calls.push({ path: url.pathname, body: route.request().postDataJSON() })
     return route.fulfill({ json: { success: true, data: data[key] || {} } })
   })
   await page.goto('/create/image')
-  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '消费记录', exact: true }).click()
   await expect(page.getByRole('cell', { name: '¥ 0.25', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '密钥', exact: true }).click()
   await page.getByRole('button', { name: '创建密钥', exact: true }).click()
   await page.getByLabel('名称', { exact: true }).fill('测试额度')
@@ -312,9 +343,9 @@ test('account tools use the configured quota ratio for logs and key budgets', as
   await page.getByRole('button', { name: '保存密钥', exact: true }).click()
   await expect(page.getByRole('dialog')).not.toBeVisible()
   expect(state.calls.find(call => call.path === '/api/new-api/tokens')?.body.remain_quota).toBe(312500)
-  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
-  await expect(page.getByRole('cell', { name: '¥2 / 百万输入', exact: true })).toBeVisible()
+  await expect(page.getByRole('article', { name: 'gpt-5 模型价格', exact: true })).toContainText('¥2 / 百万输入')
   await capture(page, 'prices')
 })
 

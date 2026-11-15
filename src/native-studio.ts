@@ -11,7 +11,7 @@ import { usesGeminiImageChat } from '../shared/studio/image-params'
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
-export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; protocol?: 'openai' | 'sync' | 'async' }
+export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; protocol?: 'openai' | 'sync' | 'async' }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {

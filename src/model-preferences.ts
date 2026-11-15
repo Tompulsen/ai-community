@@ -66,6 +66,7 @@ export function toggleModelFavorite(id: string) {
   save({ ...modelPreferences, favorites: favorites.includes(key) ? favorites.filter(item => item !== key) : [...favorites, key] })
 }
 export function modelKind(item: CreationModel): CreationKind {
+  if (item.configuredKind) return item.configuredKind
   const override = modelType(item.id)
   if (override !== 'auto') return override === 'chat' ? 'text' : override
   const group = creation.selectedGroup?.trim().toLowerCase() || ''

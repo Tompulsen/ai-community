@@ -40,8 +40,11 @@ let writes: Promise<unknown> = Promise.resolve()
 const runs = new Map<string, string>()
 const owner = () => session.user?.id || ''
 const store = () => `octopus:user-${owner()}:native-chat`
+function emptyChat(): NativeChat {
+  return { id: crypto.randomUUID(), topic: '新对话', messages: [], messageBranches: [], memoryPrompt: '', lastSummarizeIndex: 0, lastUpdate: Date.now(), settings: defaults(), system: '', skillIds: [], search: 'off', compressionThreshold: 272000, sendMemory: true, toolContext: '' }
+}
 export function newChat() {
-  const next: NativeChat = { id: crypto.randomUUID(), topic: '新对话', messages: [], messageBranches: [], memoryPrompt: '', lastSummarizeIndex: 0, lastUpdate: Date.now(), settings: defaults(), system: '', skillIds: [], search: 'off', compressionThreshold: 272000, sendMemory: true, toolContext: '' }
+  const next = emptyChat()
   chats.sessions.unshift(next); chats.activeId = next.id; void saveChats()
   return next
 }
@@ -49,7 +52,7 @@ export async function saveChats(required = false) {
   if (!owner() || !chats.ready) return
   const key = store(), accepted = owner(), snapshot = JSON.parse(JSON.stringify({ state: { sessions: chats.sessions, activeId: chats.activeId, _hasHydrated: true }, version: 1 }))
   writes = writes.catch(() => {}).then(async () => { if (owner() === accepted) await writeChatSnapshot(key, snapshot) })
-  try { await writes } catch (error) { chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
+  try { await writes } catch (error) { if (owner() === accepted) chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
 }
 export function loadChats() {
   if (chats.ready) return Promise.resolve()
@@ -88,11 +91,26 @@ export function loadChats() {
   return loading
 }
 export async function removeChat(chat: NativeChat) {
-  if (chats.busy[chat.id]) throw new Error('请先停止当前对话。')
-  chats.sessions = chats.sessions.filter(item => item.id !== chat.id)
-  if (chats.activeId === chat.id) chats.activeId = chats.sessions[0]?.id || ''
-  if (!chats.sessions.length) newChat()
-  await saveChats(true)
+  return removeChats([chat.id])
+}
+// Adapted from octopus_chat app/store/chat.ts deleteSessions (MIT).
+export async function removeChats(ids: string[]) {
+  if (!owner() || !chats.ready) return
+  const selected = new Set(ids), previous = chats.sessions, activeId = chats.activeId, version = epoch
+  if (previous.some(chat => selected.has(chat.id) && chats.busy[chat.id])) throw new Error('请先停止所选对话，再删除。')
+  const remaining = previous.filter(chat => !selected.has(chat.id))
+  if (remaining.length === previous.length) return
+  const activeIndex = previous.findIndex(chat => chat.id === activeId)
+  const remainingBefore = previous.slice(0, Math.max(0, activeIndex)).filter(chat => !selected.has(chat.id)).length
+  if (!remaining.length) remaining.push(emptyChat())
+  const nextId = remaining.some(chat => chat.id === activeId) ? activeId : remaining[Math.min(remainingBefore, remaining.length - 1)]!.id
+  chats.sessions = remaining; chats.activeId = nextId
+  const next = chats.sessions
+  try { await saveChats(true) }
+  catch (error) {
+    if (version === epoch && chats.sessions === next && chats.activeId === nextId) { chats.sessions = previous; chats.activeId = activeId }
+    throw error
+  }
 }
 export function cloneChat(chat: NativeChat) {
   const snapshot = JSON.parse(JSON.stringify(chat))

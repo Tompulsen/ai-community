@@ -145,6 +145,37 @@ test('saving unchanged legacy upload limits preserves the effective restrictions
   assert.equal(saved.version, before.version)
 })
 
+test('model types persist through settings saves and support versioned removal without changing unrelated options', async () => {
+  const f = fixture(), path = '/api/admin/community/config'
+  const before = await f.request(path)
+  assert.deepEqual(before.config.communityModelTypes, [])
+  const modelTypes = [{ id: 'custom/alias', kind: 'image' }, { id: '__proto__', kind: 'video' }, { id: 'gpt-5', kind: 'text' }]
+  const saved = await f.request(path, 'PATCH', { communityModelTypes: modelTypes, version: before.version })
+  assert.deepEqual((await f.request(path)).config.communityModelTypes, modelTypes)
+  assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
+  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
+  await f.request(path, 'PATCH', { communityFeedMode: 'latest' })
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, modelTypes)
+  const latest = await f.request(path)
+  await f.request(path, 'PATCH', { communityModelTypes: [], version: latest.version })
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, [])
+  assert.notEqual(saved.version, before.version)
+})
+
+test('model type settings reject duplicates, invalid types, control characters and oversized input before writing', async () => {
+  for (const communityModelTypes of [
+    null, {}, [{ id: '', kind: 'image' }], [{ id: ' alias ', kind: 'image' }],
+    [{ id: 'a\nb', kind: 'image' }], [{ id: 'a'.repeat(201), kind: 'image' }],
+    [{ id: 'alias', kind: 'auto' }], [{ id: 'alias', kind: 'image', extra: true }],
+    [{ id: 'alias', kind: 'image' }, { id: 'alias', kind: 'video' }],
+    Array.from({ length: 501 }, (_, index) => ({ id: String(index), kind: 'text' })),
+  ]) {
+    const f = fixture()
+    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModelTypes }), { statusCode: 400 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  }
+})
+
 test('admin limits match upload policy precedence and validation for mixed old and new values', async () => {
   const f = fixture({ clientOptions: {
     communityUploadLimits: { image: 2, video: 8, audio: 7, resource: 3, other: 4 },

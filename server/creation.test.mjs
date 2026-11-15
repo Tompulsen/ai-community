@@ -72,6 +72,10 @@ function fixture(t, options = {}) {
     const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: false }
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
+      db: { async query(sql) {
+        assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
+        return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
+      } },
       config: { url: origin },
       url: new URL(request.raw.url, origin), body: request.body || {},
       requireUser() { return user },
@@ -163,6 +167,28 @@ test('task and protected video recovery retain the original token and account ow
   assert.equal(media.payload, 'vid')
   assert.equal(media.headers['content-range'], 'bytes 0-2/12')
   assert.equal(credentialCalls.at(-1).tokenId, 71)
+})
+
+test('server model types apply to exact IDs across group catalogs without granting access to other models', async t => {
+  let token = 71
+  const { app } = fixture(t, {
+    selectedToken: () => token,
+    modelTypes: [{ id: 'custom/alias', kind: 'image' }, { id: 'tts-custom', kind: 'video' }, { id: 'not-in-group', kind: 'image' }],
+    fetch() { return Response.json({ data: token === 71 ? ['custom/alias', 'gpt-5', 'whisper-1', 'tts-custom'] : ['custom/alias', 'CUSTOM/alias'] }) },
+  })
+  const first = await app.inject('/api/creation/models')
+  assert.equal(first.statusCode, 200)
+  assert.deepEqual(first.json().items.map(({ id, kinds, configuredKind }) => ({ id, kinds, configuredKind })), [
+    { id: 'custom/alias', kinds: ['image'], configuredKind: 'image' },
+    { id: 'gpt-5', kinds: ['text'], configuredKind: undefined },
+    { id: 'tts-custom', kinds: ['video'], configuredKind: 'video' },
+  ])
+  token = 99
+  const second = (await app.inject('/api/creation/models')).json()
+  assert.equal(second.tokenId, 99)
+  assert.deepEqual(second.items.map(item => [item.id, item.kinds[0], item.configuredKind]), [
+    ['custom/alias', 'image', 'image'], ['CUSTOM/alias', 'text', undefined],
+  ])
 })
 
 test('unrecorded historical task recovery is GET-only and rejects an upstream owner mismatch', async t => {

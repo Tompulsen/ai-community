@@ -195,7 +195,7 @@ function handleEnter(event: KeyboardEvent) {
   event.preventDefault()
   void generate()
 }
-defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploading, sourceWorkId })
+defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploading, sourceWorkId, model })
 </script>
 
 <template>

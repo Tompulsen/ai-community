@@ -21,8 +21,8 @@ const matching = computed(() => searchModels(creation.models, query.value))
 const categories = computed(() => modelCategories(matching.value, favoriteModel))
 const visible = computed(() => matching.value.filter(item => category.value === 'all'
   || (category.value === 'favorites' ? favoriteModel(item.id) : modelVendor(item.id).name === category.value)))
-const icons = new Set(['openai', 'gemini', 'claude', 'deepseek', 'grok', 'qwen', 'meta', 'mistral'])
-const icon = (item: CreationModel) => icons.has(modelVendor(item.id).id) ? `/assets/model-vendors/${modelVendor(item.id).id}.svg` : ''
+const icons = import.meta.glob<string>('../assets/model-vendors/*.svg', { eager: true, query: '?url&no-inline', import: 'default' })
+const icon = (item: CreationModel) => icons[`../assets/model-vendors/${modelVendor(item.id).id}.svg`] || ''
 watch(categories, value => { if (!value.some(item => item.id === category.value)) category.value = 'all' })
 watch([query, category, () => creation.groupSwitching], () => { expanded.value = '' })
 watch(() => [session.user?.id, session.user?.accountId], () => close())
@@ -128,7 +128,7 @@ onBeforeUnmount(() => dialog.value?.close())
               <span class="model-info"><span class="model-heading"><strong>{{ item.name || item.id }}</strong><span class="model-kind">{{ kindLabels[modelKind(item)] }}</span><span v-if="modelType(item.id) !== 'auto'" class="model-manual">手动</span></span><span class="model-description">{{ modelVendor(item.id).name }} · {{ modelDescription(item, modelKind(item)) }}</span></span><Check v-if="item.id === modelValue && modelKind(item) === kind" :size="17" />
             </button><button type="button" class="icon-button" :aria-label="`调整模型类型: ${item.id}`" title="调整模型类型与接口" :aria-expanded="expanded === item.id" :aria-controls="`${id}-${encodeURIComponent(item.id)}`" :disabled="busy || !creation.modelTokenId" @click="expanded = expanded === item.id ? '' : item.id"><SlidersHorizontal :size="18" /></button><button type="button" class="icon-button" :aria-label="`${favoriteModel(item.id) ? '取消收藏' : '收藏'}: ${item.id}`" :aria-pressed="favoriteModel(item.id)" :title="favoriteModel(item.id) ? '取消收藏' : '收藏'" :disabled="busy || !creation.modelTokenId" @click="update(() => toggleModelFavorite(item.id))"><Star :size="18" :fill="favoriteModel(item.id) ? 'currentColor' : 'none'" /></button></div>
             <div v-if="expanded === item.id" :id="`${id}-${encodeURIComponent(item.id)}`" class="model-settings" role="group" :aria-label="`模型设置: ${item.id}`">
-              <label><span>模型类型</span><select :value="modelType(item.id)" :disabled="busy" @change="update(() => setModelType(item.id, ($event.target as HTMLSelectElement).value as ModelType))"><option value="auto">自动识别</option><option value="chat">对话</option><option value="image">生图</option><option value="video">视频</option></select></label>
+              <label><span>模型类型{{ item.configuredKind ? '（后台指定）' : '' }}</span><select :value="item.configuredKind === 'text' ? 'chat' : item.configuredKind || modelType(item.id)" :disabled="busy || !!item.configuredKind" @change="update(() => setModelType(item.id, ($event.target as HTMLSelectElement).value as ModelType))"><option value="auto">自动识别</option><option value="chat">对话</option><option value="image">生图</option><option value="video">视频</option></select></label>
               <label v-if="modelKind(item) === 'text'"><span>接口格式</span><select :value="modelFormat(item.id) || 'auto'" :disabled="busy" @change="update(() => setModelFormat(item.id, ($event.target as HTMLSelectElement).value as ChatApiFormat | 'auto'))"><option value="auto">跟随对话设置</option><option v-for="format in CHAT_API_FORMATS" :key="format" :value="format">{{ formatName(format) }}</option></select></label>
             </div>
           </article></template>
@@ -142,7 +142,9 @@ onBeforeUnmount(() => dialog.value?.close())
 .studio-model-trigger { position: relative; flex: 0 1 auto; width: max-content; max-width: min(220px, 100%); min-width: 0; }
 .model-trigger-width { visibility: hidden; pointer-events: none; min-height: 36px; padding: 8px 24px 8px 4px; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; }
 .studio-model-trigger input { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; outline: none; cursor: pointer; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
-.studio-model-trigger:focus-within { outline: 1px solid var(--muted); outline-offset: 2px; }
+.studio-model-trigger input[readonly] { caret-color: transparent; }
+.studio-select.studio-model-trigger:focus-within { outline: none; }
+.studio-model-trigger input:focus-visible { background: var(--surface-soft); color: var(--ink); }
 .studio-model-trigger > svg { position: absolute; right: 4px; pointer-events: none; }
 .studio-model-dialog { width: min(1000px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); display: none; flex-direction: column; border-radius: 12px; background: var(--surface); }
 .studio-model-dialog[open] { display: flex; }
