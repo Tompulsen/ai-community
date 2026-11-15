@@ -50,6 +50,9 @@ async function open(page: Page) {
 test('price cards merge groups, preserve zero and tier charges, copy names and keep the current model first', async ({ page }) => {
   const fixtureState = await fixture(page), catalog = await open(page)
   await expect(catalog.getByRole('article')).toHaveCount(4)
+  await expect(page.getByRole('heading', { name: '账户工具', exact: true })).toHaveCount(0)
+  await expect(page.locator('.studio-page-toolbar')).toBeHidden()
+  await expect(page.locator('.studio-account-view > button')).toHaveCount(0)
   await expect(catalog.getByRole('article').first()).toHaveAccessibleName('gpt-5 模型价格')
   const card = catalog.getByRole('article', { name: 'gpt-5 模型价格', exact: true })
   await expect(card).toContainText('本次调用模型')
@@ -116,5 +119,9 @@ test('price grid and details fit desktop, tablet and narrow phones in both theme
   }
   const accessibility = await new AxeBuilder({ page }).include('.model-prices').withRules(['color-contrast', 'label', 'button-name']).analyze()
   expect(accessibility.violations).toEqual([])
+  await page.getByRole('button', { name: '创作导航', exact: true }).click()
+  await page.getByRole('dialog', { name: '创作导航', exact: true }).getByRole('button', { name: '返回创作', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+  await expect(catalog).toHaveCount(0)
   expect(errors).toEqual([])
 })

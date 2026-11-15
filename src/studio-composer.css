@@ -71,7 +71,7 @@
   .studio-popover .settings-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 359px) { .studio-composer-actions { gap: 2px; } }
-.mobile-send-label, .mobile-chat-tools, .mobile-result-publish { display: none; }
+.mobile-send-label, .mobile-chat-tools { display: none; }
 @media (min-width: 1000px) {
   .create-page .native-studio, .create-page .native-chat { width: min(100%, var(--studio-content-width, 1120px)); margin-inline: auto; }
   .create-page .studio-composer { display: flex; flex-direction: column; margin-top: 16px; padding: 20px; border-radius: 24px; background: color-mix(in srgb, var(--surface) 88%, var(--canvas)); }
@@ -101,8 +101,6 @@
   .studio-composer > .group-description:not([role]), .studio-composer > .composer-hint { display: none; }
   .mobile-chat-tools { display: grid; gap: 12px; margin-bottom: 16px; }
   .mobile-chat-tools > details > summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
-  .mobile-result-publish { display: inline-flex; }
-  .native-studio .creation-output-toolbar { display: none; }
 }
 .studio-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .create-page .studio-billing + .studio-composer { margin-top: 4px; }

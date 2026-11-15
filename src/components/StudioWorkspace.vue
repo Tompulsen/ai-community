@@ -201,7 +201,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 <template>
   <section class="native-studio" aria-label="创作工作台">
     <div class="creation-output">
-      <div class="creation-output-toolbar"><h2>{{ kind === 'video' ? '视频创作' : '图片创作' }}</h2><button v-if="selected?.phase === 'complete'" class="studio-tool" @click="openPublish()"><Upload :size="16" />发布作品</button></div>
       <div ref="canvas" class="creation-canvas" :class="{ 'has-result': selected?.phase === 'complete' }" tabindex="0" aria-label="创作对话">
         <div v-if="selected" class="creation-conversation">
           <article class="creation-request" aria-label="已发送的创作请求">
@@ -221,9 +220,16 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
               <p v-if="now - selected.createdAt >= 30000" class="long-wait">等待时间较长，你可以继续编辑提示词或停止本页等待，稍后查询这次任务。</p>
             </div>
             <img v-if="selected.preview && selected.phase !== 'complete'" class="stream-preview" :src="selected.preview" alt="生成中的预览" />
-            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /><span><Maximize :size="16" />查看大图</span></button><figcaption><button class="studio-tool" @click="download(selected, index)"><Download :size="16" />下载{{ selected.urls.length > 1 ? ` ${index + 1}` : '' }}</button></figcaption></figure></div>
-            <div v-else-if="selected.text" class="creation-text"><pre>{{ selected.text }}</pre><button class="button subtle btn" @click="download(selected)"><Download :size="16" />下载文本</button></div>
-            <div v-if="selected.phase === 'complete'" class="creation-message-actions"><button class="studio-tool mobile-result-publish" @click="openPublish()"><Upload :size="15" />发布作品</button><button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish('source-comment')"><Upload :size="15" />发送到源作品评论区</button><button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />复用参数</button><button class="studio-tool" @click="newCreation"><Plus :size="15" />新的创作</button></div>
+            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /><span><Maximize :size="16" />查看大图</span></button></figure></div>
+            <div v-else-if="selected.text" class="creation-text"><pre>{{ selected.text }}</pre></div>
+            <div v-if="selected.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
+              <button class="studio-tool" @click="openPublish()"><Upload :size="15" />发布作品</button>
+              <button v-for="(url, index) in selected.urls" :key="url" class="studio-tool" @click="download(selected, index)"><Download :size="16" />下载{{ selected.urls.length > 1 ? ` ${index + 1}` : '' }}</button>
+              <button v-if="!selected.urls.length && selected.text" class="studio-tool" @click="download(selected)"><Download :size="16" />下载文本</button>
+              <button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish('source-comment')"><Upload :size="15" />发送到源作品评论区</button>
+              <button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />复用参数</button>
+              <button class="studio-tool" @click="newCreation"><Plus :size="15" />新的创作</button>
+            </div>
           </article>
         </div>
         <div v-else class="canvas-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>{{ kind === 'video' ? '开始视频创作' : '开始图片创作' }}</p><span>写下你的想法，也可以添加参考图。</span></div>
@@ -260,8 +266,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 
 <style scoped>
 .native-studio { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-.creation-output-toolbar, .task-status, .task-status > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.creation-output-toolbar h2 { margin: 0; font-size: 16px; line-height: 24px; }
+.task-status, .task-status > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .group-description { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; margin: 4px 8px 0; }
 .parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .parameter-row .control { width: 100%; min-width: 0; }
@@ -274,8 +279,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .reference-list button { position: absolute; right: 0; top: 0; min-width: 24px; width: 24px; height: 24px; min-height: 24px; background: var(--surface); }
 .creation-output { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .stream-preview { display: block; max-width: 100%; max-height: 480px; margin: auto; }
-.creation-output-toolbar { min-height: 44px; flex: none; }
-.creation-output-toolbar h2 { font-size: 14px; font-weight: 500; }
 .creation-canvas { flex: 1; min-height: 0; display: block; margin: 0; background: transparent; overflow-y: auto; overscroll-behavior: contain; padding: 16px 8px; scrollbar-color: var(--border) transparent; }
 .canvas-empty { min-height: 160px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); text-align: center; }
 .canvas-empty img { border-radius: 10px; }.canvas-empty p { margin: 0; }
@@ -304,7 +307,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .generation-feedback progress { display: block; width: min(100%, 360px); height: 6px; margin-top: 16px; accent-color: var(--blue); }
 .generation-feedback .long-wait { margin-top: 20px; font-size: 14px; }
 .creation-response > .creation-message-actions { margin-top: 12px; }
-.creation-image-preview { position: relative; display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.creation-image-preview { position: relative; display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .creation-image-preview > span { position: absolute; right: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 6px; background: var(--canvas); color: var(--ink); padding: 6px 10px; border-radius: 6px; font-size: 12px; }
 .creation-image-preview:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
 .composer-hint { color: var(--muted); font-size: 12px; line-height: 20px; margin: 4px 8px 0; }
@@ -315,8 +318,9 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .task-message { color: var(--amber); font-size: 14px; line-height: 24px; margin-block: 0 16px; overflow-wrap: anywhere; }
 .creation-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px; }
 .creation-media figure { margin: 0; min-width: 0; }
-.creation-media img, .creation-media video { width: 100%; max-height: 600px; display: block; object-fit: contain; }
-.creation-media figcaption { margin-top: 12px; }
+.creation-media img, .creation-media video { max-width: 100%; max-height: 600px; display: block; object-fit: contain; }
+.creation-media img { width: auto; height: auto; }
+.creation-media video { width: 100%; }
 @media (min-width: 1000px) {
   .creation-conversation { width: 100%; padding-block: 8px 24px; }
   .creation-request { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; width: 100%; max-width: none; margin: 0 0 12px; }
@@ -328,10 +332,10 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
   .creation-response > .creation-message-heading { margin-bottom: 8px; }
   .creation-response .task-status { min-height: 24px; margin-bottom: 12px; }
   .creation-media { max-width: 880px; gap: 4px; }
-  .creation-media img, .creation-media video { height: min(440px, 32dvh); background: var(--surface); object-fit: contain; }
+  .creation-media img { max-height: min(440px, 32dvh); }
+  .creation-media video { height: min(440px, 32dvh); background: var(--surface); }
   .creation-canvas { padding: 16px 0; }
-  .creation-output-toolbar h2 { color: var(--muted); }
 }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0 0 16px; max-width: 72ch; }
-@media (max-width: 639px) { .creation-output-toolbar { gap: 8px; }.creation-canvas { padding: 16px 0; }.creation-media img, .creation-media video { max-height: 44dvh; } }
+@media (max-width: 639px) { .creation-canvas { padding: 16px 0; }.creation-media img, .creation-media video { max-height: 44dvh; } }
 </style>

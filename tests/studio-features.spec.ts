@@ -359,12 +359,7 @@ test('composer remains visible across viewports and tool popovers preserve draft
     await expect(page.getByRole('button', { name: '发送', exact: true })).toBeInViewport()
     const bounds = await page.locator('.studio-composer').boundingBox()
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height - (width >= 640 && width < 1000 ? 64 : 0) + 1)
-    if (width >= 640) {
-      expect(await page.locator('.studio-page-toolbar h1').evaluate(element => {
-        const title = element.getBoundingClientRect(), toolbar = element.parentElement!.getBoundingClientRect()
-        return title.height <= parseFloat(getComputedStyle(element).lineHeight) + 1 && title.top >= toolbar.top && title.bottom <= toolbar.bottom
-      })).toBe(true)
-    }
+    await expect(page.locator('.studio-page-toolbar h1')).toHaveCount(0)
     if (width < 640) {
       const tools = await page.locator('.studio-composer-actions').boundingBox()
       const send = await page.getByRole('button', { name: '发送', exact: true }).boundingBox()

@@ -1,6 +1,67 @@
 import { test, expect } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import { readFile } from 'node:fs/promises'
+import sharp from 'sharp'
+
+for (const shape of ['portrait', 'square', 'landscape', 'multiple'] as const) {
+  test(`generated ${shape} images keep their intrinsic proportions and matching preview frames`, async ({ page }) => {
+    const account = await mockUnifiedAccount(page, true)
+    account.state.user.id = '17'
+    const sizes = { portrait: [768, 1536], square: [1024, 1024], landscape: [1536, 512] } as const
+    const shapes = shape === 'multiple' ? ['portrait', 'square', 'landscape'] as const : [shape]
+    const photo = await readFile('public/assets/brand/octopus-community.jpg')
+    const images = await Promise.all(shapes.map(name => sharp(photo).resize(...sizes[name]).png().toBuffer()))
+    const urls = images.map((_, index) => `https://media.example/fit-${index}.png`)
+    await page.route('**/api/creation/**', route => {
+      const url = new URL(route.request().url())
+      if (url.pathname === '/api/creation/media') return route.fulfill({ contentType: 'image/png', body: images[urls.indexOf(url.searchParams.get('url')!)]! })
+      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
+    })
+    await page.addInitScript(urls => {
+      localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
+        id: 'image-fit', owner: '17', kind: 'image', model: 'gpt-image-2', prompt: '图片比例预览',
+        createdAt: Date.now(), settledAt: Date.now(), phase: 'complete', protocol: 'sync', references: [],
+        urls, text: '', request: { size: '1024x1024', aspect_ratio: '1:1', n: urls.length, duration: 8 },
+      }]))
+    }, urls)
+    await page.goto('/create/image')
+    const previews = page.locator('.creation-image-preview')
+    await expect(previews).toHaveCount(images.length)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      for (let index = 0; index < images.length; index++) {
+        const preview = previews.nth(index)
+        const image = preview.locator('img')
+        await expect(image).toHaveJSProperty('complete', true)
+        const dimensions = await image.evaluate(element => {
+          const bounds = element.getBoundingClientRect()
+          return { width: bounds.width, height: bounds.height, naturalRatio: element.naturalWidth / element.naturalHeight }
+        })
+        expect(dimensions.width).toBeGreaterThan(0)
+        expect(dimensions.height).toBeGreaterThan(0)
+        expect(dimensions.width / dimensions.height).toBeCloseTo(dimensions.naturalRatio, 2)
+        const bounds = (await preview.boundingBox())!
+        expect(bounds.width).toBeCloseTo(dimensions.width, 0)
+        expect(bounds.height).toBeCloseTo(dimensions.height, 0)
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
+      }
+      const actions = page.getByRole('group', { name: '生成结果操作', exact: true })
+      for (const name of ['发布作品', '复用参数', '新的创作']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
+      await expect(actions.getByRole('button', { name: /^下载/ })).toHaveCount(images.length)
+      const mediaBounds = (await page.locator('.creation-media').boundingBox())!
+      const actionBounds = (await actions.boundingBox())!
+      expect(actionBounds.y).toBeGreaterThanOrEqual(mediaBounds.y + mediaBounds.height)
+      await expect(page.locator('.creation-output-toolbar')).toHaveCount(0)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (shape === 'portrait' && width !== 320) {
+        await actions.scrollIntoViewIfNeeded()
+        await page.screenshot({ path: `.taste-skill/studio-result-actions-20261115/${shape}-${width}.png` })
+      }
+    }
+    await previews.first().click()
+    await expect(page.getByRole('dialog', { name: '原始媒体预览' })).toBeVisible()
+  })
+}
 
 test('desktop sidebar restores media history without submitting and keeps account-tool drafts', async ({ page }) => {
   const errors: string[] = []
@@ -30,11 +91,16 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   await expect(sidebar).toBeVisible()
   await sidebar.getByRole('searchbox').fill('灯塔')
   await sidebar.getByRole('button', { name: '海边的灯塔', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '今天', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '图片创作', exact: true })).toHaveCount(0)
+  await expect(page.locator('.studio-page-toolbar')).toBeHidden()
+  await expect(page.getByRole('group', { name: '生成结果操作', exact: true }).getByRole('button', { name: '发布作品', exact: true })).toBeVisible()
+  await page.screenshot({ path: '.taste-skill/studio-remove-titles-20261115/desktop.png' })
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('海边的灯塔')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留这个创作草稿')
   await sidebar.getByRole('button', { name: '模型定价', exact: true }).click()
   await expect(page.locator('.studio-account-view')).toBeVisible()
-  await page.getByRole('button', { name: '返回创作', exact: true }).click()
+  await sidebar.getByRole('button', { name: '创作', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留这个创作草稿')
   await sidebar.getByRole('button', { name: '新建创作', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEmpty()
@@ -49,6 +115,9 @@ test('sidebar adapts at desktop breakpoint and result/composer edges stay aligne
   await expect(page.locator('.studio-composer')).toBeVisible()
   for (const width of [2867, 1440, 1024, 999, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
+    await expect(page.getByRole('heading', { name: '今天', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '图片创作', exact: true })).toHaveCount(0)
+    await expect(page.locator('.creation-output-toolbar')).toHaveCount(0)
     const sidebar = page.locator('.studio-sidebar')
     if (width >= 1000) await expect(sidebar).toBeVisible()
     else await expect(sidebar).toBeHidden()
