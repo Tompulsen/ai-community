@@ -1,0 +1,171 @@
+import { beforeEach, expect, it, vi } from 'vitest'
+import type { CreationTask } from './native-studio'
+
+const storage = vi.hoisted(() => ({ write: vi.fn(), read: vi.fn() }))
+vi.mock('./state', async () => {
+  const { reactive } = await import('vue')
+  return { session: reactive({ user: null as any }), errorMessage: (error: Error) => error.message, api: vi.fn() }
+})
+vi.mock('./native-studio', async () => {
+  const { reactive } = await import('vue')
+  return { creation: reactive({ tasks: [] as CreationTask[], selectedId: '', loaded: true }), resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn() }
+})
+vi.mock('./model-preferences', () => ({ modelFormat: () => undefined }))
+vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: storage.read, writeChatSnapshot: storage.write }))
+beforeEach(() => { vi.resetModules(); storage.write.mockReset().mockResolvedValue(undefined); storage.read.mockReset() })
+function task(id: string, conversationId: string, time: number, extra: Partial<CreationTask> = {}): CreationTask {
+  return { id, conversationId, kind: 'image', owner: '17', createdAt: time, phase: 'complete', protocol: 'sync', model: 'gpt-image-2', prompt: id,
+    urls: [`https://example.test/${id}.png`], references: [], text: '', request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 }, ...extra }
+}
+async function fixture() {
+  const { session } = await import('./state'), chat = await import('./native-chat')
+  const media = await import('./studio-conversations'), logic = await import('./studio-image-conversation')
+  const { creation } = await import('./native-studio')
+  session.user = { id: '17' } as any; chat.chats.ready = true
+  creation.tasks = []; creation.selectedId = ''; creation.loaded = true
+  const thread = chat.newChat('image')
+  creation.tasks.push(task('one', thread.id, 1), task('two', thread.id, 2), task('three', thread.id, 3))
+  await media.syncMediaConversations()
+  storage.write.mockClear()
+  return { ...chat, ...media, ...logic, session, creation, thread }
+}
+it('builds completed visible image context and the last original image without crossing owner or conversation', async () => {
+  const p = await fixture()
+  p.creation.tasks.push(task('foreign', p.thread.id, 4, { owner: '18' }), task('other-chat', 'other', 5), task('waiting', p.thread.id, 6, { phase: 'attention', urls: ['https://example.test/preview.png'] }))
+  await p.syncMediaConversations()
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three'])
+  expect(p.imageContinuationReferences(p.thread)).toEqual([{ name: '上一轮生成图片', url: 'https://example.test/three.png' }])
+  expect(p.buildImageContext(p.thread, 'two').turns.map(turn => turn.prompt)).toEqual(['one'])
+  expect(p.imageContinuationReferences(p.thread, 'one')).toEqual([])
+})
+it('clears only outgoing context, keeps displayed records, and includes subsequent completed turns', async () => {
+  const p = await fixture()
+  await p.clearMediaContext(p.thread)
+  expect(p.visibleMediaTasks(p.thread)).toHaveLength(3)
+  expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
+  expect(p.imageContinuationReferences(p.thread)).toEqual([])
+  p.creation.tasks.push(task('four', p.thread.id, 4))
+  await p.syncMediaConversations()
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['four'])
+})
+it('keeps clearing effective after switching to archived prompt and answer versions', async () => {
+  const p = await fixture()
+  const version = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })
+  p.creation.tasks.push(version); await p.registerMediaTurn(p.thread, version)
+  await p.clearMediaContext(p.thread)
+  await p.selectMediaVersion(p.thread, 'two-v2', -1)
+  expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
+  expect(p.imageContinuationReferences(p.thread)).toEqual([])
+  p.creation.tasks.push(task('after-clear', p.thread.id, 5))
+  await p.syncMediaConversations()
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['after-clear'])
+})
+it('never activates a branch whose local registration failed before upstream submission', async () => {
+  const p = await fixture()
+  const pending = task('unsent', p.thread.id, 4, { mediaBranch: { taskId: 'two' }, conversationPending: true, phase: 'submitting' })
+  p.creation.tasks.push(pending)
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.registerMediaTurn(p.thread, pending)).rejects.toThrow('disk full')
+  pending.phase = 'error'
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+})
+it('retains original user reference images in the corresponding historical turn', async () => {
+  const p = await fixture()
+  p.creation.tasks[0]!.references = [{ name: '人物参考', url: '/legacy-files/reference1' }]
+  expect(p.buildImageContext(p.thread).turns[0]).toEqual({
+    prompt: 'one', images: ['https://example.test/one.png'], references: ['/legacy-files/reference1'],
+  })
+})
+it('reuses answer branches, switches with their later turns, and does not duplicate archived tasks during sync', async () => {
+  const p = await fixture()
+  const regenerated = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })
+  p.creation.tasks.push(regenerated)
+  await p.registerMediaTurn(p.thread, regenerated)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
+  expect(p.mediaVersion(p.thread, 'two-v2')).toMatchObject({ index: 1, total: 2 })
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
+  await p.selectMediaVersion(p.thread, 'two-v2', -1)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+  expect(p.imageContinuationReferences(p.thread)[0]?.url).toContain('three.png')
+  await p.selectMediaVersion(p.thread, 'two', 1)
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two'])
+})
+it('edits a historical prompt as a separate version without overwriting the old prompt or branch', async () => {
+  const p = await fixture()
+  const edited = task('two-edited', p.thread.id, 4, { prompt: '把背景改成蓝色', mediaBranch: { taskId: 'two', edited: true } })
+  p.creation.tasks.push(edited)
+  await p.registerMediaTurn(p.thread, edited)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.prompt)).toEqual(['one', '把背景改成蓝色'])
+  expect(p.creation.tasks.find(task => task.id === 'two')?.prompt).toBe('two')
+  expect(p.mediaVersion(p.thread, 'two-edited')).toMatchObject({ index: 1, total: 2 })
+  await p.selectMediaVersion(p.thread, 'two-edited', -1)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+})
+it('removes selected turns and their versions, retains subsequent turns and gallery data, and cannot resurrect them on sync', async () => {
+  const p = await fixture()
+  const regenerated = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })
+  p.creation.tasks.push(regenerated)
+  await p.registerMediaTurn(p.thread, regenerated)
+  await p.selectMediaVersion(p.thread, 'two-v2', -1)
+  await p.deleteMediaTurns(p.thread, ['one', 'two'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three'])
+  expect(p.creation.tasks).toHaveLength(4)
+  expect(p.thread.deletedMediaTaskIds?.sort()).toEqual(['one', 'two', 'two-v2'])
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three'])
+  const persisted = storage.write.mock.calls.at(-1)![1]
+  expect(persisted.state.sessions[0].deletedMediaTaskIds).toContain('two-v2')
+})
+it('rolls back failed mutations without losing the current draft', async () => {
+  const p = await fixture()
+  p.thread.draft = '新草稿'
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('disk full')
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+  expect(p.thread.deletedMediaTaskIds).toBeUndefined()
+  expect(p.thread.draft).toBe('新草稿')
+})
+it('does not interleave a second mutation while a conversation save is unresolved', async () => {
+  const p = await fixture()
+  let release!: () => void
+  storage.write.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+  const clearing = p.clearMediaContext(p.thread)
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+  await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('正在保存')
+  release(); await clearing
+  expect(p.visibleMediaTasks(p.thread)).toHaveLength(3)
+})
+it('blocks destructive actions and version changes until uncertain or active tasks are checked', async () => {
+  const p = await fixture()
+  for (const phase of ['submitting', 'running', 'paused', 'attention'] as const) {
+    p.creation.tasks[0]!.phase = phase
+    await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('核对')
+    await expect(p.clearMediaContext(p.thread)).rejects.toThrow('核对')
+    await expect(p.selectMediaVersion(p.thread, 'two', -1)).rejects.toThrow('核对')
+  }
+  expect(storage.write).not.toHaveBeenCalled()
+})
+it('cannot bind another owner task or restore old-account state after a rejected write', async () => {
+  const p = await fixture()
+  await expect(p.registerMediaTurn(p.thread, task('foreign', p.thread.id, 4, { owner: '18' }))).rejects.toThrow('不属于')
+  let reject!: (error: Error) => void
+  storage.write.mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail }))
+  const clearing = p.clearMediaContext(p.thread)
+  await vi.waitFor(() => expect(reject).toBeTypeOf('function'))
+  p.session.user = { id: '18' } as any; reject(new Error('disk full'))
+  await expect(clearing).rejects.toThrow('disk full')
+  expect(p.chats.sessions).toEqual([])
+})
+it('bounds recent history by whole turns and pictures without re-embedding previous request history', async () => {
+  const p = await fixture()
+  for (let index = 4; index <= 30; index++) p.creation.tasks.push(task(`round-${index}`, p.thread.id, index, { urls: [`https://example.test/${index}-a.png`, `https://example.test/${index}-b.png`] }))
+  await p.syncMediaConversations()
+  const context = p.buildImageContext(p.thread)
+  expect(context.turns).toHaveLength(8)
+  expect(context.turns[0]?.prompt).toBe('round-23')
+  expect(context.turns.flatMap(turn => turn.images)).toHaveLength(16)
+})

@@ -16,6 +16,7 @@ import StudioSearchPicker from './StudioSearchPicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioConversations from './StudioConversations.vue'
+import StudioConversationTitle from './StudioConversationTitle.vue'
 import StudioMarkdown from './studio-message/StudioMarkdown.vue'
 import StudioReasoningPanel from './studio-message/StudioReasoningPanel.vue'
 import StudioAiStatus from './studio-message/StudioAiStatus.vue'
@@ -218,7 +219,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 <template>
   <div class="native-chat" aria-label="对话工作台">
     <section v-if="current" class="chat-main">
-      <header class="chat-toolbar"><div class="chat-title"><input v-model="current.topic" class="conversation-title" aria-label="对话名称" maxlength="100" @change="saveChats()" /><span>{{ current.messages.filter(message => message.role !== 'system').length }} 条消息</span></div><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+      <header class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
@@ -280,12 +281,12 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 .chat-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .chat-main :deep(.billing-controls) { flex-wrap: wrap; }
 @media (min-width: 1000px) {
-  .chat-main .chat-toolbar { display: none; }
+  .chat-main .chat-toolbar-actions { display: none; }
   .chat-main .chat-messages { padding-inline: 0; }
   .chat-message.assistant > .message-content { padding-inline: 0; background: transparent; border-radius: 0; }
 }
-.chat-toolbar, .chat-toolbar-actions, .chat-title, .message-heading, .message-actions { display: flex; align-items: center; gap: 8px; }
-.chat-toolbar { flex: none; justify-content: space-between; min-height: 44px; }.chat-title { min-width: 0; gap: 12px; }.chat-title > span { color: var(--muted); font-size: 12px; white-space: nowrap; }.conversation-title { width: 176px; max-width: 35vw; border: 0; background: transparent; color: var(--ink); font-size: 14px; font-weight: 500; min-width: 0; padding: 8px 0; }
+.chat-toolbar, .chat-toolbar-actions, .message-heading, .message-actions { display: flex; align-items: center; gap: 8px; }
+.chat-toolbar { flex: none; justify-content: space-between; min-width: 0; min-height: 44px; }.chat-toolbar-actions { flex: none; }
 .chat-history { max-height: min(480px, 60dvh); }
 .chat-messages-wrap { position: relative; flex: 1; min-height: 0; }.chat-messages { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px 8px; scrollbar-color: var(--border) transparent; }.chat-empty { height: 100%; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); font-size: 16px; }.chat-empty img { border-radius: 10px; }.chat-empty p { margin: 0; }.jump-latest { position: absolute; right: 12px; bottom: 8px; border: 1px solid var(--border); border-radius: 50%; background: var(--canvas); }
 .chat-message { display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 32px; }.chat-message.user { align-items: flex-end; }.message-heading { font-size: 12px; color: var(--muted); margin-bottom: 12px; max-width: 100%; }.message-heading img { border-radius: 6px; }.message-heading strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }.message-avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--surface-soft); font-size: 12px; color: var(--ink); }.user .message-heading { flex-direction: row-reverse; }.message-usage { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
@@ -297,5 +298,5 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.search-cost { margin: 4px 8px 0; font-size: 12px; color: var(--muted); }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
 .message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; }.message-actions > .button:hover { color: var(--ink); background: var(--surface); }
 @media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }
-@media (max-width: 639px) { .conversation-title { width: 112px; font-size: 14px; }.chat-title { gap: 4px; }.chat-title > span { font-size: 12px; }.chat-toolbar-actions { gap: 0; }.chat-messages { padding: 16px 0; }.chat-message { padding-bottom: 24px; }.message-content, .user-text { font-size: 16px; line-height: 28px; }.message-usage { flex-basis: 100%; }.chat-message > .message-content, .user-text { padding: 12px; } }
+@media (max-width: 639px) { .chat-toolbar-actions { gap: 0; }.chat-messages { padding: 16px 0; }.chat-message { padding-bottom: 24px; }.message-content, .user-text { font-size: 16px; line-height: 28px; }.message-usage { flex-basis: 100%; }.chat-message > .message-content, .user-text { padding: 12px; } }
 </style>

@@ -11,6 +11,7 @@ import { buildVideoRequest } from '../shared/studio/video-api.ts'
 import { validateVideoRequestParameters } from '../shared/studio/video-capabilities.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
 import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
+import { imageConversationPrompt, MAX_IMAGE_CONTEXT_IMAGES, MAX_IMAGE_CONTEXT_TEXT, MAX_IMAGE_CONTEXT_TURNS, type ImageConversationContext } from '../shared/studio/image-conversation.ts'
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationProtocol = 'openai' | 'sync' | 'async'
 export type CreationTaskProtocol = CreationProtocol | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
@@ -28,6 +29,7 @@ export interface CreationInput {
   requestId?: string
   protocol?: CreationProtocol
   imageOptions?: ImageOptions
+  imageContext?: ImageConversationContext
   videoOptions?: VideoOptions
   chatOptions?: ChatOptions
 }
@@ -62,6 +64,16 @@ function referenceUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 32 * 1024 * 1024) return false
   if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+$/.test(value)) return true
   if (/^\/legacy-files\/[A-Za-z0-9_-]{1,200}(?:\?variant=(?:thumbnail|web))?$/.test(value)) return true
+  if (value.startsWith('/api/creation/media?')) {
+    const url = new URL(value, 'https://community.invalid')
+    try {
+      const target = new URL(url.searchParams.get('url') || '')
+      return url.pathname === '/api/creation/media' && url.searchParams.getAll('url').length === 1
+        && [...url.searchParams.keys()].every(key => ['url', 'kind'].includes(key))
+        && (!url.searchParams.has('kind') || url.searchParams.get('kind') === 'image')
+        && target.href.length <= 8192 && ['http:', 'https:'].includes(target.protocol) && !target.username && !target.password
+    } catch { return false }
+  }
   try {
     const url = new URL(value)
     return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password
@@ -97,6 +109,20 @@ export function validateCreationInput(value: unknown): CreationInput {
     if (!Array.isArray(value.referenceUrls) || value.referenceUrls.length > (result.kind === 'video' ? 10 : 16)
       || value.referenceUrls.some(item => !referenceUrl(item))) invalid('参考图须为有效图片，且不能超过数量限制。')
     result.referenceUrls = value.referenceUrls
+  }
+  if (value.imageContext !== undefined) {
+    if (result.kind !== 'image' || !record(value.imageContext) || !Array.isArray(value.imageContext.turns)
+      || value.imageContext.turns.length > MAX_IMAGE_CONTEXT_TURNS) invalid('图片对话历史无效或超过 20 轮，请清除上下文后继续。')
+    let textLength = 0, images = 0
+    result.imageContext = { turns: value.imageContext.turns.map(turn => {
+      if (!record(turn) || !boundedText(turn.prompt, MAX_IMAGE_CONTEXT_TEXT) || !turn.prompt.trim()
+        || !Array.isArray(turn.images) || turn.images.some(image => !referenceUrl(image))
+        || turn.references !== undefined && (!Array.isArray(turn.references) || turn.references.some(image => !referenceUrl(image)))) invalid('图片对话历史内容无效。')
+      textLength += Array.from(turn.prompt).length
+      images += turn.images.length + (Array.isArray(turn.references) ? turn.references.length : 0)
+      if (textLength > MAX_IMAGE_CONTEXT_TEXT || images > MAX_IMAGE_CONTEXT_IMAGES) invalid('图片对话历史过长，请清除上下文或减少历史图片。')
+      return { prompt: turn.prompt, images: [...turn.images] as string[], ...(turn.references ? { references: [...turn.references] as string[] } : {}) }
+    }) }
   }
   if (value.sourceWorkId !== undefined) {
     if (typeof value.sourceWorkId !== 'string' || !/^[A-Za-z0-9]{1,32}$/.test(value.sourceWorkId)) invalid('同款作品编号无效。')
@@ -169,10 +195,17 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
       if ((input.n ?? 1) !== 1) invalid('此 Gemini 图片接口每次只能提交一张，不能隐式重复付费请求。')
       const content = references.length ? [{ type: 'text', text: input.prompt },
         ...references.map(url => ({ type: 'image_url', image_url: { url } }))] : input.prompt
-      return json('v1/chat/completions', { model: input.model, messages: [{ role: 'user', content }], stream: false })
+      const history = (input.imageContext?.turns ?? []).flatMap(turn => [
+        { role: 'user', content: turn.references?.length ? [{ type: 'text', text: turn.prompt },
+          ...turn.references.map(url => ({ type: 'image_url', image_url: { url } }))] : turn.prompt },
+        ...(turn.images.length ? [{ role: 'assistant', content: turn.images.map(url => ({ type: 'image_url', image_url: { url } })) }] : []),
+      ])
+      return json('v1/chat/completions', { model: input.model, messages: [...history, { role: 'user', content }], stream: input.imageOptions?.imageStream === true })
     }
     const options = input.imageOptions
-    const payload = { model: input.model, prompt: input.prompt, n: input.n ?? 1,
+    const prompt = imageConversationPrompt(input.prompt, input.imageContext)
+    if (Array.from(prompt).length > 32000) invalid('生图提示词和历史合计不能超过 32,000 个字符，请清除上下文后继续。')
+    const payload = { model: input.model, prompt, n: input.n ?? 1,
       size: input.size && input.size !== 'auto' ? input.size : options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model) : input.size ?? 'auto',
       response_format: options?.imageResponseFormat ?? 'url',
       ...(options?.seed ? { seed: Number(options.seed) } : {}),

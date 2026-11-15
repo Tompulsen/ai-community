@@ -1,6 +1,69 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, validateCreationInput } from './creation-contract.ts'
+import { readGenerationStream } from './creation/stream.ts'
+
+test('image conversation context is bounded, image-only and cannot introduce arbitrary media schemes', () => {
+  const image = 'https://media.example/previous.png'
+  const context = { turns: [{ prompt: '一只猫', images: [image] }] }
+  const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: '换成蓝色背景', imageContext: context })
+  assert.deepEqual(input.imageContext, context)
+  for (const patch of [
+    { kind: 'video' }, { imageContext: null }, { imageContext: { turns: Array(21).fill(context.turns[0]) } },
+    { imageContext: { turns: [{ prompt: '猫', images: Array(17).fill(image) }] } },
+    { imageContext: { turns: [{ prompt: '猫'.repeat(32001), images: [image] }] } },
+    { imageContext: { turns: [{ prompt: '猫', images: ['file:///private'] }] } },
+    { imageContext: { turns: [{ prompt: '猫', images: ['blob:other-account'] }] } },
+    { imageContext: { turns: [{ prompt: '猫', images: [image], references: ['file:///private'] }] } },
+    { imageContext: { turns: [{ prompt: '猫', images: [image], references: Array(16).fill(image) }] } },
+    { imageContext: { turns: [{ prompt: '猫', images: ['/api/creation/media?path=api/user/self'] }] } },
+  ]) assert.throws(() => validateCreationInput({ ...input, ...patch }), { statusCode: 400 })
+})
+
+test('Images requests retain ordered creation instructions and references while Gemini receives actual multimodal history', () => {
+  const image = 'data:image/png;base64,aW1hZ2U='
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: '背景换蓝色', referenceUrls: [image],
+    imageContext: { turns: [{ prompt: '一只猫', images: [image] }, { prompt: '戴上帽子', images: [image] }] } }
+  const edit = buildCreationPayload(input)
+  assert.equal(edit.path, 'v1/images/edits')
+  assert.match(edit.body.get('prompt'), /1\. 一只猫\n2\. 戴上帽子/)
+  assert.match(edit.body.get('prompt'), /当前要求：\n背景换蓝色$/)
+  assert.equal(edit.body.getAll('image[]').length, 1)
+  assert.equal(input.prompt, '背景换蓝色', 'UI/publication prompt stays the original turn')
+  const chat = JSON.parse(buildCreationPayload({ ...input, model: 'gemini-3.1-flash-image-preview', imageOptions: { imageStream: true } }).body)
+  assert.deepEqual(chat.messages.map(message => message.role), ['user', 'assistant', 'user', 'assistant', 'user'])
+  assert.equal(chat.messages[0].content, '一只猫')
+  assert.equal(chat.messages[1].content[0].image_url.url, image)
+  assert.equal(chat.messages.at(-1).content[0].text, '背景换蓝色')
+  assert.equal(chat.stream, true)
+  assert.throws(() => buildCreationPayload({ ...input, prompt: 'x'.repeat(32000) }), { statusCode: 400 })
+  const attached = JSON.parse(buildCreationPayload({ ...input, model: 'gemini-3.1-flash-image-preview',
+    imageContext: { turns: [{ prompt: '让参考中的人物合影', references: [image, 'https://media.example/person.png'], images: [image] }] } }).body)
+  assert.deepEqual(attached.messages[0].content, [{ type: 'text', text: '让参考中的人物合影' },
+    { type: 'image_url', image_url: { url: image } }, { type: 'image_url', image_url: { url: 'https://media.example/person.png' } }])
+  assert.deepEqual(attached.messages[1].content, [{ type: 'image_url', image_url: { url: image } }])
+})
+
+test('Gemini image chat streams parse fragmented Markdown and image blocks instead of the Images event protocol', async () => {
+  const image = 'data:image/png;base64,aW1hZ2U='
+  const input = { kind: 'image', model: 'gemini-3.1-flash-image-preview', prompt: '猫' }
+  const events = [
+    { choices: [{ delta: { content: '![Generated Image](' } }] },
+    { choices: [{ delta: { content: `${image})` } }] },
+    { choices: [{ delta: { content: [{ type: 'image_url', image_url: { url: 'https://media.example/image.png' } }] }, finish_reason: 'stop' }] },
+  ]
+  const wire = events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join('') + 'data: [DONE]\r\n\r\n'
+  const chunks = new TextEncoder().encode(wire), previews = []
+  const response = new Response(new ReadableStream({ start(controller) {
+    for (let index = 0; index < chunks.length; index += 7) controller.enqueue(chunks.slice(index, index + 7))
+    controller.close()
+  } }))
+  const result = await readGenerationStream(response, input, event => previews.push(event))
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.outputs, [{ url: image }, { url: 'https://media.example/image.png' }])
+  assert(previews.some(event => event.type === 'preview' && event.url === image))
+  await assert.rejects(readGenerationStream(new Response(`data: ${JSON.stringify(events[0])}\n\n`), input, () => {}), /中断/)
+})
 
 test('creation input keeps model parameters but cannot forward account credentials or arbitrary endpoints', () => {
   const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: 'An image', n: 2,

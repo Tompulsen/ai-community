@@ -23,6 +23,7 @@ import { readGenerationStream, extractChatReasoning, extractResponseUsage, type 
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes } from '../shared/studio/model-types.ts'
+import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -143,25 +144,39 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
 }
 
 async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices) {
-  const files: CreationReference[] = []
   let total = 0
-  const urls: string[] = []
-  for (const [index, source] of (input.referenceUrls ?? []).entries()) {
+  const prepared = new Map<string, { blob: Blob; url: string }>()
+  async function prepare(source: string) {
+    const previous = prepared.get(source)
+    if (previous) return previous
     let blob: Blob
     const data = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(source)
     if (data) blob = new Blob([Buffer.from(data[2]!, 'base64')], { type: data[1] })
     else {
-      const url = new URL(source, ctx.config.url)
+      let url = new URL(source, ctx.config.url)
       if (url.origin === new URL(ctx.config.url).origin) {
-        if (!/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(url.pathname) || url.search && !/^\?variant=(?:thumbnail|web)$/.test(url.search))
-          throw httpError(400, '参考图地址无效。')
-        const options = { headers: { cookie: String(ctx.req.headers.cookie || '') }, url: `${url.pathname}${url.search}` }
-        const head = await ctx.request.server.inject({ ...options, method: 'HEAD' })
-        if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp)$/.test(String(head.headers['content-type']))
-          || Number(head.headers['content-length']) > 20 * MiB) throw httpError(400, '参考图无法读取或超过 20 MB。')
-        const response = await ctx.request.server.inject({ ...options, method: 'GET' })
-        if (response.statusCode !== 200) throw httpError(400, '参考图无法读取。')
-        blob = new Blob([new Uint8Array(response.rawPayload)], { type: String(response.headers['content-type']) })
+        if (url.pathname === '/api/creation/media') {
+          const target = url.searchParams.get('url')
+          if (!target || target.length > 8192 || url.searchParams.getAll('url').length !== 1
+            || [...url.searchParams.keys()].some(key => !['url', 'kind'].includes(key))
+            || url.searchParams.has('kind') && url.searchParams.get('kind') !== 'image')
+            throw httpError(400, '参考图地址无效。')
+          url = new URL(target)
+          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+            || url.origin === new URL(ctx.config.url).origin) throw httpError(400, '参考图地址无效。')
+          const response = await svc.publicMedia(url.href, 'image', 20 * MiB, req.signal)
+          blob = await response.blob()
+        } else {
+          if (!/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(url.pathname) || url.search && !/^\?variant=(?:thumbnail|web)$/.test(url.search))
+            throw httpError(400, '参考图地址无效。')
+          const options = { headers: { cookie: String(ctx.req.headers.cookie || '') }, url: `${url.pathname}${url.search}` }
+          const head = await ctx.request.server.inject({ ...options, method: 'HEAD' })
+          if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp)$/.test(String(head.headers['content-type']))
+            || Number(head.headers['content-length']) > 20 * MiB) throw httpError(400, '参考图无法读取或超过 20 MB。')
+          const response = await ctx.request.server.inject({ ...options, method: 'GET' })
+          if (response.statusCode !== 200) throw httpError(400, '参考图无法读取。')
+          blob = new Blob([new Uint8Array(response.rawPayload)], { type: String(response.headers['content-type']) })
+        }
       } else {
         const response = await svc.publicMedia(url.href, 'image', 20 * MiB, req.signal)
         blob = await response.blob()
@@ -170,8 +185,27 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
     total += blob.size
     if (blob.size === 0 || blob.size > 20 * MiB || total > 24 * MiB || !/^image\/(?:png|jpeg|webp)$/.test(blob.type))
       throw httpError(413, '参考图须为 PNG、JPEG 或 WebP，单张不超过 20 MB，总计不超过 24 MB。')
-    urls.push(`data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`)
-    files.push({ blob, name: `reference-${index}.${blob.type.split('/')[1]}` })
+    const value = { blob, url: `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}` }
+    prepared.set(source, value)
+    return value
+  }
+  const files: CreationReference[] = [], urls: string[] = []
+  for (const [index, source] of (input.referenceUrls ?? []).entries()) {
+    const value = await prepare(source)
+    files.push({ blob: value.blob, name: `reference-${index}.${value.blob.type.split('/')[1]}` })
+    urls.push(value.url)
+  }
+  if (input.kind === 'image' && usesGeminiImageChat(input.model) && input.imageContext) {
+    for (const turn of input.imageContext.turns) {
+      const images: string[] = []
+      for (const source of turn.images) images.push((await prepare(source)).url)
+      turn.images = images
+      if (turn.references) {
+        const attachments: string[] = []
+        for (const source of turn.references) attachments.push((await prepare(source)).url)
+        turn.references = attachments
+      }
+    }
   }
   input.referenceUrls = urls
   return files
@@ -344,7 +378,11 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         const emit = (event: CreationEvent) => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(`data: ${JSON.stringify(event)}\n\n`) }
         const heartbeat = setInterval(() => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(': keepalive\n\n') }, 15000)
         try { emit({ type: 'result', ...await generate(ctx, req, svc, emit) as object }) }
-        catch (error) { emit({ type: 'error', error: message(error) }) }
+        catch (error) {
+          const statusCode = record(error) ? Number(error.statusCode ?? error.status) : 0
+          emit({ type: 'error', error: message(error),
+            ...([400, 401, 403, 413, 422, 429].includes(statusCode) ? { statusCode, notAccepted: true } : {}) })
+        }
         finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
       } else ctx.json(200, await generate(ctx, req, svc))
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {

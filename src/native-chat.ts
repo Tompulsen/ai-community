@@ -1,6 +1,6 @@
 import { reactive, watch } from 'vue'
 import { api, errorMessage, session } from './state'
-import { creation, resumeCreation, stopCreation, submitCreation } from './native-studio'
+import { creation, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
 import { modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
 import { initializeBranches, createAnswerBranch, createEditedMessageBranch, selectAnswerBranch, deleteBranchMessage, cloneBranchMessages, branchMessages } from '../shared/studio/chat-branches'
@@ -9,7 +9,7 @@ import { prepareVideoMessages } from '../shared/studio/video-input'
 import { fileContentParts, type ParsedFile } from '../shared/studio/file-upload'
 import { buildWebSearchContext } from '../shared/studio/web-search-context'
 import { verifySkillDocument } from '../shared/studio/catalog'
-import { chatOptionsSchema, type ChatOptions } from '../shared/studio/options'
+import { chatOptionsSchema, type ChatOptions, type ImageOptions, type VideoOptions } from '../shared/studio/options'
 import type { ChatMessage, ChatSession, RequestMessage } from '../shared/studio/types'
 import type { ChatApiFormat } from '../shared/studio/chat-api-format'
 import { formatQuoteInput, readMessageQuote, type MessageQuote } from '../shared/studio/message-quote'
@@ -33,6 +33,13 @@ export interface NativeMessage extends ChatMessage {
 export interface NativeChat extends ChatSession {
   creationKind?: 'text' | 'image' | 'video'
   mediaConversationId?: string
+  deletedMediaTaskIds?: string[]
+  mediaContextExcludedTaskIds?: string[]
+  mediaDraft?: {
+    references: CreationTask['references']; model?: string; manualSize?: string; ratio?: string; count?: number
+    duration?: number; protocol?: string; imageOptions?: ImageOptions; videoOptions?: VideoOptions
+    sourceWorkId?: string; skipAutomaticReference?: boolean
+  }
   projectId?: string
   renamed?: boolean
   messages: NativeMessage[]

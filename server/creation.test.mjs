@@ -263,3 +263,110 @@ test('model catalogs identify their selected group token and paid submissions pi
   assert.equal(generated.json().tokenId, 71)
   assert.equal(credentialCalls.at(-1).tokenId, 71)
 })
+
+test('Gemini conversation history and references share safe media preparation without forwarding raw remote URLs', async t => {
+  const reads = []
+  const reference = 'https://media.example/previous.png'
+  const { app, calls } = fixture(t, {
+    publicMedia(url, kind, maximum) {
+      reads.push({ url, kind, maximum })
+      return new Response('image', { headers: { 'content-type': 'image/png' } })
+    },
+    fetch(_url, init) {
+      const body = JSON.parse(init.body)
+      assert.equal(body.messages.length, 3)
+      assert.equal(body.messages[0].content[0].text, '一只猫')
+      assert.equal(body.messages[0].content[1].image_url.url, `data:${'image/png'};base64,${Buffer.from('image').toString('base64')}`)
+      assert.equal(body.messages[1].content[0].image_url.url, 'data:image/png;base64,aW1hZ2U=')
+      assert.equal(body.messages[2].content[1].image_url.url, 'data:image/png;base64,aW1hZ2U=')
+      assert.equal(body.messages[2].content[0].text, '背景换蓝色')
+      return Response.json({ choices: [{ message: { content: '![Image](https://media.example/result.png)' } }] })
+    },
+  })
+  const input = { ...imageRequest, model: 'gemini-3.1-flash-image-preview', prompt: '背景换蓝色', referenceUrls: [reference],
+    imageContext: { turns: [{ prompt: '一只猫', images: [reference], references: [reference] }] } }
+  const generated = await submit(app, input)
+  assert.equal(generated.json().status, 'succeeded')
+  assert.equal(reads.length, 1, 'history and current references reuse the same downloaded bytes')
+  assert.equal(reads[0].maximum, 20 * 1024 ** 2)
+  assert.equal(calls.length, 1)
+  const repeated = await submit(app, input)
+  assert.deepEqual(repeated.json(), generated.json())
+  assert.equal(calls.length, 1, 'retry retrieves the immutable submitted request')
+  assert.equal(reads.length, 1)
+})
+
+test('Gemini history media shares the 24 MiB reference budget and fails before a paid POST', async t => {
+  const { app, calls } = fixture(t, {
+    publicMedia() { return new Response(new Uint8Array(13 * 1024 ** 2), { headers: { 'content-type': 'image/png' } }) },
+  })
+  const response = await submit(app, { ...imageRequest, model: 'gemini-3.1-flash-image-preview',
+    referenceUrls: ['https://media.example/current.png'],
+    imageContext: { turns: [{ prompt: '前一张图', images: ['https://media.example/previous.png'] }] } })
+  assert.equal(response.statusCode, 413)
+  assert.equal(calls.length, 0)
+})
+
+test('same-origin image proxies unwrap only the image URL through the safe media service', async t => {
+  const reads = []
+  const { app, calls } = fixture(t, {
+    publicMedia(url) { reads.push(url); return new Response('image', { headers: { 'content-type': 'image/png' } }) },
+    fetch() { return Response.json({ data: [{ url: 'https://media.example/result.png' }] }) },
+  })
+  const proxy = '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fprevious.png&kind=image'
+  assert.equal((await submit(app, { ...imageRequest, referenceUrls: [proxy] })).json().status, 'succeeded')
+  assert.deepEqual(reads, ['https://media.example/previous.png'])
+  for (const source of [
+    '/api/creation/media?path=videos/private/content',
+    '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Ffile.png&kind=video',
+    '/api/creation/media?url=file%3A%2F%2Fprivate',
+    '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Ffile.png&tokenId=99',
+  ]) {
+    assert.equal((await submit(app, { ...imageRequest, requestId: 'invalid-proxy', referenceUrls: [source] })).statusCode, 400)
+  }
+  assert.equal(calls.length, 1)
+})
+
+test('private and unauthorized local history media never reach a Gemini paid request', async t => {
+  const { app, calls } = fixture(t)
+  for (const source of ['http://127.0.0.1/private.png', '/legacy-files/otheraccount']) {
+    const response = await submit(app, { ...imageRequest, model: 'gemini-3.1-flash-image-preview',
+      imageContext: { turns: [{ prompt: '原图', images: [source] }] } })
+    assert.equal(response.statusCode, 400)
+  }
+  assert.equal(calls.length, 0)
+})
+
+test('Gemini image chat streaming keeps final results recoverable and never replays the paid request', async t => {
+  const { app, calls } = fixture(t, { fetch(_url, init) {
+    assert.equal(JSON.parse(init.body).stream, true)
+    const event = { choices: [{ delta: { content: '![Image](https://media.example/stream.png)' }, finish_reason: 'stop' }] }
+    return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+  } })
+  const input = { ...imageRequest, requestId: 'gemini-stream', model: 'gemini-3.1-flash-image-preview', imageOptions: { imageStream: true } }
+  const response = await submit(app, input)
+  assert.match(response.payload, /"type":"preview"/)
+  assert.match(response.payload, /"status":"succeeded"/)
+  const recovered = await app.inject('/api/creation/requests/gemini-stream')
+  assert.deepEqual(recovered.json().outputs, [{ url: 'https://media.example/stream.png' }])
+  await submit(app, input)
+  assert.equal(calls.length, 1)
+})
+
+test('streaming preflight rejections explicitly report that no paid task was accepted', async t => {
+  const { app, calls } = fixture(t, {
+    publicMedia() { return new Response(new Uint8Array(13 * 1024 ** 2), { headers: { 'content-type': 'image/png' } }) },
+  })
+  const response = await submit(app, { ...imageRequest, requestId: 'stream-not-accepted',
+    model: 'gemini-3.1-flash-image-preview', imageOptions: { imageStream: true },
+    referenceUrls: ['https://media.example/current.png'],
+    imageContext: { turns: [{ prompt: '前一张图', images: ['https://media.example/previous.png'] }] } })
+  assert.equal(response.statusCode, 200)
+  assert.match(response.headers['content-type'], /text\/event-stream/)
+  const event = JSON.parse(response.payload.trim().slice('data: '.length))
+  assert.equal(event.type, 'error')
+  assert.equal(event.statusCode, 413)
+  assert.equal(event.notAccepted, true)
+  assert.equal(calls.length, 0)
+  assert.equal((await app.inject('/api/creation/requests/stream-not-accepted')).statusCode, 404)
+})

@@ -1,18 +1,21 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
-import { ArrowUp, Check, Clock, Download, LoaderCircle, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
+import { ArrowUp, Check, ChevronLeft, ChevronRight, Clock, Copy, Download, Eraser, ImagePlus, ListChecks, LoaderCircle, Pencil, Play, Plus, RefreshCw, SlidersHorizontal, Square, Trash2, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
-import { errorMessage, session, uploadFile } from '../state'
-import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
+import { errorMessage, notify, session, uploadFile } from '../state'
+import { creation, copyCreationImage, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
 import { chats, newChat, saveChats } from '../native-chat'
 import { conversationKind, ensureMediaConversation, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
+import { buildImageContext, clearMediaContext, deleteMediaTurns, imageContinuationReferences, mediaVersion, registerMediaTurn, selectMediaVersion, visibleMediaTasks } from '../studio-image-conversation'
 import CreationAdvanced from './CreationAdvanced.vue'
 import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
+import StudioConversationTitle from './StudioConversationTitle.vue'
+import StudioCreationImage from './studio-message/StudioCreationImage.vue'
 import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
 import { IMAGE_RATIOS, imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
@@ -32,21 +35,27 @@ const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
 const uploading = ref(false), submissions = ref<Record<string, boolean>>({}), error = ref('')
 const gallery = ref<InstanceType<typeof StudioGallery>>(), canvas = ref<HTMLElement>(), promptInput = ref<HTMLTextAreaElement>()
+const transcript = ref<HTMLElement>(), nearBottom = ref(true)
 const blank = ref(false), now = ref(Date.now())
+const branchTaskId = ref<string>(), editing = ref(false), selectedTurns = ref<string[]>([]), selecting = ref(false)
+const skipAutomaticReference = ref(false), restoringTask = ref(false), parameterModel = ref('')
 const submitting = computed(() => Boolean(submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
 const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind && task.owner === session.user?.id))
 const currentConversation = computed(() => chats.sessions.find(chat => chat.id === chats.activeId && conversationKind(chat) === props.kind))
 const currentTasks = computed(() => currentConversation.value ? mediaTasksForConversation(currentConversation.value) : [])
 const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
-const conversationTasks = computed(() => [...currentTasks.value].reverse())
+const conversationTasks = computed(() => currentConversation.value ? visibleMediaTasks(currentConversation.value) : [])
+const automaticReferences = computed(() => props.kind === 'image' && currentConversation.value && !references.value.length && !skipAutomaticReference.value
+  ? imageContinuationReferences(currentConversation.value, branchTaskId.value) : [])
+const displayedReferences = computed(() => references.value.length ? references.value : automaticReferences.value)
 const activeTask = computed(() => tasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 function working(task: CreationTask) { return ['submitting', 'running'].includes(task.phase) }
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
 const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
-const canGenerate = computed(() => chats.ready && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
+const canGenerate = computed(() => chats.ready && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
 function elapsed(task: CreationTask) {
   if (!Number.isFinite(task.createdAt) || !working(task) && !Number.isFinite(task.settledAt)) return ''
   const seconds = Math.max(0, Math.floor(((working(task) ? now.value : task.settledAt!) - task.createdAt) / 1000))
@@ -60,18 +69,24 @@ function waitingMessage(task: CreationTask) {
 let timer: ReturnType<typeof setInterval> | undefined
 watch(activeTask, value => { clearInterval(timer); now.value = Date.now(); if (value) timer = setInterval(() => { now.value = Date.now() }, 1000) }, { immediate: true })
 onUnmounted(() => clearInterval(timer))
+function followOutput() { if (nearBottom.value && canvas.value) canvas.value.scrollTop = canvas.value.scrollHeight }
+function trackScroll() { if (canvas.value) nearBottom.value = canvas.value.scrollHeight - canvas.value.scrollTop - canvas.value.clientHeight < 80 }
+const transcriptObserver = new ResizeObserver(followOutput)
+watch(transcript, element => { transcriptObserver.disconnect(); if (element) transcriptObserver.observe(element) }, { flush: 'post' })
+onUnmounted(() => transcriptObserver.disconnect())
 watch(() => selected.value?.id, async (id, previousId) => {
   const current = tasks.value.find(task => task.id === id), previous = tasks.value.find(task => task.id === previousId)
   const continuing = current && previous && current.conversationId === previous.conversationId
   await nextTick()
-  if (canvas.value) canvas.value.scrollTop = continuing ? canvas.value.scrollHeight : 0
+  nearBottom.value = Boolean(current && (!previous || continuing))
+  if (canvas.value) canvas.value.scrollTop = nearBottom.value ? canvas.value.scrollHeight : 0
 })
 const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
 function chooseModel() {
-  if (!creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const choice = takeModelChoice(props.kind, models.value)
   if (choice) model.value = choice
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
@@ -106,7 +121,28 @@ watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOpt
   if (!session.user) return
   try { localStorage.setItem(draftKey(), JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value })) }
   catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
+  if (currentConversation.value) {
+    currentConversation.value.draft = prompt.value
+    currentConversation.value.mediaDraft = JSON.parse(JSON.stringify({ references: references.value, sourceWorkId: sourceWorkId.value, skipAutomaticReference: skipAutomaticReference.value }))
+    void saveChats()
+  }
 }, { deep: true })
+watch(skipAutomaticReference, () => {
+  if (currentConversation.value?.mediaDraft) { currentConversation.value.mediaDraft.skipAutomaticReference = skipAutomaticReference.value; void saveChats() }
+})
+let restoredConversation = ''
+watch(() => currentConversation.value?.id, id => {
+  selectedTurns.value = []; selecting.value = false; branchTaskId.value = undefined; editing.value = false; parameterModel.value = ''; error.value = ''
+  if (!id) { restoredConversation = ''; return }
+  const chat = currentConversation.value!
+  // Migrate the existing mode draft once; subsequent conversations own their drafts.
+  if (chat.draft !== undefined || restoredConversation) prompt.value = chat.draft || ''
+  references.value = chat.mediaDraft?.references?.map(file => ({ ...file })) || []
+  sourceWorkId.value = chat.mediaDraft?.sourceWorkId || chat.sourceWorkId
+  skipAutomaticReference.value = chat.mediaDraft?.skipAutomaticReference === true
+  restoredConversation = id
+})
+watch(model, value => { if (!restoringTask.value && value !== parameterModel.value) parameterModel.value = '' })
 watch(videoLimits, limits => {
   if (!limits || props.kind !== 'video') return
   if (props.source?.generation?.parameters?.kind === 'video' && sourceWorkId.value === props.source.id) return
@@ -148,35 +184,70 @@ watch(() => session.user?.id, async () => {
 }, { immediate: true })
 async function addReferences(event: Event) {
   const input = event.target as HTMLInputElement
-  const files = [...(input.files || [])]
+  await addReferenceFiles([...(input.files || [])])
+  input.value = ''
+}
+async function addReferenceFiles(files: File[]) {
+  if (!files.length || uploading.value) return
   uploading.value = true; error.value = ''
-  const owner = session.user?.id
+  const owner = session.user?.id, chatId = currentConversation.value?.id
   try {
+    if (files.length + references.value.length > (props.kind === 'video' ? 10 : 16)) throw new Error('参考图数量超过上限，请减少所选图片。')
     for (const file of files) {
-      if (references.value.length >= (props.kind === 'video' ? 10 : 16)) throw new Error('参考图已达到数量上限。')
-      if (!file.type.startsWith('image/')) throw new Error('参考文件请选择图片。')
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('参考文件请选择 PNG、JPEG 或 WebP 图片。')
       const uploaded = await uploadFile(file)
-      if (owner !== session.user?.id) return
+      if (owner !== session.user?.id || chatId !== currentConversation.value?.id) return
       references.value.push({ id: uploaded.id, url: uploaded.url, name: file.name })
       if (props.kind === 'video') videoOptions.mode = references.value.length > 1 ? 'reference-to-video' : 'image-to-video'
     }
-  } catch (cause) { error.value = errorMessage(cause) }
-  finally { uploading.value = false; input.value = '' }
+  } catch (cause) { if (owner === session.user?.id && chatId === currentConversation.value?.id) error.value = errorMessage(cause) }
+  finally { uploading.value = false }
+}
+function pasteReferences(event: ClipboardEvent) {
+  const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/'))
+  if (files.length) { event.preventDefault(); void addReferenceFiles(files) }
+}
+function dropReferences(event: DragEvent) {
+  if (!event.dataTransfer?.files.length) return
+  event.preventDefault()
+  void addReferenceFiles([...event.dataTransfer.files])
+}
+function removeReference(index: number) {
+  if (!references.value.length) skipAutomaticReference.value = true
+  else references.value.splice(index, 1)
 }
 async function generate() {
   if (!canGenerate.value) return
   const kind = props.kind, owner = session.user?.id
   const chat = currentConversation.value || ensureMediaConversation(props.kind)
   const conversationId = chat.mediaConversationId || chat.id
-  const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
-    ...(props.kind === 'image' ? { imageOptions } : { videoOptions }) }))
+  const submittedPrompt = prompt.value, submittedReferences = JSON.stringify(references.value), branchId = branchTaskId.value
+  const branchEdited = editing.value
   blank.value = false
   error.value = ''; submissions.value[kind] = true
   try {
+    const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
+      ...(props.kind === 'image' ? { imageOptions, references: displayedReferences.value, imageContext: buildImageContext(chat, branchId) } : { videoOptions }),
+      ...(branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
     await saveChats(true)
     if (owner !== session.user?.id || kind !== props.kind || chats.activeId !== chat.id || !chats.sessions.some(item => item.id === chat.id)) return
-    const pending = submitCreation(input)
-    await pending
+    let registered = false
+    const result = await submitCreation(input, async task => {
+      if (registered) return
+      registered = true
+      await registerMediaTurn(chat, task, branchId, branchEdited)
+      if (owner === session.user?.id && chats.activeId === chat.id && kind === props.kind) {
+        if (prompt.value === submittedPrompt) prompt.value = ''
+        if (JSON.stringify(references.value) === submittedReferences) references.value = []
+        branchTaskId.value = undefined; editing.value = false; skipAutomaticReference.value = false
+        chat.draft = prompt.value
+        await saveChats()
+      }
+    }, () => owner === session.user?.id && chats.sessions.some(item => item.id === chat.id))
+    if (result.phase === 'error' && owner === session.user?.id && chats.activeId === chat.id && kind === props.kind && !prompt.value && !references.value.length) {
+      prompt.value = submittedPrompt; references.value = JSON.parse(submittedReferences)
+      if (branchId) { branchTaskId.value = result.id; editing.value = branchEdited }
+    }
     await syncMediaConversations()
   } catch (cause) { if (owner === session.user?.id && kind === props.kind) error.value = errorMessage(cause) }
   finally { submissions.value[kind] = false }
@@ -185,10 +256,21 @@ async function download(task: CreationTask, index = 0) {
   try { await downloadCreation(task, index) } catch (cause) { error.value = errorMessage(cause) }
 }
 function openPublish(task: CreationTask, destination: CreationDestination = 'community') { emit('publish', task, destination) }
-function useTask(task: CreationTask) {
+async function useTask(task: CreationTask) {
+  if (restoringTask.value || task.owner !== session.user?.id) return
+  restoringTask.value = true
   ensureMediaConversation(task.kind === 'video' ? 'video' : 'image', task)
+  const owner = session.user?.id, chatId = currentConversation.value?.id
+  try {
+  if (task.group && task.group !== creation.selectedGroup) {
+    if (!creation.groups.some(group => group.id === task.group)) throw new Error('原作分组当前不可用，请手动选择分组和模型。')
+    await selectCreationGroup(task.group)
+    if (creation.selectedGroup !== task.group) throw new Error('原作分组未能恢复，请重新选择。')
+  }
+  if (owner !== session.user?.id || chatId !== currentConversation.value?.id) return
   blank.value = false
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
+  parameterModel.value = task.model
   restoringParameters.value = true; manualSize.value = task.request.size; void nextTick(() => { restoringParameters.value = false })
   sourceWorkId.value = task.sourceWorkId
   ratio.value = task.request.aspect_ratio; count.value = task.request.n; duration.value = task.request.duration
@@ -197,9 +279,60 @@ function useTask(task: CreationTask) {
   Object.assign(videoOptions, video.success ? video.data : videoOptionsSchema.parse({ mode: 'text-to-video' }))
   protocol.value = task.protocol === 'async' ? 'async' : 'openai'
   references.value = task.references.map(file => ({ ...file }))
+  skipAutomaticReference.value = true
   emit('source', sourceWorkId.value)
+  if (!models.value.some(item => item.id === task.model)) error.value = '原作模型在当前分组不可用，请选择可用模型后生成。'
+  else error.value = ''
+  } catch (cause) { if (owner === session.user?.id && chatId === currentConversation.value?.id) error.value = errorMessage(cause) }
+  finally { restoringTask.value = false }
 }
-function editTask(task: CreationTask) { useTask(task); void nextTick(() => promptInput.value?.focus()) }
+async function editTask(task: CreationTask) {
+  await useTask(task)
+  if (currentConversation.value && !error.value && task.owner === session.user?.id) {
+    branchTaskId.value = task.id; editing.value = true
+    void nextTick(() => promptInput.value?.focus())
+  }
+}
+async function regenerate(task: CreationTask) {
+  if (activeTask.value || submitting.value) return
+  await useTask(task)
+  if (error.value || task.owner !== session.user?.id) return
+  branchTaskId.value = task.id; editing.value = false
+  await nextTick()
+  await generate()
+}
+function cancelEditing() {
+  branchTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; skipAutomaticReference.value = false; error.value = ''
+}
+function chooseReference(task: CreationTask, index: number) {
+  if (task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
+  const url = task.urls[index]
+  if (!url) return
+  references.value = [{ name: `历史生成图 ${index + 1}`, url }]
+  skipAutomaticReference.value = true
+  void nextTick(() => promptInput.value?.focus())
+}
+async function copyImage(task: CreationTask, index: number) {
+  const owner = session.user?.id
+  try { await copyCreationImage(task, index); if (owner === session.user?.id) notify('图片已复制') }
+  catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
+}
+function version(task: CreationTask) { return currentConversation.value ? mediaVersion(currentConversation.value, task.id) : { index: 0, total: 1 } }
+async function switchVersion(task: CreationTask, direction: -1 | 1) {
+  if (!currentConversation.value || activeTask.value || submitting.value) return
+  try { await selectMediaVersion(currentConversation.value, task.id, direction); cancelEditing() }
+  catch (cause) { error.value = errorMessage(cause) }
+}
+async function removeTurns(ids: string[]) {
+  if (!currentConversation.value || !ids.length || !confirm(`删除 ${ids.length} 轮对话记录？生成图片仍保留在图库。`)) return
+  try { await deleteMediaTurns(currentConversation.value, ids); selectedTurns.value = []; cancelEditing() }
+  catch (cause) { error.value = errorMessage(cause) }
+}
+async function clearContext() {
+  if (!currentConversation.value || activeTask.value || submitting.value) return
+  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; editing.value = false; notify('上下文已清除') }
+  catch (cause) { error.value = errorMessage(cause) }
+}
 function newCreation() {
   newChat(props.kind)
   blank.value = true; prompt.value = ''; references.value = []; error.value = ''; sourceWorkId.value = undefined
@@ -213,23 +346,31 @@ function handleEnter(event: KeyboardEvent) {
 }
 function openConversation() {
   blank.value = false
-  const task = currentTasks.value[0]
-  if (task) useTask(task)
-  else { prompt.value = ''; references.value = []; sourceWorkId.value = currentConversation.value?.sourceWorkId; error.value = '' }
+  const chat = currentConversation.value
+  if (!chat) return
+  prompt.value = chat.draft || ''
+  references.value = chat.mediaDraft?.references?.map(file => ({ ...file })) || []
+  sourceWorkId.value = chat.mediaDraft?.sourceWorkId || chat.sourceWorkId
+  skipAutomaticReference.value = chat.mediaDraft?.skipAutomaticReference === true
+  branchTaskId.value = undefined; editing.value = false; error.value = ''
 }
 defineExpose({ newCreation, useTask, openConversation, applySourceReferences, referenceUrls, uploading, sourceWorkId, model })
 </script>
 
 <template>
   <section class="native-studio" aria-label="创作工作台">
+    <header v-if="currentConversation" class="creation-conversation-header"><StudioConversationTitle :conversation="currentConversation" /><button v-if="conversationTasks.length" class="icon-button" type="button" :aria-pressed="selecting" aria-label="多选消息" title="多选消息" @click="selecting = !selecting; selectedTurns = []"><ListChecks :size="18" /></button></header>
+    <div v-if="selecting" class="creation-selection" role="group" aria-label="消息多选操作"><label><input type="checkbox" aria-label="全选当前消息" :checked="!!conversationTasks.length && selectedTurns.length === conversationTasks.length" @change="selectedTurns = ($event.target as HTMLInputElement).checked ? conversationTasks.map(task => task.id) : []" />全选</label><span role="status">已选 {{ selectedTurns.length }} 轮</span><button class="icon-button" type="button" :disabled="!selectedTurns.length || !!activeTask || submitting" aria-label="删除所选消息" title="删除所选消息" @click="removeTurns(selectedTurns)"><Trash2 :size="17" /></button><button class="icon-button" type="button" aria-label="退出消息多选" title="退出多选" @click="selecting = false; selectedTurns = []"><X :size="17" /></button></div>
     <div class="creation-output">
-      <div ref="canvas" class="creation-canvas" :class="{ 'has-result': selected?.phase === 'complete' }" tabindex="0" aria-label="创作对话">
-        <div v-if="selected" class="creation-conversation">
+      <div ref="canvas" class="creation-canvas" :class="{ 'has-result': selected?.phase === 'complete' }" tabindex="0" aria-label="创作对话" @scroll="trackScroll">
+        <div v-if="conversationTasks.length" ref="transcript" class="creation-conversation">
           <div v-for="selected in conversationTasks" :key="selected.id" class="creation-turn">
+          <label v-if="selecting" class="creation-select-turn"><input v-model="selectedTurns" type="checkbox" :value="selected.id" :aria-label="`选择消息：${selected.prompt}`" /><span class="studio-sr-only">选择此轮</span></label>
           <article class="creation-request" aria-label="已发送的创作请求">
             <header class="creation-message-heading"><span class="creation-avatar" aria-hidden="true">{{ (session.user?.name || session.user?.username || '你').slice(0, 1) }}</span><strong>你</strong><time>{{ new Date(selected.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</time></header>
-            <div class="creation-request-body"><p>{{ selected.prompt }}</p><div v-if="selected.references.length" class="sent-references"><img v-for="(file, index) in selected.references" :key="file.url" :src="file.url" :alt="`参考图 ${index + 1}：${file.name}`" /></div></div>
+            <div class="creation-request-body"><p>{{ selected.prompt }}</p><div v-if="selected.references.length" class="sent-references"><img v-for="(file, index) in selected.references" :key="file.url" :src="mediaSource(file.url)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></div></div>
             <div class="request-summary"><span>{{ selected.request.aspect_ratio === 'auto' ? '自动比例' : selected.request.aspect_ratio }}</span><span>{{ kind === 'video' ? `${selected.request.duration} 秒视频` : `${selected.request.n} 张图片` }}</span><span v-if="selected.request.imageOptions?.resolution">{{ selected.request.imageOptions.resolution === 'auto' ? '自动分辨率' : selected.request.imageOptions.resolution.toUpperCase() }}</span></div>
+            <div class="creation-turn-tools"><button class="icon-button" type="button" aria-label="编辑并重新生成" title="编辑并重新生成" :disabled="!!activeTask || submitting || ['paused', 'attention'].includes(selected.phase)" @click="editTask(selected)"><Pencil :size="15" /></button><button class="icon-button" type="button" aria-label="删除此轮消息" title="删除此轮消息" :disabled="!!activeTask || submitting" @click="removeTurns([selected.id])"><Trash2 :size="15" /></button></div>
           </article>
           <article class="creation-response" aria-label="模型生成结果">
             <header class="creation-message-heading"><img src="/assets/brand/octopus-community.jpg" width="28" height="28" alt="" /><strong>{{ selected.model }}</strong><span v-if="elapsed(selected)" class="task-elapsed" :title="'从首次提交起计算，包含暂停等待的时间'"><Clock :size="13" />{{ working(selected) ? '已等待' : '自提交起' }} {{ elapsed(selected) }}</span></header>
@@ -242,15 +383,17 @@ defineExpose({ newCreation, useTask, openConversation, applySourceReferences, re
               <p v-if="now - selected.createdAt >= 30000" class="long-wait">等待时间较长，你可以继续编辑提示词或停止本页等待，稍后查询这次任务。</p>
             </div>
             <img v-if="selected.preview && selected.phase !== 'complete'" class="stream-preview" :src="selected.preview" alt="生成中的预览" />
-            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /></button></figure></div>
+            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><template v-else><StudioCreationImage :src="mediaSource(url) || ''" :alt="selected.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="gallery?.open(selected, index)" /><figcaption class="creation-image-tools"><button class="icon-button" type="button" :aria-label="`使用第 ${index + 1} 张图片继续创作`" title="使用此图继续创作" :disabled="selected.phase !== 'complete'" @click="chooseReference(selected, index)"><ImagePlus :size="16" /></button><button class="icon-button" type="button" :aria-label="`复制第 ${index + 1} 张图片`" title="复制图片" @click="copyImage(selected, index)"><Copy :size="16" /></button></figcaption></template></figure></div>
             <div v-else-if="selected.text" class="creation-text"><pre>{{ selected.text }}</pre></div>
             <div v-if="selected.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
               <button class="studio-tool" @click="openPublish(selected)"><Upload :size="15" />发布作品</button>
               <button v-for="(url, index) in selected.urls" :key="url" class="studio-tool" @click="download(selected, index)"><Download :size="16" />下载{{ selected.urls.length > 1 ? ` ${index + 1}` : '' }}</button>
               <button v-if="!selected.urls.length && selected.text" class="studio-tool" @click="download(selected)"><Download :size="16" />下载文本</button>
               <button v-if="selected.kind !== 'video' && selected.sourceWorkId" class="studio-tool" @click="openPublish(selected, 'source-comment')"><Upload :size="15" />发送到源作品评论区</button>
-              <button class="studio-tool" @click="editTask(selected)"><Pencil :size="15" />复用参数</button>
+              <button class="studio-tool" @click="useTask(selected)"><Pencil :size="15" />复用参数</button>
+              <button class="icon-button" type="button" aria-label="重新生成此轮" title="重新生成此轮" :disabled="!!activeTask || submitting" @click="regenerate(selected)"><RefreshCw :size="16" /></button>
             </div>
+            <div v-if="version(selected).total > 1" class="creation-versions" role="group" aria-label="生成版本"><button class="icon-button" type="button" aria-label="上一个版本" title="上一个版本" :disabled="version(selected).index === 0 || !!activeTask || submitting" @click="switchVersion(selected, -1)"><ChevronLeft :size="16" /></button><output aria-label="当前生成版本">{{ version(selected).index + 1 }} / {{ version(selected).total }}</output><button class="icon-button" type="button" aria-label="下一个版本" title="下一个版本" :disabled="version(selected).index >= version(selected).total - 1 || !!activeTask || submitting" @click="switchVersion(selected, 1)"><ChevronRight :size="16" /></button></div>
           </article>
           </div>
         </div>
@@ -258,15 +401,17 @@ defineExpose({ newCreation, useTask, openConversation, applySourceReferences, re
       </div>
     </div>
     <StudioBilling :model="model" :quantity="kind === 'image' ? count : undefined" :refresh-key="selected?.settledAt" @prices="emit('prices')"><StudioModePicker /></StudioBilling>
-    <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate">
-      <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="file.url" :alt="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="references.splice(index, 1)"><X :size="14" /></button></li></ul>
-      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><textarea ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="kind === 'video' ? '描述你想生成的视频…' : '发消息，描述你的想法…'" required @keydown.enter="handleEnter" /></label>
+    <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
+      <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
+      <ul v-if="displayedReferences.length" class="reference-list"><li v-for="(file, index) in displayedReferences" :key="file.url"><img :src="mediaSource(file.url)" :alt="automaticReferences.length ? '接着上一张生成图修改' : file.name" :title="automaticReferences.length ? '接着上一张生成图修改' : file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="removeReference(index)"><X :size="14" /></button></li></ul>
+      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><textarea ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="kind === 'video' ? '描述你想生成的视频…' : '发消息，描述你的想法…'" required @keydown.enter="handleEnter" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
             <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-if="!(IMAGE_RATIOS as readonly string[]).includes(ratio)" :value="ratio">{{ ratio }}</option><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-if="!videoLimits.durations.includes(duration)" :value="duration">{{ duration }}（当前模型不支持）</option><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="3600" step="1" required /></label><label class="field"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required /></label></div>
             <CreationAdvanced :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" :kind="kind" :model="model" embedded @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
+          <button class="studio-tool" type="button" aria-label="清除上下文" title="清除上下文" :disabled="!conversationTasks.length || !!activeTask || submitting" @click="clearContext"><Eraser :size="17" /></button>
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" /></div>
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
@@ -288,6 +433,16 @@ defineExpose({ newCreation, useTask, openConversation, applySourceReferences, re
 
 <style scoped>
 .native-studio { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.creation-conversation-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 44px; }
+.creation-selection, .creation-editing, .creation-select-turn, .creation-turn-tools, .creation-image-tools, .creation-versions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.creation-selection { flex: none; min-height: 44px; padding-inline: 8px; color: var(--muted); font-size: 13px; }
+.creation-selection label { display: flex; align-items: center; gap: 8px; }.creation-selection > span { margin-inline-end: auto; }
+.creation-turn { position: relative; }.creation-select-turn { position: absolute; inset-inline-start: 0; top: 0; min-height: 28px; }
+.creation-turn:has(> .creation-select-turn) { padding-inline-start: 32px; }
+.creation-turn-tools { justify-content: flex-end; }.creation-turn-tools .icon-button, .creation-image-tools .icon-button { width: 32px; min-height: 32px; }
+.creation-image-tools { justify-content: flex-start; margin-top: 4px; }.creation-versions { margin-top: 8px; width: fit-content; }
+.creation-versions output { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 40px; text-align: center; }
+.creation-editing { padding: 0 8px 8px; color: var(--muted); font-size: 13px; }.creation-editing > button { margin-inline-start: auto; }
 .task-status, .task-status > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .group-description { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; margin: 4px 8px 0; }
 .parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
@@ -358,4 +513,5 @@ defineExpose({ newCreation, useTask, openConversation, applySourceReferences, re
 }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0 0 16px; max-width: 72ch; }
 @media (max-width: 639px) { .creation-canvas { padding: 16px 0; }.creation-media img, .creation-media video { max-height: 44dvh; } }
+@media (pointer: coarse), (max-width: 639px) { .creation-turn-tools .icon-button, .creation-image-tools .icon-button { min-height: 44px; width: 44px; } }
 </style>

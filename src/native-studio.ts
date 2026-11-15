@@ -8,6 +8,7 @@ import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatRes
 import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../shared/studio/image-params'
+import type { ImageConversationContext } from '../shared/studio/image-conversation'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -18,6 +19,8 @@ interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null
 export interface CreationTask {
   id: string
   conversationId?: string
+  mediaBranch?: { taskId: string; edited?: boolean }
+  conversationPending?: boolean
   owner: string
   kind: CreationKind
   model: string
@@ -50,6 +53,8 @@ export interface CreationTask {
 }
 export interface CreationInput {
   conversationId?: string
+  mediaBranch?: { taskId: string; edited?: boolean }
+  imageContext?: ImageConversationContext
   accountTokenId?: number | null
   accountGroup?: string | null
   kind: CreationKind
@@ -217,6 +222,42 @@ async function readableMedia(url: string, kind: CreationKind) {
   const source = url.startsWith('legacy-gallery:') ? await gallerySource(url, false) : mediaSource(url, false, kind)
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
+}
+async function portableImage(url: string) {
+  if (!url.startsWith('legacy-gallery:') && !url.startsWith('blob:')) return url
+  const response = await fetch(url.startsWith('blob:') ? url : await readableMedia(url, 'image'))
+  if (!response.ok) throw new Error('历史图片无法读取，请重新选择参考图。')
+  const blob = await response.blob()
+  if (!/^image\/(?:png|jpeg|webp)$/.test(blob.type) || !blob.size || blob.size > 20 * 1024 * 1024) throw new Error('历史图片须为 PNG、JPEG 或 WebP，且不超过 20 MB。')
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('历史图片读取失败。'))
+    reader.readAsDataURL(blob)
+  })
+}
+export async function copyCreationImage(task: CreationTask, index = 0) {
+  const accepted = activeOwner(), version = epoch
+  if (task.owner !== accepted || !task.urls[index]) throw new Error('图片不属于当前账号。')
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('浏览器不支持复制图片，请下载图片。')
+  // Supply the promise during the click gesture; loading original bytes can take time.
+  const image = (async () => {
+    const response = await fetch(await readableMedia(task.urls[index]!, 'image'), { credentials: 'same-origin' })
+    if (!response.ok) throw new Error('图片无法读取。')
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) throw new Error('图片格式无效。')
+    const bitmap = await createImageBitmap(blob)
+    try {
+      if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width; canvas.height = bitmap.height
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('图片转换失败，请下载图片。')
+      context.drawImage(bitmap, 0, 0)
+      return await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('图片转换失败。')), 'image/png'))
+    } finally { bitmap.close() }
+  })()
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })])
 }
 function mediaPathUrl(value: unknown, task: Pick<CreationTask, 'tokenId' | 'kind' | 'protocol'>): string | undefined {
   const direct = safeResultUrl(value)
@@ -390,7 +431,7 @@ export function stopCreation(task: CreationTask) {
   void persist()
 }
 export function creationConversationId(task: CreationTask) { return task.conversationId || task.id }
-export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void, isCurrent: () => boolean = () => true) {
+export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void | Promise<void>, isCurrent: () => boolean = () => true) {
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
   const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
   const selectedGroup = input.accountGroup === undefined ? creation.selectedGroup : input.accountGroup
@@ -398,12 +439,29 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
+  input = JSON.parse(JSON.stringify(input)) as CreationInput
+  if (input.mediaBranch && !creation.tasks.some(task => task.id === input.mediaBranch!.taskId && task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId))
+    throw new Error('原生成记录不属于当前会话。')
+  const portable = new Map<string, Promise<string>>()
+  const prepareImage = (url: string) => {
+    if (!portable.has(url)) portable.set(url, portableImage(url))
+    return portable.get(url)!
+  }
+  for (const file of input.references || []) file.url = await prepareImage(file.url)
+  for (const turn of input.imageContext?.turns || []) {
+    turn.images = await Promise.all(turn.images.map(prepareImage))
+    if (turn.references) turn.references = await Promise.all(turn.references.map(prepareImage))
+  }
+  if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 27 * 1024 ** 2) throw new Error('图片和对话上下文超过请求大小上限，请清除上下文或减少参考图。')
+  if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   const id = crypto.randomUUID()
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
     id, conversationId: previous ? creationConversationId(previous) : validId(input.conversationId) ? input.conversationId : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
+    ...(input.mediaBranch ? { mediaBranch: input.mediaBranch } : {}),
+    ...(input.kind !== 'text' && onUpdate ? { conversationPending: true } : {}),
     request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
       protocol: input.protocol === 'async' ? 'async' : 'openai',
       ...(input.imageOptions ? { imageOptions: JSON.parse(JSON.stringify(input.imageOptions)) } : {}),
@@ -419,18 +477,31 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   }
   const controller = new AbortController()
   controllers.set(task.id, controller)
-  onUpdate?.(task)
+  try { await onUpdate?.(task) }
+  catch (error) {
+    controllers.delete(task.id); task.phase = 'error'; task.settledAt = Date.now()
+    task.error = `会话未能保存，未提交生成：${errorMessage(error)}`
+    await persist(); throw error
+  }
+  task.conversationPending = false
+  if (epoch !== version || acceptedOwner !== activeOwner() || !isCurrent() || task.phase !== 'submitting') {
+    controllers.delete(task.id)
+    if (epoch === version) { task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未提交生成。'; await persist() }
+    return task
+  }
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}) },
-      body: JSON.stringify({ ...input, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
+      body: JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
-      throw new Error((typeof data.error === 'string' ? data.error : data.error?.message) || data.message || `生成请求失败 (${response.status})`)
+      throw Object.assign(new Error((typeof data.error === 'string' ? data.error : data.error?.message) || data.message || `生成请求失败 (${response.status})`), {
+        notAccepted: [400, 401, 403, 413, 422, 429].includes(response.status),
+      })
     }
     const tokenId = Number(response.headers.get('X-New-Api-Token'))
     if (Number.isSafeInteger(tokenId) && tokenId > 0) task.tokenId = tokenId
@@ -442,7 +513,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const parser = getLines(getMessages(message => {
         if (!message.data || epoch !== version || controller.signal.aborted) return
         const event = JSON.parse(message.data)
-        if (event.type === 'error') throw new Error(event.error || '生成失败。')
+        if (event.type === 'error') throw Object.assign(new Error(event.error || '生成失败。'), { notAccepted: event.notAccepted === true })
         if (event.type === 'preview' && safeResultUrl(event.url)) { task.preview = event.url; task.phase = 'running' }
         if (event.type === 'delta') {
           task.text = typeof event.text === 'string' ? event.text : task.text
@@ -473,9 +544,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (!finished) await poll(task, controller, version)
   } catch (error) {
     if (epoch === version) {
-      task.phase = task.upstreamId ? 'paused' : 'attention'
+      const notAccepted = record(error) && error.notAccepted === true
+      task.phase = notAccepted ? 'error' : task.upstreamId ? 'paused' : 'attention'
       task.settledAt ??= Date.now()
-      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : `${errorMessage(error)} 任务记录已保留，请勿自动重复提交。`
+      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : notAccepted ? errorMessage(error) : `${errorMessage(error)} 任务记录已保留，请勿自动重复提交。`
     }
   } finally {
     if (epoch === version) await persist()

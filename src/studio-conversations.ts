@@ -3,6 +3,7 @@ import { chats, createEmptyChat, newChat, saveChats, type NativeChat, type Nativ
 import { creation, type CreationKind, type CreationTask } from './native-studio'
 import { session } from './state'
 import { chatProjectNameSchema } from '../shared/studio/chat-projects'
+import { branchMessages, createAnswerBranch, createEditedMessageBranch, initializeBranches } from '../shared/studio/chat-branches'
 
 const owner = () => session.user?.id || ''
 const taskConversationId = (task: CreationTask) => task.conversationId || task.id
@@ -25,6 +26,22 @@ export function mediaTasksForConversation(chat: NativeChat): CreationTask[] {
 export function isConversationBusy(chat: NativeChat) {
   return Boolean(chats.busy[chat.id] || chat.messages.some(message => message.streaming) ||
     mediaTasksForConversation(chat).some(task => ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+}
+export function attachMediaTask(chat: NativeChat, task: CreationTask) {
+  if (chat.deletedMediaTaskIds?.includes(task.id) || branchMessages(chat).some(message => (message as NativeMessage).taskId === task.id && message.role === 'assistant')) return false
+  const question: NativeMessage = { id: `media-user:${task.id}`, role: 'user', content: task.prompt, createdAt: task.createdAt, taskId: task.id }
+  const answer: NativeMessage = { id: `media-assistant:${task.id}`, role: 'assistant', content: '', taskId: task.id, parentId: question.id, createdAt: task.createdAt }
+  if (task.mediaBranch) {
+    const oldAnswer = chat.messages.find(message => message.role === 'assistant' && message.taskId === task.mediaBranch!.taskId)
+    const oldQuestion = oldAnswer && chat.messages.find(message => message.id === oldAnswer.parentId && message.role === 'user')
+    if (!oldQuestion) return false
+    return task.mediaBranch.edited
+      ? createEditedMessageBranch(chat, oldQuestion.id, question, answer)
+      : createAnswerBranch(chat, oldQuestion.id, answer)
+  }
+  chat.messages.push(question, answer)
+  initializeBranches(chat)
+  return true
 }
 
 // Media bytes and generation/publication state remain in the existing task store.
@@ -53,14 +70,9 @@ export async function syncMediaConversations() {
       chats.sessions.push(legacy); chat = chats.sessions.at(-1)!
       changed = true
     }
-    const knownTasks = new Set(chat.messages.filter(message => message.role === 'assistant').map(message => message.taskId))
     for (const task of tasks) {
-      if (knownTasks.has(task.id)) continue
-      const parentId = chat.messages.at(-1)?.id
-      const question: NativeMessage = { id: `media-user:${task.id}`, role: 'user', content: task.prompt, createdAt: task.createdAt, taskId: task.id, ...(parentId ? { parentId } : {}) }
-      const answer: NativeMessage = { id: `media-assistant:${task.id}`, role: 'assistant', content: '', taskId: task.id, parentId: question.id, createdAt: task.createdAt }
-      chat.messages.push(question, answer)
-      knownTasks.add(task.id); changed = true
+      if (task.conversationPending) continue
+      if (attachMediaTask(chat, task)) changed = true
     }
     if (chat.topic === '新对话' && !chat.renamed) { chat.topic = (first.prompt || first.model).slice(0, 100); changed = true }
     if (chat.lastUpdate < last.createdAt || !chat.model) {

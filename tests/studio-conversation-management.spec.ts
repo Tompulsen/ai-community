@@ -66,6 +66,70 @@ async function select(page: Page, names: string[]) {
   return sidebar
 }
 
+for (const [mode, original] of [['text', '文字会话A'], ['image', '图片会话A'], ['video', '视频会话A']] as const) {
+  test(`${mode} shows a shared editable conversation heading and persists the renamed title`, async ({ page }) => {
+    const state = await fixture(page, mode)
+    const title = page.locator('.conversation-title-editor')
+    await expect(title).toHaveCount(1)
+    await title.getByRole('button', { name: `重命名会话：${original}`, exact: true }).click()
+    const input = title.getByRole('textbox', { name: '会话名称', exact: true })
+    await expect(input).toBeFocused()
+    await input.fill(`  ${mode} 顶部改名  `)
+    await input.press('Enter')
+    const renamed = title.getByRole('button', { name: `重命名会话：${mode} 顶部改名`, exact: true })
+    await expect(renamed).toBeVisible()
+    await expect(renamed).toBeFocused()
+    await expect(page.locator('.studio-sidebar').getByRole('button', { name: `${mode} 顶部改名`, exact: true })).toBeVisible()
+    const saved = await snapshot(page)
+    expect(saved.state.sessions.find((chat: any) => chat.topic === `${mode} 顶部改名`)?.renamed).toBe(true)
+    await page.reload()
+    await expect(renamed).toBeVisible()
+    expect(state.calls).toHaveLength(0)
+  })
+}
+
+test('the conversation heading validates empty names, cancels edits and saves on blur without touching the draft', async ({ page }) => {
+  const state = await fixture(page, 'text'), title = page.locator('.conversation-title-editor')
+  await title.getByRole('button').click()
+  const input = title.getByRole('textbox', { name: '会话名称', exact: true })
+  await input.fill(' ')
+  await input.press('Enter')
+  await expect(title.getByRole('alert')).toContainText('1 到 100')
+  expect((await snapshot(page)).state.sessions.find((chat: any) => chat.id === 'text-a').topic).toBe('文字会话A')
+  await input.fill('不保存的名称')
+  await input.press('Escape')
+  await expect(title.getByRole('button', { name: '重命名会话：文字会话A', exact: true })).toBeFocused()
+  await title.getByRole('button').click()
+  await input.fill('失焦保存')
+  await page.getByRole('textbox', { name: '消息', exact: true }).click()
+  await expect(title.getByRole('button', { name: '重命名会话：失焦保存', exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeFocused()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('文字草稿')
+  expect(state.calls).toHaveLength(0)
+})
+
+test('long conversation names fit mobile and desktop in text, image and video without hiding the composer', async ({ page }) => {
+  const state = await fixture(page, 'text')
+  const directory = '.taste-skill/conversation-title-20261115'
+  await mkdir(directory, { recursive: true })
+  for (const mode of ['text', 'image', 'video']) {
+    await page.goto(`/create/${mode}`)
+    const title = page.locator('.conversation-title-editor')
+    await title.getByRole('button').click()
+    await title.getByRole('textbox', { name: '会话名称', exact: true }).fill('会话名称'.repeat(25))
+    await title.getByRole('textbox', { name: '会话名称', exact: true }).press('Enter')
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect(title.getByRole('button')).toBeInViewport()
+      await expect(page.getByRole('button', { name: mode === 'text' ? '发送' : '开始生成', exact: true })).toBeInViewport()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
+      await page.screenshot({ path: `${directory}/title-${mode}-${width}.png` })
+    }
+    await page.setViewportSize({ width: 1440, height: 900 })
+  }
+  expect(state.calls).toHaveLength(0)
+})
+
 test('image and video conversations join the same selection, deletion and undo transaction without deleting gallery results', async ({ page }) => {
   const state = await fixture(page)
   const sidebar = await select(page, ['图片会话A', '视频会话A', '文字会话B'])
@@ -114,7 +178,8 @@ test('switching from text to media and deleting an active text conversation navi
   page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '删除对话', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/video/)
-  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('视频会话A')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
+  await expect(page.locator('.creation-request')).toContainText('视频会话A')
   await page.locator('.mobile-conversation-undo').getByRole('button', { name: '撤销删除', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/text/)
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('文字草稿')
@@ -132,8 +197,9 @@ test('the background task entry opens its own media conversation rather than the
   await dock.getByRole('button', { name: '下一个任务', exact: true }).click()
   await expect(dock).toContainText('图片会话B')
   await dock.getByRole('button', { name: '查看任务', exact: true }).click()
-  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('图片会话B')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
   await expect(page.locator('.creation-request')).toHaveCount(1)
+  await expect(page.locator('.creation-request')).toContainText('图片会话B')
   await expect(page.locator('.studio-sidebar').getByRole('button', { name: '图片会话B', exact: true })).toHaveAttribute('aria-current', 'page')
   expect(state.calls).toHaveLength(0)
   expect(errors).toEqual([])
@@ -163,6 +229,7 @@ test('renaming an image conversation persists while further generations append t
   const dialog = page.getByRole('dialog', { name: '重命名对话', exact: true })
   await dialog.getByRole('textbox', { name: '对话名称', exact: true }).fill('我的图片创作')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
   await expect(sidebar.getByRole('button', { name: '我的图片创作', exact: true })).toBeVisible()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('在同一个会话里继续生成')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()

@@ -6,10 +6,52 @@ import { createReasoningStream } from '../../shared/studio/reasoning-stream.ts'
 import { extractResponseUsage } from '../../shared/studio/response-usage.ts'
 import type { CreationInput, CreationTask } from '../creation-contract.ts'
 import { toolCallSchema } from '../../shared/studio/options.ts'
+import { usesGeminiImageChat } from '../../shared/studio/image-params.ts'
+import { normalizeCreationTask } from '../creation-contract.ts'
 
 export type CreationEvent = { type: string; [key: string]: unknown }
+async function readChatImageStream(response: Response, emit: (event: CreationEvent) => void): Promise<CreationTask> {
+  if (!response.body) throw new Error('生图流式响应为空。')
+  let text = '', complete = false, bytes = 0
+  const parts: unknown[] = [], previews = new Set<string>()
+  const result = () => normalizeCreationTask('image', { choices: [{ message: { content: [{ type: 'text', text }, ...parts] } }] })
+  const parser = getLines(getMessages(message => {
+    if (!message.data) return
+    if (message.data === '[DONE]') { complete = true; return }
+    const data = JSON.parse(message.data)
+    if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || '生成失败。')
+    const choice = data.choices?.[0], delta = choice?.delta ?? choice?.message
+    if (choice?.finish_reason) complete = true
+    if (typeof delta?.content === 'string') text += delta.content
+    else if (Array.isArray(delta?.content)) parts.push(...delta.content)
+    if (Array.isArray(delta?.images)) parts.push(...delta.images)
+    if (parts.length > 64) throw new Error('图片流式内容超过限制。')
+    if (parts.length || typeof delta?.content === 'string' && delta.content.includes(')')) {
+      for (const output of result().outputs) if (output.url && !previews.has(output.url)) {
+        previews.add(output.url)
+        emit({ type: 'preview', url: output.url })
+      }
+    }
+  }))
+  const reader = response.body.getReader()
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > 40 * 1024 ** 2) throw new Error('流式内容超过限制。')
+      parser(chunk.value)
+    }
+    parser(new TextEncoder().encode('\n\n'))
+    const final = result()
+    if (!complete || !final.outputs.length) throw new Error('生图流式响应已中断或未返回最终图片，请先核对原任务。')
+    return final
+  } catch (error) { await reader.cancel().catch(() => {}); throw error }
+  finally { reader.releaseLock() }
+}
 export async function readGenerationStream(response: Response, input: CreationInput, emit: (event: CreationEvent) => void): Promise<CreationTask> {
   if (input.kind === 'image') {
+    if (usesGeminiImageChat(input.model)) return readChatImageStream(response, emit)
     let images: string[] = []
     await readImageStream(response, url => emit({ type: 'preview', url }), values => { images = values })
     return { status: 'succeeded', outputs: images.map(url => ({ url })) }
