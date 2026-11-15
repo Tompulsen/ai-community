@@ -116,8 +116,8 @@ test('automatic references follow the latest result; clearing context and deleti
   await page.setViewportSize(viewport)
   await page.getByRole('checkbox', { name: '选择消息：第二张', exact: true }).check()
   await page.getByRole('checkbox', { name: '选择消息：修改第二张', exact: true }).check()
-  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '删除所选消息', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(page.locator('.creation-turn')).toHaveCount(2)
   await page.reload()
   await expect(page.locator('.creation-turn')).toHaveCount(2)
@@ -126,6 +126,28 @@ test('automatic references follow the latest result; clearing context and deleti
     return (await readTaskSnapshot('17'))?.length
   })
   expect(count).toBe(4)
+})
+
+test('the inline clear boundary stays between turns and restores outgoing image history', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await send(page, '清除前的图片', 1)
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  const marker = page.locator('.chat-transcript .clear-context-divider')
+  await expect(marker).toBeVisible()
+  await expect(page.locator('.toast-message')).toHaveCount(0)
+  await send(page, '清除后的图片', 2)
+  expect(calls[1].imageContext.turns).toEqual([])
+  expect(await marker.evaluate(element => element.previousElementSibling?.classList.contains('creation-turn') && element.nextElementSibling?.classList.contains('creation-turn'))).toBe(true)
+  await mkdir('.taste-skill/context-project-layout-20261115', { recursive: true })
+  await page.screenshot({ path: '.taste-skill/context-project-layout-20261115/context-desktop.png' })
+  await marker.click()
+  await expect(marker).toHaveCount(0)
+  await send(page, '恢复后继续', 3)
+  expect(calls[2].imageContext.turns.map((turn: any) => turn.prompt)).toEqual(['清除前的图片', '清除后的图片'])
+  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-2.png'])
+  await page.reload()
+  await expect(page.locator('.creation-turn')).toHaveCount(3)
+  await expect(marker).toHaveCount(0)
 })
 
 test('upload, clipboard and drop references share the same attachment flow', async ({ page }) => {

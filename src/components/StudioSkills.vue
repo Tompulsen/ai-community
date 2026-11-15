@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { Play, RefreshCw } from '@lucide/vue'
+import { ChevronDown, Play, Plug, RefreshCw, Sparkles } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
@@ -62,8 +62,8 @@ async function saveConfig() {
   <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="chat.skillIds.length"> · {{ chat.skillIds.length }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><input type="checkbox" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span></label></div>
-    <h3>MCP</h3><p v-if="!enabled" class="muted">当前账号未启用 MCP 工具。</p>
+    <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><Sparkles class="skill-icon" :size="20" aria-hidden="true" /><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /></label><p v-if="!loading && !chats.skills.some(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" class="muted skill-empty">{{ query ? '没有匹配的技能' : '暂无可用技能' }}</p></div>
+    <details class="mcp-section"><summary><Plug :size="18" /><span>MCP 工具</span><ChevronDown :size="15" /></summary><p v-if="!enabled" class="muted">当前账号未启用 MCP 工具。</p>
     <div class="model-tools" v-show="enabled"><label v-for="item in servers" :key="item.id" class="skill-row"><input v-model="chat.settings.mcpServers" type="checkbox" :value="item.id" :disabled="item.status === 'paused'" @change="saveChats()" /><span>允许模型使用 {{ item.id }}</span></label></div>
     <template v-if="enabled">
       <label class="field"><span>工具服务</span><select v-model="server" class="control" @change="listTools"><option value="">选择服务</option><option v-for="item in servers" :key="item.id" :value="item.id">{{ item.id }} · {{ item.status }}</option></select></label>
@@ -77,10 +77,11 @@ async function saveConfig() {
       <details><summary>管理 MCP 服务</summary><label class="field"><span>服务配置 JSON</span><textarea v-model="config" class="control" rows="6" /></label><button class="button subtle btn" :disabled="busy" @click="saveConfig">保存配置</button></details>
     </template>
     <pre v-if="result">{{ result }}</pre><button v-if="chat.toolContext" class="button subtle btn" @click="chat.toolContext = ''; result = ''; saveChats()">移除本轮工具结果</button>
+    </details>
   </details>
 </template>
 <style scoped>
-.skills-panel { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }summary { cursor: pointer; font-size: 14px; }.skills-heading { display: flex; gap: 8px; margin-block: 16px; }.skills-heading input { min-width: 0; width: 100%; }.skill-list { max-height: 320px; overflow-y: auto; }.skill-row { display: flex; align-items: flex-start; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--border); }.skill-row input { margin-top: 4px; }.skill-row > span { min-width: 0; display: grid; gap: 4px; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }.skill-row strong { color: var(--ink); font-size: 14px; font-weight: 500; }.skill-row span span { color: var(--muted); }h3 { font-size: 14px; margin-block: 24px 12px; }.field { margin-block: 16px; }pre { max-height: 320px; overflow: auto; font-size: 12px; background: var(--surface); padding: 12px; }.muted { font-size: 12px; line-height: 20px; }
+.skills-panel { margin-top: 24px; padding-top: 16px; }summary { cursor: pointer; font-size: 14px; }.skills-heading { display: flex; gap: 8px; margin-block: 16px; }.skills-heading input { min-width: 0; width: 100%; }.skill-list { max-height: 320px; overflow-y: auto; }.skill-row { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 8px; border-radius: 6px; cursor: pointer; }.skill-icon { flex: none; color: var(--muted); }.skill-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }.skill-row > span { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }.skill-row strong { color: var(--ink); font-size: 14px; font-weight: 500; }.skill-row span span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); }.skill-row:has(:checked), .skill-row:hover { background: var(--surface-soft); }.skill-row:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }.field { margin-block: 16px; }pre { max-height: 320px; overflow: auto; font-size: 12px; background: var(--surface); padding: 12px; }.muted { font-size: 12px; line-height: 20px; }.skill-empty { padding: 12px 8px; }.mcp-section { margin-top: 20px; }.mcp-section > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; list-style: none; color: var(--muted); font-size: 13px; }.mcp-section > summary span { flex: 1; }.mcp-section > summary::-webkit-details-marker { display: none; }.mcp-section[open] > summary > svg:last-child { transform: rotate(180deg); }
 .skills-panel.embedded { margin: 0; padding: 0; border: 0; }
 .embedded .skills-heading { margin-top: 0; }
 </style>

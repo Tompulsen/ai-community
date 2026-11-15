@@ -1,5 +1,6 @@
 <!-- Layout and library interactions adapted from octopus_chat gallery/gallery.tsx (MIT). -->
 <script setup lang="ts">
+import { confirmStudioDelete } from '../studio-confirm'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { CopyPlus, Download, ImagePlus, Images, LoaderCircle, RefreshCw, Search, SlidersHorizontal, SquareMousePointer, Trash2, Upload, X } from '@lucide/vue'
 import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, resumeCreation, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
@@ -122,13 +123,13 @@ async function selectAll() { await run(async current => { const found = await al
 async function removeItems(chosen: GalleryItem[], current: () => boolean) {
   if (!chosen.length || !current()) return
   if (view.value === 'gallery') {
-    if (!confirm(`从作品库移除 ${chosen.length} 件作品？会话中的生成记录和原文件会保留。`)) return
+    if (!await confirmStudioDelete(`从作品库移除 ${chosen.length} 件作品？会话中的生成记录和原文件会保留。`, current)) return
     await hideGalleryOutputs(chosen)
   } else {
     const removable = chosen.filter(item => ['complete', 'error'].includes(item.task.phase))
     if (!removable.length) throw new Error('所选任务仍在进行或需要核对，暂无可删除记录。')
     const kept = chosen.length - removable.length
-    if (!confirm(`删除 ${removable.length} 条任务记录？${kept ? `另外 ${kept} 条进行中或待核对的任务会保留。` : '此操作不会撤销上游生成。'}`)) return
+    if (!await confirmStudioDelete(`删除 ${removable.length} 条任务记录？${kept ? `另外 ${kept} 条进行中或待核对的任务会保留。` : '此操作不会撤销上游生成。'}`, current)) return
     await removeCreationTasks([...new Set(removable.map(item => item.task.id))])
   }
   if (current()) { selected.value = []; batchMode.value = false; await loadPage() }
@@ -157,7 +158,7 @@ async function clearFailed() {
   await run(async current => {
     const ids = creation.tasks.filter(task => task.owner === session.user?.id && task.phase === 'error').map(task => task.id)
     if (!ids.length) { error.value = '没有失败记录需要清理。'; return }
-    if (!confirm(`删除 ${ids.length} 条失败任务记录？进行中及待核对的任务会保留。`)) return
+    if (!await confirmStudioDelete(`删除 ${ids.length} 条失败任务记录？进行中及待核对的任务会保留。`, current)) return
     await removeCreationTasks(ids)
     if (current()) await loadPage()
   })

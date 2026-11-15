@@ -4,12 +4,13 @@ import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, L
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, stopCreation, type CreationTask, type CreationDestination } from '../native-studio'
-import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage } from '../native-chat'
+import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { parseFile, getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
-import { REASONING_EFFORT_OPTIONS } from '../../shared/studio/chat-params'
-import { CHAT_API_FORMATS } from '../../shared/studio/chat-api-format'
 import StudioSkills from './StudioSkills.vue'
+import StudioChatParameters from './StudioChatParameters.vue'
+import StudioResponseMetrics from './StudioResponseMetrics.vue'
+import { confirmStudioDelete } from '../studio-confirm'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioSearchPicker from './StudioSearchPicker.vue'
@@ -34,13 +35,14 @@ import StudioMediaTurn from './studio-message/StudioMediaTurn.vue'
 import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
 import StudioFollowupSuggestions from './studio-message/StudioFollowupSuggestions.vue'
 import StudioReferenceAttachments from './StudioReferenceAttachments.vue'
+import StudioClearContext from './studio-message/StudioClearContext.vue'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
 import { useStudioMaterials } from '../use-studio-materials'
 import { createMessageQuote, type MessageQuote } from '../../shared/studio/message-quote'
 import { isConversationBusy, mediaTasksForConversation } from '../studio-conversations'
-import { clearMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
+import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
@@ -113,13 +115,18 @@ const mediaByMessage = computed(() => {
 const selecting = ref(false), selectedTurns = ref<string[]>([])
 function mediaTask(message: NativeMessage) { return mediaByMessage.value.get(message.id) }
 async function removeTurns() {
-  if (!current.value || busy.value || !selectedTurns.value.length || !confirm(`删除 ${selectedTurns.value.length} 轮对话记录？生成图片仍保留在图库。`)) return
-  try { await deleteMediaTurns(current.value, selectedTurns.value); selectedTurns.value = [] }
+  const chat = current.value, ids = [...selectedTurns.value]
+  if (!chat || busy.value || !ids.length || !await confirmStudioDelete(`删除 ${ids.length} 轮对话记录？生成图片仍保留在图库。`, () => current.value === chat && !busy.value)) return
+  try { await deleteMediaTurns(chat, ids); selectedTurns.value = [] }
   catch (cause) { error.value = errorMessage(cause) }
 }
 async function clearContext() {
   if (!current.value || busy.value) return
   try { await clearMediaContext(current.value) } catch (cause) { error.value = errorMessage(cause) }
+}
+async function restoreContext() {
+  if (!current.value || busy.value) return
+  try { await restoreMediaContext(current.value) } catch (cause) { error.value = errorMessage(cause) }
 }
 function stop() {
   if (!current.value || chats.preparing[current.value.id]) return
@@ -333,10 +340,15 @@ async function fillSuggestion(message: NativeMessage, text: string) {
   await nextTick(); composerElement.value?.focus()
 }
 async function remove() {
-  if (!current.value || !confirm(`删除对话“${current.value.topic}”？`)) return
+  const chat = current.value
+  if (!chat || busy.value || !await confirmStudioDelete(`删除对话“${chat.topic}”？`, () => current.value === chat && !busy.value)) return
   const owner = session.user?.id, activeId = chats.activeId
-  try { await removeChat(current.value); if (owner === session.user?.id && chats.activeId !== activeId) emit('conversation', chats.activeId) }
+  try { await removeChat(chat); if (owner === session.user?.id && chats.activeId !== activeId) emit('conversation', chats.activeId) }
   catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
+}
+async function removeMessage(chat: NativeChat, message: NativeMessage) {
+  if (busy.value || !await confirmStudioDelete('删除这条消息？', () => current.value === chat && chat.messages.includes(message) && !busy.value)) return
+  deleteChatMessage(chat, message)
 }
 async function recover(message: NativeMessage) { try { await recoverMessage(message) } catch (cause) { error.value = errorMessage(cause) } }
 async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task) } catch (cause) { error.value = errorMessage(cause) } }
@@ -361,7 +373,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
         <div v-else ref="messagesContent" class="chat-transcript">
-        <template v-for="message in current.messages" :key="message.id">
+        <template v-for="(message, messageIndex) in current.messages" :key="message.id">
         <div v-if="mediaTask(message) && message.role === 'user'" class="creation-turn">
           <label v-if="selecting" class="creation-select-turn"><input v-model="selectedTurns" type="checkbox" :value="mediaTask(message)!.id" :aria-label="`选择消息：${mediaTask(message)!.prompt}`" /><span class="studio-sr-only">选择此轮</span></label>
           <StudioMediaTurn v-for="role in (['user', 'assistant'] as const)" :key="role" :role="role" :task="mediaTask(message)!" :conversation="current" @action="(action, task, index) => emit('mediaAction', action, task, index)" @publish="(task, destination) => emit('publish', task, destination)" @preview="(task, index) => mediaGallery?.open(task, index)" />
@@ -390,9 +402,11 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
             <button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="15" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="15" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="15" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </StudioMessageFrame>
+        <StudioClearContext v-if="messageIndex + 1 === current.clearContextIndex" :disabled="Boolean(busy)" @restore="restoreContext" />
         </template>
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
+      <StudioResponseMetrics v-if="mode === 'text'" :key="current.id" :messages="current.messages" />
       <StudioBilling v-if="mode === 'text'" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form v-if="mode === 'text'" class="chat-composer studio-composer" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
@@ -403,10 +417,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="18" /></template>
               <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" embedded /></details></div>
-              <div class="settings-grid">
-                <label class="field"><span>接口格式</span><select :value="currentFormat" class="control" @change="changeFormat"><option v-for="format in CHAT_API_FORMATS" :key="format" :value="format">{{ format }}</option></select></label>
-                <label class="field"><span>温度 {{ current.settings.temperature }}</span><input v-model.number="current.settings.temperature" type="range" min="0" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>Top P</span><input v-model.number="current.settings.top_p" class="control" type="number" min="0" max="1" step="0.05" @change="saveChats()" /></label><label class="field"><span>最大输出 Tokens</span><input v-model.number="current.settings.max_tokens" class="control" type="number" min="1" max="1000000" @change="saveChats()" /></label><label class="field"><span>话题惩罚</span><input v-model.number="current.settings.presence_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>重复惩罚</span><input v-model.number="current.settings.frequency_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label><label class="field"><span>推理强度</span><select v-model="current.settings.reasoningEffort" class="control" @change="saveChats()"><option v-for="option in REASONING_EFFORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><label class="field"><span>历史压缩阈值</span><input v-model.number="current.compressionThreshold" class="control" type="number" min="500" max="2000000" @change="saveChats()" /></label><label class="field"><span>停止序列（每行一项）</span><textarea v-model="current.settings.stop" class="control" rows="2" @change="saveChats()" /></label><label class="field"><span>系统提示词</span><textarea v-model="current.system" class="control" rows="3" @change="saveChats()" /></label><label class="check-field"><input v-model="current.settings.stream" type="checkbox" @change="saveChats()" />流式输出</label><label class="check-field"><input v-model="current.sendMemory" type="checkbox" @change="saveChats()" />保留历史摘要</label>
-              </div>
+              <StudioChatParameters :key="current.id" :chat="current" :format="currentFormat" @format="changeFormat" />
             </StudioPopover>
           </div>
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /></div>

@@ -110,8 +110,8 @@ test('old library layout has a fixed toolbar, a scrollable grid, narrow two-colu
 
 test('removing a middle output keeps original indexes, task history, thumbnails and filtered previews', async ({ page }) => {
   const { library, generation } = await fixture(page, 1, true)
-  page.once('dialog', dialog => dialog.accept())
   await library.locator('.gallery-item').nth(1).getByRole('button', { name: '从作品库移除', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(2)
   expect((await stored(page))?.[0]).toMatchObject({ urls: [
     'https://media.example/0/output-0.jpg', 'https://media.example/0/output-1.jpg', 'https://media.example/0/output-2.jpg',
@@ -191,8 +191,8 @@ test('switching A to B and back aborts a pending export without late files or pr
 test('failed-record cleanup preserves paused and attention tasks', async ({ page }) => {
   const { library, generation } = await fixture(page, 4, false, true)
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
-  page.once('dialog', dialog => dialog.accept())
   await library.getByRole('button', { name: '清理失败记录', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect.poll(async () => (await stored(page))?.map(task => task.phase).sort()).toEqual(['attention', 'complete', 'paused'])
   await library.getByRole('tab', { name: '任务', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(3)
@@ -246,8 +246,8 @@ test('mixed task export skips unfinished outputs and deleting completed tasks pr
   expect(downloads).toEqual(['creation-reuse-3-1.jpg'])
   await library.getByRole('button', { name: '批量选择', exact: true }).click()
   await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
-  page.once('dialog', dialog => dialog.accept())
   await library.getByRole('button', { name: '删除选中记录', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(2)
   expect((await stored(page))?.map(task => task.phase).sort()).toEqual(['attention', 'paused'])
 })

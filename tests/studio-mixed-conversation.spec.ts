@@ -45,7 +45,7 @@ async function fixture(page: Page) {
 }
 async function mode(page: Page, value: 'text' | 'image' | 'video') {
   await page.getByRole('button', { name: /^创作模式：/ }).click()
-  await page.getByRole('button', { name: value === 'text' ? '对话' : value === 'image' ? '图片生成' : '视频生成', exact: true }).click()
+  await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: value === 'text' ? '对话' : value === 'image' ? '图片生成' : '视频生成', exact: true }).click()
   await expect(page.getByRole('textbox', { name: value === 'text' ? '消息' : '提示词', exact: true })).toBeVisible()
 }
 async function snapshot(page: Page) {
@@ -144,6 +144,7 @@ test('reused image parameters remain intact after changing modes', async ({ page
   await mode(page, 'image')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
   await page.getByRole('spinbutton', { name: '图片数量', exact: true }).fill('2')
+  await page.locator('.parameter-advanced > summary').click()
   await page.getByRole('textbox', { name: '随机种子', exact: true }).fill('42')
   await page.keyboard.press('Escape')
   await send(page, 'image', '复用完整参数')
@@ -153,6 +154,7 @@ test('reused image parameters remain intact after changing modes', async ({ page
   await mode(page, 'video'); await mode(page, 'image')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
   await expect(page.getByRole('spinbutton', { name: '图片数量', exact: true })).toHaveValue('2')
+  await page.locator('.parameter-advanced > summary').click()
   await expect(page.getByRole('textbox', { name: '随机种子', exact: true })).toHaveValue('42')
   expect((await snapshot(page)).id).toBe('same-thread')
 })

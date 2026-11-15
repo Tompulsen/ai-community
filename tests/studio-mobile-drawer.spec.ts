@@ -175,7 +175,7 @@ test('compact workbench keeps library, models and text or image parameters reach
   await models.getByRole('button', { name: 'gpt-image-2', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/image/)
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
-  await expect(page.getByRole('combobox', { name: '画面比例', exact: true })).toBeVisible()
+  await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '新建创作', exact: true })).toBeVisible()
   expect(state.posts).toEqual([])

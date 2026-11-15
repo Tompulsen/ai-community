@@ -34,7 +34,7 @@ export function getResponseMetrics(messages: readonly ChatMessage[]) {
     }
 
     const metrics = message.responseMetrics;
-    const usage = metrics?.usage;
+    const usage = metrics?.usage ?? message.usage;
     const reportedOutputTokens = usage?.outputTokens;
     const progress = message.streaming ? message.generationProgress : undefined;
     const outputTokens = message.streaming

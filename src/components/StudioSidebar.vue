@@ -128,6 +128,7 @@ defineExpose({ open, close, visible })
 .studio-sidebar-create.active { color: var(--ink); }
 .studio-sidebar-history { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 32px; }
 .studio-sidebar-history :deep(.conversation-record) { padding-inline: 12px; gap: 12px; }
+.studio-sidebar-history :deep(button.conversation-record) { padding-inline-end: calc(var(--conversation-tool-size) * 2 + 12px); gap: 8px; }
 .studio-sidebar-history :deep(.conversation-record > svg:first-child), .studio-sidebar-history :deep(.conversation-record > input) { width: 20px; height: 20px; }
 .studio-sidebar-history :deep(.conversation-search > .studio-tool) { width: 44px; min-width: 44px; min-height: 44px; padding: 12px; }
 .studio-sidebar-history :deep(.conversation-search > .studio-tool > svg) { width: 20px; height: 20px; }

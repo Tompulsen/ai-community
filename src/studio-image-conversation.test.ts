@@ -63,6 +63,36 @@ it('clears only outgoing context, keeps displayed records, and includes subseque
   await p.syncMediaConversations()
   expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['four'])
 })
+it('restores cleared image context and automatic references without removing later turns', async () => {
+  const p = await fixture()
+  await p.clearMediaContext(p.thread)
+  p.thread.mediaDrafts = { image: { prompt: '继续创作', references: [], skipAutomaticReference: true } }
+  p.creation.tasks.push(task('four', p.thread.id, 4))
+  await p.syncMediaConversations()
+  await p.restoreMediaContext(p.thread)
+  expect(p.thread.clearContextIndex).toBeUndefined()
+  expect(p.thread.mediaDrafts!.image!.skipAutomaticReference).toBe(false)
+  expect(p.thread.mediaDrafts!.image!.prompt).toBe('继续创作')
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three', 'four'])
+  expect(p.imageContinuationReferences(p.thread)[0]?.url).toBe('https://example.test/four.png')
+})
+it('keeps the clear boundary and excluded images when restoring cannot be saved', async () => {
+  const p = await fixture()
+  await p.clearMediaContext(p.thread)
+  const draft = { prompt: '保留草稿', references: [], skipAutomaticReference: true }
+  p.thread.mediaDrafts = { image: draft }
+  let failSave!: (cause: Error) => void
+  storage.write.mockImplementationOnce(() => new Promise((_, reject) => { failSave = reject }))
+  const restoring = expect(p.restoreMediaContext(p.thread)).rejects.toThrow('disk full')
+  await vi.waitFor(() => expect(failSave).toBeTypeOf('function'))
+  draft.prompt = '保存期间的新输入'
+  failSave(new Error('disk full'))
+  await restoring
+  expect(p.thread.clearContextIndex).toBe(p.thread.messages.length)
+  expect(p.thread.mediaDrafts!.image!.skipAutomaticReference).toBe(true)
+  expect(p.thread.mediaDrafts!.image!.prompt).toBe('保存期间的新输入')
+  expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
+})
 it('keeps clearing effective after switching to archived prompt and answer versions', async () => {
   const p = await fixture()
   const version = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })

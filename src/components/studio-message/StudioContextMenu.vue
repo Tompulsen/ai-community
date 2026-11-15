@@ -1,27 +1,33 @@
 <!-- Adapted from octopus_chat app/components/chat-context-menu.tsx (MIT). -->
 <script lang="ts">
 import type { Component } from 'vue'
-export interface StudioMenuAction { label: string; icon: Component; disabled?: boolean; danger?: boolean; run: () => unknown }
+export interface StudioMenuAction { label: string; text?: string; icon: Component; disabled?: boolean; danger?: boolean; run: () => unknown }
 </script>
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { errorMessage, notify } from '../../state'
-const props = defineProps<{ items: StudioMenuAction[] }>()
+const props = defineProps<{ items: StudioMenuAction[]; label?: string }>()
 const panel = ref<HTMLElement>(), visible = ref(false)
+const portalTarget = ref<string | HTMLElement>('body')
 const position = ref({ left: '8px', top: '8px' })
 let origin: HTMLElement | null = null
-function close() { panel.value?.hidePopover() }
+let opening = 0
+function close() { opening++; panel.value?.hidePopover() }
 async function open(event: MouseEvent) {
   if ((event.target as Element)?.closest('input, textarea, select, [contenteditable="true"]')) return
   event.preventDefault(); event.stopPropagation()
   origin = event.currentTarget as HTMLElement
+  const request = ++opening
+  portalTarget.value = origin.closest<HTMLDialogElement>('dialog[open]') || 'body'
+  await nextTick()
+  if (request !== opening || !origin.isConnected) return
   panel.value?.showPopover()
   await nextTick()
-  if (!panel.value?.matches(':popover-open')) return
+  if (request !== opening || !panel.value?.matches(':popover-open')) return
   const bounds = panel.value.getBoundingClientRect()
   position.value = {
-    left: `${Math.max(8, Math.min(event.clientX, innerWidth - bounds.width - 8))}px`,
-    top: `${Math.max(8, Math.min(event.clientY, innerHeight - bounds.height - 8))}px`,
+    left: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().left : event.clientX, innerWidth - bounds.width - 8))}px`,
+    top: `${Math.max(8, Math.min(event.type === 'click' && event.detail === 0 ? origin.getBoundingClientRect().bottom : event.clientY, innerHeight - bounds.height - 8))}px`,
   }
   await nextTick()
   panel.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
@@ -39,14 +45,15 @@ function keys(event: KeyboardEvent) {
 async function select(item: StudioMenuAction) {
   if (item.disabled) return
   close()
+  origin?.focus({ preventScroll: true })
   try { await item.run() } catch (cause) { notify(errorMessage(cause)) }
 }
 onBeforeUnmount(close)
 defineExpose({ open, close, visible })
 </script>
 <template>
-  <Teleport to="body"><div ref="panel" popover="auto" class="message-context-menu" :style="position" role="menu" aria-label="消息操作" @toggle="visible = ($event as ToggleEvent).newState === 'open'" @keydown="keys">
-    <button v-for="item in props.items" :key="item.label" type="button" role="menuitem" :disabled="item.disabled" :class="{ danger: item.danger }" @click="select(item)"><component :is="item.icon" :size="16" aria-hidden="true" />{{ item.label }}</button>
+  <Teleport :to="portalTarget"><div ref="panel" popover="auto" class="message-context-menu" :style="position" role="menu" :aria-label="label || '消息操作'" @toggle="visible = ($event as ToggleEvent).newState === 'open'" @keydown="keys">
+    <button v-for="item in props.items" :key="item.label" type="button" role="menuitem" :aria-label="item.label" :disabled="item.disabled" :class="{ danger: item.danger }" @click="select(item)"><component :is="item.icon" :size="16" aria-hidden="true" /><span>{{ item.text || item.label }}</span></button>
   </div></Teleport>
 </template>
 <style scoped>
@@ -56,5 +63,6 @@ button:hover:not(:disabled), button:focus-visible { background: var(--surface-so
 button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 button.danger { color: var(--danger); }
 button:disabled { opacity: .5; cursor: default; }
+button > svg { flex: none; }button > span { min-width: 0; overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 639px) { button { min-height: 44px; } }
 </style>

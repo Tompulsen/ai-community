@@ -116,6 +116,26 @@ export async function clearMediaContext(chat: NativeChat) {
     chat.memoryPrompt = ''; chat.lastSummarizeIndex = 0
   })
 }
+export async function restoreMediaContext(chat: NativeChat) {
+  ensureSettled(chat)
+  const owner = session.user?.id
+  const flags = Object.values(chat.mediaDrafts || {}).map(draft => ({ draft, flag: draft.skipAutomaticReference }))
+  try {
+    await savedMutation(chat, () => {
+      chat.clearContextIndex = undefined
+      chat.mediaContextExcludedTaskIds = []
+      chat.lastSummarizeIndex = 0
+      for (const draft of Object.values(chat.mediaDrafts || {})) draft.skipAutomaticReference = false
+    })
+  } catch (error) {
+    if (owner === session.user?.id && chats.sessions.includes(chat)) {
+      for (const { draft, flag } of flags) {
+        if (Object.values(chat.mediaDrafts || {}).includes(draft) && draft.skipAutomaticReference === false) draft.skipAutomaticReference = flag
+      }
+    }
+    throw error
+  }
+}
 export async function deleteMediaTurns(chat: NativeChat, ids: string[]) {
   registered(chat); ensureSettled(chat)
   const selected = new Set(ids), visible = visibleMediaTasks(chat)

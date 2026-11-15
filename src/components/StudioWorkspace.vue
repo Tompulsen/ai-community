@@ -3,12 +3,12 @@
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
-import { errorMessage, notify, session } from '../state'
+import { errorMessage, session } from '../state'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
 import { chats, newChat, saveChats } from '../native-chat'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
-import CreationAdvanced from './CreationAdvanced.vue'
+import StudioMediaParameters from './StudioMediaParameters.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioBilling from './StudioBilling.vue'
@@ -20,7 +20,7 @@ import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { remapVideoMentions } from '../../shared/studio/video-mentions'
 import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
-import { IMAGE_RATIOS, imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
+import { imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
@@ -59,7 +59,7 @@ const selectedGroup = computed(() => creation.groups.find(group => group.id === 
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
 const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
 const canGenerate = computed(() => chats.ready && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
-let live = true, draftRevision = 0
+let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 onUnmounted(() => { live = false; draftRevision++; materialSubmission?.abort() })
 const draftScope = () => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}:${draftRevision}`
@@ -84,8 +84,8 @@ const materials = useStudioMaterials(referenceFiles, computed(() => `${session.u
 const uploading = materials.pending
 const materialIssues = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
 function finishRestore() {
-  const scope = draftScope()
-  void nextTick(() => { if (live && scope === draftScope()) restoringParameters.value = false })
+  const scope = draftScope(), revision = ++restoreRevision
+  void nextTick(() => { if (live && scope === draftScope() && revision === restoreRevision) restoringParameters.value = false })
 }
 const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
@@ -127,6 +127,9 @@ function loadDraft() {
   chooseModel()
 }
 watch(() => [props.kind, session.user?.id, currentConversation.value?.id], loadDraft, { immediate: true })
+watch(() => [session.user?.id, currentConversation.value?.id, props.kind, currentConversation.value?.mediaDrafts?.[props.kind]?.skipAutomaticReference] as const, (value, before) => {
+  if (value[0] === before[0] && value[1] === before[1] && value[2] === before[2] && typeof value[3] === 'boolean' && value[3] !== before[3]) skipAutomaticReference.value = value[3]
+})
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, restoringParameters], () => {
@@ -147,14 +150,19 @@ watch(videoLimits, limits => {
   if (!limits.resolutions.includes(videoOptions.resolution) && videoOptions.resolution !== 'auto') videoOptions.resolution = limits.resolutions[0]!
   if (!limits.durations.includes(duration.value)) duration.value = limits.durations.reduce((best, value) => Math.abs(value - duration.value) < Math.abs(best - duration.value) ? value : best)
 })
-watch([() => props.source?.id, () => chats.ready], () => {
-  if (!props.source || sourceWorkId.value === props.source.id) return
+watch([() => props.source?.id, () => chats.ready], async () => {
+  if (!props.source || !chats.ready || sourceWorkId.value === props.source.id) return
+  const source = props.source, owner = session.user?.id, kind = props.kind
   if (chats.ready && currentConversation.value?.sourceWorkId !== props.source.id) {
     const chat = newChat(props.kind); chat.sourceWorkId = props.source.id
   }
+  const conversation = currentConversation.value
+  // Let the new conversation load its draft before applying the original parameters.
+  await nextTick()
+  if (!live || owner !== session.user?.id || source !== props.source || kind !== props.kind || conversation !== currentConversation.value) return
+  restoringParameters.value = true
   sourceWorkId.value = props.source.id
   blank.value = true; prompt.value = props.source.prompt; references.value = []
-  restoringParameters.value = true
   const parameters = readRemixParameters(props.source.generation?.parameters)
   if (models.value.some(item => item.id === props.source!.model)) model.value = props.source.model
   if (parameters?.kind === props.kind) {
@@ -338,7 +346,7 @@ function chooseReference(task: CreationTask, index: number) {
 }
 async function clearContext() {
   if (!currentConversation.value || activeTask.value || submitting.value) return
-  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; editing.value = false; notify('上下文已清除') }
+  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; editing.value = false }
   catch (cause) { error.value = errorMessage(cause) }
 }
 function newCreation() {
@@ -370,9 +378,8 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
       <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" :disabled="submitting" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="submitting || busy || materials.snapshot.value.items.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
-          <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
-            <div class="parameter-row"><label class="field"><span>画面比例</span><select v-model="ratio" class="control"><option v-if="!(IMAGE_RATIOS as readonly string[]).includes(ratio)" :value="ratio">{{ ratio }}</option><option v-for="value in IMAGE_RATIOS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value }}</option></select></label><label v-if="kind === 'image'" class="field"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" max="16" step="1" required /></label><label v-else class="field"><span>时长（秒）</span><select v-if="videoLimits" v-model.number="duration" class="control"><option v-if="!videoLimits.durations.includes(duration)" :value="duration">{{ duration }}（当前模型不支持）</option><option v-for="value in videoLimits.durations" :key="value" :value="value">{{ value }}</option></select><input v-else v-model.number="duration" class="control" type="number" min="1" max="3600" step="1" required /></label><label class="field"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required /></label></div>
-            <CreationAdvanced :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" :kind="kind" :model="model" embedded @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
+          <StudioPopover label="高级参数" :width="380"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>
+            <StudioMediaParameters :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" v-model:ratio="ratio" v-model:count="count" v-model:duration="duration" v-model:size="size" :kind="kind" :model="model" @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" /></div>
@@ -397,8 +404,6 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
 .creation-editing { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .creation-editing { padding: 0 8px 8px; color: var(--muted); font-size: 13px; }.creation-editing > button { margin-inline-start: auto; }
 .group-description { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; margin: 4px 8px 0; }
-.parameter-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.parameter-row .control { width: 100%; min-width: 0; }
 .reference-upload { width: fit-content; position: relative; overflow: hidden; }
 .reference-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
 .reference-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

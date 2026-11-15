@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, Maximize, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
 import { copyCreationImage, downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
-import type { NativeChat } from '../../native-chat'
+import { chats, type NativeChat } from '../../native-chat'
+import { confirmStudioDelete } from '../../studio-confirm'
 import { isConversationBusy } from '../../studio-conversations'
 import { deleteMediaTurns, mediaVersion, selectMediaVersion } from '../../studio-image-conversation'
 import { errorMessage, notify, session } from '../../state'
@@ -60,9 +61,10 @@ async function perform(operation: () => Promise<unknown>) {
   error.value = ''
   try { await operation() } catch (cause) { error.value = errorMessage(cause) }
 }
-function remove() {
-  if (busy.value || !confirm('删除 1 轮对话记录？生成图片仍保留在图库。')) return
-  void perform(() => deleteMediaTurns(props.conversation, [props.task.id]))
+async function remove() {
+  const chat = props.conversation, task = props.task
+  if (busy.value || !await confirmStudioDelete('删除 1 轮对话记录？生成图片仍保留在图库。', () => chats.activeId === chat.id && chats.sessions.includes(chat) && props.task === task && !busy.value)) return
+  await perform(() => deleteMediaTurns(chat, [task.id]))
 }
 </script>
 
