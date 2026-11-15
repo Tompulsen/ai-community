@@ -234,7 +234,7 @@ Lucide 和 CSS 过渡，不引入 React、Motion 或 Tailwind 运行时。
 适配为侧栏与手机历史列表共用的 Vue `StudioConversations.vue` 和 `removeChats`。
 搜索变更会移除不可见项的选择，账号切换清空选择；批量删除一次持久化，
 全部删除后创建空白会话。沿用当前社区正在生成时不可删除的规则，
-保存失败保留原会话；没有引入 React、Zustand、拖拽或项目管理依赖。
+保存失败保留原会话；这一阶段未引入 React、Zustand、拖拽或项目管理依赖。
 
 2026-11-15 模型价格卡片复用同提交的 `app/components/account-model-pricing.tsx`
 与 `account-model-pricing.module.scss`，适配为 Vue 的 `StudioModelPrices.vue`
@@ -254,3 +254,52 @@ Lucide、原生 select/dialog。价格与币种直接展示原生账号 `model-p
 公开参数在写入与读取时均校验；不携带账号/令牌、聊天历史、MCP、私有素材地址或文件 ID。
 视频自定义 JSON 只保留受控生成参数，素材继续通过公开参考图列表单独选择。
 同款先恢复当前账号可用分组再核实模型；失败需用户确认使用当前配置，不自动付费生成。
+
+## 2026-11-15 对话消息组件复用
+
+继续使用用户指定的本地 `octopus_chat`，将以下 MIT / NextChat 模块适配为
+`src/components/studio-message/` 下的 Vue 组件，不引入 React 或第二套对话存储：
+
+| 原模块 | 当前实现 |
+| --- | --- |
+| `app/components/markdown.tsx`、`html-preview.tsx` | `StudioMarkdown.vue`、`StudioCodeBlock.vue`、`StudioHtmlPreview.vue` 与 `src/studio-markdown.ts` |
+| `reasoning-panel.tsx`、`ai-status.tsx`、`message-sources.tsx` | 思考过程、阶段计时、折叠来源及文内引用 |
+| `message-quote.tsx`、`message-selection.ts`、`message-editor.tsx` | 引用展示、选区引用、原位编辑 |
+| `message-option-list.tsx`、`tool-activity.tsx` | 单选/多选提交回执、工具参数与结果展示、手动重新执行 |
+| `app/utils/message-quote.ts`、`message-interactions.ts`、`tool-result.ts`、`ime-input.ts` | `shared/studio/` 同名纯逻辑；替换框架类型依赖 |
+
+Markdown 继续复用 Marked 和 DOMPurify，代码高亮使用 Highlight.js 常见语言集，
+公式和图表分别使用 KaTeX 与 Mermaid。未知代码语言保留原文；图表及 HTML/SVG
+预览在流式回答结束后执行。HTML 放入无 `allow-same-origin` 的 sandbox iframe，
+原消息中的 HTML 不获得脚本、样式定位或界面事件权限。
+
+`src/native-chat.ts` 延续现有账号、任务、分组、分支与附件持久化链路。
+引用仅格式化发送给模型的上下文，界面和历史保留原始提问；选项仅接受绑定当前
+回答 ID 的末尾 `chat-ui` 协议，回执先保存再请求，模型失败不自动重复提交。
+工具复用既有 MCP 接口、用户确认及请求编号，手动重新执行才创建新编号；
+取消、刷新与账号切换不自动重新调用。侧栏预览和会话导出不在本次选定范围内。
+
+## 2026-11-15 统一会话管理
+
+按用户选择的 1、2、3、5、6、7、8、10、11 项，继续参考同一 Octopus Chat
+提交的 `app/store/chat.ts`、`app/store/chat-projects.ts` 和
+`app/components/chat-list.tsx`，复用项目名称校验、会话归类、删除回退与撤销规则。
+`shared/studio/chat-projects.ts` 保留纯逻辑，Vue 适配层为
+`src/studio-conversations.ts`、`StudioConversations.vue` 和
+`StudioConversationGroup.vue`。拖拽复用 MIT 的 `vue-draggable-plus` 0.6.1
+及其内置 SortableJS，不引入 React 拖拽运行时。
+
+文字、图片、视频统一存入现有 `native-chat` 会话列表。历史媒体任务按类型与
+`conversationId` 聚合，每次生成对应一组用户/助手消息，仅引用原任务编号，
+不复制图片字节；图库、发布和任务恢复仍使用原任务存储。新媒体会话在首次
+生成前预留编号，后续生成沿用同一编号。历史迁移仅首次按时间排序，后续保留
+用户手动顺序。删除标记防止已删媒体会话在刷新时被图库记录自动重建。
+侧栏、手机历史和后台任务入口共用原生创作路由；来源参数同步只在活动会话
+类型与当前页面匹配时执行，避免旧页面更新取消跨类型导航。
+
+批量删除一次保存，删除当前项后切至邻近会话，全部删除后创建空白会话。
+删除后 5 秒可撤销；恢复合并原会话，不覆盖幸存会话的新内容，账号切换清空
+撤销记录。删除会话不删除图库结果或已发布作品，进行中或状态待核对的任务
+继续沿用不可删除限制。项目支持新建、重命名、折叠、单项/批量移入移出；
+删除项目仅取消归类。同项目内可拖动排序，亦可用 Alt + 上下方向键调整。
+全部数据沿用当前浏览器的账号隔离，不新增服务端存储或跨设备同步。

@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "start": "node server/runtime.ts",
     "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs",
-    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts server/business server/native-account/wallet.test.ts",
+    "test": "vitest run src/state.test.ts src/login-navigation.test.ts src/native-chat-selection.test.ts src/native-message-logic.test.ts src/native-chat-messages.test.ts src/studio-markdown.test.ts src/studio-conversations.test.ts server/business server/native-account/wallet.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -23,15 +23,19 @@
     "dompurify": "^3.4.17",
     "fastify": "5.12.8",
     "figma-squircle": "1.1.0",
+    "highlight.js": "11.12.0",
     "idb-keyval": "^6.2.1",
     "ioredis": "5.11.1",
     "iron-session": "8.0.4",
+    "katex": "0.19.1",
     "marked": "^18.2.0",
+    "mermaid": "12.3.0",
     "nanoid": "^5.1.16",
     "nodemailer": "10.5.0",
     "pg": "8.23.1",
     "sharp": "0.35.5",
     "vue": "^3.5.44",
+    "vue-draggable-plus": "0.6.1",
     "vue-router": "^5.5.0",
     "yaml": "2.9.1",
     "zod": "^4.6.7"
@@ -39,6 +43,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.65.0",
+    "@types/katex": "0.16.8",
     "@types/node": "^24.19.2",
     "@types/nodemailer": "8.0.2",
     "@types/pg": "8.20.3",

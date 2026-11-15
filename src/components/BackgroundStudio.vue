@@ -8,7 +8,10 @@ const route = useRoute(), router = useRouter()
 const hidden = ref(false), index = ref(0)
 const tasks = computed(() => creation.tasks.slice(0, 20))
 const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
-function open(value: CreationTask) { creation.selectedId = value.id; void router.push(`/create/${value.kind}`) }
+function open(value: CreationTask) {
+  creation.selectedId = value.id
+  void router.push({ path: `/create/${value.kind}`, query: value.kind === 'text' ? {} : { reuse: value.id } })
+}
 </script>
 
 <template>

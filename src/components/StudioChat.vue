@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, type CreationTask, type CreationDestination } from '../native-studio'
-import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage, recoverMessage, type NativeMessage } from '../native-chat'
+import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { parseFile, getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
 import { REASONING_EFFORT_OPTIONS } from '../../shared/studio/chat-params'
@@ -18,25 +16,64 @@ import StudioSearchPicker from './StudioSearchPicker.vue'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioConversations from './StudioConversations.vue'
+import StudioMarkdown from './studio-message/StudioMarkdown.vue'
+import StudioReasoningPanel from './studio-message/StudioReasoningPanel.vue'
+import StudioAiStatus from './studio-message/StudioAiStatus.vue'
+import StudioMessageSources from './studio-message/StudioMessageSources.vue'
+import StudioMessageQuote from './studio-message/StudioMessageQuote.vue'
+import StudioQuoteSelection from './studio-message/StudioQuoteSelection.vue'
+import StudioMessageEditor from './studio-message/StudioMessageEditor.vue'
+import StudioMessageOptions from './studio-message/StudioMessageOptions.vue'
+import StudioToolActivity from './studio-message/StudioToolActivity.vue'
+import type { MessageQuote } from '../../shared/studio/message-quote'
+import { conversationKind } from '../studio-conversations'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 const props = defineProps<{ source?: Work | null; sourceBlocked?: boolean }>()
-const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
-const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; conversation: [id: string] }>()
+const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId && conversationKind(chat) === 'text'))
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
-const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>()
+const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), uploading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
+const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats() } } })
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const models = computed(() => modelsForKind('text'))
 const busy = computed(() => current.value && chats.busy[current.value.id])
 const latestTask = computed(() => creation.tasks.find(task => task.id === current.value?.messages.at(-1)?.taskId))
-const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, { FORBID_TAGS: ['iframe', 'style', 'form'], FORBID_ATTR: ['style'] })
 function messageText(message: NativeMessage) { return typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') }
 function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
 function branch(message: NativeMessage) { return current.value ? answerBranches(current.value, message.id) : { index: 0, total: 1, messageIds: [] } }
+function pending(message: NativeMessage) { return message.role === 'assistant' && Boolean(message.streaming || busy.value && current.value?.messages.at(-1)?.id === message.id) }
+function messageStage(message: NativeMessage) {
+  if (message.error) return 'error'
+  if (!pending(message)) return 'done'
+  if (message.tools?.some(tool => tool.status === 'pending' || tool.status === 'running')) return 'researching'
+  if (messageText(message)) return 'writing'
+  if (current.value?.search !== 'off' && !message.taskId) return 'researching'
+  return 'thinking'
+}
+function statusLabel(message: NativeMessage) {
+  if (message.error) return '生成失败'
+  if (message.interrupted && !pending(message)) return '已停止'
+  const tool = message.tools?.find(tool => tool.status === 'pending' || tool.status === 'running')
+  return tool ? `正在执行 ${tool.name}` : undefined
+}
+function mediaUrl(value: string | undefined, type: 'image' | 'video' | 'audio') {
+  if (!value) return
+  if (value.startsWith(`data:${type}/`)) return value
+  try { const url = new URL(value, location.origin); if (['http:', 'https:', 'blob:'].includes(url.protocol)) return url.href } catch {}
+}
+function audioUrl(part: NonNullable<Exclude<NativeMessage['content'], string>[number]['input_audio']>) {
+  const format = part.format?.toLowerCase()
+  return ['mp3', 'wav', 'ogg', 'webm', 'flac', 'm4a', 'aac'].includes(format) && /^[A-Za-z0-9+/=\s]+$/.test(part.data) ? `data:audio/${format === 'mp3' ? 'mpeg' : format};base64,${part.data}` : undefined
+}
+const attachmentImage = ref<string>(), attachmentDialog = ref<HTMLDialogElement>()
+function openAttachment(url: string | undefined) { if (!url) return; attachmentImage.value = url; attachmentDialog.value?.showModal() }
+watch(() => current.value?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined })
+watch(() => session.user?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined; error.value = ''; edited.value = undefined })
 watch(() => session.user?.id, async () => { if (!session.user) return; await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); await loadChats() }, { immediate: true })
 function chooseModel() {
   if (!current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
@@ -72,10 +109,10 @@ watch([() => props.source?.id, ready], () => {
 }, { immediate: true })
 watch([prompt, files], () => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats() } }, { deep: true })
 watch(model, () => { if (current.value && model.value) { current.value.model = model.value; void saveChats() } })
-watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.streaming]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
+watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.reasoning, message.streaming, message.tools?.map(tool => [tool.id, tool.status])]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
 function scrollToBottom() { if (messagesElement.value) messagesElement.value.scrollTop = messagesElement.value.scrollHeight; nearBottom.value = true }
 function trackScroll() { const el = messagesElement.value; if (el) nearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
-function selectChat(id: string) { chats.activeId = id; void saveChats(); historyMenu.value?.close(); emit('source', current.value?.sourceWorkId) }
+function selectChat(id: string) { historyMenu.value?.close(); emit('conversation', id) }
 function createChat() { newChat(); historyMenu.value?.close(); emit('source') }
 function handleEnter(event: KeyboardEvent) { if (event.isComposing || event.keyCode === 229 || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return; event.preventDefault(); void send() }
 async function addFiles(event: Event) {
@@ -111,20 +148,48 @@ async function applySourceReferences(selected: WorkFile[]) {
 async function send() {
   if (!current.value || props.sourceBlocked || busy.value || uploading.value || !models.value.some(item => item.id === model.value)) return
   nearBottom.value = true
-  const text = prompt.value, attached = [...files.value], original = edited.value
-  error.value = ''; prompt.value = ''; files.value = []; edited.value = undefined
-  try { await sendChat(current.value, text, attached, model.value, undefined, original) }
-  catch (cause) { error.value = errorMessage(cause); prompt.value = text; files.value = attached }
+  const text = prompt.value, attached = [...files.value], quote = draftQuote.value, chat = current.value, owner = session.user?.id
+  error.value = ''; prompt.value = ''; files.value = []; draftQuote.value = undefined
+  function restoreDraft() {
+    if (owner !== session.user?.id || !chats.sessions.includes(chat) || chat.draft || chat.draftFiles?.length || chat.draftQuote) return
+    chat.draft = text; chat.draftFiles = attached; chat.draftQuote = quote
+    if (current.value?.id === chat.id) { prompt.value = text; files.value = attached }
+    void saveChats()
+  }
+  try {
+    const submitted = await sendChat(chat, text, attached, model.value, undefined, undefined, { quote })
+    if (!submitted) restoreDraft()
+  } catch (cause) { restoreDraft(); if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause) }
 }
 async function regenerate(message: NativeMessage) {
   if (!current.value || props.sourceBlocked || busy.value || !models.value.some(item => item.id === model.value)) return
   const index = current.value.messages.indexOf(message)
   const user = current.value.messages.slice(0, index + 1).reverse().find(item => item.role === 'user')
-  if (user) await sendChat(current.value, messageText(user), [], model.value, user)
+  if (user) {
+    const chat = current.value, owner = session.user?.id
+    try { await sendChat(chat, messageText(user), [], model.value, user) }
+    catch (cause) { if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause) }
+  }
 }
-function edit(message: NativeMessage) { edited.value = message; prompt.value = messageText(message) }
+function edit(message: NativeMessage) { edited.value = message }
+async function saveEdit(message: NativeMessage, text: string) {
+  if (!current.value || busy.value || props.sourceBlocked) return false
+  const chat = current.value, owner = session.user?.id
+  try {
+    if (message.role === 'assistant') await editAssistantMessage(chat, message, text)
+    else if (!await sendChat(chat, text, [], model.value, undefined, message, { quote: message.quote })) return false
+    if (current.value?.id === chat.id && owner === session.user?.id) edited.value = undefined
+    return true
+  } catch (cause) { if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause); return false }
+}
+function quoteSelection(quote: MessageQuote) { if (busy.value) return; draftQuote.value = quote; void nextTick(() => composerElement.value?.focus()) }
 async function copy(message: NativeMessage) { try { await navigator.clipboard.writeText(messageText(message)); notify('已复制。') } catch { error.value = '复制失败，请选择内容后复制。' } }
-async function remove() { if (!current.value || !confirm(`删除对话“${current.value.topic}”？`)) return; try { await removeChat(current.value); emit('source', current.value?.sourceWorkId) } catch (cause) { error.value = errorMessage(cause) } }
+async function remove() {
+  if (!current.value || !confirm(`删除对话“${current.value.topic}”？`)) return
+  const owner = session.user?.id, activeId = chats.activeId
+  try { await removeChat(current.value); if (owner === session.user?.id && chats.activeId !== activeId) emit('conversation', chats.activeId) }
+  catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
+}
 async function recover(message: NativeMessage) { try { await recoverMessage(message) } catch (cause) { error.value = errorMessage(cause) } }
 async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task) } catch (cause) { error.value = errorMessage(cause) } }
 function publish(message: NativeMessage, destination: CreationDestination = 'community') {
@@ -141,24 +206,34 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
-        <article v-for="message in current.messages" :key="message.id" class="chat-message" :class="message.role">
+        <article v-for="message in current.messages" :key="message.id" class="chat-message" :class="message.role" data-quotable-message :data-message-id="message.id" :data-message-role="message.role">
           <div class="message-heading"><img v-if="message.role === 'assistant'" src="/assets/brand/octopus-community.jpg" width="24" height="24" alt="" /><span v-else-if="message.role === 'user'" class="message-avatar" aria-hidden="true">{{ (session.user?.name || session.user?.username || '你').slice(0, 1) }}</span><strong>{{ message.role === 'user' ? '你' : message.role === 'system' ? '系统' : messageModel(message) }}</strong><time v-if="message.createdAt">{{ new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</time><LoaderCircle v-if="message.streaming" :size="15" /></div>
-          <details v-if="message.reasoning" class="reasoning"><summary>思考过程</summary><div class="message-content" v-html="render(message.reasoning)" /></details>
-          <div v-if="message.role === 'assistant'" class="message-content" v-html="render(messageText(message))" /><p v-else class="user-text">{{ messageText(message) }}</p>
-          <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index"><img v-if="part.type === 'image_url'" :src="part.image_url?.url" alt="图片附件" /><span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : '音频附件') }}</span></template></div>
-          <ol v-if="message.sources?.length" class="search-sources"><li v-for="source in message.sources" :key="source.url"><a :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title }}</a></li></ol>
-          <p v-if="message.toolStatus" class="message-tool-status" role="status">{{ message.toolStatus }}</p><p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p><div v-if="message.role === 'assistant' && message.taskId && !message.streaming && !message.interrupted" class="message-actions"><button class="button subtle btn" @click="download(message)">下载文本</button><button class="button subtle btn" @click="publish(message)">发布作品</button><button v-if="creation.tasks.find(task => task.id === message.taskId)?.sourceWorkId" class="button subtle btn" @click="publish(message, 'source-comment')">发送到源作品评论区</button></div>
+          <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
+          <StudioReasoningPanel v-if="message.reasoning" :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" />
+          <StudioAiStatus v-if="message.role === 'assistant' && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" />
+          <StudioMessageEditor v-if="edited?.id === message.id" :initial-value="messageText(message)" :disabled="sourceBlocked || busy" :save-label="message.role === 'assistant' ? '保存修改' : '保存并重新生成'" :on-save="text => saveEdit(message, text)" @cancel="edited = undefined" />
+          <StudioMarkdown v-else-if="message.role === 'assistant'" class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" /><p v-else class="user-text">{{ messageText(message) }}</p>
+          <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index">
+            <button v-if="part.type === 'image_url' && mediaUrl(part.image_url?.url, 'image')" class="attachment-image" type="button" title="放大图片" aria-label="放大图片附件" @click="openAttachment(mediaUrl(part.image_url?.url, 'image'))"><img :src="mediaUrl(part.image_url?.url, 'image')" alt="图片附件" loading="lazy" /></button>
+            <video v-else-if="part.type === 'video_url' && mediaUrl(part.video_url?.url, 'video')" :src="mediaUrl(part.video_url?.url, 'video')" controls preload="metadata" aria-label="视频附件" />
+            <audio v-else-if="part.type === 'input_audio' && part.input_audio && audioUrl(part.input_audio)" :src="audioUrl(part.input_audio)" controls preload="none" aria-label="音频附件" />
+            <span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : part.type === 'image_url' ? '图片附件无法显示' : '音频附件') }}</span>
+          </template></div>
+          <StudioMessageSources v-if="message.role === 'assistant' && message.sources?.length" :sources="message.sources" />
+          <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
+          <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
+          <p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p><div v-if="message.role === 'assistant' && message.taskId && !message.streaming && !message.interrupted" class="message-actions"><button class="button subtle btn" @click="download(message)">下载文本</button><button class="button subtle btn" @click="publish(message)">发布作品</button><button v-if="creation.tasks.find(task => task.id === message.taskId)?.sourceWorkId" class="button subtle btn" @click="publish(message, 'source-comment')">发送到源作品评论区</button></div>
           <div class="message-actions">
-            <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="15" /></button><button v-if="message.role === 'user'" class="icon-button" title="编辑提问" aria-label="编辑提问" :disabled="busy" @click="edit(message)"><Pencil :size="15" /></button>
+            <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="15" /></button><button v-if="message.role === 'user' || message.role === 'assistant'" class="icon-button" :title="message.role === 'user' ? '编辑提问' : '编辑回答'" :aria-label="message.role === 'user' ? '编辑提问' : '编辑回答'" :disabled="sourceBlocked || busy || message.role === 'user' && !models.some(item => item.id === model)" @click="edit(message)"><Pencil :size="15" /></button>
             <button v-if="message.role === 'assistant'" class="icon-button" title="重新生成回答" aria-label="重新生成回答" :disabled="sourceBlocked || busy || !models.some(item => item.id === model)" @click="regenerate(message)"><RefreshCw :size="15" /></button>
             <button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="15" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="15" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="15" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </article>
-      </div><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
+      </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioBilling :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="current.clearContextIndex = current.messages.length; current.memoryPrompt = ''; current.lastSummarizeIndex = 0; saveChats()"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form class="chat-composer studio-composer" @submit.prevent="send">
-        <p v-if="edited" class="editing-state">正在编辑提问<button class="icon-button" type="button" title="取消编辑" aria-label="取消编辑" @click="edited = undefined; prompt = ''"><X :size="14" /></button></p>
-        <label class="field"><span class="studio-sr-only">{{ edited ? '编辑内容' : '消息' }}</span><textarea v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
+        <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
+        <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
         <ul v-if="files.length" class="composer-files"><li v-for="(file, index) in files" :key="index"><span>{{ file.name }}</span><button class="icon-button" type="button" :aria-label="`移除附件 ${file.name}`" title="移除附件" @click="files.splice(index, 1)"><X :size="14" /></button></li></ul>
         <div class="studio-composer-tools">
           <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
@@ -172,12 +247,13 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           </div>
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /></div>
           <button v-if="busy" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stopChat(current)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-          <button v-else class="composer-submit send-button" :title="edited ? '提交修改' : '发送'" :aria-label="edited ? '提交修改' : '发送'" :disabled="sourceBlocked || uploading || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><Check v-if="edited" :size="19" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">{{ edited ? '提交修改' : '发送' }}</span></button>
+          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="sourceBlocked || uploading || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
         <p v-if="current.search !== 'off'" class="search-cost">搜索与回答分别按章鱼账号配置计费。</p><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
     </section>
     <p v-else class="muted" role="status">{{ chats.error || '正在读取对话…' }}</p>
+    <dialog ref="attachmentDialog" class="attachment-dialog" aria-label="图片附件预览" @click="$event.target === attachmentDialog && attachmentDialog?.close()" @close="attachmentImage = undefined"><button class="icon-button attachment-close" type="button" title="关闭图片" aria-label="关闭图片" @click="attachmentDialog?.close()"><X :size="22" /></button><img v-if="attachmentImage" :src="attachmentImage" alt="放大图片附件" /></dialog>
   </div>
 </template>
 <style scoped>
@@ -195,7 +271,9 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
 .chat-messages-wrap { position: relative; flex: 1; min-height: 0; }.chat-messages { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px 8px; scrollbar-color: var(--border) transparent; }.chat-empty { height: 100%; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); font-size: 16px; }.chat-empty img { border-radius: 10px; }.chat-empty p { margin: 0; }.jump-latest { position: absolute; right: 12px; bottom: 8px; border: 1px solid var(--border); border-radius: 50%; background: var(--canvas); }
 .chat-message { display: flex; flex-direction: column; align-items: flex-start; padding: 0 0 32px; }.chat-message.user { align-items: flex-end; }.message-heading { font-size: 12px; color: var(--muted); margin-bottom: 12px; max-width: 100%; }.message-heading img { border-radius: 6px; }.message-heading strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }.message-avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--surface-soft); font-size: 12px; color: var(--ink); }.user .message-heading { flex-direction: row-reverse; }.message-usage { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .message-content, .user-text { overflow-wrap: anywhere; font-size: 16px; line-height: 28px; max-width: min(75ch, 100%); min-width: 0; }.chat-message > .message-content, .user-text { padding: 12px 16px; border-radius: 16px; background: var(--surface); }.user-text { white-space: pre-wrap; margin: 0; max-width: min(65ch, 85%); }.message-content :deep(p) { margin-block: 0 12px; }.message-content :deep(> :last-child) { margin-bottom: 0; }.message-content :deep(pre) { overflow-x: auto; max-width: 100%; padding: 12px; background: var(--canvas); border-radius: 6px; font-size: 14px; line-height: 22px; }.message-content :deep(img) { max-width: 100%; }.message-content :deep(table) { display: block; overflow-x: auto; border-collapse: collapse; }.message-content :deep(td), .message-content :deep(th) { border: 1px solid var(--border); padding: 8px; }.message-content :deep(a), .search-sources a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }.message-content :deep(blockquote) { margin-inline: 0; border-left: 1px solid var(--border); padding-left: 16px; color: var(--muted); }
-.reasoning { margin-bottom: 12px; color: var(--muted); font-size: 12px; }.reasoning summary { cursor: pointer; margin-bottom: 8px; }.message-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; }.message-attachments img { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; }.search-sources { font-size: 12px; line-height: 24px; padding-left: 24px; overflow-wrap: anywhere; }
+.message-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; max-width: 100%; }.message-attachments img { display: block; width: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: 6px; }.attachment-image { max-width: 100%; border: 0; padding: 0; background: transparent; cursor: zoom-in; }.message-attachments video, .message-attachments audio { width: min(480px, 100%); max-width: 100%; }.attachment-dialog { max-width: 94vw; max-height: 94dvh; padding: 40px 12px 12px; border: 0; border-radius: 8px; background: var(--canvas); color: var(--ink); }.attachment-dialog::backdrop { background: rgb(0 0 0 / 75%); }.attachment-dialog > img { display: block; max-width: 88vw; max-height: 80dvh; object-fit: contain; }.attachment-close { position: absolute; top: 4px; right: 4px; }
+.chat-message > .reasoning, .chat-message > .tool-activity, .chat-message > .message-options, .chat-message > .message-editor { width: min(75ch, 100%); }
+.chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.search-cost { margin: 4px 8px 0; font-size: 12px; color: var(--muted); }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
 .message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; }.message-actions > .button:hover { color: var(--ink); background: var(--surface); }
 @media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }

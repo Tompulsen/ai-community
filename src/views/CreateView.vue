@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Images, Receipt, KeyRound, CircleDollarSign, Settings, PanelLeft, SquarePen } from '@lucide/vue'
+import { ArrowLeft, History, Images, Receipt, KeyRound, CircleDollarSign, Settings, PanelLeft, SquarePen, Undo2 } from '@lucide/vue'
 import { api, errorMessage, loadSession, session } from '../state'
-import { chats, saveChats } from '../native-chat'
+import { chats, chatDeletion, loadChats, newChat, undoRemovedChats } from '../native-chat'
+import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
 import StudioSidebar from '../components/StudioSidebar.vue'
+import StudioConversations from '../components/StudioConversations.vue'
 import StudioPopover from '../components/StudioPopover.vue'
 import StudioGallery from '../components/StudioGallery.vue'
 import StudioSourceReferences from '../components/StudioSourceReferences.vue'
@@ -31,10 +33,37 @@ function moveMenu() { accountMenu.value?.close(); menuInSidebar.value = sidebarM
 onMounted(() => sidebarMedia.addEventListener('change', moveMenu))
 onBeforeUnmount(() => { revision++; sidebarMedia.removeEventListener('change', moveMenu) })
 const navigationMenu = ref<InstanceType<typeof StudioPopover>>(), mobileGallery = ref<InstanceType<typeof StudioPopover>>()
+const mobileHistory = ref<InstanceType<typeof StudioPopover>>()
 const mobileLibraryLoaded = ref(false), pendingNew = ref(false)
 const workspace = ref<InstanceType<typeof StudioWorkspace>>(), chat = ref<InstanceType<typeof StudioChat>>()
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
+watch(() => session.user?.id, async id => {
+  if (!id) return
+  await initializeCreation(); await loadChats()
+  if (session.user?.id === id) await syncMediaConversations()
+}, { immediate: true })
+watch(() => [chats.ready, creation.loaded, creation.tasks.filter(task => task.kind !== 'text').map(task => [task.id, task.conversationId, task.phase, task.prompt])], () => {
+  void syncMediaConversations().catch(cause => { error.value = errorMessage(cause) })
+}, { deep: true })
+watch([kind, () => chats.ready, () => creation.loaded], async () => {
+  if (!chats.ready || !creation.loaded) return
+  const requestedKind = kind.value, owner = session.user?.id
+  await syncMediaConversations()
+  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse) return
+  const active = chats.sessions.find(chat => chat.id === chats.activeId && conversationKind(chat) === requestedKind)
+  const preferred = active || chats.sessions.find(chat => conversationKind(chat) === requestedKind) || newChat(requestedKind)
+  activateConversation(preferred.id)
+}, { immediate: true })
+watch([() => route.query.conversation, workspace, () => chats.ready, () => creation.loaded], async () => {
+  const id = route.query.conversation
+  if (typeof id !== 'string' || !workspace.value || !chats.ready || !creation.loaded) return
+  const selected = chats.sessions.find(chat => chat.id === id && conversationKind(chat) === kind.value)
+  if (!selected) return
+  activateConversation(id)
+  await nextTick()
+  if (chats.activeId === id) workspace.value?.openConversation()
+}, { flush: 'post' })
 let revision = 0
 watch(() => [route.params.kind, route.query.from, route.query.remix, session.user?.id, sourceRetry.value], async () => {
   const current = ++revision
@@ -79,6 +108,8 @@ function syncSource(id?: string) {
   void router.replace({ query: id ? { remix: id } : {} })
 }
 watch([workspace, () => chat.value?.ready], () => {
+  const active = chats.sessions.find(item => item.id === chats.activeId)
+  if (!active || conversationKind(active) !== kind.value || (kind.value === 'text' ? !chat.value?.ready : !workspace.value)) return
   if (!route.query.remix && !route.query.from && !route.query.reuse) syncSource(kind.value === 'text' ? chat.value?.sourceWorkId : workspace.value?.sourceWorkId)
 }, { flush: 'post' })
 function selectReferences(files: WorkFile[]) { if (kind.value === 'text') void chat.value?.applySourceReferences(files); else workspace.value?.applySourceReferences(files) }
@@ -88,14 +119,19 @@ function reuse(task: CreationTask) {
   void router.replace({ path: `/create/${task.kind}`, query: { reuse: task.id } })
 }
 function openConversation(id: string) {
-  const selected = chats.sessions.find(chat => chat.id === id)
+  const selected = activateConversation(id)
   if (!selected) return
-  chats.activeId = id; void saveChats()
-  accountTool.value = ''
-  void router.replace({ path: '/create/text', query: selected.sourceWorkId ? { remix: selected.sourceWorkId } : {} })
+  const mode = conversationKind(selected)
+  accountTool.value = ''; mobileHistory.value?.close()
+  void router.replace({ path: `/create/${mode}`, query: { ...(mode === 'text' ? {} : { conversation: id }), ...(selected.sourceWorkId ? { remix: selected.sourceWorkId } : {}) } })
 }
-watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => creation.loaded, pendingNew], () => {
-  if (!creation.loaded || (kind.value === 'text' ? !chat.value?.ready : !workspace.value)) return
+async function undoConversation() {
+  const owner = session.user?.id, activeId = chats.activeId
+  try { await undoRemovedChats(); if (owner === session.user?.id && chats.activeId !== activeId) openConversation(chats.activeId) }
+  catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
+}
+watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => chats.ready, pendingNew], () => {
+  if (!creation.loaded || !chats.ready || (kind.value === 'text' ? !chat.value : !workspace.value)) return
   if (pendingNew.value) {
     pendingNew.value = false
     if (kind.value === 'text') chat.value!.createChat()
@@ -117,15 +153,16 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
     <header class="studio-page-toolbar" :class="{ 'studio-content-toolbar': !accountTool || accountTool === 'prices' }">
       <h1 v-if="accountTool && accountTool !== 'prices'">账户工具</h1>
       <div v-if="session.user" class="mobile-studio-navigation"><StudioPopover ref="navigationMenu" label="创作导航" :width="280"><template #trigger><PanelLeft :size="19" /></template><p class="navigation-current">当前：{{ kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : '对话' }}</p><button v-if="accountTool === 'prices'" type="button" class="studio-command" @click="accountTool = ''; navigationMenu?.close()"><ArrowLeft :size="17" />返回创作</button><RouterLink to="/discover" class="studio-command" @click="navigationMenu?.close()"><ArrowLeft :size="17" />返回社区</RouterLink></StudioPopover></div>
-      <div v-if="session.user" class="mobile-studio-destinations"><StudioPopover ref="mobileGallery" label="作品库" :width="880" @toggle="mobileLibraryLoaded ||= $event"><template #trigger><Images :size="18" /><span>作品库</span></template><StudioGallery v-if="mobileLibraryLoaded" embedded @reuse="reuse" @publish="share" /></StudioPopover><button class="studio-tool" @click="openAccount('prices')"><CircleDollarSign :size="18" /><span>模型定价</span></button><button class="studio-tool mobile-new-creation" title="新建创作" aria-label="新建创作" @click="newCreation"><SquarePen :size="19" /></button></div>
+      <div v-if="session.user" class="mobile-studio-destinations"><StudioPopover v-if="kind !== 'text'" ref="mobileHistory" label="历史对话" :width="400"><template #trigger><History :size="18" /></template><StudioConversations @select="openConversation" /></StudioPopover><StudioPopover ref="mobileGallery" label="作品库" :width="880" @toggle="mobileLibraryLoaded ||= $event"><template #trigger><Images :size="18" /><span>作品库</span></template><StudioGallery v-if="mobileLibraryLoaded" embedded @reuse="reuse" @publish="share" /></StudioPopover><button class="studio-tool" @click="openAccount('prices')"><CircleDollarSign :size="18" /><span>模型定价</span></button><button class="studio-tool mobile-new-creation" title="新建创作" aria-label="新建创作" @click="newCreation"><SquarePen :size="19" /></button></div>
       <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar"><StudioPopover ref="accountMenu" label="创作台菜单" :trigger-label="menuInSidebar ? '创作台菜单：设置' : undefined" :width="260"><template #trigger><Settings :size="20" /><span v-if="menuInSidebar">设置</span></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button></StudioPopover></Teleport>
     </header>
+    <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <ContentSkeleton v-if="!session.ready" layout="form" label="正在加载账号…" />
     <div v-else-if="!session.user" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
     <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p>
       <p v-if="sourceIssue" class="form-error" role="alert">{{ sourceIssue }} <button v-if="source" type="button" class="text-link" @click="sourceIssue = ''">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
-      <StudioChat v-if="kind === 'text'" v-show="!accountTool" ref="chat" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+      <StudioChat v-if="kind === 'text'" v-show="!accountTool" ref="chat" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" />
       <StudioWorkspace v-else v-show="!accountTool" ref="workspace" :kind="kind" :source="source" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
     </template><StudioPublishDialog ref="publisher" />
   </div>
@@ -143,7 +180,9 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
 .source-label > a { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-studio-navigation, .mobile-studio-destinations { display: none; }
 .navigation-current { font-size: 14px; color: var(--muted); margin: 0 8px 12px; }
+.mobile-conversation-undo { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 8px; padding: 4px 0 8px; color: var(--muted); font-size: 12px; }
 @media (min-width: 1000px) {
+  .mobile-conversation-undo { display: none; }
   .create-page { padding: 8px 40px 24px; --studio-content-width: 1760px; }
   .studio-page-toolbar { width: min(100%, var(--studio-content-width)); margin-inline: auto; min-height: 56px; margin-bottom: 16px; }
   .studio-content-toolbar { display: none; }
@@ -151,8 +190,11 @@ watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => 
   .source-label, .studio-account-view { width: min(100%, var(--studio-content-width)); margin-inline: auto; }
 }
 @media (max-width: 639px) { .create-page { padding: 0 12px 8px; }.studio-page-toolbar { gap: 16px; margin-bottom: 0; }.studio-page-toolbar h1 { font-size: 14px; }.create-page > .empty-state { min-height: 360px; } }
-@media (max-width: 359px) { .studio-page-toolbar { gap: 12px; } }
-@media (max-width: 639px) {
+@media (max-width: 359px) {
+  .studio-page-toolbar { gap: 12px; }
+  .mobile-studio-destinations :deep(.studio-tool > span) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 999px) {
   .studio-page-toolbar { gap: 0; min-height: 52px; border-bottom: 1px solid var(--border); margin-bottom: 8px; padding-block: 4px; }
   .studio-page-toolbar h1 { display: none; }
   .mobile-studio-navigation, .mobile-studio-destinations { display: flex; align-items: center; gap: 0; }

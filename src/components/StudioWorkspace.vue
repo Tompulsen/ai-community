@@ -4,7 +4,9 @@ import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Check, Clock, Download, LoaderCircle, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, session, uploadFile } from '../state'
-import { creation, creationConversationId, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
+import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
+import { chats, newChat, saveChats } from '../native-chat'
+import { conversationKind, ensureMediaConversation, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import CreationAdvanced from './CreationAdvanced.vue'
 import StudioGallery from './StudioGallery.vue'
 import StudioPopover from './StudioPopover.vue'
@@ -18,7 +20,7 @@ import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 
-const props = defineProps<{ kind: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>()
+const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
 const imageOptions = reactive(imageOptionsSchema.parse({}))
@@ -34,15 +36,17 @@ const blank = ref(false), now = ref(Date.now())
 const submitting = computed(() => Boolean(submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
 const tasks = computed(() => creation.tasks.filter(task => task.kind === props.kind && task.owner === session.user?.id))
-const selected = computed(() => blank.value ? undefined : tasks.value.find(task => task.id === creation.selectedId) || tasks.value[0])
-const conversationTasks = computed(() => selected.value ? tasks.value.filter(task => creationConversationId(task) === creationConversationId(selected.value!)).reverse() : [])
+const currentConversation = computed(() => chats.sessions.find(chat => chat.id === chats.activeId && conversationKind(chat) === props.kind))
+const currentTasks = computed(() => currentConversation.value ? mediaTasksForConversation(currentConversation.value) : [])
+const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
+const conversationTasks = computed(() => [...currentTasks.value].reverse())
 const activeTask = computed(() => tasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 function working(task: CreationTask) { return ['submitting', 'running'].includes(task.phase) }
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
 const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
-const canGenerate = computed(() => !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
+const canGenerate = computed(() => chats.ready && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !activeTask.value && !uploading.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
 function elapsed(task: CreationTask) {
   if (!Number.isFinite(task.createdAt) || !working(task) && !Number.isFinite(task.settledAt)) return ''
   const seconds = Math.max(0, Math.floor(((working(task) ? now.value : task.settledAt!) - task.createdAt) / 1000))
@@ -58,7 +62,7 @@ watch(activeTask, value => { clearInterval(timer); now.value = Date.now(); if (v
 onUnmounted(() => clearInterval(timer))
 watch(() => selected.value?.id, async (id, previousId) => {
   const current = tasks.value.find(task => task.id === id), previous = tasks.value.find(task => task.id === previousId)
-  const continuing = current && previous && creationConversationId(current) === creationConversationId(previous)
+  const continuing = current && previous && current.conversationId === previous.conversationId
   await nextTick()
   if (canvas.value) canvas.value.scrollTop = continuing ? canvas.value.scrollHeight : 0
 })
@@ -109,8 +113,11 @@ watch(videoLimits, limits => {
   if (!limits.resolutions.includes(videoOptions.resolution) && videoOptions.resolution !== 'auto') videoOptions.resolution = limits.resolutions[0]!
   if (!limits.durations.includes(duration.value)) duration.value = limits.durations.reduce((best, value) => Math.abs(value - duration.value) < Math.abs(best - duration.value) ? value : best)
 })
-watch(() => props.source?.id, () => {
+watch([() => props.source?.id, () => chats.ready], () => {
   if (!props.source || sourceWorkId.value === props.source.id) return
+  if (chats.ready && currentConversation.value?.sourceWorkId !== props.source.id) {
+    const chat = newChat(props.kind); chat.sourceWorkId = props.source.id
+  }
   sourceWorkId.value = props.source.id
   blank.value = true; prompt.value = props.source.prompt; references.value = []
   restoringParameters.value = true
@@ -159,13 +166,18 @@ async function addReferences(event: Event) {
 async function generate() {
   if (!canGenerate.value) return
   const kind = props.kind, owner = session.user?.id
-  const conversationId = selected.value ? creationConversationId(selected.value) : undefined
+  const chat = currentConversation.value || ensureMediaConversation(props.kind)
+  const conversationId = chat.mediaConversationId || chat.id
+  const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
+    ...(props.kind === 'image' ? { imageOptions } : { videoOptions }) }))
   blank.value = false
   error.value = ''; submissions.value[kind] = true
   try {
-    const pending = submitCreation({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value.map(file => ({ ...file })), sourceWorkId: sourceWorkId.value,
-      ...(props.kind === 'image' ? { imageOptions: { ...imageOptions } } : props.kind === 'video' ? { videoOptions: { ...videoOptions } } : {}) })
+    await saveChats(true)
+    if (owner !== session.user?.id || kind !== props.kind || chats.activeId !== chat.id || !chats.sessions.some(item => item.id === chat.id)) return
+    const pending = submitCreation(input)
     await pending
+    await syncMediaConversations()
   } catch (cause) { if (owner === session.user?.id && kind === props.kind) error.value = errorMessage(cause) }
   finally { submissions.value[kind] = false }
 }
@@ -174,6 +186,7 @@ async function download(task: CreationTask, index = 0) {
 }
 function openPublish(task: CreationTask, destination: CreationDestination = 'community') { emit('publish', task, destination) }
 function useTask(task: CreationTask) {
+  ensureMediaConversation(task.kind === 'video' ? 'video' : 'image', task)
   blank.value = false
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
   restoringParameters.value = true; manualSize.value = task.request.size; void nextTick(() => { restoringParameters.value = false })
@@ -188,6 +201,7 @@ function useTask(task: CreationTask) {
 }
 function editTask(task: CreationTask) { useTask(task); void nextTick(() => promptInput.value?.focus()) }
 function newCreation() {
+  newChat(props.kind)
   blank.value = true; prompt.value = ''; references.value = []; error.value = ''; sourceWorkId.value = undefined
   emit('source')
   void nextTick(() => promptInput.value?.focus())
@@ -197,7 +211,13 @@ function handleEnter(event: KeyboardEvent) {
   event.preventDefault()
   void generate()
 }
-defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploading, sourceWorkId, model })
+function openConversation() {
+  blank.value = false
+  const task = currentTasks.value[0]
+  if (task) useTask(task)
+  else { prompt.value = ''; references.value = []; sourceWorkId.value = currentConversation.value?.sourceWorkId; error.value = '' }
+}
+defineExpose({ newCreation, useTask, openConversation, applySourceReferences, referenceUrls, uploading, sourceWorkId, model })
 </script>
 
 <template>

@@ -26,6 +26,12 @@ Runtime packages and their upstream declared licenses:
 - Fastify and @fastify/multipart: MIT.
 - Sharp: Apache-2.0; its packaged libvips dependencies retain their own notices.
 - Nodemailer: MIT-0.
+- Highlight.js: BSD-3-Clause; code highlighting uses its common-language build.
+- KaTeX: MIT; distributed fonts retain their bundled license notices.
+- Mermaid: MIT; diagram rendering is loaded on demand.
+- vue-draggable-plus 0.6.1: MIT, Copyright (c) 2023 丶远方; conversation
+  ordering uses its Vue wrapper and bundled SortableJS (MIT, RubaXa and
+  contributors). Upstream license texts are retained in the installed package.
 - FFmpeg is installed from the Alpine package repository. Its installed build
   and linked codecs retain the distribution's license and copyright files.
 

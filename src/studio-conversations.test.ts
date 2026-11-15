@@ -1,0 +1,216 @@
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import type { CreationTask } from './native-studio'
+
+const storage = vi.hoisted(() => ({ write: vi.fn(), read: vi.fn() }))
+vi.mock('./state', async () => {
+  const { reactive } = await import('vue')
+  return { session: reactive({ user: null as any }), errorMessage: (error: Error) => error.message, api: vi.fn() }
+})
+vi.mock('./native-studio', async () => {
+  const { reactive } = await import('vue')
+  return {
+    creation: reactive({ tasks: [] as CreationTask[], selectedId: '', loaded: true }),
+    resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn(),
+  }
+})
+vi.mock('./model-preferences', () => ({ modelFormat: () => undefined }))
+vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: storage.read, writeChatSnapshot: storage.write }))
+beforeEach(() => {
+  vi.resetModules(); storage.read.mockReset(); storage.write.mockReset().mockResolvedValue(undefined)
+})
+afterEach(() => vi.useRealTimers())
+async function fixture() {
+  const { session } = await import('./state')
+  const logic = await import('./native-chat')
+  const management = await import('./studio-conversations')
+  const { creation } = await import('./native-studio')
+  session.user = { id: '17' } as any; logic.chats.ready = true
+  creation.tasks = []; creation.selectedId = ''; creation.loaded = true
+  return { ...logic, ...management, session, creation }
+}
+function task(id: string, kind: 'image' | 'video' = 'image', conversationId = id, createdAt = 1): CreationTask {
+  return {
+    id, owner: '17', kind, conversationId, createdAt, settledAt: createdAt + 1, phase: 'complete',
+    model: `fixture-${kind}`, prompt: `prompt-${id}`, urls: [`data:image/png;base64,${'A'.repeat(100)}`], text: '',
+    references: [], protocol: 'sync', request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 },
+  }
+}
+async function seed() {
+  const p = await fixture()
+  const text = p.createEmptyChat(); text.id = 'text'; text.topic = '文字会话'; text.lastUpdate = 0; text.draft = '待发送'
+  p.chats.sessions.push(text); p.chats.activeId = text.id
+  p.creation.tasks.push(task('image-1', 'image', 'image-thread', 1), task('image-2', 'image', 'image-thread', 2), task('video-1', 'video', 'video-thread', 3))
+  await p.syncMediaConversations(); storage.write.mockClear()
+  return p
+}
+it('groups legacy image and video tasks into canonical sessions with one pair per turn and no duplicated media bytes', async () => {
+  const p = await seed()
+  expect(p.chats.sessions.map(p.conversationKind)).toEqual(['video', 'image', 'text'])
+  const image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  expect(image.messages).toHaveLength(4)
+  expect(image.messages.map(message => message.taskId)).toEqual(['image-1', 'image-1', 'image-2', 'image-2'])
+  expect(JSON.stringify(image)).not.toContain('base64')
+  expect(JSON.stringify(image)).not.toContain(p.creation.tasks[0]!.urls[0])
+  expect(p.mediaTasksForConversation(image).map(task => task.id)).toEqual(['image-2', 'image-1'])
+  await p.syncMediaConversations()
+  expect(image.messages).toHaveLength(4); expect(storage.write).not.toHaveBeenCalled()
+  p.activateConversation(image.id)
+  expect(p.chats.activeId).toBe(image.id); expect(p.creation.selectedId).toBe('image-2')
+})
+it('only synchronizes after both stores are ready and never imports another account task', async () => {
+  const p = await fixture()
+  p.creation.tasks.push(task('mine'), { ...task('other'), owner: '18' })
+  p.creation.loaded = false; await p.syncMediaConversations(); expect(p.chats.sessions).toEqual([])
+  p.creation.loaded = true; p.chats.ready = false; await p.syncMediaConversations(); expect(p.chats.sessions).toEqual([])
+  p.chats.ready = true; await p.syncMediaConversations()
+  expect(p.chats.sessions).toHaveLength(1); expect(p.chats.sessions[0]!.mediaConversationId).toBe('mine')
+})
+it('adds subsequent generation turns to the current canonical image conversation without replacing a manual title', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  await p.renameConversation(image.id, '我的画册')
+  p.ensureMediaConversation('image', p.creation.tasks[0])
+  const same = p.ensureMediaConversation('image')
+  expect(same.id).toBe(image.id)
+  p.creation.tasks.push(task('image-3', 'image', 'image-thread', 4))
+  await p.syncMediaConversations()
+  expect(image.topic).toBe('我的画册'); expect(image.messages).toHaveLength(6)
+  expect(p.chats.sessions.filter(chat => p.conversationKind(chat) === 'image')).toHaveLength(1)
+})
+it('deletes all selected kinds in one save, retains the gallery and uses a neighboring fallback', async () => {
+  const p = await seed(), media = p.chats.sessions.filter(chat => p.conversationKind(chat) !== 'text')
+  p.chats.activeId = media[0]!.id
+  await p.removeChats(media.map(chat => chat.id))
+  expect(p.chats.sessions.map(chat => chat.id)).toEqual(['text'])
+  expect(p.chats.activeId).toBe('text'); expect(p.creation.tasks).toHaveLength(3)
+  expect(p.chats.deletedMediaConversationIds.sort()).toEqual(['image:image-thread', 'video:video-thread'])
+  expect(storage.write).toHaveBeenCalledTimes(1)
+  await p.syncMediaConversations(); expect(p.chats.sessions).toHaveLength(1)
+})
+it('persists tombstones so reloading cannot recreate a deleted media conversation', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  await p.removeChats([image.id])
+  const snapshot = storage.write.mock.calls.at(-1)![1]
+  p.session.user = { id: '18' } as any; p.session.user = { id: '17' } as any
+  storage.read.mockResolvedValue(snapshot)
+  await p.loadChats(); await p.syncMediaConversations()
+  expect(p.chats.sessions.some(chat => p.conversationKind(chat) === 'image')).toBe(false)
+  expect(p.chats.deletedMediaConversationIds).toContain('image:image-thread')
+})
+it('reopens a deleted media conversation only when the owner explicitly selects its retained gallery item', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  await p.removeChats([image.id]); await p.syncMediaConversations()
+  expect(p.chats.sessions.some(chat => chat.id === image.id)).toBe(false)
+  const reopened = p.ensureMediaConversation('image', p.creation.tasks[0])
+  expect(reopened.id).toBe(image.id); expect(reopened.messages).toHaveLength(4)
+  expect(p.chats.activeId).toBe(image.id); expect(p.chats.deletedMediaConversationIds).toEqual([])
+  expect(() => p.ensureMediaConversation('image', { ...p.creation.tasks[0]!, owner: '18' })).toThrow('当前账号')
+})
+it('undo restores removed kinds and active state without overwriting surviving drafts or newly created sessions', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  p.chats.activeId = image.id
+  await p.removeChats([image.id])
+  p.chats.sessions.find(chat => chat.id === 'text')!.draft = '修改后的草稿'
+  const added = p.newChat(); added.topic = '删除后新建'; added.draft = '新内容'
+  await p.undoRemovedChats()
+  expect(p.chats.activeId).toBe(added.id); expect(p.chats.sessions.find(chat => chat.id === added.id)?.draft).toBe('新内容')
+  expect(p.chats.sessions.find(chat => chat.id === 'text')?.draft).toBe('修改后的草稿')
+  expect(p.chats.sessions.some(chat => chat.id === image.id)).toBe(true)
+  expect(p.chats.deletedMediaConversationIds).not.toContain('image:image-thread')
+  expect(p.chatDeletion.count).toBe(0)
+})
+it('undo removes an untouched automatic blank but keeps content typed into that blank', async () => {
+  const p = await seed()
+  await p.removeChats(p.chats.sessions.map(chat => chat.id))
+  expect(p.chats.sessions).toHaveLength(1)
+  const blank = p.chats.sessions[0]!
+  await p.undoRemovedChats()
+  expect(p.chats.sessions).toHaveLength(3); expect(p.chats.sessions.some(chat => chat.id === blank.id)).toBe(false)
+  await p.removeChats(p.chats.sessions.map(chat => chat.id))
+  p.chats.sessions[0]!.draft = '不能丢失'
+  await p.undoRemovedChats()
+  expect(p.chats.sessions).toHaveLength(4); expect(p.chats.sessions.some(chat => chat.draft === '不能丢失')).toBe(true)
+})
+it('expires undo after five seconds and clears it immediately on an account switch', async () => {
+  vi.useFakeTimers()
+  const p = await seed()
+  await p.removeChats(['text']); expect(p.chatDeletion.count).toBe(1)
+  await vi.advanceTimersByTimeAsync(5000); await p.undoRemovedChats()
+  expect(p.chats.sessions.some(chat => chat.id === 'text')).toBe(false); expect(p.chatDeletion.count).toBe(0)
+  await p.removeChats([p.chats.sessions[0]!.id]); expect(p.chatDeletion.count).toBe(1)
+  p.session.user = { id: '18' } as any; await p.undoRemovedChats()
+  expect(p.chatDeletion.count).toBe(0); expect(p.chats.sessions).toEqual([])
+})
+it('rejects deletion of running or uncertain media tasks before changing either store', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  for (const phase of ['running', 'paused', 'attention'] as const) {
+    p.creation.tasks[0]!.phase = phase
+    expect(p.isConversationBusy(image)).toBe(true)
+    await expect(p.removeChats([image.id, 'text'])).rejects.toThrow('核对')
+    expect(p.chats.sessions).toHaveLength(3)
+  }
+  expect(storage.write).not.toHaveBeenCalled()
+})
+it('rolls back media deletion and tombstones when its snapshot cannot be saved', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.removeChats([image.id])).rejects.toThrow('disk full')
+  expect(p.chats.sessions.some(chat => chat.id === image.id)).toBe(true)
+  expect(p.chats.deletedMediaConversationIds).toEqual([])
+})
+it('keeps the delete undo available when restoring it fails to save', async () => {
+  const p = await seed()
+  await p.removeChats(['text'])
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.undoRemovedChats()).rejects.toThrow()
+  expect(p.chats.sessions.some(chat => chat.id === 'text')).toBe(false); expect(p.chatDeletion.count).toBe(1)
+  await p.undoRemovedChats(); expect(p.chats.sessions.some(chat => chat.id === 'text')).toBe(true)
+})
+it('moves mixed conversations into a project, preserves object references and unassigns rather than deleting project contents', async () => {
+  const p = await seed(), chats = [...p.chats.sessions], projectId = await p.createConversationProject('  海洋  ')
+  await p.moveConversations(chats.map(chat => chat.id), projectId)
+  expect(p.chats.projects[0]!.name).toBe('海洋')
+  expect(p.chats.sessions.every(chat => chat.projectId === projectId)).toBe(true)
+  expect(p.chats.sessions.every((chat, index) => chat === chats[index])).toBe(true)
+  await p.renameConversationProject(projectId, '海洋创作')
+  expect(p.chats.projects[0]!.name).toBe('海洋创作')
+  await p.removeConversationProject(projectId)
+  expect(p.chats.projects).toEqual([]); expect(p.chats.sessions).toHaveLength(3)
+  expect(p.chats.sessions.every(chat => chat.projectId === undefined)).toBe(true)
+})
+it('reorders within a project in both directions and subsequent synchronization preserves manual order', async () => {
+  const p = await seed(), [first, second, third] = p.chats.sessions.map(chat => chat.id)
+  await p.reorderConversation(first!, third!); expect(p.chats.sessions.map(chat => chat.id)).toEqual([second, third, first])
+  await p.reorderConversation(first!, second!); expect(p.chats.sessions.map(chat => chat.id)).toEqual([first, second, third])
+  await p.reorderConversation(first!, third!); await p.syncMediaConversations()
+  expect(p.chats.sessions.map(chat => chat.id)).toEqual([second, third, first])
+  const project = await p.createConversationProject('分组')
+  await p.moveConversations([first!], project)
+  await expect(p.reorderConversation(first!, second!)).rejects.toThrow('同一个项目')
+})
+it('validates names and rolls management changes back after storage failures', async () => {
+  const p = await seed(), first = p.chats.sessions[0]!, original = first.topic
+  await expect(p.renameConversation(first.id, ' ')).rejects.toThrow('会话名称')
+  await expect(p.createConversationProject('x'.repeat(81))).rejects.toThrow('项目名称')
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.renameConversation(first.id, '未保存')).rejects.toThrow()
+  expect(first.topic).toBe(original)
+  const project = await p.createConversationProject('项目')
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.moveConversations([first.id], project)).rejects.toThrow()
+  expect(first.projectId).toBeUndefined()
+  const before = p.chats.sessions.map(chat => chat.id)
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.reorderConversation(before[0]!, before[1]!)).rejects.toThrow()
+  expect(p.chats.sessions.map(chat => chat.id)).toEqual(before)
+})
+it('does not restore another account during a failed management write and rejects sending text to a media chat', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  expect(await p.sendChat(image, 'wrong mode', [], 'model')).toBe(false)
+  let fail!: (error: Error) => void
+  storage.write.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject }))
+  const moving = p.createConversationProject('旧账号项目')
+  await vi.waitFor(() => expect(fail).toBeTypeOf('function'))
+  p.session.user = { id: '18' } as any; fail(new Error('disk full'))
+  await expect(moving).rejects.toThrow()
+  expect(p.chats.sessions).toEqual([]); expect(p.chats.projects).toEqual([])
+})

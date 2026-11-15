@@ -398,7 +398,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   const id = crypto.randomUUID()
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
-    id, conversationId: previous ? creationConversationId(previous) : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
+    id, conversationId: previous ? creationConversationId(previous) : validId(input.conversationId) ? input.conversationId : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
     request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
