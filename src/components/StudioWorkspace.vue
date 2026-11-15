@@ -21,10 +21,14 @@ import { IMAGE_RATIOS, imageRequestSize, usesGeminiImageChat } from '../../share
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
+import { studioPreferences } from '../studio-preferences'
+import { shouldSubmit } from '../../shared/studio/submit-key'
+import { createImeGuard } from '../../shared/studio/ime-input'
 
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
+const ime = createImeGuard()
 const imageOptions = reactive(imageOptionsSchema.parse({}))
 const videoOptions = reactive(videoOptionsSchema.parse({ mode: 'text-to-video' }))
 const protocol = ref('openai')
@@ -305,7 +309,8 @@ function newCreation() {
   void nextTick(() => promptInput.value?.focus())
 }
 function handleEnter(event: KeyboardEvent) {
-  if (event.isComposing || event.keyCode === 229 || event.shiftKey || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return
+  if (ime.blocks(event)) { if (event.key === 'Enter' && !ime.isComposing(event)) event.preventDefault(); return }
+  if (!shouldSubmit(event, studioPreferences.submitKey, window.matchMedia('(hover: hover) and (pointer: fine)').matches)) return
   event.preventDefault()
   void generate()
 }
@@ -322,7 +327,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
     <form class="creation-controls studio-composer" aria-label="创作参数" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
       <ul v-if="references.length" class="reference-list"><li v-for="(file, index) in references" :key="file.url"><img :src="mediaSource(file.url)" :alt="file.name" :title="file.name" /><button type="button" class="icon-button" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="removeReference(index)"><X :size="14" /></button></li></ul>
-      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown.enter="handleEnter" @paste="pasteReferences" /></label>
+      <label class="field prompt-field"><span class="studio-sr-only">提示词</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :references="references" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" class="composer-input creation-prompt" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp" multiple :disabled="uploading || references.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="480"><template #trigger><SlidersHorizontal :size="17" /><span>高级参数</span></template>

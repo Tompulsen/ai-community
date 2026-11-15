@@ -77,7 +77,7 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   await page.reload()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(`${state.source.prompt}，采用蓝色光线`)
   await expect(page.locator('.reference-list li')).toHaveCount(2)
-  await page.getByRole('button', { name: '模型定价', exact: true }).click()
+  await page.getByRole('button', { name: '模型广场', exact: true }).click()
   await page.getByRole('button', { name: '创作导航', exact: true }).click()
   await page.getByRole('button', { name: '返回创作', exact: true }).click()
   await expect(page.locator('.reference-list li')).toHaveCount(2)

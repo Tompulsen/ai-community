@@ -40,8 +40,8 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
-  <section class="model-prices" aria-label="模型价格">
-    <header class="prices-heading"><h2>模型价格</h2><div class="prices-toolbar">
+  <section class="model-prices" aria-label="模型广场">
+    <header class="prices-heading"><h2>模型广场</h2><div class="prices-toolbar">
       <label class="prices-search"><Search :size="15" aria-hidden="true" /><input v-model="query" type="search" aria-label="搜索模型价格" placeholder="搜索模型或分组" :disabled="!data" /></label>
       <span v-if="data" class="prices-count" role="status">{{ query.trim() ? `${rows.length} / ` : '' }}{{ models.length }} 个模型</span>
       <button type="button" class="studio-tool" aria-label="刷新价格" title="刷新价格" :disabled="loading" @click="load"><RefreshCw :size="15" aria-hidden="true" /></button>

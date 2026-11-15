@@ -10,6 +10,7 @@ import StudioWorkspace from '../components/StudioWorkspace.vue'
 import StudioSidebar from '../components/StudioSidebar.vue'
 import StudioConversationTitle from '../components/StudioConversationTitle.vue'
 import StudioPopover from '../components/StudioPopover.vue'
+import StudioSubmitPreference from '../components/StudioSubmitPreference.vue'
 import StudioLibraryDialog from '../components/StudioLibraryDialog.vue'
 import StudioSourceReferences from '../components/StudioSourceReferences.vue'
 import StudioPublishDialog from '../components/StudioPublishDialog.vue'
@@ -40,7 +41,7 @@ const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
 const currentConversation = computed(() => chats.sessions.find(item => item.id === chats.activeId))
 const mobileModel = computed(() => (kind.value === 'text' ? chat.value?.model : workspace.value?.model) || '')
-const accountHeading = computed(() => ({ prices: '模型定价', logs: '消费记录', keys: '密钥' })[accountTool.value || 'prices'])
+const accountHeading = computed(() => ({ prices: '模型广场', logs: '消费记录', keys: '密钥' })[accountTool.value || 'prices'])
 async function openSettings() { sidebar.value?.close(); await nextTick(); accountMenu.value?.open() }
 watch(() => session.user?.id, async id => {
   if (!id) return
@@ -180,7 +181,18 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
         <span v-if="!accountTool" class="studio-mobile-model" :title="mobileModel">{{ kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : '对话' }}<template v-if="mobileModel"> / {{ mobileModel }}</template></span>
       </div>
       <button v-if="session.user" class="studio-tool mobile-new-creation" type="button" title="新建创作" aria-label="新建创作" @click="newCreation"><SquarePen :size="22" /></button>
-      <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar"><StudioLibraryDialog ref="mobileGallery" @reuse="reuse" @publish="share" @create="createImage" /><StudioPopover ref="accountMenu" label="创作台菜单" :trigger-label="menuInSidebar ? '创作台菜单：设置' : undefined" :width="260"><template #trigger><Settings v-if="menuInSidebar" :size="20" /><MoreVertical v-else :size="22" /><span v-if="menuInSidebar">设置</span></template><template v-if="!menuInSidebar"><button v-if="accountTool" class="studio-command" @click="accountTool = ''; accountMenu?.close()"><ArrowLeft :size="17" />返回创作</button><button class="studio-command" @click="accountMenu?.close(); mobileGallery?.open()"><Images :size="17" />作品库</button></template><button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button><button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button><button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button><template v-if="!menuInSidebar && !accountTool && currentConversation"><button class="studio-command" :disabled="chat?.busy" @click="clearContext"><Eraser :size="17" />清除上下文</button><button class="studio-command" :disabled="chat?.busy" @click="accountMenu?.close(); chat?.duplicate()"><Copy :size="17" />复制对话</button><button v-if="chat?.hasMedia" class="studio-command" @click="accountMenu?.close(); chat?.toggleSelection()"><ListChecks :size="17" />多选消息</button><button class="studio-command danger" :disabled="chat?.busy" @click="accountMenu?.close(); chat?.remove()"><Trash2 :size="17" />删除对话</button></template></StudioPopover></Teleport>
+      <Teleport v-if="session.user" defer to="#studio-sidebar-menu" :disabled="!menuInSidebar">
+        <StudioLibraryDialog ref="mobileGallery" @reuse="reuse" @publish="share" @create="createImage" />
+        <StudioPopover ref="accountMenu" label="创作台菜单" :trigger-label="menuInSidebar ? '创作台菜单：设置' : undefined" :width="300">
+          <template #trigger><Settings v-if="menuInSidebar" :size="20" /><MoreVertical v-else :size="22" /><span v-if="menuInSidebar">设置</span></template>
+          <template v-if="!menuInSidebar"><button v-if="accountTool" class="studio-command" @click="accountTool = ''; accountMenu?.close()"><ArrowLeft :size="17" />返回创作</button><button class="studio-command" @click="accountMenu?.close(); mobileGallery?.open()"><Images :size="17" />作品库</button></template>
+          <button class="studio-command" @click="openAccount('prices')"><CircleDollarSign :size="17" />模型价格</button>
+          <button class="studio-command" @click="openAccount('logs')"><Receipt :size="17" />消费记录</button>
+          <button class="studio-command" @click="openAccount('keys')"><KeyRound :size="17" />密钥</button>
+          <StudioSubmitPreference />
+          <template v-if="!menuInSidebar && !accountTool && currentConversation"><button class="studio-command" :disabled="chat?.busy" @click="clearContext"><Eraser :size="17" />清除上下文</button><button class="studio-command" :disabled="chat?.busy" @click="accountMenu?.close(); chat?.duplicate()"><Copy :size="17" />复制对话</button><button v-if="chat?.hasMedia" class="studio-command" @click="accountMenu?.close(); chat?.toggleSelection()"><ListChecks :size="17" />多选消息</button><button class="studio-command danger" :disabled="chat?.busy" @click="accountMenu?.close(); chat?.remove()"><Trash2 :size="17" />删除对话</button></template>
+        </StudioPopover>
+      </Teleport>
     </header>
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <ContentSkeleton v-if="!session.ready" layout="form" label="正在加载账号…" />

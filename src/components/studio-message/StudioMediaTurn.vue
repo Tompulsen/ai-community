@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Download, Maximize, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
-import { downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { ChevronLeft, ChevronRight, Copy, Download, Maximize, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
+import { copyCreationImage, downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import type { NativeChat } from '../../native-chat'
 import { isConversationBusy } from '../../studio-conversations'
 import { deleteMediaTurns, mediaVersion, selectMediaVersion } from '../../studio-image-conversation'
-import { errorMessage } from '../../state'
+import { errorMessage, notify, session } from '../../state'
 import StudioMessageFrame from './StudioMessageFrame.vue'
 import StudioAiStatus from './StudioAiStatus.vue'
 import StudioCreationImage from './StudioCreationImage.vue'
+import StudioContextMenu, { type StudioMenuAction } from './StudioContextMenu.vue'
 
 const props = defineProps<{ task: CreationTask; conversation: NativeChat; role: 'user' | 'assistant' }>()
 const emit = defineEmits<{
@@ -18,6 +19,28 @@ const emit = defineEmits<{
 }>()
 const error = ref(''), now = ref(Date.now())
 const busy = computed(() => isConversationBusy(props.conversation))
+const menu = ref<InstanceType<typeof StudioContextMenu>>()
+const menuIndex = ref(0)
+function openMenu(event: MouseEvent) {
+  const root = event.currentTarget as HTMLElement, figure = (event.target as Element).closest('figure')
+  const index = figure ? [...root.querySelectorAll('.creation-media > figure')].indexOf(figure) : -1
+  menuIndex.value = Math.max(0, index)
+  void menu.value?.open(event)
+}
+const menuItems = computed<StudioMenuAction[]>(() => {
+  const task = props.task
+  const items: StudioMenuAction[] = props.role === 'user' ? [
+    { label: '复制提问', icon: Copy, run: async () => { await navigator.clipboard.writeText(task.prompt); notify('已复制。') } },
+    { label: '编辑并重新生成', icon: Pencil, disabled: busy.value, run: () => emit('action', 'editTask', task) },
+  ] : [
+    ...(task.urls.length ? [{ label: task.kind === 'video' ? '放大视频' : '查看大图', icon: Maximize, run: () => emit('preview', task, menuIndex.value) },
+      { label: task.kind === 'video' ? '下载视频' : '下载图片', icon: Download, run: () => perform(() => downloadCreation(task, menuIndex.value)) }] : []),
+    ...(task.kind === 'image' && task.urls.length ? [{ label: '复制图片', icon: Copy, run: () => perform(async () => { await copyCreationImage(task, menuIndex.value); notify('图片已复制') }) }] : []),
+    { label: '重新生成此轮', icon: RefreshCw, disabled: busy.value, run: () => emit('action', 'regenerate', task) },
+  ]
+  return [...items, { label: '删除此轮消息', icon: Trash2, danger: true, disabled: busy.value, run: remove }]
+})
+watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
 const version = computed(() => mediaVersion(props.conversation, props.task.id))
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
@@ -44,7 +67,7 @@ function remove() {
 </script>
 
 <template>
-  <StudioMessageFrame :role="role" :model="task.model" :created-at="task.createdAt" :class="role === 'user' ? 'creation-request' : 'creation-response'" :aria-label="role === 'user' ? '已发送的创作请求' : '模型生成结果'">
+  <StudioMessageFrame :role="role" :model="task.model" :created-at="task.createdAt" :class="[role === 'user' ? 'creation-request' : 'creation-response', { 'compact-image-response': role === 'assistant' && task.kind === 'image' }]" :aria-label="role === 'user' ? '已发送的创作请求' : '模型生成结果'" tabindex="-1" @contextmenu="openMenu">
     <template #status>
       <template v-if="role === 'assistant'">
         <StudioAiStatus v-if="working" class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="task.kind === 'video' ? '正在生成视频' : task.preview ? '正在生成图片' : undefined" :timer="false" :elapsed="elapsed" />
@@ -76,6 +99,7 @@ function remove() {
       <div v-if="version.total > 1" class="creation-versions" role="group" aria-label="生成版本"><button class="icon-button" type="button" aria-label="上一个版本" title="上一个版本" :disabled="busy || version.index === 0" @click="perform(() => selectMediaVersion(conversation, task.id, -1))"><ChevronLeft :size="16" /></button><output aria-label="当前生成版本">{{ version.index + 1 }} / {{ version.total }}</output><button class="icon-button" type="button" aria-label="下一个版本" title="下一个版本" :disabled="busy || version.index >= version.total - 1" @click="perform(() => selectMediaVersion(conversation, task.id, 1))"><ChevronRight :size="16" /></button></div>
     </template>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <StudioContextMenu ref="menu" :items="menuItems" />
   </StudioMessageFrame>
 </template>
 
@@ -87,6 +111,10 @@ function remove() {
 .creation-turn-tools .icon-button { width: 32px; min-height: 32px; }
 .creation-versions { margin-top: 8px; width: fit-content; }.creation-versions output, .task-elapsed { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .creation-message-actions { margin-top: 12px; gap: 4px 12px; }
+.compact-image-response :deep(.message-heading) { min-height: 28px; margin-bottom: 8px; gap: 6px; }
+.compact-image-response :deep(.message-avatar) { width: 24px; height: 24px; }
+.compact-image-response .creation-message-actions { margin-top: 8px; gap: 4px 8px; }
+.compact-image-response .creation-media { width: min(680px, 100%); grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
 .generation-progress { display: block; width: min(100%, 360px); height: 4px; margin-bottom: 12px; accent-color: var(--muted); }
 .task-status { color: var(--muted); font-size: 12px; }.task-error { color: var(--danger, #b64646); }
 .task-message { color: var(--amber); font-size: 14px; line-height: 24px; margin-block: 0 16px; overflow-wrap: anywhere; }

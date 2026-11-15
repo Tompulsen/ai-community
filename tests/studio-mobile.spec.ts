@@ -52,7 +52,7 @@ test('compact image workspace keeps input and actions usable at phone and keyboa
     await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
     const drawer = page.getByRole('dialog', { name: '工作台侧边栏', exact: true })
     await expect(drawer.getByRole('button', { name: '作品库', exact: true })).toBeVisible()
-    await expect(drawer.getByRole('button', { name: '模型定价', exact: true })).toBeVisible()
+    await expect(drawer.getByRole('button', { name: '模型广场', exact: true })).toBeVisible()
     await drawer.getByRole('button', { name: '关闭侧边栏', exact: true }).click()
     await page.getByRole('button', { name: '高级参数', exact: true }).click()
     await expect(page.getByRole('combobox', { name: '画面比例', exact: true })).toBeVisible()

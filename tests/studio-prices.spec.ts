@@ -44,8 +44,8 @@ async function fixture(page: Page) {
   return { ...account, state }
 }
 async function open(page: Page) {
-  await page.locator('.studio-sidebar').getByRole('button', { name: '模型定价', exact: true }).click()
-  return page.getByRole('region', { name: '模型价格', exact: true })
+  await page.locator('.studio-sidebar').getByRole('button', { name: '模型广场', exact: true }).click()
+  return page.getByRole('region', { name: '模型广场', exact: true })
 }
 test('price cards merge groups, preserve zero and tier charges, copy names and keep the current model first', async ({ page }) => {
   const fixtureState = await fixture(page), catalog = await open(page)

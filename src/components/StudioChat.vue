@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, Quote, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, stopCreation, type CreationTask, type CreationDestination } from '../native-studio'
@@ -31,8 +31,13 @@ import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import StudioMessageFrame from './studio-message/StudioMessageFrame.vue'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 import StudioMediaTurn from './studio-message/StudioMediaTurn.vue'
+import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
+import StudioFollowupSuggestions from './studio-message/StudioFollowupSuggestions.vue'
+import { studioPreferences } from '../studio-preferences'
+import { shouldSubmit } from '../../shared/studio/submit-key'
+import { createImeGuard } from '../../shared/studio/ime-input'
 import { useStudioMaterials } from '../use-studio-materials'
-import type { MessageQuote } from '../../shared/studio/message-quote'
+import { createMessageQuote, type MessageQuote } from '../../shared/studio/message-quote'
 import { isConversationBusy, mediaTasksForConversation } from '../studio-conversations'
 import { clearMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
@@ -50,6 +55,33 @@ const draftQuote = computed({ get: () => current.value?.draftQuote, set: value =
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
 const messagesContent = ref<HTMLElement>()
+const ime = createImeGuard(), dragging = ref(false)
+let dragDepth = 0
+const contextMenu = ref<InstanceType<typeof StudioContextMenu>>(), menuMessage = ref<NativeMessage>(), menuSelection = ref('')
+const menuItems = computed<StudioMenuAction[]>(() => {
+  const chat = current.value, message = menuMessage.value
+  if (!chat || !message || !chat.messages.includes(message)) return []
+  const blocked = Boolean(busy.value || props.sourceBlocked)
+  const quote = createMessageQuote(message, menuSelection.value || messageText(message))
+  return [
+    { label: menuSelection.value ? '复制选中文字' : '复制消息', icon: Copy, run: () => copy(message, menuSelection.value) },
+    ...(quote ? [{ label: '引用消息', icon: Quote, disabled: blocked || props.mode !== 'text', run: () => quoteSelection(quote) }] : []),
+    { label: message.role === 'user' ? '编辑提问' : '编辑回答', icon: Pencil, disabled: blocked, run: () => edit(message) },
+    ...(message.role === 'assistant' ? [{ label: '重新生成回答', icon: RefreshCw, disabled: blocked || !models.value.some(item => item.id === model.value), run: () => regenerate(message) }] : []),
+    { label: '删除消息', icon: Trash2, danger: true, disabled: blocked, run: () => removeMessage(chat, message) },
+  ]
+})
+function openMessageMenu(event: MouseEvent, message: NativeMessage) {
+  if (message.role === 'system') return
+  menuMessage.value = message; menuSelection.value = ''
+  const selection = document.getSelection(), range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+  const root = event.currentTarget as HTMLElement
+  if (range && root.contains(range.startContainer) && root.contains(range.endContainer)) menuSelection.value = selection!.toString()
+  void contextMenu.value?.open(event)
+}
+watch([() => current.value?.id, () => session.user?.id, () => props.mode, () => props.headerVisible], () => {
+  contextMenu.value?.close(); menuMessage.value = undefined; dragging.value = false; dragDepth = 0
+})
 const mediaGallery = ref<InstanceType<typeof StudioGallery>>()
 const transcriptObserver = new ResizeObserver(() => followOutput())
 watch(messagesContent, element => { transcriptObserver.disconnect(); if (element) transcriptObserver.observe(element) }, { flush: 'post' })
@@ -165,13 +197,43 @@ function scrollToBottom() { if (messagesElement.value) messagesElement.value.scr
 function trackScroll() { const el = messagesElement.value; if (el) nearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
 function selectChat(id: string) { historyMenu.value?.close(); emit('conversation', id) }
 function createChat() { newChat(); historyMenu.value?.close(); emit('source') }
-function handleEnter(event: KeyboardEvent) { if (event.isComposing || event.keyCode === 229 || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return; event.preventDefault(); void send() }
-async function addFiles(event: Event) {
-  const input = event.target as HTMLInputElement, owner = session.user?.id
-  const chatId = current.value?.id
+function handleEnter(event: KeyboardEvent) {
+  if (ime.blocks(event)) { if (event.key === 'Enter' && !ime.isComposing(event)) event.preventDefault(); return }
+  if (!shouldSubmit(event, studioPreferences.submitKey, window.matchMedia('(hover: hover) and (pointer: fine)').matches)) return
+  event.preventDefault(); void send()
+}
+async function attachFiles(values: File[]) {
+  if (!current.value || props.mode !== 'text' || busy.value || props.sourceBlocked) return
+  const owner = session.user?.id, id = current.value.id
   error.value = ''
-  try { await materials.add([...(input.files || [])]) }
-  catch (cause) { if (owner === session.user?.id && chatId === current.value?.id) error.value = errorMessage(cause) }
+  try { await materials.add(values) }
+  catch (cause) { if (owner === session.user?.id && id === current.value?.id) error.value = errorMessage(cause) }
+}
+function pasteFiles(event: ClipboardEvent) {
+  const values = [...(event.clipboardData?.files || [])]
+  if (!values.length) return
+  event.preventDefault(); void attachFiles(values)
+}
+function dragEnter(event: DragEvent) {
+  if (props.mode !== 'text' || !event.dataTransfer?.types.includes('Files')) return
+  event.preventDefault(); dragDepth++; dragging.value = !busy.value && !props.sourceBlocked
+}
+function dragOver(event: DragEvent) {
+  if (props.mode !== 'text' || !event.dataTransfer?.types.includes('Files')) return
+  event.preventDefault(); event.dataTransfer.dropEffect = busy.value || props.sourceBlocked ? 'none' : 'copy'
+}
+function dragLeave(event: DragEvent) {
+  if (props.mode !== 'text' || !event.dataTransfer?.types.includes('Files')) return
+  event.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dragging.value = false
+}
+function dropFiles(event: DragEvent) {
+  if (props.mode !== 'text' || !event.dataTransfer?.types.includes('Files')) return
+  event.preventDefault(); dragging.value = false; dragDepth = 0
+  void attachFiles([...event.dataTransfer.files])
+}
+async function addFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  try { await attachFiles([...(input.files || [])]) }
   finally { input.value = '' }
 }
 async function applySourceReferences(selected: WorkFile[]) {
@@ -236,7 +298,13 @@ async function saveEdit(message: NativeMessage, text: string) {
   } catch (cause) { if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause); return false }
 }
 function quoteSelection(quote: MessageQuote) { if (busy.value) return; draftQuote.value = quote; void nextTick(() => composerElement.value?.focus()) }
-async function copy(message: NativeMessage) { try { await navigator.clipboard.writeText(messageText(message)); notify('已复制。') } catch { error.value = '复制失败，请选择内容后复制。' } }
+async function copy(message: NativeMessage, selected = '') { try { await navigator.clipboard.writeText(selected || messageText(message)); notify('已复制。') } catch { error.value = '复制失败，请选择内容后复制。' } }
+async function fillSuggestion(message: NativeMessage, text: string) {
+  if (!current.value || props.mode !== 'text' || busy.value || props.sourceBlocked || message !== current.value.messages.at(-1) || message.interrupted || message.error || pending(message)) return
+  if ((prompt.value.trim() || files.value.length || draftQuote.value) && !confirm('替换当前输入的草稿？附件会保留。')) return
+  prompt.value = text
+  await nextTick(); composerElement.value?.focus()
+}
 async function remove() {
   if (!current.value || !confirm(`删除对话“${current.value.topic}”？`)) return
   const owner = session.user?.id, activeId = chats.activeId
@@ -255,7 +323,8 @@ const hasMedia = computed(() => mediaTasks.value.length > 0)
 defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
 </script>
 <template>
-  <div class="native-chat" aria-label="对话工作台">
+  <div class="native-chat" aria-label="对话工作台" @dragenter="dragEnter" @dragover="dragOver" @dragleave="dragLeave" @drop="dropFiles">
+    <div v-if="dragging" class="attachment-drop-hint" role="status"><Plus :size="24" />添加附件</div>
     <section v-if="current" class="chat-main">
       <Teleport defer to="#studio-header-conversation">
         <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="18" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="19" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="19" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
@@ -270,7 +339,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           <label v-if="selecting" class="creation-select-turn"><input v-model="selectedTurns" type="checkbox" :value="mediaTask(message)!.id" :aria-label="`选择消息：${mediaTask(message)!.prompt}`" /><span class="studio-sr-only">选择此轮</span></label>
           <StudioMediaTurn v-for="role in (['user', 'assistant'] as const)" :key="role" :role="role" :task="mediaTask(message)!" :conversation="current" @action="(action, task, index) => emit('mediaAction', action, task, index)" @publish="(task, destination) => emit('publish', task, destination)" @preview="(task, index) => mediaGallery?.open(task, index)" />
         </div>
-        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role">
+        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
           <template #status><StudioAiStatus v-if="message.role === 'assistant' && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" /></template>
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
           <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
@@ -286,6 +355,7 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
           <StudioMessageSources v-if="message.role === 'assistant' && message.sources?.length" :sources="message.sources" />
           <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
           <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
+          <StudioFollowupSuggestions v-if="mode === 'text' && message.role === 'assistant' && message === current.messages.at(-1) && message.interactions?.suggestions?.length && !pending(message) && !message.interrupted && !message.error" :suggestions="message.interactions.suggestions" :disabled="Boolean(busy || sourceBlocked)" @select="fillSuggestion(message, $event)" />
           <p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p><div v-if="message.role === 'assistant' && message.taskId && !message.streaming && !message.interrupted" class="message-actions"><button class="button subtle btn" @click="download(message)">下载文本</button><button class="button subtle btn" @click="publish(message)">发布作品</button><button v-if="creation.tasks.find(task => task.id === message.taskId)?.sourceWorkId" class="button subtle btn" @click="publish(message, 'source-comment')">发送到源作品评论区</button></div>
           <div class="message-actions">
             <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="15" /></button><button v-if="message.role === 'user' || message.role === 'assistant'" class="icon-button" :title="message.role === 'user' ? '编辑提问' : '编辑回答'" :aria-label="message.role === 'user' ? '编辑提问' : '编辑回答'" :disabled="sourceBlocked || busy || message.role === 'user' && !models.some(item => item.id === model)" @click="edit(message)"><Pencil :size="15" /></button>
@@ -295,11 +365,11 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
         </StudioMessageFrame>
         </template>
         </div>
-      </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
+      </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioBilling v-if="mode === 'text'" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
       <form v-if="mode === 'text'" class="chat-composer studio-composer" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
-        <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown.enter.exact="handleEnter" /></label>
+        <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
         <StudioMaterialStatus :items="materials.snapshot.value.items" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
           <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Sparkles :size="17" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
@@ -321,10 +391,12 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
     <p v-else class="muted" role="status">{{ chats.error || '正在读取对话…' }}</p>
     <StudioMediaPreview ref="attachmentDialog" :items="attachmentItems" :label="attachmentKind === 'image' ? '图片附件预览' : '视频附件预览'" :close-label="attachmentKind === 'image' ? '关闭图片' : '关闭视频'" @close="attachmentImage = undefined" />
     <StudioGallery :key="current?.id" ref="mediaGallery" preview-only />
+    <StudioContextMenu ref="contextMenu" :items="menuItems" />
   </div>
 </template>
 <style scoped>
-.native-chat { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.native-chat { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.attachment-drop-hint { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; gap: 12px; pointer-events: none; border-radius: 8px; background: color-mix(in srgb, var(--surface) 94%, transparent); color: var(--ink); }
 .creation-selection, .creation-select-turn { display: flex; align-items: center; gap: 8px; }.creation-selection { flex: none; min-height: 44px; color: var(--muted); font-size: 13px; }.creation-selection label { display: flex; align-items: center; gap: 8px; }.creation-selection > span { margin-inline-end: auto; }.creation-turn { position: relative; }.creation-select-turn { position: absolute; inset-inline-start: 0; top: 0; min-height: 28px; }.creation-turn:has(> .creation-select-turn) { padding-inline-start: 32px; }
 .chat-main { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .chat-main :deep(.billing-controls) { flex-wrap: wrap; }

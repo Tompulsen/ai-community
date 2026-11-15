@@ -11,6 +11,7 @@ import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
 import { loadSite, site } from './site'
+import { studioSidebarWidth } from './studio-preferences'
 
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
@@ -127,7 +128,7 @@ function restoreMessageTrigger() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px` } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>

@@ -4,6 +4,8 @@ import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { createImeGuard } from '../../shared/studio/ime-input'
 import { insertVideoMention, videoMentionQuery } from '../../shared/studio/video-mentions'
 import { mediaSource } from '../native-studio'
+import { studioPreferences } from '../studio-preferences'
+import { shouldSubmit } from '../../shared/studio/submit-key'
 
 const props = defineProps<{ modelValue: string; references: { name: string; url: string }[] }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string]; submit: []; paste: [event: ClipboardEvent] }>()
@@ -36,14 +38,14 @@ async function choose(number: number) {
 function handleInput(event: Event) { emit('update:modelValue', (event.target as HTMLTextAreaElement).value); updateCursor() }
 function keydown(event: KeyboardEvent) {
   if (ime.blocks(event)) { if (event.key === 'Enter' && !ime.isComposing(event)) event.preventDefault(); return }
-  if (opened.value && !event.shiftKey && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+  if (opened.value && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
     event.preventDefault()
     if (event.key === 'Escape') dismissed.value = true
     else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') selected.value = (selected.value + (event.key === 'ArrowDown' ? 1 : -1) + choices.value.length) % choices.value.length
     else void choose(choices.value[selected.value]?.number || choices.value[0]!.number)
     return
   }
-  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); emit('submit') }
+  if (shouldSubmit(event, studioPreferences.submitKey, window.matchMedia('(hover: hover) and (pointer: fine)').matches)) { event.preventDefault(); emit('submit') }
 }
 watch([opened, choices], async () => { selected.value = Math.max(0, Math.min(selected.value, choices.value.length - 1)); await nextTick(); position() }, { flush: 'post' })
 watch(selected, () => { panel.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) })
