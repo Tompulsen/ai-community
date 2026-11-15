@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Images, Receipt, KeyRound, CircleDollarSign, Settings, PanelLeft, SquarePen } from '@lucide/vue'
 import { api, errorMessage, loadSession, session } from '../state'
+import { chats, saveChats } from '../native-chat'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
 import StudioSidebar from '../components/StudioSidebar.vue'
@@ -86,7 +87,13 @@ function reuse(task: CreationTask) {
   mobileGallery.value?.close(); accountTool.value = ''
   void router.replace({ path: `/create/${task.kind}`, query: { reuse: task.id } })
 }
-function openConversation() { accountTool.value = ''; if (kind.value !== 'text') switchKind('text') }
+function openConversation(id: string) {
+  const selected = chats.sessions.find(chat => chat.id === id)
+  if (!selected) return
+  chats.activeId = id; void saveChats()
+  accountTool.value = ''
+  void router.replace({ path: '/create/text', query: selected.sourceWorkId ? { remix: selected.sourceWorkId } : {} })
+}
 watch([() => route.query.reuse, workspace, chat, () => chat.value?.ready, () => creation.loaded, pendingNew], () => {
   if (!creation.loaded || (kind.value === 'text' ? !chat.value?.ready : !workspace.value)) return
   if (pendingNew.value) {

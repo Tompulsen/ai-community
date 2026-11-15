@@ -3,6 +3,77 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 import { readFile } from 'node:fs/promises'
 import sharp from 'sharp'
 
+test('image, video and text conversations stay in one history across mode switches', async ({ page }) => {
+  const account = await mockUnifiedAccount(page, true)
+  account.state.user.id = '17'
+  let generations = 0
+  const photo = await readFile('public/assets/brand/octopus-community.jpg')
+  await page.route('**/api/creation/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/creation/media') return route.fulfill({ contentType: 'image/jpeg', body: photo })
+    if (path === '/api/creation/generate') generations++
+    return route.fulfill({ json: { tokenId: 41, items: [
+      { id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] },
+    ] } })
+  })
+  await page.addInitScript(() => {
+    const now = Date.now()
+    const task = (id: string, kind: string, prompt: string, createdAt: number, conversationId = id) => ({
+      id, conversationId, owner: '17', kind, model: kind === 'video' ? 'sora-2' : 'gpt-image-2', prompt,
+      createdAt, settledAt: createdAt, phase: 'complete', protocol: 'sync', references: [],
+      urls: ['https://media.example/result.png'], text: '', request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 },
+    })
+    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([
+      task('video-history', 'video', '视频会话', now - 2000),
+      task('image-next', 'image', '图片继续生成', now - 3000, 'image-history'),
+      task('image-history', 'image', '图片会话', now - 4000),
+      task('raw-chat-task', 'text', '内部对话生成任务', now),
+    ]))
+    localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+      _hasHydrated: true, activeId: 'image-history',
+      sessions: [
+        { id: 'image-history', topic: '较早的对话', messages: [{ id: 'question-a', role: 'user', content: '较早的对话内容' }], draft: '较早的草稿', lastUpdate: now - 5000 },
+        { id: 'chat-latest', topic: '最新的对话', messages: [{ id: 'question-b', role: 'user', content: '最新的对话内容' }], draft: '最新的草稿', lastUpdate: now - 1000 },
+      ],
+    } }))
+  })
+  await page.goto('/create/image')
+  const sidebar = page.locator('.studio-sidebar')
+  const records = sidebar.locator('.studio-record')
+  for (const mode of ['图片生成', '视频生成', '对话', '图片生成']) {
+    await page.getByRole('button', { name: /^创作模式：/ }).click()
+    await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: mode, exact: true }).click()
+    await expect(records).toHaveText(['最新的对话', '视频会话', '图片会话', '较早的对话'])
+    await expect(records.locator('img')).toHaveCount(0)
+    await expect(sidebar.getByRole('button', { name: '图片会话', exact: true }).locator('svg')).toHaveCount(1)
+    await expect(sidebar.getByRole('searchbox')).toHaveCount(0)
+  }
+  await sidebar.getByRole('button', { name: '视频会话', exact: true }).click()
+  await expect(page).toHaveURL(/\/create\/video/)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('视频会话')
+  await sidebar.getByRole('button', { name: '较早的对话', exact: true }).click()
+  await expect(page).toHaveURL(/\/create\/text/)
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('较早的草稿')
+  await expect(page.locator('.chat-message.user')).toContainText('较早的对话内容')
+  await sidebar.getByRole('button', { name: '图片会话', exact: true }).click()
+  await expect(page).toHaveURL(/\/create\/image/)
+  await expect(page.locator('.creation-request')).toHaveCount(2)
+  await expect(sidebar.locator('[aria-current="page"]')).toHaveCount(1)
+  await expect(sidebar.getByRole('button', { name: '图片会话', exact: true })).toHaveAttribute('aria-current', 'page')
+  await page.screenshot({ path: '.taste-skill/studio-unified-history-20261115/desktop.png' })
+  await sidebar.getByRole('button', { name: '多选对话', exact: true }).click()
+  await sidebar.getByRole('checkbox', { name: '选择对话：最新的对话', exact: true }).check()
+  page.once('dialog', dialog => dialog.accept())
+  await sidebar.getByRole('button', { name: '删除所选', exact: true }).click()
+  await expect(records).toHaveCount(3)
+  await expect(page).toHaveURL(/\/create\/image/)
+  await expect(page.locator('.creation-request')).toHaveCount(2)
+  account.state.user.id = '18'; account.state.user.accountId = '18'
+  await page.reload()
+  await expect(records).not.toContainText(['最新的对话', '视频会话', '图片会话', '较早的对话'])
+  expect(generations).toBe(0)
+})
+
 for (const shape of ['portrait', 'square', 'landscape', 'multiple'] as const) {
   test(`generated ${shape} images keep their intrinsic proportions and matching preview frames`, async ({ page }) => {
     const account = await mockUnifiedAccount(page, true)
@@ -92,7 +163,8 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   await expect(page.getByRole('button', { name: '图库与任务管理', exact: true })).toHaveCount(0)
   const sidebar = page.getByRole('complementary', { name: '创作导航与历史' })
   await expect(sidebar).toBeVisible()
-  await sidebar.getByRole('searchbox').fill('灯塔')
+  await expect(sidebar.getByRole('heading', { name: '创作记录', exact: true })).toHaveCount(0)
+  await expect(sidebar.getByRole('searchbox')).toHaveCount(0)
   await sidebar.getByRole('button', { name: '海边的灯塔', exact: true }).click()
   await expect(page.getByRole('heading', { name: '今天', exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '图片创作', exact: true })).toHaveCount(0)

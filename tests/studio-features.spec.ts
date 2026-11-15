@@ -224,7 +224,7 @@ test('stopping during persistence and switching identity during initialization p
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   state.state.user.id = '18'; state.state.user.accountId = '18'
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(0)
+  await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(0)
   await page.evaluate(() => { (window as unknown as { slowWrites: boolean }).slowWrites = false })
   await expect.poll(() => page.evaluate(() => (window as unknown as { pendingWrites: number }).pendingWrites)).toBe(0)
   expect(state.calls.filter(call => ['/api/creation/search', '/api/creation/generate'].includes(call.path))).toHaveLength(0)

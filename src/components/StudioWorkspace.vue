@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
-import { ArrowUp, Check, Clock, Download, LoaderCircle, Maximize, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
+import { ArrowUp, Check, Clock, Download, LoaderCircle, Pencil, Play, Plus, SlidersHorizontal, Square, Upload, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, session, uploadFile } from '../state'
 import { creation, creationConversationId, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, resumeCreation, stopCreation, submitCreation, type CreationTask, type CreationDestination } from '../native-studio'
@@ -222,7 +222,7 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
               <p v-if="now - selected.createdAt >= 30000" class="long-wait">等待时间较长，你可以继续编辑提示词或停止本页等待，稍后查询这次任务。</p>
             </div>
             <img v-if="selected.preview && selected.phase !== 'complete'" class="stream-preview" :src="selected.preview" alt="生成中的预览" />
-            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /><span><Maximize :size="16" />查看大图</span></button></figure></div>
+            <div v-if="selected.urls.length" class="creation-media"><figure v-for="(url, index) in selected.urls" :key="url"><video v-if="selected.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><button v-else class="creation-image-preview" :aria-label="`查看大图：预览生成图片 ${index + 1}`" @click="gallery?.open(selected, index)"><img :src="mediaSource(url)" :alt="selected.prompt" /></button></figure></div>
             <div v-else-if="selected.text" class="creation-text"><pre>{{ selected.text }}</pre></div>
             <div v-if="selected.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
               <button class="studio-tool" @click="openPublish(selected)"><Upload :size="15" />发布作品</button>
@@ -310,7 +310,6 @@ defineExpose({ newCreation, useTask, applySourceReferences, referenceUrls, uploa
 .generation-feedback .long-wait { margin-top: 20px; font-size: 14px; }
 .creation-response > .creation-message-actions { margin-top: 12px; }
 .creation-image-preview { position: relative; display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
-.creation-image-preview > span { position: absolute; right: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 6px; background: var(--canvas); color: var(--ink); padding: 6px 10px; border-radius: 6px; font-size: 12px; }
 .creation-image-preview:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
 .composer-hint { color: var(--muted); font-size: 12px; line-height: 20px; margin: 4px 8px 0; }
 @media (hover: none), (pointer: coarse) { .keyboard-hint { display: none; } }

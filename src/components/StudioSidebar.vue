@@ -1,42 +1,18 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { CircleDollarSign, Compass, FileText, FolderOpen, LoaderCircle, Search, Sparkles, SquarePen, Video } from '@lucide/vue'
+import { watch } from 'vue'
+import { CircleDollarSign, Compass, FolderOpen, Sparkles, SquarePen } from '@lucide/vue'
 import { session } from '../state'
 import { site } from '../site'
-import { chats, loadChats, saveChats } from '../native-chat'
-import { creation, creationConversationId, initializeCreation, mediaSource, type CreationTask } from '../native-studio'
+import { loadChats } from '../native-chat'
+import { initializeCreation, type CreationTask } from '../native-studio'
 import type { StudioKind } from '../studio-state'
 import StudioConversations from './StudioConversations.vue'
 
-const props = defineProps<{ kind: StudioKind; accountTool: string }>()
+defineProps<{ kind: StudioKind; accountTool: string }>()
 const emit = defineEmits<{ kind: [value: StudioKind]; new: []; reuse: [task: CreationTask]; prices: []; conversation: [id: string] }>()
-const query = ref('')
-const conversations = computed(() => {
-  const groups = new Map<string, { task: CreationTask; title: string; active: boolean; working: boolean; matches: boolean }>()
-  const search = query.value.toLowerCase()
-  for (const task of creation.tasks) {
-    if (task.kind !== props.kind || task.owner !== session.user?.id) continue
-    const id = creationConversationId(task)
-    let group = groups.get(id)
-    if (!group) {
-      group = { task, title: '', active: false, working: false, matches: false }
-      groups.set(id, group)
-    }
-    group.title = task.prompt || task.model
-    group.active ||= task.id === creation.selectedId
-    group.working ||= task.phase === 'running' || task.phase === 'submitting'
-    group.matches ||= task.prompt.toLowerCase().includes(search)
-  }
-  return [...groups.values()].filter(group => group.matches)
-})
 watch(() => session.user?.id, async id => {
   if (id) { await initializeCreation(); await loadChats() }
 }, { immediate: true })
-function selectConversation(id: string) {
-  chats.activeId = id
-  void saveChats()
-  emit('conversation', id)
-}
 </script>
 
 <template>
@@ -50,12 +26,8 @@ function selectConversation(id: string) {
       <RouterLink to="/discover"><Compass :size="20" /><span>探索社区</span></RouterLink>
       <RouterLink to="/library"><FolderOpen :size="20" /><span>我的作品</span></RouterLink>
     </nav>
-    <section class="studio-sidebar-history" :aria-label="kind === 'text' ? '对话记录' : '创作记录'">
-      <h2>{{ kind === 'text' ? '对话记录' : '创作记录' }}</h2>
-      <StudioConversations v-if="kind === 'text'" @select="selectConversation" />
-      <template v-else><label class="studio-history-search"><Search :size="15" /><input v-model="query" aria-label="搜索创作记录" placeholder="搜索记录" type="search" /></label>
-        <div class="studio-sidebar-records"><button v-for="conversation in conversations" :key="creationConversationId(conversation.task)" class="studio-record" :class="{ active: conversation.active }" :title="conversation.title" @click="emit('reuse', conversation.task)"><img v-if="conversation.task.kind === 'image' && conversation.task.urls[0]" :src="mediaSource(conversation.task.urls[0], true)" alt="" loading="lazy" /><Video v-else-if="conversation.task.kind === 'video'" :size="17" /><FileText v-else :size="17" /><span>{{ conversation.title }}</span><LoaderCircle v-if="conversation.working" :size="14" /></button><p v-if="!conversations.length" class="studio-sidebar-empty">{{ query ? '没有匹配的记录' : '暂无创作记录' }}</p></div>
-      </template>
+    <section class="studio-sidebar-history" aria-label="会话记录">
+      <StudioConversations unified :kind="kind" @select="emit('conversation', $event)" @reuse="emit('reuse', $event)" />
     </section>
     <div class="studio-sidebar-bottom"><button @click="emit('prices')"><CircleDollarSign :size="18" />模型定价</button><div id="studio-sidebar-menu" /></div>
   </aside>
@@ -70,14 +42,6 @@ function selectConversation(id: string) {
 .studio-sidebar-links a:hover, .studio-sidebar-create:hover, .studio-sidebar-bottom > :is(button, a):hover { background: var(--surface-soft); color: var(--ink); }
 .studio-sidebar-create.active { color: var(--ink); }
 .studio-sidebar-history { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 32px; }
-.studio-sidebar-history h2 { padding: 0 12px; margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 20px; }
-.studio-history-search { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 12px; color: var(--muted); }
-.studio-history-search input { width: 100%; min-width: 0; padding: 8px 0; border: 0; background: transparent; outline: none; font-size: 12px; }.studio-history-search:focus-within { outline: 2px solid var(--focus-ring); border-radius: 6px; }
-.studio-sidebar-records { overflow-y: auto; min-height: 0; margin-top: 8px; scrollbar-color: var(--border) transparent; }
-.studio-record { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 8px 12px; text-align: left; border-radius: 8px; color: var(--muted); }
-.studio-record > img { flex: none; width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }.studio-record > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.studio-record.active, .studio-record:hover { color: var(--ink); background: var(--surface-soft); }
-.studio-sidebar-empty { padding: 8px 12px; font-size: 12px; line-height: 20px; color: var(--muted); }
 .studio-sidebar-bottom { display: grid; gap: 4px; padding-top: 16px; }
 #studio-sidebar-menu:empty { display: none; }
 #studio-sidebar-menu :deep(> .studio-tool) { justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 12px; font-size: 14px; border-radius: 8px; }
