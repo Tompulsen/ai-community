@@ -1,5 +1,5 @@
 // Vue/store adapter of octopus_chat chat.ts, chat-projects.ts and chat-list.tsx (MIT).
-import { chats, createEmptyChat, newChat, saveChats, type NativeChat, type NativeMessage } from './native-chat'
+import { chats, conversationBusy, conversationMediaTasks, createEmptyChat, newChat, saveChats, type NativeChat, type NativeMessage } from './native-chat'
 import { creation, type CreationKind, type CreationTask } from './native-studio'
 import { session } from './state'
 import { chatProjectNameSchema } from '../shared/studio/chat-projects'
@@ -12,20 +12,17 @@ function requireReady() {
   if (!owner() || !chats.ready) throw new Error('会话尚未读取，请稍后重试。')
 }
 function mediaChat(kind: 'image' | 'video', id: string) {
-  return chats.sessions.find(chat => conversationKind(chat) === kind && (chat.mediaConversationId || chat.id) === id)
+  return chats.sessions.find(chat => chat.id === id) ||
+    chats.sessions.find(chat => conversationKind(chat) === kind && (chat.mediaConversationId || chat.id) === id)
 }
 export function conversationKind(chat: NativeChat): CreationKind {
   return chat.creationKind === 'image' || chat.creationKind === 'video' ? chat.creationKind : 'text'
 }
 export function mediaTasksForConversation(chat: NativeChat): CreationTask[] {
-  const kind = conversationKind(chat)
-  if (kind === 'text') return []
-  return creation.tasks.filter(task => task.owner === owner() && task.kind === kind &&
-    taskConversationId(task) === (chat.mediaConversationId || chat.id)).sort((left, right) => right.createdAt - left.createdAt)
+  return conversationMediaTasks(chat).sort((left, right) => right.createdAt - left.createdAt)
 }
 export function isConversationBusy(chat: NativeChat) {
-  return Boolean(chats.busy[chat.id] || chat.messages.some(message => message.streaming) ||
-    mediaTasksForConversation(chat).some(task => ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+  return conversationBusy(chat)
 }
 export function attachMediaTask(chat: NativeChat, task: CreationTask) {
   if (chat.deletedMediaTaskIds?.includes(task.id) || branchMessages(chat).some(message => (message as NativeMessage).taskId === task.id && message.role === 'assistant')) return false
@@ -50,7 +47,10 @@ export async function syncMediaConversations() {
   if (!owner() || !chats.ready || !creation.loaded) return
   const grouped = new Map<string, CreationTask[]>()
   for (const task of creation.tasks) {
-    if (task.owner !== owner() || task.kind === 'text') continue
+    if (task.owner !== owner() || task.kind === 'text' || task.conversationPending) continue
+    // Registered mixed turns already belong to their canonical conversation, including archived branches.
+    if (chats.sessions.some(chat => chat.deletedMediaTaskIds?.includes(task.id) ||
+      (branchMessages(chat) as NativeMessage[]).some(message => message.taskId === task.id))) continue
     const key = mediaKey(task.kind, taskConversationId(task))
     if (chats.deletedMediaConversationIds.includes(key)) continue
     const tasks = grouped.get(key) || []
@@ -104,10 +104,10 @@ export function ensureMediaConversation(kind: 'image' | 'video', existingTask?: 
     // Explicitly reopening a gallery item is allowed; ordinary sync respects tombstones.
     if (chats.deletedMediaConversationIds.includes(key)) chats.deletedMediaConversationIds = chats.deletedMediaConversationIds.filter(id => id !== key)
     void syncMediaConversations()
-    const existing = mediaChat(kind, taskConversationId(existingTask))
+    const existing = chats.sessions.find(chat => (branchMessages(chat) as NativeMessage[]).some(message => message.taskId === existingTask.id)) || mediaChat(kind, taskConversationId(existingTask))
     if (existing) { activateConversation(existing.id); creation.selectedId = existingTask.id; return existing }
   } else {
-    const active = chats.sessions.find(chat => chat.id === chats.activeId && conversationKind(chat) === kind)
+    const active = chats.sessions.find(chat => chat.id === chats.activeId)
     if (active) return active
   }
   return newChat(kind)

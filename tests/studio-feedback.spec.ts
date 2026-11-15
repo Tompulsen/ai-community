@@ -90,7 +90,7 @@ test('thinking dots move only while visible and turn static when the page is hid
   expect(await orb.evaluate((element: HTMLCanvasElement) => element.toDataURL())).toBe(frozen)
 })
 
-test('real stream packets drive measured speed independently of the visible typing buffer', async ({ page }) => {
+test('stream packets retain response metrics without displaying output speed', async ({ page }) => {
   await page.addInitScript(() => {
     const original = window.fetch
     window.fetch = async (...args: Parameters<typeof fetch>) => {
@@ -111,13 +111,12 @@ test('real stream packets drive measured speed independently of the visible typi
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect.poll(() => page.evaluate(() => typeof (window as any).__feedbackPacket)).toBe('function')
   await page.evaluate(() => (window as any).__feedbackPacket({ type: 'delta', text: '开始', reasoning: '' }))
-  await expect(page.locator('.generation-speed')).toHaveText('— tok/s')
+  await expect(page.locator('.generation-speed')).toHaveCount(0)
   await page.waitForTimeout(100)
   const text = '真实流式回答。'.repeat(100)
   await page.evaluate(text => (window as any).__feedbackPacket({ type: 'delta', text, reasoning: '' }), text)
-  await expect(page.locator('.generation-speed')).toHaveText(/^约 \d+\.\d tok\/s$/)
   await page.evaluate(text => (window as any).__feedbackPacket({ type: 'result', status: 'succeeded', outputs: [{ text }], usage: { outputTokens: 100 } }, true), text)
-  await expect(page.locator('.generation-speed')).toHaveText(/^\d+\.\d tok\/s$/)
+  await expect(page.locator('.generation-speed')).toHaveCount(0)
   await expect(page.locator('.chat-message.assistant .message-content > .studio-markdown-body')).toHaveText(text)
   expect(await page.evaluate(async () => {
     const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-chat\.ts(?:\?|$)/.test(name)).at(-1)!
@@ -193,11 +192,11 @@ test('reasoning and tool panels animate, restore focus and follow native details
   await expect(tool.locator('.studio-collapse')).not.toHaveAttribute('inert', '')
 })
 
-test('compression and measured output remain compact across themes and mobile widths', async ({ page }) => {
+test('compression feedback remains compact across themes and mobile widths without output speed', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await fixture(page, [{ ...answer, content: '这里是输出预览。'.repeat(12), reasoning: '先确认用户目标，再组织回答。', contextCompressed: true, responseMetrics: { usage: { outputTokens: 80 }, generationDurationMs: 2000 } }])
-  await expect(page.locator('.generation-speed')).toHaveText('40.0 tok/s')
+  await expect(page.locator('.generation-speed')).toHaveCount(0)
   await patchAnswer(page, { contextCompressing: true, contextCompressed: false, streaming: true })
   await expect(page.locator('.context-compression-notice')).toContainText('上下文正在压缩')
   await patchAnswer(page, { contextCompressing: false, contextCompressed: true, streaming: false })

@@ -78,10 +78,11 @@ test('gallery reads cursor pages without duplicate timestamps and combines model
   await expect(library.locator('.gallery-item')).toHaveCount(45)
   await library.getByRole('searchbox', { name: '搜索生成记录', exact: true }).fill('作品 01')
   await expect(library.locator('.gallery-item')).toHaveCount(5)
+  await library.getByRole('button', { name: '批量选择', exact: true }).click()
   await library.getByRole('checkbox', { name: '选择 作品 018', exact: true }).check()
   await library.getByRole('searchbox', { name: '搜索生成记录', exact: true }).fill('不存在的作品')
   await expect(library.locator('.gallery-item')).toHaveCount(0)
-  await expect(library.locator('.batch-toolbar')).toContainText('已选 0')
+  await expect(library.locator('.gallery-item.selected')).toHaveCount(0)
   expect(generationCalls).toHaveLength(0)
 })
 
@@ -102,7 +103,7 @@ test('image thumbnails are reduced to 384px, persisted across reload, and origin
   await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1280)
   expect(mediaReads).toHaveLength(1)
   await page.getByRole('button', { name: '关闭媒体预览', exact: true }).click()
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await expect(reopened).toBeVisible()
   await mkdir('.taste-skill/media-library-20261115', { recursive: true })
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
@@ -141,12 +142,14 @@ test('video covers skip a black intro, show actual duration and reuse the cached
 
 test('automatic original download preference is persisted per account without re-downloading old records', async ({ page }) => {
   const { library, generationCalls } = await fixture(page, 1)
+  await library.getByRole('button', { name: '作品库设置', exact: true }).click()
   const preference = library.getByRole('switch', { name: '自动下载原文件', exact: true })
   await expect(preference).toBeChecked()
   await preference.uncheck()
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-media-settings') || '{}').autoDownload)).toBe(false)
   await page.reload()
   await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await page.getByRole('button', { name: '作品库设置', exact: true }).click()
   await expect(page.getByRole('switch', { name: '自动下载原文件', exact: true })).not.toBeChecked()
   expect(generationCalls).toHaveLength(0)
 })

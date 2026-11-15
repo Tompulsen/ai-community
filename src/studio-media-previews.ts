@@ -2,9 +2,9 @@
 import type { CreationTask } from './native-studio'
 import { taskAssetUrl } from './studio-task-store'
 
-export function mediaPreviewIdentity(task: CreationTask) {
-  const source = task.urls[0] || ''
-  return JSON.stringify([task.kind, source.startsWith('data:image/') ? taskAssetUrl(task.id, 0) : source])
+export function mediaPreviewIdentity(task: CreationTask, index = 0) {
+  const source = task.urls[index] || ''
+  return JSON.stringify([task.kind, source.startsWith('data:image/') ? taskAssetUrl(task.id, index) : source])
 }
 export async function imageThumbnail(blob: Blob, signal: AbortSignal): Promise<Blob> {
   signal.throwIfAborted()

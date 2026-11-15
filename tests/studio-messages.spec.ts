@@ -337,7 +337,7 @@ test('generation shows stage and timer before completion, then offers a collapse
   })
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('分析一下')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  const status = page.locator('.chat-message.assistant > .ai-status')
+  const status = page.locator('.chat-message.assistant .message-heading .ai-status')
   await expect(status).toContainText('正在思考')
   await expect(status.locator('.ai-elapsed')).not.toHaveText('0s')
   release()

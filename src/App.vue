@@ -149,7 +149,7 @@ function restoreMessageTrigger() {
       </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
     </div></header>
     <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
-    <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${route.path}:${session.user?.id || 'guest'}`" /></main>
+    <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
     <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>
@@ -169,7 +169,7 @@ function restoreMessageTrigger() {
   .studio-shell .brand, .studio-shell .desktop-nav { display: none; }
   .studio-shell .header-tools { grid-column: 2; }
 }
-@media (max-width: 639px) {
+@media (max-width: 999px) {
   :global(#app:has(.studio-shell)) { padding-bottom: 0; }
   .studio-shell { height: var(--studio-visible-height, 100dvh); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   .studio-shell > .app-header, .studio-shell > .mobile-nav { display: none; }

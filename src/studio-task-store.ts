@@ -152,6 +152,10 @@ export async function readTaskSnapshot(owner: string): Promise<CreationTask[] | 
 export function saveTaskSnapshot(owner: string, tasks: CreationTask[]): Promise<void> {
   return saveCapturedTaskSnapshot(owner, captureTaskSnapshot(owner, tasks))
 }
+function clearTaskPreviews(store: IDBObjectStore, owner: string, id: string) {
+  store.delete([owner, id])
+  store.delete(IDBKeyRange.bound([owner, `${id}:`], [owner, `${id}:\uffff`]))
+}
 export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<string, string>): Promise<void> {
   checkOwner(owner)
   const values = new Map(captured)
@@ -169,14 +173,14 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     const transaction = db.transaction(['tasks', 'meta', 'originals', 'previews'], 'readwrite'), done = completed(transaction)
     const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), previews = transaction.objectStore('previews')
     for (const id of removed) {
-      records.delete([owner, id]); previews.delete([owner, id])
+      records.delete([owner, id]); clearTaskPreviews(previews, owner, id)
       // Other turns can still reference this task's original image.
     }
     for (const { record, assets } of prepared) {
       const previous = records.get([owner, record.id])
       previous.onsuccess = () => {
         const stored = previous.result as TaskRecord | undefined
-        if (stored && stored.mediaIdentity !== record.mediaIdentity) previews.delete([owner, record.id])
+        if (stored && stored.mediaIdentity !== record.mediaIdentity) clearTaskPreviews(previews, owner, record.id)
       }
       records.put(record)
       for (const asset of assets) originals.put(asset)
@@ -192,14 +196,35 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
   writes.set(owner, pending)
   return pending
 }
+export function galleryOutputIndexes(task: CreationTask) {
+  if (task.galleryHidden || task.kind === 'text' || task.phase !== 'complete') return []
+  const hidden = new Set(Array.isArray(task.galleryHiddenIndices) ? task.galleryHiddenIndices : [])
+  return task.urls.map((_, index) => index).filter(index => !hidden.has(index))
+}
+export async function getTaskStorageSize(owner: string) {
+  checkOwner(owner)
+  const db = await database(), transaction = db.transaction(['originals', 'previews']), done = completed(transaction)
+  let bytes = 0
+  for (const name of ['originals', 'previews']) {
+    const request = transaction.objectStore(name).openCursor(IDBKeyRange.bound([owner, ''], [owner, '\uffff']))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      bytes += (cursor.value as AssetRecord | PreviewRecord).blob.size
+      cursor.continue()
+    }
+  }
+  await done
+  return bytes
+}
 export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   checkOwner(owner)
   await writes.get(owner)?.catch(() => {})
   const db = await database(), transaction = db.transaction('tasks'), done = completed(transaction)
   const limit = Math.min(200, Math.max(1, Math.floor(options.limit || 60))), query = options.query?.trim().toLowerCase() || ''
   const tasks: CreationTask[] = [], models = new Set<string>()
-  let total = 0, more = false
-  const base = (task: CreationTask) => (!options.kind || task.kind === options.kind) && (!options.gallery || task.kind !== 'text' && task.phase === 'complete')
+  let total = 0, mediaCount = 0, more = false
+  const base = (task: CreationTask) => (!options.kind || task.kind === options.kind) && (!options.gallery || galleryOutputIndexes(task).length > 0)
   const matches = (task: CreationTask) => base(task) && (!options.phase || task.phase === options.phase) && (!options.model || task.model === options.model)
     && (!options.since || task.createdAt >= options.since) && (!query || `${task.prompt} ${task.model}`.toLowerCase().includes(query))
   const index = transaction.objectStore('tasks').index('ownerCreatedAtId')
@@ -209,7 +234,7 @@ export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
     if (!cursor) return
     const task = (cursor.value as TaskRecord).value
     if (base(task)) models.add(task.model)
-    if (matches(task)) total++
+    if (matches(task)) { total++; mediaCount += galleryOutputIndexes(task).length }
     cursor.continue()
   }
   const range = options.after
@@ -228,7 +253,7 @@ export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   }
   await done
   const last = tasks.at(-1)
-  return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), total, models: [...models].sort() }
+  return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), total, mediaCount, models: [...models].sort() }
 }
 export async function readTaskAsset(owner: string, url: string, preview = false): Promise<Blob | undefined> {
   checkOwner(owner)
@@ -241,22 +266,23 @@ export async function readTaskAsset(owner: string, url: string, preview = false)
   }
   return (await read<AssetRecord>(db.transaction('originals').objectStore('originals'), [owner, `${key[1]}:${key[2]}`]))?.blob
 }
-export async function saveTaskPreview(owner: string, id: string, mediaIdentity: string, blob: Blob, duration?: number) {
+export async function saveTaskPreview(owner: string, id: string, mediaIdentity: string, blob: Blob, duration?: number, index = 0) {
   checkOwner(owner)
+  if (!Number.isInteger(index) || index < 0) throw new Error('作品序号无效。')
   if (!/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size || blob.size > 4 * 1024 ** 2) throw new Error('作品缩略图无效或超过 4 MB。')
   const db = await database(), transaction = db.transaction(['tasks', 'previews'], 'readwrite'), done = completed(transaction)
   const request = transaction.objectStore('tasks').get([owner, id])
   request.onsuccess = () => {
     const task = (request.result as TaskRecord | undefined)?.value
-    if (!task || JSON.stringify([task.kind, task.urls[0]]) !== mediaIdentity) return
-    transaction.objectStore('previews').put({ owner, id, identity: mediaIdentity, blob,
+    if (!task || JSON.stringify([task.kind, task.urls[index]]) !== mediaIdentity) return
+    transaction.objectStore('previews').put({ owner, id: index ? `${id}:${index}` : id, identity: mediaIdentity, blob,
       ...(Number.isFinite(duration) && duration! > 0 ? { duration } : {}) } satisfies PreviewRecord)
   }
   await done
 }
-export async function readTaskPreview(owner: string, id: string, mediaIdentity: string): Promise<{ blob: Blob; duration?: number } | undefined> {
+export async function readTaskPreview(owner: string, id: string, mediaIdentity: string, index = 0): Promise<{ blob: Blob; duration?: number } | undefined> {
   checkOwner(owner)
   const db = await database()
-  const value = await read<PreviewRecord>(db.transaction('previews').objectStore('previews'), [owner, id])
+  const value = await read<PreviewRecord>(db.transaction('previews').objectStore('previews'), [owner, index ? `${id}:${index}` : id])
   return value?.identity === mediaIdentity ? { blob: value.blob, ...(value.duration === undefined ? {} : { duration: value.duration }) } : undefined
 }

@@ -1,0 +1,181 @@
+import { expect, test, type Page } from '@playwright/test'
+import { mkdir, readFile } from 'node:fs/promises'
+import sharp from 'sharp'
+import { mockUnifiedAccount } from './helpers/account-fixture'
+
+async function fixture(page: Page, kind: 'image' | 'video' = 'image') {
+  const account = await mockUnifiedAccount(page, true)
+  account.state.user.id = '17'
+  const image = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#287acc' } }).jpeg().toBuffer()
+  const video = await readFile('tests/fixtures/poster-black-intro.mp4')
+  await page.route('**/api/creation/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/creation/models') return route.fulfill({ json: { tokenId: 41, items: [
+      { id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] },
+    ] } })
+    if (url.pathname === '/api/creation/media') return route.fulfill({
+      contentType: url.searchParams.get('kind') === 'video' ? 'video/mp4' : 'image/jpeg',
+      body: url.searchParams.get('kind') === 'video' ? video : image,
+    })
+    return route.fulfill({ json: {} })
+  })
+  await page.addInitScript(({ kind }) => {
+    if (sessionStorage.getItem('media-preview-fixture')) return
+    sessionStorage.setItem('media-preview-fixture', '1')
+    const now = Date.now()
+    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
+      id: 'preview-task', owner: '17', kind, model: kind === 'image' ? 'gpt-image-2' : 'sora-2',
+      prompt: '预览作品', createdAt: now, settledAt: now, phase: 'complete', protocol: 'sync',
+      references: [], text: '', urls: kind === 'image' ? ['https://media.example/first.jpg', 'https://media.example/second.jpg'] : ['https://media.example/video.mp4'],
+      request: {},
+    }]))
+    localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+      _hasHydrated: true, activeId: 'preview-text', mediaConversationsMigrated: true,
+      sessions: [{ id: 'preview-text', creationKind: 'text', topic: '预览测试', model: 'gpt-5', lastUpdate: now, settings: {}, skillIds: [], messages: [] }],
+    } }))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      write: async (items: ClipboardItem[]) => { (window as any).copiedImageTypes = items.map(item => item.types) },
+    } })
+  }, { kind })
+  await page.setViewportSize({ width: 390, height: 900 })
+  await page.goto('/create/text', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await page.getByRole('button', { name: '预览 预览作品', exact: true }).click()
+  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+  await expect(viewer).toBeVisible()
+  return { viewer, image, video }
+}
+
+test('shared gallery viewer preserves original pixels, zooms, pans, changes items, downloads and copies', async ({ page }) => {
+  const { viewer, image } = await fixture(page)
+  const picture = viewer.locator('img'), percent = viewer.getByRole('status', { name: '缩放比例', exact: true })
+  await expect.poll(() => picture.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+  await expect(percent).toHaveText('100%')
+  await viewer.getByRole('button', { name: '放大', exact: true }).click()
+  await expect(percent).toHaveText('150%')
+  const content = viewer.locator('.lightbox-content')
+  const box = (await content.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 35, box.y + box.height / 2 + 20)
+  await expect(content).toHaveClass(/is-dragging/)
+  await page.mouse.up()
+  await expect(content).not.toHaveClass(/is-dragging/)
+  await expect(picture).toHaveAttribute('style', /translate\(35px, 20px\)/)
+  await content.dispatchEvent('pointercancel', { pointerId: 91 })
+  await viewer.getByRole('button', { name: '下一张', exact: true }).click()
+  await expect(percent).toHaveText('100%')
+  await expect(viewer.getByRole('combobox', { name: '预览图片序号', exact: true })).toHaveValue('1')
+  await content.dblclick()
+  await expect(percent).toHaveText('250%')
+  await content.dblclick()
+  await expect(percent).toHaveText('100%')
+  await content.dispatchEvent('wheel', { deltaY: -10000 })
+  await expect(percent).toHaveText('500%')
+  await expect(viewer.getByRole('button', { name: '放大', exact: true })).toBeDisabled()
+  await content.dispatchEvent('wheel', { deltaY: 10000 })
+  await expect(percent).toHaveText('50%')
+  await expect(viewer.getByRole('button', { name: '缩小', exact: true })).toBeDisabled()
+  await viewer.getByRole('button', { name: '复制图片', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).copiedImageTypes)).toEqual([['image/png']])
+  const downloadPromise = page.waitForEvent('download')
+  await viewer.getByRole('button', { name: '下载原文件', exact: true }).click()
+  const download = await downloadPromise
+  const downloaded = await readFile((await download.path())!)
+  expect(downloaded.equals(image)).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(viewer).not.toBeVisible()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+})
+
+test('video viewer uses native controls and releases playback resources on close', async ({ page }) => {
+  const { viewer } = await fixture(page, 'video')
+  const video = viewer.locator('video')
+  await expect(video).toBeVisible()
+  await expect(video).toHaveAttribute('controls', '')
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThanOrEqual(2)
+  await video.evaluate(async (element: HTMLVideoElement) => {
+    const previous = document.createElement('video')
+    previous.src = element.src; previous.muted = true; previous.loop = true
+    document.body.append(previous); (window as any).previousVideo = previous
+    await previous.play()
+  })
+  expect(await page.evaluate(() => (window as any).previousVideo.paused)).toBe(false)
+  await video.evaluate((element: HTMLVideoElement) => element.play())
+  await expect.poll(() => page.evaluate(() => (window as any).previousVideo.paused)).toBe(true)
+  await video.evaluate((element: HTMLVideoElement) => { (window as any).previewVideo = element })
+  await viewer.getByRole('button', { name: '关闭媒体预览', exact: true }).click()
+  await expect(viewer).not.toBeVisible()
+  expect(await page.evaluate(() => {
+    const element = (window as any).previewVideo as HTMLVideoElement
+    return { paused: element.paused, source: element.getAttribute('src'), connected: element.isConnected }
+  })).toEqual({ paused: true, source: null, connected: false })
+})
+
+test('viewer resolves delayed stored assets, rejects unsafe sources and closes on owner changes', async ({ page }) => {
+  await fixture(page)
+  await page.keyboard.press('Escape')
+  await page.evaluate(async () => {
+    const vuePath = '/node_modules/.vite/deps/vue.js', componentPath = '/src/components/studio-message/StudioMediaPreview.vue'
+    const { createApp, h, ref, nextTick } = await import(vuePath)
+    const { default: Preview } = await import(componentPath)
+    const handle = ref(), items = ref([{ src: undefined, kind: 'image', alt: '延迟图片' }])
+    const host = document.createElement('div'); document.body.append(host)
+    const app = createApp({ render: () => h(Preview, { ref: handle, items: items.value, label: '独立预览' }) })
+    app.mount(host); await nextTick(); await handle.value.open()
+    ;(window as any).previewHarness = { handle, items, app, host }
+  })
+  const viewer = page.getByRole('dialog', { name: '独立预览', exact: true })
+  await expect(viewer.getByRole('status').filter({ hasText: '正在加载原文件' })).toBeVisible()
+  await page.evaluate(async () => {
+    const { items } = (window as any).previewHarness
+    const response = await fetch('/api/creation/media?url=https://media.example/stored.jpg&kind=image')
+    items.value = [{ src: URL.createObjectURL(await response.blob()), kind: 'image', alt: '延迟图片' }]
+  })
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+  await page.evaluate(() => { (window as any).previewHarness.items.value = [{ src: 'javascript:alert(1)', kind: 'image' }] })
+  await expect(viewer.locator('img')).toHaveCount(0)
+  await expect(viewer.getByRole('button', { name: '下载原文件', exact: true })).toBeDisabled()
+  await page.evaluate(async () => {
+    const statePath = '/src/state.ts', { session } = await import(statePath)
+    session.user = { ...session.user, id: 'other-owner' }
+  })
+  await expect(viewer).not.toBeVisible()
+})
+
+test('full-screen viewer fits desktop and narrow mobile, honors reduced motion and retries failed media', async ({ page }) => {
+  const { viewer } = await fixture(page)
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+  await mkdir('.taste-skill/unified-dialogue-20261115', { recursive: true })
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '作品库', exact: true }).click()
+    await page.getByRole('button', { name: '预览 预览作品', exact: true }).click()
+    await expect(viewer).toBeVisible()
+    await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+    const layout = await viewer.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      const controls = element.querySelector('.lightbox-controls')!.getBoundingClientRect()
+      const image = element.querySelector('img')!.getBoundingClientRect()
+      return { width: bounds.width, height: bounds.height, controlsLeft: controls.left, controlsRight: controls.right, controlsTop: controls.top, imageBottom: image.bottom }
+    })
+    expect(layout.width).toBe(width)
+    expect(layout.height).toBe(900)
+    expect(layout.controlsLeft).toBeGreaterThanOrEqual(0)
+    expect(layout.controlsRight).toBeLessThanOrEqual(width)
+    expect(layout.imageBottom).toBeLessThan(layout.controlsTop)
+    await page.screenshot({ path: `.taste-skill/unified-dialogue-20261115/media-viewer-${width}.png` })
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await viewer.locator('img').evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s')
+  await viewer.locator('img').dispatchEvent('error')
+  await expect(viewer.getByRole('status').filter({ hasText: '图片加载失败' })).toContainText('重新加载')
+  await viewer.getByRole('button', { name: '重新加载', exact: true }).click()
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+  await viewer.locator('.lightbox-stage').click({ position: { x: 1, y: 1 } })
+  await expect(viewer).not.toBeVisible()
+})

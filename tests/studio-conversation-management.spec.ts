@@ -44,8 +44,9 @@ async function fixture(page: Page, mode = 'image') {
       ],
     } }))
   })
-  await page.goto(`/create/${mode}`)
+  await page.goto('/create/text')
   await expect(page.locator('.studio-sidebar .conversation-record')).toHaveCount(5)
+  if (mode !== 'text') await page.locator('.studio-sidebar').getByRole('button', { name: mode === 'video' ? '视频会话A' : '图片会话A', exact: true }).click()
   return { ...account, calls }
 }
 async function snapshot(page: Page, key = 'native-chat') {
@@ -81,7 +82,7 @@ async function select(page: Page, names: string[]) {
 for (const [mode, original] of [['text', '文字会话A'], ['image', '图片会话A'], ['video', '视频会话A']] as const) {
   test(`${mode} shows a shared editable conversation heading and persists the renamed title`, async ({ page }) => {
     const state = await fixture(page, mode)
-    const title = page.locator('.conversation-title-editor')
+    const title = page.locator('.conversation-title-editor:visible')
     await expect(title).toHaveCount(1)
     await title.getByRole('button', { name: `重命名会话：${original}`, exact: true }).click()
     const input = title.getByRole('textbox', { name: '会话名称', exact: true })
@@ -101,7 +102,7 @@ for (const [mode, original] of [['text', '文字会话A'], ['image', '图片会�
 }
 
 test('the conversation heading validates empty names, cancels edits and saves on blur without touching the draft', async ({ page }) => {
-  const state = await fixture(page, 'text'), title = page.locator('.conversation-title-editor')
+  const state = await fixture(page, 'text'), title = page.locator('.conversation-title-editor:visible')
   await title.getByRole('button').click()
   const input = title.getByRole('textbox', { name: '会话名称', exact: true })
   await input.fill(' ')
@@ -126,7 +127,7 @@ test('long conversation names fit mobile and desktop in text, image and video wi
   await mkdir(directory, { recursive: true })
   for (const mode of ['text', 'image', 'video']) {
     await page.goto(`/create/${mode}`)
-    const title = page.locator('.conversation-title-editor')
+    const title = page.locator('.conversation-title-editor:visible')
     await title.getByRole('button').click()
     await title.getByRole('textbox', { name: '会话名称', exact: true }).fill('会话名称'.repeat(25))
     await title.getByRole('textbox', { name: '会话名称', exact: true }).press('Enter')
@@ -186,7 +187,7 @@ test('switching from text to media and deleting an active text conversation navi
   await expect(page.locator('.creation-request')).toHaveCount(2)
   await sidebar.getByRole('button', { name: '文字会话A', exact: true }).click()
   await page.setViewportSize({ width: 800, height: 900 })
-  await page.getByRole('button', { name: '对话菜单', exact: true }).click()
+  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
   page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '删除对话', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/video/)
@@ -264,7 +265,8 @@ test('renaming an image conversation persists while further generations append t
 test('new media conversations reserve a stable ID for the first and subsequent turns', async ({ page }) => {
   await fixture(page)
   const sidebar = page.locator('.studio-sidebar')
-  await sidebar.getByRole('button', { name: '新建创作', exact: true }).click()
+  await expect(sidebar.locator('.studio-sidebar-brand').getByRole('button')).toHaveCount(0)
+  await sidebar.getByRole('navigation', { name: '工作台导航' }).getByRole('button', { name: '新对话', exact: true }).click()
   const message = page.getByRole('textbox', { name: '提示词', exact: true })
   for (const prompt of ['新的独立创作', '独立创作的第二轮']) {
     await message.fill(prompt)
@@ -344,10 +346,10 @@ test('projects group all conversation kinds and support batch move, single move,
 test('phone history manages image sessions and keeps undo reachable after deleting the current conversation', async ({ page }) => {
   const state = await fixture(page)
   await page.setViewportSize({ width: 800, height: 900 })
-  await page.getByRole('button', { name: '历史对话', exact: true }).click()
-  const history = page.getByRole('dialog', { name: '历史对话', exact: true })
+  await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+  const history = page.getByRole('dialog', { name: '工作台侧边栏', exact: true })
   await expect(history.locator('.conversation-record')).toHaveCount(5)
-  await history.getByRole('button', { name: '关闭历史对话', exact: true }).click()
+  await history.getByRole('button', { name: '关闭侧边栏', exact: true }).click()
   await page.setViewportSize({ width: 320, height: 844 })
   const toolbarButtons = await page.locator('.studio-page-toolbar button').evaluateAll(elements => elements.filter(element => element.getClientRects().length).map(element => {
     const { left, right } = element.getBoundingClientRect()
@@ -355,7 +357,7 @@ test('phone history manages image sessions and keeps undo reachable after deleti
   }))
   expect(toolbarButtons.every(bounds => bounds.left >= 0 && bounds.right <= 320)).toBe(true)
   expect(toolbarButtons.every((bounds, index) => index === 0 || bounds.left >= toolbarButtons[index - 1]!.right)).toBe(true)
-  await page.getByRole('button', { name: '历史对话', exact: true }).click()
+  await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
   await history.getByRole('button', { name: '多选对话', exact: true }).click()
   await expect(history.getByRole('checkbox')).toHaveCount(5)
   await history.getByRole('checkbox', { name: '选择对话：图片会话A', exact: true }).check()
@@ -370,7 +372,7 @@ test('phone history manages image sessions and keeps undo reachable after deleti
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
   state.state.user.id = '18'; state.state.user.accountId = '18'
   await page.reload()
-  await page.getByRole('button', { name: '历史对话', exact: true }).click()
+  await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
   await expect(history.getByRole('button', { name: '图片会话A', exact: true })).toHaveCount(0)
   await expect(history.getByRole('button', { name: '撤销删除', exact: true })).toHaveCount(0)
   expect(state.calls).toHaveLength(0)

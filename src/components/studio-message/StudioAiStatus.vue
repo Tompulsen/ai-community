@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AlertCircle, BrainCircuit, Check, Globe2, PencilLine } from '@lucide/vue'
 import StudioMatrixOrb from './StudioMatrixOrb.vue'
 
-const props = withDefaults(defineProps<{ state?: 'thinking' | 'researching' | 'writing' | 'done' | 'error'; label?: string; timer?: boolean }>(), { state: 'thinking', timer: true })
+const props = withDefaults(defineProps<{ state?: 'thinking' | 'researching' | 'writing' | 'done' | 'error'; label?: string; timer?: boolean; elapsed?: string }>(), { state: 'thinking', timer: true })
 const seconds = ref(0), active = computed(() => props.state !== 'done' && props.state !== 'error')
 const labels = { thinking: '正在思考', researching: '正在搜索', writing: '正在生成', done: '已完成', error: '执行失败' }
 const icons = { thinking: BrainCircuit, researching: Globe2, writing: PencilLine, done: Check, error: AlertCircle }
@@ -23,7 +23,7 @@ onBeforeUnmount(() => clearInterval(interval))
   <span class="ai-status" :data-state="state" :data-active="active" role="status">
     <StudioMatrixOrb v-if="state === 'thinking'" /><component v-else :is="icons[state]" :size="16" aria-hidden="true" />
     <span>{{ label ?? labels[state] }}</span>
-    <span v-if="timer && active" class="ai-elapsed" aria-hidden="true">{{ seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s` }}</span>
+    <span v-if="elapsed || timer && active" class="ai-elapsed" :class="{ 'task-elapsed': elapsed }" aria-hidden="true">{{ elapsed || (seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`) }}</span>
   </span>
 </template>
 

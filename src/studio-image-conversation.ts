@@ -1,14 +1,14 @@
 // Conversation and branch adaptation of Octopus Chat's MIT chat store.
 import { branchMessages, answerBranches, selectAnswerBranch, synchronizeBranches } from '../shared/studio/chat-branches'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { chats, saveChats, type NativeChat, type NativeMessage } from './native-chat'
+import { chats, conversationBusy, saveChats, type NativeChat, type NativeMessage } from './native-chat'
 import { creation, type CreationTask } from './native-studio'
-import { attachMediaTask, conversationKind, mediaTasksForConversation } from './studio-conversations'
+import { attachMediaTask, mediaTasksForConversation } from './studio-conversations'
 import { session } from './state'
 
 const saving = new WeakSet<NativeChat>()
 function registered(chat: NativeChat) {
-  if (!session.user || !chats.ready || !chats.sessions.includes(chat) || conversationKind(chat) === 'text') throw new Error('当前创作会话不可用。')
+  if (!session.user || !chats.ready || !chats.sessions.includes(chat)) throw new Error('当前创作会话不可用。')
 }
 function snapshot(chat: NativeChat) {
   return {
@@ -24,6 +24,8 @@ async function savedMutation(chat: NativeChat, update: () => void) {
   registered(chat)
   if (saving.has(chat)) throw new Error('会话正在保存，请稍后再操作。')
   const owner = session.user!.id, before = snapshot(chat)
+  const alreadyPreparing = chats.preparing[chat.id]
+  chats.preparing[chat.id] = true
   saving.add(chat)
   try { update(); await saveChats(true) }
   catch (error) {
@@ -31,7 +33,10 @@ async function savedMutation(chat: NativeChat, update: () => void) {
       Object.assign(chat, before); synchronizeBranches(chat)
     }
     throw error
-  } finally { saving.delete(chat) }
+  } finally {
+    saving.delete(chat)
+    if (!alreadyPreparing && session.user?.id === owner) chats.preparing[chat.id] = false
+  }
 }
 export function visibleMediaTasks(chat: NativeChat): CreationTask[] {
   if (!session.user || !chats.sessions.includes(chat)) return []
@@ -66,7 +71,7 @@ export function imageContinuationReferences(chat: NativeChat, beforeTaskId?: str
 }
 export async function registerMediaTurn(chat: NativeChat, task: CreationTask, branchTaskId?: string, edited?: boolean) {
   registered(chat)
-  if (task.owner !== session.user!.id || task.kind !== conversationKind(chat) || (task.conversationId || task.id) !== (chat.mediaConversationId || chat.id)) throw new Error('生成记录不属于当前会话。')
+  if (task.owner !== session.user!.id || task.kind === 'text' || (task.conversationId || task.id) !== (chat.mediaConversationId || chat.id)) throw new Error('生成记录不属于当前会话。')
   if (branchTaskId && !task.mediaBranch) task.mediaBranch = { taskId: branchTaskId, edited }
   await savedMutation(chat, () => {
     attachMediaTask(chat, task)
@@ -87,7 +92,8 @@ export function mediaVersion(chat: NativeChat, taskId: string) {
   return { index: Math.max(0, versions.findIndex(message => message.id === answer?.id)), total: Math.max(1, versions.length), messageIds: versions.map(message => message.id) }
 }
 function ensureSettled(chat: NativeChat) {
-  if (mediaTasksForConversation(chat).some(task => ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+  if (saving.has(chat)) throw new Error('会话正在保存，请稍后再操作。')
+  if (conversationBusy(chat))
     throw new Error('请先完成生成或核对待确认的任务。')
 }
 export async function selectMediaVersion(chat: NativeChat, taskId: string, direction: -1 | 1) {

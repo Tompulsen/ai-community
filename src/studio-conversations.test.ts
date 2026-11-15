@@ -203,9 +203,11 @@ it('validates names and rolls management changes back after storage failures', a
   await expect(p.reorderConversation(before[0]!, before[1]!)).rejects.toThrow()
   expect(p.chats.sessions.map(chat => chat.id)).toEqual(before)
 })
-it('does not restore another account during a failed management write and rejects sending text to a media chat', async () => {
+it('does not restore another account during a failed management write and blocks text while media is preparing', async () => {
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
-  expect(await p.sendChat(image, 'wrong mode', [], 'model')).toBe(false)
+  p.chats.preparing[image.id] = true
+  expect(await p.sendChat(image, 'wait for registration', [], 'model')).toBe(false)
+  p.chats.preparing[image.id] = false
   let fail!: (error: Error) => void
   storage.write.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject }))
   const moving = p.createConversationProject('旧账号项目')
@@ -213,4 +215,52 @@ it('does not restore another account during a failed management write and reject
   p.session.user = { id: '18' } as any; fail(new Error('disk full'))
   await expect(moving).rejects.toThrow()
   expect(p.chats.sessions).toEqual([]); expect(p.chats.projects).toEqual([])
+})
+it('reuses the active conversation for all modes and never migrates pending tasks into a second session', async () => {
+  const p = await fixture(), chat = p.newChat()
+  expect(p.ensureMediaConversation('image').id).toBe(chat.id)
+  expect(p.ensureMediaConversation('video').id).toBe(chat.id)
+  p.creation.tasks.push({ ...task('not-registered', 'image', chat.id), conversationPending: true })
+  await p.syncMediaConversations()
+  expect(p.chats.sessions).toHaveLength(1)
+  expect(chat.messages).toEqual([])
+  expect(p.chats.activeId).toBe(chat.id)
+})
+it('keeps mixed media, archived versions and deletion tombstones in the original text conversation', async () => {
+  const p = await fixture(), chat = p.newChat()
+  const image = task('mixed-image', 'image', chat.id), video = task('mixed-video', 'video', chat.id, 2)
+  p.creation.tasks.push(image, video)
+  p.attachMediaTask(chat, image); p.attachMediaTask(chat, video)
+  await p.syncMediaConversations()
+  expect(p.chats.sessions).toHaveLength(1)
+  expect(p.mediaTasksForConversation(chat).map(task => task.id)).toEqual(['mixed-video', 'mixed-image'])
+  video.phase = 'running'
+  expect(p.isConversationBusy(chat)).toBe(true)
+  await expect(p.removeChats([chat.id])).rejects.toThrow('核对')
+  video.phase = 'complete'
+  await p.removeChats([chat.id])
+  expect(p.chats.deletedMediaConversationIds.sort()).toEqual([`image:${chat.id}`, `video:${chat.id}`].sort())
+  await p.syncMediaConversations()
+  expect(p.chats.sessions).toHaveLength(1)
+  expect(p.chats.sessions[0]!.messages).toEqual([])
+  await p.undoRemovedChats()
+  expect(p.chats.sessions.find(item => item.id === chat.id)?.messages).toHaveLength(4)
+})
+it('keeps a media draft typed into the fallback conversation when undoing deletion', async () => {
+  const p = await seed()
+  await p.removeChats(p.chats.sessions.map(chat => chat.id))
+  const fallback = p.chats.sessions[0]!
+  fallback.mediaDrafts = { image: { prompt: '新的图片草稿', references: [] } }
+  await p.undoRemovedChats()
+  expect(p.chats.sessions.find(chat => chat.id === fallback.id)?.mediaDrafts?.image?.prompt).toBe('新的图片草稿')
+})
+it('does not assign newly generated copy tasks to the original legacy conversation', async () => {
+  const p = await seed(), original = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  p.cloneChat(original)
+  const copy = p.chats.sessions.find(chat => chat.id === p.chats.activeId)!
+  const generated = task('copy-only', 'image', copy.mediaConversationId!, 4)
+  p.creation.tasks.push(generated); p.attachMediaTask(copy, generated)
+  await p.syncMediaConversations()
+  expect(p.mediaTasksForConversation(original).some(task => task.id === generated.id)).toBe(false)
+  expect(p.mediaTasksForConversation(copy).some(task => task.id === generated.id)).toBe(true)
 })

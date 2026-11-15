@@ -8,16 +8,18 @@ import { readTaskAsset, readTaskPreview, saveTaskPreview } from '../studio-task-
 import { imageThumbnail, mediaPreviewIdentity } from '../studio-media-previews'
 import { extractVideoPoster } from '../studio-video-poster'
 
-const props = defineProps<{ task: CreationTask }>()
+const props = withDefaults(defineProps<{ task: CreationTask; index?: number; selecting?: boolean; selected?: boolean }>(), { index: 0 })
 const emit = defineEmits<{ open: [] }>()
 const element = ref<HTMLElement>(), source = ref(''), duration = ref<number>(), loading = ref(false), error = ref(''), retry = ref(0)
-const identity = computed(() => mediaPreviewIdentity(props.task))
+const identity = computed(() => mediaPreviewIdentity(props.task, props.index))
+const previewLabel = computed(() => `预览 ${props.task.prompt}${props.index > 0 ? ` · ${props.index + 1}` : ''}`)
 const durationLabel = computed(() => duration.value === undefined ? '' : `${Math.floor(duration.value / 60)}:${String(Math.floor(duration.value % 60)).padStart(2, '0')}`)
 let dispose = () => {}
-watch([() => session.user?.id, () => props.task.id, identity, retry, element], () => {
+watch([() => session.user?.id, () => props.task.id, () => props.index, identity, retry, element], () => {
   dispose(); source.value = ''; duration.value = undefined; error.value = ''; loading.value = false
-  const owner = session.user?.id, task = props.task, acceptedIdentity = identity.value
-  if (!owner || task.owner !== owner || !element.value) return
+  const owner = session.user?.id, task = props.task, index = props.index, acceptedIdentity = identity.value
+  const url = task.urls[index]
+  if (!owner || task.owner !== owner || !element.value || !url) return
   const controller = new AbortController()
   let objectUrl = '', observer: IntersectionObserver | undefined, started = false
   const current = () => !controller.signal.aborted && session.user?.id === owner && props.task.id === task.id && identity.value === acceptedIdentity
@@ -25,19 +27,19 @@ watch([() => session.user?.id, () => props.task.id, identity, retry, element], (
     if (started || !current()) return
     started = true; observer?.disconnect(); loading.value = true
     try {
-      let cached = retry.value ? undefined : await readTaskPreview(owner, task.id, acceptedIdentity)
+      let cached = retry.value ? undefined : await readTaskPreview(owner, task.id, acceptedIdentity, index)
       if (!current()) return
       if (!cached) {
-        const original = await readTaskAsset(owner, task.urls[0]!)
+        const original = await readTaskAsset(owner, url)
         if (!current()) return
         if (task.kind === 'video') {
           const temporary = original ? URL.createObjectURL(original) : undefined
-          try { cached = await extractVideoPoster(temporary || await readableMedia(task.urls[0]!, 'video'), controller.signal) }
+          try { cached = await extractVideoPoster(temporary || await readableMedia(url, 'video'), controller.signal) }
           finally { if (temporary) URL.revokeObjectURL(temporary) }
         } else {
           let blob = original
           if (!blob) {
-            const response = await fetch(await readableMedia(task.urls[0]!, 'image', task.urls[0]!.startsWith('legacy-gallery:')), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
+            const response = await fetch(await readableMedia(url, 'image', url.startsWith('legacy-gallery:')), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
             if (!response.ok) throw new Error('缩略图加载失败，可重试或查看原图。')
             blob = await response.blob()
           }
@@ -45,7 +47,7 @@ watch([() => session.user?.id, () => props.task.id, identity, retry, element], (
         }
         if (!current()) return
         // A failed optional cover write never blocks opening or publishing the original.
-        await saveTaskPreview(owner, task.id, acceptedIdentity, cached.blob, cached.duration).catch(() => {})
+        await saveTaskPreview(owner, task.id, acceptedIdentity, cached.blob, cached.duration, index).catch(() => {})
       }
       if (!current()) return
       objectUrl = URL.createObjectURL(cached.blob); source.value = objectUrl; duration.value = cached.duration
@@ -64,21 +66,21 @@ onBeforeUnmount(() => dispose())
 
 <template>
   <div ref="element" class="gallery-cover">
-    <button v-if="source" class="cover-preview" type="button" :aria-label="`预览 ${task.prompt}`" @click="emit('open')">
+    <button v-if="source" class="cover-preview" type="button" :aria-label="selecting ? `选择 ${task.prompt}${task.urls.length > 1 ? ` · ${index + 1}` : ''}` : previewLabel" :aria-pressed="selecting ? selected : undefined" @click="emit('open')">
       <img :src="source" :alt="task.prompt" decoding="async" @error="error = '封面无法显示，请重新加载。'; source = ''" />
       <Play v-if="task.kind === 'video'" :size="24" class="cover-play" aria-hidden="true" /><Maximize v-else :size="16" class="cover-expand" aria-hidden="true" />
       <span v-if="durationLabel" class="cover-duration" aria-label="实际视频时长">{{ durationLabel }}</span>
     </button>
     <div v-else class="cover-empty">
-      <button class="cover-await" type="button" :aria-label="`预览 ${task.prompt}`" @click="emit('open')"><LoaderCircle v-if="loading" :size="22" aria-hidden="true" /><Video v-else-if="task.kind === 'video'" :size="24" aria-hidden="true" /><Image v-else :size="24" aria-hidden="true" /></button>
+      <button class="cover-await" type="button" :aria-label="previewLabel" @click="emit('open')"><LoaderCircle v-if="loading" :size="22" aria-hidden="true" /><Video v-else-if="task.kind === 'video'" :size="24" aria-hidden="true" /><Image v-else :size="24" aria-hidden="true" /></button>
       <span v-if="loading" class="studio-sr-only" role="status">正在加载封面</span>
-      <template v-if="error"><button class="icon-button" type="button" :title="error" :aria-label="`重新加载封面：${task.prompt}`" @click="retry++"><RefreshCw :size="17" /></button><button class="cover-original" type="button" @click="emit('open')">查看原{{ task.kind === 'video' ? '视频' : '图' }}</button></template>
+      <template v-if="error"><button class="icon-button" type="button" :title="error" :aria-label="`重新加载封面：${task.prompt}`" @click.stop="retry++"><RefreshCw :size="17" /></button><button class="cover-original" type="button" @click="emit('open')">查看原{{ task.kind === 'video' ? '视频' : '图' }}</button></template>
     </div>
   </div>
 </template>
 
 <style scoped>
-.gallery-cover { position: relative; width: 100%; aspect-ratio: 1; min-width: 0; overflow: hidden; background: var(--surface-soft); border-radius: 6px; margin-top: 8px; }
+.gallery-cover { position: relative; width: 100%; aspect-ratio: 1; min-width: 0; overflow: hidden; background: var(--surface-soft); }
 .cover-preview { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: white; cursor: zoom-in; }
 .cover-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .cover-play, .cover-expand { position: absolute; padding: 6px; box-sizing: content-box; border-radius: 6px; background: rgb(0 0 0 / 70%); color: white; }

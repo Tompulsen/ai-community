@@ -1,5 +1,31 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test('multi-output gallery metadata preserves original indexes, cached bytes and neighboring task previews', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'one', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'three',
+      urls: ['https://media.example/0.jpg', 'https://media.example/1.jpg', 'https://media.example/2.jpg'], galleryHiddenIndices: [] as number[] }
+    const neighbor = { ...task, id: 'one-other', createdAt: 2, urls: ['https://media.example/other.jpg'], galleryHidden: true }
+    await store.saveTaskSnapshot('17', [task, neighbor])
+    for (const index of [0, 1, 2]) await store.saveTaskPreview('17', task.id, JSON.stringify(['image', task.urls[index]]), new Blob(['thumbnail'], { type: 'image/webp' }), undefined, index)
+    await store.saveTaskPreview('17', neighbor.id, JSON.stringify(['image', neighbor.urls[0]]), new Blob(['neighbor'], { type: 'image/webp' }))
+    task.galleryHiddenIndices = [1]
+    await store.saveTaskSnapshot('17', [task, neighbor])
+    const page = await store.getTaskPage('17', { gallery: true })
+    const indexes = store.galleryOutputIndexes(page.tasks[0])
+    const retained = await store.readTaskPreview('17', task.id, JSON.stringify(['image', task.urls[1]]), 1)
+    const bytes = await store.getTaskStorageSize('17'), foreignBytes = await store.getTaskStorageSize('18')
+    task.urls[1] = 'https://media.example/changed.jpg'
+    await store.saveTaskSnapshot('17', [task, neighbor])
+    const old = await store.readTaskPreview('17', task.id, JSON.stringify(['image', task.urls[2]]), 2)
+    const neighborPreview = await store.readTaskPreview('17', neighbor.id, JSON.stringify(['image', neighbor.urls[0]]))
+    return { total: page.total, mediaCount: page.mediaCount, indexes, retained: await retained?.blob.text(),
+      bytes, foreignBytes, cleared: old === undefined, neighbor: await neighborPreview?.blob.text() }
+  })
+  expect(result).toEqual({ total: 1, mediaCount: 2, indexes: [0, 2], retained: 'thumbnail', bytes: 35, foreignBytes: 0, cleared: true, neighbor: 'neighbor' })
+})
+
 async function fixture(page: Page) {
   await page.route('**/__task-store-check', route => route.fulfill({
     contentType: 'text/html', body: '<!doctype html><html><head><title>Storage fixture</title></head><body></body></html>',

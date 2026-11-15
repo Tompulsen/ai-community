@@ -29,6 +29,21 @@ async function fixture() {
   storage.write.mockClear()
   return { ...chat, ...media, ...logic, session, creation, thread }
 }
+it('registers image and video turns in a text conversation and reuses text generation afterward', async () => {
+  const p = await fixture(), mixed = p.newChat()
+  const image = task('mixed-image', mixed.id, 4), video = task('mixed-video', mixed.id, 5, { kind: 'video' })
+  p.creation.tasks.push(image, video)
+  await p.registerMediaTurn(mixed, image); await p.registerMediaTurn(mixed, video)
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(mixed).map(task => task.id)).toEqual(['mixed-image', 'mixed-video'])
+  expect(p.buildImageContext(mixed).turns.map(turn => turn.prompt)).toEqual(['mixed-image'])
+  expect(p.chats.sessions.filter(chat => p.mediaTasksForConversation(chat).some(task => task.id === image.id))).toHaveLength(1)
+  await p.deleteMediaTurns(mixed, [image.id])
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(mixed).map(task => task.id)).toEqual(['mixed-video'])
+  expect(await p.sendChat(mixed, '继续对话', [], 'gpt-5')).toBe(true)
+  expect(mixed.messages.some(message => message.role === 'user' && message.content === '继续对话')).toBe(true)
+})
 it('builds completed visible image context and the last original image without crossing owner or conversation', async () => {
   const p = await fixture()
   p.creation.tasks.push(task('foreign', p.thread.id, 4, { owner: '18' }), task('other-chat', 'other', 5), task('waiting', p.thread.id, 6, { phase: 'attention', urls: ['https://example.test/preview.png'] }))

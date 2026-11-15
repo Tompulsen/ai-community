@@ -42,6 +42,8 @@ export interface CreationTask {
   responseMetrics?: ChatResponseMetrics
   preview?: string
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
+  galleryHidden?: boolean
+  galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
   error?: string
   sourceWorkId?: string
@@ -80,7 +82,7 @@ export const creation = reactive({
   groupsLoading: false, groupSwitching: false, groupsError: '',
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
 })
-export const mediaSettings = reactive({ autoDownload: true, loaded: false })
+export const mediaSettings = reactive({ autoDownload: true, autoSaveGallery: true, loaded: false })
 const controllers = new Map<string, AbortController>()
 const downloads = new Map<string, { controller: AbortController; promise: Promise<void> }>()
 const localMedia = reactive<Record<string, string>>({})
@@ -151,10 +153,21 @@ export function canonicalCreationTask(task: CreationTask) {
   if (!current) { creation.tasks.push(task); current = creation.tasks.at(-1)! }
   return current
 }
-export async function updateMediaSettings(enabled: boolean) {
-  if (!activeOwner() || typeof enabled !== 'boolean') throw new Error('当前账号不可用。')
-  localStorage.setItem(`octopus:user-${activeOwner()}:native-media-settings`, JSON.stringify({ autoDownload: enabled }))
-  mediaSettings.autoDownload = enabled; mediaSettings.loaded = true
+export async function updateMediaSettings(patch: boolean | { autoDownload?: boolean; autoSaveGallery?: boolean }) {
+  if (!activeOwner()) throw new Error('当前账号不可用。')
+  const values = typeof patch === 'boolean' ? { autoDownload: patch } : patch
+  if (!values || Object.values(values).some(value => typeof value !== 'boolean')) throw new Error('保存设置无效。')
+  const next = { autoDownload: mediaSettings.autoDownload, autoSaveGallery: mediaSettings.autoSaveGallery, ...values }
+  localStorage.setItem(`octopus:user-${activeOwner()}:native-media-settings`, JSON.stringify(next))
+  Object.assign(mediaSettings, next, { loaded: true })
+}
+export async function hideGalleryOutputs(items: { task: CreationTask; index: number }[]) {
+  const pending = items.map(({ task, index }) => {
+    if (!Number.isInteger(index) || !task.urls[index]) throw new Error('作品不存在，请重新打开作品库。')
+    return { task: canonicalCreationTask(task), index }
+  })
+  for (const { task, index } of pending) task.galleryHiddenIndices = [...new Set([...(task.galleryHiddenIndices || []), index])].sort((a, b) => a - b)
+  await persist(true)
 }
 function validTask(value: unknown): value is CreationTask {
   return record(value) && validId(value.id) && ['image', 'video', 'text'].includes(String(value.kind))
@@ -248,6 +261,13 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
   return `/api/creation/media?${new URLSearchParams({ url, kind })}`
 }
 export async function readableMedia(url: string, kind: CreationKind, preview = false) {
+  if (url.startsWith('blob:')) return url
+  if (typeof location !== 'undefined') {
+    try {
+      const direct = new URL(url, location.href)
+      if (direct.origin === location.origin && ['/api/creation/', '/legacy-files/', '/assets/'].some(path => direct.pathname.startsWith(path))) return direct.href
+    } catch { /* Other media keeps using the existing safe proxy. */ }
+  }
   let source = url.startsWith('legacy-gallery:') ? await gallerySource(url, preview) : mediaSource(url, false, kind)
   if (url.startsWith('studio-asset:') && !source) {
     const key = `${activeOwner()}:${url}:original`
@@ -270,18 +290,21 @@ async function portableImage(url: string) {
   })
 }
 export async function copyCreationImage(task: CreationTask, index = 0) {
+  if (task.owner !== activeOwner() || !task.urls[index]) throw new Error('图片不属于当前账号。')
+  return copyMediaImage(task.urls[index]!)
+}
+export async function copyMediaImage(url: string) {
   const accepted = activeOwner(), version = epoch
-  if (task.owner !== accepted || !task.urls[index]) throw new Error('图片不属于当前账号。')
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('浏览器不支持复制图片，请下载图片。')
   // Supply the promise during the click gesture; loading original bytes can take time.
   const image = (async () => {
-    const response = await fetch(await readableMedia(task.urls[index]!, 'image'), { credentials: 'same-origin' })
+    const response = await fetch(await readableMedia(url, 'image'), { credentials: 'same-origin' })
     if (!response.ok) throw new Error('图片无法读取。')
     const blob = await response.blob()
     if (!blob.type.startsWith('image/')) throw new Error('图片格式无效。')
     const bitmap = await createImageBitmap(blob)
     try {
-      if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
+      if (version !== epoch || accepted !== activeOwner()) throw new Error('账号已切换，请重新操作。')
       const canvas = document.createElement('canvas')
       canvas.width = bitmap.width; canvas.height = bitmap.height
       const context = canvas.getContext('2d')
@@ -495,6 +518,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
     ...(input.mediaBranch ? { mediaBranch: input.mediaBranch } : {}),
+    ...(input.kind !== 'text' && !mediaSettings.autoSaveGallery ? { galleryHidden: true } : {}),
     ...(input.kind !== 'text' && onUpdate ? { conversationPending: true } : {}),
     request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
       protocol: input.protocol === 'async' ? 'async' : 'openai',
@@ -773,13 +797,15 @@ async function autoDownloadCreation(task: CreationTask) {
   try { await saveCreationLocally(task) }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
-export async function downloadCreation(task: CreationTask, index = 0) {
+export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal) {
+  signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   const version = epoch
   const url = task.urls[index]
-  const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin' }) : undefined
+  const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
   const blob = response ? await response.blob() : new Blob([task.text], { type: 'text/markdown' })
+  signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   requestDownload(blob, task, index)
 }
@@ -850,9 +876,13 @@ watch(() => activeOwner(), next => {
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
   creation.historyRevision++
-  mediaSettings.loaded = false; mediaSettings.autoDownload = true
+  mediaSettings.loaded = false; mediaSettings.autoDownload = true; mediaSettings.autoSaveGallery = true
   if (next) {
-    try { mediaSettings.autoDownload = JSON.parse(localStorage.getItem(`octopus:user-${next}:native-media-settings`) || 'null')?.autoDownload !== false }
+    try {
+      const saved = JSON.parse(localStorage.getItem(`octopus:user-${next}:native-media-settings`) || 'null')
+      mediaSettings.autoDownload = saved?.autoDownload !== false
+      mediaSettings.autoSaveGallery = saved?.autoSaveGallery !== false
+    }
     catch { /* Invalid preferences use the original automatic-download default. */ }
     mediaSettings.loaded = true
   }

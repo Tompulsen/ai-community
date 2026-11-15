@@ -141,7 +141,7 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
   try {
     await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
     await expect(page.locator('.creation-response')).toContainText('fixture-image')
-    await expect(page.locator('.task-elapsed')).toContainText(/已等待/)
+    await expect(page.locator('.task-elapsed')).toContainText(/\d+s/)
     await page.getByRole('textbox', { name: '提示词', exact: true }).fill('下一幅想画海边的小狗')
     await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
     await expect(page.locator('.generation-button')).toHaveAccessibleName('停止等待')
@@ -233,11 +233,11 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await page.getByRole('button', { name: '查看大图：预览生成图片 1', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '原始媒体预览' })).toBeVisible()
   await page.getByRole('button', { name: '放大', exact: true }).click()
-  await expect(page.locator('.media-lightbox output')).toHaveText('125%')
+  await expect(page.locator('.media-lightbox output')).toHaveText('150%')
   await page.keyboard.press('Escape')
-  await page.getByRole('complementary', { name: '创作导航与历史' }).getByRole('button', { name: '新建创作', exact: true }).click()
+  await page.getByRole('navigation', { name: '工作台导航' }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(prompt).toHaveValue('')
-  await expect(page.locator('.canvas-empty')).toContainText('开始图片创作')
+  await expect(page.locator('.chat-empty')).toContainText('开始新的对话')
   await page.locator('.studio-sidebar .studio-record[data-kind="image"]').filter({ hasText: '可复用的小猫提示词' }).click()
   await expect(page.locator('.creation-request')).toContainText('可复用的小猫提示词')
   expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(1)
@@ -310,7 +310,7 @@ test('switching accounts while recovering never displays the previous account re
   try {
     state.state.user.id = '18'
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-    await expect(page.locator('.canvas-empty')).toBeVisible()
+  await expect(page.locator('.chat-empty')).toBeVisible()
   } finally { release() }
   await expect(page.locator('.creation-request')).toHaveCount(0)
   await expect(page.locator('.creation-media')).toHaveCount(0)
@@ -503,7 +503,7 @@ test('retired composite owners are discarded instead of being migrated into the 
   })
   await page.goto('/create/image')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(0)
-  await expect(page.locator('.creation-canvas')).toContainText('开始图片创作')
+  await expect(page.locator('.chat-messages')).toContainText('开始新的对话')
   expect(state.calls.filter(call => call.path === '/api/creation/generate' || call.path.includes('/tasks/'))).toHaveLength(0)
 })
 

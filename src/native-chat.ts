@@ -32,14 +32,18 @@ export interface NativeMessage extends ChatMessage {
 }
 export interface NativeChat extends ChatSession {
   creationKind?: 'text' | 'image' | 'video'
+  composerKind?: 'text' | 'image' | 'video'
+  textModel?: string
   mediaConversationId?: string
   deletedMediaTaskIds?: string[]
   mediaContextExcludedTaskIds?: string[]
   mediaDraft?: {
+    prompt?: string
     references: CreationTask['references']; model?: string; manualSize?: string; ratio?: string; count?: number
     duration?: number; protocol?: string; imageOptions?: ImageOptions; videoOptions?: VideoOptions
     sourceWorkId?: string; skipAutomaticReference?: boolean
   }
+  mediaDrafts?: Partial<Record<'image' | 'video', NonNullable<NativeChat['mediaDraft']>>>
   projectId?: string
   renamed?: boolean
   messages: NativeMessage[]
@@ -64,6 +68,7 @@ const defaults = () => {
 }
 export const chats = reactive({
   sessions: [] as NativeChat[], activeId: '', ready: false, error: '', busy: {} as Record<string, boolean>, skills: [] as Skill[],
+  preparing: {} as Record<string, boolean>,
   projects: [] as ChatProject[], deletedMediaConversationIds: [] as string[], mediaConversationsMigrated: false,
 })
 export const chatDeletion = reactive({ count: 0, expiresAt: 0 })
@@ -80,6 +85,16 @@ const toolControllers = new Map<string, AbortController>()
 const owner = () => session.user?.id || ''
 const store = () => `octopus:user-${owner()}:native-chat`
 const registeredChat = (chat: NativeChat) => chats.ready && chats.sessions.some(item => item.id === chat.id)
+export function conversationMediaTasks(chat: NativeChat): CreationTask[] {
+  const ids = new Set((branchMessages(chat) as NativeMessage[]).flatMap(message => message.taskId ? [message.taskId] : []))
+  const claimed = new Set(chats.sessions.flatMap(item => (branchMessages(item) as NativeMessage[]).flatMap(message => message.taskId ? [message.taskId] : [])))
+  return creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' &&
+    (ids.has(task.id) || !claimed.has(task.id) && task.kind === chat.creationKind && (task.conversationId || task.id) === (chat.mediaConversationId || chat.id)))
+}
+export function conversationBusy(chat: NativeChat) {
+  return Boolean(chats.busy[chat.id] || chats.preparing[chat.id] || chat.messages.some(message => message.streaming) ||
+    conversationMediaTasks(chat).some(task => ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+}
 function restoreMessage(message: NativeMessage): NativeMessage {
   return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
 }
@@ -135,6 +150,10 @@ export function loadChats() {
           draftQuote: readMessageQuote(value.draftQuote), messages: value.messages.map(restoreMessage),
           messageBranches: Array.isArray(value.messageBranches) ? value.messageBranches.map(restoreMessage) : [] }
         initializeBranches(next)
+        if (!next.mediaDrafts && next.creationKind !== 'text') {
+          next.mediaDrafts = { [next.creationKind!]: { ...next.mediaDraft, references: next.mediaDraft?.references || [], prompt: next.draft || '' } }
+          next.draft = ''
+        }
         restoreInterruptedToolCalls(branchMessages(next) as NativeMessage[])
         return next
       }), chats.projects)
@@ -163,9 +182,7 @@ export async function removeChats(ids: string[]) {
   if (!owner() || !chats.ready) return
   const selected = new Set(ids), previous = chats.sessions, activeId = chats.activeId, version = epoch
   const removed = previous.flatMap((chat, index) => selected.has(chat.id) ? [{ chat, index }] : [])
-  const blocked = removed.some(({ chat }) => chats.busy[chat.id] || chat.messages.some(message => message.streaming) ||
-    chat.creationKind !== 'text' && chat.creationKind !== undefined && creation.tasks.some(task => task.owner === owner() && task.kind === chat.creationKind &&
-      (task.conversationId || task.id) === (chat.mediaConversationId || chat.id) && ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+  const blocked = removed.some(({ chat }) => conversationBusy(chat))
   if (blocked) throw new Error('请先停止所选对话并核对进行中的任务，再删除。')
   const remaining = previous.filter(chat => !selected.has(chat.id))
   if (remaining.length === previous.length) return
@@ -175,7 +192,10 @@ export async function removeChats(ids: string[]) {
   if (fallback) remaining.push(fallback)
   const nextId = remaining.some(chat => chat.id === activeId) ? activeId : remaining[Math.min(remainingBefore, remaining.length - 1)]!.id
   const previousTombstones = chats.deletedMediaConversationIds
-  const tombstones = removed.flatMap(({ chat }) => chat.creationKind === 'image' || chat.creationKind === 'video' ? [`${chat.creationKind}:${chat.mediaConversationId || chat.id}`] : [])
+  const tombstones = removed.flatMap(({ chat }) => [
+    ...(chat.creationKind === 'image' || chat.creationKind === 'video' ? [`${chat.creationKind}:${chat.mediaConversationId || chat.id}`] : []),
+    ...conversationMediaTasks(chat).map(task => `${task.kind}:${task.conversationId || task.id}`),
+  ])
   chats.deletedMediaConversationIds = [...new Set([...previousTombstones, ...tombstones])]
   chats.sessions = remaining; chats.activeId = nextId
   const next = chats.sessions
@@ -206,7 +226,7 @@ export async function undoRemovedChats() {
     existingIds.add(chat.id)
   }
   const fallback = restored.find(chat => chat.id === snapshot.fallbackId)
-  if (fallback && restored.length > 1 && !fallback.messages.length && !fallback.draft && !fallback.draftFiles?.length && !fallback.draftQuote && !fallback.projectId && fallback.topic === '新对话') restored.splice(restored.indexOf(fallback), 1)
+  if (fallback && restored.length > 1 && !fallback.messages.length && !fallback.draft && !fallback.draftFiles?.length && !fallback.draftQuote && !Object.keys(fallback.mediaDrafts || {}).length && !fallback.projectId && fallback.topic === '新对话') restored.splice(restored.indexOf(fallback), 1)
   chats.sessions = restored
   if (activeId === snapshot.nextId && restored.some(chat => chat.id === snapshot.activeId)) chats.activeId = snapshot.activeId
   if (!restored.some(chat => chat.id === chats.activeId)) chats.activeId = restored[0]!.id
@@ -221,6 +241,7 @@ export async function undoRemovedChats() {
 export function cloneChat(chat: NativeChat) {
   const snapshot = JSON.parse(JSON.stringify(chat))
   const copy = { ...snapshot, ...cloneBranchMessages(snapshot, () => crypto.randomUUID()), id: crypto.randomUUID(), topic: `${chat.topic} 副本` } as NativeChat
+  if (copy.mediaConversationId) copy.mediaConversationId = copy.id
   const ids = new Map<string, string>()
   for (const [index, message] of snapshot.messages.entries()) ids.set(message.id, copy.messages[index]!.id)
   for (const [index, message] of (snapshot.messageBranches || []).entries()) ids.set(message.id, copy.messageBranches![index]!.id)
@@ -232,8 +253,16 @@ export function cloneChat(chat: NativeChat) {
   if (copy.draftQuote) copy.draftQuote.messageId = ids.get(copy.draftQuote.messageId) || copy.draftQuote.messageId
   chats.sessions.unshift(copy); chats.activeId = copy.id; void saveChats()
 }
-export function switchBranch(chat: NativeChat, source: string, target: string) { selectAnswerBranch(chat, source, target); void saveChats() }
-export function removeMessage(chat: NativeChat, message: NativeMessage) { if (chats.busy[chat.id]) return; deleteBranchMessage(chat, message.id); void saveChats() }
+export function switchBranch(chat: NativeChat, source: string, target: string) { if (conversationBusy(chat)) return; selectAnswerBranch(chat, source, target); void saveChats() }
+export function removeMessage(chat: NativeChat, message: NativeMessage) {
+  if (conversationBusy(chat)) return
+  const before = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
+  deleteBranchMessage(chat, message.id)
+  const remaining = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
+  chat.deletedMediaTaskIds = [...new Set([...(chat.deletedMediaTaskIds || []),
+    ...creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' && before.has(task.id) && !remaining.has(task.id)).map(task => task.id)])]
+  void saveChats()
+}
 export function stopChat(chat: NativeChat) {
   runs.delete(chat.id)
   toolControllers.get(chat.id)?.abort()
@@ -262,7 +291,7 @@ export async function recoverMessage(message: NativeMessage) {
   await saveChats()
 }
 export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse }): Promise<boolean> {
-  if (chats.busy[chat.id] || !owner() || !registeredChat(chat) || chat.creationKind && chat.creationKind !== 'text') return false
+  if (conversationBusy(chat) || !owner() || !registeredChat(chat)) return false
   if (regenerate) {
     regenerate = chat.messages.find(message => message.id === regenerate!.id && message.role === 'user')
     if (!regenerate) return false
@@ -337,7 +366,11 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     result.streaming = false
     const userIndex = chat.messages.findIndex(message => message.id === user.id)
     const prepared = await prepareContext({
-      prefix, history: chat.messages.slice(chat.sendMemory && chat.memoryPrompt ? Math.max(chat.clearContextIndex || 0, chat.lastSummarizeIndex) : chat.clearContextIndex || 0, userIndex).filter(message => !message.error).flatMap(message => [...(message.toolRounds || []), modelMessage(message)]), input: modelMessage(user),
+      prefix, history: chat.messages.slice(chat.sendMemory && chat.memoryPrompt ? Math.max(chat.clearContextIndex || 0, chat.lastSummarizeIndex) : chat.clearContextIndex || 0, userIndex).filter(message => !message.error).flatMap(message => {
+        const task = creation.tasks.find(task => task.owner === owner() && task.id === message.taskId && task.kind !== 'text')
+        if (task && message.role === 'assistant') return [{ role: 'assistant' as const, content: task.phase === 'complete' ? `已生成${task.kind === 'image' ? '图片' : '视频'}。` : '媒体生成未完成。' }]
+        return [...(message.toolRounds || []), modelMessage(message)]
+      }), input: modelMessage(user),
       memory: chat.sendMemory ? chat.memoryPrompt : '',
       config: { ...settings, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory },
       summarize: async messages => {
@@ -508,6 +541,6 @@ watch(owner, () => {
   for (const controller of toolControllers.values()) controller.abort()
   toolControllers.clear()
   clearDeletedChats()
-  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}
+  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}; chats.preparing = {}
   chats.projects = []; chats.deletedMediaConversationIds = []; chats.mediaConversationsMigrated = false; loading = undefined
 }, { flush: 'sync' })

@@ -8,9 +8,15 @@ const route = useRoute(), router = useRouter()
 const hidden = ref(false), index = ref(0)
 const tasks = computed(() => creation.tasks.slice(0, 20))
 const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
-function open(value: CreationTask) {
+async function open(value: CreationTask) {
+  const owner = session.user?.id
+  const [{ chats, loadChats }, { ensureMediaConversation, syncMediaConversations }] = await Promise.all([import('../native-chat'), import('../studio-conversations')])
+  await loadChats(); await syncMediaConversations()
+  if (!owner || owner !== session.user?.id || value.owner !== owner) return
   creation.selectedId = value.id
-  void router.push({ path: `/create/${value.kind}`, query: value.kind === 'text' ? {} : { reuse: value.id } })
+  const conversation = value.kind === 'text' ? chats.sessions.find(chat => chat.messages.some(message => message.taskId === value.id))
+    : ensureMediaConversation(value.kind, value)
+  void router.push({ path: `/create/${value.kind}`, query: conversation ? { conversation: conversation.id } : { reuse: value.id } })
 }
 </script>
 

@@ -34,7 +34,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', position)
   window.visualViewport?.removeEventListener('resize', position)
 })
-defineExpose({ close })
+defineExpose({ close, open: () => panel.value?.showPopover() })
 </script>
 
 <template>
