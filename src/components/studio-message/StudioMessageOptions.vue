@@ -86,13 +86,13 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }legend { max-width: 
 .option-limits { margin: 0 0 8px; color: var(--muted); font-size: 12px; }.option-list { display: grid; gap: 4px; min-width: 0; }
 .message-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 10px; min-width: 0; min-height: 44px; padding: 12px 10px; border-radius: 6px; cursor: pointer; touch-action: manipulation; }
 .message-option[data-selected="true"], .message-option:hover:not([data-disabled="true"]) { background: var(--surface-soft); }.message-option[data-disabled="true"] { cursor: default; }
-.message-option:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.message-option:focus-within { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 input[type="checkbox"], input[type="radio"] { appearance: auto; width: 18px; height: 18px; margin: 1px 0 0; padding: 0; accent-color: var(--ink); cursor: inherit; }
 input:disabled { opacity: .55; }input::after { display: none; }
 .message-option > span, .option-receipt li > span { display: grid; gap: 4px; min-width: 0; }strong { font-weight: 400; overflow-wrap: anywhere; }small { color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .option-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--surface-soft); }button:disabled { opacity: .55; cursor: default; }button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }button svg { flex: none; }
+button:hover:not(:disabled) { background: var(--surface-soft); }button:disabled { opacity: .55; cursor: default; }button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }button svg { flex: none; }
 .option-error { margin: 8px 0 0; color: var(--danger); font-size: 12px; }.option-receipt-heading { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--muted); font-size: 12px; }
 .option-receipt { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }.option-receipt li { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 10px; }.option-receipt li > svg { margin-top: 2px; }
 @media (pointer: coarse), (max-width: 600px) { button { min-height: 44px; } }

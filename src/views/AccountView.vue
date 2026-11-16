@@ -233,7 +233,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId" class="account-identity" aria-label="章鱼号">章鱼号：{{ session.user.accountId }}</span></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
@@ -263,7 +263,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
-            <button class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
+            <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
         </nav>
@@ -291,7 +291,10 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">
-          <section class="panel-section balance-panel"><div class="section-heading"><h2>账户余额</h2><Wallet :size="20" aria-hidden="true" /></div><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="muted caption-5">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p><div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a><button class="button subtle btn" :disabled="busy" @click="loadAccount().catch(cause => error = errorMessage(cause))">刷新账户</button></div></section>
+          <section class="panel-section balance-panel">
+            <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>账户余额</h2></div><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></div>
+            <div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a></div>
+          </section>
           <AccountWallet @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
         </div>
       </div>
@@ -303,7 +306,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 
 <style scoped>
 .settings-page { max-width: 1360px; }
-.account-identity { min-width: 0; max-width: 100%; color: var(--muted); font-size: 14px; text-align: right; overflow-wrap: anywhere; }
+.settings-page:has(.balance-settings) { max-width: 1200px; }
+.settings-page:has(.balance-settings) .page-heading { min-height: 40px; margin-bottom: 24px; }
+.settings-page:has(.balance-settings) .split-layout { grid-template-columns: 208px minmax(0, 1fr); gap: 32px; }
 .settings-page .split-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 40px; align-items: start; }
 .settings-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }
 .settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); }
@@ -355,13 +360,14 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .profile-save-status > svg { color: var(--green); }
 .profile-savebar .button { min-height: 44px; }
 .profile-leave-actions { justify-content: end; flex-wrap: wrap; }
-.balance-settings { display: grid; gap: 32px; }
+.balance-settings { display: grid; gap: 24px; }
 .balance-settings > .panel-section { padding-top: 0; }
-.balance-settings .balance-panel { padding: 24px; background: var(--surface); border-radius: 8px; border: 0; }
-.account-balance { font-size: 32px; line-height: 40px; margin: 24px 0 8px; padding: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
-.balance-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.balance-settings .balance-panel { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px 24px; padding: 0 0 16px; background: transparent; border-radius: 0; }
+.balance-summary { min-width: 0; }.balance-summary .section-heading { justify-content: flex-start; gap: 8px; margin-bottom: 0; color: var(--muted); }.balance-summary h2 { font-size: 14px; line-height: 20px; font-weight: 500; }.balance-summary .form-note { margin-top: 4px; }
+.account-balance { font-size: 28px; line-height: 36px; margin: 8px 0 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 @media (max-width: 899px) {
-  .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .settings-page .split-layout, .settings-page:has(.balance-settings) .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .settings-sidebar { position: static; }
   .settings-search { margin-bottom: 12px; }
   .account-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 12px; }
@@ -380,7 +386,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
   .profile-heading .form-note { font-size: 12px; }
   .profile-savebar { padding: 12px; bottom: var(--mobile-nav-height); }
   .profile-savebar .button { margin-left: auto; }
-  .balance-settings .balance-panel { padding: 20px; }
+  .balance-settings .balance-panel { padding-bottom: 16px; }.balance-actions .button, .balance-actions .icon-button { min-height: 44px; }
 }
 
 .auth-page { --canvas: #fff; --surface: #fff; --surface-soft: #f8fafc; --ink: #101828; --muted: #667085; --border: #e4e7ec; --blue: #3f51b5; --blue-hover: #34449b; --blue-soft: #eef0fb; --action: var(--blue); --action-ink: #fff; --bg: #fff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100svh; background: #fff; color: var(--ink); color-scheme: light; }

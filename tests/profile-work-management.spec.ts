@@ -129,13 +129,39 @@ test('management toolbar and filters fit desktop and small phones', async ({ pag
     await expect(panel(page).getByRole('combobox', { name: '作品状态', exact: true })).toBeVisible()
     expect(await panel(page).evaluate(element => {
       const bounds = element.getBoundingClientRect()
-      return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth
+      return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+        && element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight + 1
     })).toBe(true)
+    if (width === 1440) {
+      const anchor = (await page.getByRole('button', { name: '批量管理', exact: true }).boundingBox())!
+      const bounds = (await panel(page).boundingBox())!
+      expect(bounds.y - anchor.y - anchor.height).toBeCloseTo(8, 0)
+      expect(bounds.x + bounds.width).toBeCloseTo(anchor.x + anchor.width, 0)
+    }
+    for (const name of ['重置', '应用筛选', '多选作品']) await expect(panel(page).getByRole('button', { name, exact: true })).toBeInViewport()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `.taste-skill/profile-management-20261116/filters-${width}.png`, fullPage: true })
     await panel(page).getByRole('button', { name: '关闭批量管理', exact: true }).click()
     await expect(page.getByRole('button', { name: '批量管理', exact: true })).toBeFocused()
     await page.screenshot({ path: `.taste-skill/profile-management-20261116/profile-${width}.png`, fullPage: true })
   }
+  for (const [width, height] of [[1440, 600], [768, 650], [390, 520], [320, 400]]) {
+    await page.setViewportSize({ width: width!, height: height! })
+    await open(page)
+    expect(await panel(page).evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth
+    })).toBe(true)
+    for (const name of ['重置', '应用筛选', '多选作品']) await expect(panel(page).getByRole('button', { name, exact: true })).toBeInViewport()
+    await panel(page).getByRole('button', { name: '关闭批量管理', exact: true }).click()
+  }
+  await page.setViewportSize({ width: 1440, height: 600 })
+  await open(page)
+  await page.evaluate(() => window.scrollBy(0, 80))
+  await expect.poll(async () => {
+    const anchor = (await page.getByRole('button', { name: '批量管理', exact: true }).boundingBox())!
+    const bounds = (await panel(page).boundingBox())!
+    return Math.min(Math.abs(bounds.y - anchor.y - anchor.height - 8), Math.abs(anchor.y - bounds.y - bounds.height - 8))
+  }).toBeLessThan(1)
   expect(state.errors).toEqual([])
 })

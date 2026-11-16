@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { X } from '@lucide/vue'
 
-const props = withDefaults(defineProps<{ label: string; triggerLabel?: string; width?: number; disabled?: boolean }>(), { width: 360 })
+const props = withDefaults(defineProps<{ label: string; triggerLabel?: string; width?: number; disabled?: boolean; placement?: 'auto' | 'bottom-end'; panelClass?: string }>(), { width: 360 })
 const emit = defineEmits<{ toggle: [open: boolean] }>()
 const id = `studio-${useId()}`
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), opened = ref(false)
@@ -20,16 +20,20 @@ function position() {
     return
   }
   const availableAbove = anchor.top - top - 16, availableBelow = bottom - anchor.bottom - 16
-  const above = availableAbove >= Math.min(240, availableBelow)
+  const above = props.placement === 'bottom-end'
+    ? availableBelow < Math.min(panel.value.scrollHeight + 2, availableAbove)
+    : availableAbove >= Math.min(240, availableBelow)
   panel.value.style.maxHeight = `${Math.max(80, above ? availableAbove : availableBelow)}px`
   const bounds = panel.value.getBoundingClientRect()
-  panel.value.style.left = `${Math.max(12, Math.min(anchor.left, innerWidth - bounds.width - 12))}px`
+  const left = props.placement === 'bottom-end' ? anchor.right - bounds.width : anchor.left
+  panel.value.style.left = `${Math.max(12, Math.min(left, innerWidth - bounds.width - 12))}px`
   panel.value.style.top = `${above ? Math.max(top + 8, anchor.top - bounds.height - 8) : anchor.bottom + 8}px`
 }
 async function toggle(event: Event) {
   opened.value = (event as ToggleEvent).newState === 'open'
   emit('toggle', opened.value)
   window.removeEventListener('resize', position)
+  window.removeEventListener('scroll', position, true)
   window.visualViewport?.removeEventListener('resize', position)
   window.visualViewport?.removeEventListener('scroll', position)
   resizeObserver.disconnect()
@@ -41,6 +45,7 @@ async function toggle(event: Event) {
       if (content) resizeObserver.observe(content)
     }
     window.addEventListener('resize', position)
+    if (props.placement === 'bottom-end') window.addEventListener('scroll', position, true)
     window.visualViewport?.addEventListener('resize', position)
     window.visualViewport?.addEventListener('scroll', position)
   }
@@ -49,6 +54,7 @@ function close() { panel.value?.hidePopover(); if (trigger.value?.isConnected) t
 onMounted(() => { portalTarget.value = trigger.value?.closest<HTMLElement>('dialog, [popover]') || 'body' })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', position)
+  window.removeEventListener('scroll', position, true)
   window.visualViewport?.removeEventListener('resize', position)
   window.visualViewport?.removeEventListener('scroll', position)
   resizeObserver.disconnect()
@@ -58,7 +64,7 @@ defineExpose({ close, open: () => panel.value?.showPopover() })
 
 <template>
   <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="triggerLabel || label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
-  <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @toggle="toggle">
+  <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" :class="panelClass" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @toggle="toggle">
     <header class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></header>
     <div class="studio-popover-content"><slot /></div>
   </div></Teleport>

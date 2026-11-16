@@ -1,5 +1,6 @@
 /** Browser-safe wallet contracts. Payment amounts come from the account server. */
 export type WalletPaymentMethod = { type: string; name: string };
+export type WalletSection = "topup" | "plans" | "history";
 export type WalletPlan = {
   id: number;
   title: string;

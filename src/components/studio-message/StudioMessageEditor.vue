@@ -51,7 +51,7 @@ function keydown(event: KeyboardEvent) {
 <style scoped>
 .message-editor { min-width: 0; width: 100%; }
 textarea { box-sizing: border-box; width: 100%; min-height: 120px; padding: 12px; resize: vertical; border: 0; border-radius: 8px; background: var(--surface-soft); color: var(--ink); caret-color: var(--ink); font: inherit; font-size: 16px; line-height: 26px; }
-textarea:focus-visible, button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+textarea:focus-visible, button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .editor-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
 button:hover:not(:disabled) { background: var(--surface-soft); }button svg { flex: none; }button:disabled, textarea:disabled { cursor: default; opacity: .55; }

@@ -406,5 +406,5 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
 .group-description { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; margin: 4px 8px 0; }
 .reference-upload { width: fit-content; position: relative; overflow: hidden; }
 .reference-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
-.reference-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.reference-upload:focus-within { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 </style>

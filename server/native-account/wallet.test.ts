@@ -241,6 +241,23 @@ test("wallet overview is read-only, sanitized and scoped to the authenticated ac
     );
   }
 });
+test.each([
+  ["topup", ["/api/user/topup/info", "/api/status"]],
+  ["plans", ["/api/user/topup/info", "/api/status", "/api/subscription/plans", "/api/subscription/self"]],
+  ["history", ["/api/user/topup/info", "/api/status", "/api/user/topup/self"]],
+])("wallet %s reads only its requested section", async (section, paths) => {
+  const response = await GET(request(`wallet/${section}`), context(`wallet/${section}`));
+  expect(response.status).toBe(200);
+  expect(jest.mocked(fetch).mock.calls.map(([url]) => new URL(String(url)).pathname).sort()).toEqual([...paths].sort());
+  expect(jest.mocked(fetch).mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
+  const { data } = await response.json();
+  expect(data.userId).toBe(17);
+  if (section !== "plans") {
+    expect(data.plans).toEqual([]);
+    expect(data.subscriptions).toEqual([]);
+  }
+  if (section !== "history") expect(data.history).toEqual([]);
+});
 test("quote accepts the real Epay message envelope and preserves server total", async () => {
   const response = await post("wallet/quote", { amount: 10 });
   expect(response.status).toBe(200);

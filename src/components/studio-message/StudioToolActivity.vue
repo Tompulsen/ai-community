@@ -78,7 +78,7 @@ async function copy() {
 <style scoped>
 .tool-activity { min-width: 0; margin-block: 12px; color: var(--ink); font-size: 13px; line-height: 20px; }
 :deep(summary) { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 4px 8px; border-radius: 6px; cursor: pointer; list-style: none; }:deep(summary::-webkit-details-marker) { display: none; }:deep(summary:hover) { background: var(--surface-soft); }:deep(summary > svg) { flex: none; color: var(--muted); transition: transform 220ms cubic-bezier(.22, 1, .36, 1); }.tool-activity[data-expanded="true"] :deep(summary > svg) { transform: rotate(180deg); }
-:deep(summary:focus-visible), button:focus-visible, input:focus-visible, textarea:focus-visible, .tool-table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+:deep(summary:focus-visible), button:focus-visible, input:focus-visible, textarea:focus-visible, .tool-table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .tool-content { display: grid; gap: 12px; min-width: 0; padding: 8px; }.tool-content section { min-width: 0; }
 .tool-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-height: 32px; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 32px; min-height: 32px; max-width: 100%; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }button:hover:not(:disabled) { background: var(--surface-soft); }button:disabled { opacity: .55; cursor: default; }button svg { flex: none; }

@@ -67,7 +67,7 @@ function preview(theme: Theme) {
 .mode-option:hover, .palette-option:hover { border-color: var(--muted); }
 .mode-option.selected { background: var(--surface-soft); border-color: var(--focus-ring); color: var(--ink); }
 .mode-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
-.mode-option:has(:focus-visible), .palette-option:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.mode-option:has(:focus-visible), .palette-option:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .mode-option input:focus-visible, .palette-option input:focus-visible { outline: none; }
 .theme-current { margin: 16px 0 24px; color: var(--muted); font-size: 13px; }
 .theme-schedule { margin: 0 0 28px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; }

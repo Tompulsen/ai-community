@@ -408,6 +408,9 @@ export async function handle(
       return ok(await readModelPricing(req));
     }
     if (req.method === "GET" && route === "wallet") return ok(await readWallet(req));
+    if (req.method === "GET" && route === "wallet/topup") return ok(await readWallet(req, "topup"));
+    if (req.method === "GET" && route === "wallet/plans") return ok(await readWallet(req, "plans"));
+    if (req.method === "GET" && route === "wallet/history") return ok(await readWallet(req, "history"));
     if (req.method === "POST" && route === "wallet/quote") return ok(await quoteWallet(req, await body(req)));
     if (req.method === "POST" && route === "wallet/pay") return ok(await createWalletPayment(req, await body(req), "topup"));
     if (req.method === "POST" && route === "wallet/subscription") return ok(await createWalletPayment(req, await body(req), "subscription"));

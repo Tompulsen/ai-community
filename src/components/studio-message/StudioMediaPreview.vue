@@ -189,7 +189,7 @@ async function run(kind: 'download' | 'copy') {
 .lightbox-actions { position: absolute; right: max(16px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); z-index: 2; display: flex; align-items: center; gap: 8px; }
 .viewer-button { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 6px; color: #f5f5f5; background: rgb(38 38 38 / 85%); cursor: pointer; }
 .viewer-button:hover:not(:disabled), .viewer-retry:hover { background: #404040; }.viewer-button:disabled { opacity: .4; cursor: default; }
-.viewer-button:focus-visible, select:focus-visible, .viewer-retry:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.viewer-button:focus-visible, select:focus-visible, .viewer-retry:focus-visible { outline: 2px solid #fff; outline-offset: var(--focus-outline-offset); }
 .lightbox-controls { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 2; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; width: max-content; max-width: calc(100% - 24px); padding: 4px; border-radius: 8px; background: rgb(24 24 24 / 94%); }
 .lightbox-controls .viewer-button { background: transparent; }.lightbox-controls output { min-width: 48px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .lightbox-sequence { display: flex; align-items: center; gap: 4px; }.lightbox-sequence select { box-sizing: border-box; width: auto; max-width: 104px; height: 40px; padding: 4px 8px; border: 0; border-radius: 4px; font: inherit; font-size: 13px; color: #f5f5f5; background: #262626; font-variant-numeric: tabular-nums; }

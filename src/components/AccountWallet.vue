@@ -1,19 +1,21 @@
 <!-- Adapted from octopus_chat/app/components/account-wallet.tsx (MIT / NextChat). -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowUpRight, RefreshCw, Ticket } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowLeft, ArrowUpRight, ChevronDown, Ticket } from '@lucide/vue'
 import { session, errorMessage } from '../state'
 import { accountBalance, refreshAccountBalance } from '../account-balance'
 import { studioAccount } from '../studio-account'
-import { safeWalletPaymentUrl, type WalletOverview, type WalletPayment, type WalletPlan, type WalletQuote, type WalletRedemption } from '../../shared/studio/wallet'
+import { cachedWalletQuote, defaultWalletAmount, invalidateWalletCache, loadWallet, loadWalletQuote, walletPricingKey } from '../wallet-prefetch'
+import { safeWalletPaymentUrl, type WalletOverview, type WalletPayment, type WalletPlan, type WalletQuote, type WalletRedemption, type WalletSection } from '../../shared/studio/wallet'
 
 const emit = defineEmits<{ refresh: [] }>()
 const data = ref<WalletOverview>(), quote = ref<WalletQuote>(), payment = ref<WalletPayment>(), selectedPlan = ref<WalletPlan>()
-const tab = ref<'topup' | 'plans' | 'history'>('topup')
+const paymentForm = ref<HTMLFormElement>()
+const tab = ref<WalletSection>('topup')
 const amount = ref(''), method = ref(''), code = ref('')
-const loading = ref(false), busy = ref(false), launched = ref(false), redemptionOpen = ref(false)
+const loading = ref(false), busy = ref(false), quoting = ref(false), launched = ref(false), redemptionOpen = ref(false)
 const error = ref(''), quoteError = ref(''), notice = ref('')
-let revision = 0, quoteRevision = 0, quoteTimer: ReturnType<typeof setTimeout> | undefined
+let revision = 0, loadRevision = 0, quoteRevision = 0, quotePricing = '', quoteTimer: ReturnType<typeof setTimeout> | undefined
 const identity = () => `${session.user?.id || ''}:${session.user?.accountId || session.user?.id || ''}`
 const accountId = () => Number(session.user?.accountId || session.user?.id)
 const numericAmount = computed(() => Number(amount.value))
@@ -21,8 +23,9 @@ const validAmount = computed(() => !!data.value && Number.isSafeInteger(numericA
   numericAmount.value >= data.value.topup.minAmount &&
   (data.value.quotaDisplayType !== 'TOKENS' || numericAmount.value % data.value.quotaPerUnit === 0))
 const paymentOrder = computed(() => data.value?.history.find(order => order.tradeNo === payment.value?.tradeNo))
-const canPay = computed(() => !!data.value?.topup.enabled && !!method.value && !busy.value && !loading.value)
-const canOpenPayment = computed(() => !!payment.value && !busy.value && !launched.value &&
+const canPay = computed(() => !!data.value?.topup.enabled && !!method.value && !busy.value && !loading.value &&
+  (tab.value !== 'topup' || (!quoting.value && !quoteError.value)))
+const canOpenPayment = computed(() => !!payment.value && !busy.value && !loading.value && !error.value && !launched.value &&
   (!paymentOrder.value || paymentOrder.value.status === 'pending') &&
   payment.value.userId === accountId() && !!safeWalletPaymentUrl(payment.value.action))
 const tabs = [{ id: 'topup', label: '余额充值' }, { id: 'plans', label: '套餐与订阅' }, { id: 'history', label: '充值记录' }] as const
@@ -35,43 +38,72 @@ async function request<T extends { userId: number }>(path: string, body?: object
   if (current !== revision || owner !== identity() || result?.userId !== userId) throw new Error('账号已变化，请重新读取充值信息。')
   return result
 }
-async function load() {
-  const current = revision
+function mergeSection(result: WalletOverview, section: WalletSection) {
+  const previous = data.value
+  data.value = {
+    ...result,
+    plans: section === 'plans' ? result.plans : previous?.plans || [],
+    subscriptions: section === 'plans' ? result.subscriptions : previous?.subscriptions || [],
+    history: section === 'history' ? result.history : previous?.history || [],
+    historyTotal: section === 'history' ? result.historyTotal : previous?.historyTotal || 0,
+  }
+}
+async function load(force = false) {
+  const current = revision, read = ++loadRevision, section = tab.value
   loading.value = true; error.value = ''
   try {
-    const result = await request<WalletOverview>('wallet')
-    if (current !== revision) return
-    data.value = result
-    if (!amount.value) amount.value = String(result.topup.amountOptions[0] || result.topup.minAmount)
+    const [result, history] = await Promise.all([
+      loadWallet(section, force),
+      payment.value && section !== 'history' ? loadWallet('history', force) : undefined,
+    ])
+    if (current !== revision || read !== loadRevision) return
+    mergeSection(result, section)
+    if (history) mergeSection(history, 'history')
+    if (!amount.value) amount.value = String(defaultWalletAmount(result))
     if (!result.topup.paymentMethods.some(item => item.type === method.value)) method.value = result.topup.paymentMethods[0]?.type || ''
-  } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
-  finally { if (current === revision) loading.value = false }
+    if (force) updateQuote()
+  } catch (cause) { if (current === revision && read === loadRevision) error.value = errorMessage(cause) }
+  finally { if (current === revision && read === loadRevision) loading.value = false }
 }
 watch(identity, () => {
-  revision++; quoteRevision++; clearTimeout(quoteTimer)
+  revision++; loadRevision++; quoteRevision++; clearTimeout(quoteTimer)
   data.value = undefined; quote.value = undefined; payment.value = undefined; selectedPlan.value = undefined
   amount.value = ''; method.value = ''; code.value = ''; error.value = ''; quoteError.value = ''; notice.value = ''
-  busy.value = false; launched.value = false; redemptionOpen.value = false
+  busy.value = false; loading.value = false; quoting.value = false; quotePricing = ''; launched.value = false; redemptionOpen.value = false
   if (session.user) void load()
 }, { immediate: true, flush: 'sync' })
-watch([numericAmount, () => data.value], () => {
+watch(tab, () => { if (session.user) void load() }, { flush: 'sync' })
+function updateQuote() {
   const current = ++quoteRevision
-  clearTimeout(quoteTimer); quote.value = undefined; quoteError.value = ''
-  if (!validAmount.value || !data.value?.topup.enabled) return
-  const owner = revision, value = numericAmount.value
-  quoteTimer = setTimeout(async () => {
+  clearTimeout(quoteTimer); quoting.value = false; quoteError.value = ''
+  if (tab.value !== 'topup') return
+  if (!validAmount.value || !data.value?.topup.enabled) { quote.value = undefined; return }
+  const owner = revision, value = numericAmount.value, config = data.value, pricing = walletPricingKey(config)
+  if (quote.value?.amount !== value || quotePricing !== pricing) quote.value = undefined
+  const cached = cachedWalletQuote(value, config)
+  if (cached) { quote.value = cached; quotePricing = pricing; return }
+  quoting.value = true
+  const read = async () => {
     try {
-      const result = await request<WalletQuote>('wallet/quote', { amount: value })
-      if (current === quoteRevision && owner === revision && result.amount === value) quote.value = result
+      const result = await loadWalletQuote(value, config)
+      if (current === quoteRevision && owner === revision) { quote.value = result; quotePricing = pricing }
     } catch (cause) { if (current === quoteRevision && owner === revision) quoteError.value = errorMessage(cause) }
-  }, 250)
-})
+    finally { if (current === quoteRevision && owner === revision) quoting.value = false }
+  }
+  if (config.topup.amountOptions.includes(value) || value === defaultWalletAmount(config)) void read()
+  else quoteTimer = setTimeout(read, 250)
+}
+watch([numericAmount, () => data.value ? walletPricingKey(data.value) : '', tab], updateQuote)
+function invalidateQuotes() {
+  invalidateWalletCache(); quoteRevision++; clearTimeout(quoteTimer); quoting.value = false
+}
 async function refresh() {
   if (busy.value || loading.value) return
   const current = revision
   busy.value = true; notice.value = ''
   try {
-    await load()
+    invalidateQuotes()
+    await load(true)
     if (current !== revision) return
     await refreshAccountBalance()
     if (current !== revision) return
@@ -84,7 +116,8 @@ async function refresh() {
 }
 async function pay(plan?: WalletPlan) {
   if (!canPay.value || (!plan && (!validAmount.value || quote.value?.amount !== numericAmount.value))) return
-  const current = revision, quotedMoney = quote.value?.money
+  const current = revision, expectedMoney = plan ? plan.currency === 'CNY' ? plan.priceAmount : undefined : quote.value?.money
+  let automatic = false
   busy.value = true; error.value = ''; notice.value = ''; launched.value = false
   try {
     const result = await request<WalletPayment>(plan ? 'wallet/subscription' : 'wallet/pay', plan
@@ -93,16 +126,27 @@ async function pay(plan?: WalletPlan) {
     if (current !== revision) return
     if (!safeWalletPaymentUrl(result.action)) throw new Error('支付地址无效，请刷新订单确认。')
     payment.value = result; selectedPlan.value = undefined
-    notice.value = !plan && Number(result.money) !== Number(quotedMoney)
-      ? `实付金额已变化为 ¥ ${result.money}，请确认后打开支付页。`
-      : '请确认订单金额后打开支付页。'
+    const requiresConfirmation = expectedMoney === undefined || Number(result.money) !== Number(expectedMoney)
+    automatic = !requiresConfirmation
+    notice.value = requiresConfirmation
+      ? expectedMoney === undefined ? `订单实付金额为 ¥ ${result.money}，请确认后打开支付页。` : `实付金额已变化为 ¥ ${result.money}，请确认后打开支付页。`
+      : '订单已创建，正在前往支付页。'
   } catch (cause) {
-    if (current === revision) error.value = `${errorMessage(cause)} 如订单结果未确认，请先刷新充值记录。`
+    if (current === revision) error.value = `${errorMessage(cause)} 如订单结果未确认，请刷新页面核对充值记录。`
   } finally { if (current === revision) busy.value = false }
+  if (automatic) {
+    await nextTick()
+    if (current === revision) submitPayment()
+  }
 }
-function openPayment(event: Event) {
-  if (!canOpenPayment.value) { event.preventDefault(); return }
+function submitPayment() {
+  if (!canOpenPayment.value || !paymentForm.value) return
   launched.value = true
+  try { HTMLFormElement.prototype.submit.call(paymentForm.value) }
+  catch {
+    launched.value = false
+    notice.value = '无法打开支付页，请点击继续支付重试。'
+  }
 }
 async function redeem() {
   if (busy.value || loading.value || !data.value?.topup.redemptionEnabled || !code.value.trim()) return
@@ -112,7 +156,8 @@ async function redeem() {
     await request<WalletRedemption>('wallet/redeem', { key: code.value.trim() })
     if (current !== revision) return
     code.value = ''
-    await Promise.all([refreshAccountBalance(), load()])
+    invalidateQuotes()
+    await Promise.all([refreshAccountBalance(), load(true)])
     if (current !== revision) return
     emit('refresh')
     notice.value = accountBalance.amount === null ? '兑换成功，但余额读取失败，请刷新余额，勿重复兑换。' : '兑换成功，请以刷新后的账户余额为准。'
@@ -144,7 +189,7 @@ function limitReached(plan: WalletPlan) {
 function refreshVisible() { if (payment.value && document.visibilityState === 'visible') void refresh() }
 onMounted(() => { window.addEventListener('focus', refreshVisible); document.addEventListener('visibilitychange', refreshVisible) })
 onBeforeUnmount(() => {
-  revision++; quoteRevision++; clearTimeout(quoteTimer)
+  revision++; loadRevision++; quoteRevision++; clearTimeout(quoteTimer)
   payment.value = undefined
   window.removeEventListener('focus', refreshVisible); document.removeEventListener('visibilitychange', refreshVisible)
 })
@@ -152,18 +197,18 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="account-wallet panel-section" aria-labelledby="wallet-heading">
-    <div class="section-heading"><h2 id="wallet-heading">充值与套餐</h2><button class="icon-button" aria-label="刷新充值记录" title="刷新充值记录" :disabled="busy || loading" @click="refresh"><RefreshCw :size="18" /></button></div>
-    <p v-if="error" class="notice-inline" role="alert">{{ error }} <button v-if="!data" class="text-link" :disabled="loading" @click="load">重新读取</button></p>
+    <div class="section-heading"><h2 id="wallet-heading">充值与套餐</h2></div>
+    <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" :disabled="loading" @click="load()">重新读取</button></p>
     <p v-if="notice" class="wallet-notice" role="status">{{ notice }}</p>
-    <p v-if="loading && !data" class="muted" role="status">正在读取充值方式与套餐…</p>
+    <p v-if="loading" class="muted" role="status">正在读取充值信息…</p>
     <template v-if="data">
       <div v-if="payment" class="wallet-checkout">
         <button class="text-link" :disabled="busy" @click="payment = undefined; launched = false; notice = ''"><ArrowLeft :size="16" />返回充值</button>
         <dl class="info-list"><div><dt>实付金额</dt><dd class="wallet-money">¥ {{ payment.money }}</dd></div><div><dt>订单号</dt><dd>{{ payment.tradeNo }}</dd></div><div><dt>状态</dt><dd>{{ paymentOrder ? statusLabel(paymentOrder.status) : '待支付' }}</dd></div></dl>
         <div class="wallet-actions">
-          <form :action="payment.action" method="POST" target="_blank" rel="noopener noreferrer" @submit="openPayment">
+          <form ref="paymentForm" :action="payment.action" method="POST" target="_self" @submit.prevent="submitPayment">
             <input v-for="(value, name) in payment.fields" :key="name" type="hidden" :name="name" :value="value" />
-            <button class="button primary btn" type="submit" :disabled="!canOpenPayment">打开支付页<ArrowUpRight :size="16" /></button>
+            <button class="button primary btn" type="submit" :disabled="!canOpenPayment">{{ launched ? '正在跳转…' : '继续支付' }}<ArrowUpRight :size="16" /></button>
           </form>
           <button class="button subtle btn" :disabled="busy || loading" @click="refresh">我已支付，刷新余额</button>
         </div>
@@ -173,20 +218,22 @@ onBeforeUnmount(() => {
           <button v-for="item in tabs" :key="item.id" :aria-pressed="tab === item.id" :disabled="busy" @click="tab = item.id; selectedPlan = undefined">{{ item.label }}</button>
         </div>
         <div v-if="tab === 'topup'" class="wallet-section">
-          <form v-if="data.topup.enabled" class="stack" @submit.prevent="pay()">
+          <form v-if="data.topup.enabled" class="wallet-topup-form" @submit.prevent="pay()">
+            <div class="wallet-topup-fields">
             <label class="field"><span>充值金额</span><input v-model="amount" class="control" type="number" :min="data.topup.minAmount" step="1" inputmode="numeric" :disabled="busy" /></label>
-            <div v-if="data.topup.amountOptions.length" class="wallet-amounts" role="group" aria-label="快捷充值金额"><button v-for="value in data.topup.amountOptions" :key="value" type="button" :aria-pressed="numericAmount === value" :disabled="busy" @click="amount = String(value)">{{ value }}<small v-if="data.topup.discounts?.[value]">{{ Math.round((1 - data.topup.discounts[value]!) * 100) }}% 优惠</small></button></div>
+            <div v-if="data.topup.amountOptions.length" class="wallet-amounts" role="group" aria-label="快捷充值金额"><button v-for="value in data.topup.amountOptions" :key="value" type="button" :aria-pressed="numericAmount === value" :disabled="busy" @click="amount = String(value)"><span>{{ value }}</span><small v-if="data.topup.discounts?.[value]">{{ Math.round((1 - data.topup.discounts[value]!) * 100) }}% 优惠</small></button></div>
             <p v-if="!validAmount" class="form-note">请输入不小于 {{ data.topup.minAmount }} 的整数金额。<template v-if="data.quotaDisplayType === 'TOKENS'">数量须为 {{ data.quotaPerUnit }} tokens 的整数倍。</template></p>
             <fieldset class="wallet-methods"><legend>支付方式</legend><label v-for="item in data.topup.paymentMethods" :key="item.type"><input v-model="method" type="radio" name="wallet-topup-method" :value="item.type" :disabled="busy" />{{ item.name }}</label></fieldset>
-            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><small v-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button></div>
-            <p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="load">重新报价</button></p>
+            </div>
+            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><small v-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
           </form>
           <p v-else class="muted">当前暂无可用的在线充值方式。</p>
           <div v-if="data.topup.redemptionEnabled" class="wallet-redemption">
-            <button class="text-link" :aria-expanded="redemptionOpen" @click="redemptionOpen = !redemptionOpen"><Ticket :size="17" />使用兑换码</button>
-            <form v-if="redemptionOpen" class="wallet-redeem" @submit.prevent="redeem"><label class="field"><span>兑换码</span><input v-model="code" class="control" autocomplete="off" maxlength="256" :disabled="busy" /></label><button class="button subtle btn" type="submit" :disabled="busy || !code.trim()">兑换</button><a v-if="safeWalletPaymentUrl(data.topup.redemptionUrl)" :href="data.topup.redemptionUrl" class="text-link" target="_blank" rel="noopener noreferrer">获取兑换码<ArrowUpRight :size="15" /></a></form>
+            <button class="text-link wallet-redemption-toggle" :aria-expanded="redemptionOpen" aria-controls="wallet-redemption-form" @click="redemptionOpen = !redemptionOpen"><Ticket :size="17" aria-hidden="true" />使用兑换码<ChevronDown :size="15" aria-hidden="true" /></button>
+            <form v-if="redemptionOpen" id="wallet-redemption-form" class="wallet-redeem" @submit.prevent="redeem"><label class="field"><span class="wallet-redeem-label">兑换码</span><input v-model="code" class="control" placeholder="请输入兑换码" autocomplete="off" maxlength="256" :disabled="busy" /></label><button class="button subtle btn" type="submit" :disabled="busy || !code.trim()">兑换</button><a v-if="safeWalletPaymentUrl(data.topup.redemptionUrl)" :href="data.topup.redemptionUrl" class="text-link" target="_blank" rel="noopener noreferrer">获取兑换码<ArrowUpRight :size="15" /></a></form>
           </div>
         </div>
+        <div v-else-if="loading || error" class="wallet-section" />
         <div v-else-if="tab === 'plans'" class="wallet-section">
           <div v-if="data.topup.paymentMethods.length" class="wallet-methods" role="group" aria-label="套餐支付方式"><label v-for="item in data.topup.paymentMethods" :key="item.type"><input v-model="method" type="radio" name="wallet-plan-method" :value="item.type" :disabled="busy" />{{ item.name }}</label></div>
           <div v-if="data.plans.length" class="wallet-plans">
@@ -212,28 +259,38 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.account-wallet { min-width: 0; }
-.account-wallet .section-heading { margin-bottom: 16px; }
-.wallet-tabs { display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.account-wallet { --wallet-summary-width: 224px; --wallet-column-gap: 24px; min-width: 0; padding-bottom: 0; border-bottom: 0; }
+.account-wallet .section-heading { margin-bottom: 8px; }.account-wallet .section-heading h2 { font-size: 16px; line-height: 24px; }
+.wallet-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .wallet-tabs button { min-height: 44px; padding: 8px 12px; color: var(--muted); border-radius: 6px; }
 .wallet-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--surface-soft); }
-.wallet-section { padding-top: 24px; min-width: 0; }
-.wallet-section > form { max-width: 640px; }
-.wallet-amounts { display: flex; flex-wrap: wrap; gap: 8px; }
-.wallet-amounts button { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; }
+.wallet-section { padding-top: 16px; min-width: 0; }
+.wallet-topup-form { display: grid; grid-template-columns: minmax(0, 1fr) var(--wallet-summary-width); align-items: start; gap: var(--wallet-column-gap); }
+.wallet-topup-fields { display: grid; gap: 16px; min-width: 0; }.wallet-topup-fields > .field { font-size: 13px; }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; }
+.wallet-topup-fields > .form-note { margin: 0; }
+.wallet-amounts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.wallet-amounts button { display: grid; grid-template-rows: 24px 16px; align-content: center; justify-items: center; gap: 2px; min-width: 0; height: 64px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
+.wallet-amounts button > span { font-size: 15px; line-height: 24px; }
 .wallet-amounts button[aria-pressed="true"] { border-color: var(--focus-ring); background: var(--surface-soft); }
-.wallet-amounts small { font-size: 12px; color: var(--muted); }
-.wallet-methods { display: flex; flex-wrap: wrap; gap: 12px 24px; border: 0; padding: 0; margin: 0; }
-.wallet-methods legend { padding: 0; margin-bottom: 8px; font-weight: 500; }
-.wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.wallet-amounts small { font-size: 11px; line-height: 16px; white-space: nowrap; color: var(--muted); }
+.wallet-methods { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
+.wallet-methods legend { padding: 0; margin-bottom: 8px; font-size: 13px; font-weight: 500; }
+.wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer; }
+.wallet-methods label:has(:checked) { border-color: var(--focus-ring); background: var(--surface-soft); }
 .wallet-methods input { margin: 0; accent-color: var(--ink); }
-.wallet-quote { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding-block: 16px; }
+.wallet-quote { display: grid; gap: 16px; min-width: 0; padding: 0 0 0 24px; border-left: 1px solid var(--border); }
 .wallet-quote > div { display: grid; gap: 6px; }
-.wallet-quote strong, .wallet-money { font-size: 24px; line-height: 32px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.wallet-redemption { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
-.wallet-redeem { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; max-width: 640px; margin-top: 12px; }
-.wallet-redeem > .field { flex: 1 1 240px; }
-.wallet-redeem > a { flex-basis: 100%; }
+.wallet-quote strong, .wallet-money { font-size: 28px; line-height: 36px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wallet-quote > div > span, .wallet-quote small { font-size: 12px; line-height: 20px; }.wallet-quote small { color: var(--muted); overflow-wrap: anywhere; }.wallet-quote > .button { width: 100%; min-height: 44px; padding-inline: 10px; font-size: 13px; }
+.wallet-redemption { max-width: calc(100% - var(--wallet-summary-width) - var(--wallet-column-gap)); margin-top: 24px; border-top: 1px solid var(--border); padding-top: 8px; }
+.wallet-redemption-toggle { min-height: 44px; gap: 8px; color: var(--muted); font-size: 13px; }
+.wallet-redemption-toggle:hover, .wallet-redemption-toggle[aria-expanded="true"] { color: var(--ink); }
+.wallet-redemption-toggle[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }
+.wallet-redeem { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px 12px; margin-top: 8px; }
+.wallet-redeem-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.wallet-redeem .control { width: 100%; min-width: 0; height: 44px; min-height: 44px; font-size: 13px; }
+.wallet-redeem > .button { min-width: 80px; height: 44px; min-height: 44px; align-self: end; margin: 0; font-size: 13px; }
+.wallet-redeem > a { grid-column: 1 / -1; justify-self: start; min-height: 44px; font-size: 13px; }
 .wallet-plans { margin-top: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .wallet-plan { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; }
 .wallet-plan p { overflow-wrap: anywhere; }
@@ -251,5 +308,10 @@ onBeforeUnmount(() => {
 .wallet-notice { margin-bottom: 16px; color: var(--ink); }
 .wallet-history-total { margin-bottom: 12px; }
 .account-wallet th, .account-wallet td { white-space: nowrap; }
-@media (max-width: 639px) { .wallet-plans { grid-template-columns: minmax(0, 1fr); }.wallet-quote { gap: 16px; }.wallet-tabs { gap: 0; }.wallet-tabs button { padding-inline: 10px; } }
+@media (max-width: 639px) {
+  .wallet-plans, .wallet-topup-form { grid-template-columns: minmax(0, 1fr); }
+  .wallet-topup-form { gap: 20px; }.wallet-quote { gap: 16px; padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  .wallet-redemption { max-width: none; }
+  .wallet-tabs { gap: 0; }.wallet-tabs button { padding-inline: 10px; font-size: 12px; }.wallet-methods { gap: 8px; }
+}
 </style>

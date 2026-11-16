@@ -65,7 +65,7 @@ onBeforeUnmount(() => { revision++ })
 .prices-search { display: flex; align-items: center; gap: 8px; width: 200px; min-width: 0; min-height: 36px; padding: 0 10px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
 .prices-search input { width: 100%; min-width: 0; padding: 6px 0; border: 0; border-radius: 0; outline: none; background: transparent; color: var(--ink); caret-color: var(--ink); font: inherit; }
 .prices-search input::placeholder { color: var(--muted); opacity: 1; }
-.prices-search:focus-within { outline: 1px solid var(--muted); outline-offset: 2px; }
+.prices-search:focus-within { outline: 1px solid var(--muted); outline-offset: var(--focus-outline-offset); }
 .prices-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .model-price-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 16px; }
 .prices-state { margin: 0; padding: 20px 0; overflow-wrap: anywhere; }

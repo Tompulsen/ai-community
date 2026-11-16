@@ -22,7 +22,7 @@ const failed = computed(() => props.items.some(item => item.status === 'failed')
 .material-status { min-width: 0; max-height: 180px; overflow: auto; margin: 8px; color: var(--muted); font-size: 12px; }
 header, .material-item, .material-state { display: flex; align-items: center; gap: 8px; }header { min-height: 32px; justify-content: space-between; }
 ul { list-style: none; padding: 0; margin: 0; }li { padding-block: 2px; }.material-name { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--ink); }.material-size, .material-state { flex: none; font-variant-numeric: tabular-nums; }.material-item > svg { flex: none; }
-button { display: inline-grid; place-items: center; flex: none; min-width: 32px; min-height: 32px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }button:hover { background: var(--surface-soft); color: var(--ink); }button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }button:disabled { opacity: .5; cursor: default; }
+button { display: inline-grid; place-items: center; flex: none; min-width: 32px; min-height: 32px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }button:hover { background: var(--surface-soft); color: var(--ink); }button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }button:disabled { opacity: .5; cursor: default; }
 .material-error { margin: 2px 0 6px 23px; color: var(--danger); overflow-wrap: anywhere; }
 @media (max-width: 600px), (pointer: coarse) { button { min-width: 44px; min-height: 44px; }.material-size { display: none; }.material-status { max-height: 140px; } }
 </style>

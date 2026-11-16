@@ -32,12 +32,12 @@ const safeSources = computed(() => props.sources.flatMap((source, index) => {
 <style scoped>
 .message-sources { min-width: 0; margin-top: 16px; color: var(--ink); font-size: 13px; line-height: 20px; }
 summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 4px 8px; border-radius: 6px; color: var(--muted); cursor: pointer; list-style: none; }
-summary::-webkit-details-marker { display: none; }summary:hover { background: var(--surface-soft); }summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+summary::-webkit-details-marker { display: none; }summary:hover { background: var(--surface-soft); }summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 details[open] summary > svg { transform: rotate(180deg); }
 ol { display: grid; gap: 16px; margin: 8px 0 0; padding: 0 8px; list-style: none; }
 li { display: grid; grid-template-columns: 22px minmax(0, 1fr) 14px; align-items: start; gap: 8px; }
 li > svg { color: var(--muted); margin-top: 3px; }.source-number { color: var(--muted); font-variant-numeric: tabular-nums; }
-a { display: grid; gap: 3px; min-width: 0; color: inherit; text-decoration: none; overflow-wrap: anywhere; }a:hover .source-title { text-decoration: underline; text-underline-offset: 3px; }a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 4px; }
+a { display: grid; gap: 3px; min-width: 0; color: inherit; text-decoration: none; overflow-wrap: anywhere; }a:hover .source-title { text-decoration: underline; text-underline-offset: 3px; }a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); border-radius: 4px; }
 .source-title { font-weight: 500; }.source-domain, .source-snippet { color: var(--muted); font-size: 12px; }
 @media (pointer: coarse), (max-width: 600px) { summary { min-height: 44px; } }
 </style>

@@ -161,7 +161,7 @@ async function removeFollower() {
 </script>
 
 <template>
-  <div class="page-container community-page">
+  <div class="page-container community-page" :class="{ 'creator-page': creatorId }">
     <div v-if="!creatorId" class="community-toolbar">
       <h1>社区</h1>
       <div class="tabs" aria-label="社区分类"><button class="tab" :class="{ active: tab === 'creators' }" :aria-pressed="tab === 'creators'" @click="selectTab('creators')"><Users :size="16" />创作者</button><button class="tab" :class="{ active: tab === 'announcements' }" :aria-pressed="tab === 'announcements'" @click="selectTab('announcements')"><Megaphone :size="16" />社区公告</button></div>
@@ -253,22 +253,23 @@ async function removeFollower() {
 .announcement-item[open] summary svg { transform: rotate(180deg); }
 .announcement-body { padding: 0 36px 24px 0; color: var(--muted); font-size: 14px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .profile-banner { display: block; width: 100%; height: 180px; object-fit: cover; border-radius: var(--radius); margin-bottom: 28px; }
-.creator-profile { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: start; gap: 32px; margin: 24px 0 40px; }
-.creator-profile > .profile-avatar { width: 160px; height: 160px; border-radius: 50%; font-size: 56px; }
-.profile-copy { padding-top: 4px; }
-.profile-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.profile-copy h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 28px; line-height: 36px; font-weight: 600; }
-.profile-stats { display: flex; flex-wrap: wrap; align-items: center; column-gap: 32px; row-gap: 0; margin: 8px 0 12px; }
-.profile-stat { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; gap: 8px; min-height: 44px; border: 0; background: transparent; color: var(--muted); font-size: 15px; line-height: 24px; padding: 0; }
-.profile-stat + .profile-stat::before { content: ''; position: absolute; top: 14px; bottom: 14px; left: -16px; width: 1px; background: var(--border); }
-.profile-stat strong { color: var(--ink); font-size: 20px; line-height: 28px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.creator-page { padding-top: 24px; }
+.creator-profile { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: start; gap: 20px; margin: 8px 0 24px; }
+.creator-profile > .profile-avatar { width: 96px; height: 96px; border-radius: 50%; font-size: 36px; }
+.profile-copy { padding-top: 0; }
+.profile-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.profile-copy h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 24px; line-height: 32px; font-weight: 600; }
+.profile-stats { display: flex; flex-wrap: wrap; align-items: center; column-gap: 24px; row-gap: 0; margin: 4px 0; }
+.profile-stat { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; gap: 6px; min-height: 32px; border: 0; background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; padding: 0; }
+.profile-stat + .profile-stat::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: -12px; width: 1px; background: var(--border); }
+.profile-stat strong { color: var(--ink); font-size: 16px; line-height: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
 button.profile-stat:hover { color: var(--ink); }
 button.profile-stat:hover strong { color: var(--blue-hover); }
-.profile-copy > .profile-account-id { margin: 0; color: var(--muted); overflow-wrap: anywhere; font-size: 13px; line-height: 20px; }
-.profile-bio { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; max-width: 70ch; color: var(--muted); font-size: 14px; line-height: 24px; }
+.profile-copy > .profile-account-id { margin: 0; color: var(--muted); overflow-wrap: anywhere; font-size: 12px; line-height: 18px; }
+.profile-bio { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; max-width: 70ch; color: var(--muted); font-size: 13px; line-height: 20px; }
 .profile-actions, .person-row, .person-identity { display: flex; align-items: center; gap: 12px; }
-.profile-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
-.profile-actions .button { min-height: 40px; white-space: nowrap; }
+.profile-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.profile-actions .button { min-height: 36px; padding: 6px 12px; font-size: 12px; white-space: nowrap; }
 .profile-content-toolbar { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); margin-bottom: 28px; min-width: 0; }
 .profile-tabs { flex: 1; gap: 40px; padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
 .profile-tabs .tab { min-height: 48px; padding: 12px 0; font-size: 16px; }
@@ -287,7 +288,7 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
 @media (max-width: 1199px) { .creators-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 639px) {
   .community-toolbar { align-items: flex-start; flex-direction: column; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; }
-  .community-toolbar h1, .profile-copy h1 { font-size: 24px; line-height: 32px; }
+  .community-toolbar h1 { font-size: 24px; line-height: 32px; }
   .creators-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .creator-card { min-height: 160px; padding: 18px; }
   .creator-footer .button { min-height: 44px; }
@@ -296,19 +297,20 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .announcement-item time { font-size: 11px; }
   .announcement-body { padding-right: 0; }
   .profile-banner { height: 120px; margin-bottom: 24px; }
-  .creator-profile { grid-template-columns: 80px minmax(0, 1fr); gap: 16px; margin: 16px 0 28px; }
-  .creator-profile > .profile-avatar { width: 80px; height: 80px; font-size: 32px; }
+  .creator-page { padding-top: 16px; }
+  .creator-profile { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; margin: 8px 0 20px; }
+  .creator-profile > .profile-avatar { width: 64px; height: 64px; font-size: 28px; }
   .profile-copy { padding-top: 0; }
-  .profile-heading { flex-wrap: wrap; gap: 12px; }
-  .profile-copy h1 { flex: 1 1 auto; font-size: 24px; line-height: 32px; }
+  .profile-heading { flex-wrap: wrap; gap: 8px; }
+  .profile-copy h1 { flex: 1 1 auto; font-size: 20px; line-height: 28px; }
   .profile-actions { gap: 8px; }
   .profile-actions .button { min-height: 44px; padding-inline: 12px; font-size: 12px; }
-  .profile-stats { column-gap: 20px; margin: 4px 0 8px; }
-  .profile-stat { gap: 4px; font-size: 12px; line-height: 20px; }
+  .profile-stats { column-gap: 16px; margin: 4px 0; }
+  .profile-stat { gap: 4px; min-height: 44px; font-size: 12px; line-height: 20px; }
   .profile-stat strong { font-size: 16px; line-height: 24px; }
-  .profile-stat + .profile-stat::before { left: -10px; }
+  .profile-stat + .profile-stat::before { top: 16px; bottom: 16px; left: -8px; }
   .profile-copy > .profile-account-id { font-size: 12px; }
-  .profile-bio { font-size: 13px; line-height: 22px; }
+  .profile-bio { font-size: 13px; line-height: 20px; }
   .profile-content-toolbar { gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
   .profile-tabs { gap: 24px; margin-bottom: 0; flex: 1 1 auto; }
   .profile-tabs .tab { font-size: 15px; }

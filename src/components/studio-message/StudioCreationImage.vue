@@ -54,7 +54,7 @@ async function retry() {
 .creation-image-preview { position: relative; display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: zoom-in; }
 .creation-image-preview img { display: block; width: auto; height: auto; max-width: 100%; max-height: min(480px, 44dvh); object-fit: contain; }
 .creation-image-preview[aria-busy="true"] img { min-width: min(240px, 100%); min-height: 160px; }
-.creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
+.creation-image-preview:focus-visible, .image-retry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .image-retry { display: flex; align-items: center; justify-content: center; gap: 8px; width: min(320px, 100%); min-height: 160px; padding: 16px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
 .image-retry:disabled { cursor: default; opacity: .6; }
 @media (min-width: 1000px) { .creation-image-preview img { max-height: min(340px, 26dvh); } }

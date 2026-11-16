@@ -11,6 +11,7 @@ import {
   type WalletPlan,
   type WalletQuote,
   type WalletRedemption,
+  type WalletSection,
 } from "../../shared/studio/wallet.ts";
 
 const EPAY_METHODS = new Set(["alipay", "wxpay"]);
@@ -85,8 +86,10 @@ function normalizePlan(value: unknown): WalletPlan | null {
   };
 }
 
-export async function readWallet(req: AccountRequest): Promise<WalletOverview> {
+export async function readWallet(req: AccountRequest, section: WalletSection | "all" = "all"): Promise<WalletOverview> {
   const userId = await identity(req, false, true);
+  const plans = section === "all" || section === "plans";
+  const historyPage = section === "all" || section === "history";
   const [
     infoResult,
     planResult,
@@ -95,15 +98,15 @@ export async function readWallet(req: AccountRequest): Promise<WalletOverview> {
     statusResult,
   ] = await Promise.all([
     accountRequest(req, "/api/user/topup/info", { reuseRequestSession: true }),
-    accountRequest(req, "/api/subscription/plans", {
+    plans ? accountRequest(req, "/api/subscription/plans", {
       reuseRequestSession: true,
-    }),
-    accountRequest(req, "/api/subscription/self", {
+    }) : Promise.resolve({ data: [] }),
+    plans ? accountRequest(req, "/api/subscription/self", {
       reuseRequestSession: true,
-    }),
-    accountRequest(req, "/api/user/topup/self?p=1&page_size=20", {
+    }) : Promise.resolve({ data: {} }),
+    historyPage ? accountRequest(req, "/api/user/topup/self?p=1&page_size=20", {
       reuseRequestSession: true,
-    }),
+    }) : Promise.resolve({ data: {} }),
     upstream("/api/status"),
   ]);
   const info = object(infoResult.data),

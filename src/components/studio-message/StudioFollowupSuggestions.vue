@@ -17,7 +17,7 @@ button { display: flex; align-items: center; gap: 12px; min-height: 36px; max-wi
 button span { overflow-wrap: anywhere; }
 svg { flex: none; }
 button:hover:not(:disabled) { color: var(--ink); background: var(--surface-soft); }
-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 button:disabled { opacity: .6; cursor: default; }
 @media (pointer: coarse), (max-width: 639px) { button { min-height: 44px; } }
 </style>

@@ -48,6 +48,7 @@
   --card: var(--surface);
   --action: var(--blue);
   --line-strong: var(--border);
+  --focus-outline-offset: -2px;
   --radius: 6px;
   --card-radius: 32px;
   --work-cover-shade: linear-gradient(180deg, #0000 0%, #00000033 24%, #000000c2 60%, #000000d1 100%);
@@ -79,7 +80,7 @@ a { color: inherit; text-decoration: none; }
 button:disabled, select:disabled { cursor: not-allowed; opacity: .56; }
 button:not(:disabled):active { transform: translateY(1px); }
 button, a, input, select, textarea { transition: background-color 200ms var(--ease), color 200ms var(--ease), opacity 200ms var(--ease); }
-:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 ::selection { background: var(--blue); color: var(--action-ink); }
 input, textarea { caret-color: var(--blue); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
@@ -176,7 +177,7 @@ summary::-webkit-details-marker { display: none; }
 .field input[type="file"]::file-selector-button:hover { background: var(--blue-soft); color: var(--blue); }
 .control { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--control-border); border-radius: var(--radius); outline: none; background: var(--surface); resize: vertical; }
 .control:focus { border-color: var(--focus-ring); }
-.control:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.control:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .control:disabled { background: var(--surface-soft); }
 textarea.control { line-height: 24px; }
 .form-note { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; margin-top: 12px; line-height: 20px; }
@@ -184,7 +185,7 @@ textarea.control { line-height: 24px; }
 .required-mark { color: var(--danger); }
 .search-control { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 40px; width: 320px; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); background: var(--surface-soft); }
 .search-control:focus-within { border-color: var(--focus-ring); }
-.search-control:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.search-control:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .search-control input, .search-control .control { background: transparent; border: 0; min-width: 0; width: 100%; outline: none; padding: 8px 0; color: var(--ink); box-shadow: none; font-size: 14px; }
 .search-control input:focus-visible { outline: none; }
 .search-control .icon-button { width: 24px; height: 28px; min-height: 28px; }

@@ -21,7 +21,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .studio-confirm-dialog { width: min(400px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 20px; border: 0; border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 12px 40px rgb(0 0 0 / 24%); }
 .studio-confirm-dialog::backdrop { background: rgb(0 0 0 / 48%); }
 header, footer { display: flex; align-items: center; gap: 8px; }header { justify-content: space-between; }h2 { margin: 0; font-size: 16px; font-weight: 500; }p { margin: 16px 0 24px; font-size: 14px; line-height: 24px; overflow-wrap: anywhere; white-space: pre-wrap; }footer { justify-content: flex-end; }.confirm-delete { background: var(--surface-soft); color: var(--danger); }
-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 footer button { border: 0; }
 @media (pointer: coarse), (max-width: 639px) { button { min-height: 44px; } }
 </style>

@@ -17,6 +17,6 @@ function change(event: Event) {
 svg { flex: none; color: var(--muted); }
 span { white-space: nowrap; }
 select { margin-left: auto; min-width: 0; min-height: 36px; padding: 6px; border: 0; border-radius: 6px; color: var(--ink); background: var(--surface-soft); font: inherit; font-size: 12px; }
-select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 option { background: var(--surface); }
 </style>
