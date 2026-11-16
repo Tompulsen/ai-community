@@ -79,7 +79,6 @@ test('pagination appends results and a new search discards the old cursor', asyn
   await page.getByRole('button', { name: '加载更多', exact: true }).click()
   await expect(page.locator('article.work-card')).toHaveCount(2)
   expect(queries.some(params => params.get('cursor') === 'fixture-page-2')).toBe(true)
-  await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
   await page.getByLabel('搜索作品', { exact: true }).fill('回归筛选')
   await expect(page.getByRole('link', { name: '筛选结果', exact: true })).toBeVisible()
   await expect(page.locator('article.work-card')).toHaveCount(1)

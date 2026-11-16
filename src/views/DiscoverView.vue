@@ -6,7 +6,6 @@ import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
-import GooeyInput from '../components/GooeyInput.vue'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import { kindLabels, type Work } from '../data'
 
@@ -108,7 +107,6 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
         </div>
       </div>
     </div>
-    <Teleport to="#header-search"><GooeyInput v-model="query" /></Teleport>
     <div v-if="query || tag || kind !== 'all'" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />

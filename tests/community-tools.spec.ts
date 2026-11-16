@@ -80,6 +80,7 @@ test('guest notification entry returns to its category after login', async ({ pa
   expect(fixture.reads.filter(path => path.startsWith('/api/messages') || path === '/api/notifications')).toEqual([])
   await expect(panel(page).getByRole('link', { name: '个人资料', exact: true })).toHaveAttribute('href', '/account?returnTo=/account?tab=profile')
   await panel(page).getByRole('link', { name: '通知', exact: true }).click()
+  await expect(page).toHaveURL(/\/account\?returnTo=/)
   expect(new URL(page.url()).searchParams.get('returnTo')).toBe('/messages?tab=activity')
   await fillAccountLogin(page)
   await expect(page).toHaveURL(/\/messages\?tab=activity$/)
@@ -96,7 +97,7 @@ test('keyboard, outside click and other header menus close the launcher predicta
   await expect(panel(page)).not.toBeVisible()
   await expect(launcher(page)).toBeFocused()
   await launcher(page).click()
-  await page.getByRole('heading', { name: '社区', exact: true }).click()
+  await page.getByRole('searchbox', { name: '搜索作品', exact: true }).click()
   await expect(panel(page)).not.toBeVisible()
   await page.getByLabel('账号菜单', { exact: true }).click()
   await expect(page.locator('.account-popover')).toBeVisible()
@@ -170,6 +171,10 @@ test('launcher fits narrow guest and member screens with accessible controls', a
       expect(bounds.x).toBeGreaterThanOrEqual(0)
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
       expect(bounds.y).toBeGreaterThanOrEqual(header.y + header.height)
+      if (width >= 1000) {
+        expect(bounds.x).toBeGreaterThanOrEqual(64)
+        expect(bounds.x).toBeLessThanOrEqual(80)
+      }
       const bottom = width < 1000 ? (await page.getByRole('navigation', { name: '手机导航' }).boundingBox())!.y : page.viewportSize()!.height
       expect(bounds.y + bounds.height).toBeLessThanOrEqual(bottom)
       await panel(page).getByRole('button', { name: '刷新', exact: true }).scrollIntoViewIfNeeded()

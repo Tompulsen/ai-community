@@ -32,11 +32,15 @@ delivery now includes the frontend and an independent community backend.
 ## Capabilities and Constraints
 
 - Public navigation groups home (首页), the promotion center, community and the
-  creation desk in that order on desktop and mobile.
-  Personal works and saved works live in the account menu.
+  creation desk in that order. Community pages use a 64px icon rail on desktop
+  and bottom navigation on smaller screens. Logo, navigation, existing tools,
+  submission and messages occupy the rail; settings stay at its bottom.
+  Personal works and saved works remain reachable through existing tools.
 - Home begins with segmented recommendations, latest and following modes, a
-  horizontal type/tag rail. The top header contains expandable icon search and a
-  submission entry that opens the existing work editor for members or login for guests.
+  horizontal type/tag rail. Community pages have a persistent full-width top search,
+  with account balance and the account menu at the right. Phones put search on its
+  own second header row. Discovery searches as users type; other pages submit to
+  discovery. Submission opens the existing work editor for members or login for guests.
   Types and content tags filter independently;
   the all option clears both. The rail supports touch, keyboard and scroll arrows.
   Its page heading remains available to screen readers; the visible heading and
@@ -69,11 +73,14 @@ delivery now includes the frontend and an independent community backend.
   revisions can overlap published totals. The pending queue queries pending work
   directly. Administrator-only operation logs support actor, type, date and cursor
   filters, exposing safe summaries without raw configuration or credentials.
-- A header community-tools launcher groups existing destinations in an icon grid,
+- A community-tools launcher groups existing destinations in an icon grid,
   including work search, discovery, announcements, creators, saved work, messages,
   creation, promotions and account tools. Unread badges reuse the shared inbox;
   private destinations resume after sign-in and management remains role-gated.
   Reload and navigation retain existing unsaved-edit protection.
+  Desktop menus open to the right of the rail; changing the desktop breakpoint closes
+  open menus. Short rail navigation scrolls independently without covering settings.
+  Studio and standalone guest login retain their own layout.
 - The current user reference is a compact Pinterest-style masonry gallery.
   Discovery uses the available page width with approximately 200px-wide columns,
   a 16px horizontal gap and at least 24px between cards in a column; phones use two

@@ -4,18 +4,18 @@
 import { nextTick, ref, useId, watch } from 'vue'
 import { Search, X } from '@lucide/vue'
 
-withDefaults(defineProps<{ placeholder?: string }>(), { placeholder: '搜索作品、提示词或创作者' })
+const props = withDefaults(defineProps<{ placeholder?: string; persistent?: boolean }>(), { placeholder: '搜索作品、提示词或创作者' })
 const model = defineModel<string>({ default: '' })
 const filterId = `gooey-filter-${useId()}`
 const inputId = `gooey-input-${useId()}`
 const root = ref<HTMLElement>()
 const input = ref<HTMLInputElement>()
 const trigger = ref<HTMLButtonElement>()
-const expanded = ref(!!model.value)
+const expanded = ref(props.persistent || !!model.value)
 
 watch(model, value => {
   if (value) expanded.value = true
-  else if (!root.value?.contains(document.activeElement)) expanded.value = false
+  else if (!props.persistent && !root.value?.contains(document.activeElement)) expanded.value = false
 })
 async function expand() {
   expanded.value = true
@@ -23,10 +23,10 @@ async function expand() {
   input.value?.focus()
 }
 function blur(event: FocusEvent) {
-  if (!model.value && !root.value?.contains(event.relatedTarget as Node | null)) expanded.value = false
+  if (!props.persistent && !model.value && !root.value?.contains(event.relatedTarget as Node | null)) expanded.value = false
 }
 async function escape(event: KeyboardEvent) {
-  if (model.value) return
+  if (props.persistent || model.value) return
   event.preventDefault()
   event.stopPropagation()
   expanded.value = false
@@ -40,8 +40,8 @@ function clear() {
 </script>
 
 <template>
-  <div ref="root" class="gooey-input" :class="{ expanded }" @focusout="blur" @keydown.esc="escape">
-    <svg class="gooey-definitions" width="0" height="0" aria-hidden="true">
+  <div ref="root" class="gooey-input" :class="{ expanded, persistent }" @focusout="blur" @keydown.esc="escape">
+    <svg v-if="!persistent" class="gooey-definitions" width="0" height="0" aria-hidden="true">
       <defs>
         <filter :id="filterId" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
@@ -50,7 +50,7 @@ function clear() {
         </filter>
       </defs>
     </svg>
-    <div class="gooey-surfaces" :style="{ filter: `url(#${filterId})` }" aria-hidden="true">
+    <div v-if="!persistent" class="gooey-surfaces" :style="{ filter: `url(#${filterId})` }" aria-hidden="true">
       <div class="gooey-field-surface" />
       <div class="gooey-bubble" />
     </div>
@@ -87,6 +87,11 @@ function clear() {
 .gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: inherit; }
 .gooey-clear:hover { background: var(--border); }
 .gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--ink); }
+.gooey-input.persistent { position: relative; inset: auto; width: 100%; border-radius: 8px; background: var(--surface-soft); }
+.persistent .gooey-search-icon { left: 16px; }
+.persistent .gooey-field { left: 40px; right: 0; width: auto; border-radius: 8px; }
+.persistent .gooey-field input { border-radius: 8px; padding-left: 4px; }
+.persistent:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 @media (prefers-reduced-motion: reduce) {
   .gooey-surfaces { filter: none !important; }
   .gooey-field-surface, .gooey-bubble, .gooey-search-icon, .gooey-field { transition: none; }
