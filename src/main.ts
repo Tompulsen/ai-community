@@ -5,4 +5,5 @@ import { router } from './router'
 import { continuousCorners } from './continuous-corners'
 import { walletPrefetch } from './wallet-prefetch'
 
-createApp(App).directive('continuous', continuousCorners).directive('wallet-prefetch', walletPrefetch).use(router).mount('#app')
+const app = createApp(App).directive('continuous', continuousCorners).directive('wallet-prefetch', walletPrefetch).use(router)
+void router.isReady().then(() => app.mount('#app'))

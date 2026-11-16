@@ -1,13 +1,17 @@
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import type { SessionUser, Work, WorkFile } from './data'
 
 export const session = reactive({
   user: null as SessionUser | null,
   ready: false,
+  loading: false,
   error: '',
   csrfToken: '',
   accountUrl: '',
 })
+export const sessionStatus = computed(() => session.user ? 'authenticated'
+  : !session.ready || session.loading ? 'loading'
+    : session.error ? 'error' : 'guest')
 export const notice = ref('')
 let noticeTimer: ReturnType<typeof setTimeout>
 let sessionRequest: Promise<void> | undefined
@@ -153,6 +157,7 @@ export async function syncAccountSession(returnTo?: string, signal?: AbortSignal
 
 function invalidateSessionRead() {
   sessionVersion++
+  session.loading = false
   sessionController?.abort()
   sessionController = undefined
   sessionRequest = undefined
@@ -163,6 +168,8 @@ export async function loadSession(force = false) {
   if (session.ready && !force) return
   const version = sessionVersion
   const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(new Error('账号加载超时，请检查网络后重试。')), 20_000)
+  session.loading = true
   sessionController = controller
   sessionRequest = (async () => {
     session.error = ''
@@ -189,10 +196,12 @@ export async function loadSession(force = false) {
     } catch (error) {
       if (version !== sessionVersion) return
       if ((error as { status?: number }).status === 401) session.user = null
-      session.error = errorMessage(error)
+      session.error = errorMessage(controller.signal.aborted ? controller.signal.reason : error)
     } finally {
+      clearTimeout(timeout)
       if (version === sessionVersion) {
         session.ready = true
+        session.loading = false
         sessionRequest = undefined
         sessionController = undefined
       }

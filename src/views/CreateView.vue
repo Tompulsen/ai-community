@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
-import { api, errorMessage, loadSession, session } from '../state'
+import { api, errorMessage, session, sessionStatus } from '../state'
 import { chats, chatDeletion, loadChats, newChat, undoRemovedChats } from '../native-chat'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
 import type { Work, WorkFile } from '../data'
@@ -20,7 +20,6 @@ import { modelKind } from '../model-preferences'
 import '../studio-composer.css'
 const StudioChat = defineAsyncComponent(() => import('../components/StudioChat.vue'))
 const StudioAccountTools = defineAsyncComponent(() => import('../components/StudioAccountTools.vue'))
-import ContentSkeleton from '../components/ContentSkeleton.vue'
 import type { StudioKind } from '../studio-state'
 const route = useRoute(), router = useRouter()
 const source = ref<Work | null>(null), error = ref('')
@@ -75,7 +74,6 @@ watch(() => [route.query.from, route.query.remix, session.user?.id, sourceRetry.
   const current = ++revision
   const sourceId = typeof route.query.from === 'string' ? route.query.from : typeof route.query.remix === 'string' ? route.query.remix : ''
   sourceLoading.value = Boolean(sourceId); sourceIssue.value = ''
-  await loadSession()
   if (!session.user || current !== revision) return
   source.value = null; error.value = ''
   if (sourceId) {
@@ -174,7 +172,7 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
 
 <template>
   <div class="page-container create-page">
-    <StudioSidebar v-if="session.user" ref="sidebar" :kind="kind" :account-tool="accountTool" @kind="switchKind" @new="newCreation" @reuse="reuse" @prices="openAccount('prices')" @library="mobileGallery?.open()" @conversation="openConversation" @settings="openSettings" />
+    <div v-if="sessionStatus !== 'guest'" :inert="!session.user || undefined"><StudioSidebar ref="sidebar" :kind="kind" :account-tool="accountTool" @kind="switchKind" @new="newCreation" @reuse="reuse" @prices="openAccount('prices')" @library="mobileGallery?.open()" @conversation="openConversation" @settings="openSettings" /></div>
     <header class="studio-page-toolbar" :class="{ 'studio-content-toolbar': !accountTool || accountTool === 'prices' }">
       <h1 v-if="accountTool && accountTool !== 'prices'">账户工具</h1>
       <button v-if="session.user" class="studio-tool mobile-studio-navigation" type="button" aria-label="打开侧边栏" title="打开侧边栏" aria-controls="studio-sidebar-drawer" :aria-expanded="sidebar?.visible || false" @click="sidebar?.open()"><Menu :size="23" /></button>
@@ -199,13 +197,12 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
       </Teleport>
     </header>
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
-    <ContentSkeleton v-if="!session.ready" layout="form" label="正在加载账号…" />
-    <div v-else-if="!session.user" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
+    <div v-if="sessionStatus === 'guest'" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink><RouterLink to="/discover" class="text-link"><ArrowLeft :size="16" />返回社区</RouterLink></div>
     <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p>
       <p v-if="sourceIssue" class="form-error" role="alert">{{ sourceIssue }} <button v-if="source" type="button" class="text-link" @click="sourceIssue = ''">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
-      <StudioChat v-show="!accountTool" ref="chat" :mode="kind" :header-visible="!accountTool" :source="source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :kind="kind" :source="source?.kind === kind ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
+      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="source?.kind === kind ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
     </template><StudioPublishDialog ref="publisher" />
   </div>
 </template>

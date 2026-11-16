@@ -38,6 +38,55 @@ describe('real API state', () => {
     await Promise.all([loadSession(), loadSession()])
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+  it('distinguishes unknown, failed, retrying, authenticated and confirmed guest states', async () => {
+    const { loadSession, sessionStatus } = await import('./state')
+    expect(sessionStatus.value).toBe('loading')
+    fetchMock.mockResolvedValueOnce(response({ message: 'Temporary outage' }, 503))
+    await loadSession()
+    expect(sessionStatus.value).toBe('error')
+    let finishRead!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finishRead = resolve }))
+    const retry = loadSession(true)
+    expect(sessionStatus.value).toBe('loading')
+    finishRead(response({ user }))
+    await retry
+    expect(sessionStatus.value).toBe('authenticated')
+    fetchMock.mockResolvedValueOnce(response({ user: null }))
+    await loadSession(true)
+    expect(sessionStatus.value).toBe('guest')
+  })
+  it.each(['/api/session', '/api/account/session'])('leaves loading and allows retry when %s stalls', async stalledPath => {
+    fetchMock.mockImplementation((path: string, options: RequestInit) => path === stalledPath
+      ? new Promise<Response>((_, reject) => {
+        options.signal!.addEventListener('abort', () => reject(options.signal!.reason), { once: true })
+      })
+      : response({ user: null, authentication: 'zhangyu' }))
+    const { loadSession, session } = await import('./state')
+    const pending = loadSession()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(session.ready).toBe(true)
+    expect(session.error).toContain('超时')
+    expect(session.user).toBeNull()
+    await pending
+    fetchMock.mockResolvedValue(response({ user }))
+    await loadSession(true)
+    expect(session.error).toBe('')
+    expect(session.user).toEqual(user)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('preserves the current identity when a session refresh times out', async () => {
+    fetchMock.mockImplementation((_: string, options: RequestInit) => new Promise<Response>((_, reject) => {
+      options.signal!.addEventListener('abort', () => reject(options.signal!.reason), { once: true })
+    }))
+    const { loadSession, session } = await import('./state')
+    session.user = { ...user }
+    session.ready = true
+    const pending = loadSession(true)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(session.error).toContain('超时')
+    await pending
+    expect(session.user).toEqual(user)
+  })
   it('preserves the last identity on temporary session failure but clears a confirmed expired session', async () => {
     const { session, loadSession } = await import('./state')
     session.user = { ...user }

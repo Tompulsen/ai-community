@@ -465,7 +465,14 @@ defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls,
         <div v-if="current.search !== 'off'" class="composer-feedback"><p class="search-cost">搜索与回答分别按章鱼账号配置计费。</p></div><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
     </section>
-    <p v-else class="muted" role="status">{{ chats.error || '正在读取对话…' }}</p>
+    <section v-else class="chat-main">
+      <div class="chat-messages-wrap"><div class="chat-messages"><div class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div></div></div>
+      <div v-if="mode === 'text'" class="chat-composer studio-composer">
+        <label class="field"><span class="studio-sr-only">消息</span><textarea class="composer-input" rows="1" placeholder="发消息，描述你的想法…" disabled /></label>
+        <div class="studio-composer-tools"><button class="composer-submit send-button" type="button" aria-label="发送" disabled><ArrowUp :size="21" /></button></div>
+      </div>
+      <p v-if="chats.error" class="form-error" role="alert">{{ chats.error }}</p>
+    </section>
     <StudioMediaPreview ref="attachmentDialog" :items="attachmentItems" :label="attachmentKind === 'image' ? '图片附件预览' : '视频附件预览'" :close-label="attachmentKind === 'image' ? '关闭图片' : '关闭视频'" @close="attachmentImage = undefined" />
     <StudioGallery :key="current?.id" ref="mediaGallery" preview-only />
     <StudioContextMenu ref="contextMenu" :items="menuItems" />

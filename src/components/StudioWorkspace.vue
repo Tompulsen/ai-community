@@ -106,6 +106,7 @@ function loadDraft() {
   sourceWorkId.value = undefined
   prompt.value = ''; model.value = ''; manualSize.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
   Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' })); protocol.value = 'openai'
+  if (!session.user) return
   try {
     const chat = currentConversation.value
     const saved = chat?.mediaDrafts?.[props.kind] || (chat?.creationKind === props.kind && !chat.mediaDrafts ? { ...chat.mediaDraft, prompt: chat.draft || '' } : null) ||

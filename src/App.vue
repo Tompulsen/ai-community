@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
+import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -9,14 +9,14 @@ import AccountBalance from './components/AccountBalance.vue'
 import MessageCenterDialog from './components/MessageCenterDialog.vue'
 import GooeyInput from './components/GooeyInput.vue'
 import type { Work } from './data'
-import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session } from './state'
+import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session, sessionStatus } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
 import { loadSite, site } from './site'
 import { studioSidebarWidth } from './studio-preferences'
 
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
-const studioPage = computed(() => Boolean(session.user) && (route.path === '/create' || route.path.startsWith('/create/')))
+const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
 const desktopCommunity = computed(() => communityShell.value && wideViewport.value)
@@ -175,23 +175,24 @@ function restoreMessageTrigger() {
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" :size="22" aria-hidden="true" /><span>{{ link.label }}</span></RouterLink></nav></Teleport>
-      <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation" />
+      <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
       <div class="header-tools"><form v-if="communityShell" id="header-search" class="header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
-      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="22" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
+      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="22" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
           <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
           <div class="menu-popover message-popover" :style="desktopCommunity ? { top: `${messagePopoverTop}px` } : undefined">
             <template v-if="session.user"><button v-for="item in messageLinks" :key="item.category" type="button" class="message-menu-link" aria-haspopup="dialog" @click="showMessageCenter(item.category)"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></button></template>
-            <div v-else class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
+            <div v-else-if="sessionStatus === 'guest'" class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
+            <div v-else class="message-login"><p>{{ sessionStatus === 'loading' ? '正在加载账号…' : '账号暂时无法加载' }}</p><button v-if="sessionStatus === 'error'" type="button" class="button btn subtle" @click="loadSession(true)">重新加载</button></div>
           </div>
         </details></div></Teleport>
         <template v-if="session.user">
         <AccountBalance />
         <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span v-if="session.user.accountId" class="caption-5">章鱼号：{{ session.user.accountId }}</span></div>
           <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
-      </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
+      </template><RouterLink v-else-if="sessionStatus === 'guest'" to="/account" class="button primary btn header-login">登录</RouterLink><span v-else-if="sessionStatus === 'loading' && !studioPage" class="header-session-status" role="status">账号加载中…</span><button v-else-if="sessionStatus === 'error'" type="button" class="icon-button" aria-label="重新加载账号" title="重新加载账号" @click="loadSession(true)"><RefreshCw :size="18" /></button></div></div>
     </div></header>
-    <p v-if="session.error" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
+    <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
@@ -206,6 +207,9 @@ function restoreMessageTrigger() {
 .studio-shell { flex: none; height: calc(100dvh - var(--mobile-nav-height)); min-height: 0; }
 .studio-shell > main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .studio-header-conversation { display: flex; align-items: center; min-width: 0; }
+.studio-home-link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--muted); }
+.studio-home-link:hover { color: var(--ink); }
+.header-session-status { display: inline-flex; align-items: center; min-height: 36px; min-width: 80px; font-size: 12px; line-height: 20px; color: var(--muted); white-space: nowrap; }
 @media (min-width: 1000px) {
   .studio-shell { --studio-sidebar-width: clamp(248px, 14.6vw, 420px); --studio-sidebar-surface: color-mix(in srgb, var(--canvas) 76%, var(--surface)); }
   .studio-shell > main { margin-left: var(--studio-sidebar-width); }
