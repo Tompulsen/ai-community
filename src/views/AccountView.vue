@@ -306,9 +306,6 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 
 <style scoped>
 .settings-page { max-width: 1360px; }
-.settings-page:has(.balance-settings) { max-width: 1200px; }
-.settings-page:has(.balance-settings) .page-heading { min-height: 40px; margin-bottom: 24px; }
-.settings-page:has(.balance-settings) .split-layout { grid-template-columns: 208px minmax(0, 1fr); gap: 32px; }
 .settings-page .split-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 40px; align-items: start; }
 .settings-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }
 .settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); }
@@ -367,7 +364,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .account-balance { font-size: 28px; line-height: 36px; margin: 8px 0 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 @media (max-width: 899px) {
-  .settings-page .split-layout, .settings-page:has(.balance-settings) .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .settings-sidebar { position: static; }
   .settings-search { margin-bottom: 12px; }
   .account-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 12px; }

@@ -53,10 +53,10 @@ test('a configured human verification token goes to the existing account login e
 test('returning to the account page refreshes an account changed in another tab', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
   await page.goto('/account')
-  await expect(page.getByLabel('章鱼号', { exact: true })).toHaveText('章鱼号：17')
+  await expect(page.locator('.profile-preview-body > span')).toHaveText('章鱼号：17')
   await expect(page.getByRole('textbox', { name: '登录用户名', exact: true })).toHaveValue('octopusfixture')
   fixture.state.user = { ...fixture.state.user, id: 'secondAccountUser', username: 'secondaccount' }
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.getByLabel('章鱼号', { exact: true })).toHaveText('章鱼号：17')
+  await expect(page.locator('.profile-preview-body > span')).toHaveText('章鱼号：17')
   await expect(page.getByRole('textbox', { name: '登录用户名', exact: true })).toHaveValue('secondaccount')
 })
