@@ -78,6 +78,17 @@ function redis() {
 
 export { redis as getNewApiRedis };
 
+export async function closeNewApiRedis() {
+  const store = state.redis;
+  state.redis = undefined;
+  if (!store) return;
+  try {
+    if (store.status !== "wait" && store.status !== "end") await store.quit();
+  } finally {
+    store.disconnect();
+  }
+}
+
 export function getSessionId(req: AccountRequest): string | null {
   assertNormalRequest(req);
   const id =

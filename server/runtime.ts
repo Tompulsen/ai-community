@@ -22,6 +22,7 @@ import { handleAdmin } from './admin.ts'
 import { handleSecurity } from './security.ts'
 import { startMediaWorker } from './media.ts'
 import { handleAccountRequest } from './native-account/index.ts'
+import { closeNewApiRedis } from './native-account/session.ts'
 import { handleCreation } from './creation.ts'
 import { handleStudioTools, closeMcpClients } from './studio-tools.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
@@ -69,6 +70,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ajv: { customOptions: { coerceTypes: false, useDefaults: false, removeAdditional: false } },
   })
   app.addHook('onClose', closeMcpClients)
+  app.addHook('onClose', closeNewApiRedis)
   const contexts = new WeakMap<FastifyRequest, RequestContext>()
   app.register(multipart, { limits: { files: 1, fields: 4, parts: 5, fieldSize: 4096, fileSize: 10 * 1024 ** 3 } })
   const parseJson = app.getDefaultJsonParser('error', 'error')
