@@ -74,14 +74,14 @@ delivery now includes the frontend and an independent community backend.
   creation, promotions and account tools. Unread badges reuse the shared inbox;
   private destinations resume after sign-in and management remains role-gated.
   Reload and navigation retain existing unsaved-edit protection.
-- The user selected the Aceternity Bento Grid reference for this redesign.
-  Work galleries use five base columns on desktop; small cards span one, large
-  cards span two. Small cards use a 4:5 ratio; large cards keep the same height.
-  Known landscape covers prefer two columns when space remains in the row, without
-  changing feed order. Covers fill and crop; clicking opens the detail page directly,
-  where the complete media remains available.
-  Smaller desktop widths use four columns, tablet two, phone one.
-  Work cards retain one iOS style continuous outer corner without an inner frame.
+- The current user reference is a compact Pinterest-style masonry gallery.
+  Discovery uses the available page width with approximately 200px-wide columns,
+  a 16px horizontal gap and at least 24px between cards in a column; phones use two
+  columns. Covers retain their natural aspect ratio without cropping, with 8px
+  media corners. Titles, authors and likes sit below each cover without a shade.
+  Feed and keyboard order stay unchanged; media loading, resizing and pagination
+  repack the grid. Clicking still opens details directly. Hover changes opacity
+  without moving cards. Loading skeletons use the same columns and information layout.
 - Existing feature scope is preserved. No new business capability is proposed.
 - Run independent community foundation services. Reuse the existing business
   modules and adapt their integration points.

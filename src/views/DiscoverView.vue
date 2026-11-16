@@ -122,7 +122,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 
 <style scoped>
 .discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.discover-page { padding-top: 16px; }
+.discover-page { max-width: none; padding-top: 16px; }
 .discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 24px; padding-bottom: 0; margin-bottom: 24px; }
 .browse-modes { display: flex; align-items: center; padding: 4px; border-radius: 18px; background: var(--surface); }
 .browse-mode { min-height: 28px; min-width: 60px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; font-weight: 500; white-space: nowrap; }

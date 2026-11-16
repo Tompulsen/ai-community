@@ -98,10 +98,10 @@ for (const width of [320, 390, 768, 1000, 1440]) {
         const expectedWorks = path.startsWith('/work/') ? works.slice(1, 6) : works
         await expect(gallery.locator('.work-card')).toHaveCount(expectedWorks.length)
         const layout = await gallery.evaluate(gridLayout)
-        const columns = width >= 1200 ? 5 : width >= 1000 ? 4 : width >= 640 ? 2 : 1
+        const columns = width < 640 ? 2 : Math.floor((layout.width + 16) / 216)
         expect(layout.columns, target.path).toBe(columns)
         expect(layout.columnGap, target.path).toBe(16)
-        expect(layout.rowGap, target.path).toBe(16)
+        expect(layout.rowGap, target.path).toBe(0)
         expect(layout.items.map(item => item.id), target.path).toEqual(expectedWorks.map(item => item.id))
         const header = await page.locator('.header-inner').evaluate(element => {
           const bounds = element.getBoundingClientRect(), style = getComputedStyle(element)
@@ -110,11 +110,9 @@ for (const width of [320, 390, 768, 1000, 1440]) {
         expect(layout.left, target.path).toBeCloseTo(header.left, 1)
         expect(layout.right, target.path).toBeCloseTo(header.right, 1)
         const columnWidth = (layout.width - (columns - 1) * 16) / columns
-        for (const [index, item] of layout.items.entries()) {
-          const wide = width >= 1200 ? index % 8 === 5 || index % 8 === 7 : width >= 1000 && index % 3 === 2
-          const span = wide ? 2 : 1
-          expect(item.width, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth * span + (span - 1) * 16, 1)
-          expect(item.height, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth * 5 / 4, 1)
+        for (const item of layout.items) {
+          expect(item.width, `${target.path}: ${item.id}`).toBeCloseTo(columnWidth, 1)
+          expect(item.height, `${target.path}: ${item.id}`).toBeGreaterThan(columnWidth * 5 / 4)
         }
         await expect(gallery.locator('.work-card > .continuous-outline')).toHaveCount(0)
         const corners = await gallery.locator('.work-card').evaluateAll(cards => cards.map(card => {
@@ -129,12 +127,13 @@ for (const width of [320, 390, 768, 1000, 1440]) {
         }))
         for (const corner of corners) {
           const context = `${target.path}: ${corner.id}`
-          expect(corner.radius, context).toBe(32)
-          expect(corner.smoothing, context).toBe(0.6)
-          expect(corner.clipPath, context).not.toBe('none')
-          expect(corner.coverRadius, context).toBe(0)
+          expect(corner.clipPath, context).toBe('none')
+          expect(corner.coverRadius, context).toBe(8)
           expect(corner.coverClipPath, context).toBe('none')
-          for (const inset of Object.values(corner.coverInset)) expect(inset, context).toBeCloseTo(0, 1)
+          expect(corner.coverInset.top, context).toBeCloseTo(0, 1)
+          expect(corner.coverInset.left, context).toBeCloseTo(0, 1)
+          expect(corner.coverInset.right, context).toBeCloseTo(0, 1)
+          expect(corner.coverInset.bottom, context).toBeGreaterThan(0)
         }
       }
       if (target.path === '/library') {
@@ -202,20 +201,19 @@ test('gallery loading keeps its columns and exposes an accessible status', async
   await expect(loading).toBeVisible()
   const loadingLayout = await loading.evaluate(gridLayout)
   const width = page.viewportSize()!.width
-  expect(loadingLayout.columns).toBe(width >= 1200 ? 5 : width >= 1000 ? 4 : width >= 640 ? 2 : 1)
+  expect(loadingLayout.columns).toBe(width < 640 ? 2 : Math.floor((loadingLayout.width + 16) / 216))
   expect(loadingLayout.columnGap).toBe(16)
-  expect(loadingLayout.rowGap).toBe(16)
+  expect(loadingLayout.rowGap).toBe(0)
   const columnWidth = (loadingLayout.width - (loadingLayout.columns - 1) * 16) / loadingLayout.columns
-  for (const item of loadingLayout.items) expect(item.height).toBeCloseTo(columnWidth * 5 / 4, 1)
+  for (const item of loadingLayout.items) expect(item.height).toBeCloseTo(columnWidth * 5 / 4 + 56, 1)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await loading.locator('.skeleton').first().evaluate(element => getComputedStyle(element).animationName)).toBe('none')
   release()
   await expect(loading).toHaveCount(0)
   await expect(page.locator('.work-card')).toHaveCount(10)
   const galleryLayout = await page.locator('.bento-grid').evaluate(gridLayout)
-  expect({ ...galleryLayout, items: galleryLayout.items.map(({ width, height }) => ({ width, height })) }).toEqual({
-    ...loadingLayout, items: loadingLayout.items.map(({ width, height }) => ({ width, height })),
-  })
+  expect(galleryLayout.columns).toBe(loadingLayout.columns)
+  expect(galleryLayout.items.map(item => item.width)).toEqual(loadingLayout.items.map(item => item.width))
 })
 
 test('guest account and library stay within a small viewport', async ({ page }) => {

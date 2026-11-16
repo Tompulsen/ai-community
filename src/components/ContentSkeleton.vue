@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import BentoGrid from './BentoGrid.vue'
 
-const props = withDefaults(defineProps<{ label: string; layout?: 'works' | 'creators' | 'rows' | 'form' }>(), { layout: 'rows' })
-const cornerMode = computed(() => props.layout === 'works' ? 'clip' : undefined)
+withDefaults(defineProps<{ label: string; layout?: 'works' | 'creators' | 'rows' | 'form' }>(), { layout: 'rows' })
 </script>
 
 <template>
   <component :is="layout === 'works' ? BentoGrid : 'div'" class="content-loading" :class="`loading-${layout}`" role="status" :aria-label="label">
-    <div v-for="n in layout === 'works' ? 10 : layout === 'creators' ? 4 : 3" :key="n" v-continuous:[cornerMode]="{ radius: layout === 'works' ? 32 : 8 }" class="loading-item" aria-hidden="true">
+    <div v-for="n in layout === 'works' ? 10 : layout === 'creators' ? 4 : 3" :key="n" v-continuous="{ radius: 8 }" class="loading-item" aria-hidden="true">
       <div v-if="layout === 'works'" class="skeleton loading-cover" />
       <div v-else-if="layout === 'creators'" v-continuous:clip="{ radius: 20 }" class="skeleton loading-cover" />
       <div v-if="layout === 'works'" class="loading-work-info"><div class="skeleton loading-line" /><div class="skeleton loading-line loading-line-short" /></div>
@@ -18,12 +16,11 @@ const cornerMode = computed(() => props.layout === 'works' ? 'clip' : undefined)
 </template>
 
 <style scoped>
-.loading-works > .loading-item { position: relative; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: var(--card-radius); background: var(--surface); }
-.loading-works > .loading-item::before { content: ""; position: absolute; inset: auto 0 0; height: var(--work-cover-shade-height); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
-.loading-works .loading-cover { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; aspect-ratio: auto; border-radius: 0; }
-.loading-work-info { position: relative; z-index: 2; display: flex; flex: 0 0 auto; flex-direction: column; justify-content: center; gap: 12px; height: 80px; min-width: 0; padding: 12px 16px 16px; }
+.loading-works > .loading-item { display: flex; flex-direction: column; gap: 0; min-width: 0; min-height: 0; padding: 0; border: 0; background: transparent; }
+.loading-works .loading-cover { position: relative; width: 100%; height: auto; min-height: 0; aspect-ratio: 4 / 5; border-radius: 8px; }
+.loading-work-info { display: flex; flex-direction: column; justify-content: center; gap: 8px; height: 56px; min-width: 0; padding: 8px 4px 0; }
 .loading-work-info .loading-line { flex: none; }
 @media (max-width: 639px) {
-  .loading-work-info { height: 102px; }
+  .loading-work-info { height: 80px; }
 }
 </style>
