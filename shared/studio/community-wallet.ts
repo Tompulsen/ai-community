@@ -40,6 +40,14 @@ export function formatPoints(value: string): string {
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (tail ? `.${tail}` : '')
 }
 
+/** CNY payment quotes have at most two decimal places; one fen is 50 points. */
+export function formatCnyPoints(value: string | number): string {
+  const match = /^(0|[1-9]\d{0,13})(?:\.(\d{1,2}))?$/.exec(String(value))
+  if (!match) return '—'
+  const cents = BigInt(match[1]!) * 100n + BigInt((match[2] || '').padEnd(2, '0'))
+  return formatPoints((cents * 50n).toString())
+}
+
 export function pointsInCny(value: string): string {
   if (!decimalPoints.test(value)) return '—'
   const [whole = '0', fraction = ''] = value.split('.')

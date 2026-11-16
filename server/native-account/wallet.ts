@@ -3,6 +3,7 @@ import { BlockList, isIP } from "node:net";
 import type { AccountRequest } from "./http.ts";
 import { accountRequest, getAuthenticatedSession, upstream } from "./client.ts";
 import { NewApiError, requireNewApiConfig } from "./config.ts";
+import { communityQuotaPerPoint } from "./community-wallet.ts";
 import {
   safeWalletPaymentUrl,
   type WalletOverview,
@@ -136,6 +137,7 @@ export async function readWallet(req: AccountRequest, section: WalletSection | "
     userId,
     currencySymbol,
     quotaPerUnit,
+    quotaPerPoint: communityQuotaPerPoint(),
     quotaDisplayType,
     creditExchangeRate,
     topup: {

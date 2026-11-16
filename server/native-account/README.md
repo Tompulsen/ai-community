@@ -33,6 +33,13 @@ off. Also configure `COMMUNITY_WALLET_CLIENT_ID` (the community's fixed origin)
 and `COMMUNITY_WALLET_SECRET` (at least 32 random characters, independent of the
 login-session secret). The same values must be configured at New API, with its
 `UNIFIED_WALLET_ENABLED` flag enabled after the complete relay path is verified.
+Set `COMMUNITY_WALLET_QUOTA_PER_CNY` to the exact New API
+`UNIFIED_WALLET_QUOTA_PER_CNY` value (for this deployment, `500000`). This controls
+point displays for model prices, consumption logs, token limits and plan quotas;
+it does not alter payment requests or settlement. Enabled point displays fail
+closed when the scale is missing or invalid. Top-up previews use the server's
+actual CNY payment quote times 5,000, including discounts. Historical order money
+is shown only as a point equivalent, never as proof of permanent-wallet credit.
 Keep these variables server-only; never prefix them with `VITE_`.
 
 `GET /api/new-api/wallet/points` reads `/api/user/self/wallet` through the current

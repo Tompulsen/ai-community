@@ -8,6 +8,15 @@ export function communityWalletEnabled() {
   return process.env.COMMUNITY_WALLET_ENABLED === 'true'
 }
 
+export function communityQuotaPerPoint(): number | undefined {
+  if (!communityWalletEnabled()) return undefined
+  const quotaPerCny = Number(process.env.COMMUNITY_WALLET_QUOTA_PER_CNY)
+  if (!Number.isSafeInteger(quotaPerCny) || quotaPerCny <= 0) {
+    throw new NewApiError('积分兑换比例暂不可用，请稍后再试', 503, 'COMMUNITY_WALLET_CONFIG')
+  }
+  return quotaPerCny / 5000
+}
+
 export async function readCommunityWallet(req: AccountRequest): Promise<{ userId: number; points: CommunityWallet }> {
   if (!communityWalletEnabled()) throw new NewApiError('积分钱包尚未启用', 404, 'COMMUNITY_WALLET_DISABLED')
   const { session } = await getAuthenticatedSession(req, true)

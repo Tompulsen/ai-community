@@ -12,6 +12,7 @@ import type {
   LotteryAward, LotteryCreditReceipt, LotteryProgress, LotterySettings, LotterySettingsInput,
 } from './business/lottery.ts'
 import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
+import { communityQuotaPerPoint } from './native-account/community-wallet.ts'
 
 interface LotteryConfigRow {
   id: string
@@ -29,6 +30,7 @@ interface PublicDrawSource {
   createdAt: Date | string
   creditAttempts: number
   prizes: LotteryAward[]
+  creditSubject?: string | null
 }
 interface LotteryDrawRow extends PublicDrawSource {
   requestId: string
@@ -130,10 +132,24 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
 }
 
 export function packLotteryDraw(row: PublicDrawSource, username = '') {
+  const quotaPerPoint = communityQuotaPerPoint()
   return {
     id: row.id, userId: row.userId ?? '', username,
     createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)).toISOString(), creditAttempts: row.creditAttempts,
-    prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt: _receipt, creditBlocked: _blocked, ...prize }) => prize),
+    prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt, creditBlocked: _blocked, ...prize }, index) => {
+      if (!quotaPerPoint) return prize
+      let legacyPoints: string | null = null
+      if (prize.status === 'fulfilled' && creditReceipt && /^[1-9]\d{0,15}$/.test(row.creditSubject || '')) {
+        const userId = Number(row.creditSubject), reference = `community_lottery_${row.id}_${index}`
+        try {
+          const receipt = lotteryCreditReceipt({ credited: true, reference, user_id: userId, amount_cents: prize.amountCents,
+            receipt: { id: creditReceipt.id, quota_added: creditReceipt.quotaAdded, quota_per_usd: creditReceipt.quotaPerUsd } },
+          reference, userId, prize.amountCents)
+          legacyPoints = (receipt.quotaAdded / quotaPerPoint).toFixed(6)
+        } catch { /* Historical records without valid delivery evidence remain unclassified. */ }
+      }
+      return { ...prize, legacyPoints }
+    }),
   }
 }
 

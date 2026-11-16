@@ -40,6 +40,7 @@ export type WalletOverview = {
   userId: number;
   currencySymbol: string;
   quotaPerUnit: number;
+  quotaPerPoint?: number;
   quotaDisplayType: string;
   creditExchangeRate: number;
   topup: {

@@ -20,7 +20,7 @@ onBeforeUnmount(() => {
 
 <template>
   <RouterLink v-wallet-prefetch to="/account?tab=balance" class="account-balance" :class="{ unavailable: accountBalance.amount === null && !accountBalance.points }" :aria-label="accountBalance.amount === null && !accountBalance.points ? '我的账户' : `我的账户，${balanceDescription}`" :title="accountBalance.amount === null && !accountBalance.points ? '查看我的账户' : balanceDescription" :aria-busy="accountBalance.loading">
-    <span v-if="accountBalance.points" class="points-compact"><span>公益 {{ formatPoints(accountBalance.points.charityPoints) }}</span><span>永久 {{ formatPoints(accountBalance.points.permanentPoints) }}</span></span>
+    <span v-if="accountBalance.points" class="points-compact"><span>公益 {{ formatPoints(accountBalance.points.charityPoints) }} 积分</span><span>永久 {{ formatPoints(accountBalance.points.permanentPoints) }} 积分</span></span>
     <span v-else>{{ balanceNumber }}{{ accountBalance.amount !== null && accountBalance.currency ? ' ' + accountBalance.currency : '' }}</span>
   </RouterLink>
 </template>

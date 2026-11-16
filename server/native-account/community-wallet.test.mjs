@@ -2,13 +2,22 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import test from 'node:test'
 import { signCommunityRequest } from './community-wallet.ts'
-import { parseCommunityWallet, formatPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
+import { parseCommunityWallet, formatPoints, formatCnyPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
 
 const url = new URL('https://model.example/v1/images/edits?mode=test')
 const secret = 'fixture-community-secret-'.repeat(2)
 const wallet = { enabled: true, currency: 'CNY', pointsPerCny: 5000,
   charityPoints: '123456789012345678.123456', permanentPoints: '100.000001',
   legacyApiQuota: -2, paidApiQuota: 4, totalApiQuota: 2, charityExpiringAt: null }
+
+test('paid CNY principal converts to points without floating-point rounding or product-unit assumptions', () => {
+  for (const [money, points] of [['1', '5,000'], ['10.00', '50,000'], ['8.00', '40,000'],
+    ['0.02', '100'], ['0.29', '1,450'], ['2.50', '12,500'], ['0', '0'],
+    ['99999999999999.99', '499,999,999,999,999,950']]) assert.equal(formatCnyPoints(money), points)
+  assert.equal(formatCnyPoints(10), '50,000')
+  for (const invalid of ['', '-1', '1e3', '0.001', '01', 'Infinity', Number.NaN])
+    assert.equal(formatCnyPoints(invalid), '—')
+})
 
 function configure(t, values = {}) {
   const config = { COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_SECRET: secret,

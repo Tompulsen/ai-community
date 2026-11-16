@@ -29,7 +29,7 @@ function cached<T>(store: Map<string, Entry<T>>, key: string, read: () => Promis
   return pending
 }
 export function walletPricingKey(data: WalletOverview) {
-  return JSON.stringify([data.currencySymbol, data.quotaPerUnit, data.quotaDisplayType, data.creditExchangeRate, data.topup])
+  return JSON.stringify([data.currencySymbol, data.quotaPerUnit, data.quotaPerPoint, data.quotaDisplayType, data.creditExchangeRate, data.topup])
 }
 export function defaultWalletAmount(data: WalletOverview) { return data.topup.amountOptions[0] || data.topup.minAmount }
 export function loadWallet(section: WalletSection, force = false) {
