@@ -498,8 +498,6 @@ dialog::backdrop { background: #0000009c; }
   .brand-mark { width: 28px; height: 28px; }
   .header-actions { gap: 4px; }
   .header-messages { display: none; }
-  .publish-button { width: 44px; min-height: 44px; padding: 0; }
-  .publish-button > span { display: none; }
   .profile-toggle > svg { display: none; }
   .profile-toggle { padding-left: 4px; }
   .page-container { padding: 24px 16px 40px; }

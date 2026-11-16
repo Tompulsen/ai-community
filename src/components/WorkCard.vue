@@ -78,7 +78,10 @@ function measureCover(event: Event) {
     <button class="save-work icon-button" :class="{ selected: work.saved }" :aria-label="`${work.saved ? '取消收藏' : '收藏'}：${work.title}`" :aria-pressed="work.saved" :title="work.saved ? '取消收藏' : '收藏作品'" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" /></button>
     <div class="work-information">
       <RouterLink :to="`/work/${work.id}`" class="work-title title-4" :title="work.title">{{ work.title }}</RouterLink>
-      <div class="work-meta"><RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="work-author"><span class="avatar avatar-xs blue"><img v-if="work.avatarUrl" :src="work.avatarUrl" :alt="work.author" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></span><span>{{ work.author }}</span></RouterLink><button class="like-button" :class="{ selected: work.liked }" :aria-label="`喜欢：${work.title}，${work.likes} 赞`" :aria-pressed="work.liked" :disabled="pendingActions.has(`liked:${work.id}`)" @click="toggleWork(work, 'liked')"><Heart :size="13" :fill="work.liked ? 'currentColor' : 'none'" /><span>{{ work.likes }}</span></button></div>
+      <div class="work-meta">
+        <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="work-author" :title="work.author"><span>{{ work.author }}</span></RouterLink>
+        <button class="like-button" :class="{ selected: work.liked }" :aria-label="`喜欢：${work.title}，${work.likes} 赞`" :aria-pressed="work.liked" :disabled="pendingActions.has(`liked:${work.id}`)" @click="toggleWork(work, 'liked')"><Heart :size="13" :fill="work.liked ? 'currentColor' : 'none'" /><span>{{ work.likes }}</span></button>
+      </div>
     </div>
     <slot name="actions" />
     </div>
@@ -90,23 +93,22 @@ function measureCover(event: Event) {
 .work-card-content { --work-ink: #fff; --work-muted: #e2e2df; --work-accent: #aec2a8; position: relative; display: flex; flex-direction: column; justify-content: flex-end; width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .work-card-content:has(.resource-cover) { --work-ink: var(--ink); --work-muted: var(--muted); --work-accent: var(--blue-hover); }
 /* Overdraw the shared clip edge so composited media cannot form a subpixel seam. */
-.work-card-content::before { content: ""; position: absolute; inset: auto -1px -1px; height: calc(160px + 1px); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
+.work-card-content::before { content: ""; position: absolute; inset: auto -1px -1px; height: calc(144px + 1px); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
 .work-card-content:has(.resource-cover)::before { display: none; }
 .work-cover { position: absolute; inset: 0; min-width: 0; min-height: 0; width: 100%; height: 100%; aspect-ratio: auto; border-radius: 0; overflow: visible; background: var(--surface-soft); }
 /* Stop transformed media before the shade's raster edge can expose an unshaded pixel. */
 .work-cover:not(.resource-cover) { clip-path: inset(0 0 1px); }
 .work-cover:focus-visible { outline-offset: -4px; }
 .work-cover > img, .work-cover > video { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
-.work-information { position: relative; z-index: 2; flex: 0 0 auto; min-width: 0; padding: 12px 16px; color: var(--work-ink); }
+.work-information { position: relative; z-index: 2; flex: 0 0 auto; min-width: 0; padding: 12px 16px 16px; color: var(--work-ink); }
 .work-title { min-width: 0; padding-top: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
 .work-title:hover { color: var(--work-ink); text-decoration: underline; text-underline-offset: 3px; }
-.work-meta { margin-top: 4px; gap: 8px; min-height: 32px; color: var(--work-muted); }
-.work-author { flex: 1; min-width: 0; min-height: 32px; }
+.work-meta { margin-top: 6px; gap: 12px; min-height: 24px; font-size: 12px; line-height: 18px; color: var(--work-muted); }
+.work-author { flex: 1; min-width: 0; min-height: 24px; }
 .work-author > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-author:hover { color: var(--work-ink); }
 .work-title:focus-visible, .work-author:focus-visible { outline-offset: -2px; }
-.avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
-.like-button { min-width: 36px; min-height: 32px; justify-content: center; color: var(--work-muted); transition: color 200ms var(--ease); }
+.like-button { min-width: 36px; min-height: 24px; padding: 0 0 0 4px; justify-content: flex-end; color: var(--work-muted); transition: color 200ms var(--ease); }
 .like-button:hover, .like-button:focus-visible { color: var(--work-ink); }
 .like-button.selected { color: var(--work-accent); }
 .save-work { top: 16px; right: 16px; z-index: 2; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; }
@@ -122,10 +124,9 @@ function measureCover(event: Event) {
 .work-card-managed .work-card-content::before { height: calc(224px + 1px); }
 .work-card-managed .work-card-content > :deep(.work-management-actions) { position: relative; z-index: 2; margin: 0; padding: 0 16px 16px; color: var(--work-ink); }
 @media (max-width: 639px) {
-  .work-card-content::before { height: calc(192px + 1px); }
+  .work-card-content::before { height: calc(176px + 1px); }
   .work-card-managed .work-card-content::before { height: calc(288px + 1px); }
-  .work-meta { gap: 8px; }
-  .work-title { min-height: 44px; line-height: 44px; }
+  .work-title { min-height: 24px; line-height: 24px; }
   .work-author, .like-button { min-height: 44px; }
   .like-button { min-width: 44px; }
   .save-work { min-width: 44px; min-height: 44px; }

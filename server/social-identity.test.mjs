@@ -19,6 +19,7 @@ const mappings = [
 
 function fixture(path, options = {}) {
   const statements = []
+  const profiles = people.map(person => options.nickname && person.id === 'bound17' ? { ...person, name: options.nickname } : person)
   let response
   const user = { id: 'reader', username: 'reader' }
   const query = async (sql, parameters = []) => {
@@ -33,14 +34,14 @@ function fixture(path, options = {}) {
     if (sql.includes('SELECT * FROM "user"')) return { rows: [{ id: user.id, host: null }] }
     if (sql.startsWith('SELECT 1 FROM blocking')) return { rows: [], rowCount: options.blocked ? 1 : 0 }
     if (sql.startsWith('SELECT 1 WHERE EXISTS (SELECT 1 FROM following')) return { rows: [], rowCount: 0 }
-    if (sql.includes('WITH latest AS')) return { rows: people.map((person, index) => ({ ...person,
+    if (sql.includes('WITH latest AS')) return { rows: profiles.map((person, index) => ({ ...person,
       messageId: `0000001${index}message`, fromUserId: user.id, toUserId: person.id, text: '', reads: [], unread: index + 1 })) }
     if (sql.startsWith('SELECT COUNT(*)::int AS "unreadCount"')) return { rows: [{ unreadCount: 6 }] }
     if (sql.includes('FROM chat_message')) return { rows: [] }
     if (sql.includes('SELECT id,username,name,"avatarId","chatScope"')) {
-      return { rows: people.filter(person => person.id === parameters[0]) }
+      return { rows: profiles.filter(person => person.id === parameters[0]) }
     }
-    if (sql.includes('SELECT id,username,name,"avatarId"')) return { rows: people }
+    if (sql.includes('SELECT id,username,name,"avatarId"')) return { rows: profiles }
     assert.fail(`Unexpected social identity query: ${sql}`)
   }
   const ctx = {
@@ -108,4 +109,18 @@ test('notification actor DTOs and fallback text share the public identity withou
   assert.equal(local.actor.accountId, undefined)
   assert.equal(identityReads(statements).length, 1)
   assert(!JSON.stringify(response()).includes('na_internal'))
+})
+
+test('local nicknames are used in message threads, peers and notification actors while upstream identity stays intact', async () => {
+  for (const path of ['/api/messages/threads', '/api/messages/bound17', '/api/notifications']) {
+    const f = fixture(path, { nickname: '章鱼小白' })
+    await handleSocial(f.ctx)
+    const result = f.response()
+    const actor = path.endsWith('/threads') ? result.items.find(item => item.user.id === 'bound17').user
+      : path.startsWith('/api/messages/') ? result.user : result.items.find(item => item.actor.id === 'bound17').actor
+    assert.equal(actor.name, '章鱼小白')
+    assert.equal(actor.username, 'root')
+    assert.equal(actor.accountId, '17')
+    assert.equal(actor.id, 'bound17')
+  }
 })

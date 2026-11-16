@@ -33,7 +33,7 @@ test('balance links to account settings, refreshes and fits desktop/mobile heade
   balance = 9.123456
   await indicator.click()
   await expect(page).toHaveURL(/\/account\?tab=balance$/)
-  await expect(page.getByRole('navigation', { name: '账户设置', exact: true }).getByRole('button', { name: '账户与余额', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('navigation', { name: '账户设置', exact: true }).getByRole('button', { name: '我的账户', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(indicator).toHaveText(`9.12 ${currencySymbol}`)
   await expect(indicator).toHaveAttribute('title', `可用余额 ${currencySymbol} 9.123456`)
   balance = 123456789.123456
@@ -45,7 +45,7 @@ test('balance links to account settings, refreshes and fits desktop/mobile heade
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(indicator).toHaveText('—')
   await expect(indicator).toHaveAttribute('href', '/account?tab=balance')
-  await expect(indicator).toHaveAttribute('title', '查看账户与余额')
+  await expect(indicator).toHaveAttribute('title', '查看我的账户')
   failed = false
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(indicator).toHaveText(`9.12 ${currencySymbol}`)

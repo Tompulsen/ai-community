@@ -362,6 +362,24 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     const tag = ctx.url.searchParams.get('tag');
     if (tag) conditions.push(`EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND (t.id = ${add(text(tag, 100))} OR t.name = $${params.length}))`);
     const status = ctx.url.searchParams.get('status');
+    const visibility = ctx.url.searchParams.get('visibility');
+    if (visibility && visibility !== 'all') {
+      if (!['public', 'private'].includes(visibility)) fail(400, 'Invalid work visibility');
+      if (scope !== 'mine') fail(403, 'Only your own works support visibility filtering');
+      const published = `(s.status IN ('published', 'approved') AND s."approvedNoteId" IS NOT NULL AND COALESCE(n.visibility='public',false))`;
+      conditions.push(visibility === 'public' ? published : `(s.status<>'draft' AND NOT ${published})`);
+    }
+    const dates = ['from', 'to'].map(key => {
+      const value = ctx.url.searchParams.get(key);
+      if (!value) return null;
+      const timestamp = value.length <= 40 ? Date.parse(value) : NaN;
+      if (!Number.isFinite(timestamp)) fail(400, 'Invalid work date');
+      return timestamp;
+    });
+    const [dateFrom, dateTo] = dates;
+    if (dateFrom != null && dateTo != null && dateFrom >= dateTo) fail(400, 'Invalid work date range');
+    if (dateFrom != null) conditions.push(`s."submittedAt">=to_timestamp(${add(dateFrom)}/1000.0)`);
+    if (dateTo != null) conditions.push(`s."submittedAt"<to_timestamp(${add(dateTo)}/1000.0)`);
     if ((scope === 'mine' || scope === 'admin') && status && status !== 'all') {
       if (status === 'pending') conditions.push(`(s.status = 'pending' OR s."pendingRevision" IS NOT NULL)`);
       else if (scope === 'admin' && status === 'published') conditions.push(`(s.status = 'published' OR (s.status = 'approved' AND s."approvedNoteId" IS NOT NULL))`);

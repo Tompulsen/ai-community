@@ -116,6 +116,30 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
+test('work authors and comments use the current local nickname while retaining verified account fields and content ownership', async () => {
+  let nickname = '章鱼小白';
+  const query = async sql => {
+    if (sql.includes('FROM external_account')) return { rows: [{ userId: 'owner1', subject: '17', username: 'root' }] };
+    if (sql.includes('FROM community_submission s')) return { rows: [{ ...workRow, authorName: nickname }] };
+    if (sql.includes('FROM note n JOIN "user"')) return { rows: [{
+      id: 'comment1', userId: 'owner1', name: nickname, username: 'oldLoginName', text: '你好', fileIds: [], replyId: 'note1',
+    }] };
+    return { rows: [] };
+  };
+  for (const name of ['章鱼小白', '修改后的社区昵称']) {
+    nickname = name;
+    for (const path of ['/api/works?sort=latest', '/api/works/work1/comments']) {
+      const ctx = context({ path, query });
+      await handleContent(ctx);
+      const item = ctx.result.payload.items[0];
+      assert.equal(item.author, name);
+      assert.equal(item.authorUsername, 'root');
+      assert.equal(item.authorAccountId, '17');
+      assert.equal(item.authorId, 'owner1');
+    }
+  }
+});
+
 test('generation recipes survive normalization with public options only and reject invalid values', () => {
   const parameters = { version: 1, kind: 'video', group: '视频', size: '720x1280', aspect_ratio: '9:16', n: 1, duration: 8,
     tokenId: 99, apiKey: 'private', videoOptions: { mode: 'text-to-video', seed: '42', openaiImageUrl: 'https://private.example/image', openaiFileId: 'private',
@@ -218,6 +242,36 @@ test('saved library filtering and cursor are applied in SQL before the page limi
   assert(statement.includes('s.id<$2'));
   assert.deepEqual(parameters, ['reader1', 'work8', 101]);
   assert.equal(ctx.result.payload.nextCursor, null);
+});
+
+test('owner visibility and date filters are applied before pagination and keep drafts separate', async () => {
+  for (const visibility of ['public', 'private']) {
+    let statement, parameters;
+    const ctx = context({ path: `/api/library?visibility=${visibility}&kind=image&from=2026-11-01T00:00:00Z&to=2026-11-17T00:00:00Z&cursor=work8&limit=2&authorId=other`,
+      user: { id: 'owner1' }, query: async (sql, values) => { statement = sql; parameters = values; return { rows: [] }; } });
+    await handleContent(ctx);
+    assert(statement.includes('s."authorId" = $1'));
+    assert(statement.includes(`s.status IN ('published', 'approved')`));
+    assert(statement.includes(`COALESCE(n.visibility='public',false)`));
+    assert.equal(statement.includes(`s.status<>'draft' AND NOT`), visibility === 'private');
+    assert(statement.indexOf('s."submittedAt">=to_timestamp(') < statement.indexOf('ORDER BY'));
+    assert(statement.includes('s."submittedAt"<to_timestamp('));
+    assert.deepEqual(parameters, ['owner1', 'image', Date.parse('2026-11-01T00:00:00Z'), Date.parse('2026-11-17T00:00:00Z'), 'work8', 3]);
+    assert(!parameters.includes('other'));
+  }
+  let sql;
+  await handleContent(context({ path: '/api/library?status=draft', user: { id: 'owner1' }, query: async statement => { sql = statement; return { rows: [] }; } }));
+  assert(sql.includes('s.status = $2'));
+});
+
+test('visibility and date filters reject invalid values and never expose another owner', async () => {
+  for (const path of ['/api/library?visibility=hidden', '/api/library?from=invalid', '/api/library?from=2026-11-17&to=2026-11-16']) {
+    await assert.rejects(handleContent(context({ path, user: { id: 'owner1' } })), { statusCode: 400 });
+  }
+  for (const path of ['/api/works?visibility=private&authorId=owner1', '/api/library?tab=saved&visibility=private', '/api/library?tab=liked&visibility=private']) {
+    await assert.rejects(handleContent(context({ path, user: { id: 'other1' } })), { statusCode: 403 });
+  }
+  await assert.rejects(handleContent(context({ path: '/api/library?visibility=private' })), { statusCode: 401 });
 });
 
 test('profile received likes share public visibility and count works without amplifying them by reactions', async () => {

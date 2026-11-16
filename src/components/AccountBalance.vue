@@ -18,7 +18,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <RouterLink to="/account?tab=balance" class="account-balance" :class="{ unavailable: accountBalance.amount === null }" :aria-label="accountBalance.amount === null ? '账户与余额' : `账户与余额，${balanceDescription}`" :title="accountBalance.amount === null ? '查看账户与余额' : balanceDescription" :aria-busy="accountBalance.loading">
+  <RouterLink to="/account?tab=balance" class="account-balance" :class="{ unavailable: accountBalance.amount === null }" :aria-label="accountBalance.amount === null ? '我的账户' : `我的账户，${balanceDescription}`" :title="accountBalance.amount === null ? '查看我的账户' : balanceDescription" :aria-busy="accountBalance.loading">
     <span>{{ balanceNumber }}{{ accountBalance.amount !== null && accountBalance.currency ? ' ' + accountBalance.currency : '' }}</span>
   </RouterLink>
 </template>

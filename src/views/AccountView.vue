@@ -32,7 +32,7 @@ const settingsItems = [
   { id: 'profile', label: '个人资料', icon: UserRound, group: '账号设置', keywords: '昵称 名称 头像 封面 简介 profile' },
   { id: 'privacy', label: '关注与隐私', icon: LockKeyhole, group: '账号设置', keywords: '关注 审批 粉丝 隐私 公开 privacy' },
   { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security' },
-  { id: 'balance', label: '账户与余额', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance' },
+  { id: 'balance', label: '我的账户', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance' },
   { id: 'theme', label: '主题与外观', icon: Palette, group: '偏好设置', keywords: '明亮 暗色 主题 配色 外观 定时 跟随系统 theme' },
 ]
 const settingsGroups = computed(() => {
@@ -233,7 +233,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId && tab !== 'balance'" class="account-identity" aria-label="章鱼账号">账号ID:{{ session.user.accountId }} @{{ session.user.username }}</span></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div><span v-if="session.user?.accountId" class="account-identity" aria-label="章鱼号">章鱼号：{{ session.user.accountId }}</span></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
@@ -279,9 +279,10 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
             </div>
             <input id="profile-avatar" ref="avatarInput" hidden type="file" aria-label="头像" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" />
             <input id="profile-banner" ref="bannerInput" hidden type="file" aria-label="主页封面" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" />
-            <div class="profile-field-group"><label class="field"><span>显示名称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" aria-describedby="profile-name-help" @input="saved = false" /></label><div class="field-caption"><p id="profile-name-help">作为昵称显示在作品和个人主页。</p><span>{{ name.length }}/50</span></div></div>
+            <div class="profile-field-group"><label class="field"><span>社区昵称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" aria-describedby="profile-name-help" @input="saved = false" /></label><div class="field-caption"><p id="profile-name-help">用于作品、评论和个人主页，不影响章鱼账号登录。</p><span>{{ name.length }}/50</span></div></div>
+            <div class="profile-field-group"><label class="field"><span>登录用户名</span><input :value="session.user.username" class="control" readonly aria-describedby="profile-username-help" /></label><div class="field-caption"><p id="profile-username-help">由章鱼账户中心管理。</p></div></div>
             <div class="profile-field-group"><label class="field"><span>个人简介</span><textarea v-model="bio" class="control profile-bio" rows="6" maxlength="1500" :disabled="busy" aria-describedby="profile-bio-help" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label><div class="field-caption"><p id="profile-bio-help">让大家更了解你。</p><span>{{ bio.length }}/1500</span></div></div>
-            <details class="profile-preview"><summary><Eye :size="16" aria-hidden="true" />预览个人资料<ChevronDown class="preview-chevron" :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name || session.user.username }}</strong><span>@{{ session.user.username }}</span><p>{{ bio || '还没有填写个人简介。' }}</p></div></details>
+            <details class="profile-preview"><summary><Eye :size="16" aria-hidden="true" />预览个人资料<ChevronDown class="preview-chevron" :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name || session.user.username }}</strong><span v-if="session.user.accountId">章鱼号：{{ session.user.accountId }}</span><p>{{ bio || '还没有填写个人简介。' }}</p></div></details>
             <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved" :size="15" aria-hidden="true" /><span v-else class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传' + (uploading === 'avatar' ? '头像…' : '封面…') : busy ? '正在保存资料…' : saved ? '资料已保存' : dirty ? '有未保存的修改' : '资料已同步' }}</p><button class="button primary btn" :disabled="busy"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存资料' }}</button></footer>
           </form>
         </section>

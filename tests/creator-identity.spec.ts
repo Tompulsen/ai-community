@@ -52,7 +52,7 @@ async function mockCreators(page: Page, currentId = '', patch: Partial<ProfileCr
   await page.route('**/api/library**', route => {
     const url = new URL(route.request().url())
     reads.push(url)
-    return route.fulfill({ json: { items: [url.searchParams.get('tab') === 'saved' ? savedWork : likedWork], nextCursor: null } })
+    return route.fulfill({ json: { items: [url.searchParams.get('tab') === 'saved' ? savedWork : url.searchParams.get('tab') === 'liked' ? likedWork : publicWork], nextCursor: null } })
   })
   await page.route('**/api/users/**', route => {
     if (route.request().method() !== 'GET') return route.fallback()
@@ -77,15 +77,15 @@ test('guests see numeric account IDs without handles in creator cards, profiles 
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
     await page.goto('/community')
-    await expect(page.locator('.creator-name > .caption-5')).toHaveText(['账号ID:3', '账号ID:42', '账号ID:7'])
-    const rootLink = page.locator('.creator-card').filter({ hasText: '账号ID:3' }).getByRole('link')
+    await expect(page.locator('.creator-name > .caption-5')).toHaveText(['章鱼号：3', '章鱼号：42', '章鱼号：7'])
+    const rootLink = page.locator('.creator-card').filter({ hasText: '章鱼号：3' }).locator('.creator-identity')
     await expect(rootLink).toHaveAttribute('href', `/community?creator=${creator.id}`)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `${screenshotDirectory}/cards-${width}.png`, fullPage: true })
     await rootLink.click()
     await expect(page).toHaveURL(`/community?creator=${creator.id}`)
-    await expect(profileIdentity(page)).toHaveText('账号ID:3')
-    await expect(page.locator('.profile-copy h1')).toHaveText('root')
+    await expect(profileIdentity(page)).toHaveText('章鱼号：3')
+    await expect(page.locator('.profile-copy h1')).toHaveText('章鱼创作者')
     await expect(page.getByRole('link', { name: '编辑资料', exact: true })).toHaveCount(0)
     await expect(page.locator('.community-page')).not.toContainText('na_')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -95,7 +95,7 @@ test('guests see numeric account IDs without handles in creator cards, profiles 
       const dialog = peopleDialog(page)
       await expect(dialog).toBeVisible()
       await expect(dialog.getByRole('heading', { name: title, exact: true })).toBeVisible()
-      await expect(dialog.locator('.person-identity .caption-5')).toHaveText([`账号ID:${expectedId}`])
+      await expect(dialog.locator('.person-identity .caption-5')).toHaveText([`章鱼号：${expectedId}`])
       await expect(dialog.locator('.person-identity').first()).toHaveAttribute('href', `/community?creator=${expectedId}`)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await page.screenshot({ path: `${screenshotDirectory}/${title === '粉丝' ? 'followers' : 'following'}-${width}.png`, fullPage: true })
@@ -110,22 +110,22 @@ test('guests see numeric account IDs without handles in creator cards, profiles 
 test('the current account can edit its profile and switch between works, saved works and liked works', async ({ page }) => {
   const fixture = await mockCreators(page, '3', { isSelf: false })
   await page.goto('/community?creator=3')
-  await expect(page.locator('.profile-copy h1')).toHaveText('root')
-  await expect(profileIdentity(page)).toHaveText('账号ID:3')
+  await expect(page.locator('.profile-copy h1')).toHaveText('章鱼创作者')
+  await expect(profileIdentity(page)).toHaveText('章鱼号：3')
   await expect(page.getByRole('link', { name: '编辑资料', exact: true })).toHaveAttribute('href', '/account?tab=profile')
   await expect(page.getByRole('button', { name: '查看关注', exact: true })).toContainText('2')
   await expect(page.getByRole('button', { name: '查看粉丝', exact: true })).toContainText('2')
   await expect(page.getByText(/收获点赞\s*38/)).toBeVisible()
   await expect(page.getByRole('link', { name: fixture.publicWork.title, exact: true })).toBeVisible()
-  expect(fixture.reads.filter(url => url.pathname === '/api/library')).toHaveLength(0)
+  expect(fixture.reads.filter(url => url.pathname === '/api/library').map(url => url.searchParams.get('tab'))).toEqual([null])
   await contentTab(page, '收藏').click()
   await expect(page.getByRole('link', { name: fixture.savedWork.title, exact: true })).toBeVisible()
   await contentTab(page, '喜欢').click()
   await expect(page.getByRole('link', { name: fixture.likedWork.title, exact: true })).toBeVisible()
   await contentTab(page, '作品').click()
   await expect(page.getByRole('link', { name: fixture.publicWork.title, exact: true })).toBeVisible()
-  expect(fixture.reads.filter(url => url.pathname === '/api/library').map(url => url.searchParams.get('tab'))).toEqual(['saved', 'liked'])
-  expect(fixture.reads.some(url => url.pathname === '/api/works' && url.searchParams.get('authorId') === '3')).toBe(true)
+  expect(fixture.reads.filter(url => url.pathname === '/api/library').map(url => url.searchParams.get('tab'))).toEqual([null, 'saved', 'liked', null])
+  expect(fixture.reads.some(url => url.pathname === '/api/works')).toBe(false)
 })
 
 for (const currentId of ['', '42']) {
@@ -138,7 +138,7 @@ for (const currentId of ['', '42']) {
     await contentTab(page, '喜欢').click()
     await expect(page.getByText('喜欢仅本人可见', { exact: true })).toBeVisible()
     expect(fixture.reads.filter(url => url.pathname === '/api/library')).toHaveLength(0)
-    await expect(profileIdentity(page)).toHaveText('账号ID:3')
+    await expect(profileIdentity(page)).toHaveText('章鱼号：3')
   })
 }
 
@@ -147,22 +147,22 @@ test('people dialogs preserve pagination and reset the list when switching from 
   await page.goto('/community?creator=3')
   const dialog = peopleDialog(page)
   await page.getByRole('button', { name: '查看粉丝', exact: true }).click()
-  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['账号ID:42'])
+  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['章鱼号：42'])
   await dialog.getByRole('button', { name: '加载更多', exact: true }).click()
-  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['账号ID:42', '账号ID:7'])
+  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['章鱼号：42', '章鱼号：7'])
   await expect(dialog.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
   await dialog.getByRole('button', { name: '关闭列表', exact: true }).click()
   await page.getByRole('button', { name: '查看关注', exact: true }).click()
   await expect(dialog.getByRole('heading', { name: '关注', exact: true })).toBeVisible()
-  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['账号ID:7'])
+  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['章鱼号：7'])
   await dialog.getByRole('button', { name: '加载更多', exact: true }).click()
-  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['账号ID:7', '账号ID:42'])
+  await expect(dialog.locator('.person-identity .caption-5')).toHaveText(['章鱼号：7', '章鱼号：42'])
   expect(fixture.reads.filter(url => url.searchParams.has('cursor')).map(url => url.searchParams.get('cursor'))).toEqual(['followers-next', 'following-next'])
 })
 
 test('profile avatars, usernames, IDs, descriptions and content tabs fit desktop and small phones', async ({ page }) => {
   const fixture = await mockCreators(page, '3', {
-    username: 'studio_creator_42',
+    username: 'studio_creator_42', name: '章鱼小白的图片与视频创作记录',
     bio: '分享图片和视频创作，记录从构思到作品发布的过程。欢迎交流镜头、色彩和提示词，持续整理每次创作的经验与灵感。',
   })
   const errors: string[] = []
@@ -172,8 +172,8 @@ test('profile avatars, usernames, IDs, descriptions and content tabs fit desktop
     await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
     await page.goto('/community?creator=3')
     const heading = page.locator('.profile-copy h1')
-    await expect(heading).toHaveText(fixture.profile.username)
-    await expect(profileIdentity(page)).toHaveText('账号ID:3')
+    await expect(heading).toHaveText(fixture.profile.name)
+    await expect(profileIdentity(page)).toHaveText('章鱼号：3')
     await expect(page.getByText(fixture.profile.bio, { exact: true })).toBeVisible()
     await expect(contentTab(page, '作品')).toBeVisible()
     await expect(contentTab(page, '收藏')).toBeVisible()
@@ -188,4 +188,17 @@ test('profile avatars, usernames, IDs, descriptions and content tabs fit desktop
     await page.screenshot({ path: `${screenshotDirectory}/layout-${width}.png`, fullPage: true })
   }
   expect(errors).toEqual([])
+})
+
+test('nickname and upstream account number take priority without changing profile links or ownership', async ({ page }) => {
+  await mockCreators(page, '3', { accountId: '17', name: '章鱼小白', username: 'root' })
+  await page.goto('/community?creator=3')
+  await expect(page.locator('.profile-copy h1')).toHaveText('章鱼小白')
+  await expect(profileIdentity(page)).toHaveText('章鱼号：17')
+  await expect(page.getByRole('link', { name: '编辑资料', exact: true })).toBeVisible()
+  await expect(page.locator('.profile-avatar img')).toHaveAttribute('alt', '章鱼小白')
+  await page.goto('/community')
+  const card = page.locator('.creator-card').filter({ hasText: '章鱼号：17' })
+  await expect(card.locator('h2')).toHaveText('章鱼小白')
+  await expect(card.locator('.creator-identity')).toHaveAttribute('href', '/community?creator=3')
 })

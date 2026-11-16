@@ -144,9 +144,8 @@ function restoreMessageTrigger() {
           </div>
         </details>
         <template v-if="session.user">
-        <RouterLink v-if="!studioPage && route.path !== '/discover'" :to="{ path: route.path, query: { ...route.query, publish: '1' } }" class="button primary publish-button btn" aria-label="发布作品" title="发布作品"><Plus :size="17" /><span>发布作品</span></RouterLink>
         <AccountBalance />
-        <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span class="caption-5">账号ID:{{ session.user.id }}</span></div>
+        <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span v-if="session.user.accountId" class="caption-5">章鱼号：{{ session.user.accountId }}</span></div>
           <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
       </template><RouterLink v-else to="/account" class="button primary btn header-login">登录</RouterLink></div></div>
     </div></header>
@@ -224,7 +223,6 @@ function restoreMessageTrigger() {
   .header-search-slot { --gooey-expanded-width: 100%; }
   .header-search-slot:has(.expanded) { grid-column: 1 / -1; grid-row: 2; width: 100%; align-self: start; }
 }
-@media (max-width: 639px) { .header-actions > .publish-button { padding: 0; } }
 @media (max-width: 379px) {
   .brand > span { display: none; }
   .header-inner:has(.account-balance) .header-search-slot { display: none; }

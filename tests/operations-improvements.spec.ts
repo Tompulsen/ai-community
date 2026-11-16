@@ -103,7 +103,10 @@ test('saving from a dirty admin panel closes the saved editor even if the next n
   })
   await page.goto('/admin?tab=site')
   await page.getByLabel('站点名称', { exact: true }).fill('未保存社区名')
-  await page.getByRole('link', { name: '发布作品', exact: true }).click()
+  await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & { __vue_app__: import('vue').App }
+    return root.__vue_app__.config.globalProperties.$router.push({ query: { tab: 'site', publish: '1' } })
+  })
   const editor = page.getByRole('dialog', { name: '发布作品', exact: true })
   await expect(editor).toBeVisible()
   await editor.getByLabel('作品类型').selectOption('resource'); await editor.getByLabel('作品标题').fill('从管理页创建'); await editor.getByLabel('资源内容').fill('草稿正文')

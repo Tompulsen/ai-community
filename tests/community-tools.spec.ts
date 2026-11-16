@@ -116,13 +116,13 @@ test('keyboard, outside click and other header menus close the launcher predicta
 test('tool navigation and reload preserve the unsaved profile guard', async ({ page }) => {
   await toolsFixture(page)
   await page.goto('/account')
-  await page.getByLabel('显示名称', { exact: true }).fill('尚未保存的个人资料')
+  await page.getByLabel('社区昵称', { exact: true }).fill('尚未保存的个人资料')
   await launcher(page).click()
   await panel(page).getByRole('link', { name: '收藏', exact: true }).click()
   await expect(panel(page)).not.toBeVisible()
   await page.getByRole('button', { name: '继续编辑', exact: true }).click()
   await expect(page).toHaveURL(/\/account$/)
-  await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('尚未保存的个人资料')
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('尚未保存的个人资料')
   await launcher(page).click()
   const prompt = page.waitForEvent('dialog')
   const refresh = panel(page).getByRole('button', { name: '刷新', exact: true }).click()
@@ -130,7 +130,7 @@ test('tool navigation and reload preserve the unsaved profile guard', async ({ p
   expect(confirm.type()).toBe('beforeunload')
   await confirm.dismiss()
   await refresh
-  await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('尚未保存的个人资料')
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('尚未保存的个人资料')
 })
 
 test('switching accounts closes tools and updates identity, privileges and unread counts', async ({ page }) => {
@@ -143,7 +143,7 @@ test('switching accounts closes tools and updates identity, privileges and unrea
   fixture.state.user = { ...fixture.state.user, id: 'secondAccount', isAdmin: false, isModerator: false, name: '另一个账号' }
   Object.assign(fixture.counts, { announcement: 0, activity: 0, messages: 0 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('另一个账号')
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('另一个账号')
   await expect(panel(page)).not.toBeVisible()
   await launcher(page).click()
   await expect(panel(page).getByRole('searchbox')).toHaveValue('')

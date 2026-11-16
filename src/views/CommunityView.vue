@@ -1,22 +1,26 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Users, X } from '@lucide/vue'
+import { ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Trash2, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
-import { kindLabels, type Announcement, type Creator, type Work } from '../data'
+import { type Announcement, type Creator, type Work } from '../data'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import FollowButton from '../components/FollowButton.vue'
 import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
+import ProfileWorkControls, { type ProfileWorkFilters } from '../components/ProfileWorkControls.vue'
+import { confirmStudioDelete } from '../studio-confirm'
 const route = useRoute()
 const router = useRouter()
 const tab = ref(route.query.tab === 'announcements' ? 'announcements' : 'creators')
 const creatorId = computed(() => typeof route.query.creator === 'string' ? route.query.creator : '')
 const creators = ref<Creator[]>([]), announcements = ref<Announcement[]>([]), creator = ref<Creator | null>(null), works = ref<Work[]>([])
 const profileTabs = [{ value: 'works', label: '作品' }, { value: 'saved', label: '收藏' }, { value: 'liked', label: '喜欢' }] as const
-const profileTab = ref<'works' | 'saved' | 'liked'>('works'), kind = ref('all'), people = ref<Creator[]>([])
+const profileTab = ref<'works' | 'saved' | 'liked'>('works'), people = ref<Creator[]>([])
+const filters = ref<ProfileWorkFilters>({ kind: 'all', visibility: 'all', from: '', to: '' })
+const selecting = ref(false), selectedWorks = ref(new Set<string>()), deleting = ref(false)
 const nextCursor = ref<string | null>(null), worksCursor = ref<string | null>(null), collectionLoading = ref(false)
 const loading = ref(true), error = ref(''), collectionError = ref('')
 const peopleDialog = ref<HTMLDialogElement>(), peopleMode = ref<'followers' | 'following'>('followers')
@@ -25,14 +29,22 @@ const removeDialog = ref<HTMLDialogElement>(), removing = ref<Creator | null>(nu
 const isOwnProfile = computed(() => Boolean(creator.value && creator.value.id === session.user?.id))
 const collectionPrivate = computed(() => profileTab.value !== 'works' && !isOwnProfile.value)
 const collectionLabel = computed(() => profileTabs.find(item => item.value === profileTab.value)!.label)
-const collectionTitle = computed(() => profileTab.value === 'works' ? '公开作品' : `${collectionLabel.value}的作品`)
+const selectedItems = computed(() => works.value.filter(work => work.owned && selectedWorks.value.has(work.id)))
+const allSelected = computed(() => works.value.length > 0 && works.value.every(work => work.owned && selectedWorks.value.has(work.id)))
+const emptyLabel = computed(() => filters.value.kind !== 'all' || filters.value.from || filters.value.to ? '没有符合筛选条件的作品'
+  : profileTab.value !== 'works' ? `还没有${collectionLabel.value}作品`
+  : !isOwnProfile.value ? '还没有公开作品' : ({ all: '还没有作品', public: '还没有公开作品', private: '还没有私密作品', draft: '草稿箱为空' })[filters.value.visibility])
 let loadId = 0, collectionId = 0, peopleId = 0
 onBeforeUnmount(() => { loadId++; collectionId++; peopleId++ })
-function creatorIdentity(item: Creator) { return `账号ID:${item.id}` }
+function creatorIdentity(item: Creator) {
+  const id = item.accountId || (/^[1-9]\d*$/.test(item.id) ? item.id : '')
+  return id ? `章鱼号：${id}` : ''
+}
 async function load() {
   const current = ++loadId, captured = followRevision.value
   ++collectionId; ++peopleId; peopleDialog.value?.close(); removeDialog.value?.close(); removing.value = null
-  loading.value = true; error.value = ''; creator.value = null; works.value = []; people.value = []; profileTab.value = 'works'; kind.value = 'all'
+  loading.value = true; error.value = ''; creator.value = null; works.value = []; people.value = []; profileTab.value = 'works'
+  filters.value = { kind: 'all', visibility: 'all', from: '', to: '' }; selecting.value = false; selectedWorks.value = new Set()
   worksCursor.value = null; nextCursor.value = null; collectionError.value = ''; peopleError.value = ''
   try {
     await loadSession()
@@ -54,20 +66,26 @@ async function load() {
 async function loadCollection(append = false) {
   if (!creator.value) return
   const current = ++collectionId
-  const selectedTab = profileTab.value, owner = session.user?.id
+  const selectedTab = profileTab.value, owner = session.user?.id, own = isOwnProfile.value
   collectionError.value = ''
-  if (!append) { works.value = []; worksCursor.value = null }
+  if (!append) { works.value = []; worksCursor.value = null; selectedWorks.value = new Set() }
   if (collectionPrivate.value) { collectionLoading.value = false; return }
   collectionLoading.value = true; collectionError.value = ''
   try {
-    const path = selectedTab === 'works' ? '/api/works' : '/api/library'
+    const path = selectedTab === 'works' && !own ? '/api/works' : '/api/library'
+    const start = filters.value.from ? new Date(`${filters.value.from}T00:00:00`) : undefined
+    const end = filters.value.to ? new Date(`${filters.value.to}T00:00:00`) : undefined
+    end?.setDate(end.getDate() + 1)
     const result = await api<{ items: Work[]; nextCursor?: string | null }>(`${path}${queryString({
-      authorId: selectedTab === 'works' ? creatorId.value : undefined,
+      authorId: path === '/api/works' ? creatorId.value : undefined,
       tab: selectedTab === 'works' ? undefined : selectedTab,
-      kind: kind.value === 'all' ? undefined : kind.value,
+      kind: filters.value.kind === 'all' ? undefined : filters.value.kind,
+      visibility: own && selectedTab === 'works' && ['public', 'private'].includes(filters.value.visibility) ? filters.value.visibility : undefined,
+      status: own && selectedTab === 'works' && filters.value.visibility === 'draft' ? 'draft' : undefined,
+      from: start?.toISOString(), to: end?.toISOString(),
       cursor: append ? worksCursor.value || undefined : undefined,
     })}`)
-    if (current === collectionId && (selectedTab === 'works' || isOwnProfile.value && session.user?.id === owner)) {
+    if (current === collectionId && owner === session.user?.id && (selectedTab === 'works' || isOwnProfile.value)) {
       works.value = append ? [...works.value, ...result.items] : result.items
       worksCursor.value = result.nextCursor || null
     }
@@ -92,7 +110,30 @@ function openPeople(mode: 'followers' | 'following') {
 }
 function closePeople() { ++peopleId; peopleLoading.value = false; peopleError.value = ''; people.value = []; nextCursor.value = null }
 watch([creatorId, () => session.user?.id], () => { void load() }, { immediate: true })
-watch([profileTab, kind], () => { if (!loading.value) void loadCollection() })
+watch([profileTab, filters], () => { selecting.value = false; selectedWorks.value = new Set(); if (!loading.value) void loadCollection() })
+function toggleWorkSelection(id: string) {
+  const next = new Set(selectedWorks.value)
+  if (next.has(id)) next.delete(id); else next.add(id)
+  selectedWorks.value = next
+}
+async function deleteSelectedWorks() {
+  const items = selectedItems.value.map(work => ({ id: work.id, version: work.version }))
+  const owner = session.user?.id, profile = creatorId.value, generation = collectionId
+  const current = () => owner === session.user?.id && profile === creatorId.value && generation === collectionId && isOwnProfile.value && profileTab.value === 'works'
+  if (deleting.value || !items.length || !await confirmStudioDelete(`删除选中的 ${items.length} 件作品？删除后无法恢复。`, () => current() && !deleting.value)) return
+  deleting.value = true; collectionError.value = ''
+  let removed = 0
+  try {
+    for (const item of items) {
+      if (!current()) return
+      await api(`/api/works/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: { version: item.version } })
+      if (!current()) return
+      works.value = works.value.filter(work => work.id !== item.id); selectedWorks.value.delete(item.id); removed++
+    }
+    selecting.value = false
+  } catch (cause) { if (current()) collectionError.value = `${removed ? `已删除 ${removed} 件。` : ''}${errorMessage(cause)} 剩余作品已保留，请核对后重试。` }
+  finally { deleting.value = false }
+}
 watch(() => route.query.tab, value => { tab.value = value === 'announcements' ? 'announcements' : 'creators' })
 function selectTab(value: 'creators' | 'announcements') { void router.push({ path: '/community', query: { tab: value } }) }
 function updateRelationship(result: Relationship) {
@@ -126,12 +167,12 @@ async function removeFollower() {
       <div class="tabs" aria-label="社区分类"><button class="tab" :class="{ active: tab === 'creators' }" :aria-pressed="tab === 'creators'" @click="selectTab('creators')"><Users :size="16" />创作者</button><button class="tab" :class="{ active: tab === 'announcements' }" :aria-pressed="tab === 'announcements'" @click="selectTab('announcements')"><Megaphone :size="16" />社区公告</button></div>
     </div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
-    <template v-else-if="creatorId"><RouterLink to="/community" class="back-link profile-back"><ArrowLeft :size="16" />全部创作者</RouterLink>
+    <template v-else-if="creatorId">
       <template v-if="creator"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
         <div class="creator-profile">
-          <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.username || creator.name" /><span v-else>{{ (creator.username || creator.name || '用').slice(0, 1) }}</span></span>
+          <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></span>
           <div class="profile-copy">
-            <div class="profile-heading"><h1>{{ creator.username || creator.name }}</h1><div class="profile-actions">
+            <div class="profile-heading"><h1>{{ creator.name || creator.username }}</h1><div class="profile-actions">
               <RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/account?tab=following" class="button btn subtle">关注申请</RouterLink>
               <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
             </div></div>
@@ -140,18 +181,18 @@ async function removeFollower() {
               <button class="profile-stat" aria-label="查看粉丝" aria-haspopup="dialog" @click="openPeople('followers')"><span>粉丝</span><strong>{{ creator.followersCount ?? 0 }}</strong></button>
               <span class="profile-stat"><span>收获点赞</span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong></span>
             </div>
-            <p class="caption-5 profile-account-id">{{ creatorIdentity(creator) }}</p>
+            <p v-if="creatorIdentity(creator)" class="caption-5 profile-account-id">{{ creatorIdentity(creator) }}</p>
             <p v-if="creator.bio" class="profile-bio">{{ creator.bio }}</p>
           </div>
         </div>
-        <div class="tabs profile-tabs" aria-label="个人主页内容"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :aria-pressed="profileTab === item.value" @click="profileTab = item.value">{{ item.label }}</button></div>
+        <div class="profile-content-toolbar"><div class="tabs profile-tabs" aria-label="个人主页内容"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :aria-pressed="profileTab === item.value" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
         <div v-if="collectionPrivate" class="empty-state profile-private"><LockKeyhole :size="28" /><h2>{{ collectionLabel }}仅本人可见</h2></div>
         <template v-else>
-          <div class="section-heading profile-work-heading"><h2>{{ collectionTitle }}</h2><label class="sort-control"><select v-model="kind" aria-label="个人作品分类"><option value="all">全部类型</option><option v-for="(label, value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></label></div>
+          <div v-if="selecting && isOwnProfile && profileTab === 'works'" class="profile-selection" role="toolbar" aria-label="作品批量操作"><label><input type="checkbox" aria-label="全选当前作品" :checked="allSelected" :disabled="deleting || collectionLoading" @change="selectedWorks = allSelected ? new Set() : new Set(works.filter(work => work.owned).map(work => work.id))" />全选当前页</label><span role="status">已选 {{ selectedItems.length }} 件</span><button type="button" class="icon-button" title="删除所选作品" aria-label="删除所选作品" :disabled="deleting || !selectedItems.length" @click="deleteSelectedWorks"><Trash2 :size="17" /></button><button type="button" class="icon-button" title="退出批量管理" aria-label="退出批量管理" :disabled="deleting" @click="selecting = false; selectedWorks = new Set()"><X :size="18" /></button></div>
           <p v-if="collectionError" class="form-error" role="alert">{{ collectionError }} <button class="text-link" @click="loadCollection()">重试</button></p>
           <div v-if="collectionLoading && !works.length" class="empty-state" role="status">正在加载作品…</div>
-          <BentoGrid v-else-if="works.length" class="profile-works"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
-          <div v-else-if="!collectionError" class="empty-state"><component :is="profileTab === 'saved' ? Bookmark : profileTab === 'liked' ? Heart : Images" :size="28" /><h2>{{ profileTab === 'works' ? '还没有公开作品' : `还没有${collectionLabel}作品` }}</h2></div>
+          <BentoGrid v-else-if="works.length" class="profile-works"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :management="isOwnProfile && profileTab === 'works'" :eager="index < 3"><template #actions><label v-if="selecting && work.owned" class="profile-work-select"><input type="checkbox" :aria-label="`选择作品：${work.title}`" :checked="selectedWorks.has(work.id)" :disabled="deleting" @change="toggleWorkSelection(work.id)" /><span class="studio-sr-only">选择作品</span></label></template></WorkCard></BentoGrid>
+          <div v-else-if="!collectionError" class="empty-state"><component :is="profileTab === 'saved' ? Bookmark : profileTab === 'liked' ? Heart : Images" :size="28" /><h2>{{ emptyLabel }}</h2></div>
           <div v-if="worksCursor" class="feed-end"><button class="button btn" :disabled="collectionLoading" @click="loadCollection(true)">加载更多</button></div>
         </template>
         <dialog ref="peopleDialog" class="profile-people-dialog" aria-labelledby="profile-people-heading" @close="closePeople">
@@ -159,7 +200,7 @@ async function removeFollower() {
           <div class="profile-people-body">
             <p v-if="peopleError" class="form-error" role="alert">{{ peopleError }} <button class="text-link" @click="loadPeople()">重试</button></p>
             <div v-if="peopleLoading && !people.length" class="profile-people-status" role="status">正在加载列表…</div>
-            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="person.avatarUrl" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><div class="person-actions"><FollowButton :person="person" @changed="updateRelationship" /><button v-if="isOwnProfile && peopleMode === 'followers'" class="button btn subtle" @click="removing = person; removeDialog?.showModal()">移除粉丝</button></div></article></div>
+            <div class="people-list"><article v-for="person in people" :key="person.id" class="person-row"><RouterLink :to="{ path: '/community', query: { creator: person.id } }" class="person-identity"><span class="avatar blue"><img v-if="person.avatarUrl" :src="person.avatarUrl" :alt="person.name || person.username" /><span v-else>{{ (person.name || person.username || '用').slice(0, 1) }}</span></span><div><strong>{{ person.name || person.username }}</strong><p v-if="creatorIdentity(person)" class="caption-5">{{ creatorIdentity(person) }}</p></div></RouterLink><div class="person-actions"><FollowButton :person="person" @changed="updateRelationship" /><button v-if="isOwnProfile && peopleMode === 'followers'" class="button btn subtle" @click="removing = person; removeDialog?.showModal()">移除粉丝</button></div></article></div>
             <p v-if="!peopleLoading && !people.length && !peopleError" class="profile-people-status">暂无{{ peopleMode === 'followers' ? '粉丝' : '关注' }}</p>
             <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="peopleLoading" @click="loadPeople(true)">加载更多</button></div>
           </div>
@@ -170,7 +211,7 @@ async function removeFollower() {
     <template v-else>
       <section v-if="tab === 'creators'" class="creators-grid" aria-label="社区创作者">
         <article v-for="item in creators" :key="item.id" class="creator-card card">
-          <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="item.avatarUrl" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
+          <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="item.avatarUrl" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p v-if="creatorIdentity(item)" class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
           <p v-if="item.bio" class="creator-summary">{{ item.bio }}</p>
           <div class="creator-footer"><span class="caption-5">{{ item.count }} 件公开作品</span><FollowButton :person="item" @changed="updateRelationship" /></div>
         </article>
@@ -211,7 +252,6 @@ async function removeFollower() {
 .announcement-item summary svg { color: var(--muted); }
 .announcement-item[open] summary svg { transform: rotate(180deg); }
 .announcement-body { padding: 0 36px 24px 0; color: var(--muted); font-size: 14px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.profile-back { margin: 0 0 24px; min-height: 40px; color: var(--muted); }
 .profile-banner { display: block; width: 100%; height: 180px; object-fit: cover; border-radius: var(--radius); margin-bottom: 28px; }
 .creator-profile { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: start; gap: 32px; margin: 24px 0 40px; }
 .creator-profile > .profile-avatar { width: 160px; height: 160px; border-radius: 50%; font-size: 56px; }
@@ -229,10 +269,11 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
 .profile-actions, .person-row, .person-identity { display: flex; align-items: center; gap: 12px; }
 .profile-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
 .profile-actions .button { min-height: 40px; white-space: nowrap; }
-.profile-tabs { gap: 40px; padding-bottom: 0; margin-bottom: 28px; }
+.profile-content-toolbar { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); margin-bottom: 28px; min-width: 0; }
+.profile-tabs { flex: 1; gap: 40px; padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
 .profile-tabs .tab { min-height: 48px; padding: 12px 0; font-size: 16px; }
-.profile-work-heading { margin-bottom: 20px; }
-.profile-work-heading h2 { font-size: 16px; line-height: 24px; font-weight: 500; }
+.profile-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; margin-bottom: 16px; color: var(--muted); font-size: 13px; }.profile-selection label { display: flex; align-items: center; gap: 8px; min-height: 44px; }.profile-selection > span { margin-inline-end: auto; }.profile-selection input { accent-color: var(--ink); width: 18px; height: 18px; }
+.profile-work-select { position: absolute; z-index: 3; inset: 8px auto auto 8px; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 6px; background: var(--surface); cursor: pointer; }.profile-work-select input { width: 20px; height: 20px; margin: 0; accent-color: var(--ink); cursor: pointer; }
 .profile-private { min-height: 240px; }
 .profile-people-dialog { width: 560px; max-width: calc(100vw - 32px); }
 .profile-people-body { padding: 0 24px 24px; max-height: min(560px, 65svh); overflow-y: auto; }
@@ -254,7 +295,6 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .announcement-item summary strong { font-size: 14px; }
   .announcement-item time { font-size: 11px; }
   .announcement-body { padding-right: 0; }
-  .profile-back { margin-bottom: 16px; }
   .profile-banner { height: 120px; margin-bottom: 24px; }
   .creator-profile { grid-template-columns: 80px minmax(0, 1fr); gap: 16px; margin: 16px 0 28px; }
   .creator-profile > .profile-avatar { width: 80px; height: 80px; font-size: 32px; }
@@ -269,7 +309,8 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .profile-stat + .profile-stat::before { left: -10px; }
   .profile-copy > .profile-account-id { font-size: 12px; }
   .profile-bio { font-size: 13px; line-height: 22px; }
-  .profile-tabs { gap: 32px; margin-bottom: 24px; }
+  .profile-content-toolbar { gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
+  .profile-tabs { gap: 24px; margin-bottom: 0; flex: 1 1 auto; }
   .profile-tabs .tab { font-size: 15px; }
   .profile-people-body { padding: 0 16px 16px; }
   .person-row { flex-wrap: wrap; gap: 16px; }

@@ -213,7 +213,7 @@ function synchronizationFixture(existing = true) {
   const ctx = { req: { method: 'POST', ...request(), socket: { remoteAddress: '127.0.0.1' } },
     url: new URL('/api/account/session', config.url), body: { returnTo: '/create/image' }, config, user: null,
     db: { query, connect: async () => ({ query, release() {} }) }, redis: { eval: async () => 1 },
-    newId: () => 'new123', async createSession(...args) { sessions.push(args); return { id: user.id, username: 'creator' } },
+    newId: () => 'new123', async createSession(...args) { sessions.push(args); return { id: user.id, username: 'creator', name: user.name } },
     json(status, value) { response.status = status; response.value = value } }
   return { ctx, response, sessions, inserts, queries, snapshots, user, state }
 }
@@ -243,12 +243,26 @@ test('a first login creates the user with the verified numeric subject and exact
   const binding = inserts.find(item => item.sql.startsWith('INSERT INTO external_account'))
   assert.equal(created.values[0], '7')
   assert.equal(created.values[1], 'creator')
+  assert.equal(created.values[4], 'Creator')
   assert.deepEqual(binding.values, ['https://accounts.test', '7', '7'])
   assert.deepEqual(snapshots, [['https://accounts.test', '7', '7', 'creator']])
   assert.equal(response.value.user.id, '7')
   assert.equal(response.value.user.accountId, '7')
   assert.equal(response.value.user.username, 'creator')
   assert.doesNotMatch(JSON.stringify(response.value), /body-must-not-be-trusted|native-generation|retained-password|must-not-leak/)
+})
+
+test('returning account logins preserve the local nickname even when upstream display name changes', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope({ id: 7, username: 'creator', display_name: '账户中心新名称' }))
+  const fixture = synchronizationFixture()
+  fixture.user.name = '章鱼小白'
+  await handleAccount(fixture.ctx)
+  assert.equal(fixture.response.value.user.name, '章鱼小白')
+  assert.equal(fixture.response.value.user.accountId, '7')
+  assert.equal(fixture.response.value.user.username, 'creator')
+  assert.equal(fixture.user.name, '章鱼小白')
+  assert(!fixture.queries.some(sql => /^UPDATE "user"/.test(sql)))
+  assert(!fixture.inserts.some(item => item.sql.startsWith('INSERT INTO "user"')))
 })
 
 test('a same-name or occupied numeric account is refused instead of adopting it or inventing another identity', async t => {
