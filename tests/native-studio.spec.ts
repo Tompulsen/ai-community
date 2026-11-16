@@ -331,7 +331,14 @@ test('native image generation uses the existing account, uploads references and 
   await expect(page.locator('.creation-media img')).toBeVisible()
   expect(await page.locator('.creation-media img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
   const generation = state.calls.find(call => call.path === '/api/creation/generate')!
-  expect(generation.body).toMatchObject({ kind: 'image', model: 'fixture-image', referenceUrls: ['/legacy-files/file-1.jpg'], n: 1 })
+  expect(generation.body).toMatchObject({ kind: 'image', model: 'fixture-image', n: 1 })
+  expect(generation.body.referenceUrls).toEqual([expect.stringMatching(/^data:image\/jpeg;base64,/)])
+  expect(await page.evaluate(async source => {
+    const image = await createImageBitmap(await (await fetch(source)).blob())
+    try { return image.width > 0 && image.height > 0 }
+    finally { image.close() }
+  }, (generation.body.referenceUrls as string[])[0]!)).toBe(true)
+  expect(state.uploads()).toBe(0)
   expect(generation.body.requestId).toMatch(/^[a-f\d-]{36}$/)
   expect(generation.csrf).toBe('unified-account-fixture')
   expect(generation.body).not.toHaveProperty('tokenId')
@@ -346,9 +353,9 @@ test('native image generation uses the existing account, uploads references and 
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '发布作品', exact: true }).getByRole('status')).toHaveText('作品已提交审核。')
   const publication = state.calls.find(call => call.path === '/api/works')!
-  expect(publication.body).toMatchObject({ kind: 'image', title: '海底图书馆', fileIds: ['fixture-file-2'], requestId: generation.body.requestId })
-  expect(state.uploads()).toBe(3)
-  expect(publication.body.generation).toMatchObject({ referenceFileIds: ['fixture-file-3'] })
+  expect(publication.body).toMatchObject({ kind: 'image', title: '海底图书馆', fileIds: ['fixture-file-1'], requestId: generation.body.requestId })
+  expect(state.uploads()).toBe(2)
+  expect(publication.body.generation).toMatchObject({ referenceFileIds: ['fixture-file-2'] })
   expect(errors).toEqual([])
 })
 
@@ -387,9 +394,7 @@ test('asynchronous video waits can stop and recover with GET using the original 
   expect(source.searchParams.get('tokenId')).toBe('83')
   expect(source.searchParams.get('kind')).toBe('video')
   await page.goto('/library')
-  await expect(page.getByRole('complementary', { name: '后台生成任务', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '查看任务', exact: true }).click()
-  await expect(page).toHaveURL(/\/create\/video$/)
+  await expect(page.getByRole('complementary', { name: '后台生成任务', exact: true })).toHaveCount(0)
   expect(state.mutations.some(item => item.path.includes('authorize'))).toBe(false)
 })
 

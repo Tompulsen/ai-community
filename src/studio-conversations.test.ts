@@ -264,3 +264,53 @@ it('does not assign newly generated copy tasks to the original legacy conversati
   expect(p.mediaTasksForConversation(original).some(task => task.id === generated.id)).toBe(false)
   expect(p.mediaTasksForConversation(copy).some(task => task.id === generated.id)).toBe(true)
 })
+for (const kind of ['image', 'video'] as const) {
+  it(`keeps reused ${kind} turns in the selected original or copied conversation`, async () => {
+    const p = await fixture(), original = p.newChat(kind)
+    p.creation.tasks.push(task('shared-result', kind, original.id))
+    const source = p.creation.tasks.at(-1)!
+    p.attachMediaTask(original, source)
+    p.cloneChat(original)
+    const copy = p.chats.sessions.find(chat => chat.id === p.chats.activeId)!
+    p.activateConversation(original.id)
+    expect(p.ensureMediaConversation(kind, source)).toBe(original)
+    expect(p.chats.activeId).toBe(original.id)
+    p.activateConversation(copy.id)
+    expect(p.ensureMediaConversation(kind, source)).toBe(copy)
+    expect(p.chats.activeId).toBe(copy.id)
+    expect(p.mediaBranchTask(kind, original.id, source.id)).toBe(source)
+    expect(p.mediaBranchTask(kind, copy.id, source.id)).toBe(source)
+  })
+}
+it('accepts media branch anchors only from the requested registered conversation and owner', async () => {
+  const p = await seed(), original = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  const source = p.creation.tasks.find(task => task.id === 'image-1')!
+  const conversationId = original.mediaConversationId!
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBe(source)
+  expect(p.mediaBranchTask('image', 'text', source.id)).toBeUndefined()
+  expect(p.mediaBranchTask('video', conversationId, source.id)).toBeUndefined()
+  expect(p.mediaBranchTask('image', undefined, source.id)).toBeUndefined()
+  expect(p.mediaBranchTask('image', conversationId, 'missing')).toBeUndefined()
+  source.owner = '18'
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  source.owner = '17'
+  original.deletedMediaTaskIds = [source.id]
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  original.deletedMediaTaskIds = []
+  const answer = original.messages.find(message => message.role === 'assistant' && message.taskId === source.id)!
+  const parent = answer.parentId
+  answer.parentId = 'missing-parent'
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  answer.parentId = parent
+  const question = original.messages.find(message => message.id === parent)!
+  original.messages = original.messages.filter(message => message !== answer && message !== question)
+  original.messageBranches = [question, answer]
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  original.messages.push(question, answer); original.messageBranches = []
+  p.chats.ready = false
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  p.chats.ready = true; p.chats.sessions = p.chats.sessions.filter(chat => chat !== original)
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+  p.session.user = { id: '18' } as any
+  expect(p.mediaBranchTask('image', conversationId, source.id)).toBeUndefined()
+})

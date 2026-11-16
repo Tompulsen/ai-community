@@ -124,7 +124,7 @@ watch([workspace, () => chat.value?.ready], () => {
   if (!route.query.remix && !route.query.from && !route.query.reuse) syncSource(kind.value === 'text' ? chat.value?.sourceWorkId : workspace.value?.sourceWorkId)
 }, { flush: 'post' })
 function selectReferences(files: WorkFile[]) { if (kind.value === 'text') void chat.value?.applySourceReferences(files); else workspace.value?.applySourceReferences(files) }
-function share(task: CreationTask, destination: CreationDestination) { mobileGallery.value?.close(); void publisher.value?.open(task, destination) }
+function share(task: CreationTask, destination: CreationDestination, content?: string) { mobileGallery.value?.close(); void publisher.value?.open(task, destination, content) }
 function reuse(task: CreationTask) {
   mobileGallery.value?.close(); accountTool.value = ''
   void router.replace({ path: `/create/${task.kind}`, query: { reuse: task.id } })
@@ -151,19 +151,23 @@ async function undoConversation() {
   try { await undoRemovedChats(); if (owner === session.user?.id && chats.activeId !== activeId) openConversation(chats.activeId) }
   catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
 }
-watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => chats.ready, pendingNew], () => {
+watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => chats.ready, pendingNew], async () => {
   if (!creation.loaded || !chats.ready || (kind.value === 'text' ? !chat.value : !workspace.value)) return
   if (pendingNew.value) {
     pendingNew.value = false
     if (kind.value === 'text') chat.value!.createChat()
     else workspace.value!.newCreation()
   } else if (typeof route.query.reuse === 'string') {
-    const task = creation.tasks.find(task => task.id === route.query.reuse && task.owner === session.user?.id && task.kind === kind.value)
+    const reuseId = route.query.reuse, owner = session.user?.id
+    const task = creation.tasks.find(task => task.id === reuseId && task.owner === owner && task.kind === kind.value)
+    let restored = false
     if (task) {
-      if (kind.value === 'text') chat.value!.useTask(task)
-      else workspace.value!.useTask(task)
+      restored = kind.value === 'text' ? await chat.value!.useTask(task) : await workspace.value!.useTask(task)
     } else error.value = '未找到这条生成记录，请从作品库重新选择。'
-    void router.replace({ query: task?.sourceWorkId ? { remix: task.sourceWorkId } : {} })
+    if (owner === session.user?.id && route.query.reuse === reuseId) {
+      const { reuse: _, ...query } = route.query
+      void router.replace({ query: restored ? task?.sourceWorkId ? { remix: task.sourceWorkId } : {} : query })
+    }
   }
 }, { flush: 'post' })
 </script>

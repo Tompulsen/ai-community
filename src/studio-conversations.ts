@@ -24,6 +24,14 @@ export function mediaTasksForConversation(chat: NativeChat): CreationTask[] {
 export function isConversationBusy(chat: NativeChat) {
   return conversationBusy(chat)
 }
+export function mediaBranchTask(kind: 'image' | 'video', conversationId: string | undefined, taskId: string): CreationTask | undefined {
+  if (!owner() || !chats.ready || !conversationId) return
+  const chat = chats.sessions.find(item => (item.mediaConversationId || item.id) === conversationId)
+  const task = creation.tasks.find(item => item.id === taskId && item.owner === owner() && item.kind === kind)
+  if (!chat || !task || chat.deletedMediaTaskIds?.includes(taskId)) return
+  const answer = chat.messages.find(message => message.role === 'assistant' && message.taskId === taskId)
+  if (answer && chat.messages.some(message => message.role === 'user' && message.id === answer.parentId)) return task
+}
 export function attachMediaTask(chat: NativeChat, task: CreationTask) {
   if (chat.deletedMediaTaskIds?.includes(task.id) || branchMessages(chat).some(message => (message as NativeMessage).taskId === task.id && message.role === 'assistant')) return false
   const question: NativeMessage = { id: `media-user:${task.id}`, role: 'user', content: task.prompt, createdAt: task.createdAt, taskId: task.id }
@@ -104,7 +112,10 @@ export function ensureMediaConversation(kind: 'image' | 'video', existingTask?: 
     // Explicitly reopening a gallery item is allowed; ordinary sync respects tombstones.
     if (chats.deletedMediaConversationIds.includes(key)) chats.deletedMediaConversationIds = chats.deletedMediaConversationIds.filter(id => id !== key)
     void syncMediaConversations()
-    const existing = chats.sessions.find(chat => (branchMessages(chat) as NativeMessage[]).some(message => message.taskId === existingTask.id)) || mediaChat(kind, taskConversationId(existingTask))
+    const containsTask = (chat: NativeChat) => !chat.deletedMediaTaskIds?.includes(existingTask.id) &&
+      (branchMessages(chat) as NativeMessage[]).some(message => message.role === 'assistant' && message.taskId === existingTask.id)
+    const active = chats.sessions.find(chat => chat.id === chats.activeId && containsTask(chat))
+    const existing = active || chats.sessions.find(containsTask) || mediaChat(kind, taskConversationId(existingTask))
     if (existing) { activateConversation(existing.id); creation.selectedId = existingTask.id; return existing }
   } else {
     const active = chats.sessions.find(chat => chat.id === chats.activeId)

@@ -9,7 +9,7 @@ import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { captureTaskSnapshot, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
+import { captureTaskSnapshot, deleteTaskRecords, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -50,7 +50,7 @@ export interface CreationTask {
   references: { name: string; url: string; id?: string; fromWorkId?: string }[]
   publicationFiles?: string[]
   publicationReferences?: string[]
-  publications?: Partial<Record<CreationDestination, { title: string; text: string; work?: Work }>>
+  publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; files?: string[]; work?: Work }>>
   request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; protocol?: 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
@@ -497,8 +497,11 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
   input = JSON.parse(JSON.stringify(input)) as CreationInput
-  if (input.mediaBranch && !creation.tasks.some(task => task.id === input.mediaBranch!.taskId && task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId))
-    throw new Error('原生成记录不属于当前会话。')
+  if (input.mediaBranch) {
+    const { mediaBranchTask } = await import('./studio-conversations')
+    if (input.kind === 'text' || !mediaBranchTask(input.kind, input.conversationId, input.mediaBranch.taskId))
+      throw new Error('原生成记录不属于当前会话。')
+  }
   const portable = new Map<string, Promise<string>>()
   const prepareImage = (url: string) => {
     if (!portable.has(url)) portable.set(url, portableImage(url))
@@ -614,10 +617,13 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   return task
 }
 export async function removeCreationTasks(ids: string[]) {
-  const selected = new Set(ids)
+  const selected = new Set(ids), acceptedOwner = activeOwner(), version = epoch
   if (creation.tasks.some(task => selected.has(task.id) && (controllers.has(task.id) || ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))) throw new Error('进行中或需要核对的任务请保留，查询完成后再删除。')
-  for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === activeOwner())) downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
-  creation.tasks = creation.tasks.filter(task => task.owner !== activeOwner() || !selected.has(task.id))
+  await writes.catch(() => {})
+  await deleteTaskRecords(acceptedOwner, ids)
+  if (version !== epoch || acceptedOwner !== activeOwner()) return
+  for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === acceptedOwner)) downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
+  creation.tasks = creation.tasks.filter(task => task.owner !== acceptedOwner || !selected.has(task.id))
   if (selected.has(creation.selectedId)) creation.selectedId = creation.tasks[0]?.id || ''
   await persist(true)
 }
@@ -814,7 +820,7 @@ async function autoDownloadCreation(task: CreationTask) {
   try { await saveCreationLocally(task) }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
-export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal) {
+export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string) {
   signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   task = creation.tasks.find(current => current.id === task.id && current.owner === task.owner) || task
@@ -822,7 +828,7 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
   const url = task.urls[index]
   const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
-  const blob = response ? await response.blob() : new Blob([task.text], { type: 'text/markdown' })
+  const blob = response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' })
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()
@@ -831,20 +837,28 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
   requestDownload(blob, task, index)
 }
 const sharing = new Set<string>()
-export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string) {
+export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string) {
   const key = `${task.owner}:${task.id}`
   if (sharing.has(key)) throw new Error('这条作品正在提交，请稍后查看结果。')
   sharing.add(key)
-  try { return await preparePublication(task, title, destination, text) }
+  try { return await preparePublication(task, title, destination, text, content) }
   finally { sharing.delete(key) }
 }
-async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string) {
+async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string, content?: string) {
   if (task.owner !== activeOwner() || task.phase !== 'complete') throw new Error('请先完成生成。')
   if (destination === 'source-comment' && (task.kind === 'video' || !task.sourceWorkId || !task.model)) throw new Error('图片或文本同款作品才能发送到源作品评论区。')
   const previous = task.publications?.[destination]
   if (previous?.work) return { work: previous.work }
   const version = epoch
   const checkOwner = () => { if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。') }
+  task.publications ??= {}
+  const publication = task.publications[destination] ??= {
+    title: title.trim().slice(0, 100),
+    text: (text ?? (task.kind === 'text' ? content ?? task.text : task.prompt)).slice(0, 2500),
+    ...(task.kind === 'text' ? { content: content ?? task.text, files: [] } : {}),
+  }
+  const files = task.kind === 'text' ? publication.files ??= [...(task.publicationFiles || [])] : task.publicationFiles ??= []
+  await persist(true); checkOwner()
   async function uploadMedia(url: string, kind: CreationKind, name: string) {
     const response = await fetch(await readableMedia(url, kind), { credentials: 'same-origin' })
     if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
@@ -856,14 +870,13 @@ async function preparePublication(task: CreationTask, title: string, destination
     checkOwner()
     return uploaded.id
   }
-  task.publicationFiles ??= []
-  for (let index = task.publicationFiles.length; index < task.urls.length; index++) {
-    task.publicationFiles.push(await uploadMedia(task.urls[index]!, task.kind, `creation-${index + 1}`))
+  for (let index = files.length; index < task.urls.length; index++) {
+    files.push(await uploadMedia(task.urls[index]!, task.kind, `creation-${index + 1}`))
     await persist(true); checkOwner()
   }
-  if (task.kind === 'text' && !task.publicationFiles.length) {
-    const uploaded = await uploadFile(new File([task.text], 'creation.md', { type: 'text/markdown' }))
-    checkOwner(); task.publicationFiles.push(uploaded.id); await persist(true); checkOwner()
+  if (task.kind === 'text' && !files.length) {
+    const uploaded = await uploadFile(new File([publication.content ?? task.text], 'creation.md', { type: 'text/markdown' }))
+    checkOwner(); files.push(uploaded.id); await persist(true); checkOwner()
   }
   if (destination === 'community') {
     task.publicationReferences ??= []
@@ -872,16 +885,13 @@ async function preparePublication(task: CreationTask, title: string, destination
       await persist(true); checkOwner()
     }
   }
-  task.publications ??= {}
-  const publication = task.publications[destination] ??= { title: title.trim().slice(0, 100), text: (text ?? (task.kind === 'text' ? task.text : task.prompt)).slice(0, 2500) }
-  await persist(true); checkOwner()
   const result = await api<{ work: Work }>('/api/works', { method: 'POST', body: {
     title: publication.title, kind: task.kind === 'text' ? 'resource' : task.kind,
     body: publication.text, prompt: task.prompt,
     model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
       parameters: task.legacy ? undefined : readRemixParameters({ version: 1, kind: task.kind, group: task.group,
         ...(task.kind === 'image' && usesGeminiImageChat(task.model) ? { protocol: task.request.protocol, n: task.request.n } : task.request) }) },
-    fileIds: task.publicationFiles, tags: [], status: 'pending', destination,
+    fileIds: files, tags: [], status: 'pending', destination,
     requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })
   checkOwner(); publication.work = result.work; await persist()

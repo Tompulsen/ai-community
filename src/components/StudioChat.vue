@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, Quote, RefreshCw, Settings2, Sparkles, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
-import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, stopCreation, type CreationTask, type CreationDestination } from '../native-studio'
+import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
 import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { parseFile, getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
@@ -46,7 +46,7 @@ import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaT
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
-const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
@@ -56,6 +56,7 @@ const materials = useStudioMaterials(files, computed(() => `${session.user?.id |
 const uploading = computed(() => referenceLoading.value || materials.pending.value)
 const waitingForMaterials = ref(false)
 let materialSubmission: AbortController | undefined
+let live = true
 const draftImages = computed(() => files.value.flatMap((file, index) => file.type.startsWith('image/') ? [{ name: file.name, url: file.content, index }] : []))
 const materialItems = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready' || !item.type.startsWith('image/')))
 function removeDraftImage(index: number) {
@@ -63,7 +64,7 @@ function removeDraftImage(index: number) {
   if (position !== undefined) materials.removeAt(position)
 }
 watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => materialSubmission?.abort())
-onBeforeUnmount(() => materialSubmission?.abort())
+onBeforeUnmount(() => { live = false; materialSubmission?.abort() })
 const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats() } } })
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
@@ -100,8 +101,9 @@ const transcriptObserver = new ResizeObserver(() => followOutput())
 watch(messagesContent, element => { transcriptObserver.disconnect(); if (element) transcriptObserver.observe(element) }, { flush: 'post' })
 onBeforeUnmount(() => transcriptObserver.disconnect())
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
+const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
-const busy = computed(() => current.value && isConversationBusy(current.value))
+const busy = computed(() => restoringTask.value || current.value && isConversationBusy(current.value))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
 const mediaByMessage = computed(() => {
@@ -351,12 +353,47 @@ async function removeMessage(chat: NativeChat, message: NativeMessage) {
   deleteChatMessage(chat, message)
 }
 async function recover(message: NativeMessage) { try { await recoverMessage(message) } catch (cause) { error.value = errorMessage(cause) } }
-async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task) } catch (cause) { error.value = errorMessage(cause) } }
+async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task, 0, undefined, messageText(message)) } catch (cause) { error.value = errorMessage(cause) } }
 function publish(message: NativeMessage, destination: CreationDestination = 'community') {
   const task = creation.tasks.find(item => item.id === message.taskId)
-  if (task) emit('publish', task, destination)
+  if (task) emit('publish', task, destination, messageText(message))
 }
-function useTask(task: CreationTask) { const next = newChat(); next.model = task.model; next.draft = task.prompt; next.sourceWorkId = task.sourceWorkId; prompt.value = task.prompt; model.value = task.model; files.value = []; void saveChats(); emit('source', task.sourceWorkId) }
+async function useTask(task: CreationTask) {
+  if (restoringTask.value || task.kind !== 'text' || task.owner !== session.user?.id) return false
+  const owner = session.user?.id
+  let conversation = current.value?.id
+  const currentScope = () => live && props.mode === 'text' && owner === session.user?.id && conversation === current.value?.id
+  restoringTask.value = true; error.value = ''
+  try {
+    const parameters = readRemixParameters({ version: 1, kind: 'text', group: task.group, chatOptions: task.request.chatOptions })
+    if (!parameters) throw new Error('原任务生成参数无效，请使用当前配置。')
+    await waitCreationGroup(); await loadCreationGroups()
+    if (!currentScope()) return false
+    if (creation.groupsError) throw new Error(creation.groupsError)
+    if (parameters.group && parameters.group !== creation.selectedGroup) {
+      if (!creation.groups.some(group => group.id === parameters.group)) throw new Error('原作分组当前不可用，请手动选择分组和模型。')
+      await selectCreationGroup(parameters.group)
+      if (!currentScope()) return false
+      if (creation.groupsError || creation.selectedGroup !== parameters.group) throw new Error(creation.groupsError || '原作分组未能恢复，请重新选择。')
+    } else await loadCreationModels()
+    if (!currentScope()) return false
+    if (creation.modelsError) throw new Error(creation.modelsError)
+    if (!models.value.some(item => item.id === task.model)) throw new Error('原作模型在当前分组不可用，请选择可用配置。')
+    const next = newChat()
+    conversation = next.id
+    next.model = task.model; next.textModel = task.model; next.draft = task.prompt; next.sourceWorkId = task.sourceWorkId
+    if (parameters.chatOptions) {
+      Object.assign(next.settings, parameters.chatOptions)
+      next.formatOverride = parameters.chatOptions.format
+    }
+    prompt.value = task.prompt; model.value = task.model; files.value = []
+    await saveChats(true)
+    if (!currentScope()) return false
+    emit('source', task.sourceWorkId)
+    return true
+  } catch (cause) { if (currentScope()) error.value = errorMessage(cause); return false }
+  finally { restoringTask.value = false }
+}
 function toggleSelection() { selecting.value = !selecting.value; selectedTurns.value = [] }
 const hasMedia = computed(() => mediaTasks.value.length > 0)
 defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })

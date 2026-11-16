@@ -214,3 +214,28 @@ it('bounds recent history by whole turns and pictures without re-embedding previ
   expect(context.turns[0]?.prompt).toBe('round-23')
   expect(context.turns.flatMap(turn => turn.images)).toHaveLength(16)
 })
+for (const kind of ['image', 'video'] as const) {
+  for (const edited of [false, true]) {
+    it(`${edited ? 'edits' : 'regenerates'} copied ${kind} turns without changing the original conversation`, async () => {
+      const p = await fixture(), original = p.newChat(kind)
+      p.creation.tasks.push(task('original-result', original.id, 10, { kind }))
+      const source = p.creation.tasks.at(-1)!
+      p.attachMediaTask(original, source)
+      const originalMessages = original.messages.map(message => ({ ...message }))
+      p.cloneChat(original)
+      const copy = p.chats.sessions.find(chat => chat.id === p.chats.activeId)!
+      expect(p.ensureMediaConversation(kind, source)).toBe(copy)
+      expect(p.mediaBranchTask(kind, copy.mediaConversationId || copy.id, source.id)).toBe(source)
+      const generated = task('copy-branch', copy.mediaConversationId || copy.id, 11, {
+        kind, prompt: edited ? 'edited in copy' : source.prompt, mediaBranch: { taskId: source.id, edited },
+      })
+      p.creation.tasks.push(generated)
+      await p.registerMediaTurn(copy, generated)
+      await p.syncMediaConversations()
+      expect(original.messages).toEqual(originalMessages)
+      expect(p.visibleMediaTasks(original).map(task => task.id)).toEqual([source.id])
+      expect(p.visibleMediaTasks(copy).map(task => task.id)).toEqual([generated.id])
+      expect(p.mediaVersion(copy, generated.id)).toMatchObject({ index: 1, total: 2 })
+    })
+  }
+}

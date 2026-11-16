@@ -46,6 +46,7 @@ function fixture(t, options = {}) {
     async get(key) { return values.get(key) ?? null },
     async set(key, value, ...flags) {
       if (flags.includes('NX') && values.has(key)) return null
+      await options.beforeRedisSet?.(key, value, flags)
       values.set(key, value)
       return 'OK'
     },
@@ -168,6 +169,66 @@ test('task and protected video recovery retain the original token and account ow
   assert.equal(media.headers['content-range'], 'bytes 0-2/12')
   assert.equal(credentialCalls.at(-1).tokenId, 71)
 })
+
+for (const failedMapping of ['task', 'media']) {
+  test(`${failedMapping} metadata write failure preserves the accepted result and cached recovery repairs ownership without another POST`, async t => {
+    let failed = false, selectedToken = 71
+    const { app, values, calls, credentialCalls } = fixture(t, {
+      selectedToken: () => selectedToken,
+      beforeRedisSet(key) {
+        if (!failed && key.includes(`community-next:creation:${failedMapping}:`)) {
+          failed = true
+          throw new Error('Injected metadata storage failure')
+        }
+      },
+      fetch(url, init) {
+        if (init.method === 'POST') return Response.json({
+          id: 'paid_job', status: failedMapping === 'task' ? 'queued' : 'completed', user_id: 17,
+        })
+        const pathname = new URL(String(url)).pathname
+        if (pathname === '/v1/videos/paid_job') return Response.json({ id: 'paid_job', status: 'completed', user_id: 17 })
+        assert.equal(pathname, '/v1/videos/paid_job/content')
+        return new Response('video', { headers: { 'content-type': 'video/mp4' } })
+      },
+    })
+    const input = { kind: 'video', model: 'sora-2', prompt: 'A paid video', requestId: `metadata-${failedMapping}` }
+    const created = await submit(app, input)
+    assert.equal(failed, true)
+    assert.equal(created.statusCode, 200)
+    assert.equal(created.json().status, failedMapping === 'task' ? 'pending' : 'succeeded')
+    assert.equal(created.json().upstreamId, 'paid_job')
+    assert.equal(created.json().tokenId, 71)
+    if (failedMapping === 'media') assert.equal(created.json().mediaPath, 'videos/paid_job/content')
+    assert(!created.payload.includes(apiKey))
+    selectedToken = 99
+    const clearOwnership = () => {
+      for (const key of values.keys()) if (/community-next:creation:(?:task|media):/.test(key)) values.delete(key)
+    }
+    const assertOwnership = () => {
+      const saved = [...values].filter(([key]) => /community-next:creation:(?:task|media):/.test(key))
+      assert.equal(saved.length, failedMapping === 'task' ? 1 : 2)
+      assert(saved.every(([, value]) => JSON.parse(value).tokenId === 71))
+    }
+    clearOwnership()
+    const recovered = await app.inject(`/api/creation/requests/${input.requestId}`)
+    assert.equal(recovered.statusCode, 200)
+    assert.deepEqual(recovered.json(), created.json())
+    assertOwnership()
+    clearOwnership()
+    assert.deepEqual((await submit(app, input)).json(), created.json())
+    assertOwnership()
+    const resolved = await app.inject('/api/creation/tasks/video/paid_job?protocol=openai')
+    assert.equal(resolved.statusCode, 200)
+    assert.equal(resolved.json().status, 'succeeded')
+    assert.equal(credentialCalls.at(-1).tokenId, 71)
+    const media = await app.inject('/api/creation/media?path=videos/paid_job/content')
+    assert.equal(media.statusCode, 200)
+    assert.equal(media.payload, 'video')
+    assert.equal(credentialCalls.at(-1).tokenId, 71)
+    assert.equal((await app.inject({ url: `/api/creation/requests/${input.requestId}`, headers: { 'x-test-account': '18' } })).statusCode, 404)
+    assert.equal(calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+}
 
 test('server model types apply to exact IDs across group catalogs without granting access to other models', async t => {
   let token = 71

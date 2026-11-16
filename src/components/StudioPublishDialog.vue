@@ -6,7 +6,7 @@ import { api, errorMessage, notify, session } from '../state'
 import type { Work } from '../data'
 import { mediaSource, publishCreation, type CreationDestination, type CreationTask } from '../native-studio'
 const dialog = ref<HTMLDialogElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
-const title = ref(''), text = ref(''), error = ref(''), busy = ref(false), result = ref<Work>()
+const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
 const direct = computed(() => destination.value === 'source-comment')
 const locked = computed(() => Boolean(task.value?.publications?.[destination.value]))
 const heading = computed(() => direct.value ? '发送到源作品评论区' : '发布作品')
@@ -17,13 +17,13 @@ const resultMessage = computed(() => result.value?.status === 'pending' ? direct
 let revision = 0
 onBeforeUnmount(() => revision++)
 watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; error.value = ''; busy.value = false })
-async function open(value: CreationTask, target: CreationDestination = 'community') {
+async function open(value: CreationTask, target: CreationDestination = 'community', currentText?: string) {
   if (busy.value || value.phase !== 'complete' || value.owner !== session.user?.id) return
   const current = ++revision
-  task.value = value; destination.value = target; error.value = ''; result.value = undefined
+  task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined
   const previous = value.publications?.[target]
   title.value = previous?.title || (target === 'source-comment' ? '我的同款作品' : value.prompt.slice(0, 50))
-  text.value = previous?.text ?? (value.kind === 'text' ? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : value.prompt).slice(0, 2500)
+  text.value = previous?.text ?? (value.kind === 'text' ? currentText ?? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : value.prompt).slice(0, 2500)
   await nextTick(); if (current !== revision) return
   dialog.value?.showModal()
   if (previous?.work) {
@@ -38,7 +38,7 @@ async function submit() {
   const current = revision
   busy.value = true; error.value = ''
   try {
-    const response = await publishCreation(task.value, title.value, destination.value, text.value)
+    const response = await publishCreation(task.value, title.value, destination.value, text.value, content.value)
     if (current !== revision) return
     result.value = response.work
     notify(resultMessage.value)

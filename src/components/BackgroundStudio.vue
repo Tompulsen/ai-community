@@ -1,12 +1,29 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, LoaderCircle, Minus, TriangleAlert } from '@lucide/vue'
+import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, Minus } from '@lucide/vue'
 import { creation, type CreationTask } from '../native-studio'
 import { session } from '../state'
 const route = useRoute(), router = useRouter()
 const hidden = ref(false), index = ref(0)
-const tasks = computed(() => creation.tasks.slice(0, 20))
+const unread = ref<string[]>([])
+const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
+watch(() => ({
+  owner: session.user?.id,
+  studio: studioPage.value,
+  phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
+}), (current, previous) => {
+  if (!current.owner || current.owner !== previous?.owner || current.studio) unread.value = []
+  else {
+    const completed = [...current.phases].filter(([id, phase]) =>
+      phase === 'complete' && ['submitting', 'running'].includes(previous?.phases.get(id) || ''),
+    ).map(([id]) => id)
+    unread.value = [...new Set([...unread.value, ...completed])].filter(id => current.phases.get(id) === 'complete')
+    if (completed.length) hidden.value = false
+  }
+  index.value = 0
+}, { immediate: true, flush: 'sync' })
+const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && unread.value.includes(item.id)))
 const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
 async function open(value: CreationTask) {
   const owner = session.user?.id
@@ -21,9 +38,9 @@ async function open(value: CreationTask) {
 </script>
 
 <template>
-  <aside v-if="session.user && task && !route.path.startsWith('/create')" class="background-dock" :class="{ minimized: hidden }" aria-label="后台生成任务">
-    <button v-if="hidden" class="button btn" @click="hidden = false"><LoaderCircle v-if="tasks.some(item => ['submitting', 'running'].includes(item.phase))" :size="17" /><CheckCircle2 v-else :size="17" />生成任务 · {{ tasks.length }}</button>
-    <template v-else><div class="dock-heading"><strong>生成任务 · {{ index + 1 }}/{{ tasks.length }}</strong><button class="icon-button" aria-label="收起生成任务" title="收起" @click="hidden = true"><Minus :size="17" /></button></div><div class="dock-content"><component :is="['submitting', 'running'].includes(task.phase) ? LoaderCircle : task.phase === 'complete' ? CheckCircle2 : TriangleAlert" :size="20" /><div><strong>{{ task.phase === 'complete' ? '生成完成' : ['submitting', 'running'].includes(task.phase) ? '正在生成' : '任务已保留' }}</strong><p>{{ task.prompt || task.model }}</p></div></div><div class="dock-actions"><button class="button primary btn" @click="open(task)">查看任务<ArrowUpRight :size="15" /></button><button class="icon-button" aria-label="上一个任务" title="上一个任务" :disabled="tasks.length < 2" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="17" /></button><button class="icon-button" aria-label="下一个任务" title="下一个任务" :disabled="tasks.length < 2" @click="index = (index + 1) % tasks.length"><ChevronRight :size="17" /></button></div></template>
+  <aside v-if="session.user && task && !studioPage" class="background-dock" :class="{ minimized: hidden }" aria-label="后台生成任务">
+    <button v-if="hidden" class="button btn" @click="hidden = false"><CheckCircle2 :size="17" />生成任务 · {{ tasks.length }}</button>
+    <template v-else><div class="dock-heading"><strong>生成任务 · {{ index + 1 }}/{{ tasks.length }}</strong><button class="icon-button" aria-label="收起生成任务" title="收起" @click="hidden = true"><Minus :size="17" /></button></div><div class="dock-content" role="status"><CheckCircle2 :size="20" /><div><strong>生成完成</strong><p>{{ task.prompt || task.model }}</p></div></div><div class="dock-actions"><button class="button primary btn" @click="open(task)">查看任务<ArrowUpRight :size="15" /></button><button class="icon-button" aria-label="上一个任务" title="上一个任务" :disabled="tasks.length < 2" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="17" /></button><button class="icon-button" aria-label="下一个任务" title="下一个任务" :disabled="tasks.length < 2" @click="index = (index + 1) % tasks.length"><ChevronRight :size="17" /></button></div></template>
   </aside>
 </template>
 

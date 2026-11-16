@@ -203,11 +203,19 @@ test('the background task entry opens its own media conversation rather than the
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   const state = await fixture(page)
-  await page.goto('/community')
+  const setPhase = (phase: 'running' | 'complete') => page.evaluate(async phase => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!
+    const { creation } = await import(/* @vite-ignore */ path)
+    const task = creation.tasks.find(task => task.id === 'image-b1')!
+    task.phase = phase
+    task.settledAt = phase === 'complete' ? Date.now() : undefined
+  }, phase)
+  await setPhase('running')
+  await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
+  await expect(page).toHaveURL(/\/discover$/)
   const dock = page.getByRole('complementary', { name: '后台生成任务', exact: true })
-  await expect(dock).toContainText('视频会话A')
-  await dock.getByRole('button', { name: '下一个任务', exact: true }).click()
-  await dock.getByRole('button', { name: '下一个任务', exact: true }).click()
+  await expect(dock).toHaveCount(0)
+  await setPhase('complete')
   await expect(dock).toContainText('图片会话B')
   await dock.getByRole('button', { name: '查看任务', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')

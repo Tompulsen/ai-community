@@ -212,11 +212,15 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
 }
 
 async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>) {
+  let result = cached.result as Result
   if (typeof cached.file === 'string' && /^[a-f0-9]{64}\.json$/.test(cached.file) && ctx.filesRoot) {
-    try { return JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
-    catch { return cached.result }
+    try { result = JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
+    catch { /* Keep the saved request state when its result file is unavailable. */ }
   }
-  return cached.result
+  if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
+    await remember(ctx, cached.kind, result).catch(() => {})
+  }
+  return result
 }
 async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}) {
   const input = validateCreationInput(ctx.body)
@@ -240,7 +244,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   const credentials = await svc.credentials(req, payload.path)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
-  const pending = { fingerprint, result: { ...uncertain, tokenId: credentials.tokenId, protocol } }
+  const pending = { fingerprint, kind: input.kind, result: { ...uncertain, tokenId: credentials.tokenId, protocol } }
   const accepted = await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
   if (accepted !== 'OK') {
     const previous = await ctx.redis.get(key)
@@ -283,11 +287,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
         if (result.status === 'pending' && !result.upstreamId) result = { ...result, ...uncertain }
       }
     }
-    await remember(ctx, input.kind, result)
   } catch {
     result = { ...uncertain, tokenId: credentials.tokenId, protocol }
   }
-  const serialized = JSON.stringify({ fingerprint, result })
+  // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
+  await remember(ctx, input.kind, result).catch(() => {})
+  const serialized = JSON.stringify({ ...pending, result })
   if (serialized.length > MiB && ctx.filesRoot) {
     try {
       const directory = path.join(ctx.filesRoot, '.creation-results'), file = hash(key) + '.json'
