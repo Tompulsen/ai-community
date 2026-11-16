@@ -48,7 +48,7 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
         <div class="billing-detail-actions"><button v-if="error" type="button" class="studio-tool" @click="load"><RefreshCw :size="15" />重试</button><button type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>
       </div>
     </StudioPopover><slot /></div>
-    <div class="billing-account"><span class="billing-balance" :title="balanceDescription">可用 {{ accountBalance.amount === null ? '—' : `${accountBalance.currency} ${balanceNumber}` }}</span>
+    <div class="billing-account"><span class="billing-balance" :title="balanceDescription">{{ accountBalance.points ? balanceDescription : `可用 ${accountBalance.amount === null ? '—' : `${accountBalance.currency} ${balanceNumber}`}` }}</span>
     <button type="button" class="studio-tool billing-refresh" aria-label="刷新费用和额度" title="刷新费用和额度" :disabled="loading || accountBalance.loading" @click="load"><RefreshCw :size="14" /></button></div>
   </div>
 </template>

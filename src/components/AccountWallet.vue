@@ -8,6 +8,7 @@ import { studioAccount } from '../studio-account'
 import { cachedWalletQuote, defaultWalletAmount, invalidateWalletCache, loadWallet, loadWalletQuote, walletPricingKey } from '../wallet-prefetch'
 import { safeWalletPaymentUrl, type WalletOverview, type WalletPayment, type WalletPlan, type WalletQuote, type WalletRedemption, type WalletSection } from '../../shared/studio/wallet'
 
+defineProps<{ walletEnabled?: boolean }>()
 const emit = defineEmits<{ refresh: [] }>()
 const data = ref<WalletOverview>(), quote = ref<WalletQuote>(), payment = ref<WalletPayment>(), selectedPlan = ref<WalletPlan>()
 const paymentForm = ref<HTMLFormElement>()
@@ -109,7 +110,7 @@ async function refresh() {
     if (current !== revision) return
     emit('refresh')
     launched.value = false
-    if (!error.value) notice.value = accountBalance.amount === null
+    if (!error.value) notice.value = accountBalance.amount === null && !accountBalance.points
       ? '订单状态已刷新，余额读取失败，请稍后刷新余额。'
       : paymentOrder.value?.status === 'success' ? '订单已到账，请以账户实时余额为准。' : '已刷新余额和订单状态。'
   } finally { if (current === revision) busy.value = false }
@@ -160,7 +161,7 @@ async function redeem() {
     await Promise.all([refreshAccountBalance(), load(true)])
     if (current !== revision) return
     emit('refresh')
-    notice.value = accountBalance.amount === null ? '兑换成功，但余额读取失败，请刷新余额，勿重复兑换。' : '兑换成功，请以刷新后的账户余额为准。'
+    notice.value = accountBalance.amount === null && !accountBalance.points ? '兑换成功，但余额读取失败，请刷新余额，勿重复兑换。' : '兑换成功，请以刷新后的账户余额为准。'
   } catch (cause) {
     if (current === revision) error.value = `${errorMessage(cause)} 若结果未确认，请先刷新余额，勿重复提交。`
   } finally { if (current === revision) busy.value = false }
@@ -225,7 +226,7 @@ onBeforeUnmount(() => {
             <p v-if="!validAmount" class="form-note">请输入不小于 {{ data.topup.minAmount }} 的整数金额。<template v-if="data.quotaDisplayType === 'TOKENS'">数量须为 {{ data.quotaPerUnit }} tokens 的整数倍。</template></p>
             <fieldset class="wallet-methods"><legend>支付方式</legend><label v-for="item in data.topup.paymentMethods" :key="item.type"><input v-model="method" type="radio" name="wallet-topup-method" :value="item.type" :disabled="busy" />{{ item.name }}</label></fieldset>
             </div>
-            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><small v-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
+            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><small v-if="walletEnabled">支付确认后，实付人民币本金按 ¥ 1 = 5,000 永久积分入账。</small><small v-else-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
           </form>
           <p v-else class="muted">当前暂无可用的在线充值方式。</p>
           <div v-if="data.topup.redemptionEnabled" class="wallet-redemption">

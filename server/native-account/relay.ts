@@ -133,7 +133,7 @@ export async function resolveWebSearchCredentials(req: AccountRequest) {
   if (!isNewApiEnabled()) {
     throw new NewApiError("联网搜索需要登录账号", 503);
   }
-  await authenticatedRelaySession(req);
+  const session = await authenticatedRelaySession(req);
   const tokenId = await resolveSystemAutoToken(req);
   const { data } = await accountRequest(req, `/api/token/${tokenId}/key`, {
     method: "POST",
@@ -148,6 +148,7 @@ export async function resolveWebSearchCredentials(req: AccountRequest) {
   return {
     baseUrl: getNewApiConfig().baseUrl,
     apiKey: key.startsWith("sk-") ? key : `sk-${key}`,
+    userId: session.user!.id,
   };
 }
 

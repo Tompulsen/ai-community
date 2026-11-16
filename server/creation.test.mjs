@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 import assert from 'node:assert/strict'
+import { createHash, createHmac } from 'node:crypto'
 import test from 'node:test'
 import Fastify from 'fastify'
 import { handleCreation } from './creation.ts'
@@ -11,6 +12,42 @@ const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
 const apiKey = 'sk-fixture-secret-for-tests'
 const imageRequest = { kind: 'image', model: 'gpt-image-2', prompt: 'A test image', requestId: 'request-1' }
+
+test('wallet-paid creation signs the actual relay request once and config failure leaves no accepted record', async t => {
+  const config = { COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_SECRET: 'fixture-wallet-secret-'.repeat(3),
+    COMMUNITY_WALLET_CLIENT_ID: origin, NEW_API_BASE_URL: 'https://model.example' }
+  for (const [key, value] of Object.entries(config)) {
+    const previous = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
+  }
+  const { app, calls } = fixture(t, { async fetch(url, init) {
+    const wire = new Request(url, init), headers = wire.headers
+    const bytes = Buffer.from(await wire.arrayBuffer())
+    const canonical = ['community-wallet-v1', origin, '17', headers.get('X-Community-Timestamp'),
+      headers.get('X-Community-Nonce'), 'POST', new URL(url).pathname + new URL(url).search,
+      headers.get('Idempotency-Key'), createHash('sha256').update(bytes).digest('hex')].join('\n')
+    assert.equal(headers.get('X-Community-User'), '17')
+    assert.equal(headers.get('X-Community-Signature'), createHmac('sha256', config.COMMUNITY_WALLET_SECRET).update(canonical).digest('hex'))
+    return Response.json({ data: [{ url: 'https://media.example/result.png' }] })
+  } })
+  process.env.COMMUNITY_WALLET_SECRET = ''
+  assert.equal((await submit(app)).statusCode, 503)
+  assert.equal(calls.length, 0)
+  assert.equal((await app.inject('/api/creation/requests/request-1')).statusCode, 404)
+  const streaming = await submit(app, { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'stream-config',
+    chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } })
+  assert.match(streaming.payload, /"notAccepted":true/)
+  assert.match(streaming.payload, /"statusCode":503/)
+  assert.equal((await app.inject('/api/creation/requests/stream-config')).statusCode, 404)
+  assert.equal(calls.length, 0)
+  process.env.COMMUNITY_WALLET_SECRET = config.COMMUNITY_WALLET_SECRET
+  const result = await submit(app, imageRequest, { 'X-Community-User': '999', 'X-Community-Signature': 'forged' })
+  assert.equal(result.statusCode, 200)
+  assert.equal(result.json().status, 'succeeded')
+  assert.deepEqual((await submit(app)).json(), result.json())
+  assert.equal(calls.length, 1)
+})
 
 test('a streamed paid request persists a final recoverable result without another POST', async t => {
   const { app, calls } = fixture(t, { fetch() {

@@ -3,6 +3,8 @@ import { AccountRequest as NextRequest, AccountResponse as NextResponse } from "
 import { assertSameOrigin, getAuthenticatedSession } from "../native-account/client.ts";
 import { isNewApiEnabled, NewApiError } from "../native-account/config.ts";
 import { relayHeaders, resolveWebSearchCredentials } from "../native-account/relay.ts";
+import { randomUUID } from "node:crypto";
+import { signCommunityRequest } from "../native-account/community-wallet.ts";
 
 export type SkillSource = { title: string; url: string; snippet: string };
 export type SkillRetrievalKind = "papers" | "web";
@@ -342,19 +344,21 @@ async function retrieveBilledWebSources(
   const timeout = setTimeout(cancel, 45000);
   try {
     if (controller.signal.aborted) throw new Error("aborted");
-    const { baseUrl, apiKey } = await resolveWebSearchCredentials(req);
+    const { baseUrl, apiKey, userId } = await resolveWebSearchCredentials(req);
     if (controller.signal.aborted) throw new Error("aborted");
     const headers = relayHeaders(req, apiKey);
     headers.set("Content-Type", "application/json");
     headers.set("Accept", "application/json");
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    headers.set("Idempotency-Key", randomUUID());
+    const url = new URL('/v1/chat/completions', baseUrl);
+    const signed = await signCommunityRequest(url, userId, headers, JSON.stringify({
+      model,
+      messages: [{ role: "user", content: query }],
+      stream: false,
+    }));
+    const response = await fetch(url, {
       method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: query }],
-        stream: false,
-      }),
+      ...signed,
       signal: controller.signal,
       cache: "no-store",
       redirect: "error",

@@ -1,0 +1,122 @@
+--- a/service/video.py
++++ b/service/video.py
+@@ -1,4 +1,5 @@
+ import asyncio
++import base64
+ import hashlib
+ import json
+ import os
+@@ -15,6 +16,7 @@
+ from fastapi.responses import FileResponse, JSONResponse
+ 
+ from .api import authorize
++from .community_wallet import CommunityWalletMiddleware, current_wallet, wallet_digest, sign_request
+ from .core import AdmissionError, DATA, PUBLIC, UPSTREAM, db, seal, unseal
+ 
+ MAX_VIDEO = int(os.getenv("MAX_VIDEO_BYTES", str(512 * 1024**2)))
+@@ -82,9 +84,9 @@
+     return result
+ 
+ 
+-def submit_video(owner, idem, payload, token, origin):
++def submit_video(owner, idem, payload, token, origin, wire=None):
+     payload = dict(payload)
+-    api_format = payload.pop("api_format", "generations")
++    api_format = "videos" if wire else payload.pop("api_format", "generations")
+     if api_format not in CREATE_PATHS:
+         raise AdmissionError("unsupported_video_api_format", 422)
+     if (not isinstance(payload.get("model"), str) or not 1 <= len(payload["model"]) <= 256
+@@ -97,6 +99,12 @@
+     normalized = json.dumps({"api_format": api_format, "request": payload},
+                             sort_keys=True, separators=(",", ":"), allow_nan=False)
+     digest = hashlib.sha256(normalized.encode()).hexdigest()
++    if wire:
++        digest = hashlib.sha256((digest + "\n" + wire["body"]).encode()).hexdigest()
++    wallet = current_wallet(token)
++    if wire and not wallet:
++        raise AdmissionError("community_wallet_required", 403)
++    digest = wallet_digest(digest, wallet)
+     reserve = MAX_VIDEO + 1024**2
+     now = timestamp()
+     with db() as c:
+@@ -122,7 +130,7 @@
+             "payload,api_format,reserved) VALUES(?,?,?,?,'queued',?,?,?,?,?,?,?)",
+             (identifier, owner, idem, digest, now, now, now + VIDEO_TTL,
+              now + GENERATION_DEADLINE,
+-             seal({"request": payload, "token": token, "origin": origin}), api_format, reserve),
++             seal({"request": payload, "token": token, "origin": origin, "wallet": wallet, "wire": wire}), api_format, reserve),
+         )
+         return dict(c.execute("SELECT * FROM video_jobs WHERE id=?", (identifier,)).fetchone())
+ 
+@@ -155,7 +163,7 @@
+     async with client.stream(method, UPSTREAM + path, **kwargs) as response:
+         if response.status_code not in (200, 201, 202):
+             rejected = method == "POST" and response.status_code in (
+-                400, 401, 403, 404, 405, 413, 415, 422, 429,
++                400, 401, 402, 403, 404, 405, 413, 415, 422, 429,
+             )
+             raise VideoError("upstream_rejected" if rejected else "upstream_query_unavailable")
+         body = bytearray()
+@@ -273,13 +281,19 @@
+                       (identifier, claim))
+         try:
+             kwargs = {"headers": token_headers(payload)}
+-            if row["api_format"] == "videos":
++            if payload.get("wire"):
++                kwargs["headers"]["Content-Type"] = payload["wire"]["content_type"]
++                kwargs["content"] = base64.b64decode(payload["wire"]["body"], validate=True)
++            elif row["api_format"] == "videos":
+                 kwargs["files"] = {
+                     key: (None, value if isinstance(value, str) else json.dumps(value))
+                     for key, value in payload["request"].items() if value is not None
+                 }
+             else:
+                 kwargs["json"] = payload["request"]
++            target = UPSTREAM + CREATE_PATHS[row["api_format"]]
++            headers = kwargs.pop("headers")
++            kwargs = sign_request(payload.get("wallet"), payload["token"], target, headers, **kwargs)
+             result = await read_json(client, "POST", CREATE_PATHS[row["api_format"]], **kwargs)
+             upstream_id = result.get("id") or result.get("task_id")
+             if not isinstance(upstream_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", upstream_id):
+@@ -409,6 +423,9 @@
+ )
+ 
+ 
++app.add_middleware(CommunityWalletMiddleware, paths=("/async-videos/v1/tasks",))
++
++
+ @app.get("/healthz")
+ async def health():
+     background = getattr(app.state, "background", [])
+@@ -425,13 +442,28 @@
+     body = bytearray()
+     async for chunk in request.stream():
+         body.extend(chunk)
+-        if len(body) > 1024**2:
++        if len(body) > (64 * 1024**2 if request.headers.get("x-community-signature") else 1024**2):
+             raise HTTPException(413, "request_too_large")
+     try:
+-        payload = json.loads(body)
++        wallet = current_wallet(token)
++        content_type = request.headers.get("content-type", "application/json")
++        if wallet and content_type.lower().startswith("multipart/form-data"):
++            async def replay():
++                return {"type": "http.request", "body": bytes(body), "more_body": False}
++            raw_request = Request(request.scope, replay)
++            async with raw_request.form(max_files=8, max_fields=128) as form:
++                for field in ("model", "prompt", "n", "stream"):
++                    if len(form.getlist(field)) > 1:
++                        raise ValueError()
++                payload = {"model": form.get("model"), "prompt": form.get("prompt")}
++                if form.get("n") not in (None, "1") or form.get("stream") not in (None, "false"):
++                    raise ValueError()
++        else:
++            payload = json.loads(body)
+         if not isinstance(payload, dict):
+             raise ValueError()
+-        row = await asyncio.to_thread(submit_video, owner, idem, payload, token, origin)
++        wire = {"body": base64.b64encode(body).decode("ascii"), "content_type": content_type} if wallet else None
++        row = await asyncio.to_thread(submit_video, owner, idem, payload, token, origin, wire=wire)
+     except AdmissionError as error:
+         raise HTTPException(error.status, error.code) from None
+     except (ValueError, UnicodeError, TypeError):

@@ -6,6 +6,27 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { accountHash, bindExternalAccount, handleAccount, newApiIdentity, newApiOrigin, newApiReturnPath, readAccountBalance, readFlowCookie } from './account.ts'
 
+test('unified wallet only displays New API points for the verified subject and never falls back to mixed quota', async t => {
+  const previous = process.env.COMMUNITY_WALLET_ENABLED
+  process.env.COMMUNITY_WALLET_ENABLED = 'true'
+  t.after(() => { if (previous === undefined) delete process.env.COMMUNITY_WALLET_ENABLED; else process.env.COMMUNITY_WALLET_ENABLED = previous })
+  const ctx = { config: { url: 'https://community.test' }, req: { headers: { cookie: 'octopus_new_api_session=' + 'a'.repeat(43) } } }
+  const points = { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100', permanentPoints: '5000', legacyApiQuota: -2, paidApiQuota: 10, totalApiQuota: 8, charityExpiringAt: null }
+  let subject = 7, upstream = points
+  const fetcher = async (url, init) => {
+    assert.equal(init.headers['x-new-api-user'], '7')
+    assert.notEqual(url.pathname, '/api/new-api/status', 'quota display settings must not convert points')
+    return Response.json({ success: true, data: url.pathname.endsWith('/session')
+      ? { authenticated: true, user: { id: 7, quota: 99999999 } } : { userId: subject, points: upstream } })
+  }
+  assert.deepEqual(await readAccountBalance(ctx, '7', fetcher), { balance: null, currencySymbol: 'CNY', points })
+  subject = 8
+  assert.equal(await readAccountBalance(ctx, '7', fetcher), null)
+  subject = 7; upstream = { ...points, permanentPoints: 123 }
+  assert.equal(await readAccountBalance(ctx, '7', fetcher), null)
+  assert.equal(await readAccountBalance(ctx, '7', async () => new Response('', { status: 503 })), null)
+})
+
 test('issuer permits only an HTTPS origin without credentials, path or query', () => {
   assert.equal(newApiOrigin('https://accounts.test/'), 'https://accounts.test')
   for (const input of ['http://accounts.test', 'https://secret@accounts.test', 'https://accounts.test/other', 'https://accounts.test?x=1', 'https://accounts.test/#x']) {
