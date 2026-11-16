@@ -176,11 +176,11 @@ function restoreMessageTrigger() {
   .studio-shell { height: var(--studio-visible-height, 100dvh); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   .studio-shell > .app-header, .studio-shell > .mobile-nav { display: none; }
 }
-.header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 32px; }
+.header-inner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 32px; }
 .brand { justify-self: start; min-width: 0; max-width: min(280px, 100%); }
 .brand > span { overflow: hidden; text-overflow: ellipsis; }
 .app-footer > span { min-width: 0; overflow-wrap: anywhere; }
-.desktop-nav { align-items: center; justify-self: center; gap: 24px; }
+.desktop-nav { align-items: center; justify-self: start; gap: 24px; }
 .header-tools { display: flex; align-items: center; justify-self: end; min-width: 0; gap: 8px; }
 .header-actions { margin-left: 0; gap: 8px; }
 .header-submission { display: flex; align-items: center; justify-content: center; flex: none; gap: 6px; width: max-content; height: 36px; margin-right: 14px; color: var(--muted); white-space: nowrap; }

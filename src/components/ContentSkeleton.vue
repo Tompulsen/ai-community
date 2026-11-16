@@ -19,12 +19,11 @@ const cornerMode = computed(() => props.layout === 'works' ? 'clip' : undefined)
 
 <style scoped>
 .loading-works > .loading-item { position: relative; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: var(--card-radius); background: var(--surface); }
-.loading-works > .loading-item::before { content: ""; position: absolute; inset: auto 0 0; height: 144px; z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
+.loading-works > .loading-item::before { content: ""; position: absolute; inset: auto 0 0; height: var(--work-cover-shade-height); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
 .loading-works .loading-cover { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; aspect-ratio: auto; border-radius: 0; }
 .loading-work-info { position: relative; z-index: 2; display: flex; flex: 0 0 auto; flex-direction: column; justify-content: center; gap: 12px; height: 80px; min-width: 0; padding: 12px 16px 16px; }
 .loading-work-info .loading-line { flex: none; }
 @media (max-width: 639px) {
-  .loading-works > .loading-item::before { height: 176px; }
   .loading-work-info { height: 102px; }
 }
 </style>

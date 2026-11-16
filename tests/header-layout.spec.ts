@@ -15,7 +15,8 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover')
     await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeVisible()
+    if (width < 380) await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeHidden()
+    else await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeVisible()
     expect(await page.getByRole('heading', { name: '首页', exact: true }).evaluate(element => element.getBoundingClientRect().height)).toBe(1)
     await expect(page).toHaveTitle('首页 · 章鱼社区')
     await expect(page.locator('.discover-count')).toHaveCount(0)
@@ -27,6 +28,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await expect(brand).toBeVisible()
     const controls = page.locator('.brand, .header-actions, .browse-modes, .tag-navigation, .header-search-slot')
     for (const control of await controls.all()) {
+      if (!await control.isVisible()) continue
       const bounds = await control.boundingBox()
       expect(bounds).not.toBeNull()
       expect(bounds!.x).toBeGreaterThanOrEqual(0)
@@ -48,7 +50,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(actions!.x)
       const tools = await page.locator('.header-tools').boundingBox()
       expect(bounds!.x + bounds!.width + 24).toBeLessThanOrEqual(tools!.x + 1)
-      if (width >= 1280) expect(bounds!.x + bounds!.width / 2).toBeCloseTo(width / 2, 1)
+      expect(bounds!.x - brandBounds!.x - brandBounds!.width).toBeGreaterThanOrEqual(24)
     } else {
       await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeHidden()
       const nav = page.getByRole('navigation', { name: '手机导航' })
@@ -78,27 +80,29 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       height: element.getBoundingClientRect().height,
       groups: Array.from(element.children).map(child => child.getBoundingClientRect().toJSON()),
     }))
-    expect(layout.top).toBeCloseTo(headerBounds!.height + 24, 1)
-    expect(layout.height).toBeLessThanOrEqual(width >= 640 ? 57 : 105)
-    for (const group of layout.groups) expect(group.height).toBe(36)
+    expect(layout.top).toBeCloseTo(headerBounds!.height + 16, 1)
+    expect(layout.height).toBeLessThanOrEqual(width >= 640 ? 36 : 100)
+    for (const group of layout.groups) expect(group.height).toBe(width >= 640 ? 36 : 44)
     if (width >= 640) {
       expect(new Set(layout.groups.map(group => Math.round(group.y + group.height / 2))).size).toBe(1)
       expect(layout.groups[0].right + 24).toBeLessThanOrEqual(layout.groups[1].left + 1)
     } else if (width < 640) {
       expect(layout.groups[1].top).toBeGreaterThanOrEqual(layout.groups[0].bottom + 12)
     }
-    const capsule = await page.locator('.gooey-input').evaluate(element => {
-      const root = element.getBoundingClientRect()
-      const surface = element.querySelector('.gooey-field-surface')!.getBoundingClientRect()
-      return { right: surface.right, rootRight: root.right, width: surface.width, rootWidth: root.width }
-    })
-    expect(capsule.right).toBeCloseTo(capsule.rootRight, 1)
-    expect(capsule.width).toBe(44)
-    expect(capsule.rootWidth).toBe(44)
-    await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toHaveText('')
-    await expect(page.getByRole('searchbox', { name: '搜索作品', includeHidden: true })).toBeDisabled()
-    await page.getByRole('button', { name: '展开搜索作品', exact: true }).hover()
-    await expect(page.locator('.gooey-field-surface')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    if (width >= 380) {
+      const capsule = await page.locator('.gooey-input').evaluate(element => {
+        const root = element.getBoundingClientRect()
+        const surface = element.querySelector('.gooey-field-surface')!.getBoundingClientRect()
+        return { right: surface.right, rootRight: root.right, width: surface.width, rootWidth: root.width }
+      })
+      expect(capsule.right).toBeCloseTo(capsule.rootRight, 1)
+      expect(capsule.width).toBe(44)
+      expect(capsule.rootWidth).toBe(44)
+      await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toHaveText('')
+      await expect(page.getByRole('searchbox', { name: '搜索作品', includeHidden: true })).toBeDisabled()
+      await page.getByRole('button', { name: '展开搜索作品', exact: true }).hover()
+      await expect(page.locator('.gooey-field-surface')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    }
     await expect(page.locator('.app-header .gooey-input')).toHaveCount(1)
     await expect(page.locator('.discovery-toolbar .gooey-input')).toHaveCount(0)
     await expect(page.locator('.app-header .header-submission')).toHaveText('投稿')
@@ -120,31 +124,73 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       const { width, height } = button.getBoundingClientRect()
       return { width, height }
     }))
-    for (const target of targets) { expect(target.width).toBeGreaterThanOrEqual(44); expect(target.height).toBe(width < 640 ? 36 : 28) }
-    await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
-    await expect(page.getByRole('searchbox', { name: '搜索作品' })).toBeFocused()
-    expect((await page.locator('.gooey-field').boundingBox())!.width).toBeGreaterThanOrEqual(128)
-    if (width >= 1000) {
-      const nav = await page.locator('.desktop-nav').boundingBox()
-      const search = await page.locator('.gooey-input').boundingBox()
-      expect(nav!.x + nav!.width).toBeLessThanOrEqual(search!.x)
-    }
-    const focus = await page.locator('.gooey-field').evaluate(element => {
-      const style = getComputedStyle(element)
-      return {
-        top: element.getBoundingClientRect().top - parseFloat(style.outlineWidth) - parseFloat(style.outlineOffset),
-        bottom: element.getBoundingClientRect().bottom,
-        header: document.querySelector('.app-header')!.getBoundingClientRect().toJSON(),
-        outlineStyle: style.outlineStyle,
+    for (const target of targets) { expect(target.width).toBeGreaterThanOrEqual(44); expect(target.height).toBe(width < 640 ? 44 : 28) }
+    if (width >= 380) {
+      await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+      await expect(page.getByRole('searchbox', { name: '搜索作品' })).toBeFocused()
+      expect((await page.locator('.gooey-field').boundingBox())!.width).toBeGreaterThanOrEqual(128)
+      if (width >= 1000) {
+        const nav = await page.locator('.desktop-nav').boundingBox()
+        const search = await page.locator('.gooey-input').boundingBox()
+        expect(nav!.x + nav!.width).toBeLessThanOrEqual(search!.x)
       }
-    })
-    expect(focus.outlineStyle).toBe('none')
-    expect(focus.top).toBeGreaterThanOrEqual(focus.header.top)
-    expect(focus.bottom).toBeLessThanOrEqual(focus.header.bottom)
+      const focus = await page.locator('.gooey-field').evaluate(element => {
+        const style = getComputedStyle(element)
+        return {
+          top: element.getBoundingClientRect().top - parseFloat(style.outlineWidth) - parseFloat(style.outlineOffset),
+          bottom: element.getBoundingClientRect().bottom,
+          header: document.querySelector('.app-header')!.getBoundingClientRect().toJSON(),
+          outlineStyle: style.outlineStyle,
+        }
+      })
+      expect(focus.outlineStyle).toBe('none')
+      expect(focus.top).toBeGreaterThanOrEqual(focus.header.top)
+      expect(focus.bottom).toBeLessThanOrEqual(focus.header.bottom)
+    }
     const accessibility = await new AxeBuilder({ page }).include('.app-header').include('.mobile-nav').include('main').analyze()
     expect(accessibility.violations).toEqual([])
   })
 }
+
+test('expanded search keeps navigation and the actual account balance separate at desktop breakpoints', async ({ page }) => {
+  const writes: string[] = [], errors: string[] = []
+  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.url()) })
+  page.on('pageerror', error => errors.push(error.message))
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.route('**/api/session', route => route.fulfill({ json: {
+    user: { id: 'layout-user', accountId: '17', username: 'root', name: 'root' },
+  } }))
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    linked: true, subject: '17', balance: 89.87, currencySymbol: '\u2726',
+  } }))
+  await page.setViewportSize({ width: 1000, height: 900 })
+  await page.goto('/discover')
+  const balance = page.locator('.header-actions .account-balance')
+  await expect(balance).toHaveText('89.87 \u2726')
+  await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+  const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
+  await expect(input).toBeFocused()
+  for (const width of [1000, 1024, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    const brand = await page.locator('.brand').boundingBox()
+    const nav = await page.locator('.desktop-nav').boundingBox()
+    const search = await page.locator('.gooey-input').boundingBox()
+    const actions = await page.locator('.header-actions').boundingBox()
+    const amount = await balance.boundingBox()
+    const account = await page.locator('.profile-toggle').boundingBox()
+    expect(brand!.x + brand!.width, `${width}: brand/navigation`).toBeLessThanOrEqual(nav!.x)
+    expect(nav!.x + nav!.width, `${width}: navigation/search`).toBeLessThanOrEqual(search!.x)
+    expect(search!.x + search!.width, `${width}: search/actions`).toBeLessThanOrEqual(actions!.x)
+    expect(amount!.x + amount!.width, `${width}: balance/account`).toBeLessThanOrEqual(account!.x)
+    expect(account!.x + account!.width, `${width}: account edge`).toBeLessThanOrEqual(width)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), String(width)).toBe(true)
+    await expect(balance).toHaveText('89.87 \u2726')
+    await expect(input).toBeVisible()
+    if (width === 1280 || width === 1440) await page.screenshot({ path: test.info().outputPath(`balanced-expanded-${width}.png`) })
+  }
+  expect(writes).toEqual([])
+  expect(errors).toEqual([])
+})
 
 for (const width of [320, 1440]) {
   test(`submission opens the existing editor without submitting work at ${width}px`, async ({ page }) => {
@@ -226,7 +272,7 @@ test('search, categories, tags and sorting keep their API behavior', async ({ pa
   await expect(page.getByRole('button', { name: '全部', exact: true })).toHaveAttribute('aria-pressed', 'true')
 })
 
-for (const width of [320, 1440]) {
+for (const width of [390, 1440]) {
   test(`gooey search supports keyboard, persistent queries and clearing at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover?kind=image&tag=Skill')
@@ -272,6 +318,28 @@ for (const width of [320, 1440]) {
     expect(await filter.boundingBox()).toEqual(before)
   })
 }
+
+test('the compact phone header keeps search available through community tools', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.goto('/discover')
+  await expect(page.locator('.header-search-slot')).toBeHidden()
+  const launcher = page.getByTitle('社区工具', { exact: true })
+  await launcher.focus()
+  await launcher.press('Enter')
+  const panel = page.getByRole('dialog', { name: '社区工具', exact: true })
+  await panel.getByRole('button', { name: '搜索', exact: true }).click()
+  const query = panel.getByRole('searchbox', { name: '搜索社区作品', exact: true })
+  await expect(query).toBeFocused()
+  const searched = page.waitForRequest(request => new URL(request.url()).pathname === '/api/works' && new URL(request.url()).searchParams.get('query') === '手机搜索')
+  await query.fill('手机搜索')
+  await query.press('Enter')
+  await searched
+  await expect(panel).not.toBeVisible()
+  expect(new URL(page.url()).searchParams.get('q')).toBe('手机搜索')
+  await expect(page.locator('.active-conditions')).toContainText('搜索：手机搜索')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: test.info().outputPath('compact-phone-search-320.png') })
+})
 
 for (const width of [320, 1440]) {
   test(`tag rail scrolls in both directions and keeps selected tags at ${width}px`, async ({ page }) => {

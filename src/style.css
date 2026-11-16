@@ -52,6 +52,7 @@
   --radius: 6px;
   --card-radius: 32px;
   --work-cover-shade: linear-gradient(180deg, #0000 0%, #00000033 24%, #000000c2 60%, #000000d1 100%);
+  --work-cover-shade-height: 128px;
   --card-inset: 16px;
   --card-border: 1px;
   --card-inner-radius: calc(var(--card-radius) - var(--card-inset) - var(--card-border));
@@ -492,7 +493,7 @@ dialog::backdrop { background: #0000009c; }
   .calendar-day { min-height: 72px; }
 }
 @media (max-width: 639px) {
-  :root { --page-gutter: 16px; --space-page: 24px; }
+  :root { --page-gutter: 16px; --space-page: 24px; --work-cover-shade-height: 160px; }
   .header-inner { padding-inline: 16px; gap: 8px; }
   .brand { font-size: 16px; gap: 8px; }
   .brand { min-height: 44px; }

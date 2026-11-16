@@ -93,7 +93,7 @@ function measureCover(event: Event) {
 .work-card-content { --work-ink: #fff; --work-muted: #e2e2df; --work-accent: #aec2a8; position: relative; display: flex; flex-direction: column; justify-content: flex-end; width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .work-card-content:has(.resource-cover) { --work-ink: var(--ink); --work-muted: var(--muted); --work-accent: var(--blue-hover); }
 /* Overdraw the shared clip edge so composited media cannot form a subpixel seam. */
-.work-card-content::before { content: ""; position: absolute; inset: auto -1px -1px; height: calc(144px + 1px); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
+.work-card-content::before { content: ""; position: absolute; inset: auto -1px -1px; height: calc(var(--work-cover-shade-height) + 1px); z-index: 1; background: var(--work-cover-shade); pointer-events: none; }
 .work-card-content:has(.resource-cover)::before { display: none; }
 .work-cover { position: absolute; inset: 0; min-width: 0; min-height: 0; width: 100%; height: 100%; aspect-ratio: auto; border-radius: 0; overflow: visible; background: var(--surface-soft); }
 /* Stop transformed media before the shade's raster edge can expose an unshaded pixel. */
@@ -124,7 +124,6 @@ function measureCover(event: Event) {
 .work-card-managed .work-card-content::before { height: calc(224px + 1px); }
 .work-card-managed .work-card-content > :deep(.work-management-actions) { position: relative; z-index: 2; margin: 0; padding: 0 16px 16px; color: var(--work-ink); }
 @media (max-width: 639px) {
-  .work-card-content::before { height: calc(176px + 1px); }
   .work-card-managed .work-card-content::before { height: calc(288px + 1px); }
   .work-title { min-height: 24px; line-height: 24px; }
   .work-author, .like-button { min-height: 44px; }

@@ -122,20 +122,23 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 
 <style scoped>
 .discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.discover-page { padding-top: 24px; }
-.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 24px; padding-bottom: 20px; margin-bottom: 24px; }
-.browse-modes { display: flex; align-items: center; padding: 3px; border: 1px solid var(--border); border-radius: 18px; }
+.discover-page { padding-top: 16px; }
+.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 24px; padding-bottom: 0; margin-bottom: 24px; }
+.browse-modes { display: flex; align-items: center; padding: 4px; border-radius: 18px; background: var(--surface); }
 .browse-mode { min-height: 28px; min-width: 60px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; font-weight: 500; white-space: nowrap; }
 .browse-mode:hover { color: var(--ink); }
-.tag-navigation { display: flex; align-items: center; min-width: 0; border: 1px solid var(--border); border-radius: 18px; padding: 3px; }
+.tag-navigation { position: relative; display: flex; align-items: center; min-width: 0; padding: 4px 0; }
+.tag-navigation::before { content: ""; position: absolute; left: -12px; top: 50%; width: 1px; height: 16px; transform: translateY(-50%); background: var(--border); }
 .tag-rail { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-radius: 14px; }
 .tag-rail::-webkit-scrollbar { display: none; }
-.category-tabs, .content-tags { display: flex; align-items: center; flex: none; gap: 4px; }
-.content-tags { margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--border); }
+.tag-rail > .category-tabs, .content-tags { display: flex; align-items: center; flex: none; gap: 4px; width: auto; }
+.content-tags { position: relative; margin-left: 20px; padding-left: 20px; }
+.content-tags::before { content: ""; position: absolute; left: 0; top: 50%; width: 1px; height: 16px; transform: translateY(-50%); background: var(--border); }
 .rail-option { min-height: 28px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; white-space: nowrap; font-weight: 500; }
 .rail-option:hover { color: var(--ink); }
 .browse-mode, .rail-option { transition: background-color .2s ease-in-out, color .2s ease-in-out, border-color .2s ease-in-out, box-shadow .2s ease-in-out; }
-.browse-mode.active, .rail-option.active { background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--border); }
+.browse-mode.active, .rail-option.active { background: var(--surface); color: var(--ink); }
+.browse-mode.active { background: var(--surface-soft); }
 .rail-option:focus-visible, .browse-mode:focus-visible { outline-offset: -3px; }
 .tag-scroll-controls { display: flex; flex: none; }
 .tag-scroll-controls .icon-button { width: 28px; height: 28px; min-height: 28px; min-width: 28px; border-radius: 50%; }
@@ -148,13 +151,15 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
   .browse-mode, .rail-option { transition: none; }
 }
 @media (pointer: coarse), (max-width: 639px) {
-  .browse-modes, .tag-navigation { padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--border); }
-  .browse-mode, .rail-option { min-height: 36px; border-radius: 18px; }
-  .tag-rail { border-radius: 18px; }
-  .tag-scroll-controls .icon-button { width: 36px; height: 36px; min-height: 36px; min-width: 36px; }
+  .browse-modes, .tag-navigation { padding: 0; }
+  .browse-mode, .rail-option { min-height: 44px; border-radius: 22px; }
+  .browse-modes { border-radius: 22px; }
+  .tag-rail { border-radius: 0; }
+  .tag-scroll-controls .icon-button { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
 }
 @media (max-width: 639px) {
-  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 20px; }
+  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .browse-modes { grid-column: 1 / -1; justify-self: start; }
+  .tag-navigation::before { display: none; }
 }
 </style>
