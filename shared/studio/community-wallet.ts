@@ -6,12 +6,14 @@ export interface CommunityWallet {
   charityPoints: string
   permanentPoints: string
   legacyApiQuota: number
+  legacyPoints?: string
   paidApiQuota: number
   totalApiQuota: number
   charityExpiringAt: number | null
 }
 
 const decimalPoints = /^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$/
+const legacyDecimalPoints = /^-?(?:0|[1-9]\d{0,19})(?:\.\d{1,18})?$/
 
 export function parseCommunityWallet(value: unknown): CommunityWallet {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('积分余额暂不可用')
@@ -19,6 +21,7 @@ export function parseCommunityWallet(value: unknown): CommunityWallet {
   if (wallet.enabled !== true || wallet.currency !== 'CNY' || wallet.pointsPerCny !== 5000
     || typeof wallet.charityPoints !== 'string' || !decimalPoints.test(wallet.charityPoints)
     || typeof wallet.permanentPoints !== 'string' || !decimalPoints.test(wallet.permanentPoints)
+    || wallet.legacyPoints !== undefined && (typeof wallet.legacyPoints !== 'string' || !legacyDecimalPoints.test(wallet.legacyPoints))
     || !['legacyApiQuota', 'paidApiQuota', 'totalApiQuota'].every(key => Number.isSafeInteger(wallet[key]))
     || Number(wallet.paidApiQuota) < 0
     || !(wallet.charityExpiringAt === null || Number.isSafeInteger(wallet.charityExpiringAt)
@@ -29,12 +32,22 @@ export function parseCommunityWallet(value: unknown): CommunityWallet {
     enabled: true, currency: 'CNY', pointsPerCny: 5000,
     charityPoints: wallet.charityPoints, permanentPoints: wallet.permanentPoints,
     legacyApiQuota: wallet.legacyApiQuota as number, paidApiQuota: wallet.paidApiQuota as number,
+    ...(wallet.legacyPoints === undefined ? {} : { legacyPoints: wallet.legacyPoints as string }),
     totalApiQuota: wallet.totalApiQuota as number, charityExpiringAt: wallet.charityExpiringAt as number | null,
   }
 }
 
 export function formatPoints(value: string): string {
   if (!decimalPoints.test(value)) return '—'
+  return formatDecimalPoints(value)
+}
+
+export function formatLegacyPoints(value: string | undefined): string {
+  if (typeof value !== 'string' || !legacyDecimalPoints.test(value)) return '—'
+  return formatDecimalPoints(value)
+}
+
+function formatDecimalPoints(value: string): string {
   const [whole = '0', fraction = ''] = value.split('.')
   const tail = fraction.replace(/0+$/, '')
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (tail ? `.${tail}` : '')

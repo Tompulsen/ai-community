@@ -42,18 +42,21 @@ const envelope = (data, headers) => Response.json({ success: true, data }, { hea
 
 test('community point balances are authenticated, sanitized and fail closed on malformed upstream money', async t => {
   configure(t)
-  const previous = process.env.COMMUNITY_WALLET_ENABLED
-  process.env.COMMUNITY_WALLET_ENABLED = 'true'
-  t.after(() => { if (previous === undefined) delete process.env.COMMUNITY_WALLET_ENABLED; else process.env.COMMUNITY_WALLET_ENABLED = previous })
+  for (const [key, value] of Object.entries({ COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_QUOTA_PER_CNY: '500000' })) {
+    const previous = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
+  }
   const fixture = await session(t)
-  let charity = '100.123456', calls = 0
+  let charity = '100.123456', legacyQuota = 100, calls = 0
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     calls++
+    assert.ok(!options.method || options.method === 'GET')
     assert.equal(options.headers.get('Authorization'), 'Bearer private-access')
     if (new URL(url).pathname === '/api/user/self') return envelope(user)
     assert.equal(new URL(url).pathname, '/api/user/self/wallet')
     return envelope({ enabled: true, currency: 'CNY', points_per_cny: 5000, charity_points: charity,
-      permanent_points: '5000', legacy_api_quota: 100, paid_api_quota: 500, total_api_quota: 600,
+      permanent_points: '5000', legacy_api_quota: legacyQuota, paid_api_quota: 500, total_api_quota: legacyQuota + 500,
       charity_expiring_at: 1800000000, private: 'secret-not-exposed' })
   })
   const response = await handleAccountRequest(fixture.request('/api/new-api/wallet/points', { headers: { 'x-new-api-user': '7' } }))
@@ -62,8 +65,16 @@ test('community point balances are authenticated, sanitized and fail closed on m
   assert.equal(result.data.userId, 7)
   assert.equal(result.data.points.charityPoints, '100.123456')
   assert.equal(result.data.points.permanentPoints, '5000')
+  assert.equal(result.data.points.legacyPoints, '1')
   assert.doesNotMatch(JSON.stringify(result), /secret-not-exposed|private-access/)
   assert.match(response.headers.get('cache-control'), /no-store/)
+  for (const [quota, points] of [[1000000, '10000'], [-2, '-0.02'], [0, '0']]) {
+    legacyQuota = quota
+    const projected = await (await handleAccountRequest(fixture.request('/api/new-api/wallet/points'))).json()
+    assert.equal(projected.data.points.legacyPoints, points)
+    assert.equal(projected.data.points.charityPoints, '100.123456')
+    assert.equal(projected.data.points.permanentPoints, '5000')
+  }
   const before = calls
   assert.equal((await handleAccountRequest(fixture.request('/api/new-api/wallet/points', { headers: { 'x-new-api-user': '8' } }))).status, 409)
   assert.equal(calls, before)

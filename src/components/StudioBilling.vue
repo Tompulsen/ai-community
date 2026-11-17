@@ -48,7 +48,7 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
         <div class="billing-detail-actions"><button v-if="error" type="button" class="studio-tool" @click="load"><RefreshCw :size="15" />重试</button><button type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>
       </div>
     </StudioPopover><slot /></div>
-    <div class="billing-account"><span class="billing-balance" :title="balanceDescription">{{ accountBalance.points ? balanceDescription : `可用 ${accountBalance.amount === null ? '—' : `${accountBalance.currency} ${balanceNumber}`}` }}</span>
+    <div class="billing-account"><span class="billing-balance" :class="{ 'billing-points': accountBalance.points }" :title="balanceDescription">{{ accountBalance.points ? balanceDescription : `可用 ${accountBalance.amount === null ? '—' : `${accountBalance.currency} ${balanceNumber}`}` }}</span>
     <button type="button" class="studio-tool billing-refresh" aria-label="刷新费用和额度" title="刷新费用和额度" :disabled="loading || accountBalance.loading" @click="load"><RefreshCw :size="14" /></button></div>
   </div>
 </template>
@@ -57,6 +57,7 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
 .billing-controls, .billing-account { display: flex; flex: none; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .billing-account { margin-left: auto; }
 .billing-balance { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.billing-points { white-space: normal; overflow-wrap: anywhere; }
 .billing-details { display: grid; gap: 12px; font-size: 14px; line-height: 24px; overflow-wrap: anywhere; }
 .billing-details p { margin: 0; }
 .billing-model { font-weight: 500; }

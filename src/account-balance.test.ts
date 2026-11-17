@@ -14,14 +14,14 @@ it('shows authoritative point strings, clears them across account changes and ne
   const { session } = await import('./state')
   const { accountBalance, balanceDescription, refreshAccountBalance } = await import('./account-balance')
   const points = { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100.123456', permanentPoints: '5000',
-    legacyApiQuota: 99999999, paidApiQuota: 500, totalApiQuota: 100000499, charityExpiringAt: null }
+    legacyApiQuota: 99999999, legacyPoints: '999999.99', paidApiQuota: 500, totalApiQuota: 100000499, charityExpiringAt: null }
   session.user = { ...user }
   const result = (value: unknown, subject = '17') => new Response(JSON.stringify({ linked: true, subject, balance: 999999, walletEnabled: true, points: value }))
   fetchMock.mockResolvedValueOnce(result(points))
   await refreshAccountBalance()
   expect(accountBalance.points).toEqual(points)
   expect(accountBalance.amount).toBeNull()
-  expect(balanceDescription.value).toBe('公益 100.123456 积分 · 永久 5,000 积分')
+  expect(balanceDescription.value).toBe('公益 100.123456 积分 · 永久 5,000 积分 · 历史 API 额度 999,999.99 积分（仅账户中心使用）')
   fetchMock.mockResolvedValueOnce(result(null))
   await refreshAccountBalance()
   expect(accountBalance.points).toBeNull()
@@ -45,6 +45,23 @@ it('shares one read and displays the authoritative amount without quota conversi
   expect(accountBalance.amount).toBe(1234.56789)
   expect(balanceNumber.value).toBe('1234.57')
   expect(accountBalance.currency).toBe('USD')
+})
+
+it.each([
+  [-2, '-0.02', '公益 0 积分 · 永久 0 积分 · 历史欠额 -0.02 积分（仅账户中心记账）'],
+  [0, '0', '公益 0 积分 · 永久 0 积分'],
+  [1000000, undefined, '公益 0 积分 · 永久 0 积分 · 历史 API 额度折合积分暂不可用（仅账户中心使用）'],
+])('keeps zero, negative and missing historical displays separate (%s quota)', async (legacyApiQuota, legacyPoints, expected) => {
+  const { session } = await import('./state')
+  const { accountBalance, balanceDescription, refreshAccountBalance } = await import('./account-balance')
+  session.user = { ...user }
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ linked: true, subject: '17', walletEnabled: true,
+    points: { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '0', permanentPoints: '0',
+      legacyApiQuota, legacyPoints, paidApiQuota: 0, totalApiQuota: legacyApiQuota, charityExpiringAt: null } })))
+  await refreshAccountBalance()
+  expect(balanceDescription.value).toBe(expected)
+  expect(accountBalance.points?.charityPoints).toBe('0')
+  expect(accountBalance.points?.permanentPoints).toBe('0')
 })
 
 it('clears on identity changes and ignores delayed responses from the previous account', async () => {

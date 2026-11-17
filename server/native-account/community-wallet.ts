@@ -8,13 +8,26 @@ export function communityWalletEnabled() {
   return process.env.COMMUNITY_WALLET_ENABLED === 'true'
 }
 
-export function communityQuotaPerPoint(): number | undefined {
-  if (!communityWalletEnabled()) return undefined
+function communityQuotaPerCny(): number {
   const quotaPerCny = Number(process.env.COMMUNITY_WALLET_QUOTA_PER_CNY)
   if (!Number.isSafeInteger(quotaPerCny) || quotaPerCny <= 0) {
     throw new NewApiError('积分兑换比例暂不可用，请稍后再试', 503, 'COMMUNITY_WALLET_CONFIG')
   }
-  return quotaPerCny / 5000
+  return quotaPerCny
+}
+
+export function communityQuotaPerPoint(): number | undefined {
+  return communityWalletEnabled() ? communityQuotaPerCny() / 5000 : undefined
+}
+
+/** Display only: keep historical quota separate from both spendable point balances. */
+export function communityLegacyPoints(quota: number): string {
+  if (!Number.isSafeInteger(quota)) throw new Error('历史额度暂不可用')
+  const scale = 1_000_000_000_000_000_000n
+  const units = BigInt(quota) * 5000n * scale / BigInt(communityQuotaPerCny())
+  const digits = (units < 0n ? -units : units).toString().padStart(19, '0')
+  const fraction = digits.slice(-18).replace(/0+$/, '')
+  return `${units < 0n ? '-' : ''}${digits.slice(0, -18)}${fraction ? '.' + fraction : ''}`
 }
 
 export async function readCommunityWallet(req: AccountRequest): Promise<{ userId: number; points: CommunityWallet }> {
@@ -27,6 +40,7 @@ export async function readCommunityWallet(req: AccountRequest): Promise<{ userId
       enabled: data?.enabled, currency: data?.currency, pointsPerCny: data?.points_per_cny,
       charityPoints: data?.charity_points, permanentPoints: data?.permanent_points,
       legacyApiQuota: data?.legacy_api_quota, paidApiQuota: data?.paid_api_quota,
+      legacyPoints: communityLegacyPoints(data?.legacy_api_quota),
       totalApiQuota: data?.total_api_quota, charityExpiringAt: data?.charity_expiring_at,
     })
     return { userId: session.user.id, points }

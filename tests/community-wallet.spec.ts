@@ -35,9 +35,10 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await mockUnifiedAccount(page, true)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  let points: object | null = { enabled: true, currency: 'CNY', pointsPerCny: 5000,
+  const initialPoints = { enabled: true, currency: 'CNY', pointsPerCny: 5000,
     charityPoints: '123456789012345678.123456', permanentPoints: '5000.000001',
-    legacyApiQuota: 1000000, paidApiQuota: 500, totalApiQuota: 1000500, charityExpiringAt: 1800000000 }
+    legacyApiQuota: 1000000, legacyPoints: '10000', paidApiQuota: 500, totalApiQuota: 1000500, charityExpiringAt: 1800000000 }
+  let points: object | null = initialPoints
   await page.route('**/api/account', route => route.fulfill({ json: {
     linked: true, subject: '17', balance: 999999, walletEnabled: true, points, accountUrl: 'https://accounts.example',
   } }))
@@ -54,12 +55,14 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await expect(summary).toContainText('充值实付本金换算的积分')
   await expect(summary).toContainText('仅限社区使用')
   await expect(summary).toContainText('最近一批到期：')
-  await expect(summary).toContainText('历史额度保留在账户中心使用，未计入充值永久积分')
+  await expect(summary.locator('.legacy-balance')).toContainText('历史 API 额度（折合积分）10,000积分')
+  await expect(summary).toContainText('仅限账户中心及原 API 使用，不计入社区可用积分')
   await expect(page.locator('.balance-panel .account-balance')).toHaveCount(0)
   const indicator = page.locator('.header-actions .account-balance')
-  await expect(indicator).toHaveAttribute('title', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
-  await expect(indicator).toHaveAccessibleName('我的账户，公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
-  await expect(indicator).toHaveAttribute('aria-description', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
+  await expect(indicator).toHaveAttribute('title', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分 · 历史 API 额度 10,000 积分（仅账户中心使用）')
+  await expect(indicator).toContainText('历史/API 10,000 积分')
+  await expect(indicator).toHaveAccessibleName('我的账户，公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分 · 历史 API 额度 10,000 积分（仅账户中心使用）')
+  await expect(indicator).toHaveAttribute('aria-description', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分 · 历史 API 额度 10,000 积分（仅账户中心使用）')
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
     await page.goto('/discover')
@@ -79,10 +82,40 @@ test('community points keep exact amounts, restrictions and unavailable state on
     const layout = await summary.boundingBox()
     expect(layout!.x).toBeGreaterThanOrEqual(0)
     expect(layout!.x + layout!.width).toBeLessThanOrEqual(width)
+    const appHeader = await page.locator('.app-header').boundingBox(), balance = await indicator.boundingBox()
+    expect(balance!.y).toBeGreaterThanOrEqual(appHeader!.y)
+    expect(balance!.y + balance!.height).toBeLessThanOrEqual(appHeader!.y + appHeader!.height)
     await page.screenshot({ path: info.outputPath(`wallet-${width}.png`), fullPage: true })
   }
   const a11y = await new AxeBuilder({ page }).include('.community-wallet-summary').analyze()
   expect(a11y.violations).toEqual([])
+  const historicalOnly = { ...initialPoints, charityPoints: '0', permanentPoints: '0', paidApiQuota: 0, totalApiQuota: 1000000 }
+  points = historicalOnly
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(summary).toContainText('公益积分0积分')
+  await expect(summary).toContainText('永久积分0积分')
+  await expect(summary.locator('.legacy-balance')).toContainText('10,000积分')
+  await page.screenshot({ path: info.outputPath('wallet-history-only-320.png'), fullPage: true })
+  await page.route('**/api/creation/**', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } }))
+  await page.goto('/create/image')
+  await expect(page.locator('.billing-balance')).toBeVisible()
+  await expect(page.locator('.billing-balance')).toContainText('历史 API 额度 10,000 积分（仅账户中心使用）')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('studio-history-only-320.png'), fullPage: true })
+  await page.goto('/account?tab=balance')
+  points = { ...historicalOnly, legacyApiQuota: -2, legacyPoints: '-0.02', totalApiQuota: -2 }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(summary.locator('.legacy-balance')).toContainText('历史欠额（折合积分）-0.02积分')
+  await expect(indicator).toContainText('历史欠额 -0.02 积分')
+  points = { ...historicalOnly, legacyPoints: undefined }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(summary.locator('.legacy-balance')).toContainText('历史额度折合积分暂不可用')
+  await expect(summary).toContainText('永久积分0积分')
+  await expect(indicator).toContainText('历史/API 暂不可用')
+  points = { ...historicalOnly, legacyApiQuota: 0, legacyPoints: '0', totalApiQuota: 0 }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(summary.locator('.legacy-balance')).toHaveCount(0)
+  await expect(indicator).toHaveAttribute('title', '公益 0 积分 · 永久 0 积分')
   points = null
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(summary).toHaveCount(0)

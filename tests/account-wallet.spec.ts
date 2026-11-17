@@ -69,7 +69,7 @@ for (const width of [1440, 390]) test(`community point previews use actual paid 
   await page.route('**/api/account', route => route.fulfill({ json: {
     linked: true, subject: '17', balance: 8415.17, currencySymbol: '✦', walletEnabled: true,
     points: { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100', permanentPoints: '50000',
-      legacyApiQuota: 4207585000, paidApiQuota: 5000000, totalApiQuota: 4212585000, charityExpiringAt: null },
+      legacyApiQuota: 4207585000, legacyPoints: '42075850', paidApiQuota: 5000000, totalApiQuota: 4212585000, charityExpiringAt: null },
   } }))
   await page.route('**/api/new-api/wallet/quote', route => route.fulfill({ json: { success: true, data: {
     userId: 17, amount: route.request().postDataJSON().amount,
@@ -79,6 +79,7 @@ for (const width of [1440, 390]) test(`community point previews use actual paid 
   const summary = page.getByRole('region', { name: '社区积分', exact: true })
   await expect(summary).toContainText('公益积分100积分')
   await expect(summary).toContainText('永久积分50,000积分')
+  await expect(summary.locator('.legacy-balance')).toContainText('42,075,850积分')
   await expect(page.locator('.header-actions .account-balance')).toContainText('永久 50,000 积分')
   await expect(page.locator('.balance-settings')).not.toContainText('8415.17')
   await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 50,000 永久积分')

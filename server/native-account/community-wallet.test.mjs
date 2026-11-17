@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import test from 'node:test'
-import { signCommunityRequest } from './community-wallet.ts'
-import { parseCommunityWallet, formatPoints, formatCnyPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
+import { communityLegacyPoints, signCommunityRequest } from './community-wallet.ts'
+import { parseCommunityWallet, formatLegacyPoints, formatPoints, formatCnyPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
 
 const url = new URL('https://model.example/v1/images/edits?mode=test')
 const secret = 'fixture-community-secret-'.repeat(2)
@@ -21,6 +21,7 @@ test('paid CNY principal converts to points without floating-point rounding or p
 
 function configure(t, values = {}) {
   const config = { COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_SECRET: secret,
+    COMMUNITY_WALLET_QUOTA_PER_CNY: '500000',
     COMMUNITY_WALLET_CLIENT_ID: 'https://community.example', NEW_API_BASE_URL: url.origin,
     NEW_API_IMAGE_BASE_URL: '', NEW_API_ASYNC_BASE_URL: '', ...values }
   for (const [key, value] of Object.entries(config)) {
@@ -29,6 +30,33 @@ function configure(t, values = {}) {
     t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous })
   }
 }
+
+test('historical quota is projected exactly and separately, including debt, zero and safe-integer limits', t => {
+  configure(t)
+  for (const [quota, points] of [[1000000, '10000'], [-2, '-0.02'], [0, '0'],
+    [Number.MAX_SAFE_INTEGER, '90071992547409.91']]) {
+    assert.equal(communityLegacyPoints(quota), points)
+    const parsed = parseCommunityWallet({ ...wallet, legacyApiQuota: quota, legacyPoints: points })
+    assert.equal(parsed.legacyPoints, points)
+    assert.equal(parsed.charityPoints, wallet.charityPoints)
+    assert.equal(parsed.permanentPoints, wallet.permanentPoints)
+  }
+  assert.equal(formatLegacyPoints('-123456.0100'), '-123,456.01')
+  assert.equal(formatLegacyPoints(undefined), '—')
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = '1000000'
+  assert.equal(communityLegacyPoints(1), '0.005')
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = String(Number.MAX_SAFE_INTEGER)
+  assert.match(communityLegacyPoints(-1), /^-0\.0+[1-9]/)
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = '1'
+  assert.equal(formatLegacyPoints(communityLegacyPoints(Number.MAX_SAFE_INTEGER)), '45,035,996,273,704,955,000')
+  for (const invalid of [undefined, '100', 0.1, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => communityLegacyPoints(invalid))
+  for (const invalid of ['', '0', '-1', '0.5']) {
+    process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = invalid
+    assert.throws(() => communityLegacyPoints(100), { code: 'COMMUNITY_WALLET_CONFIG' })
+  }
+  for (const invalid of [null, 100, '1e3', '01', 'NaN', '--1']) assert.throws(() => parseCommunityWallet({ ...wallet, legacyPoints: invalid }))
+  assert.deepEqual(parseCommunityWallet(wallet), wallet, 'older responses retain both point balances without inventing historical points')
+})
 
 function expectedSignature(target, userId, headers, bytes) {
   const canonical = ['community-wallet-v1', headers.get('X-Community-Client'), String(userId),

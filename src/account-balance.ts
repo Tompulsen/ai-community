@@ -1,15 +1,25 @@
 import { computed, reactive, watch } from 'vue'
 import { api, session } from './state'
-import { formatPoints, parseCommunityWallet, type CommunityWallet } from '../shared/studio/community-wallet'
+import { formatLegacyPoints, formatPoints, parseCommunityWallet, type CommunityWallet } from '../shared/studio/community-wallet'
 
 export const accountBalance = reactive({ amount: null as number | null, currency: '', points: null as CommunityWallet | null, loading: false, error: '' })
 const identity = () => `${session.user?.id || ''}:${session.user?.accountId || session.user?.id || ''}`
 export const balanceNumber = computed(() => accountBalance.amount === null ? '—' : accountBalance.amount.toFixed(2))
-export const balanceDescription = computed(() => accountBalance.points
-  ? `公益 ${formatPoints(accountBalance.points.charityPoints)} 积分 · 永久 ${formatPoints(accountBalance.points.permanentPoints)} 积分`
-  : accountBalance.amount === null
-  ? accountBalance.loading ? '正在读取可用余额' : accountBalance.error || '可用余额暂不可用'
-  : `可用余额 ${accountBalance.currency} ${accountBalance.amount}`)
+export const balanceDescription = computed(() => {
+  const points = accountBalance.points
+  if (points) {
+    const balances = [`公益 ${formatPoints(points.charityPoints)} 积分`, `永久 ${formatPoints(points.permanentPoints)} 积分`]
+    if (points.legacyApiQuota !== 0) {
+      const label = points.legacyApiQuota < 0 ? '历史欠额' : '历史 API 额度'
+      const amount = points.legacyPoints === undefined ? '折合积分暂不可用' : ` ${formatLegacyPoints(points.legacyPoints)} 积分`
+      balances.push(`${label}${amount}（仅账户中心${points.legacyApiQuota < 0 ? '记账' : '使用'}）`)
+    }
+    return balances.join(' · ')
+  }
+  return accountBalance.amount === null
+    ? accountBalance.loading ? '正在读取可用余额' : accountBalance.error || '可用余额暂不可用'
+    : `可用余额 ${accountBalance.currency} ${accountBalance.amount}`
+})
 let revision = 0
 let pending: Promise<void> | undefined
 
