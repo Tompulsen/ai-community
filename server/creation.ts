@@ -24,6 +24,7 @@ import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
+import { signCommunityRequest } from './native-account/community-wallet.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -243,6 +244,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })))
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   const credentials = await svc.credentials(req, payload.path)
+  const url = new URL(`/${payload.path}`, credentials.baseUrl)
+  const headers = relayHeaders(req, credentials.apiKey)
+  headers.delete('content-type')
+  if (payload.contentType) headers.set('content-type', payload.contentType)
+  headers.set('Idempotency-Key', hash(`${accountNamespace(ctx)}:${input.requestId}`))
+  const signed = await signCommunityRequest(url, credentials.userId, headers, payload.body)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const pending = { fingerprint, kind: input.kind, result: { ...uncertain, tokenId: credentials.tokenId, protocol } }
   const accepted = await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
@@ -254,13 +261,9 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   }
   let result: Result
   try {
-    const headers = relayHeaders(req, credentials.apiKey)
-    headers.delete('content-type')
-    if (payload.contentType) headers.set('content-type', payload.contentType)
-    headers.set('Idempotency-Key', hash(`${accountNamespace(ctx)}:${input.requestId}`))
     // Keep a paid request alive after the browser stops waiting, and never replay it.
-    const response = await svc.fetch(new URL(`/${payload.path}`, credentials.baseUrl), {
-      method: 'POST', headers, body: payload.body, redirect: 'error', cache: 'no-store',
+    const response = await svc.fetch(url, {
+      method: 'POST', ...signed, redirect: 'error', cache: 'no-store',
       signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : 180000),
     })
     if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
@@ -385,8 +388,10 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         try { emit({ type: 'result', ...await generate(ctx, req, svc, emit) as object }) }
         catch (error) {
           const statusCode = record(error) ? Number(error.statusCode ?? error.status) : 0
+          const notAccepted = [400, 401, 403, 413, 422, 429].includes(statusCode)
+            || record(error) && error.code === 'COMMUNITY_WALLET_CONFIG'
           emit({ type: 'error', error: message(error),
-            ...([400, 401, 403, 413, 422, 429].includes(statusCode) ? { statusCode, notAccepted: true } : {}) })
+            ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
         finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
       } else ctx.json(200, await generate(ctx, req, svc))

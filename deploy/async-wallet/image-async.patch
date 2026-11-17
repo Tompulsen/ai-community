@@ -1,0 +1,139 @@
+--- a/service/api.py
++++ b/service/api.py
+@@ -1,4 +1,6 @@
+ import asyncio
++from contextvars import copy_context
++from .community_wallet import CommunityWalletMiddleware
+ import hashlib
+ import ipaddress
+ import json
+@@ -69,6 +71,14 @@
+ media_proxy_slots = asyncio.Semaphore(int(os.getenv("MEDIA_PROXY_STREAMS", "8")))
+ edit_upload_slots = asyncio.Semaphore(int(os.getenv("EDIT_UPLOAD_SLOTS", "4")))
+ json_input_slots = asyncio.Semaphore(int(os.getenv("JSON_INPUT_SLOTS", "2")))
++
++
++app.add_middleware(CommunityWalletMiddleware, paths=(
++    "/v1/images/generations", "/v1/images/generations/",
++    "/v1/images/edits", "/v1/images/edits/",
++    "/v1/images/variations", "/v1/images/variations/",
++    "/async-images/v1/tasks", "/async-images/v1/edits", "/async-images/v1/edits/",
++))
+ 
+ 
+ class JSONInput:
+@@ -296,7 +306,7 @@
+     try:
+         stream = ImageEventStream(stream_slots.release)
+         future = asyncio.get_running_loop().run_in_executor(
+-            sync_executor, partial(stream.run, owner, token, origin, payload, **upstream),
++            sync_executor, copy_context().run, partial(stream.run, owner, token, origin, payload, **upstream),
+         )
+     except BaseException:
+         sync_slots.release()
+--- a/service/core.py
++++ b/service/core.py
+@@ -13,6 +13,7 @@
+ 
+ from cryptography.fernet import Fernet
+ from huey import SqliteHuey
++from .community_wallet import current_wallet, wallet_digest
+ 
+ 
+ DATA = Path(os.getenv("DATA_DIR", "/data"))
+@@ -192,6 +193,8 @@
+     }
+     normalized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+     digest = request_digest or hashlib.sha256(normalized.encode()).hexdigest()
++    wallet = current_wallet(token)
++    digest = wallet_digest(digest, wallet)
+     timestamp = now()
+     reserve = 4096 if synchronous else payload.get("n", 1) * MAX_IMAGE * 3 + 1024**2
+     with db() as c:
+@@ -214,7 +217,7 @@
+         if active[0] >= MAX_QUEUE or active[1] >= MAX_OWNER:
+             raise AdmissionError("task_queue_full", 429)
+         identifier = "img_" + uuid.uuid4().hex
+-        envelope = {"request": payload, "token": token, "origin": origin, "operation": operation}
++        envelope = {"request": payload, "token": token, "origin": origin, "operation": operation, "wallet": wallet}
+         if upload:
+             if not c.execute("SELECT 1 FROM upload_reservations WHERE id=?",
+                              (upload["id"],)).fetchone():
+--- a/service/sync.py
++++ b/service/sync.py
+@@ -4,6 +4,7 @@
+ 
+ import httpx
+ from httpx_sse import EventSource
++from .community_wallet import current_wallet, sign_request
+ 
+ from .core import (
+     GEN_TIMEOUT, MAX_RESULTS, PUBLIC, TTL, UPSTREAM, db, fail_job,
+@@ -137,9 +138,8 @@
+                     headers.update({"Content-Type": content_type,
+                                     "Content-Length": str(upload.raw_size)})
+                     kwargs = {"content": upload.iter_bytes()}
+-                with client.stream(
+-                    "POST", UPSTREAM + path, headers=headers, **kwargs,
+-                ) as response:
++                kwargs = sign_request(current_wallet(token), token, UPSTREAM + path, headers, **kwargs)
++                with client.stream("POST", UPSTREAM + path, **kwargs) as response:
+                     if response.status_code != 200:
+                         fail_job(identifier, "upstream_request_rejected", response.status_code)
+                         raise SyncError("upstream_request_rejected", response.status_code
+--- a/service/sync_stream.py
++++ b/service/sync_stream.py
+@@ -6,6 +6,7 @@
+ import uuid
+ 
+ import httpx
++from .community_wallet import current_wallet, sign_request
+ from fastapi.responses import JSONResponse, StreamingResponse
+ 
+ from .core import AdmissionError, GEN_TIMEOUT, MAX_RESULTS, db, fail_job, now, submit
+@@ -92,19 +93,21 @@
+                        "X-Forwarded-For": origin, "Accept-Encoding": "identity"}
+             kwargs = {"json": payload}
+             upload = upstream.get("upload")
++            wallet = current_wallet(token)
+             if upload:
+                 async def content():
+                     for chunk in upload.iter_bytes():
+                         yield chunk
+                 headers.update({"Content-Type": upstream["content_type"],
+                                 "Content-Length": str(upload.raw_size)})
+-                kwargs = {"content": content()}
++                kwargs = {"content": upload.iter_bytes() if wallet else content()}
++            kwargs = sign_request(wallet, token, sync.UPSTREAM + path, headers, **kwargs)
+             async with asyncio.timeout(GEN_TIMEOUT):
+                 async with httpx.AsyncClient(
+                     trust_env=False, follow_redirects=False,
+                     timeout=httpx.Timeout(GEN_TIMEOUT, connect=15),
+                 ) as client:
+-                    async with client.stream("POST", sync.UPSTREAM + path, headers=headers, **kwargs) as response:
++                    async with client.stream("POST", sync.UPSTREAM + path, **kwargs) as response:
+                         if response.status_code != 200:
+                             fail_job(identifier, "upstream_request_rejected", response.status_code)
+                             raise SyncError("upstream_request_rejected",
+--- a/service/tasks.py
++++ b/service/tasks.py
+@@ -10,6 +10,7 @@
+ 
+ import httpx
+ import ijson
++from .community_wallet import sign_request
+ 
+ from .core import (
+     AdmissionError, DATA, GEN_TIMEOUT, LEASE, MAX_IMAGE, MAX_RESULTS, UPSTREAM,
+@@ -107,8 +108,9 @@
+                         current = c.execute("SELECT status,claim FROM jobs WHERE id=?", (job,)).fetchone()
+                     if current["status"] != "generating" or current["claim"] != claim:
+                         return
+-                    response = stack.enter_context(client.stream(
+-                        "POST", UPSTREAM + "/v1/images/" + operation, headers=headers, **kwargs))
++                    target = UPSTREAM + "/v1/images/" + operation
++                    kwargs = sign_request(payload.get("wallet"), payload["token"], target, headers, **kwargs)
++                    response = stack.enter_context(client.stream("POST", target, **kwargs))
+                     if response.status_code != 200:
+                         fail_job(job, "upstream_request_rejected", response.status_code)
+                         with db() as c:

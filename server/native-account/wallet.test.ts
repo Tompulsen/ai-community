@@ -241,6 +241,19 @@ test("wallet overview is read-only, sanitized and scoped to the authenticated ac
     );
   }
 });
+test("community point display keeps payment product units and CNY quotes unchanged", async () => {
+  process.env.COMMUNITY_WALLET_ENABLED = "true";
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = "500000";
+  const overview = await GET(request("wallet/topup"), context("wallet/topup"));
+  expect((await overview.json()).data).toMatchObject({ quotaPerPoint: 100, quotaPerUnit: 500000,
+    quotaDisplayType: "CUSTOM", topup: { amountOptions: [1, 10, 50] } });
+  const response = await post("wallet/quote", { amount: 10 });
+  expect((await response.json()).data).toEqual({ userId: 17, amount: 10, money: "2.50" });
+  expect(JSON.parse(writes("/api/user/amount")[0][1]?.body as string)).toEqual({ amount: 10 });
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = "0";
+  expect((await GET(request("wallet/topup"), context("wallet/topup"))).status).toBe(503);
+});
+
 test.each([
   ["topup", ["/api/user/topup/info", "/api/status"]],
   ["plans", ["/api/user/topup/info", "/api/status", "/api/subscription/plans", "/api/subscription/self"]],

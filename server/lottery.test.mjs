@@ -40,6 +40,25 @@ function recordedDraw(patch = {}) {
     ...patch }
 }
 
+test('public community reward points use verified delivered quota and never invent missing historical credit', t => {
+  for (const [key, value] of Object.entries({ COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_QUOTA_PER_CNY: '500000' })) {
+    const before = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (before === undefined) delete process.env[key]; else process.env[key] = before })
+  }
+  const row = recordedDraw()
+  const prize = packLotteryDraw(row).prizes[0]
+  assert.equal(prize.legacyPoints, '2500.000000')
+  assert.equal('creditReceipt' in prize, false)
+  assert.equal('fulfilledBy' in prize, false)
+  for (const patch of [{ creditReceipt: undefined }, { creditReceipt: { ...row.prizes[0].creditReceipt, quotaAdded: 1 } },
+    { status: 'pending' }]) {
+    assert.equal(packLotteryDraw({ ...row, prizes: [{ ...row.prizes[0], ...patch }] }).prizes[0].legacyPoints, null)
+  }
+  assert.equal(packLotteryDraw({ ...row, creditSubject: null }).prizes[0].legacyPoints, null)
+  assert.doesNotMatch(JSON.stringify(prize), /private-|permanent|charity/)
+})
+
 test('admin records expose only a validated receipt and preserve the exact decimal conversion ratio', () => {
   const result = packAdminLotteryDraw(recordedDraw())
   assert.equal(result.prizes[0].reference, 'community_lottery_recordedDraw_0')

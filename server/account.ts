@@ -9,6 +9,8 @@ import bcrypt from 'bcryptjs'
 import { lotteryInviter } from './business/lottery.ts'
 import { readAccountSession } from './account-session.ts'
 import { handleAccountRequest, getNewApiConfig } from './native-account/index.ts'
+import { communityWalletEnabled } from './native-account/community-wallet.ts'
+import { parseCommunityWallet, type CommunityWallet } from '../shared/studio/community-wallet.ts'
 import { rememberPublicIdentity } from './public-identity.ts'
 import { hash as sessionTokenHash, publicUser } from './auth.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
@@ -50,10 +52,11 @@ interface SignupMeta {
 }
 
 interface AccountBalance {
-  balance: number
-  quota: number
-  quotaPerUnit: number
+  balance: number | null
+  quota?: number
+  quotaPerUnit?: number
   currencySymbol: string
+  points?: CommunityWallet
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -251,6 +254,7 @@ export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'r
   try {
     const origin = new URL(ctx.config.url)
     const headers = { Cookie: cookies[0], Host: origin.host, Origin: origin.origin,
+      'x-new-api-user': subject,
       'x-forwarded-host': origin.host, 'x-forwarded-proto': origin.protocol.slice(0, -1) }
     const read = async (path: string): Promise<Record<string, unknown>> => {
       const request = new Request(new URL(path, origin), { headers, redirect: 'error', signal: AbortSignal.timeout(8000) })
@@ -268,6 +272,15 @@ export async function readAccountBalance(ctx: Pick<RequestContext, 'config' | 'r
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       if (!isRecord(value)) throw new Error()
       return value
+    }
+    if (communityWalletEnabled()) {
+      const [session, wallet] = await Promise.all([read('/api/new-api/session'), read('/api/new-api/wallet/points')])
+      const sessionData = isRecord(session.data) ? session.data : null
+      const user = isRecord(sessionData?.user) ? sessionData.user : null
+      const walletData = isRecord(wallet.data) ? wallet.data : null
+      if (session.success !== true || sessionData?.authenticated !== true || String(user?.id) !== subject
+        || wallet.success !== true || String(walletData?.userId) !== subject) return null
+      return { balance: null, currencySymbol: 'CNY', points: parseCommunityWallet(walletData?.points) }
     }
     const [session, status] = await Promise.all([read('/api/new-api/session'), read('/api/new-api/status')])
     const sessionData = isRecord(session.data) ? session.data : null
@@ -301,7 +314,7 @@ export async function handleAccount(ctx: RequestContext): Promise<boolean> {
     try { studioReady = nativeReady(ctx) } catch {}
     const balance = rows.length ? await readAccountBalance(ctx, rows[0].subject) : null
     result = { linked: rows.length > 0, issuer: accountIssuer, subject: rows[0]?.subject ?? null,
-      balance: null, ...balance, accountUrl: accountIssuer, studioReady }
+      balance: null, ...balance, walletEnabled: communityWalletEnabled(), accountUrl: accountIssuer, studioReady }
   } else if (method === 'POST' && path === '/api/account/session') result = await synchronizeSession(ctx)
   else return false
   ctx.json(200, result)

@@ -10,6 +10,31 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+it('shows authoritative point strings, clears them across account changes and never treats legacy quota as permanent points', async () => {
+  const { session } = await import('./state')
+  const { accountBalance, balanceDescription, refreshAccountBalance } = await import('./account-balance')
+  const points = { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100.123456', permanentPoints: '5000',
+    legacyApiQuota: 99999999, paidApiQuota: 500, totalApiQuota: 100000499, charityExpiringAt: null }
+  session.user = { ...user }
+  const result = (value: unknown, subject = '17') => new Response(JSON.stringify({ linked: true, subject, balance: 999999, walletEnabled: true, points: value }))
+  fetchMock.mockResolvedValueOnce(result(points))
+  await refreshAccountBalance()
+  expect(accountBalance.points).toEqual(points)
+  expect(accountBalance.amount).toBeNull()
+  expect(balanceDescription.value).toBe('公益 100.123456 积分 · 永久 5,000 积分')
+  fetchMock.mockResolvedValueOnce(result(null))
+  await refreshAccountBalance()
+  expect(accountBalance.points).toBeNull()
+  expect(accountBalance.amount).toBeNull()
+  fetchMock.mockResolvedValueOnce(result(points))
+  await refreshAccountBalance()
+  session.user = { ...user, accountId: '18' }
+  expect(accountBalance.points).toBeNull()
+  fetchMock.mockResolvedValueOnce(result(points))
+  await refreshAccountBalance()
+  expect(accountBalance.points).toBeNull()
+})
+
 it('shares one read and displays the authoritative amount without quota conversion', async () => {
   const { session } = await import('./state')
   const { accountBalance, balanceNumber, refreshAccountBalance } = await import('./account-balance')

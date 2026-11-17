@@ -46,6 +46,63 @@ async function walletFixture(page: Page) {
 }
 const wallet = (page: Page) => page.locator('.account-wallet')
 
+test('wallet metadata shows point previews while the balance response is still pending', async ({ page }) => {
+  const fixture = await walletFixture(page)
+  Object.assign(fixture.overview, { quotaPerPoint: 100 })
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/account', async route => {
+    await pending
+    return route.fulfill({ json: { linked: true, subject: '17', balance: null, walletEnabled: true, points: null } })
+  })
+  try {
+    await page.goto('/account?tab=balance')
+    await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 12,500 永久积分')
+    await expect(wallet(page)).not.toContainText('✦')
+  } finally { release() }
+})
+
+for (const width of [1440, 390]) test(`community point previews use actual paid money and keep historical credit separate at ${width}px`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 1000 })
+  const fixture = await walletFixture(page)
+  Object.assign(fixture.overview, { quotaPerPoint: 100 })
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    linked: true, subject: '17', balance: 8415.17, currencySymbol: '✦', walletEnabled: true,
+    points: { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100', permanentPoints: '50000',
+      legacyApiQuota: 4207585000, paidApiQuota: 5000000, totalApiQuota: 4212585000, charityExpiringAt: null },
+  } }))
+  await page.route('**/api/new-api/wallet/quote', route => route.fulfill({ json: { success: true, data: {
+    userId: 17, amount: route.request().postDataJSON().amount,
+    money: route.request().postDataJSON().amount === 50 ? '8.00' : '10.00',
+  } } }))
+  await page.goto('/account?tab=balance')
+  const summary = page.getByRole('region', { name: '社区积分', exact: true })
+  await expect(summary).toContainText('公益积分100积分')
+  await expect(summary).toContainText('永久积分50,000积分')
+  await expect(page.locator('.header-actions .account-balance')).toContainText('永久 50,000 积分')
+  await expect(page.locator('.balance-settings')).not.toContainText('8415.17')
+  await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 50,000 永久积分')
+  await expect(wallet(page).getByText('¥ 10.00', { exact: true })).toBeVisible()
+  await page.screenshot({ path: info.outputPath(`points-topup-${width}.png`), fullPage: true })
+  await wallet(page).getByLabel('充值档位', { exact: true }).fill('50')
+  await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 40,000 永久积分')
+  await expect(wallet(page).getByText('¥ 8.00', { exact: true })).toBeVisible()
+  await wallet(page).getByRole('button', { name: '确认金额，去支付' }).click()
+  await expect(wallet(page)).toContainText('13,750 永久积分')
+  await expect(wallet(page).getByRole('status')).toContainText('实付金额已变化为 ¥ 2.75')
+  expect(fixture.writes.find(item => item.path.endsWith('/pay'))?.body).toEqual({ amount: 50, paymentMethod: 'alipay' })
+  await wallet(page).getByRole('button', { name: '返回充值', exact: true }).click()
+  await wallet(page).getByRole('button', { name: '充值记录', exact: true }).click()
+  await expect(wallet(page).getByRole('columnheader', { name: '实付折合积分' })).toBeVisible()
+  await expect(wallet(page).getByRole('row').nth(1)).toContainText('10,000 积分')
+  await expect(wallet(page).getByRole('row').nth(1)).toContainText('¥ 2.00')
+  await expect(wallet(page).getByRole('row').nth(1)).not.toContainText('永久')
+  await wallet(page).getByRole('button', { name: '套餐与订阅', exact: true }).click()
+  await expect(wallet(page)).toContainText('额度 50,000 积分')
+  await expect(wallet(page)).not.toContainText('✦')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 test('preloads after deliberate hover, reuses reads on entry and loads other tabs only on demand', async ({ page }) => {
   const fixture = await walletFixture(page)
   await page.goto('/account?tab=profile')

@@ -40,6 +40,39 @@ function request(path, options = {}) {
 
 const envelope = (data, headers) => Response.json({ success: true, data }, { headers })
 
+test('community point balances are authenticated, sanitized and fail closed on malformed upstream money', async t => {
+  configure(t)
+  const previous = process.env.COMMUNITY_WALLET_ENABLED
+  process.env.COMMUNITY_WALLET_ENABLED = 'true'
+  t.after(() => { if (previous === undefined) delete process.env.COMMUNITY_WALLET_ENABLED; else process.env.COMMUNITY_WALLET_ENABLED = previous })
+  const fixture = await session(t)
+  let charity = '100.123456', calls = 0
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls++
+    assert.equal(options.headers.get('Authorization'), 'Bearer private-access')
+    if (new URL(url).pathname === '/api/user/self') return envelope(user)
+    assert.equal(new URL(url).pathname, '/api/user/self/wallet')
+    return envelope({ enabled: true, currency: 'CNY', points_per_cny: 5000, charity_points: charity,
+      permanent_points: '5000', legacy_api_quota: 100, paid_api_quota: 500, total_api_quota: 600,
+      charity_expiring_at: 1800000000, private: 'secret-not-exposed' })
+  })
+  const response = await handleAccountRequest(fixture.request('/api/new-api/wallet/points', { headers: { 'x-new-api-user': '7' } }))
+  assert.equal(response.status, 200)
+  const result = await response.json()
+  assert.equal(result.data.userId, 7)
+  assert.equal(result.data.points.charityPoints, '100.123456')
+  assert.equal(result.data.points.permanentPoints, '5000')
+  assert.doesNotMatch(JSON.stringify(result), /secret-not-exposed|private-access/)
+  assert.match(response.headers.get('cache-control'), /no-store/)
+  const before = calls
+  assert.equal((await handleAccountRequest(fixture.request('/api/new-api/wallet/points', { headers: { 'x-new-api-user': '8' } }))).status, 409)
+  assert.equal(calls, before)
+  charity = 100
+  assert.equal((await handleAccountRequest(fixture.request('/api/new-api/wallet/points'))).status, 503)
+  process.env.COMMUNITY_WALLET_ENABLED = 'false'
+  assert.equal((await handleAccountRequest(fixture.request('/api/new-api/wallet/points'))).status, 404)
+})
+
 test("group selection reuses the authenticated account, persists its key and rejects a changed account", async t => {
   configure(t)
   const fixture = await session(t)
@@ -105,6 +138,40 @@ test("native account status preserves the authoritative quota display conversion
     assert.equal(result.data.turnstileSiteKey, "public-site-key")
     assert.match(response.headers.get("cache-control"), /no-store/)
   }
+})
+
+test('community status and model prices use the configured quota per point, independent of upstream display currency', async t => {
+  configure(t)
+  for (const [key, value] of Object.entries({ COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_QUOTA_PER_CNY: '500000' })) {
+    const before = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (before === undefined) delete process.env[key]; else process.env[key] = before })
+  }
+  const fixture = await session(t)
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url).pathname
+    if (path === '/api/user/self') return envelope(user)
+    if (path === '/api/status') return envelope({ quota_per_unit: 500000, quota_display_type: 'CUSTOM',
+      custom_currency_symbol: '✦', custom_currency_exchange_rate: 2, usd_exchange_rate: 7 })
+    assert.equal(path, '/api/pricing')
+    return Response.json({ success: true, data: [
+      { model_name: 'image', enable_groups: ['default'], quota_type: 1, model_price: 0.02 },
+      { model_name: 'chat', enable_groups: ['default'], quota_type: 0, model_ratio: 0.2, completion_ratio: 2 },
+    ], group_ratio: { default: 1 } })
+  })
+  const status = await handleAccountRequest(request('/api/new-api/status'))
+  assert.equal(status.status, 200)
+  assert.equal((await status.json()).data.quotaPerUnit, 100)
+  const prices = await handleAccountRequest(fixture.request('/api/new-api/model-pricing'))
+  const pricing = (await prices.json()).data
+  assert.equal(pricing.currency, '积分')
+  assert.equal(pricing.rows[0].price, '积分 100')
+  assert.equal(pricing.rows[1].price, '输入 积分 2,000 / 输出 积分 4,000')
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = '700000'
+  const scaled = await handleAccountRequest(request('/api/new-api/status'))
+  assert.equal((await scaled.json()).data.quotaPerUnit, 140)
+  process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = ''
+  assert.equal((await handleAccountRequest(request('/api/new-api/status'))).status, 503)
 })
 
 test("existing normal session cookies return sanitized account information without creating another login", async t => {

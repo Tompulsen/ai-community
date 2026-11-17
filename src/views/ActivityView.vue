@@ -7,10 +7,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, onMounted, ref } from 'vue'
 import { ArrowUpRight, Gift, Link2, Ticket, Users, Heart, Copy, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
+import { formatPoints } from '../../shared/studio/community-wallet'
 
 interface Rule { enabled: boolean; threshold: number; tickets: number }
 interface Prize { id: string; name: string; description: string; amountCents: number; kind: 'balance' | 'empty'; weight: number; stock: number; enabled: boolean }
-interface Award { prizeId: string; name: string; description: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note?: string }
+interface Award { prizeId: string; name: string; description: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note?: string; legacyPoints?: string | null }
 interface Draw { id: string; createdAt: string; prizes: Award[] }
 interface PendingDraw { requestId: string; count: 1 | 3 | 5 }
 interface LotteryStatus {
@@ -22,6 +23,15 @@ const tab = ref('draw')
 const tabs = [{ id: 'draw', label: '抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
 const loading = ref(true), drawing = ref(false), recordsLoading = ref(false), error = ref('')
+const pointDisplay = ref<{ currencySymbol?: string; pointsPerUsd?: number }>()
+function rewardAmount(value: Prize | Award) {
+  if (pointDisplay.value?.currencySymbol !== '积分') return pointDisplay.value ? `$${(value.amountCents / 100).toFixed(2)}` : '积分待核对'
+  if ('status' in value && value.status === 'fulfilled') return value.legacyPoints
+    ? `${formatPoints(value.legacyPoints)} 积分（历史 API 额度）` : '历史 API 额度，积分待核对'
+  const rate = pointDisplay.value.pointsPerUsd
+  return rate && Number.isFinite(rate) && rate > 0
+    ? `约 ${(value.amountCents / 100 * rate).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分（历史 API 额度）` : '积分待核对'
+}
 const count = ref<1 | 3 | 5>(1), pending = ref<PendingDraw | null>(null), wheelRotation = ref(0)
 const drawCounts = [1, 3, 5] as const
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
@@ -72,9 +82,16 @@ function restorePending() {
   } catch { /* Ignore invalid local state without issuing a new draw. */ }
 }
 async function load() {
-  loading.value = true; error.value = ''
+  loading.value = true; error.value = ''; pointDisplay.value = undefined
   await loadSession()
-  try { status.value = await api<LotteryStatus>('/api/lottery/status'); restorePending(); await loadRecords() }
+  try {
+    const [lottery] = await Promise.all([
+      api<LotteryStatus>('/api/lottery/status'),
+      api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
+        .then(value => { if (value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data }).catch(() => {}),
+    ])
+    status.value = lottery; restorePending(); await loadRecords()
+  }
   catch (cause) { error.value = drawMessage(cause) }
   finally { loading.value = false }
 }
@@ -125,6 +142,7 @@ async function copyInvite() {
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status">
+      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note">抽奖奖励属于历史 API 额度，仅在账户中心使用，不计入社区公益或永久积分余额。奖池按当前比例预计折合，已到账记录以发放凭证换算。</p>
       <div v-if="tab === 'draw'" class="activity-layout lottery-layout">
         <section class="panel-section draw-section">
           <div class="section-heading"><h2>{{ appearance.title || '幸运抽奖' }}</h2><Ticket :size="20" /></div><p v-if="appearance.subtitle" class="muted">{{ appearance.subtitle }}</p>
@@ -137,15 +155,15 @@ async function copyInvite() {
           <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
           <button v-if="session.user" class="button primary btn" :disabled="drawDisabled" @click="draw"><Gift :size="17" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
           <p v-if="pending && !drawing" class="form-note">上次结果尚未确认，再次核对会使用同一凭证。</p><p v-if="!status.settings.enabled" class="form-note">活动暂未开放。</p><p v-else-if="!status.creditReady" class="form-note">奖励发放服务暂不可用。</p><RouterLink v-else-if="!status.accountLinked && session.user" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink><p v-else-if="status.balance < count && session.user && !pending" class="form-note">本次需要 {{ count }} 次机会，当前次数不足。</p>
-          <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></p></div><button class="text-link" @click="tab = 'records'">查看奖励记录<ArrowUpRight :size="15" /></button></div>
+          <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents"> · {{ rewardAmount(award) }}</span></p></div><button class="text-link" @click="tab = 'records'">查看奖励记录<ArrowUpRight :size="15" /></button></div>
           <p v-if="appearance.rulesText" class="activity-rules">{{ appearance.rulesText }}</p>
         </section>
-        <section class="panel-section prize-section"><div class="section-heading"><h2>奖池</h2><Gift :size="18" /></div><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="avatar" :class="prize.kind === 'empty' ? 'rose' : 'green'"><Gift :size="18" /></span><div><strong>{{ prize.name }}</strong><p class="caption-5">{{ prize.description }}<span v-if="prize.amountCents"> · ${{ (prize.amountCents / 100).toFixed(2) }}</span></p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
+        <section class="panel-section prize-section"><div class="section-heading"><h2>奖池</h2><Gift :size="18" /></div><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="avatar" :class="prize.kind === 'empty' ? 'rose' : 'green'"><Gift :size="18" /></span><div><strong>{{ prize.name }}</strong><p class="caption-5">{{ prize.description }}<span v-if="prize.amountCents"> · {{ rewardAmount(prize) }}</span></p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
         <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2><Ticket :size="18" /></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
         <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2><Link2 :size="18" /></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
       </div>
       <div v-else-if="tab === 'tasks'" class="activity-layout"><section class="panel-section"><h2>活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div><p v-if="!rules.length" class="muted">当前没有开放的任务。</p></section><section class="panel-section"><h2>邀请朋友</h2><dl class="info-list"><div><dt>有效邀请</dt><dd>{{ status.counts.invites }}</dd></div><div><dt>已获得机会</dt><dd>{{ status.earned.invites }}</dd></div></dl><template v-if="session.user && status.inviteUrl"><p class="invite-url">{{ status.inviteUrl }}</p><button class="button btn" @click="copyInvite"><Copy :size="16" />复制邀请链接</button></template><RouterLink v-else to="/account" class="button btn">登录</RouterLink></section></div>
-      <section v-else class="panel-section"><div class="section-heading"><h2>奖励记录</h2><button class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" />刷新</button></div><div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">金额</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td>{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td>{{ award.name }}</td><td>{{ award.amountCents ? `$${(award.amountCents / 100).toFixed(2)}` : '--' }}</td><td><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
+      <section v-else class="panel-section"><div class="section-heading"><h2>奖励记录</h2><button class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" />刷新</button></div><div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td>{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td>{{ award.name }}</td><td>{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
     </template>
   </div>
 </template>

@@ -1,6 +1,7 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
 import { readModelPricing } from "./model-pricing.ts";
 import { readWallet, quoteWallet, createWalletPayment, redeemWallet } from "./wallet.ts";
+import { communityQuotaPerPoint, readCommunityWallet } from "./community-wallet.ts";
 import { assertNormalRequest } from "./transport.ts";
 import { readRequestBody, RequestBodyError } from "./request-body.ts";
 import {
@@ -326,14 +327,15 @@ async function clearSelection(req: AccountRequest, tokenId: number) {
 
 async function status(localOnly = false) {
   const config = getNewApiConfig();
+  const quotaPerPoint = communityQuotaPerPoint();
   const base = {
     enabled: config.enabled,
     configured: config.configured,
     publicUrl: config.enabled ? config.publicUrl : "",
     passwordLoginEnabled: false,
     turnstileSiteKey: "",
-    quotaPerUnit: 500000,
-    currencySymbol: "额度",
+    quotaPerUnit: quotaPerPoint ?? 500000,
+    currencySymbol: quotaPerPoint ? "积分" : "额度",
   };
   if (localOnly || !config.enabled || !config.configured) return ok(base);
   const { data } = await upstream("/api/status");
@@ -348,12 +350,14 @@ async function status(localOnly = false) {
     ...base,
     passwordLoginEnabled: data.password_login_enabled !== false,
     turnstileSiteKey: data.turnstile_check ? data.turnstile_site_key || "" : "",
-    quotaPerUnit:
+    pointsPerUsd: quotaPerPoint && Number.isSafeInteger(data.quota_per_unit) && data.quota_per_unit > 0
+      ? data.quota_per_unit / quotaPerPoint : undefined,
+    quotaPerUnit: quotaPerPoint ?? (
       type === "TOKENS"
         ? 1
-        : Number(data.quota_per_unit || 500000) / (rate > 0 ? rate : 1),
+        : Number(data.quota_per_unit || 500000) / (rate > 0 ? rate : 1)),
     currencySymbol:
-      type === "CNY"
+      quotaPerPoint ? "积分" : type === "CNY"
         ? "¥"
         : type === "CUSTOM"
         ? data.custom_currency_symbol || "额度"
@@ -408,6 +412,7 @@ export async function handle(
       return ok(await readModelPricing(req));
     }
     if (req.method === "GET" && route === "wallet") return ok(await readWallet(req));
+    if (req.method === "GET" && route === "wallet/points") return ok(await readCommunityWallet(req));
     if (req.method === "GET" && route === "wallet/topup") return ok(await readWallet(req, "topup"));
     if (req.method === "GET" && route === "wallet/plans") return ok(await readWallet(req, "plans"));
     if (req.method === "GET" && route === "wallet/history") return ok(await readWallet(req, "history"));

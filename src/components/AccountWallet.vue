@@ -7,9 +7,12 @@ import { accountBalance, refreshAccountBalance } from '../account-balance'
 import { studioAccount } from '../studio-account'
 import { cachedWalletQuote, defaultWalletAmount, invalidateWalletCache, loadWallet, loadWalletQuote, walletPricingKey } from '../wallet-prefetch'
 import { safeWalletPaymentUrl, type WalletOverview, type WalletPayment, type WalletPlan, type WalletQuote, type WalletRedemption, type WalletSection } from '../../shared/studio/wallet'
+import { formatCnyPoints } from '../../shared/studio/community-wallet'
 
+const props = defineProps<{ walletEnabled?: boolean }>()
 const emit = defineEmits<{ refresh: [] }>()
 const data = ref<WalletOverview>(), quote = ref<WalletQuote>(), payment = ref<WalletPayment>(), selectedPlan = ref<WalletPlan>()
+const pointsEnabled = computed(() => props.walletEnabled || data.value?.quotaPerPoint !== undefined)
 const paymentForm = ref<HTMLFormElement>()
 const tab = ref<WalletSection>('topup')
 const amount = ref(''), method = ref(''), code = ref('')
@@ -109,7 +112,7 @@ async function refresh() {
     if (current !== revision) return
     emit('refresh')
     launched.value = false
-    if (!error.value) notice.value = accountBalance.amount === null
+    if (!error.value) notice.value = accountBalance.amount === null && !accountBalance.points
       ? '订单状态已刷新，余额读取失败，请稍后刷新余额。'
       : paymentOrder.value?.status === 'success' ? '订单已到账，请以账户实时余额为准。' : '已刷新余额和订单状态。'
   } finally { if (current === revision) busy.value = false }
@@ -160,7 +163,7 @@ async function redeem() {
     await Promise.all([refreshAccountBalance(), load(true)])
     if (current !== revision) return
     emit('refresh')
-    notice.value = accountBalance.amount === null ? '兑换成功，但余额读取失败，请刷新余额，勿重复兑换。' : '兑换成功，请以刷新后的账户余额为准。'
+    notice.value = accountBalance.amount === null && !accountBalance.points ? '兑换成功，但余额读取失败，请刷新余额，勿重复兑换。' : '兑换成功，请以刷新后的账户余额为准。'
   } catch (cause) {
     if (current === revision) error.value = `${errorMessage(cause)} 若结果未确认，请先刷新余额，勿重复提交。`
   } finally { if (current === revision) busy.value = false }
@@ -168,6 +171,8 @@ async function redeem() {
 function quota(value: number) {
   const wallet = data.value
   if (!wallet) return '—'
+  if (pointsEnabled.value) return wallet.quotaPerPoint && wallet.quotaPerPoint > 0
+    ? `${(value / wallet.quotaPerPoint).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分` : '—'
   const total = wallet.quotaDisplayType === 'TOKENS' ? value : value / wallet.quotaPerUnit * wallet.creditExchangeRate
   return `${total.toLocaleString('zh-CN', { maximumFractionDigits: 4 })} ${wallet.currencySymbol}`
 }
@@ -204,7 +209,7 @@ onBeforeUnmount(() => {
     <template v-if="data">
       <div v-if="payment" class="wallet-checkout">
         <button class="text-link" :disabled="busy" @click="payment = undefined; launched = false; notice = ''"><ArrowLeft :size="16" />返回充值</button>
-        <dl class="info-list"><div><dt>实付金额</dt><dd class="wallet-money">¥ {{ payment.money }}</dd></div><div><dt>订单号</dt><dd>{{ payment.tradeNo }}</dd></div><div><dt>状态</dt><dd>{{ paymentOrder ? statusLabel(paymentOrder.status) : '待支付' }}</dd></div></dl>
+        <dl class="info-list"><div><dt>实付金额</dt><dd class="wallet-money">¥ {{ payment.money }}</dd></div><div v-if="pointsEnabled && payment.kind === 'topup'"><dt>预计到账</dt><dd>{{ formatCnyPoints(payment.money) }} 永久积分</dd></div><div><dt>订单号</dt><dd>{{ payment.tradeNo }}</dd></div><div><dt>状态</dt><dd>{{ paymentOrder ? statusLabel(paymentOrder.status) : '待支付' }}</dd></div></dl>
         <div class="wallet-actions">
           <form ref="paymentForm" :action="payment.action" method="POST" target="_self" @submit.prevent="submitPayment">
             <input v-for="(value, name) in payment.fields" :key="name" type="hidden" :name="name" :value="value" />
@@ -220,12 +225,13 @@ onBeforeUnmount(() => {
         <div v-if="tab === 'topup'" class="wallet-section">
           <form v-if="data.topup.enabled" class="wallet-topup-form" @submit.prevent="pay()">
             <div class="wallet-topup-fields">
-            <label class="field"><span>充值金额</span><input v-model="amount" class="control" type="number" :min="data.topup.minAmount" step="1" inputmode="numeric" :disabled="busy" /></label>
+            <label class="field"><span>{{ pointsEnabled ? '充值档位' : '充值金额' }}</span><input v-model="amount" class="control" type="number" :min="data.topup.minAmount" step="1" inputmode="numeric" :disabled="busy" /></label>
+            <p v-if="pointsEnabled" class="form-note">选择充值档位后查看实付金额与到账积分。</p>
             <div v-if="data.topup.amountOptions.length" class="wallet-amounts" role="group" aria-label="快捷充值金额"><button v-for="value in data.topup.amountOptions" :key="value" type="button" :aria-pressed="numericAmount === value" :disabled="busy" @click="amount = String(value)"><span>{{ value }}</span><small v-if="data.topup.discounts?.[value]">{{ Math.round((1 - data.topup.discounts[value]!) * 100) }}% 优惠</small></button></div>
             <p v-if="!validAmount" class="form-note">请输入不小于 {{ data.topup.minAmount }} 的整数金额。<template v-if="data.quotaDisplayType === 'TOKENS'">数量须为 {{ data.quotaPerUnit }} tokens 的整数倍。</template></p>
             <fieldset class="wallet-methods"><legend>支付方式</legend><label v-for="item in data.topup.paymentMethods" :key="item.type"><input v-model="method" type="radio" name="wallet-topup-method" :value="item.type" :disabled="busy" />{{ item.name }}</label></fieldset>
             </div>
-            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><small v-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
+            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><template v-if="pointsEnabled"><small v-if="quote?.amount === numericAmount" aria-label="预计到账积分">预计到账 {{ formatCnyPoints(quote.money) }} 永久积分</small><small>支付确认后，实付人民币本金按 ¥ 1 = 5,000 永久积分入账。</small></template><small v-else-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
           </form>
           <p v-else class="muted">当前暂无可用的在线充值方式。</p>
           <div v-if="data.topup.redemptionEnabled" class="wallet-redemption">
@@ -252,7 +258,7 @@ onBeforeUnmount(() => {
           <div v-for="item in data.subscriptions" :key="item.id" class="wallet-subscription"><strong>{{ data.plans.find(plan => plan.id === item.planId)?.title || `套餐 ${item.planId}` }}</strong><span>{{ statusLabel(item.status === 'active' && item.endTime * 1000 <= Date.now() ? 'expired' : item.status) }}</span><span>已用 {{ quota(item.amountUsed) }} / {{ item.amountTotal > 0 ? quota(item.amountTotal) : '不限量' }}</span><span>到期 {{ orderTime(item.endTime) }}</span><span v-if="item.nextResetTime > 0">下次重置 {{ orderTime(item.nextResetTime) }}</span></div>
           <p v-if="!data.subscriptions.length" class="muted">暂无订阅。</p>
         </div>
-        <div v-else class="wallet-section"><p class="muted wallet-history-total">最近 {{ data.history.length }} 笔，共 {{ data.historyTotal }} 笔</p><div v-if="data.history.length" class="table-scroll"><table><thead><tr><th>时间</th><th>订单号</th><th>充值金额</th><th>实付</th><th>状态</th></tr></thead><tbody><tr v-for="order in data.history" :key="order.id"><td>{{ orderTime(order.createdAt) }}</td><td>{{ order.tradeNo }}</td><td>{{ quota(order.amount * data.quotaPerUnit) }}</td><td>{{ order.money.toFixed(2) }}</td><td>{{ statusLabel(order.status) }}</td></tr></tbody></table></div><p v-else class="muted">暂无充值记录。</p></div>
+        <div v-else class="wallet-section"><p class="muted wallet-history-total">最近 {{ data.history.length }} 笔，共 {{ data.historyTotal }} 笔</p><p v-if="pointsEnabled" class="form-note">历史订单按实付金额折合积分，仅供对照；永久积分以实时钱包为准。</p><div v-if="data.history.length" class="table-scroll"><table><thead><tr><th>时间</th><th>订单号</th><th>{{ pointsEnabled ? '实付折合积分' : '充值金额' }}</th><th>实付人民币</th><th>状态</th></tr></thead><tbody><tr v-for="order in data.history" :key="order.id"><td>{{ orderTime(order.createdAt) }}</td><td>{{ order.tradeNo }}</td><td>{{ pointsEnabled ? order.status === 'success' ? `${formatCnyPoints(order.money)} 积分` : '—' : quota(order.amount * data.quotaPerUnit) }}</td><td>¥ {{ order.money.toFixed(2) }}</td><td>{{ statusLabel(order.status) }}</td></tr></tbody></table></div><p v-else class="muted">暂无充值记录。</p></div>
       </template>
     </template>
   </section>

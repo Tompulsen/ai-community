@@ -10,13 +10,15 @@ import AccountPrivacy from '../components/AccountPrivacy.vue'
 import FollowRequests from '../components/FollowRequests.vue'
 import AccountTheme from '../components/AccountTheme.vue'
 import AccountWallet from '../components/AccountWallet.vue'
+import CommunityWalletSummary from '../components/CommunityWalletSummary.vue'
+import { parseCommunityWallet, type CommunityWallet } from '../../shared/studio/community-wallet'
 import PasswordRecovery from '../components/PasswordRecovery.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import LoginCharacters from '../components/LoginCharacters.vue'
 import AccountTurnstile from '../components/AccountTurnstile.vue'
 import { loginReturnPath } from '../login-navigation'
 
-interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean }
+interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean; walletEnabled?: boolean; points?: CommunityWallet | null }
 const route = useRoute()
 const router = useRouter()
 const settingTabs = ['profile', 'privacy', 'following', 'theme', 'security', 'balance']
@@ -119,12 +121,22 @@ watch(bannerUrl, () => { bannerFailed.value = false })
 watch(() => session.user?.id, (id, previous) => {
   if (!id && previous && active && !statusReady.value) void loadStatus()
 })
+watch(() => session.user?.accountId, () => { account.value = null }, { flush: 'sync' })
 async function loadAccount() {
   if (!session.user) { account.value = null; return }
-  const owner = session.user.id
-  const result = await api<Account>('/api/account')
-  if (!active || session.user?.id !== owner) return
-  account.value = { ...result, currency: result.currencySymbol || result.currency || 'USD' }
+  const owner = session.user.id, subject = session.user.accountId || owner
+  let result: Account
+  try { result = await api<Account>('/api/account', { expectedAccount: subject }) }
+  catch (cause) {
+    if (active && session.user?.id === owner && (session.user.accountId || owner) === subject && account.value?.walletEnabled)
+      account.value = { ...account.value, points: null, balance: null }
+    throw cause
+  }
+  if (!active || session.user?.id !== owner || (session.user.accountId || owner) !== subject) return
+  if (result.subject !== subject || !result.linked) { account.value = null; return }
+  let points: CommunityWallet | null = null
+  if (result.walletEnabled) { try { points = parseCommunityWallet(result.points) } catch {} }
+  account.value = { ...result, points, currency: result.currencySymbol || result.currency || 'USD' }
 }
 async function loadStatus() {
   try {
@@ -292,10 +304,10 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">
           <section class="panel-section balance-panel">
-            <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>账户余额</h2></div><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></div>
+            <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。</p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>
             <div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a></div>
           </section>
-          <AccountWallet @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
+          <AccountWallet :wallet-enabled="account?.walletEnabled" @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
         </div>
       </div>
     </div>

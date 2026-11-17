@@ -322,35 +322,38 @@ test('legacy split chat attachments are hydrated into native conversation withou
     return new Promise(resolve => { const transaction = db.transaction('keyval', 'readonly'), request = transaction.objectStore('keyval').get('octopus:user-17:chat-next-web-store'); request.onsuccess = () => resolve(request.result); transaction.oncomplete = () => db.close() })
   })).toBe(original)
 })
-test('account tools use the configured quota ratio for logs and key budgets', async ({ page }) => {
+for (const display of [
+  { name: 'legacy currency', symbol: '¥', scale: 250000, log: '¥ 0.25', budget: '1.25', rawQuota: 312500, price: '¥2 / 百万输入' },
+  { name: 'community points', symbol: '积分', scale: 100, log: '积分 625', budget: '1250', rawQuota: 125000, price: '积分 100 / 百万输入' },
+]) test(`account tools use the configured quota ratio for logs and key budgets in ${display.name}`, async ({ page }) => {
   const state = await fixture(page)
   await page.route('**/api/new-api/**', route => {
     const url = new URL(route.request().url()), key = url.pathname.split('/api/new-api/')[1]!
-    const data: Record<string, unknown> = { status: { quotaPerUnit: 250000, currencySymbol: '¥' }, session: { selectedTokenId: 41 },
+    const data: Record<string, unknown> = { status: { quotaPerUnit: display.scale, currencySymbol: display.symbol }, session: { selectedTokenId: 41 },
       groups: [{ id: 'auto', name: 'Auto' }], 'auto-groups': { supported: false, defaultGroups: [], maxCount: 0 },
       logs: { items: [{ id: 1, created_at: 1700000000, model_name: 'gpt-5', token_name: '系统创建', prompt_tokens: 12, completion_tokens: 24, quota: 62500 }], total: 1 },
       tokens: { items: [{ id: 41, name: '系统创建', group: 'auto', status: 1, expired_time: -1, unlimited_quota: true, used_quota: 250000, remain_quota: 500000 }], total: 1 },
       'model-groups': { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto', ratio: 1 }] },
-      'model-pricing': { userId: 17, account: 'root', currency: '¥', fetchedAt: new Date().toISOString(), rows: [{ model: 'gpt-5', group: 'auto', billing: 'Tokens', price: '¥2 / 百万输入' }] } }
+      'model-pricing': { userId: 17, account: 'root', currency: display.symbol, fetchedAt: new Date().toISOString(), rows: [{ model: 'gpt-5', group: 'auto', billing: 'Tokens', price: display.price }] } }
     if (route.request().method() !== 'GET') state.calls.push({ path: url.pathname, body: route.request().postDataJSON() })
     return route.fulfill({ json: { success: true, data: data[key] || {} } })
   })
   await page.goto('/create/image')
   await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '消费记录', exact: true }).click()
-  await expect(page.getByRole('cell', { name: '¥ 0.25', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: display.log, exact: true })).toBeVisible()
   await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '密钥', exact: true }).click()
   await page.getByRole('button', { name: '创建密钥', exact: true }).click()
   await page.getByLabel('名称', { exact: true }).fill('测试额度')
   await page.getByLabel('不限额', { exact: true }).uncheck()
-  await page.getByLabel('额度（¥）', { exact: true }).fill('1.25')
+  await page.getByLabel(`额度（${display.symbol}）`, { exact: true }).fill(display.budget)
   await page.getByRole('button', { name: '保存密钥', exact: true }).click()
   await expect(page.getByRole('dialog')).not.toBeVisible()
-  expect(state.calls.find(call => call.path === '/api/new-api/tokens')?.body.remain_quota).toBe(312500)
+  expect(state.calls.find(call => call.path === '/api/new-api/tokens')?.body.remain_quota).toBe(display.rawQuota)
   await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
-  await expect(page.getByRole('article', { name: 'gpt-5 模型价格', exact: true })).toContainText('¥2 / 百万输入')
+  await expect(page.getByRole('article', { name: 'gpt-5 模型价格', exact: true })).toContainText(display.price)
   await capture(page, 'prices')
 })
 
