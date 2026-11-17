@@ -89,6 +89,7 @@ const localMedia = reactive<Record<string, string>>({})
 const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
 let modelRevision = 0
+let modelRead: Promise<void> | undefined, modelReadGroup: string | null = null
 let groupRead: Promise<void> | undefined, groupSelection: Promise<void> | undefined
 let writes: Promise<unknown> = Promise.resolve()
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value)
@@ -404,20 +405,24 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
   }
   if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，任务记录已保留，可继续查询。'; await persist() }
 }
-export async function loadCreationModels() {
-  if (!session.user) return
-  const version = epoch, revision = ++modelRevision
+export function loadCreationModels(): Promise<void> {
+  if (!session.user) return Promise.resolve()
+  if (modelRead && modelReadGroup === creation.selectedGroup) return modelRead
+  const version = epoch, revision = ++modelRevision, group = creation.selectedGroup
+  modelReadGroup = group
   creation.modelsLoading = true; creation.modelsLoaded = false; creation.modelsError = ''
-  try {
+  modelRead = (async () => { try {
     const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models')
-    if (version !== epoch || revision !== modelRevision) return
+    if (version !== epoch || revision !== modelRevision || group !== creation.selectedGroup) return
     creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string')
     creation.modelTokenId = Number.isSafeInteger(result.tokenId) && result.tokenId! > 0 ? result.tokenId! : null
   } catch (error) {
-    if (version === epoch && revision === modelRevision) {
+    if (version === epoch && revision === modelRevision && group === creation.selectedGroup) {
       creation.models = []; creation.modelTokenId = null; creation.modelsError = errorMessage(error)
     }
-  } finally { if (version === epoch && revision === modelRevision) { creation.modelsLoading = false; creation.modelsLoaded = true } }
+  } finally { if (version === epoch && revision === modelRevision) { modelRead = undefined; creation.modelsLoading = false; creation.modelsLoaded = group === creation.selectedGroup } }
+  })()
+  return modelRead
 }
 export function loadCreationGroups(): Promise<void> {
   if (!session.user) return Promise.resolve()
@@ -442,11 +447,12 @@ export function selectCreationGroup(group: string): Promise<void> {
   if (!creation.groups.some(item => item.id === group)) return Promise.resolve()
   const version = epoch, accountId = session.user.accountId || session.user.id
   creation.groupSwitching = true; creation.groupsError = ''; creation.modelsError = ''
-  ++modelRevision
+  ++modelRevision; modelRead = undefined
   creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false
   groupSelection = (async () => { try {
     const result = await accountApi<{ group: string; selectedTokenId: number }>('model-groups/select', { group }, accountId)
     if (version !== epoch) return
+    ++modelRevision; modelRead = undefined
     creation.selectedGroup = result.group
     await loadCreationModels()
   } catch (error) {
@@ -454,6 +460,7 @@ export function selectCreationGroup(group: string): Promise<void> {
     // A timed-out selection may have succeeded; read it back without repeating the mutation.
     await loadCreationGroups()
     if (version !== epoch) return
+    ++modelRevision; modelRead = undefined
     await loadCreationModels()
     if (version === epoch) creation.groupsError = errorMessage(error)
   } finally { if (version === epoch) { creation.groupSwitching = false; groupSelection = undefined } }
@@ -918,7 +925,7 @@ watch(() => activeOwner(), next => {
     mediaSettings.loaded = true
   }
   creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.modelsLoaded = false; creation.storageError = ''
-  ++modelRevision
+  ++modelRevision; modelRead = undefined
   groupRead = undefined; groupSelection = undefined
   creation.groups = []; creation.selectedGroup = null; creation.modelTokenId = null
   creation.groupsLoading = false; creation.groupSwitching = false; creation.groupsError = ''

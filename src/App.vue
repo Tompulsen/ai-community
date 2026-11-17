@@ -169,7 +169,7 @@ function restoreMessageTrigger() {
     <a href="#main" class="skip-link">跳至内容</a>
     <aside v-if="communityShell" class="community-rail" aria-label="社区侧栏">
       <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
-      <div class="rail-scroll" @scroll.passive="dismissMenus"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
+      <div class="rail-scroll" @scroll.passive="positionMessagePopover"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
       <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置"><Settings :size="22" aria-hidden="true" /></RouterLink>
     </aside>
     <header v-if="!guestAccount" class="app-header"><div class="header-inner">

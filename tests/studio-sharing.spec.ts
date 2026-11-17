@@ -132,7 +132,7 @@ test('a lost publish response can be retried after reload with identical attachm
   expect(state.generated).toHaveLength(1)
 })
 
-test('reusing image history synchronizes the source and a new creation clears it', async ({ page }) => {
+test('opening image history preserves the conversation draft and source, and a new creation clears them', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/create/image?remix=source42')
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
@@ -144,7 +144,8 @@ test('reusing image history synchronizes the source and a new creation clears it
   await page.locator('.studio-sidebar .studio-record').filter({ hasText: state.source.prompt }).click()
   await expect(page).toHaveURL(url => url.pathname === '/create/image' && url.searchParams.get('remix') === 'source42')
   await expect(page.locator('.source-label')).toContainText(state.source.title)
-  await expect(prompt).toHaveValue(state.source.prompt)
+  await expect(prompt).toHaveValue('')
+  await expect(page.getByRole('article', { name: '已发送的创作请求', exact: true })).toContainText(state.source.prompt)
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
   await expect(page.getByRole('checkbox')).toHaveCount(2)
   await page.keyboard.press('Escape')
@@ -152,7 +153,7 @@ test('reusing image history synchronizes the source and a new creation clears it
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status').last()).toContainText('生成完成')
   expect(state.generated[1].sourceWorkId).toBe('source42')
-  await page.locator('.studio-sidebar').getByRole('button', { name: '新建创作', exact: true }).click()
+  await page.getByRole('navigation', { name: '工作台导航', exact: true }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(page).toHaveURL(/create\/image$/)
   await expect(page.locator('.source-label')).toHaveCount(0)
   await expect(prompt).toHaveValue('')
@@ -168,19 +169,21 @@ test('chat history restores its own source and preserves an edited draft', async
   await page.goto('/create/text?remix=source42')
   const prompt = page.getByRole('textbox', { name: '消息', exact: true })
   await expect(prompt).toHaveValue(state.source.prompt)
-  await page.getByRole('textbox', { name: '对话名称', exact: true }).fill('海底同款对话')
+  await page.locator('.studio-mobile-title').getByRole('button', { name: /^重命名会话：/ }).click()
+  await page.getByRole('textbox', { name: '会话名称', exact: true }).fill('海底同款对话')
+  await page.getByRole('textbox', { name: '会话名称', exact: true }).press('Enter')
   await prompt.fill('保留我的海底草稿')
   await page.goto('/create/text?remix=sourceB')
   await expect(prompt).toHaveValue('森林里的萤火虫')
-  await page.getByRole('button', { name: '历史对话', exact: true }).click()
-  await page.getByRole('navigation', { name: '历史对话', exact: true }).getByRole('button', { name: '海底同款对话', exact: true }).click()
+  await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+  await page.getByRole('dialog', { name: '工作台侧边栏', exact: true }).locator('.studio-record').filter({ hasText: '海底同款对话' }).click()
   await expect(page).toHaveURL(/create\/text\?remix=source42$/)
   await expect(page.locator('.source-label')).toContainText(state.source.title)
   await expect(prompt).toHaveValue('保留我的海底草稿')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.chat-message.assistant .message-content')).toContainText('水母点亮')
   expect(state.generated[0]).toMatchObject({ sourceWorkId: 'source42', prompt: '保留我的海底草稿' })
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByRole('button', { name: '新建创作', exact: true }).click()
   await expect(page).toHaveURL(/create\/text$/)
   await expect(page.locator('.source-label')).toHaveCount(0)
   await expect(prompt).toHaveValue('')
@@ -191,7 +194,7 @@ test('loading author references does not restore an attachment removed during th
   await page.goto('/create/text?remix=source42')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.prompt)
   await page.locator('.chat-composer').getByLabel('添加附件', { exact: true }).setInputFiles({ name: '自己的参考图.jpg', mimeType: 'image/jpeg', buffer: state.photo })
-  await expect(page.locator('.composer-files li')).toHaveCount(1)
+  await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(1)
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
   await page.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true }).check()
   let release!: () => void, loading = false
@@ -204,11 +207,11 @@ test('loading author references does not restore an attachment removed during th
   await page.getByRole('button', { name: '使用选中的 1 张参考图', exact: true }).click()
   try {
     await expect.poll(() => loading).toBe(true)
-    await page.getByRole('button', { name: '移除附件 自己的参考图.jpg', exact: true }).click()
-    await expect(page.locator('.composer-files li')).toHaveCount(0)
+    await page.locator('.chat-composer').getByRole('button', { name: '移除参考图 1', exact: true }).click()
+    await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(0)
   } finally { release() }
-  await expect(page.locator('.composer-files li')).toHaveCount(1)
-  await expect(page.locator('.composer-files li')).toHaveText('作者参考图1.jpg')
+  await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(1)
+  await expect(page.locator('.chat-composer .reference-list li img')).toHaveAttribute('alt', '作者参考图1.jpg')
   expect(state.generated).toHaveLength(0)
 })
 
@@ -235,7 +238,7 @@ test('text remix keeps source attribution and selected images when sharing only 
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
   await page.getByRole('checkbox', { name: '作者参考图2.jpg', exact: true }).check()
   await page.getByRole('button', { name: '使用选中的 1 张参考图', exact: true }).click()
-  await expect(page.locator('.composer-files li')).toHaveCount(1)
+  await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(1)
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('.chat-message.assistant .message-content')).toContainText('水母点亮')
   await page.getByRole('button', { name: '发送到源作品评论区', exact: true }).click()
@@ -290,10 +293,15 @@ test('image remix restores model, group and full public settings, then republish
   state.source.generation = { parameters: { version: 1, kind: 'image', group: '生图', protocol: 'async',
     size: '1200x900', aspect_ratio: '4:3', n: 3, duration: 8,
     imageOptions: { resolution: '2k', quality: 'high', seed: '42', style: 'vivid', imageOutputFormat: 'webp', imageBackground: 'transparent', imageOutputCompression: 85 } } }
-  let group = 'auto'
+  let group = 'auto', modelReads = 0
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图', ratio: 0.6 }] } } }))
   await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } }))
+  await page.route('**/api/creation/models', async route => {
+    const read = ++modelReads, tokenId = group === '生图' ? 52 : 41
+    // Overlapping initialization reads must not finish source restoration before the selected group's models.
+    if (read === 2 || read === 3) await new Promise(resolve => setTimeout(resolve, read === 2 ? 150 : 400))
+    await route.fulfill({ json: { tokenId, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
+  })
   await page.goto('/create/image?remix=source42')
   const groupPicker = await openGroupPicker(page)
   await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toContainText('生图 · 0.6×')

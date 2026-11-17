@@ -19,7 +19,7 @@ for (const width of [1440, 390, 320]) {
       await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
       const entry = (await page.locator('.profile-toggle').boundingBox())!
       await page.getByLabel('账号菜单', { exact: true }).click()
-      await page.getByRole('link', { name: '账号设置', exact: true }).click()
+      await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
       await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
       expect.soft((await page.locator('.profile-toggle').boundingBox())!.x).toBeCloseTo(entry.x, 1)
 
