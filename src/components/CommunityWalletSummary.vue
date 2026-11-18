@@ -1,17 +1,15 @@
 <script setup lang="ts">
 import { formatPoints, type CommunityWallet } from '../../shared/studio/community-wallet'
 defineProps<{ wallet: CommunityWallet }>()
-const expiry = (timestamp: number) => new Date(timestamp * 1000).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 </script>
 
 <template>
   <section class="community-wallet-summary" aria-label="社区积分">
     <dl class="point-balances">
-      <div><dt>公益积分</dt><dd class="point-amount">{{ formatPoints(wallet.charityPoints) }}<span>积分</span></dd><dd class="point-note">仅限社区使用</dd><dd v-if="wallet.charityExpiringAt" class="point-note">最近一批到期：{{ expiry(wallet.charityExpiringAt) }}</dd></div>
-      <div><dt>永久积分</dt><dd class="point-amount">{{ formatPoints(wallet.permanentPoints) }}<span>积分</span></dd><dd class="point-note">充值实付本金换算的积分</dd><dd class="point-note">与账户中心共用同一份充值余额</dd></div>
+      <div><dt>福利积分</dt><dd class="point-amount">{{ formatPoints(wallet.charityPoints) }}<span>积分</span></dd><dd class="point-note">QX 有效积分合计，与 QX 共用余额</dd><dd class="point-note">消费和限时积分过期后自动更新</dd></div>
+      <div><dt>永久积分</dt><dd class="point-amount">{{ formatPoints(wallet.permanentPoints) }}<span>积分</span></dd><dd class="point-note">New API 全部可用余额折算的积分</dd><dd class="point-note">与账户中心共用同一份余额</dd></div>
     </dl>
-    <p class="points-rule">100 积分 = ¥ 0.02。社区优先使用公益积分，不足部分使用永久积分。</p>
-    <p v-if="wallet.legacyApiQuota !== 0" class="points-rule">历史额度保留在账户中心使用，未计入充值永久积分。</p>
+    <p class="points-rule">¥ 1 = 5,000 积分。社区优先使用福利积分，不足部分使用永久积分。</p>
   </section>
 </template>
 

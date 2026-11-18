@@ -2,7 +2,7 @@ import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-for (const authenticated of [true, false]) test(`lottery displays point equivalents with historical API restrictions for ${authenticated ? 'members' : 'guests'}`, async ({ page }) => {
+for (const authenticated of [true, false]) test(`lottery displays point equivalents with permanent point classification for ${authenticated ? 'members' : 'guests'}`, async ({ page }) => {
   await mockUnifiedAccount(page, authenticated)
   await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true,
     data: { enabled: true, configured: true, currencySymbol: '积分', quotaPerUnit: 100, pointsPerUsd: 5000 } } }))
@@ -21,13 +21,13 @@ for (const authenticated of [true, false]) test(`lottery displays point equivale
     ] }], nextCursor: null,
   } }))
   await page.goto('/activities')
-  await expect(page.locator('.prize-list')).toContainText('约 2,500 积分（历史 API 额度）')
-  await expect(page.locator('.activity-page')).toContainText('不计入社区公益或永久积分余额')
+  await expect(page.locator('.prize-list')).toContainText('约 2,500 积分（永久积分）')
+  await expect(page.locator('.activity-page')).toContainText('统一折算为社区永久积分')
   await expect(page.locator('.activity-page')).not.toContainText('$0.50')
   if (authenticated) {
     await page.getByRole('button', { name: '奖励记录', exact: true }).click()
-    await expect(page.getByRole('row').nth(1)).toContainText('2,500 积分（历史 API 额度）')
-    await expect(page.getByRole('row').nth(2)).toContainText('历史 API 额度，积分待核对')
+    await expect(page.getByRole('row').nth(1)).toContainText('2,500 积分（永久积分）')
+    await expect(page.getByRole('row').nth(2)).toContainText('永久积分，数额待核对')
   }
 })
 
@@ -51,22 +51,22 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await expect(summary).toBeVisible()
   await expect(summary).toContainText('123,456,789,012,345,678.123456')
   await expect(summary).toContainText('5,000.000001')
-  await expect(summary).toContainText('充值实付本金换算的积分')
-  await expect(summary).toContainText('仅限社区使用')
-  await expect(summary).toContainText('最近一批到期：')
-  await expect(summary).toContainText('历史额度保留在账户中心使用，未计入充值永久积分')
+  await expect(summary).toContainText('New API 全部可用余额折算的积分')
+  await expect(summary).toContainText('与 QX 共用余额')
+  await expect(summary).not.toContainText('最近一批到期：')
+  await expect(summary).toContainText('社区优先使用福利积分')
   await expect(page.locator('.balance-panel .account-balance')).toHaveCount(0)
   const indicator = page.locator('.header-actions .account-balance')
-  await expect(indicator).toHaveAttribute('title', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
-  await expect(indicator).toHaveAccessibleName('我的账户，公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
-  await expect(indicator).toHaveAttribute('aria-description', '公益 123,456,789,012,345,678.123456 积分 · 永久 5,000.000001 积分')
+  await expect(indicator).toHaveAttribute('title', '可用 123,456,789,012,350,678.123457 积分')
+  await expect(indicator).toHaveAccessibleName('我的账户，可用 123,456,789,012,350,678.123457 积分')
+  await expect(indicator).toHaveAttribute('aria-description', '可用 123,456,789,012,350,678.123457 积分')
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
     await page.goto('/discover')
     await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toBeVisible()
     if (width >= 1000) await expect(page.locator('.community-rail')).toBeVisible()
     else await expect(page.getByRole('navigation', { name: '手机导航', exact: true })).toBeVisible()
-    await expect(indicator).toContainText('公益 123,456,789,012,345,678.123456 积分')
+    await expect(indicator).toHaveText('123,456,789,012,350,678.123457 积分')
     const header = await page.locator('.header-actions').boundingBox()
     expect(header!.x).toBeGreaterThanOrEqual(0)
     expect(header!.x + header!.width).toBeLessThanOrEqual(width)
@@ -90,4 +90,27 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await expect(page.locator('.balance-panel')).not.toContainText('999999')
   await expect(indicator).toHaveText('—')
   expect(errors).toEqual([])
+})
+
+test('header refreshes the shared total when limited QX points expire or are spent', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.clock.install()
+  let charityPoints = '1500'
+  const expiry = Math.floor(Date.now() / 1000) + 60
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    linked: true, subject: '17', walletEnabled: true, points: {
+      enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints,
+      permanentPoints: '50000', legacyApiQuota: 50000, paidApiQuota: 0,
+      totalApiQuota: 50000, charityExpiringAt: charityPoints === '1500' ? expiry : null,
+    },
+  } }))
+  await page.goto('/discover')
+  const indicator = page.locator('.header-actions .account-balance')
+  await expect(indicator).toHaveText('51,500 积分')
+  charityPoints = '1000'
+  await page.clock.fastForward(61_000)
+  await expect(indicator).toHaveText('51,000 积分')
+  charityPoints = '999.999999'
+  await page.clock.fastForward(15_000)
+  await expect(indicator).toHaveText('50,999.999999 积分')
 })

@@ -62,7 +62,7 @@ test('wallet metadata shows point previews while the balance response is still p
   } finally { release() }
 })
 
-for (const width of [1440, 390]) test(`community point previews use actual paid money and keep historical credit separate at ${width}px`, async ({ page }, info) => {
+for (const width of [1440, 390]) test(`community point previews use actual paid money and show a compact total at ${width}px`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: 1000 })
   const fixture = await walletFixture(page)
   Object.assign(fixture.overview, { quotaPerPoint: 100 })
@@ -77,9 +77,9 @@ for (const width of [1440, 390]) test(`community point previews use actual paid 
   } } }))
   await page.goto('/account?tab=balance')
   const summary = page.getByRole('region', { name: '社区积分', exact: true })
-  await expect(summary).toContainText('公益积分100积分')
+  await expect(summary).toContainText('福利积分100积分')
   await expect(summary).toContainText('永久积分50,000积分')
-  await expect(page.locator('.header-actions .account-balance')).toContainText('永久 50,000 积分')
+  await expect(page.locator('.header-actions .account-balance')).toContainText('50,100 积分')
   await expect(page.locator('.balance-settings')).not.toContainText('8415.17')
   await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 50,000 永久积分')
   await expect(wallet(page).getByText('¥ 10.00', { exact: true })).toBeVisible()

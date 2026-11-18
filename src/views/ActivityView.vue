@@ -27,10 +27,10 @@ const pointDisplay = ref<{ currencySymbol?: string; pointsPerUsd?: number }>()
 function rewardAmount(value: Prize | Award) {
   if (pointDisplay.value?.currencySymbol !== '积分') return pointDisplay.value ? `$${(value.amountCents / 100).toFixed(2)}` : '积分待核对'
   if ('status' in value && value.status === 'fulfilled') return value.legacyPoints
-    ? `${formatPoints(value.legacyPoints)} 积分（历史 API 额度）` : '历史 API 额度，积分待核对'
+    ? `${formatPoints(value.legacyPoints)} 积分（永久积分）` : '永久积分，数额待核对'
   const rate = pointDisplay.value.pointsPerUsd
   return rate && Number.isFinite(rate) && rate > 0
-    ? `约 ${(value.amountCents / 100 * rate).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分（历史 API 额度）` : '积分待核对'
+    ? `约 ${(value.amountCents / 100 * rate).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分（永久积分）` : '积分待核对'
 }
 const count = ref<1 | 3 | 5>(1), pending = ref<PendingDraw | null>(null), wheelRotation = ref(0)
 const drawCounts = [1, 3, 5] as const
@@ -142,7 +142,7 @@ async function copyInvite() {
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status">
-      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note">抽奖奖励属于历史 API 额度，仅在账户中心使用，不计入社区公益或永久积分余额。奖池按当前比例预计折合，已到账记录以发放凭证换算。</p>
+      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note">奖励到账后计入 New API 可用余额，统一折算为社区永久积分。¥1 = 5,000 积分，奖池预计数额和到账记录以账户余额为准。</p>
       <div v-if="tab === 'draw'" class="activity-layout lottery-layout">
         <section class="panel-section draw-section">
           <div class="section-heading"><h2>{{ appearance.title || '幸运抽奖' }}</h2><Ticket :size="20" /></div><p v-if="appearance.subtitle" class="muted">{{ appearance.subtitle }}</p>

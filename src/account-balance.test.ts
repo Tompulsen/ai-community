@@ -10,7 +10,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-it('shows authoritative point strings, clears them across account changes and never treats legacy quota as permanent points', async () => {
+it('shows the exact total returned by the wallet and clears balances across account changes', async () => {
   const { session } = await import('./state')
   const { accountBalance, balanceDescription, refreshAccountBalance } = await import('./account-balance')
   const points = { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '100.123456', permanentPoints: '5000',
@@ -21,7 +21,7 @@ it('shows authoritative point strings, clears them across account changes and ne
   await refreshAccountBalance()
   expect(accountBalance.points).toEqual(points)
   expect(accountBalance.amount).toBeNull()
-  expect(balanceDescription.value).toBe('公益 100.123456 积分 · 永久 5,000 积分')
+  expect(balanceDescription.value).toBe('可用 5,100.123456 积分')
   fetchMock.mockResolvedValueOnce(result(null))
   await refreshAccountBalance()
   expect(accountBalance.points).toBeNull()
@@ -87,4 +87,16 @@ it('hides unavailable or mismatched balances and allows a later retry', async ()
   await refreshAccountBalance()
   expect(balanceNumber.value).toBe('0.00')
   expect(accountBalance.error).toBe('')
+})
+
+it('adds large balances and fractional points exactly for the single total', async () => {
+  const { totalCommunityPoints, formatPoints } = await import('../shared/studio/community-wallet')
+  const wallet = { enabled: true as const, currency: 'CNY' as const, pointsPerCny: 5000 as const,
+    charityPoints: '1500', permanentPoints: '50000', legacyApiQuota: 50000,
+    paidApiQuota: 0, totalApiQuota: 50000, charityExpiringAt: null }
+  expect(totalCommunityPoints(wallet)).toBe('51500')
+  expect(totalCommunityPoints({ ...wallet, charityPoints: '1000' })).toBe('51000')
+  expect(totalCommunityPoints({ ...wallet, charityPoints: '0.000001', permanentPoints: '0.999999' })).toBe('1')
+  expect(formatPoints(totalCommunityPoints({ ...wallet, charityPoints: '999999999999999999', permanentPoints: '1' })))
+    .toBe('1,000,000,000,000,000,000')
 })

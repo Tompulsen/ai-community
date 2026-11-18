@@ -33,8 +33,20 @@ export function parseCommunityWallet(value: unknown): CommunityWallet {
   }
 }
 
+/** Sum display balances without losing fractional points to floating point. */
+export function totalCommunityPoints(wallet: CommunityWallet): string {
+  const units = [wallet.charityPoints, wallet.permanentPoints].map(value => {
+    if (!decimalPoints.test(value)) throw new Error('积分余额暂不可用')
+    const [whole = '0', fraction = ''] = value.split('.')
+    return BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))
+  })
+  const total = units[0]! + units[1]!
+  const fraction = (total % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '')
+  return `${total / 1_000_000n}${fraction ? `.${fraction}` : ''}`
+}
+
 export function formatPoints(value: string): string {
-  if (!decimalPoints.test(value)) return '—'
+  if (!/^(?:0|[1-9]\d{0,18})(?:\.\d{1,6})?$/.test(value)) return '—'
   const [whole = '0', fraction = ''] = value.split('.')
   const tail = fraction.replace(/0+$/, '')
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (tail ? `.${tail}` : '')

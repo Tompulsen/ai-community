@@ -329,9 +329,10 @@ function restoreMessageTrigger() {
   :global(:root:has(.community-shell)) { --header-height: 120px; }
   .community-shell > .app-header { height: 120px; }
   .community-shell .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 64px 56px; gap: 0 8px; }
+  .community-shell .header-inner:has(.account-balance) { grid-template-columns: auto minmax(0, 1fr); }
   .community-shell .header-tools { display: contents; }
   .community-shell .header-inner > .brand { grid-column: 1; grid-row: 1; }
-  .community-shell .header-actions { grid-column: 2; grid-row: 1; }
+  .community-shell .header-actions { grid-column: 2; grid-row: 1; max-width: 100%; }
   .community-shell .header-search-slot { display: block; grid-column: 1 / -1; grid-row: 2; align-self: start; }
   .community-shell .header-inner:has(.account-balance) .header-search-slot { display: block; }
   .community-shell .header-actions, .community-shell .community-actions { gap: 4px; }
