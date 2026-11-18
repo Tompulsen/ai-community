@@ -98,6 +98,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
             <button v-for="(label, value) in kindLabels" :key="value" class="rail-option" :class="{ active: kind === value }" :aria-pressed="kind === value" :aria-label="value === 'resource' ? `资源，${label}` : label" @click="kind = value">{{ value === 'resource' ? '资源' : label }}</button>
           </div>
           <div v-if="tags.length" class="content-tags" role="group" aria-label="内容标签">
+            <button class="rail-option mobile-all-tags" :class="{ active: !tag }" :aria-pressed="!tag" @click="tag = ''">全部标签</button>
             <button v-for="item in tags" :key="item.id" class="rail-option" :class="{ active: tag === item.name }" :aria-pressed="tag === item.name" @click="tag = tag === item.name ? '' : item.name">{{ item.name }}</button>
           </div>
         </div>
@@ -132,6 +133,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 .tag-rail > .category-tabs, .content-tags { display: flex; align-items: center; flex: none; gap: 4px; width: auto; }
 .content-tags { position: relative; margin-left: 20px; padding-left: 20px; }
 .content-tags::before { content: ""; position: absolute; left: 0; top: 50%; width: 1px; height: 16px; transform: translateY(-50%); background: var(--border); }
+.mobile-all-tags { display: none; }
 .rail-option { min-height: 28px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; white-space: nowrap; font-weight: 500; }
 .rail-option:hover { color: var(--ink); }
 .browse-mode, .rail-option { transition: background-color .2s ease-in-out, color .2s ease-in-out, border-color .2s ease-in-out, box-shadow .2s ease-in-out; }
@@ -148,16 +150,19 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 @media (prefers-reduced-motion: reduce) {
   .browse-mode, .rail-option { transition: none; }
 }
-@media (pointer: coarse), (max-width: 639px) {
+@media (pointer: coarse), (max-width: 999px) {
   .browse-modes, .tag-navigation { padding: 0; }
   .browse-mode, .rail-option { min-height: 44px; border-radius: 22px; }
   .browse-modes { border-radius: 22px; }
   .tag-rail { border-radius: 0; }
   .tag-scroll-controls .icon-button { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
 }
-@media (max-width: 639px) {
-  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (max-width: 999px) {
+  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-bottom: 16px; }
   .browse-modes { grid-column: 1 / -1; justify-self: start; }
-  .tag-navigation::before { display: none; }
+  .tag-navigation::before, .tag-rail > .category-tabs, .content-tags::before { display: none; }
+  .tag-navigation:not(:has(.content-tags)) { display: none; }
+  .content-tags { margin: 0; padding: 0; }
+  .mobile-all-tags { display: block; }
 }
 </style>

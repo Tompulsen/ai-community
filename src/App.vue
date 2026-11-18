@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Settings, ShieldCheck, Users, WandSparkles } from '@lucide/vue'
+import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Search, Settings, ShieldCheck, Users, WandSparkles, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -20,7 +20,26 @@ const studioPage = computed(() => route.path === '/create' || route.path.startsW
 const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
 const desktopCommunity = computed(() => communityShell.value && wideViewport.value)
+const mobileCommunity = computed(() => communityShell.value && !wideViewport.value)
 const searchQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const mobileSearchOpen = ref(!!searchQuery.value)
+const mobileSearchButton = ref<HTMLButtonElement>()
+const mobileSearchForm = ref<HTMLFormElement>()
+const discoveryLinks = [
+  { kind: 'all', label: '发现' }, { kind: 'video', label: '视频' },
+  { kind: 'image', label: '图片' }, { kind: 'resource', label: 'Skill', description: 'Skill 与资源' },
+]
+function discoveryDestination(kind: string) {
+  const query = route.path === '/discover' ? route.query : {}
+  return { path: '/discover', query: { ...query, q: searchQuery.value.trim() || undefined, kind: kind === 'all' ? undefined : kind, tag: kind === 'all' ? undefined : query.tag } }
+}
+async function toggleMobileSearch() {
+  mobileSearchOpen.value = !mobileSearchOpen.value
+  await nextTick()
+  if (mobileSearchOpen.value) mobileSearchForm.value?.querySelector('input')?.focus()
+  else mobileSearchButton.value?.focus()
+}
+watch(() => route.path, () => { mobileSearchOpen.value = !!route.query.q })
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 watch(searchQuery, value => {
   clearTimeout(searchTimer)
@@ -99,10 +118,12 @@ watch(() => session.user?.id, id => {
   void loadInbox()
   poll = setInterval(() => { if (document.visibilityState === 'visible') void loadInbox(true) }, 45000)
 }, { immediate: true })
-function closePublish() {
+async function closePublish() {
   if (publicationNavigation.value || route.query.publish !== '1') return
   const { publish: _, ...query } = route.query
-  void router.replace({ path: route.path, query, hash: route.hash })
+  await router.replace({ path: route.path, query, hash: route.hash })
+  await nextTick()
+  if (mobileCommunity.value && route.query.publish !== '1') document.querySelector<HTMLElement>('.mobile-community-header .tools-trigger')?.focus({ preventScroll: true })
 }
 async function published(work: Work) {
   const owner = session.user?.id
@@ -160,6 +181,7 @@ function showMessageCenter(category: InboxCategory) {
 }
 function restoreMessageTrigger() {
   messageMenu.value?.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true })
+  if (mobileCommunity.value) document.querySelector<HTMLElement>('.mobile-community-header .tools-trigger')?.focus({ preventScroll: true })
   if (messageMenu.value) messageMenu.value.open = false
 }
 </script>
@@ -172,7 +194,31 @@ function restoreMessageTrigger() {
       <div class="rail-scroll" @scroll.passive="positionMessagePopover"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
       <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置"><Settings :size="22" aria-hidden="true" /></RouterLink>
     </aside>
-    <header v-if="!guestAccount" class="app-header"><div class="header-inner">
+    <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen }">
+      <div class="mobile-header-row">
+        <CommunityTools v-slot="{ close }" compact @toggle="toggleHeaderMenu" @message="showMessageCenter">
+          <div class="mobile-account-tools">
+            <template v-if="session.user">
+              <RouterLink to="/account" class="mobile-account-identity" @click="close"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" alt="" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><span>{{ session.user.name || session.user.username }}<small v-if="session.user.accountId">章鱼号：{{ session.user.accountId }}</small></span></RouterLink>
+              <AccountBalance @click="close" />
+            </template>
+            <RouterLink v-else-if="sessionStatus === 'guest'" to="/account" class="button primary btn" @click="close">登录章鱼账号</RouterLink>
+            <span v-else-if="sessionStatus === 'loading'" role="status">账号加载中…</span>
+            <button v-else type="button" class="button btn" @click="loadSession(true)"><RefreshCw :size="16" />重新加载账号</button>
+            <div class="mobile-account-actions">
+              <RouterLink v-if="sessionStatus === 'authenticated' || sessionStatus === 'guest'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="button btn mobile-submission" @click="close"><Plus :size="18" aria-hidden="true" />投稿</RouterLink>
+              <button v-if="session.user" class="mobile-sign-out" :disabled="signingOut" @click="close(); signOut()"><LogOut :size="16" aria-hidden="true" />退出登录</button>
+            </div>
+          </div>
+        </CommunityTools>
+        <nav class="mobile-discovery-nav" aria-label="作品分类">
+          <RouterLink v-for="link in discoveryLinks" :key="link.kind" :to="discoveryDestination(link.kind)" :aria-label="link.description || link.label" :title="link.description" :aria-current="route.path === '/discover' && (route.query.kind || 'all') === link.kind ? 'page' : undefined">{{ link.label }}</RouterLink>
+        </nav>
+        <button ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button>
+      </div>
+      <form v-if="mobileSearchOpen" id="mobile-community-search" ref="mobileSearchForm" class="mobile-community-search" role="search" aria-label="作品搜索" @submit.prevent="searchWorks" @keydown.esc.stop.prevent="toggleMobileSearch"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
+    </header>
+    <header v-else-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" :size="22" aria-hidden="true" /><span>{{ link.label }}</span></RouterLink></nav></Teleport>
       <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
@@ -326,18 +372,26 @@ function restoreMessageTrigger() {
   .rail-settings { display: grid; place-items: center; flex: none; width: 44px; height: 44px; margin-top: 8px; border-radius: 8px; }
 }
 @media (max-width: 999px) {
-  :global(:root:has(.community-shell)) { --header-height: 120px; }
-  .community-shell > .app-header { height: 120px; }
-  .community-shell .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 64px 56px; gap: 0 8px; }
-  .community-shell .header-inner:has(.account-balance) { grid-template-columns: auto minmax(0, 1fr); }
-  .community-shell .header-tools { display: contents; }
-  .community-shell .header-inner > .brand { grid-column: 1; grid-row: 1; }
-  .community-shell .header-actions { grid-column: 2; grid-row: 1; max-width: 100%; }
-  .community-shell .header-search-slot { display: block; grid-column: 1 / -1; grid-row: 2; align-self: start; }
-  .community-shell .header-inner:has(.account-balance) .header-search-slot { display: block; }
-  .community-shell .header-actions, .community-shell .community-actions { gap: 4px; }
-  .community-shell .header-submission { width: 44px; height: 44px; margin: 0; }
-  .community-shell .submission-label { display: none; }
-  .community-shell .message-popover { position: fixed; right: 16px; top: 64px; max-width: calc(100vw - 32px); }
+  :global(:root:has(.community-shell)) { --header-height: calc(60px + env(safe-area-inset-top)); }
+  :global(:root:has(.mobile-search-open)) { --header-height: calc(116px + env(safe-area-inset-top)); }
+  .community-shell > .mobile-community-header { height: auto; padding: env(safe-area-inset-top) 12px 0; border-bottom: 1px solid var(--border); }
+  .mobile-header-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 4px; height: 59px; max-width: 640px; margin-inline: auto; }
+  .mobile-discovery-nav { display: flex; align-items: stretch; justify-content: space-evenly; min-width: 0; height: 100%; }
+  .mobile-discovery-nav > a { position: relative; display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0 6px; font-size: 16px; font-weight: 600; color: var(--muted); }
+  .mobile-discovery-nav > a:hover, .mobile-discovery-nav > a[aria-current] { color: var(--ink); }
+  .mobile-discovery-nav > a[aria-current]::after { content: ''; position: absolute; bottom: 5px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: var(--blue); }
+  .mobile-discovery-nav > a:focus-visible { outline-offset: -4px; }
+  .mobile-search-toggle { width: 44px; height: 44px; color: var(--ink); }
+  .mobile-community-search { max-width: 640px; height: 56px; padding-bottom: 12px; margin-inline: auto; }
+  .mobile-community-search :deep(input) { font-size: 16px; }
+  .mobile-account-tools { display: grid; gap: 4px; margin-bottom: 16px; padding: 12px; border-radius: 10px; background: var(--canvas); }
+  .mobile-account-identity { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 44px; font-weight: 600; }
+  .mobile-account-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+  .mobile-account-identity small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .mobile-account-tools :deep(.account-balance) { justify-content: flex-start; width: 100%; max-width: none; padding-inline: 0; }
+  .mobile-account-tools :deep(.account-balance > span) { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+  .mobile-account-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .mobile-submission { min-height: 44px; padding-inline: 16px; }
+  .mobile-sign-out { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 0; color: var(--muted); }
 }
 </style>

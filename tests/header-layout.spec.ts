@@ -11,22 +11,22 @@ test.beforeEach(async ({ page }) => {
 })
 
 for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
-  test(`sidebar, persistent search and discovery controls fit at ${width}px`, async ({ page }) => {
+  test(`responsive navigation and discovery controls fit at ${width}px`, async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover')
-    await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+    if (width >= 1000) await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+    else await expect(page.getByRole('navigation', { name: '作品分类', exact: true })).toBeVisible()
     const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
-    await expect(input).toBeVisible()
-    await expect(input).toBeEnabled()
-    await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toHaveCount(0)
+    if (width >= 1000) {
+      await expect(input).toBeVisible()
+      await expect(input).toBeEnabled()
+    } else await expect(input).toHaveCount(0)
     await expect(page.getByRole('heading', { name: '首页', exact: true })).toHaveCount(1)
     await expect(page).toHaveTitle('首页 · 章鱼社区')
     const header = (await page.locator('.app-header').boundingBox())!
-    const search = (await page.locator('.header-search-slot').boundingBox())!
-    const account = (await page.locator('.profile-toggle').boundingBox())!
     const main = (await page.locator('main').boundingBox())!
     const desktop = page.getByRole('navigation', { name: '主导航', exact: true })
     const mobile = page.getByRole('navigation', { name: '手机导航', exact: true })
@@ -37,6 +37,8 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await expect(nav.getByRole('link', { name: '首页', exact: true })).toHaveAttribute('aria-current', 'page')
     await expect(nav.getByRole('link', { name: '创作台', exact: true })).toHaveAttribute('href', '/create')
     if (width >= 1000) {
+      const search = (await page.locator('.header-search-slot').boundingBox())!
+      const account = (await page.locator('.profile-toggle').boundingBox())!
       const rail = (await page.locator('.community-rail').boundingBox())!
       expect(rail.x).toBe(0)
       expect(rail.width).toBe(64)
@@ -56,15 +58,20 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       await expect(page.locator('.community-rail .community-actions')).toBeVisible()
       await expect(page.locator('.header-actions .community-actions')).toHaveCount(0)
     } else {
-      expect(header.height).toBe(120)
-      expect(search.x).toBe(16)
-      expect(search.y).toBe(64)
-      expect(search.height).toBe(44)
+      expect(header.height).toBe(60)
+      const categories = page.getByRole('navigation', { name: '作品分类', exact: true })
+      await expect(categories.getByRole('link')).toHaveText(['发现', '视频', '图片', 'Skill'])
+      await expect(categories.getByRole('link', { name: '发现', exact: true })).toHaveAttribute('aria-current', 'page')
+      for (const link of await categories.getByRole('link').all()) {
+        const box = (await link.boundingBox())!
+        expect(box.width).toBeGreaterThanOrEqual(44)
+        expect(box.height).toBeGreaterThanOrEqual(44)
+      }
       expect(main.x).toBe(0)
       await expect(page.locator('.community-rail')).toBeHidden()
-      await expect(page.locator('.header-actions .community-actions')).toBeVisible()
+      await expect(page.getByTitle('社区工具', { exact: true })).toBeVisible()
     }
-    for (const selector of ['.header-actions', '.header-search-slot', '.discovery-toolbar', '.profile-toggle']) {
+    for (const selector of width >= 1000 ? ['.header-actions', '.header-search-slot', '.discovery-toolbar', '.profile-toggle'] : ['.mobile-header-row', '.discovery-toolbar', '.mobile-search-toggle']) {
       const bounds = (await page.locator(selector).boundingBox())!
       expect(bounds.x, selector).toBeGreaterThanOrEqual(0)
       expect(bounds.x + bounds.width, selector).toBeLessThanOrEqual(width)
@@ -73,7 +80,8 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await expect(modes.getByRole('button')).toHaveText(['推荐', '最新', '关注'])
     await expect(modes.getByRole('button', { name: '推荐', exact: true })).toHaveAttribute('aria-pressed', 'true')
     expect((await page.locator('.discovery-toolbar').boundingBox())!.y).toBeCloseTo(header.height + 16, 1)
-    await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button')).toHaveCount(4)
+    if (width >= 1000) await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button')).toHaveCount(4)
+    else await expect(page.getByRole('group', { name: '作品类型' })).toBeHidden()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     if ([320, 768, 1440, 2560].includes(width)) {
       expect((await new AxeBuilder({ page }).include('.community-shell').analyze()).violations).toEqual([])
@@ -87,6 +95,7 @@ for (const width of [320, 1440]) {
   test(`persistent search keeps filters, clears and supports keyboard at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover?kind=image&tag=Skill')
+    if (width < 1000) await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
     const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
     const before = await page.locator('.discovery-toolbar').boundingBox()
     const searched = page.waitForRequest(request => {
@@ -100,11 +109,18 @@ for (const width of [320, 1440]) {
     await page.getByRole('button', { name: '清除搜索', exact: true }).click()
     await expect(input).toHaveValue('')
     await expect(input).toBeFocused()
-    await input.press('Escape')
+    if (width >= 1000) await input.press('Escape')
     await expect(input).toBeVisible()
     await expect(input).toBeEnabled()
     expect(await page.locator('.discovery-toolbar').boundingBox()).toEqual(before)
-    await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button', { name: '图片', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    if (width >= 1000) await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button', { name: '图片', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    else {
+      await expect(page.getByRole('navigation', { name: '作品分类' }).getByRole('link', { name: '图片', exact: true })).toHaveAttribute('aria-current', 'page')
+      await input.press('Escape')
+      await expect(input).toHaveCount(0)
+      await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeFocused()
+      expect((await page.locator('.app-header').boundingBox())!.height).toBe(60)
+    }
   })
 
   test(`submission opens the existing editor without publishing at ${width}px`, async ({ page }) => {
@@ -114,12 +130,14 @@ for (const width of [320, 1440]) {
       if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.url())
     })
     await page.goto('/discover?kind=image&tag=Skill')
+    if (width < 1000) await page.getByTitle('社区工具', { exact: true }).click()
     await page.getByRole('link', { name: '投稿', exact: true }).click()
     await expect(page.getByRole('dialog', { name: '发布作品', exact: true })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('kind')).toBe('image')
     expect(new URL(page.url()).searchParams.get('tag')).toBe('Skill')
     await page.getByRole('button', { name: '关闭作品编辑', exact: true }).click()
     await expect(page).not.toHaveURL(/publish=1/)
+    if (width < 1000) await expect(page.getByTitle('社区工具', { exact: true })).toBeFocused()
     expect(writes).toEqual([])
   })
 }
@@ -217,7 +235,7 @@ test('short desktop sidebar scrolls without covering settings and menus close ac
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(360)
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(panel).not.toBeVisible()
-  await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeVisible()
   await launcher.click()
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: '关闭社区工具', exact: true }).click()
@@ -233,4 +251,76 @@ test('guests keep login and submission destinations', async ({ page }) => {
   await expect(page.getByRole('form', { name: '登录章鱼账号', exact: true })).toBeVisible()
   await expect(page.locator('.community-rail')).toHaveCount(0)
   await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toHaveCount(0)
+})
+
+test('mobile categories retain pending search text, independent tags and browser history', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/discover?tag=Skill')
+  await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+  const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
+  const categories = page.getByRole('navigation', { name: '作品分类', exact: true })
+  // Dispatch both actions in one browser task so the debounce cannot mask a lost query.
+  await input.evaluate(async element => {
+    const field = element as HTMLInputElement
+    field.value = '测试保留'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await Promise.resolve()
+    document.querySelector<HTMLAnchorElement>('.mobile-discovery-nav a[href*="kind=video"]')!.click()
+  })
+  await expect(input).toHaveValue('测试保留')
+  await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('测试保留')
+  await expect.poll(() => new URL(page.url()).searchParams.get('kind')).toBe('video')
+  expect(new URL(page.url()).searchParams.get('tag')).toBe('Skill')
+  await categories.getByRole('link', { name: '图片', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('kind')).toBe('image')
+  await page.goBack()
+  await expect(categories.getByRole('link', { name: '视频', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(input).toHaveValue('测试保留')
+  await categories.getByRole('link', { name: 'Skill 与资源', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('kind')).toBe('resource')
+  await page.reload()
+  await expect(categories.getByRole('link', { name: 'Skill 与资源', exact: true })).toHaveAttribute('aria-current', 'page')
+  await categories.getByRole('link', { name: '发现', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.has('kind')).toBe(false)
+  expect(new URL(page.url()).searchParams.has('tag')).toBe(false)
+  await expect(input).toHaveValue('测试保留')
+})
+
+test('mobile menu closes on the current account and supports logout and guest entry', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 })
+  await page.goto('/account')
+  const trigger = page.getByTitle('社区工具', { exact: true })
+  const menu = page.getByRole('dialog', { name: '社区工具', exact: true })
+  await trigger.click()
+  await page.locator('.mobile-account-identity').click()
+  await expect(menu).not.toBeVisible()
+  await expect(trigger).toBeFocused()
+  await trigger.click()
+  await menu.getByRole('button', { name: '退出登录', exact: true }).click()
+  await expect(page).toHaveURL('/discover')
+  await trigger.click()
+  await expect(menu.getByRole('link', { name: '登录章鱼账号', exact: true })).toBeVisible()
+  await expect(menu.locator('.account-balance')).toHaveCount(0)
+  await menu.getByRole('link', { name: '投稿', exact: true }).click()
+  await expect(page.getByRole('form', { name: '登录章鱼账号', exact: true })).toBeVisible()
+})
+
+test('mobile search submits from other pages and empty tag lists leave no unused filter row', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 900 })
+  await page.route('**/api/tags', route => route.fulfill({ json: { items: [] } }))
+  await page.goto('/community')
+  await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+  const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
+  await expect(input).toBeFocused()
+  await input.fill('社区搜索')
+  await expect(page).toHaveURL('/community')
+  await input.press('Enter')
+  await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('社区搜索')
+  await expect(page.locator('.tag-navigation')).toBeHidden()
+  await page.getByRole('button', { name: '收起搜索作品', exact: true }).click()
+  await expect(page.locator('.active-conditions')).toContainText('社区搜索')
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await expect(input).toBeVisible()
+  await expect(input).toHaveValue('社区搜索')
+  await expect(page.locator('.mobile-community-header')).toHaveCount(0)
 })

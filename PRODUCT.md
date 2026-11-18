@@ -37,9 +37,14 @@ delivery now includes the frontend and an independent community backend.
   submission and messages occupy the rail; settings stay at its bottom.
   Personal works and saved works remain reachable through existing tools.
 - Home begins with segmented recommendations, latest and following modes, a
-  horizontal type/tag rail. Community pages have a persistent full-width top search,
-  with account balance and the account menu at the right. Phones put search on its
-  own second header row. Discovery searches as users type; other pages submit to
+  horizontal type/tag rail. Desktop community pages have a persistent full-width top search,
+  with account balance and the account menu at the right. Below 1000px a compact
+  header contains the menu, discovery/video/image/Skill links and expandable search.
+  Skill retains the incumbent resource category (text, code and Skills). Mobile
+  type filters live in that header; the feed keeps browse modes and content tags.
+  The mobile menu contains identity, full point balance, submission, logout and
+  existing tools; unread counts and the in-place message center remain available.
+  Discovery searches as users type; other pages submit to
   discovery. Submission opens the existing work editor for members or login for guests.
   Types and content tags filter independently;
   the all option clears both. The rail supports touch, keyboard and scroll arrows.

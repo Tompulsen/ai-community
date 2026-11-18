@@ -161,8 +161,10 @@ test('launcher fits narrow guest and member screens with accessible controls', a
     for (const width of [1440, 768, 390, 320]) {
       await page.setViewportSize({ width, height: width < 400 ? 740 : 900 })
       await page.goto('/discover')
-      if (authenticated) await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
-      else await expect(page.locator('.header-login')).toBeVisible()
+      if (width >= 1000) {
+        if (authenticated) await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+        else await expect(page.locator('.header-login')).toBeVisible()
+      } else await expect(page.getByRole('navigation', { name: '作品分类' })).toBeVisible()
       await launcher(page).click()
       await expect(panel(page)).toBeVisible()
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

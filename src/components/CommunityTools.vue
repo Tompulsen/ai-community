@@ -1,23 +1,27 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, MessageSquare, Palette, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, WandSparkles, X } from '@lucide/vue'
-import { inbox, loadInbox } from '../inbox'
+import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, WandSparkles, X } from '@lucide/vue'
+import { inbox, loadInbox, type InboxCategory } from '../inbox'
 import { session } from '../state'
+import { site } from '../site'
 
-interface Tool { label: string; icon: Component; to?: string; member?: boolean; count?: number; action?: 'search' | 'refresh' }
+defineProps<{ compact?: boolean }>()
+const emit = defineEmits<{ message: [category: InboxCategory] }>()
+const unreadCount = computed(() => session.user ? inbox.counts.announcement + inbox.counts.messages + inbox.counts.activity : 0)
+interface Tool { label: string; icon: Component; to?: string; member?: boolean; count?: number; category?: InboxCategory; action?: 'search' | 'refresh' }
 const router = useRouter()
 const menu = ref<HTMLDetailsElement>(), trigger = ref<HTMLElement>(), searchInput = ref<HTMLInputElement>()
 const query = ref('')
 const tools = computed<Tool[]>(() => [
-  { label: '通知', icon: Bell, to: '/messages?tab=activity', member: true, count: inbox.counts.activity },
+  { label: '通知', icon: Bell, to: '/messages?tab=activity', member: true, count: inbox.counts.activity, category: 'activity' },
   { label: '发现', icon: Compass, to: '/discover' },
-  { label: '公告', icon: Megaphone, to: '/community?tab=announcements', count: inbox.counts.announcement },
+  { label: '公告', icon: Megaphone, to: '/community?tab=announcements', count: inbox.counts.announcement, category: 'announcement' },
   { label: '搜索', icon: Search, action: 'search' },
   { label: '创作者', icon: Users, to: '/community?tab=creators' },
   { label: '收藏', icon: Bookmark, to: '/library?tab=saved', member: true },
   { label: '我的作品', icon: FolderOpen, to: '/library', member: true },
-  { label: '消息', icon: MessageSquare, to: '/messages', member: true, count: inbox.counts.messages },
+  { label: '消息', icon: MessageSquare, to: '/messages', member: true, count: inbox.counts.messages, category: 'messages' },
   { label: '图片', icon: Image, to: '/discover?kind=image' },
   { label: '视频', icon: Video, to: '/discover?kind=video' },
   { label: '创作台', icon: WandSparkles, to: '/create', member: true },
@@ -57,14 +61,16 @@ watch(() => session.user?.id, () => {
 </script>
 
 <template>
-  <details ref="menu" class="header-menu community-tools" @toggle="toggle" @focusout="blur">
-    <summary ref="trigger" class="icon-button tools-trigger" aria-label="社区工具" title="社区工具" aria-haspopup="dialog"><LayoutGrid :size="19" aria-hidden="true" /></summary>
-    <div class="tools-panel" role="dialog" aria-labelledby="community-tools-heading">
-      <div class="tools-heading"><h2 id="community-tools-heading">社区工具</h2><button type="button" class="icon-button" aria-label="关闭社区工具" @click="close"><X :size="20" aria-hidden="true" /></button></div>
+  <details ref="menu" class="header-menu community-tools" :class="{ compact }" @toggle="toggle" @focusout="blur">
+    <summary ref="trigger" class="icon-button tools-trigger" :aria-label="compact && unreadCount ? `社区工具，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '社区工具'" :aria-description="compact && unreadCount ? `共 ${unreadCount} 条未读消息` : undefined" title="社区工具" aria-haspopup="dialog"><component :is="compact ? Menu : LayoutGrid" :size="compact ? 23 : 19" aria-hidden="true" /><span v-if="compact && unreadCount" class="tools-unread" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+    <div class="tools-panel" role="dialog" :aria-label="compact ? '社区工具' : undefined" :aria-labelledby="compact ? undefined : 'community-tools-heading'">
+      <div class="tools-heading"><h2 id="community-tools-heading"><img v-if="compact && site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" />{{ compact ? site.brand : '社区工具' }}</h2><button type="button" class="icon-button" aria-label="关闭社区工具" @click="close"><X :size="20" aria-hidden="true" /></button></div>
+      <slot :close="close" />
       <form class="tools-search search-control" role="search" aria-label="搜索社区作品" @submit.prevent="searchWorks"><Search :size="17" aria-hidden="true" /><input ref="searchInput" v-model="query" type="search" aria-label="搜索社区作品" placeholder="作品、提示词或创作者" maxlength="200" /><button type="submit" class="icon-button" aria-label="开始搜索"><ArrowRight :size="18" aria-hidden="true" /></button></form>
       <nav class="tools-grid" aria-label="社区工具入口">
         <template v-for="tool in tools" :key="tool.label">
-          <RouterLink v-if="tool.to" v-wallet-prefetch="tool.to === '/account?tab=balance'" :to="destination(tool)" class="tool-item" :aria-label="session.user && tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :aria-description="session.user && tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" :aria-describedby="tool.member && !session.user ? 'tools-member-hint' : undefined" @click="close">
+          <button v-if="compact && session.user && tool.category" type="button" class="tool-item" aria-haspopup="dialog" :aria-label="tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :aria-description="tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" @click="close(); emit('message', tool.category)"><component :is="tool.icon" :size="27" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span><span v-if="tool.count" class="tool-count" aria-hidden="true">{{ tool.count > 99 ? '99+' : tool.count }}</span></button>
+          <RouterLink v-else-if="tool.to" v-wallet-prefetch="tool.to === '/account?tab=balance'" :to="destination(tool)" class="tool-item" :aria-label="session.user && tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :aria-description="session.user && tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" :aria-describedby="tool.member && !session.user ? 'tools-member-hint' : undefined" @click="close">
             <component :is="tool.icon" :size="27" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span><span v-if="session.user && tool.count" class="tool-count" aria-hidden="true">{{ tool.count > 99 ? '99+' : tool.count }}</span><LockKeyhole v-if="tool.member && !session.user" class="tool-lock" :size="12" aria-hidden="true" />
           </RouterLink>
           <button v-else type="button" class="tool-item" @click="run(tool.action)"><component :is="tool.icon" :size="27" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span></button>
@@ -77,6 +83,11 @@ watch(() => session.user?.id, () => {
 
 <style scoped>
 .tools-trigger { width: 44px; min-height: 44px; border-radius: 6px; }
+.compact > .tools-trigger { position: relative; color: var(--ink); }
+.tools-unread { position: absolute; top: 0; right: -3px; display: grid; place-items: center; min-width: 16px; height: 16px; padding-inline: 3px; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.compact .tools-panel { left: 12px; right: 12px; width: auto; max-width: 480px; }
+.compact .tools-heading h2 { display: flex; align-items: center; gap: 10px; }
+.compact .tools-heading img { border-radius: 7px; }
 .community-tools[open] > .tools-trigger { background: var(--blue-soft); color: var(--blue-hover); }
 .tools-panel { position: fixed; top: calc(var(--header-height) + 8px); right: max(24px, calc((100vw - 1512px) / 2 + 40px)); width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 16px 48px #0005; }
 .tools-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
