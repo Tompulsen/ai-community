@@ -16,10 +16,10 @@ export function removeVideoMention(prompt: string, removed: number) {
     return image === removed ? '[已移除图片]' : image > removed ? `@图片${image - 1}` : text
   })
 }
-export function remapVideoMentions(prompt: string, before: string[], after: string[]) {
+export function remapVideoMentions(prompt: string, before: string[], after: string[], removeUnknown = false) {
   return prompt.replace(/@图片(\d+)(?!\d)/g, (text, digits: string) => {
     const index = Number(digits) - 1
-    if (index < 0 || index >= before.length) return text
+    if (index < 0 || index >= before.length) return removeUnknown ? '[已移除图片]' : text
     const target = after.indexOf(before[index]!)
     return target < 0 ? '[已移除图片]' : `@图片${target + 1}`
   })

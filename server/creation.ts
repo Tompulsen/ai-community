@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import sharp from 'sharp'
 import { httpError } from './auth.ts'
 import {
   AccountRequest, NewApiError, getNewApiConfig, relayHeaders, resolveRelayCredentials,
@@ -172,7 +173,7 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
             throw httpError(400, '参考图地址无效。')
           const options = { headers: { cookie: String(ctx.req.headers.cookie || '') }, url: `${url.pathname}${url.search}` }
           const head = await ctx.request.server.inject({ ...options, method: 'HEAD' })
-          if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp)$/.test(String(head.headers['content-type']))
+          if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(String(head.headers['content-type']))
             || Number(head.headers['content-length']) > 20 * MiB) throw httpError(400, '参考图无法读取或超过 20 MB。')
           const response = await ctx.request.server.inject({ ...options, method: 'GET' })
           if (response.statusCode !== 200) throw httpError(400, '参考图无法读取。')
@@ -183,9 +184,17 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
         blob = await response.blob()
       }
     }
-    total += blob.size
-    if (blob.size === 0 || blob.size > 20 * MiB || total > 24 * MiB || !/^image\/(?:png|jpeg|webp)$/.test(blob.type))
-      throw httpError(413, '参考图须为 PNG、JPEG 或 WebP，单张不超过 20 MB，总计不超过 24 MB。')
+    const originalSize = blob.size
+    if (blob.size === 0 || blob.size > 20 * MiB || total + blob.size > 24 * MiB || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type))
+      throw httpError(413, '参考图须为 PNG、JPEG、WebP、GIF 或 AVIF，单张不超过 20 MB，总计不超过 24 MB。')
+    if (/^image\/(?:gif|avif)$/.test(blob.type)) {
+      try {
+        const png = await sharp(Buffer.from(await blob.arrayBuffer()), { pages: 1, limitInputPixels: 100_000_000, failOn: 'warning' }).rotate().png().toBuffer()
+        blob = new Blob([new Uint8Array(png)], { type: 'image/png' })
+      } catch { throw httpError(400, '参考图无法解码，请更换图片或重新上传。') }
+    }
+    total += Math.max(originalSize, blob.size)
+    if (blob.size > 20 * MiB || total > 24 * MiB) throw httpError(413, '参考图转换后过大，单张不超过 20 MB，总计不超过 24 MB。')
     const value = { blob, url: `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}` }
     prepared.set(source, value)
     return value

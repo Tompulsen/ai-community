@@ -24,7 +24,7 @@ import { imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
-import { remixReferenceFiles, remixVideoMode } from '../studio-remix'
+import { remixVideoMode } from '../studio-remix'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
@@ -167,7 +167,7 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
   sourceWorkId.value = source.id
   blank.value = true; prompt.value = source.prompt
   references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId }))
-  if (kind === 'video') prompt.value = remapVideoMentions(prompt.value, remixReferenceFiles(source).map(file => file.url), references.value.map(file => file.url))
+  if (kind === 'video') prompt.value = remapVideoMentions(prompt.value, (source.referenceFiles || []).map(file => file.url), references.value.map(file => file.url), true)
   const parameters = readRemixParameters(source.generation?.parameters)
   if (models.value.some(item => item.id === source.model)) model.value = source.model
   if (parameters?.kind === props.kind) {

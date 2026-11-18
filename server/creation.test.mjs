@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import test from 'node:test'
 import Fastify from 'fastify'
+import sharp from 'sharp'
 import { handleCreation } from './creation.ts'
 
 const origin = 'https://community.example'
@@ -467,4 +468,28 @@ test('streaming preflight rejections explicitly report that no paid task was acc
   assert.equal(event.notAccepted, true)
   assert.equal(calls.length, 0)
   assert.equal((await app.inject('/api/creation/requests/stream-not-accepted')).statusCode, 404)
+})
+
+
+for (const format of ['gif', 'avif']) test(`public ${format} source images are converted to PNG before the paid relay`, async t => {
+  const bytes = await sharp({ create: { width: 3, height: 2, channels: 3, background: '#ef3344' } }).toFormat(format).toBuffer()
+  const { app, calls } = fixture(t, { async fetch(_url, init) {
+    const image = JSON.parse(init.body).messages[0].content.find(part => part.type === 'image_url').image_url.url
+    assert.match(image, /^data:image\/png;base64,/)
+    const metadata = await sharp(Buffer.from(image.split(',')[1], 'base64')).metadata()
+    assert.equal(metadata.format, 'png'); assert.equal(metadata.width, 3); assert.equal(metadata.height, 2)
+    return Response.json({ choices: [{ message: { content: '![Image](https://media.example/result.png)' } }] })
+  } })
+  app.get('/legacy-files/sourceImage', (_request, reply) => reply.type(`image/${format}`).send(bytes))
+  const response = await submit(app, { ...imageRequest, model: 'gemini-3.1-flash-image-preview', referenceUrls: ['/legacy-files/sourceImage'] })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.equal(response.json().status, 'succeeded'); assert.equal(calls.length, 1)
+})
+
+test('invalid GIF source images fail before any paid relay call', async t => {
+  const { app, calls } = fixture(t)
+  app.get('/legacy-files/brokenGif', (_request, reply) => reply.type('image/gif').send(Buffer.from('not an image')))
+  const response = await submit(app, { ...imageRequest, referenceUrls: ['/legacy-files/brokenGif'] })
+  assert.equal(response.statusCode, 400); assert.match(response.json().error.message, /无法解码/)
+  assert.equal(calls.length, 0)
 })

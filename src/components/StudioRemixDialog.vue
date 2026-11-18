@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ImagePlus, LoaderCircle, X } from '@lucide/vue'
-import type { Work } from '../data'
+import type { Work, WorkFile } from '../data'
 import { errorMessage, session } from '../state'
 import { mediaSource } from '../native-studio'
 import { remixReferenceFiles } from '../studio-remix'
@@ -14,24 +14,36 @@ const props = defineProps<{ source: Work; issue: string; ready: boolean; busy: b
 const emit = defineEmits<{ apply: [files: StudioFile[]]; cancel: []; retry: []; fallback: [] }>()
 const dialog = ref<HTMLDialogElement>(), upload = ref<HTMLInputElement>()
 const selected = ref<string[]>([]), own = ref<StudioFile[]>([]), error = ref(''), importing = ref(false)
-const failed = ref<string[]>([])
+const failed = ref<string[]>([]), failedThumbnails = ref<string[]>([]), selectedOwn = ref<string[]>([])
 const originals = computed(() => remixReferenceFiles(props.source))
 watch(originals, files => { selected.value = selected.value.filter(id => files.some(file => file.id === id)) })
 const limit = computed(() => props.source.kind === 'image' ? 16 : 10)
 const materials = useStudioMaterials(own, computed(() => (session.user?.id || '') + ':' + props.source.id), { limit, imagesOnly: true })
+const ownImages = computed(() => materials.snapshot.value.items.filter(item => item.status === 'ready').map((item, index) => ({ id: item.id, file: own.value[index]! })))
+watch(ownImages, (items, previous) => {
+  const previousIds = new Set(previous.map(item => item.id))
+  const chosen = items.filter(item => selectedOwn.value.includes(item.id)).map(item => item.id)
+  for (const item of items) if (!previousIds.has(item.id) && selected.value.length + chosen.length < limit.value) chosen.push(item.id)
+  selectedOwn.value = chosen
+})
+const selectedUploads = computed(() => ownImages.value.filter(item => selectedOwn.value.includes(item.id)))
 const issues = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
-const count = computed(() => selected.value.length + own.value.length)
+const count = computed(() => selected.value.length + selectedUploads.value.length)
 const pending = computed(() => materials.pending.value || importing.value || props.busy)
 const blocked = computed(() => pending.value || !props.ready || Boolean(props.issue))
 const controller = new AbortController()
 onMounted(() => dialog.value?.showModal())
 onBeforeUnmount(() => controller.abort())
 
+function previewFailed(file: WorkFile) {
+  if (file.thumbnailUrl && !failedThumbnails.value.includes(file.id)) failedThumbnails.value.push(file.id)
+  else failed.value.push(file.id)
+}
 async function addFiles(event: Event) {
   const input = event.target as HTMLInputElement, values = [...(input.files || [])]; input.value = ''
   if (!values.length || pending.value) return
   error.value = ''
-  if (values.length + selected.value.length + materials.snapshot.value.items.length > limit.value) {
+  if (values.length + count.value > limit.value || values.length + materials.snapshot.value.items.length > limit.value) {
     error.value = '参考图数量超过上限，请先取消勾选或移除部分图片。'; return
   }
   try { await materials.add(values) } catch (cause) { error.value = errorMessage(cause) }
@@ -52,9 +64,9 @@ async function apply(withReferences: boolean) {
           const blob = await response.blob()
           content = await prepareStudioImage(new File([blob], file.name, { type: blob.type }), true)
         }
-        images.push({ name: file.name, type: file.type, size: file.size || 0, content, isText: false, sourceUrl: file.url, fromWorkId: source.id })
+        images.push({ name: file.name, type: /^data:([^;,]+)/.exec(content)?.[1] || file.type, size: file.size || 0, content, isText: false, sourceUrl: file.url, fromWorkId: source.id })
       }
-      images.push(...own.value.map(file => ({ ...file })))
+      images.push(...selectedUploads.value.map(({ file }) => ({ ...file })))
     }
     if (images.length > limit.value) throw new Error('参考图数量超过上限，请先移除部分图片。')
     if (controller.signal.aborted || owner !== session.user?.id || source !== props.source) return
@@ -72,14 +84,33 @@ async function apply(withReferences: boolean) {
       <p class="form-note">原作品模型：<strong>{{ source.model || '未记录' }}</strong></p>
       <details class="remix-prompt"><summary>查看完整提示词</summary><p>{{ source.prompt || '作者未公开提示词，可导入图片后在工作台填写。' }}</p></details>
       <h3>本次使用的参考图</h3>
-      <p class="form-note">选择作者公开的参考图，或上传自己的图片。导入后可继续编辑，再点击生成。</p>
-      <div class="remix-tools"><button type="button" class="button btn" :disabled="pending || count >= limit" @click="upload?.click()"><LoaderCircle v-if="materials.pending.value" :size="18" /><ImagePlus v-else :size="18" />上传我的参考图</button><span class="form-note">最多 {{ limit }} 张，每张 20 MB</span><input ref="upload" hidden type="file" aria-label="上传我的参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="pending" @change="addFiles" /></div>
+      <p class="form-note">勾选源作品图片，或上传自己的参考图。只有选中的图片会用于本次生成。</p>
+      <div class="remix-tools"><button type="button" class="button btn" :disabled="pending || count >= limit || materials.snapshot.value.items.length >= limit" @click="upload?.click()"><LoaderCircle v-if="materials.pending.value" :size="18" /><ImagePlus v-else :size="18" />上传我的参考图</button><span class="form-note">最多 {{ limit }} 张，每张 20 MB</span><input ref="upload" hidden type="file" aria-label="上传我的参考图" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic,image/heif,.heic,.heif" multiple :disabled="pending" @change="addFiles" /></div>
       <p class="remix-count" role="status">已选择 {{ count }} / {{ limit }} 张</p>
-      <section v-if="originals.length" aria-label="作者参考图"><div class="remix-section-heading"><h3>作者参考图</h3><button type="button" class="text-link" :disabled="pending || originals.length + own.length > limit" @click="selected = originals.map(file => file.id)">全选</button><button type="button" class="text-link" :disabled="pending || !selected.length" @click="selected = []">清空</button></div><div class="remix-grid"><label v-for="(file, index) in originals" :key="file.id" class="remix-image"><div class="remix-preview"><span v-if="failed.includes(file.id)">预览暂不可用</span><img v-else :src="file.thumbnailUrl || file.url" alt="" loading="lazy" @error="failed.push(file.id)" /></div><span><input v-model="selected" type="checkbox" :value="file.id" :disabled="pending || !selected.includes(file.id) && selected.length + materials.snapshot.value.items.length >= limit" />{{ index + 1 }}. {{ file.name }}</span></label></div></section>
-      <p v-else class="form-note">作者未公开参考图。可上传自己的图片，或仅导入提示词。</p>
-      <section v-if="own.length" aria-label="我的参考图"><h3>我的参考图</h3><div class="remix-grid"><div v-for="(file, index) in own" :key="index" class="remix-image"><div class="remix-preview"><img :src="file.content" :alt="file.name" /></div><span>{{ selected.length + index + 1 }}. {{ file.name }}</span><button type="button" class="text-link remix-remove" :aria-label="'移除 ' + file.name" :disabled="pending" @click="materials.removeAt(index)">移除</button></div></div></section>
+      <section v-if="ownImages.length" aria-label="我的参考图">
+        <h3>我的参考图 · {{ ownImages.length }}</h3>
+        <p class="form-note">上传后默认选中，点击图片可取消或重新选择。</p>
+        <div class="remix-grid">
+          <div v-for="{ id, file } in ownImages" :key="id" class="remix-image">
+            <label><div class="remix-preview"><img :src="file.content" :alt="file.name" /></div><span><input v-model="selectedOwn" type="checkbox" :value="id" :aria-label="file.name" :disabled="pending || !selectedOwn.includes(id) && count >= limit" />{{ file.name }}</span></label>
+            <button type="button" class="text-link remix-remove" :aria-label="'移除 ' + file.name" :disabled="pending" @click="materials.remove(id)">移除</button>
+          </div>
+        </div>
+      </section>
+      <section v-if="originals.length" aria-label="源作品图片">
+        <div class="remix-section-heading"><h3>源作品图片 · {{ originals.length }}</h3><button type="button" class="text-link" :disabled="pending || originals.length + selectedUploads.length > limit" @click="selected = originals.map(file => file.id)">全选</button><button type="button" class="text-link" :disabled="pending || !selected.length" @click="selected = []">清空</button></div>
+        <p class="form-note">包含作者公开的参考图和作品配图，可按需选择。GIF 将使用首帧作为静态参考。</p>
+        <div class="remix-grid">
+          <label v-for="file in originals" :key="file.id" class="remix-image">
+            <div class="remix-preview"><span v-if="failed.includes(file.id)">预览暂不可用</span><img v-else :src="failedThumbnails.includes(file.id) ? file.url : file.thumbnailUrl || file.url" alt="" loading="lazy" @error="previewFailed(file)" /></div>
+            <span><input v-model="selected" type="checkbox" :value="file.id" :aria-label="file.name" :disabled="pending || !selected.includes(file.id) && count >= limit" />{{ file.name }}</span>
+            <small class="remix-origin">{{ source.referenceFiles?.some(reference => reference.id === file.id) ? '作者参考图' : '作品图片' }}</small>
+          </label>
+        </div>
+      </section>
+      <p v-else class="form-note">原作没有可用的公开图片。可上传自己的图片，或仅导入提示词。</p>
       <StudioMaterialStatus :items="issues" :disabled="importing || busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
-      <p v-if="source.kind === 'video'" class="form-note">作者参考图按原顺序导入，你的图片排在后面。视频中的 @图片编号会同步调整，未选图片会标记为已移除。</p>
+      <p v-if="source.kind === 'video'" class="form-note">选中的源作品图片按原顺序导入，你的图片排在后面。视频中的 @图片编号会同步调整，未选图片会标记为已移除。</p>
       <p v-if="issue" class="form-error" role="alert">{{ issue }} <button v-if="canFallback" type="button" class="text-link" :disabled="pending" @click="emit('fallback')">使用当前配置</button><button type="button" class="text-link" :disabled="pending" @click="emit('retry')">重新读取原作</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
@@ -107,12 +138,13 @@ async function apply(withReferences: boolean) {
 .remix-count { font-size: 13px; color: var(--muted); }
 .remix-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
 .remix-image { min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-label.remix-image { cursor: pointer; }
+label.remix-image, .remix-image > label { display: block; cursor: pointer; }
 .remix-image:has(:checked) { border-color: var(--focus-ring); background: var(--surface); }
 .remix-preview { aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; background: var(--surface); font-size: 12px; }
 .remix-preview img { width: 100%; height: 100%; object-fit: contain; }
-.remix-image > span { display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
+.remix-image > span, .remix-image > label > span { display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
 .remix-image input { flex: none; }
+.remix-origin { display: block; padding: 0 8px 8px; color: var(--muted); font-size: 12px; }
 .remix-remove { width: 100%; border-top: 1px solid var(--border); }
 .remix-footer { justify-content: flex-end; border-top: 1px solid var(--border); }
 .remix-footer .button { min-height: 44px; white-space: normal; }

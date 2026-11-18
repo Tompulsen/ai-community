@@ -11,3 +11,8 @@ it('renumbers retained references and marks removed ones without reassigning the
   expect(removeVideoMention('@图片1 到 @图片2，再到 @图片10', 2)).toBe('@图片1 到 [已移除图片]，再到 @图片9')
   expect(remapVideoMentions('@图片1 @图片2 @图片3', ['a', 'b', 'c'], ['c', 'a', 'd'])).toBe('@图片2 [已移除图片] @图片1')
 })
+
+it('does not bind unknown original mentions to newly selected work images', () => {
+  expect(remapVideoMentions('@图片1 @图片2', [], ['poster'], true)).toBe('[已移除图片] [已移除图片]')
+  expect(remapVideoMentions('@图片1 @图片2', ['author'], ['poster', 'author'], true)).toBe('@图片2 [已移除图片]')
+})

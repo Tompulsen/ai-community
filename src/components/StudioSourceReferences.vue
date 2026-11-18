@@ -15,9 +15,9 @@ function apply() { emit('select', files.value.filter(file => chosen.value.includ
 <template>
   <StudioPopover ref="menu" label="选择原作参考图" :width="520" @toggle="opened">
     <template #trigger><ImagePlus :size="17" /><span>参考图</span></template>
-    <p class="reference-help">可选择作者公开的参考图，也可在输入区上传自己的图片。</p>
+    <p class="reference-help">可选择原作公开的参考图或作品图片，也可在输入区上传自己的图片。</p>
     <div v-if="files.length" class="source-reference-grid"><label v-for="file in files" :key="file.id"><img :src="file.url" alt="" loading="lazy" /><span><input v-model="chosen" type="checkbox" :value="file.id" :disabled="disabled" />{{ file.name }}</span></label></div>
-    <p v-else class="reference-help">作者没有公开参考图。</p>
+    <p v-else class="reference-help">原作没有可用的公开图片。</p>
     <button class="button primary btn" :disabled="disabled" @click="apply">{{ chosen.length ? `使用选中的 ${chosen.length} 张参考图` : '不使用原作参考图' }}</button>
   </StudioPopover>
 </template>
@@ -26,7 +26,7 @@ function apply() { emit('select', files.value.filter(file => chosen.value.includ
 .source-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-height: 45dvh; overflow-y: auto; margin-bottom: 16px; }
 .source-reference-grid label { cursor: pointer; min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .source-reference-grid label:has(:checked) { border-color: var(--focus-ring); background: var(--surface); }
-.source-reference-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
+.source-reference-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; display: block; }
 .source-reference-grid span { display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
 .source-reference-grid input { flex: none; }
 </style>

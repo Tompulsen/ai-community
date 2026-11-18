@@ -6,7 +6,8 @@ import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
 import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
-import { parseFile, getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
+import { getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
+import { prepareStudioImage } from '../studio-image-upload'
 import StudioSkills from './StudioSkills.vue'
 import StudioChatParameters from './StudioChatParameters.vue'
 import StudioResponseMetrics from './StudioResponseMetrics.vue'
@@ -275,7 +276,8 @@ async function applySourceReferences(selected: WorkFile[]) {
       if (!response.ok) throw new Error('参考图无法读取，请重新选择或上传。')
       const blob = await response.blob()
       if (!blob.type.startsWith('image/')) throw new Error('参考文件请选择图片。')
-      const parsed = await parseFile(new File([blob], file.name, { type: blob.type }))
+      const content = await prepareStudioImage(new File([blob], file.name, { type: blob.type }), true)
+      const parsed = { name: file.name, type: /^data:([^;,]+)/.exec(content)?.[1] || blob.type, size: blob.size, content, isText: false }
       if (owner !== session.user?.id || current.value?.id !== chatId || props.source?.id !== sourceId) return
       added.push({ ...parsed, sourceUrl: file.url, fromWorkId: sourceId })
     }

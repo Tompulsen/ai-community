@@ -29,7 +29,7 @@ export async function compressImage(file: Blob, maxSize = 512 * 1024): Promise<s
     source = image
   }
   const originalSizeKB = dataUrlLength(source) / 1024
-  if (originalSizeKB < 200) return readDataUrl(source)
+  if (originalSizeKB < 200 && /^image\/(?:png|jpeg|webp)$/.test(source.type)) return readDataUrl(source)
   const image = new Image(), objectUrl = URL.createObjectURL(source)
   let canvas: HTMLCanvasElement | undefined, bitmap: ImageBitmap | undefined
   try {
@@ -78,7 +78,7 @@ export async function compressImage(file: Blob, maxSize = 512 * 1024): Promise<s
 export async function prepareStudioImage(file: File, referencesOnly = false) {
   if (!file.size || file.size > (referencesOnly ? 20 : 10) * 1024 * 1024)
     throw new Error(`请选择非空图片，大小不超过 ${referencesOnly ? 20 : 10} MB。`)
-  if (referencesOnly && !/^image\/(?:png|jpeg|webp|heic|heif)$/.test(file.type))
-    throw new Error('请选择 PNG、JPEG、WebP 或 HEIC 图片。')
+  if (referencesOnly && !/^image\/(?:png|jpeg|webp|gif|avif|heic|heif)$/.test(file.type))
+    throw new Error('请选择 PNG、JPEG、WebP、GIF、AVIF 或 HEIC 图片。')
   return compressImage(file)
 }
