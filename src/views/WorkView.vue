@@ -142,7 +142,7 @@ async function share() {
             </div>
             <section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
             <div class="detail-create">
-              <RouterLink :to="{ path: `/create/${work.kind === 'resource' ? 'text' : work.kind}`, query: { remix: work.id } }" class="button btn subtle remix-button"><WandSparkles :size="16" />制作同款</RouterLink>
+              <RouterLink :to="{ path: `/create/${work.kind === 'resource' ? 'text' : work.kind}`, query: { remix: work.id, prepare: '1' } }" class="button btn subtle remix-button"><WandSparkles :size="16" />制作同款</RouterLink>
               <span v-if="work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
             </div>
             <details class="detail-metadata">

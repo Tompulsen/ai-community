@@ -60,6 +60,7 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/work/source42')
   await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/image\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-image')
@@ -157,6 +158,7 @@ test('opening image history preserves the conversation draft and source, and a n
   await prompt.fill('复用原作后的修改')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  await expect.poll(() => state.generated.length).toBe(2)
   expect(state.generated[1].sourceWorkId).toBe('source42')
   await page.getByRole('navigation', { name: '工作台导航', exact: true }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(page).toHaveURL(/create\/image$/)
@@ -224,6 +226,7 @@ test('video remix opens the video workspace and only offers community publicatio
   const state = await fixture(page, 'video')
   await page.goto('/work/source42')
   await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/video\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
   await expect(page.locator('.reference-list li')).toHaveCount(0)
@@ -238,6 +241,7 @@ test('text remix keeps source attribution and selected images when sharing only 
   const state = await fixture(page, 'resource')
   await page.goto('/work/source42')
   await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/text\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.prompt)
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
@@ -445,4 +449,265 @@ test('switching source during a slow group restore leaves the newer source and g
   await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toContainText('Auto')
   await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   expect(state.generated).toEqual([])
+})
+
+
+test('remix entry imports public prompt, author references and own files without generating', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.prompt = '作品描述并不是生成提示词'
+  state.source.generation = { prompt: '公开的完整提示词\n保留第二行', model: 'fixture-image' }
+  await page.goto('/work/source42')
+  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('checkbox')).toHaveCount(2)
+  await expect(dialog.getByRole('checkbox').first()).not.toBeChecked()
+  await dialog.locator('summary').click()
+  await expect(dialog).toContainText('公开的完整提示词')
+  await dialog.getByRole('checkbox', { name: /作者参考图2/ }).check()
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '自己的参考图.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await expect(dialog.getByRole('status')).toHaveText('已选择 2 / 16 张')
+  await expect(dialog.getByRole('img', { name: '自己的参考图.jpg' })).toBeVisible()
+  for (const width of [320, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: '../remix-flow-20261118/remix-' + width + '.png', fullPage: true })
+  }
+  expect((await new AxeBuilder({ page }).include('.studio-remix-dialog').analyze()).violations).toEqual([])
+  await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
+  await expect(page).toHaveURL(/create\/image\?remix=source42$/)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.generation.prompt!)
+  await expect(page.locator('.reference-list li')).toHaveCount(2)
+  expect(state.generated).toHaveLength(0)
+  await page.reload()
+  await expect(page.locator('.reference-list li')).toHaveCount(2)
+  await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
+  await page.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true }).check()
+  await page.getByRole('button', { name: '使用选中的 2 张参考图', exact: true }).click()
+  await expect(page.locator('.reference-list li')).toHaveCount(3)
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ prompt: state.source.generation.prompt, sourceWorkId: 'source42',
+    referenceUrls: ['/legacy-files/authorRef1', '/legacy-files/authorRef2', expect.stringMatching(/^data:image\/jpeg;base64,/)] })
+  expect(state.uploads()).toBe(0)
+})
+
+test('prompt-only video remix resets reference mode without changing public quality settings', async ({ page }) => {
+  const state = await fixture(page, 'video')
+  state.source.generation = { parameters: { version: 1, kind: 'video', duration: 8,
+    videoOptions: { mode: 'first-last-frame', resolution: '720p', seed: '42' } } }
+  await page.goto('/create/video?remix=source42')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ referenceUrls: [], videoOptions: { mode: 'text-to-video', resolution: '720p', seed: '42' } })
+})
+
+
+test('video selection remaps original image mentions and keeps selected author images before own images', async ({ page }) => {
+  const state = await fixture(page, 'video')
+  state.source.prompt = '以@图片2为主角，@图片1作为背景'
+  state.source.generation = { parameters: { version: 1, kind: 'video', duration: 8, videoOptions: { mode: 'reference-to-video', seed: '42' } } }
+  await page.goto('/create/video?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await dialog.getByRole('checkbox', { name: /作者参考图2/ }).check()
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '自己的图片.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('以@图片1为主角，[已移除图片]作为背景')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ sourceWorkId: 'source42', prompt: '以@图片1为主角，[已移除图片]作为背景',
+    referenceUrls: ['/legacy-files/authorRef2', expect.stringMatching(/^data:image\/jpeg;base64,/)], videoOptions: { mode: 'reference-to-video', seed: '42' } })
+})
+
+test('repeated remix imports create separate drafts while cancel keeps the existing draft', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image?remix=source42&prepare=1')
+  await page.getByRole('button', { name: '仅导入提示词', exact: true }).click()
+  const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
+  await prompt.fill('第一次同款自己的修改')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.locator('.parameter-advanced > summary').click()
+  await page.getByLabel('尺寸', { exact: true }).fill('1200x900')
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 768, height: 1024 })
+  await page.locator('.studio-mobile-title').getByRole('button', { name: /^重命名会话：/ }).click()
+  await page.getByRole('textbox', { name: '会话名称', exact: true }).fill('保留的同款草稿')
+  await page.getByRole('textbox', { name: '会话名称', exact: true }).press('Enter')
+  await page.goto('/create/image?remix=source42&prepare=1')
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page).toHaveURL(/work\/source42$/)
+  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '仅导入提示词', exact: true }).click()
+  await expect(prompt).toHaveValue(state.source.prompt)
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.getByLabel('尺寸', { exact: true })).not.toHaveValue('1200x900')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+  await page.getByRole('dialog', { name: '工作台侧边栏', exact: true }).locator('.studio-record').filter({ hasText: '保留的同款草稿' }).click()
+  await expect(prompt).toHaveValue('第一次同款自己的修改')
+  expect(state.generated).toHaveLength(0)
+})
+
+test('text remix prepares both reference sources and preserves prompt and original model', async ({ page }) => {
+  const state = await fixture(page, 'resource')
+  state.source.model = 'display-label'
+  state.source.generation = { model: 'fixture-text', prompt: '根据参考图片写一句话' }
+  await page.goto('/create/text?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await dialog.getByRole('checkbox', { name: /作者参考图1/ }).check()
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '我的文本配图.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
+  await expect(page.locator('.chat-composer .reference-list li')).toHaveCount(2)
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.generation.prompt!)
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ model: 'fixture-text', sourceWorkId: 'source42' })
+  expect(state.generated[0].chatOptions.messages.at(-1).content.filter((part: any) => part.type === 'image_url')).toHaveLength(2)
+})
+
+test('remix validation blocks invalid uploads and permits explicit model fallback', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = 'removed-original-model'
+  await page.goto('/create/image?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(dialog.getByRole('alert')).toContainText('请选择替代模型')
+  await expect(dialog.getByRole('button', { name: '仅导入提示词', exact: true })).toBeDisabled()
+  await dialog.getByRole('button', { name: '使用当前配置', exact: true }).click()
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '无效.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })
+  await expect(dialog.getByRole('alert')).toContainText('请选择')
+  await dialog.getByRole('button', { name: '仅导入提示词', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
+  expect(state.generated).toHaveLength(0)
+})
+
+test('legacy remix chooses the available image group before restoring its original model', async ({ page }) => {
+  const state = await fixture(page)
+  let group = 'auto'
+  await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图' }] } } }))
+  await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: group === '生图' ? [{ id: 'fixture-image', kinds: ['text'] }] : [{ id: 'fixture-text', kinds: ['text'] }] } }))
+  await page.goto('/create/image?remix=source42&prepare=1')
+  await page.getByRole('button', { name: '仅导入提示词', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-image')
+  expect(group).toBe('生图')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ model: 'fixture-image', sourceWorkId: 'source42' })
+})
+
+
+test('failed source loading offers retry and return without a stuck disabled workspace', async ({ page }) => {
+  const state = await fixture(page)
+  let fail = true
+  await page.route('**/api/works/source42', route => fail ? route.fulfill({ status: 404, json: { message: '原作暂不可访问' } }) : route.fulfill({ json: { work: state.source } }))
+  await page.goto('/create/image?remix=source42&prepare=1')
+  await expect(page.getByRole('alert')).toContainText('原作暂不可访问')
+  await expect(page.getByRole('button', { name: '返回作品', exact: true })).toBeVisible()
+  fail = false
+  await page.getByRole('button', { name: '重新读取原作', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '制作同款', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page).toHaveURL(/work\/source42$/)
+  expect(state.generated).toHaveLength(0)
+})
+
+test('retrying unavailable source models preserves chosen and uploaded references', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = 'model-now-unavailable'
+  await page.goto('/create/image?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await dialog.getByRole('checkbox', { name: /作者参考图2/ }).check()
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '重试时保留.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await expect(dialog.getByRole('status')).toHaveText('已选择 2 / 16 张')
+  state.source.model = 'fixture-image'
+  await dialog.getByRole('button', { name: '重新读取原作', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('checkbox', { name: /作者参考图2/ })).toBeChecked()
+  await expect(dialog.getByRole('img', { name: '重试时保留.jpg' })).toBeVisible()
+  await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
+  await expect(page.locator('.reference-list li')).toHaveCount(2)
+})
+
+test('canceling a remix restores the group and preserves the previous model and exact size', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.generation = { parameters: { version: 1, kind: 'image', group: '生图' } }
+  let group = 'auto'
+  await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图' }] } } }))
+  await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'auto' ? 41 : 52 } } }) })
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === 'auto' ? 41 : 52, items: [{ id: group === 'auto' ? 'original-image-model' : 'fixture-image', kinds: ['image'] }] } }))
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('旧草稿不应被取消同款影响')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.locator('.parameter-advanced > summary').click()
+  await page.getByLabel('尺寸', { exact: true }).fill('1200x900')
+  await page.keyboard.press('Escape')
+  await page.goto('/create/image?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(dialog).toBeVisible()
+  expect(group).toBe('生图')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page).toHaveURL(/work\/source42$/)
+  expect(group).toBe('auto')
+  await page.goto('/create/image')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('旧草稿不应被取消同款影响')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('original-image-model')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveValue('1200x900')
+  expect(state.generated).toHaveLength(0)
+})
+
+test('single subject reference keeps reference-to-video mode and two frames keep their original order', async ({ page }) => {
+  const state = await fixture(page, 'video')
+  state.source.generation = { parameters: { version: 1, kind: 'video', duration: 8, videoOptions: { mode: 'reference-to-video' } } }
+  await page.goto('/create/video?remix=source42&prepare=1')
+  await page.getByRole('checkbox', { name: /作者参考图2/ }).check()
+  await page.getByRole('button', { name: '导入提示词和参考图（1）', exact: true }).click()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ referenceUrls: ['/legacy-files/authorRef2'], videoOptions: { mode: 'reference-to-video' } })
+  state.source.generation.parameters!.videoOptions!.mode = 'first-last-frame'
+  await page.goto('/create/video?remix=source42&prepare=1')
+  await page.getByRole('button', { name: '全选', exact: true }).click()
+  await page.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(2)
+  expect(state.generated[1]).toMatchObject({ referenceUrls: ['/legacy-files/authorRef1', '/legacy-files/authorRef2'], videoOptions: { mode: 'first-last-frame' } })
+})
+
+
+test('cancel during text reference reading aborts the import and leaves no generated request', async ({ page }) => {
+  const state = await fixture(page, 'resource')
+  await page.goto('/create/text?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await dialog.getByRole('checkbox', { name: /作者参考图1/ }).check()
+  let release!: () => void, reading = false
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/legacy-files/authorRef1', async route => {
+    if (route.request().resourceType() !== 'fetch') return route.fulfill({ body: state.photo, contentType: 'image/jpeg' })
+    reading = true; await pending
+    await route.fulfill({ body: state.photo, contentType: 'image/jpeg' }).catch(() => {})
+  })
+  await dialog.getByRole('button', { name: '导入提示词和参考图（1）', exact: true }).click()
+  try {
+    await expect.poll(() => reading).toBe(true)
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(page).toHaveURL(/work\/source42$/)
+  } finally { release() }
+  expect(state.generated).toHaveLength(0)
+})
+
+test('changing accounts while preparing remix images discards the old accounts selection', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '只属于旧账号.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await expect(dialog.getByRole('status')).toHaveText('已选择 1 / 16 张')
+  state.state.user.id = '18'
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(dialog.getByRole('status')).toHaveText('已选择 0 / 16 张')
+  await expect(dialog.getByRole('img', { name: '只属于旧账号.jpg' })).toHaveCount(0)
+  expect(state.generated).toHaveLength(0)
 })

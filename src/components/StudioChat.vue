@@ -39,13 +39,13 @@ import StudioClearContext from './studio-message/StudioClearContext.vue'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
-import { useStudioMaterials } from '../use-studio-materials'
+import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { createMessageQuote, type MessageQuote } from '../../shared/studio/message-quote'
 import { isConversationBusy, mediaTasksForConversation } from '../studio-conversations'
 import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
-const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
+const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
@@ -177,13 +177,13 @@ watch(() => current.value?.id, () => { attachmentDialog.value?.close(); attachme
 watch(() => session.user?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined; error.value = ''; edited.value = undefined })
 watch(() => session.user?.id, async () => { if (!session.user) return; await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); await loadChats() }, { immediate: true })
 function chooseModel() {
-  if (!current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const saved = current.value.textModel || current.value.model
   const next = takeModelChoice('text', models.value) || (models.value.some(item => item.id === saved) ? saved! : models.value[0]?.id || '')
   model.value = next
   if (next && current.value.textModel !== next) { current.value.textModel = next; void saveChats() }
 }
-watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching], chooseModel)
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 function changeFormat(event: Event) {
   if (!current.value) return
   const format = (event.target as HTMLSelectElement).value as typeof current.value.settings.format
@@ -199,16 +199,21 @@ watch([() => props.source?.id, ready], () => {
   if (!ready.value || appliedSource === props.source.id) return
   appliedSource = props.source.id
   if (current.value?.sourceWorkId === props.source.id) return
-  const next = newChat(); next.sourceWorkId = props.source.id; next.draft = props.source.prompt
-  if (models.value.some(item => item.id === props.source!.model)) { next.model = props.source.model; model.value = props.source.model }
-  const parameters = readRemixParameters(props.source.generation?.parameters)
+  applyRemix(props.source)
+}, { immediate: true })
+function applyRemix(source: Work, initialFiles: StudioFile[] = []) {
+  if (!session.user || !chats.ready || source.kind !== 'resource') return false
+  const next = newChat(); next.sourceWorkId = source.id; next.draft = source.prompt; next.draftFiles = initialFiles
+  if (models.value.some(item => item.id === source.model)) { next.model = source.model; next.textModel = source.model; model.value = source.model }
+  const parameters = readRemixParameters(source.generation?.parameters)
   if (parameters?.kind === 'text' && parameters.chatOptions) {
     Object.assign(next.settings, parameters.chatOptions)
     next.formatOverride = parameters.chatOptions.format
   }
-  prompt.value = props.source.prompt; files.value = []
+  prompt.value = source.prompt; files.value = initialFiles
   void saveChats()
-}, { immediate: true })
+  return true
+}
 watch([prompt, files], () => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats() } }, { deep: true })
 watch(model, () => { if (current.value && model.value) { current.value.textModel = model.value; void saveChats() } })
 watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.reasoning, message.streaming, message.tools?.map(tool => [tool.id, tool.status])]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
@@ -396,7 +401,7 @@ async function useTask(task: CreationTask) {
 }
 function toggleSelection() { selecting.value = !selecting.value; selectedTurns.value = [] }
 const hasMedia = computed(() => mediaTasks.value.length > 0)
-defineExpose({ createChat, useTask, ready, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
+defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
 </script>
 <template>
   <div class="native-chat" aria-label="对话工作台" @dragenter="dragEnter" @dragover="dragOver" @dragleave="dragLeave" @drop="dropFiles">

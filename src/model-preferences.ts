@@ -65,13 +65,17 @@ export function toggleModelFavorite(id: string) {
   const key = modelPreferenceKey(id), favorites = modelPreferences.favorites
   save({ ...modelPreferences, favorites: favorites.includes(key) ? favorites.filter(item => item !== key) : [...favorites, key] })
 }
+export function groupKind(id: string) {
+  const group = id.trim().toLowerCase()
+  if (['生图', '生圖', '绘图', '繪圖', 'image', 'images'].includes(group)) return 'image'
+  if (['视频', '視頻', 'video', 'videos'].includes(group)) return 'video'
+}
 export function modelKind(item: CreationModel): CreationKind {
   if (item.configuredKind) return item.configuredKind
   const override = modelType(item.id)
   if (override !== 'auto') return override === 'chat' ? 'text' : override
-  const group = creation.selectedGroup?.trim().toLowerCase() || ''
-  if (['生图', '生圖', '绘图', '繪圖', 'image', 'images'].includes(group)) return 'image'
-  if (['视频', '視頻', 'video', 'videos'].includes(group)) return 'video'
+  const group = groupKind(creation.selectedGroup || '')
+  if (group) return group
   return item.kinds?.[0] || 'text'
 }
 export function modelsForKind(kind: CreationKind) { return creation.models.filter(item => modelKind(item) === kind) }

@@ -462,3 +462,13 @@ optional source/permission fields, and reference selection from the local AGPL-3
 `community-studio-ui/packages/frontend/src/pages/community/surface.vue` and `tag-picker.vue`
 under the user-designated reference project. Reused the current `/api/tags`, `/api/works`, native
 Vue dialog, design tokens and persisted publication snapshots; no new dependency or backend schema.
+
+
+## Remix preparation (2026-11-18)
+
+Adapted the explicit prompt/reference confirmation flow from the AGPL-3.0-only local reference
+`community-studio-ui/packages/frontend/src/components/MkStudioRemix.vue` and its `studio-remix.ts`
+helper. Only published author references are offered; user images reuse the existing material
+preparation, limits and compression. Vue dialog, model-group validation, new conversation drafts,
+video mention mapping and generation requests remain in the current native studio. No dependencies,
+iframe bridge, background generation service or database schema were added.

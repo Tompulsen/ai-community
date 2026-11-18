@@ -4,10 +4,11 @@ import { computed, ref } from 'vue'
 import { ImagePlus } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import StudioPopover from './StudioPopover.vue'
+import { remixReferenceFiles } from '../studio-remix'
 const props = defineProps<{ source: Work; selected: string[]; disabled?: boolean }>()
 const emit = defineEmits<{ select: [files: WorkFile[]] }>()
 const menu = ref<InstanceType<typeof StudioPopover>>(), chosen = ref<string[]>([])
-const files = computed(() => (props.source.referenceFiles || []).filter(file => file.type.startsWith('image/')))
+const files = computed(() => remixReferenceFiles(props.source))
 function opened(open: boolean) { if (open) chosen.value = files.value.filter(file => props.selected.includes(file.url)).map(file => file.id) }
 function apply() { emit('select', files.value.filter(file => chosen.value.includes(file.id))); menu.value?.close() }
 </script>

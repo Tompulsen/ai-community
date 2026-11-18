@@ -16,15 +16,21 @@ import StudioSourceReferences from '../components/StudioSourceReferences.vue'
 import StudioPublishDialog from '../components/StudioPublishDialog.vue'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
-import { modelKind } from '../model-preferences'
+import { groupKind, modelKind } from '../model-preferences'
+import StudioRemixDialog from '../components/StudioRemixDialog.vue'
+import type { StudioFile } from '../use-studio-materials'
 import '../studio-composer.css'
 const StudioChat = defineAsyncComponent(() => import('../components/StudioChat.vue'))
 const StudioAccountTools = defineAsyncComponent(() => import('../components/StudioAccountTools.vue'))
 import type { StudioKind } from '../studio-state'
 const route = useRoute(), router = useRouter()
 const source = ref<Work | null>(null), error = ref('')
-const sourceLoading = ref(false), sourceIssue = ref(''), sourceRetry = ref(0)
-const sourceBlocked = computed(() => sourceLoading.value || Boolean(sourceIssue.value))
+const sourceLoading = ref(false), sourceIssue = ref(''), sourceRetry = ref(0), sourceCanFallback = ref(false)
+let sourceOwner: string | undefined
+const preparingRemix = computed(() => route.query.prepare === '1')
+const importingRemix = ref(false)
+let previousRemixGroup: string | null | undefined
+const sourceBlocked = computed(() => sourceLoading.value || Boolean(sourceIssue.value) || preparingRemix.value || importingRemix.value)
 const accountTool = ref<'' | 'prices' | 'logs' | 'keys'>('')
 const accountMenu = ref<InstanceType<typeof StudioPopover>>()
 const sidebarMedia = window.matchMedia('(min-width: 1000px)')
@@ -73,15 +79,18 @@ let revision = 0
 watch(() => [route.query.from, route.query.remix, session.user?.id, sourceRetry.value], async () => {
   const current = ++revision
   const sourceId = typeof route.query.from === 'string' ? route.query.from : typeof route.query.remix === 'string' ? route.query.remix : ''
-  sourceLoading.value = Boolean(sourceId); sourceIssue.value = ''
+  sourceLoading.value = Boolean(sourceId); sourceIssue.value = ''; sourceCanFallback.value = false
+  const previousSource = preparingRemix.value && source.value?.id === sourceId && sourceOwner === session.user?.id ? source.value : null
+  if (sourceOwner !== session.user?.id) previousRemixGroup = undefined
+  source.value = previousSource; error.value = ''
   if (!session.user || current !== revision) return
-  source.value = null; error.value = ''
   if (sourceId) {
     let next: Work | null = null
     try {
       const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(sourceId)}`)
       if (current !== revision) return
-      next = result.work
+      next = { ...result.work, prompt: result.work.generation?.prompt ?? (result.work.prompt || result.work.body || ''), model: result.work.generation?.model || result.work.model }
+      sourceOwner = session.user.id; sourceCanFallback.value = true
       const parameters = readRemixParameters(next.generation?.parameters)
       if (next.generation?.parameters !== undefined && (!parameters || parameters.kind !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error('原作生成参数无效，请使用当前配置。')
       await initializeCreation(); await waitCreationGroup()
@@ -89,20 +98,50 @@ watch(() => [route.query.from, route.query.remix, session.user?.id, sourceRetry.
       await loadCreationGroups()
       if (current !== revision) return
       if (creation.groupsError) throw new Error(creation.groupsError)
-      if (parameters?.group && creation.selectedGroup !== parameters.group) {
-        if (!creation.groups.some(group => group.id === parameters.group)) throw new Error(`当前账号无法使用原作分组“${parameters.group}”，请选择可用配置。`)
-        await selectCreationGroup(parameters.group)
+      if (preparingRemix.value && previousRemixGroup === undefined) previousRemixGroup = creation.selectedGroup
+      const preferredGroup = parameters?.group || (next.kind !== 'resource' ? creation.groups.find(group => groupKind(group.id) === next!.kind)?.id : undefined)
+      if (preferredGroup && creation.selectedGroup !== preferredGroup) {
+        if (!creation.groups.some(group => group.id === preferredGroup)) throw new Error(`当前账号无法使用原作分组“${preferredGroup}”，请选择可用配置。`)
+        await selectCreationGroup(preferredGroup)
         if (current !== revision) return
-        if (creation.groupsError || creation.selectedGroup !== parameters.group) throw new Error(creation.groupsError || '未能恢复原作分组，请确认当前配置。')
+        if (creation.groupsError || creation.selectedGroup !== preferredGroup) throw new Error(creation.groupsError || '未能恢复原作分组，请确认当前配置。')
       } else await loadCreationModels()
       if (current !== revision) return
       if (creation.modelsError) throw new Error(creation.modelsError)
       const originalModel = creation.models.find(model => model.id === next!.model)
       if (next.model && (!originalModel || modelKind(originalModel) !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error(`原作模型“${next.model}”在当前分组不可用，请选择替代模型。`)
     } catch (cause) { if (current === revision) sourceIssue.value = errorMessage(cause) }
-    finally { if (current === revision) { source.value = next; sourceLoading.value = false } }
+    finally { if (current === revision) { source.value = next || previousSource; sourceLoading.value = false } }
   }
 }, { immediate: true })
+async function importRemix(files: StudioFile[]) {
+  if (!source.value || sourceLoading.value || sourceIssue.value || importingRemix.value || !preparingRemix.value) return
+  const current = revision, owner = session.user?.id, original = source.value
+  importingRemix.value = true
+  try {
+    const applied = kind.value === 'text' ? chat.value?.applyRemix(original, files) : await workspace.value?.applyRemix(original, files, true)
+    if (current !== revision || owner !== session.user?.id) return
+    if (!applied) { sourceIssue.value = '工作台尚未就绪，请稍后重试。'; return }
+    const { prepare: _, ...query } = route.query
+    await router.replace({ query })
+  } finally { importingRemix.value = false }
+}
+function sourceFallback() {
+  if (source.value?.generation) source.value = { ...source.value, generation: { ...source.value.generation, parameters: undefined } }
+  sourceIssue.value = ''
+}
+async function cancelRemix() {
+  if (importingRemix.value) return
+  const id = source.value?.id || route.query.remix, owner = session.user?.id
+  if (typeof id !== 'string') return
+  ++revision; importingRemix.value = true; source.value = null
+  try {
+    await waitCreationGroup()
+    if (owner !== session.user?.id) return
+    if (previousRemixGroup && previousRemixGroup !== creation.selectedGroup) await selectCreationGroup(previousRemixGroup)
+    if (owner === session.user?.id) await router.replace('/work/' + id)
+  } finally { importingRemix.value = false }
+}
 function switchKind(value: StudioKind) { sidebar.value?.close(); accountTool.value = ''; void router.replace({ path: `/create/${value}`, query: route.query }) }
 function openAccount(value: 'prices' | 'logs' | 'keys') { accountTool.value = value; accountMenu.value?.close() }
 function newCreation() { sidebar.value?.close(); accountMenu.value?.close(); accountTool.value = ''; pendingNew.value = true }
@@ -198,11 +237,12 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
     </header>
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <div v-if="sessionStatus === 'guest'" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink><RouterLink to="/discover" class="text-link"><ArrowLeft :size="16" />返回社区</RouterLink></div>
-    <template v-else><div v-if="source" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
-      <p v-if="sourceLoading" role="status">正在恢复原作配置…</p>
-      <p v-if="sourceIssue" class="form-error" role="alert">{{ sourceIssue }} <button v-if="source" type="button" class="text-link" @click="sourceIssue = ''">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
-      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="source?.kind === kind ? source : null" :source-blocked="sourceBlocked" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+    <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
+      <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
+      <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
+      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
+      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+      <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :can-fallback="sourceCanFallback" :ready="!sourceLoading && (kind === 'text' ? !!chat?.ready : !!workspace && chats.ready)" :busy="importingRemix" @apply="importRemix" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>
 </template>

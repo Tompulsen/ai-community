@@ -24,11 +24,12 @@ import { imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
+import { remixReferenceFiles, remixVideoMode } from '../studio-remix'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
 
-const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean }>()
+const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
 const ime = createImeGuard()
@@ -72,10 +73,7 @@ const referenceFiles = computed<StudioFile[]>({
     const next = files.map(file => ({ name: file.name, url: file.content, id: file.referenceId, fromWorkId: file.fromWorkId }))
     if (props.kind === 'video') prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
     references.value = next
-    if (props.kind === 'video' && references.value.length) {
-      videoOptions.mode = videoOptions.mode === 'first-last-frame' && references.value.length === 2 ? 'first-last-frame'
-        : references.value.length > 1 ? 'reference-to-video' : 'image-to-video'
-    }
+    if (props.kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, next.length)
   },
 })
 const materials = useStudioMaterials(referenceFiles, computed(() => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}`), {
@@ -91,7 +89,7 @@ const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize(
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
 function chooseModel() {
-  if (restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (props.remixPreparing || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const choice = takeModelChoice(props.kind, models.value)
   if (choice) model.value = choice
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
@@ -131,7 +129,7 @@ watch([() => props.kind, () => session.user?.id, () => currentConversation.value
 watch(() => [session.user?.id, currentConversation.value?.id, props.kind, currentConversation.value?.mediaDrafts?.[props.kind]?.skipAutomaticReference] as const, (value, before) => {
   if (value[0] === before[0] && value[1] === before[1] && value[2] === before[2] && typeof value[3] === 'boolean' && value[3] !== before[3]) skipAutomaticReference.value = value[3]
 })
-watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching], chooseModel)
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, restoringParameters], () => {
   if (!session.user || restoringParameters.value || !live) return
@@ -146,26 +144,32 @@ watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOpt
 }, { deep: true, flush: 'sync' })
 watch(model, value => { if (!restoringTask.value && value !== parameterModel.value) parameterModel.value = '' })
 watch(videoLimits, limits => {
-  if (!limits || props.kind !== 'video') return
+  if (props.remixPreparing || !limits || props.kind !== 'video') return
   if (props.source?.generation?.parameters?.kind === 'video' && sourceWorkId.value === props.source.id) return
   if (!limits.resolutions.includes(videoOptions.resolution) && videoOptions.resolution !== 'auto') videoOptions.resolution = limits.resolutions[0]!
   if (!limits.durations.includes(duration.value)) duration.value = limits.durations.reduce((best, value) => Math.abs(value - duration.value) < Math.abs(best - duration.value) ? value : best)
 })
 watch([() => props.source?.id, () => chats.ready], async () => {
   if (!props.source || !chats.ready || sourceWorkId.value === props.source.id) return
-  const source = props.source, owner = session.user?.id, kind = props.kind
-  if (chats.ready && currentConversation.value?.sourceWorkId !== props.source.id) {
-    const chat = newChat(props.kind); chat.sourceWorkId = props.source.id
+  await applyRemix(props.source)
+}, { immediate: true })
+async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh = false) {
+  const owner = session.user?.id, kind = props.kind
+  if (!owner || !chats.ready || source.kind !== kind) return false
+  if (fresh || currentConversation.value?.sourceWorkId !== source.id) {
+    const chat = newChat(kind); chat.sourceWorkId = source.id; chat.mediaDrafts = {}
   }
   const conversation = currentConversation.value
   // Let the new conversation load its draft before applying the original parameters.
   await nextTick()
-  if (!live || owner !== session.user?.id || source !== props.source || kind !== props.kind || conversation !== currentConversation.value) return
+  if (!live || owner !== session.user?.id || !fresh && source !== props.source || kind !== props.kind || conversation !== currentConversation.value) return false
   restoringParameters.value = true
-  sourceWorkId.value = props.source.id
-  blank.value = true; prompt.value = props.source.prompt; references.value = []
-  const parameters = readRemixParameters(props.source.generation?.parameters)
-  if (models.value.some(item => item.id === props.source!.model)) model.value = props.source.model
+  sourceWorkId.value = source.id
+  blank.value = true; prompt.value = source.prompt
+  references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId }))
+  if (kind === 'video') prompt.value = remapVideoMentions(prompt.value, remixReferenceFiles(source).map(file => file.url), references.value.map(file => file.url))
+  const parameters = readRemixParameters(source.generation?.parameters)
+  if (models.value.some(item => item.id === source.model)) model.value = source.model
   if (parameters?.kind === props.kind) {
     if (parameters.aspect_ratio !== undefined) ratio.value = parameters.aspect_ratio
     if (parameters.n !== undefined) count.value = parameters.n
@@ -175,16 +179,18 @@ watch([() => props.source?.id, () => chats.ready], async () => {
     Object.assign(videoOptions, { openaiReferenceSource: 'upload', openaiImageUrl: undefined, openaiLastImageUrl: undefined, openaiFileId: undefined }, parameters.videoOptions || {})
     if (parameters.size !== undefined) manualSize.value = parameters.size
   }
+  if (kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, references.value.length)
   finishRestore()
-}, { immediate: true })
+  return true
+}
 function applySourceReferences(files: WorkFile[]) {
   if (!props.source) return
   const own = references.value.filter(file => file.fromWorkId !== props.source!.id)
   if (own.length + files.length > (props.kind === 'video' ? 10 : 16)) { error.value = '参考图数量超过当前创作类型上限，请减少所选图片。'; return }
-  const next = [...own, ...files.map(file => ({ name: file.name, url: file.url, fromWorkId: props.source!.id }))]
+  const next = [...files.map(file => ({ name: file.name, url: file.url, fromWorkId: props.source!.id })), ...own]
   if (props.kind === 'video') prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
   references.value = next
-  if (props.kind === 'video') videoOptions.mode = videoOptions.mode === 'first-last-frame' && references.value.length === 2 ? 'first-last-frame' : references.value.length > 1 ? 'reference-to-video' : references.value.length ? 'image-to-video' : 'text-to-video'
+  if (props.kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, references.value.length)
   error.value = ''
 }
 watch(() => session.user?.id, async () => {
@@ -366,7 +372,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext })
+defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext })
 </script>
 
 <template>
