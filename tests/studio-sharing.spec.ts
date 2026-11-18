@@ -2,7 +2,7 @@ import { mockPublicationTags, completePublicationFields } from './helpers/public
 import { mkdir, readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
-import { mockUnifiedAccount } from './helpers/account-fixture'
+import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 import type { Work } from '../src/data'
 
 async function openGroupPicker(page: Page) {
@@ -54,6 +54,25 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image
   })
   return { ...account, source, photo, generated, submitted, saved, uploads: () => uploads, loseNextResponse: () => { loseResponse = true }, hideSource: () => { unavailable = true } }
 }
+
+for (const kind of ['image', 'video', 'resource'] as const) test(`guest mobile ${kind} remix returns to preparation after login`, async ({ page }) => {
+  const state = await fixture(page, kind)
+  state.state.authenticated = false; state.state.accountAuthenticated = false
+  const mode = kind === 'resource' ? 'text' : kind
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/work/source42')
+  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('link', { name: '登录', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('returnTo')).toBe(`/create/${mode}?remix=source42&prepare=1`)
+  await fillAccountLogin(page)
+  await expect(page).toHaveURL(`/create/${mode}?remix=source42&prepare=1`)
+  const preparation = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(preparation).toBeVisible()
+  await preparation.getByRole('button', { name: '仅导入提示词', exact: true }).click()
+  await expect(page).toHaveURL(`/create/${mode}?remix=source42`)
+  await expect(page.getByRole('textbox', { name: mode === 'text' ? '消息' : '提示词', exact: true })).toHaveValue(state.source.prompt)
+  expect(state.generated).toHaveLength(0)
+})
 
 test('remix starts with the prompt only, keeps selected and uploaded references, and shares each destination', async ({ page }) => {
   const state = await fixture(page)
