@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, WandSparkles, X } from '@lucide/vue'
+import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
 import { inbox, loadInbox, type InboxCategory } from '../inbox'
 import { session } from '../state'
 import { site } from '../site'
@@ -24,7 +24,7 @@ const tools = computed<Tool[]>(() => [
   { label: '消息', icon: MessageSquare, to: '/messages', member: true, count: inbox.counts.messages, category: 'messages' },
   { label: '图片', icon: Image, to: '/discover?kind=image' },
   { label: '视频', icon: Video, to: '/discover?kind=video' },
-  { label: '创作台', icon: WandSparkles, to: '/create', member: true },
+  { label: '创作台', icon: PanelsTopLeft, to: '/create', member: true },
   { label: '福利中心', icon: Gift, to: '/activities' },
   { label: session.user ? '个人主页' : '个人资料', icon: UserRound, to: session.user ? `/community?creator=${encodeURIComponent(session.user.id)}` : '/account?tab=profile', member: true },
   { label: '账号设置', icon: Settings, to: '/account?tab=profile', member: true },
@@ -62,7 +62,7 @@ watch(() => session.user?.id, () => {
 
 <template>
   <details ref="menu" class="header-menu community-tools" :class="{ compact }" @toggle="toggle" @focusout="blur">
-    <summary ref="trigger" class="icon-button tools-trigger" :aria-label="compact && unreadCount ? `社区工具，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '社区工具'" :aria-description="compact && unreadCount ? `共 ${unreadCount} 条未读消息` : undefined" title="社区工具" aria-haspopup="dialog"><component :is="compact ? Menu : LayoutGrid" :size="compact ? 23 : 19" aria-hidden="true" /><span v-if="compact && unreadCount" class="tools-unread" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+    <summary ref="trigger" class="icon-button tools-trigger" :aria-label="compact && unreadCount ? `社区工具，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '社区工具'" :aria-description="compact && unreadCount ? `共 ${unreadCount} 条未读消息` : undefined" title="社区工具" aria-haspopup="dialog"><component :is="compact ? Menu : LayoutGrid" class="rail-icon" :size="compact ? 23 : 22" aria-hidden="true" /><span v-if="compact && unreadCount" class="tools-unread" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
     <div class="tools-panel" role="dialog" :aria-label="compact ? '社区工具' : undefined" :aria-labelledby="compact ? undefined : 'community-tools-heading'">
       <div class="tools-heading"><h2 id="community-tools-heading"><img v-if="compact && site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" />{{ compact ? site.brand : '社区工具' }}</h2><button type="button" class="icon-button" aria-label="关闭社区工具" @click="close"><X :size="20" aria-hidden="true" /></button></div>
       <slot :close="close" />

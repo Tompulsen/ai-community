@@ -126,7 +126,7 @@ test('desktop message menu survives pointer entry and supports keyboard focus an
   const target = await popover(page).getByRole('button', { name: /互动消息/ }).boundingBox()
   await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 12 })
   await expect(popover(page)).toBeVisible()
-  await page.mouse.move(24, 500)
+  await page.mouse.move(page.viewportSize()!.width - 16, page.viewportSize()!.height - 16)
   await expect(popover(page)).not.toBeVisible()
   await trigger(page).focus()
   await expect(popover(page)).toBeVisible()

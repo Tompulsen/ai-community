@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Search, Settings, ShieldCheck, Users, WandSparkles, X } from '@lucide/vue'
+import { ArrowLeft, Bell, ChevronDown, Gift, Heart, House, LogOut, MessageSquare, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -86,7 +86,7 @@ const links = [
   { path: '/discover', label: '首页', icon: House },
   { path: '/activities', label: '福利中心', icon: Gift },
   { path: '/community', label: '社区', icon: Users },
-  { path: '/create', label: '创作台', icon: WandSparkles },
+  { path: '/create', label: '创作台', icon: PanelsTopLeft },
 ]
 function isCurrent(path: string) {
   return route.path === path || (path === '/create' && route.path.startsWith('/create/')) || (path === '/discover' && route.path.startsWith('/work/'))
@@ -218,7 +218,7 @@ function restoreMessageTrigger() {
     <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏">
       <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
       <div class="rail-scroll" @scroll.passive="positionMessagePopover"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
-      <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置"><Settings :size="22" aria-hidden="true" /></RouterLink>
+      <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
     </aside>
     <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen, 'mobile-profile-header': profilePage }">
       <div class="mobile-header-row">
@@ -247,12 +247,12 @@ function restoreMessageTrigger() {
     </header>
     <header v-else-if="!guestAccount" v-show="!accountSettings" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
-      <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" :size="22" aria-hidden="true" /><span>{{ link.label }}</span></RouterLink></nav></Teleport>
+      <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">{{ link.label }}</span></RouterLink></nav></Teleport>
       <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
       <div class="header-tools"><form v-if="communityShell" id="header-search" class="header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
-      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Plus class="submission-icon" :size="22" aria-hidden="true" /><span class="submission-label">投稿</span></RouterLink>
+      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Send class="submission-icon rail-icon" :size="22" aria-hidden="true" /><span class="submission-label rail-label">投稿</span></RouterLink>
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
-          <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare :size="19" /><span v-if="unreadCount" class="message-count">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+          <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare class="rail-icon" :size="22" aria-hidden="true" /><span v-if="unreadCount" class="message-count" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
           <div class="menu-popover message-popover" :style="desktopCommunity ? { top: `${messagePopoverTop}px` } : undefined">
             <template v-if="session.user"><button v-for="item in messageLinks" :key="item.category" type="button" class="message-menu-link" aria-haspopup="dialog" @click="showMessageCenter(item.category)"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></button></template>
             <div v-else-if="sessionStatus === 'guest'" class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
@@ -390,24 +390,25 @@ function restoreMessageTrigger() {
   .community-shell .header-search-slot { flex: 1; }
   .community-shell .header-actions { flex: none; }
   .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px 0; background: var(--canvas); border-right: 1px solid var(--border); }
-  .rail-brand { display: grid; place-items: center; flex: none; width: 48px; height: 48px; margin-bottom: 24px; border-radius: 8px; }
+  .rail-brand { display: grid; place-items: center; flex: none; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 8px; }
   .rail-brand img { border-radius: 6px; }
-  .rail-scroll { flex: 1; width: 100%; min-height: 0; padding: 0 10px 16px; overflow-y: auto; scrollbar-width: none; }
+  .rail-scroll { flex: 1; width: 100%; min-height: 0; padding: 0 8px 12px; overflow-y: auto; scrollbar-width: none; }
   .rail-scroll::-webkit-scrollbar { display: none; }
-  .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
-  .community-rail .nav-link { display: flex; justify-content: center; flex: none; width: 44px; min-height: 44px; padding: 0; border-radius: 8px; color: var(--muted); }
-  .community-rail .nav-link > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .community-rail .nav-link:hover, .community-rail .nav-link:focus-visible, .community-rail .nav-link.active { color: var(--ink); background: var(--surface-soft); }
-  .community-rail .nav-link.active > svg { stroke-width: 2.4; }
-  .community-rail .community-actions { flex-direction: column; gap: 12px; margin-top: 24px; }
-  .community-rail .header-submission, .community-rail .message-trigger { width: 44px; height: 44px; margin: 0; border-radius: 8px; }
-  .community-rail .submission-label { display: none; }
-  .community-rail .header-submission:hover, .rail-settings:hover { background: var(--surface-soft); }
-  .community-rail :deep(.tools-trigger) { border-radius: 8px; }
+  .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+  .community-rail .nav-link, .community-rail .header-submission, .community-rail .message-trigger, .rail-settings, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 8px; color: var(--muted); }
+  .community-rail :deep(.rail-icon) { flex: none; width: 22px; height: 22px; stroke-width: 1.8; }
+  .community-rail .rail-label { display: none; }
+  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .community-rail .message-trigger:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 2px); width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .message-trigger, .rail-settings):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .community-rail .message-count { top: 2px; right: 0; min-width: 16px; height: 18px; padding-inline: 3px; border: 2px solid var(--canvas); border-radius: 9px; font-size: 10px; line-height: 14px; }
+  .community-rail .messages-menu[open] > .message-trigger, .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
   .community-rail :deep(.tools-panel) { left: 76px; right: auto; top: 72px; max-height: calc(100dvh - 88px); }
   .community-rail .message-popover { position: fixed; left: 76px; right: auto; max-width: calc(100vw - 88px); }
   .community-rail .message-popover::before { inset: 0 auto 0 -12px; width: 12px; height: auto; }
-  .rail-settings { display: grid; place-items: center; flex: none; width: 44px; height: 44px; margin-top: 8px; border-radius: 8px; }
+  .rail-settings { margin-top: 8px; }
 }
 @media (max-width: 999px) {
   :global(:root:has(.community-shell)) { --header-height: calc(52px + env(safe-area-inset-top)); }
