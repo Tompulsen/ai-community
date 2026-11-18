@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowLeft, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, Send, WandSparkles, X } from '@lucide/vue'
+import { ArrowLeft, ChevronRight, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, Send, WandSparkles, X } from '@lucide/vue'
 import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork, uploadFile } from '../state'
 import { kindLabels, type Creator, type Work, type WorkComment, type WorkFile } from '../data'
 import WorkCard from '../components/WorkCard.vue'
@@ -10,6 +10,11 @@ import BentoGrid from '../components/BentoGrid.vue'
 import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
 
+const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
+const mediaBrowser = ref<InstanceType<typeof WorkMedia>>()
+function openRelated() { mediaBrowser.value?.pause(); relatedDialog.value?.showModal() }
+const commentsDialog = ref<HTMLDialogElement>(), relatedDialog = ref<HTMLDialogElement>()
+watch(mobile, () => { commentsDialog.value?.close(); relatedDialog.value?.close() })
 const route = useRoute()
 const work = ref<Work | null>(null)
 const files = computed<WorkFile[]>(() => work.value?.files?.length ? work.value.files : work.value?.video ? [{ id: 'video', name: work.value.title, type: 'video/mp4', url: work.value.video }] : work.value?.cover ? [{ id: 'cover', name: work.value.title, type: 'image/jpeg', url: work.value.cover }] : [])
@@ -25,6 +30,7 @@ let controller: AbortController | undefined
 async function load() {
   controller?.abort()
   const active = new AbortController(); controller = active
+  commentsDialog.value?.close(); relatedDialog.value?.close()
   loading.value = true; error.value = ''; work.value = null; comments.value = []; commentsCursor.value = null; related.value = []
   replyTo.value = null; commentText.value = ''; commentFiles.value = []
   try {
@@ -53,7 +59,7 @@ async function loadComments(append = false, signal?: AbortSignal) {
     const result = await api<{ items: WorkComment[]; nextCursor?: string | null }>(`/api/works/${encodeURIComponent(id)}/comments${queryString({ cursor: append ? commentsCursor.value || undefined : undefined })}`, { signal })
     if (work.value?.id !== id) return
     comments.value = append ? [...comments.value, ...result.items] : result.items; commentsCursor.value = result.nextCursor || null
-    if (!append && /^#comment-[a-zA-Z0-9]+$/.test(route.hash)) { await nextTick(); document.getElementById(route.hash.slice(1))?.scrollIntoView({ block: 'center' }) }
+    if (!append && /^#comment-[a-zA-Z0-9]+$/.test(route.hash)) { await nextTick(); if (mobile.value) commentsDialog.value?.showModal(); document.getElementById(route.hash.slice(1))?.scrollIntoView({ block: 'center' }) }
   } catch (cause) { if (!signal?.aborted && work.value?.id === id) commentError.value = errorMessage(cause) }
   finally { if (!signal?.aborted && work.value?.id === id) commentsLoading.value = false }
 }
@@ -65,8 +71,11 @@ async function chooseCommentFiles(event: Event) {
   catch (cause) { commentError.value = errorMessage(cause) }
   finally { commentBusy.value = false }
 }
-async function reply(comment: WorkComment) { replyTo.value = comment; await nextTick(); commentInput.value?.focus(); commentInput.value?.scrollIntoView({ block: 'center' }) }
-function focusComments() {
+async function reply(comment: WorkComment) { replyTo.value = comment; await focusComments(); }
+async function focusComments() {
+  mediaBrowser.value?.pause()
+  if (mobile.value && !commentsDialog.value?.open) commentsDialog.value?.showModal()
+  await nextTick()
   if (commentInput.value) commentInput.value.focus()
   else document.getElementById('comments-heading')?.scrollIntoView({ block: 'nearest' })
 }
@@ -122,8 +131,9 @@ async function share() {
     <div class="detail-layout" :class="{ 'without-related': !related.length }">
       <article class="detail-focus" :key="work.id" aria-label="作品详情">
         <div class="detail-visual-column">
+          <button v-if="mobile && related.length" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button>
           <RouterLink to="/discover" class="icon-button detail-back" aria-label="返回发现" title="返回发现"><ArrowLeft :size="22" /></RouterLink>
-          <WorkMedia class="detail-visual" :class="{ 'single-file': files.length < 2 }" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
+          <WorkMedia ref="mediaBrowser" class="detail-visual" :class="{ 'single-file': files.length < 2 }" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
         </div>
         <section class="detail-info" aria-label="作品信息与评论">
           <div class="detail-actions">
@@ -151,6 +161,7 @@ async function share() {
               <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ kindLabels[work.kind] }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>来源</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">查看原始来源</a></dd></div></dl>
               <div v-if="work.tags.length" class="work-tags"><RouterLink v-for="tag in work.tags" :key="tag" :to="{ path: '/discover', query: { tag } }" class="tag-button">{{ tag }}</RouterLink></div>
             </details>
+            <Teleport to="#mobile-work-comments" :disabled="!mobile" defer>
             <section v-if="['published', 'approved'].includes(work.status)" class="work-comments" aria-labelledby="comments-heading">
               <div class="section-heading"><h2 id="comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2></div>
               <p v-if="commentsLoading && !comments.length" class="form-note" role="status">正在加载评论…</p>
@@ -158,7 +169,9 @@ async function share() {
               <p v-if="!commentsLoading && !comments.length && !commentError" class="form-note">暂无评论</p>
               <button v-if="commentsCursor" class="button btn" :disabled="commentsLoading" @click="loadComments(true)">加载更多评论</button>
             </section>
+            </Teleport>
           </div>
+          <Teleport to="#mobile-work-comment-entry" :disabled="!mobile" defer>
           <div v-if="['published', 'approved'].includes(work.status)" class="detail-comment-entry">
             <p v-if="commentError" class="form-error" role="alert">{{ commentError }} <button class="text-link" @click="loadComments()">刷新评论</button></p>
             <form v-if="session.user" class="comment-composer" @submit.prevent="postComment">
@@ -172,10 +185,15 @@ async function share() {
             </form>
             <RouterLink v-else :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="comment-login text-link">登录后发表评论</RouterLink>
           </div>
+          </Teleport>
         </section>
       </article>
+      <Teleport to="#mobile-related-content" :disabled="!mobile" defer>
       <section v-if="related.length" class="related-works" aria-labelledby="related-heading"><h2 id="related-heading" class="sr-only">更多作品</h2><BentoGrid><WorkCard v-for="item in related" :key="item.id" :work="item" /></BentoGrid><RouterLink to="/discover" class="text-link all-works">全部作品</RouterLink></section>
+      </Teleport>
     </div>
+    <dialog ref="commentsDialog" class="mobile-comments-dialog" aria-labelledby="mobile-comments-heading" @click="($event.target === commentsDialog) && commentsDialog?.close()"><div class="dialog-heading"><h2 id="mobile-comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2><button class="icon-button" aria-label="关闭评论" @click="commentsDialog?.close()"><X :size="20" /></button></div><div id="mobile-work-comments" /><div id="mobile-work-comment-entry" /></dialog>
+    <dialog ref="relatedDialog" class="mobile-related-dialog" aria-labelledby="mobile-related-heading" @click="($event.target === relatedDialog) && relatedDialog?.close()"><div class="dialog-heading"><h2 id="mobile-related-heading">更多作品</h2><button class="icon-button" aria-label="关闭更多作品" @click="relatedDialog?.close()"><X :size="20" /></button></div><div id="mobile-related-content" /></dialog>
     <dialog ref="reportDialog" class="compact-dialog" aria-labelledby="report-heading"><div class="dialog-heading"><h2 id="report-heading">{{ reportComment ? '举报评论' : '举报作品' }}</h2><button class="icon-button" aria-label="关闭举报" :disabled="reporting" @click="reportDialog?.close()"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="report"><label class="field"><span>举报原因</span><textarea v-model="reportReason" class="control" required rows="4" maxlength="2000" :disabled="reporting" /></label><p v-if="reportError" role="alert" class="form-error">{{ reportError }}</p><button class="button btn primary" :disabled="reporting || !reportReason.trim()"><Flag :size="16" />提交举报</button></form></dialog>
     <dialog ref="shareDialog" class="compact-dialog" aria-labelledby="share-heading"><div class="dialog-heading"><h2 id="share-heading">私信分享作品</h2><button class="icon-button" aria-label="关闭私信分享" :disabled="sharing" @click="shareDialog?.close()"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="share"><label class="field"><span>接收人</span><select v-model="recipient" class="control" required><option value="">选择创作者</option><option v-for="person in recipients" :key="person.id" :value="person.id">{{ person.name || person.username }}</option></select></label><p class="form-note">互相关注后可分享作品。</p><p v-if="shareError" class="form-error" role="alert">{{ shareError }}</p><button class="button btn primary" :disabled="sharing || !recipient"><Send :size="16" />分享作品</button><RouterLink to="/messages" class="text-link">打开私信</RouterLink></form></dialog>
   </div>
@@ -275,4 +293,51 @@ async function share() {
   .detail-actions .icon-button, .comment-input-row .icon-button { min-width: 44px; min-height: 44px; }
   .work-comments :deep(.comment-actions .button) { min-height: 44px; }
 }
+
+@media (max-width: 999px) {
+  .detail-page { padding: 0; }
+  .detail-layout, .detail-layout.without-related { display: block; }
+  .detail-focus { --canvas: #0b1011; --surface: #172426; --ink: #fff; --muted: #d0d9da; position: relative; top: auto; display: block; height: calc(100dvh - var(--header-height)); min-height: 400px; border: 0; border-radius: 0; overflow: hidden; background: #0b1011; color: #fff; }
+  .detail-visual-column { position: absolute; inset: 0; }
+  .detail-back { display: none; }
+  .detail-visual { height: 100%; overflow: auto; padding-bottom: 260px; }
+  .detail-visual :deep(.media-stage) { position: relative; flex: 1 0 100%; min-height: 140px; }
+  .detail-visual :deep(.media-controls) { position: absolute; z-index: 2; top: 8px; left: 8px; right: 8px; border: 0; border-radius: 12px; background: #172426c9; }
+  .detail-visual :deep(.detail-media) { height: 100%; flex: 1; min-height: 0; background: #0b1011; }
+  .detail-visual :deep(.detail-media:has(> video)) { width: calc(100% - 64px); }
+  .detail-visual :deep(.detail-media > img), .detail-visual :deep(.detail-media > video) { width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
+  .detail-visual :deep(.resource-article) { padding: 24px 20px; background: #0b1011; }
+  .detail-info { display: contents; }
+  .detail-info-scroll { position: absolute; bottom: 0; left: 0; right: 60px; max-height: 260px; padding: 38px 14px 16px; background: linear-gradient(transparent, #0b1011ed 34%); overflow-y: auto; display: flex; flex-direction: column; }
+  .detail-info-scroll:has(.detail-metadata[open]) { max-height: calc(100% - 12px); padding-top: 16px; background: #172426f5; border-radius: 16px 16px 0 0; }
+  .detail-creator { order: -1; margin: 0 0 8px; }
+  .creator-line { margin: 0; }
+  .creator-line .avatar { width: 28px; height: 28px; }
+  .creator-line strong { font-size: 13px; }
+  .creator-line .caption-5 { display: none; }
+  .detail-info h1 { font-size: 16px; line-height: 24px; font-weight: 600; }
+  .detail-description { margin-top: 6px; }
+  .work-body { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; line-height: 20px; }
+  .detail-info-scroll:has(.detail-metadata[open]) .work-body { display: block; }
+  .detail-create { margin-top: 8px; }
+  .detail-create .remix-button { min-height: 44px; background: var(--blue); color: var(--action-ink); border: 0; border-radius: 10px; padding-inline: 12px; }
+  .view-count { font-size: 10px; }
+  .detail-metadata { margin-top: 0; }
+  .detail-metadata > summary { min-height: 44px; font-size: 12px; color: #d0d9da; }
+  .detail-actions { position: absolute; right: 6px; bottom: 16px; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 0; min-height: 0; width: 48px; border: 0; }
+  .detail-actions .icon-button, .detail-actions .save-detail { display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 48px; min-width: 44px; min-height: 48px; height: auto; margin: 0; padding: 4px; border: 0; border-radius: 24px; background: #0b1011a6; color: #fff; font-size: 11px; }
+  .detail-actions .selected, .detail-actions [aria-pressed="true"] { color: var(--blue); }
+  .mobile-related-toggle { position: absolute; z-index: 3; left: 0; top: 35%; width: 32px; height: 48px; border-radius: 0 12px 12px 0; background: #172426cc; color: #fff; }
+  .mobile-comments-dialog { position: fixed; inset: auto 0 0; width: 100%; max-width: 100%; max-height: min(82dvh, calc(100dvh - 24px)); margin: 0; padding: 0 0 env(safe-area-inset-bottom); border-radius: 20px 20px 0 0; overflow: auto; }
+  .mobile-comments-dialog[open] { display: flex; flex-direction: column; }
+  .mobile-comments-dialog .dialog-heading { flex: none; }
+  #mobile-work-comments { flex: 1; min-height: 100px; overflow-y: auto; padding: 0 16px; }
+  #mobile-work-comments .work-comments { margin: 0; padding: 0 0 16px; border: 0; }
+  #mobile-work-comments .work-comments > .section-heading { display: none; }
+  #mobile-work-comment-entry { flex: none; padding: 0 12px; border-top: 1px solid var(--border); }
+  #mobile-work-comment-entry .detail-comment-entry { background: transparent; }
+  .mobile-related-dialog { position: fixed; inset: 0 auto 0 0; width: min(90vw, 420px); height: 100dvh; max-height: 100dvh; max-width: 90vw; margin: 0; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); border-radius: 0 16px 16px 0; }
+  #mobile-related-content { padding: 0 10px 20px; }
+}
+
 </style>

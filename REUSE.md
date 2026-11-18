@@ -8,6 +8,15 @@
 图标网格与未读提示交互，使用本项目已有 header-menu、Vue Router、Lucide 与 inbox 状态实现。
 本次不迁入参考项目的菜单源码、运行时依赖或未接入的业务模块。
 
+2026-11-18 手机界面继续以用户指定本地 `community-studio-ui` 为设计来源：
+`packages/frontend/src/ui/_common_/{community-header,mobile-footer-menu}.vue`、
+`pages/community/{mobile-navigation,profile-header,profile-tabs}.vue`、
+`pages/user/community-profile.vue`、`components/MkLaunchPad.vue` 与
+`styles/community-design.scss` 的导航、配色、个人页与移动交互。
+适配复用现有 Vue Router、原生 dialog、WorkEditor、WorkMedia、消息与创作组件，
+补齐搜索浮层、评论抽屉、个人作品分页签和触控布局；账号、钱包、发布及生成沿用现有接口。
+参考项目保持原状；本轮没有新增运行时依赖。
+
 2026-11-13 运营体验完善继续复用本项目的原生 dialog、Vue Router 离开守卫、
 公共身份映射、PostgreSQL 管理记录与 ID 时间编码，以及 Redis 通知流。
 新增 `notification-inbox.ts` 整理现有通知处理，保留旧全局已读水位和单条已读语义，

@@ -11,6 +11,26 @@ const categories = [
   { label: '互动消息', unread: 3 },
 ]
 
+test('mobile bottom messages opens a full page and returns from a conversation', async ({ page }) => {
+  await messageFixture(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/discover')
+  await expect(page.locator('.mobile-unread')).toContainText('9')
+  await page.locator('.mobile-nav a[href="/messages"]').click()
+  await expect(page).toHaveURL('/messages')
+  await expect(page.locator('.mobile-discovery-nav')).toHaveCount(0)
+  await expect(page.locator('.mobile-page-title')).toHaveText('消息')
+  await expect(page.locator('.messages-page:not(.embedded)')).toBeVisible()
+  await page.locator('.inbox-categories').getByRole('link', { name: /我的消息/ }).click()
+  await page.locator('.thread-row').filter({ hasText: '海洋创作者' }).click()
+  await expect(page.locator('.message-history')).toContainText('来自海洋创作者的消息')
+  await page.screenshot({ path: test.info().outputPath('mobile-conversation.png') })
+  await page.locator('.conversation-back').click()
+  await expect(page.locator('.thread-pane')).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath('mobile-messages.png') })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 function deferred() {
   let resolve!: () => void
   const promise = new Promise<void>(yes => { resolve = yes })

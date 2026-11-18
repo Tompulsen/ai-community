@@ -16,6 +16,8 @@
     { id: 'jade', name: '深海青', mode: 'dark', colors: ['#111f20', '#1c3031', '#253e3e', '#3b5757', '#e2eeee', '#a3bdbb', '#6dd5bc', '#a0e6d4', '#254640', '#102a25'] },
   ]
   const tokens = ['--p-bg', '--p-surface', '--surface-soft', '--border', '--p-ink', '--muted', '--p-action', '--blue-hover', '--blue-soft', '--p-action-ink']
+  const mobile = window.matchMedia('(max-width: 999px)')
+  const referenceColors = ['#172426', '#1d2d30', '#233639', '#ffffff1a', '#dadada', '#a5b6b8', '#00a497', '#40c9bc', '#173e3d', '#071f1d']
   const media = window.matchMedia('(prefers-color-scheme: dark)')
   let prefs = { ...defaults }, storageError = '', timer
   function validTimes(light, dark) {
@@ -47,7 +49,8 @@
   }
   function reconcile() {
     clearTimeout(timer)
-    const mode = effectiveMode(), theme = themes.find(item => item.id === prefs[mode]), root = document.documentElement
+    const mode = effectiveMode(), selected = themes.find(item => item.id === prefs[mode]), root = document.documentElement
+    const theme = mobile.matches && selected.id === 'sage' ? { ...selected, colors: referenceColors } : selected
     root.dataset.theme = theme.id; root.dataset.colorScheme = mode
     tokens.forEach((token, index) => root.style.setProperty(token, theme.colors[index]))
     root.style.setProperty('--p-accent', theme.colors[6]); root.style.setProperty('--p-accent-ink', theme.colors[9]); root.style.setProperty('--p-muted', theme.colors[5])
@@ -79,6 +82,7 @@
   }
   prefs = read(); reconcile()
   media.addEventListener('change', reconcile)
+  mobile.addEventListener('change', reconcile)
   document.addEventListener('visibilitychange', reconcile)
   window.addEventListener('focus', reconcile)
   window.addEventListener('pageshow', reconcile)

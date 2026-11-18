@@ -18,7 +18,7 @@ async function fixture(page: Page, items = [image, resource], brokenImage = fals
   page.on('pageerror', error => errors.push(error.message))
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url())
-    if (url.origin !== 'http://localhost:18775') return route.abort()
+    if (url.origin !== new URL(test.info().project.use.baseURL!).origin) return route.abort()
     if (url.pathname === '/__preview-fixtures/cover.svg') {
       const ratio = Number(url.searchParams.get('ratio')) || 4 / 5
       return brokenImage
@@ -52,7 +52,7 @@ async function expectPacked(page: Page, count: number) {
   await expect(cards).toHaveCount(count)
   await expect.poll(() => cards.evaluateAll(elements => elements.every(element => {
     const style = getComputedStyle(element)
-    return parseInt(style.gridRowEnd.replace('span ', '')) === Math.ceil(element.getBoundingClientRect().height + 24)
+    return parseInt(style.gridRowEnd.replace('span ', '')) === Math.ceil(element.getBoundingClientRect().height + Number.parseFloat(getComputedStyle(element.parentElement!).getPropertyValue('--card-row-gap')))
   }))).toBe(true)
   const bounds = await cards.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))
   for (const [index, box] of bounds.entries()) {
@@ -62,7 +62,7 @@ async function expectPacked(page: Page, count: number) {
       const horizontal = box.left < other.right - 1 && box.right > other.left + 1
       const vertical = box.top < other.bottom - 1 && box.bottom > other.top + 1
       expect(horizontal && vertical).toBe(false)
-      if (Math.abs(box.left - other.left) < 1) expect(other.top - box.bottom).toBeGreaterThanOrEqual(23.9)
+      if (Math.abs(box.left - other.left) < 1) expect(other.top - box.bottom).toBeGreaterThanOrEqual(page.viewportSize()!.width < 1000 ? 11.9 : 23.9)
     }
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -108,14 +108,14 @@ test('masonry preserves natural image proportions and feed order across viewport
           radius: getComputedStyle(cover).borderRadius }
       }),
     }))
-    expect(layout.columns).toBe(width < 640 ? 2 : Math.floor((layout.width + 16) / 216))
+    expect(layout.columns).toBe(width < 1000 ? 2 : Math.floor((layout.width + 16) / 216))
     expect(layout.cards.map(card => card.id)).toEqual(items.map(item => item.id))
     for (const [index, card] of layout.cards.entries()) {
       expect(card.ratio).toBeCloseTo(ratios[index]!, 2)
       expect(card.fit).toBe('contain')
       expect(card.mediaWidth).toBeCloseTo(card.width, 1)
       expect(card.infoTop).toBeGreaterThanOrEqual(card.bottom)
-      expect(card.radius).toBe('8px')
+      expect(card.radius).toBe(width < 1000 ? '12px' : '8px')
     }
   }
   expect(state.errors).toEqual([])
@@ -211,7 +211,7 @@ test.describe('touch cards', () => {
     await fixture(page)
     await page.goto('/discover')
     await expectPacked(page, 2)
-    for (const selector of ['.save-work', '.like-button']) {
+    for (const selector of ['.like-button']) {
       const bounds = await page.locator(`[data-work-id="${image.id}"] ${selector}`).boundingBox()
       expect(bounds!.width).toBeGreaterThanOrEqual(44)
       expect(bounds!.height).toBeGreaterThanOrEqual(44)

@@ -47,7 +47,7 @@ function measureCover(event: Event) {
     <div class="work-information">
       <RouterLink :to="`/work/${work.id}`" class="work-title title-4" :title="work.title">{{ work.title }}</RouterLink>
       <div class="work-meta">
-        <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="work-author" :title="work.author"><span>{{ work.author }}</span></RouterLink>
+        <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="work-author" :title="work.author"><span class="work-author-avatar" aria-hidden="true"><img v-if="work.avatarUrl" :src="work.avatarUrl" alt="" loading="lazy" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></span><span>{{ work.author }}</span></RouterLink>
         <button class="like-button" :class="{ selected: work.liked }" :aria-label="`喜欢：${work.title}，${work.likes} 赞`" :aria-pressed="work.liked" :disabled="pendingActions.has(`liked:${work.id}`)" @click="toggleWork(work, 'liked')"><Heart :size="13" :fill="work.liked ? 'currentColor' : 'none'" /><span>{{ work.likes }}</span></button>
       </div>
     </div>
@@ -92,5 +92,20 @@ function measureCover(event: Event) {
 }
 @media (prefers-reduced-motion: reduce) {
   .work-cover, .like-button { transition: none; }
+}
+.work-author-avatar { display: none; }
+@media (max-width: 999px) {
+  .work-cover { border-radius: 12px; }
+  .work-information { padding: 6px 2px 0; }
+  .work-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 14px; line-height: 20px; min-height: 0; }
+  .work-meta { margin-top: 0; gap: 2px; min-height: 36px; }
+  .work-author { display: flex; gap: 5px; min-height: 44px; font-size: 12px; }
+  .work-author-avatar { display: grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 50%; overflow: hidden; background: var(--surface-soft); font-size: 10px; }
+  .work-author-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .like-button { min-height: 44px; min-width: 44px; font-size: 11px; }
+  .save-work { display: none; }
+  .video-badge { left: 6px; top: 6px; font-size: 10px; padding: 3px 6px; border-radius: 6px; }
+  .resource-cover { padding: 12px 12px 40px; }
+  .resource-heading { font-size: 16px; line-height: 22px; }
 }
 </style>

@@ -121,7 +121,7 @@ test('all palettes provide accessible controls on desktop and mobile', async ({ 
   await page.screenshot({ path: 'test-results/theme-mobile.png', fullPage: true })
 })
 
-test('light palettes keep resource text readable and media overlays bright', async ({ page }) => {
+test('light palettes keep resource and card text readable with selected like feedback', async ({ page }) => {
   const work = { id: 'themeResource', authorId: '25', author: '作品作者', avatar: '作', title: '主题适配创作笔记', kind: 'resource', body: '可阅读的创作经验与参考资料。', cover: '', tags: [], likes: 2, liked: true, saved: false, status: 'published', date: '2026-11-14T00:00:00Z' }
   await page.route('**/api/works?*', route => route.fulfill({ json: { items: [work, { ...work, id: 'themeImage', kind: 'image', title: '主题适配图片', cover: '/assets/brand/octopus-community.jpg' }], nextCursor: null } }))
   await page.goto('/account?tab=theme')
@@ -131,8 +131,9 @@ test('light palettes keep resource text readable and media overlays bright', asy
   for (const palette of ['cloud', 'paper', 'mist']) {
     await page.evaluate(light => window.communityAppearance.set({ light }), palette)
     expect((await new AxeBuilder({ page }).include('.works-grid').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
-    await expect(page.locator('[data-work-id="themeImage"] .work-title')).toHaveCSS('color', 'rgb(255, 255, 255)')
-    await expect(page.locator('[data-work-id="themeImage"] .like-button.selected')).toHaveCSS('color', 'rgb(174, 194, 168)')
+    const ink = await page.locator('[data-work-id="themeImage"]').evaluate(element => getComputedStyle(element).color)
+    await expect(page.locator('[data-work-id="themeImage"] .work-title')).toHaveCSS('color', ink)
+    await expect(page.locator('[data-work-id="themeImage"] .like-button.selected')).toHaveCSS('color', 'rgb(180, 35, 55)')
   }
   await page.screenshot({ path: 'test-results/theme-gallery-light.png', fullPage: true })
 })

@@ -41,7 +41,9 @@ delivery now includes the frontend and an independent community backend.
   with account balance and the account menu at the right. Below 1000px a compact
   header contains the menu, discovery/video/image/Skill links and expandable search.
   Skill retains the incumbent resource category (text, code and Skills). Mobile
-  type filters live in that header; the feed keeps browse modes and content tags.
+  category links live in the 52px header; browse modes and content tags move into
+  the search/filter overlay without shifting the feed. Mobile bottom navigation is
+  首页 / 创作 / ＋ / 消息 / 我, with a 58px bar plus the device safe area.
   The mobile menu contains identity, full point balance, submission, logout and
   existing tools; unread counts and the in-place message center remain available.
   Discovery searches as users type; other pages submit to
@@ -51,6 +53,12 @@ delivery now includes the frontend and an independent community backend.
   Its page heading remains available to screen readers; the visible heading and
   work count are omitted. Clearing conditions preserves content type and browse
   mode; restoring defaults resets the complete selection. Following requires login.
+- The whole mobile surface follows the user's local community-studio-ui reference:
+  teal default dark palette, natural-ratio two-column feed, large profile hero with
+  four shortcuts and three-column work grid, keyboard/swipe profile tabs, immersive
+  work preview with separate comments and related-work drawers, compact messages,
+  publishing, login and settings. The existing APIs, permissions, account and wallet
+  integrations, native creation and draft protection remain authoritative.
 - Community announcements and creator profiles remain reachable.
 - Follow authors from work details, creator cards, profiles and follower lists.
   Relationships include following, mutual following and pending approval. Owners

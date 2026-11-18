@@ -173,4 +173,19 @@ onBeforeUnmount(() => { loadId++; controller?.abort(); removeGuard(); window.rem
 .file-name span { overflow-wrap: anywhere; }
 .table-actions { flex-shrink: 0; }
 @media (max-width: 639px) { .editor-columns { grid-template-columns: 1fr; } .attachment-list li { flex-wrap: wrap; } .table-actions { margin-left: auto; } }
+
+@media (max-width: 999px) {
+  .editor-dialog { width: calc(100vw - 24px); max-width: 680px; border-radius: 16px; }
+  .editor-dialog .dialog-heading { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .editor-columns { grid-template-columns: minmax(0, 1fr); }
+  .editor-fields { gap: 20px; }
+  .editor-dialog .control { font-size: 16px; min-height: 44px; border-radius: 10px; }
+  .editor-dialog .dialog-footer { position: sticky; bottom: -16px; z-index: 1; margin: 0 -16px -16px; padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); }
+  .editor-dialog .dialog-footer > div { display: flex; flex: 1; gap: 8px; }
+  .editor-dialog .dialog-footer .button { flex: 1; min-height: 44px; justify-content: center; }
+  .attachment-section { padding: 12px; background: var(--surface-soft); border-radius: 12px; }
+  .attachment-section .section-heading { flex-wrap: wrap; gap: 8px; }
+  .attachment-section .button, .table-actions .icon-button { min-height: 44px; min-width: 44px; }
+}
+
 </style>

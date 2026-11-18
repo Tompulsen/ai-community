@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Trash2, Users, X } from '@lucide/vue'
+import { ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
@@ -12,6 +12,7 @@ import FollowButton from '../components/FollowButton.vue'
 import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
 import ProfileWorkControls, { type ProfileWorkFilters } from '../components/ProfileWorkControls.vue'
 import { confirmStudioDelete } from '../studio-confirm'
+const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const route = useRoute()
 const router = useRouter()
 const tab = ref(route.query.tab === 'announcements' ? 'announcements' : 'creators')
@@ -34,6 +35,29 @@ const allSelected = computed(() => works.value.length > 0 && works.value.every(w
 const emptyLabel = computed(() => filters.value.kind !== 'all' || filters.value.from || filters.value.to ? '没有符合筛选条件的作品'
   : profileTab.value !== 'works' ? `还没有${collectionLabel.value}作品`
   : !isOwnProfile.value ? '还没有公开作品' : ({ all: '还没有作品', public: '还没有公开作品', private: '还没有私密作品', draft: '草稿箱为空' })[filters.value.visibility])
+let swipeStart: { x: number; y: number } | null = null
+function beginSwipe(event: TouchEvent) {
+  const point = event.touches[0]
+  swipeStart = mobile.value && point && event.touches.length === 1 ? { x: point.clientX, y: point.clientY } : null
+}
+function endSwipe(event: TouchEvent) {
+  const point = event.changedTouches[0], start = swipeStart
+  swipeStart = null
+  if (!point || !start || deleting.value || selecting.value || Math.abs(point.clientY - start.y) > 40 || Math.abs(point.clientX - start.x) < 64) return
+  const index = profileTabs.findIndex(item => item.value === profileTab.value)
+  const next = profileTabs[index + (point.clientX < start.x ? 1 : -1)]
+  if (next) { event.preventDefault(); profileTab.value = next.value }
+}
+async function navigateProfileTabs(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || deleting.value) return
+  event.preventDefault()
+  const tabs = event.currentTarget as HTMLElement
+  const index = profileTabs.findIndex(item => item.value === profileTab.value)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? profileTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + profileTabs.length) % profileTabs.length
+  profileTab.value = profileTabs[next]!.value
+  await nextTick()
+  ;tabs.querySelector<HTMLElement>('[aria-selected="true"]')?.focus()
+}
 let loadId = 0, collectionId = 0, peopleId = 0
 onBeforeUnmount(() => { loadId++; collectionId++; peopleId++ })
 function creatorIdentity(item: Creator) {
@@ -168,7 +192,16 @@ async function removeFollower() {
     </div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
     <template v-else-if="creatorId">
-      <template v-if="creator"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
+      <template v-if="creator">
+        <section v-if="mobile" class="mobile-profile" aria-label="个人资料">
+          <div class="profile-hero"><img v-if="creator.bannerUrl" class="profile-hero-banner" :src="creator.bannerUrl" alt="" /><div class="profile-hero-identity"><span class="avatar blue"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></span><div><h1>{{ creator.name || creator.username }}</h1><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
+          <div class="mobile-profile-body"><div class="mobile-profile-stats"><button type="button" aria-label="查看关注" @click="openPeople('following')"><strong>{{ creator.followingCount ?? 0 }}</strong>关注</button><button type="button" aria-label="查看粉丝" @click="openPeople('followers')"><strong>{{ creator.followersCount ?? 0 }}</strong>粉丝</button><span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong>获赞</span><RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="14" />编辑资料</RouterLink></div>
+            <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><RouterLink v-else-if="isOwnProfile" to="/account?tab=profile" class="profile-add-bio">添加个人简介<Pencil :size="13" /></RouterLink>
+            <div v-if="!isOwnProfile" class="profile-actions"><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></div>
+            <nav v-if="isOwnProfile" class="profile-shortcuts" aria-label="个人主页工具"><RouterLink to="/library"><LayoutGrid :size="22" />作品管理</RouterLink><button type="button" @click="profileTab = 'saved'"><Bookmark :size="22" />我的收藏</button><RouterLink to="/create/video"><WandSparkles :size="22" />创作</RouterLink><RouterLink to="/account"><Settings :size="22" />设置</RouterLink></nav>
+          </div>
+        </section>
+        <template v-else><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
         <div class="creator-profile">
           <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></span>
           <div class="profile-copy">
@@ -185,7 +218,9 @@ async function removeFollower() {
             <p v-if="creator.bio" class="profile-bio">{{ creator.bio }}</p>
           </div>
         </div>
-        <div class="profile-content-toolbar"><div class="tabs profile-tabs" aria-label="个人主页内容"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :aria-pressed="profileTab === item.value" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
+        </template>
+        <div class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
+        <div id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
         <div v-if="collectionPrivate" class="empty-state profile-private"><LockKeyhole :size="28" /><h2>{{ collectionLabel }}仅本人可见</h2></div>
         <template v-else>
           <div v-if="selecting && isOwnProfile && profileTab === 'works'" class="profile-selection" role="toolbar" aria-label="作品批量操作"><label><input type="checkbox" aria-label="全选当前作品" :checked="allSelected" :disabled="deleting || collectionLoading" @change="selectedWorks = allSelected ? new Set() : new Set(works.filter(work => work.owned).map(work => work.id))" />全选当前页</label><span role="status">已选 {{ selectedItems.length }} 件</span><button type="button" class="icon-button" title="删除所选作品" aria-label="删除所选作品" :disabled="deleting || !selectedItems.length" @click="deleteSelectedWorks"><Trash2 :size="17" /></button><button type="button" class="icon-button" title="退出批量管理" aria-label="退出批量管理" :disabled="deleting" @click="selecting = false; selectedWorks = new Set()"><X :size="18" /></button></div>
@@ -195,6 +230,7 @@ async function removeFollower() {
           <div v-else-if="!collectionError" class="empty-state"><component :is="profileTab === 'saved' ? Bookmark : profileTab === 'liked' ? Heart : Images" :size="28" /><h2>{{ emptyLabel }}</h2></div>
           <div v-if="worksCursor" class="feed-end"><button class="button btn" :disabled="collectionLoading" @click="loadCollection(true)">加载更多</button></div>
         </template>
+        </div>
         <dialog ref="peopleDialog" class="profile-people-dialog" aria-labelledby="profile-people-heading" @close="closePeople">
           <div class="dialog-heading"><h2 id="profile-people-heading">{{ peopleMode === 'followers' ? '粉丝' : '关注' }}</h2><button class="icon-button" aria-label="关闭列表" title="关闭列表" @click="peopleDialog?.close()"><X :size="20" /></button></div>
           <div class="profile-people-body">
@@ -317,4 +353,52 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .profile-people-body { padding: 0 16px 16px; }
   .person-row { flex-wrap: wrap; gap: 16px; }
 }
+
+@media (max-width: 999px) {
+  .creator-page { padding-top: 0; }
+  .profile-hero { position: relative; padding: 28px 20px 38px; background: var(--blue-soft); overflow: hidden; }
+  .profile-hero-banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .2; }
+  .profile-hero-identity { position: relative; display: flex; align-items: center; gap: 18px; }
+  .profile-hero-identity > .avatar { width: 92px; height: 92px; border: 3px solid var(--surface); font-size: 34px; color: var(--blue); }
+  .profile-hero-identity > div { min-width: 0; }
+  .profile-hero h1 { margin: 0; font-size: 25px; line-height: 1.4; overflow-wrap: anywhere; }
+  .profile-hero p { margin-top: 4px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .mobile-profile-body { position: relative; margin-top: -18px; padding: 14px 16px 16px; border-radius: 20px 20px 0 0; background: var(--canvas); }
+  .mobile-profile-stats { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+  .mobile-profile-stats > :is(button, span) { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; padding: 0; font-size: 12px; color: var(--muted); }
+  .mobile-profile-stats strong { font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .mobile-profile-stats > a { margin-left: auto; min-height: 44px; padding-inline: 10px; font-size: 12px; border-radius: 8px; }
+  .mobile-profile-bio { font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
+  .profile-add-bio { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: var(--muted); font-size: 13px; }
+  .profile-shortcuts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+  .profile-shortcuts > * { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 64px; border-radius: 10px; background: var(--surface); font-size: 12px; }
+  .profile-shortcuts > *:active { background: var(--blue-soft); }
+  .profile-shortcuts svg { color: var(--blue); }
+  .profile-content-toolbar { position: sticky; top: var(--header-height); z-index: 5; flex-wrap: nowrap; gap: 4px; min-height: 50px; margin: 0; padding: 0 8px; background: var(--canvas); }
+  .profile-tabs { display: flex; gap: 0; }
+  .profile-tabs .tab { position: relative; flex: 1; min-height: 50px; padding: 12px 8px; border: 0; font-size: 14px; text-align: center; justify-content: center; }
+  .profile-tabs .tab.active { color: var(--blue); }
+  .profile-tabs .tab.active::after { content: ''; position: absolute; bottom: 0; left: calc(50% - 18px); width: 36px; height: 3px; border-radius: 2px; background: var(--blue); }
+  .profile-works { grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 2px; --card-row-gap: 2; padding-top: 2px; }
+  .profile-works :deep(.work-cover) { aspect-ratio: 3 / 4 !important; border-radius: 0; }
+  .profile-works :deep(.work-cover > img), .profile-works :deep(.work-cover > video) { object-fit: cover; }
+  .profile-works :deep(.work-information), .profile-works :deep(.save-work), .profile-works :deep(.resource-bottom) { display: none; }
+  .profile-works :deep(.resource-cover) { padding: 10px; }
+  .profile-works :deep(.resource-top) { font-size: 9px; gap: 4px; }
+  .profile-works :deep(.resource-heading) { font-size: 13px; line-height: 18px; margin-top: 8px; }
+  .profile-works :deep(.resource-cover > p) { display: none; }
+  #profile-collection { touch-action: pan-y; }
+  .profile-selection { padding: 8px 12px; margin: 0; }
+  .profile-work-select { left: 2px; top: 2px; }
+  .profile-actions { justify-content: flex-start; }
+  .community-toolbar { padding: 0 12px 12px; }
+}
+@media (max-width: 360px) {
+  .profile-hero { padding-inline: 16px; }
+  .profile-hero-identity { gap: 12px; }
+  .profile-hero-identity > .avatar { width: 80px; height: 80px; }
+  .profile-hero h1 { font-size: 22px; }
+  .mobile-profile-stats { gap: 8px 10px; }
+}
+
 </style>

@@ -126,10 +126,10 @@ test('mobile chat retains tools and navigation and pricing uses the actual accou
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
   await page.getByRole('link', { name: '探索社区', exact: true }).click()
-  await page.getByLabel('账号菜单', { exact: true }).click()
+  await page.getByTitle('社区工具', { exact: true }).click()
   await expect(page.getByRole('link', { name: '账号设置', exact: true })).toBeVisible()
   await page.getByRole('link', { name: '账号设置', exact: true }).click()
-  await expect(page).toHaveURL('/account')
+  await expect(page).toHaveURL('/account?tab=profile')
   expect(state.submissions()).toBe(0)
 })
 

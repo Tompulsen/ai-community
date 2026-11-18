@@ -477,4 +477,26 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
   .auth-panel { padding: 32px 24px; }
   .auth-heading { margin-bottom: 32px; }
 }
+
+@media (max-width: 999px) {
+  .settings-page { padding-top: 12px; }
+  .settings-page > .page-heading { display: none; }
+  .settings-page .split-layout { gap: 16px; }
+  .settings-sidebar { padding: 12px; background: var(--surface); border-radius: 16px; }
+  .settings-search { border-radius: 10px; }
+  .account-tabs { gap: 4px; margin: 0; padding-bottom: 8px; }
+  .settings-nav-item { min-height: 44px; border-radius: 10px; font-size: 13px; }
+  .settings-page .control { font-size: 16px; border-radius: 10px; }
+  .settings-page .profile-cover { border-radius: 16px 16px 0 0; }
+  .profile-savebar { border-radius: 12px; }
+  .auth-page { --canvas: var(--p-bg); --surface: var(--p-surface); --surface-soft: var(--p-surface); --ink: var(--p-ink); --muted: var(--p-muted); --border: color-mix(in srgb, var(--p-ink) 20%, transparent); --blue: var(--p-action); --blue-hover: var(--p-action); --blue-soft: color-mix(in srgb, var(--p-action) 15%, transparent); --action-ink: var(--p-action-ink); background: var(--canvas); color: var(--ink); color-scheme: inherit; }
+  .auth-panel { padding: 28px 24px; min-height: 100dvh; }
+  .auth-mobile-brand { margin-bottom: 40px; }
+  .auth-mobile-brand .auth-brand-mark { background: var(--surface); }
+  .auth-form .control { border-radius: 12px; background: var(--surface); color: var(--ink); }
+  .auth-button { border-radius: 12px; }
+  .auth-octopus { color: var(--action-ink); }
+  .auth-button-hover { color: var(--action-ink); }
+}
+
 </style>

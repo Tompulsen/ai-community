@@ -238,4 +238,31 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
   .emoji-list > .button { margin: 8px 0 0; width: 100%; }
   .conversation-pane > .form-error { margin: 12px 12px 0; }
 }
+
+@media (max-width: 999px) {
+  .messages-page:not(.embedded) { padding-top: 0; }
+  .messages-page:not(.embedded) > .page-heading { min-height: 44px; margin: 0; padding: 4px 12px; justify-content: flex-end; }
+  .messages-page:not(.embedded) > .page-heading h1 { display: none; }
+  .inbox-actions .button { min-height: 44px; font-size: 12px; padding-inline: 10px; }
+  .inbox-categories { position: sticky; top: var(--header-height); z-index: 4; display: flex; gap: 0; margin: 0; padding: 0 8px; background: var(--canvas); }
+  .inbox-categories .tab { flex: 1; justify-content: center; min-height: 50px; padding: 10px 4px; font-size: 13px; white-space: nowrap; }
+  .inbox-categories .tab.active { color: var(--blue); }
+  .inbox-panel { min-height: calc(100svh - var(--header-height) - var(--mobile-nav-height) - 110px); border-top: 0; }
+  .inbox-notification { padding: 18px 14px; }
+  .messages-layout { grid-template-columns: minmax(0, 1fr); min-height: 360px; height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 104px); border: 0; border-radius: 0; }
+  .thread-pane { border: 0; padding: 0 8px; background: var(--canvas); }
+  .thread-row { padding: 16px 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; min-height: 82px; }
+  .thread-row .avatar { width: 44px; height: 44px; }
+  .conversation-pane { display: none; }
+  .has-conversation .thread-pane { display: none; }
+  .has-conversation .conversation-pane { display: flex; }
+  .conversation-back { display: inline-flex; }
+  .conversation-heading { min-height: 56px; padding: 6px 12px; }
+  .message-history { padding: 16px 12px; scrollbar-gutter: auto; }
+  .message-bubble { border-radius: 14px 14px 14px 4px; }
+  .owned .message-bubble { border-radius: 14px 14px 4px 14px; }
+  .message-composer { padding: 12px; }
+  .emoji-button { width: 44px; height: 44px; }
+}
+
 </style>

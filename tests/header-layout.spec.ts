@@ -33,9 +33,9 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     const nav = width >= 1000 ? desktop : mobile
     await expect(nav).toBeVisible()
     await expect(width >= 1000 ? mobile : desktop).toBeHidden()
-    await expect(nav.getByRole('link')).toHaveText(['首页', '推广中心', '社区', '创作台'])
+    await expect(nav.getByRole('link')).toHaveText(width >= 1000 ? ['首页', '推广中心', '社区', '创作台'] : ['首页', '创作', '消息', '我'])
     await expect(nav.getByRole('link', { name: '首页', exact: true })).toHaveAttribute('aria-current', 'page')
-    await expect(nav.getByRole('link', { name: '创作台', exact: true })).toHaveAttribute('href', '/create')
+    await expect(nav.getByRole('link', { name: width >= 1000 ? '创作台' : '创作', exact: true })).toHaveAttribute('href', width >= 1000 ? '/create' : '/create/video')
     if (width >= 1000) {
       const search = (await page.locator('.header-search-slot').boundingBox())!
       const account = (await page.locator('.profile-toggle').boundingBox())!
@@ -58,9 +58,9 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       await expect(page.locator('.community-rail .community-actions')).toBeVisible()
       await expect(page.locator('.header-actions .community-actions')).toHaveCount(0)
     } else {
-      expect(header.height).toBe(60)
+      expect(header.height).toBe(52)
       const categories = page.getByRole('navigation', { name: '作品分类', exact: true })
-      await expect(categories.getByRole('link')).toHaveText(['发现', '视频', '图片', 'Skill'])
+      await expect(categories.getByRole('link')).toHaveText(['发现', '视频', '图片', 'skill'])
       await expect(categories.getByRole('link', { name: '发现', exact: true })).toHaveAttribute('aria-current', 'page')
       for (const link of await categories.getByRole('link').all()) {
         const box = (await link.boundingBox())!
@@ -71,17 +71,23 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       await expect(page.locator('.community-rail')).toBeHidden()
       await expect(page.getByTitle('社区工具', { exact: true })).toBeVisible()
     }
-    for (const selector of width >= 1000 ? ['.header-actions', '.header-search-slot', '.discovery-toolbar', '.profile-toggle'] : ['.mobile-header-row', '.discovery-toolbar', '.mobile-search-toggle']) {
+    for (const selector of width >= 1000 ? ['.header-actions', '.header-search-slot', '.discovery-toolbar', '.profile-toggle'] : ['.mobile-header-row', '.mobile-search-toggle']) {
       const bounds = (await page.locator(selector).boundingBox())!
       expect(bounds.x, selector).toBeGreaterThanOrEqual(0)
       expect(bounds.x + bounds.width, selector).toBeLessThanOrEqual(width)
     }
+    if (width < 1000) {
+      await expect(page.locator('.discovery-toolbar')).toBeHidden()
+      await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+      await page.getByRole('button', { name: '筛选', exact: true }).click()
+      expect((await page.locator('.app-header').boundingBox())!.height).toBe(52)
+    }
     const modes = page.getByRole('group', { name: '浏览方式', exact: true })
     await expect(modes.getByRole('button')).toHaveText(['推荐', '最新', '关注'])
     await expect(modes.getByRole('button', { name: '推荐', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    expect((await page.locator('.discovery-toolbar').boundingBox())!.y).toBeCloseTo(header.height + 16, 1)
+    if (width >= 1000) expect((await page.locator('.discovery-toolbar').boundingBox())!.y).toBeCloseTo(header.height + 16, 1)
     if (width >= 1000) await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button')).toHaveCount(4)
-    else await expect(page.getByRole('group', { name: '作品类型' })).toBeHidden()
+    else await expect(page.getByRole('group', { name: '作品类型' })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     if ([320, 768, 1440, 2560].includes(width)) {
       expect((await new AxeBuilder({ page }).include('.community-shell').analyze()).violations).toEqual([])
@@ -119,7 +125,7 @@ for (const width of [320, 1440]) {
       await input.press('Escape')
       await expect(input).toHaveCount(0)
       await expect(page.getByRole('button', { name: '展开搜索作品', exact: true })).toBeFocused()
-      expect((await page.locator('.app-header').boundingBox())!.height).toBe(60)
+      expect((await page.locator('.app-header').boundingBox())!.height).toBe(52)
     }
   })
 
@@ -130,14 +136,14 @@ for (const width of [320, 1440]) {
       if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.url())
     })
     await page.goto('/discover?kind=image&tag=Skill')
-    if (width < 1000) await page.getByTitle('社区工具', { exact: true }).click()
-    await page.getByRole('link', { name: '投稿', exact: true }).click()
+    if (width < 1000) await page.getByRole('button', { name: '发布作品', exact: true }).click()
+    else await page.getByRole('link', { name: '投稿', exact: true }).click()
     await expect(page.getByRole('dialog', { name: '发布作品', exact: true })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('kind')).toBe('image')
     expect(new URL(page.url()).searchParams.get('tag')).toBe('Skill')
     await page.getByRole('button', { name: '关闭作品编辑', exact: true }).click()
     await expect(page).not.toHaveURL(/publish=1/)
-    if (width < 1000) await expect(page.getByTitle('社区工具', { exact: true })).toBeFocused()
+    if (width < 1000) await expect(page.getByRole('button', { name: '发布作品', exact: true })).toBeFocused()
     expect(writes).toEqual([])
   })
 }
@@ -209,14 +215,19 @@ for (const width of [320, 1440]) {
     await page.goto('/discover')
     const rail = page.getByRole('region', { name: '类型和标签', exact: true })
     const back = page.getByRole('button', { name: '向前浏览标签', exact: true, includeHidden: true })
-    await page.getByRole('button', { name: '向后浏览标签', exact: true }).click()
-    await expect.poll(() => rail.evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
-    await back.click()
+    if (width < 1000) {
+      await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+      await page.getByRole('button', { name: '筛选', exact: true }).click()
+    } else {
+      await page.getByRole('button', { name: '向后浏览标签', exact: true }).click()
+      await expect.poll(() => rail.evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
+      await back.click()
+    }
     const last = page.getByRole('button', { name: '主题16', exact: true })
     await last.focus()
     await last.press('Enter')
     await expect(last).toHaveAttribute('aria-pressed', 'true')
-    await page.getByRole('button', { name: '清除条件', exact: true }).click()
+    await page.getByRole('button', { name: '清除条件', exact: true }).first().click()
     await expect(last).toHaveAttribute('aria-pressed', 'false')
   })
 }

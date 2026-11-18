@@ -283,4 +283,14 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
   .studio-mobile-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; line-height: 16px; }
   .studio-page-toolbar > .studio-tool { margin-left: 0; }
 }
+
+@media (max-width: 999px) {
+  .create-page { background: var(--canvas); padding-inline: 10px; }
+  .studio-page-toolbar { min-height: 56px; padding: 4px 0; margin-bottom: 0; border-bottom: 1px solid var(--border); }
+  .studio-mobile-title > strong { font-weight: 600; }
+  .create-page :deep(.studio-composer), .create-page :deep(.studio-popover-panel) { border-radius: 16px; }
+  .create-page :deep(textarea), .create-page :deep(input:not([type="range"]):not([type="checkbox"])) { font-size: 16px; }
+  .create-page > .empty-state { flex: 1; min-height: 240px; border: 0; }
+}
+
 </style>

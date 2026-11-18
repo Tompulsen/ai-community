@@ -461,13 +461,13 @@ dialog::backdrop { background: #0000009c; }
   .history-panel { display: none; }
 }
 @media (max-width: 999px) {
-  :root { --header-height: 64px; --mobile-nav-height: calc(64px + env(safe-area-inset-bottom)); }
+  :root { --header-height: 64px; --mobile-nav-height: calc(58px + env(safe-area-inset-bottom)); }
   .desktop-nav { display: none; }
   .works-grid, .loading-works { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-header { height: 64px; }
   #app { padding-bottom: var(--mobile-nav-height); }
-  .mobile-nav { position: fixed; display: grid; grid-template-columns: repeat(4, 1fr); z-index: 25; bottom: 0; left: 0; width: 100%; background: var(--canvas); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); height: calc(64px + env(safe-area-inset-bottom)); }
-  .mobile-nav a { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+  .mobile-nav { position: fixed; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); z-index: 25; bottom: 0; left: 0; width: 100%; background: var(--canvas); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); height: var(--mobile-nav-height); }
+  .mobile-nav > a, .mobile-nav > button { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; color: var(--muted); font-size: 14px; font-weight: 600; min-height: 56px; position: relative; }
   .mobile-nav a.active { color: var(--blue); }
   .toast-message { bottom: 88px; }
   .detail-layout { grid-template-columns: minmax(0, 1fr) 272px; gap: 24px; }
@@ -607,3 +607,20 @@ dialog::backdrop { background: #0000009c; }
 }
 .continuous-surface { position: relative; isolation: isolate; background: transparent !important; border-color: transparent !important; }
 .continuous-outline { position: absolute; top: -1px; left: -1px; width: calc(100% + 2px); height: calc(100% + 2px); max-width: none; z-index: -1; pointer-events: none; overflow: visible; }
+
+/* Mobile community follows the local community-studio-ui reference. */
+@media (max-width: 999px) {
+  html { scrollbar-gutter: auto; }
+  .mobile-nav { padding-inline: 6px; background: var(--surface); }
+  .mobile-nav > a, .mobile-nav > button { color: var(--ink); }
+  .mobile-nav > a > span { position: relative; }
+  .mobile-nav .mobile-publish > span { display: grid; place-items: center; width: 44px; height: 36px; border-radius: 10px; background: var(--blue); color: #fff; }
+  .mobile-nav > :is(a, button):active { background: var(--surface-soft); }
+  .mobile-nav > :is(a, button):focus-visible { outline-offset: -4px; }
+  .mobile-unread { position: absolute; left: calc(100% - 3px); top: -9px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 10px; line-height: 16px; background: var(--blue); color: var(--action-ink); }
+  dialog { max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); border-radius: 16px; }
+  dialog .control { font-size: 16px; border-radius: 10px; }
+  dialog .dialog-heading { padding: 16px; }
+  dialog .dialog-body { padding: 0 16px 16px; }
+  dialog .dialog-heading .icon-button { width: 44px; height: 44px; }
+}

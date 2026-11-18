@@ -117,4 +117,14 @@ watch(() => session.user?.id, () => {
   .tool-label { font-size: 12px; }
   .tools-panel { padding: 12px; }
 }
+
+@media (max-width: 999px) {
+  .compact .tools-panel { left: 10px; right: 10px; top: calc(var(--header-height) + 6px); border-radius: 16px; background: var(--surface); }
+  .compact .tools-heading h2 { font-size: 17px; }
+  .compact .tool-item { border-radius: 12px; min-height: 80px; gap: 8px; }
+  .compact .tool-item > svg:first-child { color: var(--blue); }
+  .compact .tools-search { border-radius: 10px; }
+  .compact .tools-search input { font-size: 16px; }
+}
+
 </style>

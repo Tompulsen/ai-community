@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Search, Settings, ShieldCheck, Users, WandSparkles, X } from '@lucide/vue'
+import { ArrowLeft, Bell, ChevronDown, Heart, House, Gift, LogOut, MessageSquare, Plus, RefreshCw, Search, Settings, ShieldCheck, Users, WandSparkles, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -21,13 +21,31 @@ const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
 const desktopCommunity = computed(() => communityShell.value && wideViewport.value)
 const mobileCommunity = computed(() => communityShell.value && !wideViewport.value)
+provide('mobile-community', mobileCommunity)
+const feedPage = computed(() => route.path === '/discover')
+const profilePage = computed(() => route.path === '/community' && !!route.query.creator)
+const workPage = computed(() => route.path.startsWith('/work/'))
+const ownProfile = computed(() => profilePage.value && route.query.creator === session.user?.id)
+const mobilePageTitle = computed(() => profilePage.value ? (ownProfile.value ? '我的主页' : '个人主页') : workPage.value ? '作品预览' : String(route.meta.title || '社区'))
+const meDestination = computed(() => session.user ? { path: '/community', query: { creator: session.user.id } } : { path: '/account' })
+let publishTrigger: HTMLElement | null = null
+function rememberMenuPublish() { publishTrigger = document.querySelector<HTMLElement>('.mobile-community-header .tools-trigger') }
+function openPublish(event: MouseEvent) {
+  publishTrigger = event.currentTarget as HTMLElement
+  const target = { path: route.path, query: { ...route.query, publish: '1' } }
+  void router.push(session.user ? target : { path: '/account', query: { returnTo: router.resolve(target).fullPath } })
+}
+function mobileBack() {
+  if (router.options.history.state.back) router.back()
+  else void router.push('/discover')
+}
 const searchQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const mobileSearchOpen = ref(!!searchQuery.value)
 const mobileSearchButton = ref<HTMLButtonElement>()
 const mobileSearchForm = ref<HTMLFormElement>()
 const discoveryLinks = [
   { kind: 'all', label: '发现' }, { kind: 'video', label: '视频' },
-  { kind: 'image', label: '图片' }, { kind: 'resource', label: 'Skill', description: 'Skill 与资源' },
+  { kind: 'image', label: '图片' }, { kind: 'resource', label: 'skill', description: 'Skill 与资源' },
 ]
 function discoveryDestination(kind: string) {
   const query = route.path === '/discover' ? route.query : {}
@@ -35,6 +53,7 @@ function discoveryDestination(kind: string) {
 }
 async function toggleMobileSearch() {
   mobileSearchOpen.value = !mobileSearchOpen.value
+  if (mobileSearchOpen.value) document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false })
   await nextTick()
   if (mobileSearchOpen.value) mobileSearchForm.value?.querySelector('input')?.focus()
   else mobileSearchButton.value?.focus()
@@ -123,7 +142,7 @@ async function closePublish() {
   const { publish: _, ...query } = route.query
   await router.replace({ path: route.path, query, hash: route.hash })
   await nextTick()
-  if (mobileCommunity.value && route.query.publish !== '1') document.querySelector<HTMLElement>('.mobile-community-header .tools-trigger')?.focus({ preventScroll: true })
+  if (mobileCommunity.value && route.query.publish !== '1') (publishTrigger?.isConnected ? publishTrigger : document.querySelector<HTMLElement>('.mobile-publish'))?.focus({ preventScroll: true })
 }
 async function published(work: Work) {
   const owner = session.user?.id
@@ -144,6 +163,7 @@ async function signOut() {
 function toggleHeaderMenu(event: Event) {
   const opened = event.target as HTMLDetailsElement
   if (!opened.open) return
+  if (mobileCommunity.value) mobileSearchOpen.value = false
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (menu !== opened) menu.open = false })
   if (opened.classList.contains('messages-menu')) { void loadInbox(); positionMessagePopover() }
 }
@@ -171,6 +191,11 @@ function leaveMessages(event: Event) {
   }, 120)
 }
 function dismissMenus(event: Event) {
+  const insideSearch = event.composedPath().some(node => node instanceof Element && node.matches('.mobile-community-header, .mobile-search-panel'))
+  if (mobileSearchOpen.value && (event.type === 'keydown' || !insideSearch)) {
+    mobileSearchOpen.value = false
+    if (event.type === 'keydown') mobileSearchButton.value?.focus()
+  }
   if (event.type === 'click' && (event.target as HTMLElement).closest('.header-menu')) return
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (event.type === 'keydown') menu.querySelector('summary')?.focus(); menu.open = false })
 }
@@ -187,16 +212,17 @@ function restoreMessageTrigger() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage, 'community-shell': communityShell }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'studio-shell': studioPage, 'community-shell': communityShell, 'work-shell': workPage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <aside v-if="communityShell" class="community-rail" aria-label="社区侧栏">
       <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
       <div class="rail-scroll" @scroll.passive="positionMessagePopover"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
       <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置"><Settings :size="22" aria-hidden="true" /></RouterLink>
     </aside>
-    <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen }">
+    <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen, 'mobile-profile-header': profilePage }">
       <div class="mobile-header-row">
-        <CommunityTools v-slot="{ close }" compact @toggle="toggleHeaderMenu" @message="showMessageCenter">
+        <button v-if="profilePage || workPage" type="button" class="icon-button mobile-back" aria-label="返回上一页" @click="mobileBack"><ArrowLeft :size="22" /></button>
+        <CommunityTools v-else v-slot="{ close }" compact @toggle="toggleHeaderMenu" @message="showMessageCenter">
           <div class="mobile-account-tools">
             <template v-if="session.user">
               <RouterLink to="/account" class="mobile-account-identity" @click="close"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" alt="" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><span>{{ session.user.name || session.user.username }}<small v-if="session.user.accountId">章鱼号：{{ session.user.accountId }}</small></span></RouterLink>
@@ -206,17 +232,17 @@ function restoreMessageTrigger() {
             <span v-else-if="sessionStatus === 'loading'" role="status">账号加载中…</span>
             <button v-else type="button" class="button btn" @click="loadSession(true)"><RefreshCw :size="16" />重新加载账号</button>
             <div class="mobile-account-actions">
-              <RouterLink v-if="sessionStatus === 'authenticated' || sessionStatus === 'guest'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="button btn mobile-submission" @click="close"><Plus :size="18" aria-hidden="true" />投稿</RouterLink>
+              <RouterLink v-if="sessionStatus === 'authenticated' || sessionStatus === 'guest'" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="button btn mobile-submission" @click="rememberMenuPublish(); close()"><Plus :size="18" aria-hidden="true" />投稿</RouterLink>
               <button v-if="session.user" class="mobile-sign-out" :disabled="signingOut" @click="close(); signOut()"><LogOut :size="16" aria-hidden="true" />退出登录</button>
             </div>
           </div>
         </CommunityTools>
-        <nav class="mobile-discovery-nav" aria-label="作品分类">
+        <nav v-if="feedPage" class="mobile-discovery-nav" aria-label="作品分类">
           <RouterLink v-for="link in discoveryLinks" :key="link.kind" :to="discoveryDestination(link.kind)" :aria-label="link.description || link.label" :title="link.description" :aria-current="route.path === '/discover' && (route.query.kind || 'all') === link.kind ? 'page' : undefined">{{ link.label }}</RouterLink>
         </nav>
-        <button ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button>
+        <component v-else :is="profilePage || workPage ? 'strong' : 'h1'" class="mobile-page-title">{{ mobilePageTitle }}</component>
+        <div class="mobile-header-actions"><button ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>
       </div>
-      <form v-if="mobileSearchOpen" id="mobile-community-search" ref="mobileSearchForm" class="mobile-community-search" role="search" aria-label="作品搜索" @submit.prevent="searchWorks" @keydown.esc.stop.prevent="toggleMobileSearch"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
     </header>
     <header v-else-if="!guestAccount" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
@@ -238,11 +264,21 @@ function restoreMessageTrigger() {
           <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
       </template><RouterLink v-else-if="sessionStatus === 'guest'" to="/account" class="button primary btn header-login">登录</RouterLink><span v-else-if="sessionStatus === 'loading' && !studioPage" class="header-session-status" role="status">账号加载中…</span><button v-else-if="sessionStatus === 'error'" type="button" class="icon-button" aria-label="重新加载账号" title="重新加载账号" @click="loadSession(true)"><RefreshCw :size="18" /></button></div></div>
     </div></header>
+    <div v-show="mobileCommunity && mobileSearchOpen" id="mobile-community-search" class="mobile-search-panel" @keydown.esc.stop.prevent="toggleMobileSearch">
+      <form v-if="mobileCommunity && mobileSearchOpen" ref="mobileSearchForm" class="mobile-community-search" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /><button type="submit" class="button btn">搜索</button></form>
+      <div id="mobile-discovery-filters" />
+    </div>
     <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
     <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
-    <nav v-if="!guestAccount" class="mobile-nav" aria-label="手机导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" :class="{ active: isCurrent(link.path) }" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component :is="link.icon" :size="21" /><span>{{ link.label }}</span></RouterLink></nav>
+    <nav v-if="!guestAccount && !workPage" class="mobile-nav" aria-label="手机导航">
+      <RouterLink to="/discover" :class="{ active: feedPage }" :aria-current="feedPage ? 'page' : undefined">首页</RouterLink>
+      <RouterLink to="/create/video" :class="{ active: studioPage }" :aria-current="studioPage ? 'page' : undefined">创作</RouterLink>
+      <button type="button" class="mobile-publish" aria-label="发布作品" aria-haspopup="dialog" @click="openPublish"><span><Plus :size="24" aria-hidden="true" /></span></button>
+      <RouterLink :to="session.user ? '/messages' : { path: '/account', query: { returnTo: '/messages' } }" :class="{ active: route.path.startsWith('/messages') }" :aria-current="route.path.startsWith('/messages') ? 'page' : undefined"><span>消息<span v-if="unreadCount" class="mobile-unread" :aria-label="`${unreadCount} 条未读`">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></span></RouterLink>
+      <RouterLink :to="meDestination" :class="{ active: ownProfile || route.path === '/account' || route.path === '/library' }" :aria-current="ownProfile || route.path === '/account' || route.path === '/library' ? 'page' : undefined">我</RouterLink>
+    </nav>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
     <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
     <MessageCenterDialog v-if="session.user" ref="messageCenter" @close="restoreMessageTrigger" />
@@ -372,17 +408,19 @@ function restoreMessageTrigger() {
   .rail-settings { display: grid; place-items: center; flex: none; width: 44px; height: 44px; margin-top: 8px; border-radius: 8px; }
 }
 @media (max-width: 999px) {
-  :global(:root:has(.community-shell)) { --header-height: calc(60px + env(safe-area-inset-top)); }
-  :global(:root:has(.mobile-search-open)) { --header-height: calc(116px + env(safe-area-inset-top)); }
-  .community-shell > .mobile-community-header { height: auto; padding: env(safe-area-inset-top) 12px 0; border-bottom: 1px solid var(--border); }
-  .mobile-header-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 4px; height: 59px; max-width: 640px; margin-inline: auto; }
+  :global(:root:has(.community-shell)) { --header-height: calc(52px + env(safe-area-inset-top)); }
+  .community-shell > .mobile-community-header { height: auto; padding: env(safe-area-inset-top) 6px 0; border-bottom: 1px solid var(--border); }
+  .mobile-header-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 2px; height: 51px; max-width: 640px; margin-inline: auto; }
   .mobile-discovery-nav { display: flex; align-items: stretch; justify-content: space-evenly; min-width: 0; height: 100%; }
   .mobile-discovery-nav > a { position: relative; display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0 6px; font-size: 16px; font-weight: 600; color: var(--muted); }
-  .mobile-discovery-nav > a:hover, .mobile-discovery-nav > a[aria-current] { color: var(--ink); }
-  .mobile-discovery-nav > a[aria-current]::after { content: ''; position: absolute; bottom: 5px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: var(--blue); }
+  .mobile-discovery-nav > a:hover, .mobile-discovery-nav > a[aria-current] { color: var(--blue); }
+  .mobile-discovery-nav > a[aria-current] { font-weight: 750; }
+  .mobile-discovery-nav > a[aria-current]::after { content: ''; position: absolute; bottom: 2px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: var(--blue); }
   .mobile-discovery-nav > a:focus-visible { outline-offset: -4px; }
   .mobile-search-toggle { width: 44px; height: 44px; color: var(--ink); }
-  .mobile-community-search { max-width: 640px; height: 56px; padding-bottom: 12px; margin-inline: auto; }
+  .mobile-community-search { display: flex; gap: 8px; min-width: 0; height: 44px; }
+  .mobile-community-search :deep(.gooey-input) { flex: 1; min-width: 0; }
+  .mobile-community-search > .button { flex: none; min-height: 44px; }
   .mobile-community-search :deep(input) { font-size: 16px; }
   .mobile-account-tools { display: grid; gap: 4px; margin-bottom: 16px; padding: 12px; border-radius: 10px; background: var(--canvas); }
   .mobile-account-identity { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 44px; font-weight: 600; }
@@ -394,4 +432,20 @@ function restoreMessageTrigger() {
   .mobile-submission { min-height: 44px; padding-inline: 16px; }
   .mobile-sign-out { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 0; color: var(--muted); }
 }
+.mobile-search-panel { display: none; }
+@media (max-width: 999px) {
+  .mobile-search-panel { display: block; position: fixed; z-index: 24; top: var(--header-height); left: 0; right: 0; padding: 12px; max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 12px); overflow: auto; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: 0 12px 28px #0003; }
+  .mobile-page-title { margin: 0; text-align: center; font-size: 17px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-header-actions { display: flex; align-items: center; }
+  .mobile-header-actions > .icon-button { width: 44px; height: 48px; }
+  :global(:root:has(.mobile-profile-header)) { --header-height: calc(56px + env(safe-area-inset-top)); }
+  .mobile-profile-header .mobile-header-row { height: 55px; grid-template-columns: 44px minmax(0, 1fr) 88px; }
+  .mobile-back, .mobile-header-row > .icon-button { width: 44px; height: 48px; }
+  .community-shell > main :deep(.discover-page) { padding: 8px 10px 20px; }
+  .community-shell > main :deep(.creator-page), .community-shell > main :deep(.detail-page), .community-shell > main :deep(.messages-page:not(.embedded)) { padding-inline: 0; }
+  .community-shell > .app-footer { display: none; }
+  :global(:root:has(.work-shell)) { --mobile-nav-height: 0px; }
+  .work-shell .mobile-page-title { font-size: 15px; }
+}
+@media (max-width: 360px) { .mobile-discovery-nav > a { font-size: 14px; padding-inline: 4px; } }
 </style>

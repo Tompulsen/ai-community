@@ -74,11 +74,15 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
     if (width >= 1280) {
       expect(boxes.related.left).toBeGreaterThanOrEqual(boxes.focus.right + 15)
       expect(boxes.related.top).toBeCloseTo(boxes.focus.top, 0)
-    } else expect(boxes.related.top).toBeGreaterThanOrEqual(boxes.focus.bottom)
-    if (width >= 768) {
+    } else if (width >= 1000) expect(boxes.related.top).toBeGreaterThanOrEqual(boxes.focus.bottom)
+    else {
+      await expect(page.getByRole('button', { name: '更多作品', exact: true })).toBeVisible()
+      await expect(page.locator('.related-works')).toBeHidden()
+    }
+    if (width >= 1000) {
       expect(boxes.info.left).toBeGreaterThan(boxes.media.left)
       expect(boxes.composer.bottom).toBeLessThanOrEqual(900)
-    } else expect(boxes.info.top).toBeGreaterThanOrEqual(boxes.media.bottom)
+    } else expect(boxes.focus.height).toBe(848)
     await page.screenshot({ path: `test-results/work-detail-${width}.png`, fullPage: true })
   }
   expect(errors).toEqual([])
@@ -159,7 +163,9 @@ test('detail controls and both themes remain accessible on desktop and mobile', 
       await page.goto('/work/detailwork')
       await page.evaluate(mode => window.communityAppearance.set({ mode }), colorScheme)
       expect(await page.evaluate(() => window.communityAppearance.mode)).toBe(colorScheme)
+      if (width < 1000) await page.getByRole('button', { name: '跳转评论' }).click()
       await expect(page.locator('#comment-firstcomment')).toBeVisible()
+      if (width < 1000) await page.getByRole('button', { name: '关闭评论' }).click()
       expect((await new AxeBuilder({ page }).include('.detail-focus').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
     }
   }

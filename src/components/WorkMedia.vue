@@ -13,10 +13,14 @@ const file = computed(() => activeFiles.value[selected.value])
 watch(() => props.files, () => { selected.value = 0; viewingReference.value = false; failed.value.clear() })
 function choose(index: number, reference = false) { selected.value = index; viewingReference.value = reference }
 function step(offset: number) { selected.value = (selected.value + offset + activeFiles.value.length) % activeFiles.value.length }
+const browser = ref<HTMLElement>()
+function pause() { browser.value?.querySelectorAll('video').forEach(video => video.pause()) }
+function openPreview() { pause(); preview.value?.showModal() }
+defineExpose({ pause })
 </script>
 
 <template>
-  <div class="work-media-browser">
+  <div ref="browser" class="work-media-browser">
     <article v-if="resource" class="resource-article" aria-label="资源内容"><div class="resource-label"><FileText :size="18" /><span>资源内容</span></div><pre>{{ body }}</pre></article>
     <div v-if="!resource || file" class="media-stage"><div class="detail-media">
       <div v-if="!file" class="empty-state"><ImageOff :size="28" /><p>暂无可预览的作品文件</p></div>
@@ -25,12 +29,12 @@ function step(offset: number) { selected.value = (selected.value + offset + acti
       <img v-else-if="file.type.startsWith('image/')" :key="file.id" :src="file.url" :alt="file.name || title" @error="failed.add(file.id)" />
       <a v-else :href="file.url" class="button btn" download><FileText :size="20" />{{ file.name }}<Download :size="16" /></a>
     </div>
-    <div v-if="file" class="media-controls"><div class="media-page-controls"><button class="icon-button" aria-label="上一个文件" title="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="18" /></button><span class="caption-5">{{ selected + 1 }} / {{ activeFiles.length }}{{ viewingReference ? ' · 参考图' : '' }}</span><button class="icon-button" aria-label="下一个文件" title="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="18" /></button></div><span class="media-file-name" :title="file.name">{{ file.name }}</span><div class="media-tools"><a :href="file.url" download :aria-label="`下载 ${file.name}`" class="icon-button" title="下载文件"><Download :size="18" /></a><button v-if="file.type.startsWith('image/') || file.type.startsWith('video/')" class="icon-button" aria-label="放大预览" title="放大预览" @click="preview?.showModal()"><Maximize2 :size="18" /></button></div></div>
+    <div v-if="file" class="media-controls"><div class="media-page-controls"><button class="icon-button" aria-label="上一个文件" title="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="18" /></button><span class="caption-5">{{ selected + 1 }} / {{ activeFiles.length }}{{ viewingReference ? ' · 参考图' : '' }}</span><button class="icon-button" aria-label="下一个文件" title="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="18" /></button></div><span class="media-file-name" :title="file.name">{{ file.name }}</span><div class="media-tools"><a :href="file.url" download :aria-label="`下载 ${file.name}`" class="icon-button" title="下载文件"><Download :size="18" /></a><button v-if="file.type.startsWith('image/') || file.type.startsWith('video/')" class="icon-button" aria-label="放大预览" title="放大预览" @click="openPreview"><Maximize2 :size="18" /></button></div></div>
     </div>
     <section v-for="group in [{ title: '作品文件', items: files, reference: false }, { title: '参考图', items: references || [], reference: true }]" :key="group.title" class="material-group">
       <template v-if="group.items.length"><h3 class="title-4">{{ group.title }} · {{ group.items.length }}</h3><div class="material-strip"><div v-for="(item, index) in group.items" :key="item.id" class="material-item"><button class="material-thumbnail" :class="{ selected: selected === index && viewingReference === group.reference }" :aria-label="`预览 ${item.name}`" :aria-pressed="selected === index && viewingReference === group.reference" @click="choose(index, group.reference)"><img v-if="item.type.startsWith('image/')" :src="item.thumbnailUrl || item.url" :alt="item.name" loading="lazy" /><video v-else-if="item.type.startsWith('video/')" :src="item.url" preload="metadata" muted /><FileText v-else :size="22" /></button><a :href="item.url" download class="file-download" :title="`下载 ${item.name}`"><span>{{ item.name }}</span><Download :size="14" /></a></div></div></template>
     </section>
-    <dialog ref="preview" class="media-preview" aria-label="作品文件预览"><div class="dialog-heading"><span>{{ file?.name }}</span><button class="icon-button" aria-label="关闭预览" @click="preview?.close()"><X :size="20" /></button></div><video v-if="file?.type.startsWith('video/')" :src="file.url" controls playsinline /><img v-else-if="file?.type.startsWith('image/')" :src="file.url" :alt="file.name" /><div class="media-controls"><button class="icon-button" aria-label="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="20" /></button><a v-if="file" :href="file.url" download class="button btn"><Download :size="16" />下载原文件</a><button class="icon-button" aria-label="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="20" /></button></div></dialog>
+    <dialog ref="preview" class="media-preview" aria-label="作品文件预览" @close="pause"><div class="dialog-heading"><span>{{ file?.name }}</span><button class="icon-button" aria-label="关闭预览" @click="preview?.close()"><X :size="20" /></button></div><video v-if="file?.type.startsWith('video/')" :src="file.url" controls playsinline /><img v-else-if="file?.type.startsWith('image/')" :src="file.url" :alt="file.name" /><div class="media-controls"><button class="icon-button" aria-label="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="20" /></button><a v-if="file" :href="file.url" download class="button btn"><Download :size="16" />下载原文件</a><button class="icon-button" aria-label="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="20" /></button></div></dialog>
   </div>
 </template>
 

@@ -44,7 +44,7 @@ async function fixture(page: Page, own = true) {
   await page.route('**/api/library**', listing)
   await page.route('**/api/works?**', listing)
   await page.goto('/community?creator=3')
-  await expect(page.locator('.profile-copy h1')).toHaveText('root')
+  await expect(page.locator('.creator-page h1')).toHaveText('root')
   return { ...account, errors, queries, deleted, fail: (id: string) => { failId = id } }
 }
 const panel = (page: Page) => page.getByRole('dialog', { name: '批量管理', exact: true })
@@ -127,7 +127,7 @@ test('management toolbar and filters fit desktop and small phones', async ({ pag
     await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), width === 390 ? 'dark' : 'light')
     await open(page)
     await expect(panel(page).getByRole('combobox', { name: '作品状态', exact: true })).toBeVisible()
-    expect(await panel(page).evaluate(element => {
+    await expect.poll(() => panel(page).evaluate(element => {
       const bounds = element.getBoundingClientRect()
       return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
         && element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight + 1
@@ -148,7 +148,7 @@ test('management toolbar and filters fit desktop and small phones', async ({ pag
   for (const [width, height] of [[1440, 600], [768, 650], [390, 520], [320, 400]]) {
     await page.setViewportSize({ width: width!, height: height! })
     await open(page)
-    expect(await panel(page).evaluate(element => {
+    await expect.poll(() => panel(page).evaluate(element => {
       const bounds = element.getBoundingClientRect()
       return bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth
     })).toBe(true)

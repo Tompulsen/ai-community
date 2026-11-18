@@ -21,7 +21,7 @@ onMounted(() => {
       // One-pixel rows pack natural card heights without changing feed or keyboard order.
       const height = entry.borderBoxSize[0]?.blockSize ?? entry.target.getBoundingClientRect().height
       const card = entry.target as HTMLElement
-      card.style.gridRowEnd = `span ${Math.ceil(height + 24)}`
+      card.style.gridRowEnd = `span ${Math.ceil(height + (Number.parseFloat(getComputedStyle(grid.value!).getPropertyValue('--card-row-gap')) || 0))}`
     }
   })
   syncCards()
@@ -35,9 +35,9 @@ onBeforeUnmount(() => observer?.disconnect())
 </template>
 
 <style scoped>
-.bento-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: 1px; grid-auto-flow: row; align-items: start; gap: 0 16px; width: 100%; min-width: 0; margin-inline: auto; }
+.bento-grid { --card-row-gap: 24; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: 1px; grid-auto-flow: row; align-items: start; gap: 0 16px; width: 100%; min-width: 0; margin-inline: auto; }
 .bento-grid.works-grid > :deep(*) { min-width: 0; min-height: 0; height: auto; }
-@media (max-width: 639px) {
-  .bento-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 999px) {
+  .bento-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 8px; --card-row-gap: 12; }
 }
 </style>

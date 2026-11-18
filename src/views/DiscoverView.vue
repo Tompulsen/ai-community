@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { X, SearchX, ChevronLeft, ChevronRight } from '@lucide/vue'
+import { X, SearchX, RefreshCw, LayoutGrid, SlidersHorizontal, ChevronLeft, ChevronRight } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
@@ -9,12 +9,15 @@ import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import { kindLabels, type Work } from '../data'
 
+const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
+const filtersOpen = ref(false)
 const route = useRoute()
 const router = useRouter()
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const kind = ref(typeof route.query.kind === 'string' ? route.query.kind : 'all')
 const tag = ref(typeof route.query.tag === 'string' ? route.query.tag : '')
-const order = ref('featured')
+const order = ref(typeof route.query.sort === 'string' ? route.query.sort : 'featured')
+const hasConditions = computed(() => !!query.value || !!tag.value || kind.value !== 'all' || order.value !== 'featured')
 const browseModes = [{ value: 'featured', label: '推荐' }, { value: 'latest', label: '最新' }, { value: 'following', label: '关注' }]
 const tagRail = ref<HTMLElement>()
 const canScrollBack = ref(false), canScrollForward = ref(false)
@@ -52,7 +55,7 @@ async function load(append = false) {
 watch([query, kind, tag, order], () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
-    void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined } })
+    void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined, sort: order.value === 'featured' ? undefined : order.value } })
     void load()
   }, 180)
 })
@@ -60,6 +63,7 @@ watch(() => route.query, value => {
   query.value = typeof value.q === 'string' ? value.q : ''
   kind.value = typeof value.kind === 'string' ? value.kind : 'all'
   tag.value = typeof value.tag === 'string' ? value.tag : ''
+  order.value = typeof value.sort === 'string' ? value.sort : 'featured'
 })
 function updateRail() {
   const rail = tagRail.value
@@ -87,7 +91,9 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 <template>
   <div class="page-container discover-page">
     <h1 class="discover-heading-sr">首页</h1>
-    <div class="discovery-toolbar">
+    <Teleport to="#mobile-discovery-filters" :disabled="!mobile" defer>
+    <div v-if="mobile" class="mobile-filter-actions"><button type="button" class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" />刷新</button><button type="button" class="button btn subtle" :aria-expanded="filtersOpen" aria-controls="discovery-filters" @click="filtersOpen = !filtersOpen"><SlidersHorizontal :size="16" />筛选<span v-if="hasConditions" class="filter-dot" /></button><button type="button" class="text-link" :disabled="!hasConditions" @click="reset">清除条件</button></div>
+    <div v-show="!mobile || filtersOpen" id="discovery-filters" class="discovery-toolbar">
       <div class="browse-modes" role="group" aria-label="浏览方式">
         <button v-for="mode in browseModes" :key="mode.value" class="browse-mode" :class="{ active: order === mode.value }" :aria-pressed="order === mode.value" @click="order = mode.value">{{ mode.label }}</button>
       </div>
@@ -108,12 +114,13 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
         </div>
       </div>
     </div>
-    <div v-if="query || tag || kind !== 'all'" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
+    </Teleport>
+    <div v-if="query || tag || (!mobile && kind !== 'all')" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />
     <BentoGrid v-else-if="works.length" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
     <div v-else-if="!error && order === 'following' && session.ready && !session.user" class="empty-state"><SearchX :size="32" /><h2>登录后查看关注的作品</h2><RouterLink to="/account" class="button primary btn">登录</RouterLink></div>
-    <div v-else-if="!error" class="empty-state"><SearchX :size="32" /><h2>{{ order === 'following' ? '还没有关注的作品' : '没有找到相关作品' }}</h2><p>试试其他关键词，或恢复默认浏览。</p><button class="button btn subtle" @click="reset">恢复默认</button></div>
+    <div v-else-if="!error" class="empty-state discovery-empty"><SearchX v-if="hasConditions" :size="32" /><LayoutGrid v-else :size="32" aria-hidden="true" /><h2>{{ order === 'following' ? '还没有关注的作品' : hasConditions ? '没有找到相关作品' : '这里还没有作品' }}</h2><p>{{ hasConditions ? '试试其他关键词，或恢复默认浏览。' : '第一份已公开的作品会出现在这里。' }}</p><button v-if="hasConditions" class="button btn subtle" @click="reset">恢复默认</button></div>
     <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多' }}</button></div>
     <CommunityAds :slots="['communityAd1', 'communityAd2', 'communityAd3', 'communityAd4']" />
   </div>
@@ -164,5 +171,23 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
   .tag-navigation:not(:has(.content-tags)) { display: none; }
   .content-tags { margin: 0; padding: 0; }
   .mobile-all-tags { display: block; }
+}
+@media (max-width: 999px) {
+  .mobile-filter-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .mobile-filter-actions .button { gap: 6px; min-height: 44px; padding-inline: 10px; }
+  .mobile-filter-actions .text-link { margin-left: auto; min-height: 44px; }
+  .filter-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+  .discovery-toolbar { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+  .browse-modes { width: 100%; }
+  .browse-mode { flex: 1; }
+  .tag-rail { flex-wrap: wrap; gap: 6px; overflow: visible; }
+  .tag-rail > .category-tabs, .content-tags { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+  .tag-navigation:not(:has(.content-tags)) { display: flex; }
+  .tag-scroll-controls { display: none; }
+  .browse-mode.active, .rail-option.active { color: var(--blue-hover); background: var(--blue-soft); }
+  .discover-page > .empty-state { min-height: calc(100svh - var(--header-height) - var(--mobile-nav-height) - 28px); border: 0; padding: 24px 12px; }
+  .discovery-empty h2 { font-size: 18px; font-weight: 600; }
+  .discovery-empty p { font-size: 13px; }
+  .search-result { margin-bottom: 8px; font-size: 12px; }
 }
 </style>
