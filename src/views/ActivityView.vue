@@ -233,6 +233,7 @@ async function copyInvite() {
 .wheel-pointer { position: absolute; left: calc(50% - 12px); top: -4px; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 24px solid var(--wheel-accent); }
 .wheel-center { position: absolute; inset: 37%; border-radius: 50%; background: var(--wheel-accent); color: var(--action-ink); display: flex; align-items: center; justify-content: center; padding: 8px; font-weight: 600; font-size: 16px; text-align: center; overflow-wrap: anywhere; border: 4px solid var(--canvas); }
 .wheel-center:disabled { opacity: .72; color: var(--action-ink); cursor: default; }
+.theme-violet .wheel-center, .theme-sunset .wheel-center { color: #17252a; }
 .wheel-center:not(:disabled):hover { filter: brightness(1.1); }
 .wheel-center:focus-visible { outline-color: var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .wheel-caption { text-align: left; color: var(--muted); font-size: 13px; line-height: 20px; }
