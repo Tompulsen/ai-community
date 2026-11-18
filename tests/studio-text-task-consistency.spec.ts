@@ -1,3 +1,4 @@
+import { mockPublicationTags, completePublicationFields } from './helpers/publication-fixture'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
@@ -21,6 +22,7 @@ async function fixture(page: Page, reuseGroup?: 'available' | 'missing') {
   })
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
+  await mockPublicationTags(page)
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: {
     selectedGroup, selectedTokenId: selectedGroup === 'G' ? 52 : 41,
     groups: [{ id: 'auto', name: 'Auto', ratio: 1 }, ...(reuseGroup === 'missing' ? [] : [{ id: 'G', name: '原任务分组', ratio: 0.5 }])],
@@ -141,10 +143,11 @@ test('an edited answer reopens as a fresh publication draft and uploads its visi
   await editAnswer(page)
   const dialog = page.getByRole('dialog', { name: '发布作品', exact: true })
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '创作说明', exact: true })).toHaveValue(editedAnswer)
+  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(editedAnswer)
   await dialog.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '创作说明', exact: true })).toHaveValue(editedAnswer)
+  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(editedAnswer)
+  await completePublicationFields(page)
   await dialog.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(dialog.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
   expect(state.uploads).toEqual([{ name: 'creation.md', type: 'text/markdown', text: editedAnswer }])
@@ -159,13 +162,15 @@ test('a submitted text publication retains its original retry snapshot after a l
   state.loseNextResponse()
   const dialog = page.getByRole('dialog', { name: '发布作品', exact: true })
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await completePublicationFields(page)
   await dialog.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('提交响应丢失')
   await dialog.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   await editAnswer(page)
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '创作说明', exact: true })).toHaveValue(originalAnswer)
-  await expect(dialog.getByRole('textbox', { name: '创作说明', exact: true })).toBeDisabled()
+  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(originalAnswer)
+  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toBeDisabled()
+  await completePublicationFields(page)
   await dialog.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(dialog.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
   expect(state.submitted).toHaveLength(2)

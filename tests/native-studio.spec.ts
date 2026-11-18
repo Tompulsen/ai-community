@@ -1,3 +1,4 @@
+import { mockPublicationTags, completePublicationFields } from './helpers/publication-fixture'
 import { mkdir, readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -27,6 +28,7 @@ async function legacyFixture(page: Page) {
 async function fixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
+  await mockPublicationTags(page)
   const image = await readFile(asset)
   const calls: { path: string; body: Record<string, unknown>; csrf?: string }[] = []
   let uploads = 0
@@ -78,7 +80,7 @@ for (const kind of ['image', 'video'] as const) {
     await expect(page.locator('.creation-request')).toHaveCount(2)
     await expect(records).toHaveCount(1)
     await page.setViewportSize({ width: 390, height: 900 })
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.locator('.creation-turn').last().scrollIntoViewIfNeeded()
     await page.screenshot({ path: `.taste-skill/studio-conversations-20261115/${kind}-mobile.png` })
     await page.locator('.mobile-new-creation').click()
@@ -149,7 +151,7 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
     await mkdir(screenshotDirectory, { recursive: true })
     for (const width of [1440, 768, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await page.screenshot({ path: `${screenshotDirectory}/waiting-${width}.png`, fullPage: true })
     }
     expect((await new AxeBuilder({ page }).include('.native-studio').analyze()).violations).toEqual([])
@@ -345,11 +347,12 @@ test('native image generation uses the existing account, uploads references and 
   await mkdir(screenshotDirectory, { recursive: true })
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `${screenshotDirectory}/image-${width}.png`, fullPage: true })
   }
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
   await page.getByRole('textbox', { name: '作品标题', exact: true }).fill('海底图书馆')
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '发布作品', exact: true }).getByRole('status')).toHaveText('作品已提交审核。')
   const publication = state.calls.find(call => call.path === '/api/works')!
@@ -461,6 +464,7 @@ test('native text results can download and publish without a separate chat accou
   await page.getByRole('button', { name: '下载文本', exact: true }).click()
   expect((await download).suggestedFilename()).toMatch(/\.md$/)
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '发布作品', exact: true }).getByRole('status')).toHaveText('作品已提交审核。')
   expect(state.calls.find(call => call.path === '/api/works')?.body).toMatchObject({ kind: 'resource', body: '海底的灯亮了。\\n章鱼开始写作。', fileIds: ['fixture-file-1'] })

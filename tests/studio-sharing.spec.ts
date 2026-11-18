@@ -1,3 +1,4 @@
+import { mockPublicationTags, completePublicationFields } from './helpers/publication-fixture'
 import { mkdir, readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -12,6 +13,7 @@ async function openGroupPicker(page: Page) {
 async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image') {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
+  await mockPublicationTags(page)
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
   const source: Work = { id: 'source42', title: '原作海底城市', authorId: '26', author: '原作者', avatar: '原', kind, prompt: '海底城市与发光的水母', model: `fixture-${kind === 'resource' ? 'text' : kind}`, version: 1, tags: [], status: 'published', date: '2026-11-13', likes: 0, owned: false, saved: false, liked: false,
     fileIds: ['authorResult'], cover: '/legacy-files/authorResult', files: [{ id: 'authorResult', name: '原作成品.jpg', type: 'image/jpeg', url: '/legacy-files/authorResult' }],
@@ -102,6 +104,7 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toHaveAttribute('href', `/work/${comment.id}`)
   await page.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
   expect(state.submitted[1]).toMatchObject({ destination: 'community', fileIds: ['upload1'], generation: { sourceWorkId: 'source42', referenceFileIds: ['upload2', 'upload3'] } })
@@ -118,11 +121,13 @@ test('a lost publish response can be retried after reload with identical attachm
   await expect(page.locator('.task-status')).toContainText('生成完成')
   state.loseNextResponse()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('连接中断')
   await page.reload()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '作品标题', exact: true })).toBeDisabled()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(page.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
   expect(state.submitted).toHaveLength(2)
@@ -274,6 +279,7 @@ test('switching accounts during result upload cannot publish under the new ident
   const pending = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/uploads', async route => { uploading = true; await pending; await route.fulfill({ json: { file: { id: 'upload1', name: 'result.jpg', type: 'image/jpeg', url: '/legacy-files/upload1' } } }).catch(() => {}) })
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   try {
     await expect.poll(() => uploading).toBe(true)
@@ -333,6 +339,7 @@ test('image remix restores model, group and full public settings, then republish
   await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toBeEnabled()
   await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   await page.getByRole('button', { name: '发布作品', exact: true }).last().click()
+  await completePublicationFields(page)
   await page.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect.poll(() => state.submitted.length).toBe(1)
   expect(state.submitted[0].generation.parameters).toMatchObject({ version: 1, kind: 'image', group: '生图', size: '1200x900', n: 3, protocol: 'async', imageOptions: { seed: '42', imageOutputCompression: 85 } })

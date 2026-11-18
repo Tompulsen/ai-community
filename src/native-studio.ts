@@ -14,6 +14,7 @@ import { captureTaskSnapshot, deleteTaskRecords, readTaskAsset, readTaskSnapshot
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
+export interface PublicationDetails { tagIds: string[]; prompt: string; sourceUrl: string; license: string; referenceIndices: number[] }
 export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; protocol?: 'openai' | 'sync' | 'async' }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
@@ -50,7 +51,7 @@ export interface CreationTask {
   references: { name: string; url: string; id?: string; fromWorkId?: string }[]
   publicationFiles?: string[]
   publicationReferences?: string[]
-  publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; files?: string[]; work?: Work }>>
+  publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; details?: PublicationDetails; files?: string[]; work?: Work }>>
   request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; protocol?: 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
@@ -844,22 +845,33 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
   requestDownload(blob, task, index)
 }
 const sharing = new Set<string>()
-export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string) {
+export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string, details?: PublicationDetails) {
   const key = `${task.owner}:${task.id}`
   if (sharing.has(key)) throw new Error('这条作品正在提交，请稍后查看结果。')
   sharing.add(key)
-  try { return await preparePublication(task, title, destination, text, content) }
+  try { return await preparePublication(task, title, destination, text, content, details) }
   finally { sharing.delete(key) }
 }
-async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string, content?: string) {
+async function preparePublication(task: CreationTask, title: string, destination: CreationDestination, text?: string, content?: string, details?: PublicationDetails) {
   if (task.owner !== activeOwner() || task.phase !== 'complete') throw new Error('请先完成生成。')
   if (destination === 'source-comment' && (task.kind === 'video' || !task.sourceWorkId || !task.model)) throw new Error('图片或文本同款作品才能发送到源作品评论区。')
   const previous = task.publications?.[destination]
   if (previous?.work) return { work: previous.work }
+  if (!previous && details && destination === 'community') {
+    if (details.tagIds.length < 1 || details.tagIds.length > 3 || new Set(details.tagIds).size !== details.tagIds.length) throw new Error('请选择 1–3 个作品标签。')
+    if (details.prompt.length > 100000 || details.license.length > 200 || details.sourceUrl.length > 2000) throw new Error('作品信息超过字数上限。')
+    if (details.sourceUrl) {
+      let url: URL
+      try { url = new URL(details.sourceUrl) } catch { throw new Error('来源链接必须使用 http:// 或 https://。') }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('来源链接必须使用 http:// 或 https://，且不能包含登录信息。')
+    }
+    if (new Set(details.referenceIndices).size !== details.referenceIndices.length || details.referenceIndices.some(index => !Number.isInteger(index) || index < 0 || index >= task.references.length)) throw new Error('参考图选择无效，请重新选择。')
+  }
   const version = epoch
   const checkOwner = () => { if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。') }
   task.publications ??= {}
   const publication = task.publications[destination] ??= {
+    ...(details && destination === 'community' ? { details: { ...details, tagIds: [...details.tagIds], referenceIndices: [...details.referenceIndices] } } : {}),
     title: title.trim().slice(0, 100),
     text: (text ?? (task.kind === 'text' ? content ?? task.text : task.prompt)).slice(0, 2500),
     ...(task.kind === 'text' ? { content: content ?? task.text, files: [] } : {}),
@@ -887,20 +899,33 @@ async function preparePublication(task: CreationTask, title: string, destination
   }
   if (destination === 'community') {
     task.publicationReferences ??= []
-    for (let index = task.publicationReferences.length; index < task.references.length; index++) {
-      task.publicationReferences.push(await uploadMedia(task.references[index]!.url, 'image', `reference-${index + 1}`))
+    const references = publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references
+    for (let index = task.publicationReferences.length; index < references.length; index++) {
+      task.publicationReferences.push(await uploadMedia(references[index]!.url, 'image', `reference-${index + 1}`))
       await persist(true); checkOwner()
     }
   }
-  const result = await api<{ work: Work }>('/api/works', { method: 'POST', body: {
+  let result: { work: Work }
+  try { result = await api<{ work: Work }>('/api/works', { method: 'POST', body: {
     title: publication.title, kind: task.kind === 'text' ? 'resource' : task.kind,
-    body: publication.text, prompt: task.prompt,
-    model: task.model, generation: { prompt: task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
+    body: publication.text, prompt: publication.details?.prompt ?? task.prompt,
+    ...(publication.details ? { sourceUrl: publication.details.sourceUrl, license: publication.details.license } : {}),
+    model: task.model, generation: { prompt: publication.details?.prompt ?? task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
       parameters: task.legacy ? undefined : readRemixParameters({ version: 1, kind: task.kind, group: task.group,
         ...(task.kind === 'image' && usesGeminiImageChat(task.model) ? { protocol: task.request.protocol, n: task.request.n } : task.request) }) },
-    fileIds: files, tags: [], status: 'pending', destination,
+    fileIds: files, ...(publication.details ? { tagIds: publication.details.tagIds } : { tags: [] }), status: 'pending', destination,
     requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })
+  } catch (cause) {
+    checkOwner()
+    // A first-attempt validation rejection has no saved work; uncertain retries keep their original payload.
+    if (!previous && publication.details && (cause as { status?: number }).status === 400) {
+      delete task.publications[destination]
+      task.publicationReferences = []
+      await persist()
+    }
+    throw cause
+  }
   checkOwner(); publication.work = result.work; await persist()
   return result
 }

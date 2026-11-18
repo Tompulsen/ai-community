@@ -3,10 +3,15 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Send, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
-import type { Work } from '../data'
-import { mediaSource, publishCreation, type CreationDestination, type CreationTask } from '../native-studio'
+import { kindLabels, type Work } from '../data'
+import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
 const dialog = ref<HTMLDialogElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
+interface Tag { id: string; category: string; name: string }
+const tags = ref<Tag[]>([]), tagIds = ref<string[]>([]), tagQuery = ref(''), tagsLoading = ref(false), tagsError = ref('')
+const prompt = ref(''), sourceUrl = ref(''), license = ref(''), rights = ref(false), referenceIndices = ref<number[]>([])
+const category = computed(() => task.value?.kind === 'text' ? 'resource' : task.value?.kind || 'image')
+const visibleTags = computed(() => tags.value.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
 const direct = computed(() => destination.value === 'source-comment')
 const locked = computed(() => Boolean(task.value?.publications?.[destination.value]))
 const heading = computed(() => direct.value ? '发送到源作品评论区' : '发布作品')
@@ -17,13 +22,38 @@ const resultMessage = computed(() => result.value?.status === 'pending' ? direct
 let revision = 0
 onBeforeUnmount(() => revision++)
 watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; error.value = ''; busy.value = false })
+async function loadTags() {
+  const current = revision, kind = category.value
+  tagsLoading.value = true; tagsError.value = ''
+  try {
+    const response = await api<{ items: Tag[] }>(`/api/tags?kind=${kind}`)
+    if (current !== revision) return
+    if (!Array.isArray(response.items)) throw new Error('标签数据暂时不可用。')
+    tags.value = response.items.filter(tag => tag.category === kind)
+    if (!locked.value) {
+      const valid = tagIds.value.filter(id => tags.value.some(tag => tag.id === id))
+      if (valid.length !== tagIds.value.length) { tagIds.value = valid; error.value = '部分标签已失效，请重新选择。' }
+    }
+  } catch (cause) { if (current === revision) tagsError.value = errorMessage(cause) }
+  finally { if (current === revision) tagsLoading.value = false }
+}
+function toggleTag(id: string) {
+  if (busy.value || locked.value) return
+  if (tagIds.value.includes(id)) tagIds.value = tagIds.value.filter(value => value !== id)
+  else if (tagIds.value.length < 3) tagIds.value.push(id)
+}
 async function open(value: CreationTask, target: CreationDestination = 'community', currentText?: string) {
   if (busy.value || value.phase !== 'complete' || value.owner !== session.user?.id) return
   const current = ++revision
   task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined
   const previous = value.publications?.[target]
   title.value = previous?.title || (target === 'source-comment' ? '我的同款作品' : value.prompt.slice(0, 50))
-  text.value = previous?.text ?? (value.kind === 'text' ? currentText ?? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : value.prompt).slice(0, 2500)
+  text.value = previous?.text ?? (value.kind === 'text' ? currentText ?? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : '').slice(0, 2500)
+  prompt.value = previous?.details?.prompt ?? value.prompt
+  sourceUrl.value = previous?.details?.sourceUrl ?? ''; license.value = previous?.details?.license ?? ''
+  referenceIndices.value = [...(previous?.details?.referenceIndices ?? value.references.map((_, index) => index))]
+  tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagQuery.value = ''; tagsError.value = ''; rights.value = Boolean(previous)
+  if (target === 'community' && !previous?.work) void loadTags()
   await nextTick(); if (current !== revision) return
   dialog.value?.showModal()
   if (previous?.work) {
@@ -35,14 +65,21 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
 }
 async function submit() {
   if (!task.value || busy.value || result.value) return
+  error.value = ''
+  if (!direct.value && !locked.value) {
+    if (tagsLoading.value || tagsError.value) { error.value = '请先加载作品标签后再提交。'; return }
+    if (tagIds.value.length < 1 || tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id))) { error.value = '请选择 1–3 个当前分类的作品标签。'; return }
+    if (!rights.value) { error.value = '请先确认作品发布权。'; return }
+  }
+  const details: PublicationDetails | undefined = direct.value ? undefined : { tagIds: [...tagIds.value], prompt: prompt.value, sourceUrl: sourceUrl.value.trim(), license: license.value.trim(), referenceIndices: [...referenceIndices.value].sort((a, b) => a - b) }
   const current = revision
-  busy.value = true; error.value = ''
+  busy.value = true
   try {
-    const response = await publishCreation(task.value, title.value, destination.value, text.value, content.value)
+    const response = await publishCreation(task.value, title.value, destination.value, text.value, content.value, details)
     if (current !== revision) return
     result.value = response.work
     notify(resultMessage.value)
-  } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
+  } catch (cause) { if (current === revision) { error.value = errorMessage(cause); if (!direct.value && !locked.value && (cause as { status?: number }).status === 400) void loadTags() } }
   finally { if (current === revision) busy.value = false }
 }
 defineExpose({ open })
@@ -53,14 +90,59 @@ defineExpose({ open })
     <form v-if="task" class="dialog-body stack" @submit.prevent="submit">
       <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url)" :alt="task.prompt" /></template></div>
       <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，按社区审核设置公开。</p>
-      <template v-if="!result"><label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" /></label><label class="field"><span>{{ direct ? '评论内容' : '创作说明' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" /></label><p v-if="locked && !busy" class="form-note">将使用上次提交的内容重试，避免重复发布。</p><button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button></template>
+      <template v-if="!result">
+        <p v-if="!direct" class="publish-context">{{ kindLabels[category] }} · {{ task.model }}<span>已带入生成结果与参数</span></p>
+        <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
+        <label class="field"><span>{{ direct ? '评论内容' : '作品简介' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" :placeholder="direct ? '分享你的同款创作' : '介绍作品、创作过程或填写文本作品内容…'" /></label>
+        <template v-if="!direct">
+          <fieldset class="publish-tags" :disabled="busy || locked" aria-describedby="publish-tags-hint">
+            <legend>作品标签 <span>{{ tagIds.length }} / 3</span></legend>
+            <p id="publish-tags-hint" class="form-note">选择 1–3 个{{ kindLabels[category] }}标签，让作品更容易被发现。</p>
+            <p v-if="tagsLoading" role="status" class="form-note">正在加载标签…</p>
+            <div v-else-if="tagsError" class="stack"><p class="form-error" role="alert">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
+            <template v-else-if="tags.length">
+              <label v-if="tags.length > 8" class="field"><span class="studio-sr-only">搜索作品标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
+              <div class="publish-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
+              <p v-if="!visibleTags.length" class="form-note">没有匹配的标签，试试其他关键词。</p>
+            </template>
+            <p v-else class="form-note">此分类暂无可用标签，请联系管理员添加后重试。</p>
+          </fieldset>
+          <label class="field"><span>生成提示词（选填）</span><textarea v-model="prompt" class="control" rows="4" maxlength="100000" :disabled="busy || locked" aria-describedby="publish-prompt-hint" /></label>
+          <p id="publish-prompt-hint" class="form-note">制作同款会使用这里的提示词和选中的参考图，作品简介不会作为提示词导入。</p>
+          <fieldset v-if="task.references.length" class="publish-references" :disabled="busy || locked"><legend>公开参考图</legend><p class="form-note">仅勾选你希望随作品公开、供他人制作同款的参考图。</p><div class="publish-reference-options"><label v-for="(reference, index) in task.references" :key="index"><input v-model="referenceIndices" type="checkbox" :value="index" /><img :src="mediaSource(reference.url)" alt="" /><span>{{ reference.name || `参考图 ${index + 1}` }}</span></label></div></fieldset>
+          <details class="publish-details"><summary>补充来源与授权（选填）</summary><div class="stack"><label class="field"><span>来源链接</span><input v-model="sourceUrl" class="control" type="url" maxlength="2000" placeholder="https://" :disabled="busy || locked" /></label><label class="field"><span>授权说明</span><input v-model="license" class="control" maxlength="200" placeholder="例如：允许署名分享，商用请联系作者" :disabled="busy || locked" /></label></div></details>
+          <label class="publish-rights"><input v-model="rights" type="checkbox" :disabled="busy || locked" /><span>我确认拥有作品发布权，并已核实所填写的来源与授权说明。</span></label>
+        </template>
+        <p v-if="locked && !busy" class="form-note">将使用上次提交的内容重试，避免重复发布。</p>
+        <button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button>
+      </template>
       <div v-else class="stack"><p role="status">{{ resultMessage }}</p><RouterLink :to="resultLink" class="button primary btn" @click="dialog?.close()">{{ sourceCommentLink ? '查看源作品评论' : '查看提交' }}</RouterLink></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </form>
   </dialog></Teleport>
 </template>
 <style scoped>
+.studio-publish-dialog { width: 640px; }
 .publish-preview { display: flex; gap: 8px; overflow-x: auto; max-height: 200px; }
 .publish-preview img, .publish-preview video { width: min(220px, 70vw); max-height: 200px; object-fit: contain; border-radius: 8px; background: var(--surface); }
 .form-note a { color: var(--blue); }
+.publish-context { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
+.publish-context span { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 4px; }
+.publish-tags, .publish-references { border: 0; padding: 0; margin: 0; min-width: 0; }
+.publish-tags legend, .publish-references legend { padding: 0; margin-bottom: 8px; }
+.publish-tags legend span { color: var(--muted); margin-left: 8px; font-size: 12px; }
+.publish-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 192px; overflow-y: auto; margin-top: 12px; padding: 3px; }
+.publish-tag { min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); overflow-wrap: anywhere; }
+.publish-tag[aria-pressed=true] { border-color: var(--blue); background: var(--blue-soft); color: var(--ink); }
+.publish-tag:disabled { opacity: .5; }
+.publish-reference-options { display: grid; gap: 8px; margin-top: 12px; }
+.publish-reference-options label { display: flex; gap: 12px; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
+.publish-reference-options img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
+.publish-reference-options span { min-width: 0; }
+.publish-details summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+.publish-details > div { margin-top: 8px; }
+.publish-rights { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 22px; min-height: 44px; }
+.publish-rights input { margin-top: 4px; flex-shrink: 0; }
+@media (max-width: 639px) { .studio-publish-dialog { max-width: calc(100vw - 16px); } }
+
 </style>

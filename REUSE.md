@@ -453,3 +453,12 @@ dialog，不引入 React 运行时或 ZIP 依赖。任务页及查询恢复入�
 自动收录只影响新任务的图库可见性，与自动下载开关独立，任务持久化照常。
 批量导出通过原下载函数和 AbortSignal 执行，停止、关闭窗口、筛选变更和账号
 切换会取消当前导出，不触发生成请求。
+
+
+## Studio publication fields (2026-11-18)
+
+Adapted the category tag selection (1–3 existing tags), separate work description and remix prompt,
+optional source/permission fields, and reference selection from the local AGPL-3.0-only reference
+`community-studio-ui/packages/frontend/src/pages/community/surface.vue` and `tag-picker.vue`
+under the user-designated reference project. Reused the current `/api/tags`, `/api/works`, native
+Vue dialog, design tokens and persisted publication snapshots; no new dependency or backend schema.
