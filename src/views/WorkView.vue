@@ -133,7 +133,7 @@ async function share() {
         <div class="detail-visual-column">
           <button v-if="mobile && related.length" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button>
           <RouterLink to="/discover" class="icon-button detail-back" aria-label="返回发现" title="返回发现"><ArrowLeft :size="22" /></RouterLink>
-          <WorkMedia ref="mediaBrowser" class="detail-visual" :class="{ 'single-file': files.length < 2 }" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
+          <WorkMedia ref="mediaBrowser" class="detail-visual" :class="{ 'single-file': files.length < 2 && !work.referenceFiles?.length }" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
         </div>
         <section class="detail-info" aria-label="作品信息与评论">
           <div class="detail-actions">

@@ -131,6 +131,28 @@ test('prompt disclosure, file navigation, reference images and preview remain us
   await expect(page.getByRole('link', { name: '制作同款' })).toHaveAttribute('href', '/create/image?remix=detailwork&prepare=1')
 })
 
+test('one finished work and one reference remain visibly separated and independently selectable', async ({ page }) => {
+  await fixture(page, { ...work, referenceFiles: [landscape] })
+  await page.goto('/work/detailwork')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    const results = page.getByRole('region', { name: '作品文件', exact: true })
+    const references = page.getByRole('region', { name: '参考图', exact: true })
+    await expect(results.getByRole('heading')).toHaveText('作品文件 · 1')
+    await expect(references.getByRole('heading')).toHaveText('参考图 · 1')
+    await expect(results.getByRole('button')).toHaveCount(1)
+    await expect(references.getByRole('button')).toHaveCount(1)
+    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', portrait.url)
+    await references.getByRole('button', { name: `预览 ${landscape.name}`, exact: true }).click()
+    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', landscape.url)
+    await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 参考图')
+    await results.getByRole('button', { name: `预览 ${portrait.name}`, exact: true }).click()
+    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', portrait.url)
+    await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 作品')
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+})
+
 test('related links load another work and browser back restores the original detail', async ({ page }) => {
   await fixture(page)
   await page.goto('/work/detailwork')

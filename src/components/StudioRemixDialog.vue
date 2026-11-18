@@ -80,11 +80,10 @@ async function apply(withReferences: boolean) {
   <dialog ref="dialog" class="studio-remix-dialog" aria-labelledby="remix-heading" @cancel.prevent="cancel">
     <header class="dialog-heading"><h2 id="remix-heading">制作同款</h2><button type="button" class="icon-button" aria-label="关闭制作同款" :disabled="busy" @click="cancel"><X :size="20" /></button></header>
     <div class="remix-body">
-      <p v-if="!ready" class="form-note" role="status">正在读取原作配置…</p><h3 class="remix-title">{{ source.title }}</h3>
-      <p class="form-note">原作品模型：<strong>{{ source.model || '未记录' }}</strong></p>
-      <details class="remix-prompt"><summary>查看完整提示词</summary><p>{{ source.prompt || '作者未公开提示词，可导入图片后在工作台填写。' }}</p></details>
+      <p v-if="!ready" class="form-note" role="status">正在读取提示词和参考图…</p>
+      <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
       <h3>本次使用的参考图</h3>
-      <p class="form-note">勾选源作品图片，或上传自己的参考图。只有选中的图片会用于本次生成。</p>
+      <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>
       <div class="remix-tools"><button type="button" class="button btn" :disabled="pending || count >= limit || materials.snapshot.value.items.length >= limit" @click="upload?.click()"><LoaderCircle v-if="materials.pending.value" :size="18" /><ImagePlus v-else :size="18" />上传我的参考图</button><span class="form-note">最多 {{ limit }} 张，每张 20 MB</span><input ref="upload" hidden type="file" aria-label="上传我的参考图" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic,image/heif,.heic,.heif" multiple :disabled="pending" @change="addFiles" /></div>
       <p class="remix-count" role="status">已选择 {{ count }} / {{ limit }} 张</p>
       <section v-if="ownImages.length" aria-label="我的参考图">
@@ -97,20 +96,18 @@ async function apply(withReferences: boolean) {
           </div>
         </div>
       </section>
-      <section v-if="originals.length" aria-label="源作品图片">
-        <div class="remix-section-heading"><h3>源作品图片 · {{ originals.length }}</h3><button type="button" class="text-link" :disabled="pending || originals.length + selectedUploads.length > limit" @click="selected = originals.map(file => file.id)">全选</button><button type="button" class="text-link" :disabled="pending || !selected.length" @click="selected = []">清空</button></div>
-        <p class="form-note">包含作者公开的参考图和作品配图，可按需选择。GIF 将使用首帧作为静态参考。</p>
+      <section v-if="originals.length" aria-label="作品参考图">
+        <div class="remix-section-heading"><h3>作品参考图 · {{ originals.length }}</h3><button type="button" class="text-link" :disabled="pending || originals.length + selectedUploads.length > limit" @click="selected = originals.map(file => file.id)">全选</button><button type="button" class="text-link" :disabled="pending || !selected.length" @click="selected = []">清空</button></div>
         <div class="remix-grid">
           <label v-for="file in originals" :key="file.id" class="remix-image">
             <div class="remix-preview"><span v-if="failed.includes(file.id)">预览暂不可用</span><img v-else :src="failedThumbnails.includes(file.id) ? file.url : file.thumbnailUrl || file.url" alt="" loading="lazy" @error="previewFailed(file)" /></div>
             <span><input v-model="selected" type="checkbox" :value="file.id" :aria-label="file.name" :disabled="pending || !selected.includes(file.id) && count >= limit" />{{ file.name }}</span>
-            <small class="remix-origin">{{ source.referenceFiles?.some(reference => reference.id === file.id) ? '作者参考图' : '作品图片' }}</small>
           </label>
         </div>
       </section>
-      <p v-else class="form-note">原作没有可用的公开图片。可上传自己的图片，或仅导入提示词。</p>
+      <p v-else class="form-note">作者未公开参考图。可上传自己的图片，或仅导入提示词。</p>
       <StudioMaterialStatus :items="issues" :disabled="importing || busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
-      <p v-if="source.kind === 'video'" class="form-note">选中的源作品图片按原顺序导入，你的图片排在后面。视频中的 @图片编号会同步调整，未选图片会标记为已移除。</p>
+      <p v-if="source.kind === 'video'" class="form-note">选中的作品参考图按原顺序导入，你的图片排在后面。视频中的 @图片编号会同步调整，未选图片会标记为已移除。</p>
       <p v-if="issue" class="form-error" role="alert">{{ issue }} <button v-if="canFallback" type="button" class="text-link" :disabled="pending" @click="emit('fallback')">使用当前配置</button><button type="button" class="text-link" :disabled="pending" @click="emit('retry')">重新读取原作</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
@@ -128,8 +125,7 @@ async function apply(withReferences: boolean) {
 .dialog-heading .icon-button { width: 44px; height: 44px; }
 .remix-body { padding: 20px; overflow-y: auto; overflow-wrap: anywhere; }
 .remix-body h3 { margin: 20px 0 8px; font-size: 15px; line-height: 24px; }
-.remix-body .remix-title { margin-top: 0; font-size: 18px; }
-.remix-prompt summary { min-height: 44px; padding-block: 10px; cursor: pointer; color: var(--ink); font-size: 14px; }
+.remix-prompt h3 { margin-top: 0; }
 .remix-prompt p { max-height: 160px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; }
 .remix-tools, .remix-section-heading, .remix-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .remix-section-heading h3 { margin: 0 auto 0 0; }
@@ -144,7 +140,6 @@ label.remix-image, .remix-image > label { display: block; cursor: pointer; }
 .remix-preview img { width: 100%; height: 100%; object-fit: contain; }
 .remix-image > span, .remix-image > label > span { display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; font-size: 13px; overflow-wrap: anywhere; }
 .remix-image input { flex: none; }
-.remix-origin { display: block; padding: 0 8px 8px; color: var(--muted); font-size: 12px; }
 .remix-remove { width: 100%; border-top: 1px solid var(--border); }
 .remix-footer { justify-content: flex-end; border-top: 1px solid var(--border); }
 .remix-footer .button { min-height: 44px; white-space: normal; }

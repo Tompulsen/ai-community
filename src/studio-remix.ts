@@ -2,9 +2,9 @@
 import type { Work } from './data'
 import type { VideoOptions } from '../shared/studio/options'
 
-export function remixReferenceFiles(work: Pick<Work, 'referenceFiles' | 'files'>) {
+export function remixReferenceFiles(work: Pick<Work, 'referenceFiles'>) {
   const seen = new Set<string>(), ids = new Set<string>()
-  return [...(work.referenceFiles || []), ...(work.files || [])].filter(file => {
+  return (work.referenceFiles || []).filter(file => {
     if (!/^image\/(?:png|jpeg|webp|gif|avif)$/.test(file.type) || !file.url.trim() || ids.has(file.id) || seen.has(file.url)) return false
     try {
       const url = new URL(file.url, 'https://community.invalid')

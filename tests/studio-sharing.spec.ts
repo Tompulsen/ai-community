@@ -87,7 +87,7 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   expect(state.generated).toHaveLength(0)
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
   const picker = page.getByRole('dialog', { name: '选择原作参考图', exact: true })
-  await expect(picker.getByRole('checkbox')).toHaveCount(3)
+  await expect(picker.getByRole('checkbox')).toHaveCount(2)
   await expect(picker.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true })).not.toBeChecked()
   await picker.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true }).check()
   await mkdir('.impeccable/review/studio-mobile', { recursive: true })
@@ -172,7 +172,7 @@ test('opening image history preserves the conversation draft and source, and a n
   await expect(prompt).toHaveValue('')
   await expect(page.getByRole('article', { name: '已发送的创作请求', exact: true })).toContainText(state.source.prompt)
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
-  await expect(page.getByRole('checkbox')).toHaveCount(3)
+  await expect(page.getByRole('checkbox')).toHaveCount(2)
   await page.keyboard.press('Escape')
   await prompt.fill('复用原作后的修改')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -479,11 +479,9 @@ test('remix entry imports public prompt, author references and own files without
   await page.getByRole('link', { name: '制作同款', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByRole('checkbox')).toHaveCount(3)
+  await expect(dialog.getByRole('checkbox')).toHaveCount(2)
   await expect(dialog.getByRole('checkbox').first()).not.toBeChecked()
-  await dialog.locator('summary').click()
-  await expect(dialog).toContainText('公开的完整提示词')
-  await dialog.locator('summary').click()
+  await expect(dialog.getByRole('region', { name: '作品提示词' })).toHaveText('作品提示词' + state.source.generation.prompt)
   await dialog.getByRole('checkbox', { name: /作者参考图2/ }).check()
   await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '自己的参考图.jpg', mimeType: 'image/jpeg', buffer: state.photo })
   await expect(dialog.getByRole('status').filter({ hasText: /^已选择/ })).toHaveText('已选择 2 / 16 张')
@@ -491,7 +489,7 @@ test('remix entry imports public prompt, author references and own files without
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await page.screenshot({ path: '../remix-reference-display-20261118/remix-' + width + '.png', fullPage: true })
+    await page.screenshot({ path: '../remix-reference-separation-20261118/remix-' + width + '.png', fullPage: true })
   }
   expect((await new AxeBuilder({ page }).include('.studio-remix-dialog').analyze()).violations).toEqual([])
   await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
@@ -734,7 +732,7 @@ test('changing accounts while preparing remix images discards the old accounts s
 })
 
 
-test('legacy work attachments appear as selectable source images without published references', async ({ page }) => {
+test('unclassified work attachments are not references and users can upload their own', async ({ page }) => {
   const state = await fixture(page)
   state.source.referenceFiles = []
   state.source.files = [
@@ -743,18 +741,20 @@ test('legacy work attachments appear as selectable source images without publish
   ]
   await page.goto('/create/image?remix=source42&prepare=1')
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
-  await expect(dialog.getByRole('checkbox')).toHaveCount(2)
-  await expect(dialog).toContainText('源作品图片')
-  await expect(dialog.locator('.remix-grid img')).toHaveCount(2)
-  await expect.poll(() => dialog.locator('.remix-grid img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
-  await dialog.getByRole('checkbox', { name: /原作配图.webp/ }).check()
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0)
+  await expect(dialog).toContainText('作者未公开参考图')
+  await expect(dialog.locator('.remix-grid img')).toHaveCount(0)
+  await expect(dialog.getByRole('region', { name: '作品提示词' })).toContainText(state.source.prompt)
+  await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '我的参考图.jpg', mimeType: 'image/jpeg', buffer: state.photo })
+  await expect(dialog.getByRole('checkbox', { name: '我的参考图.jpg', exact: true })).toBeChecked()
+  await expect(dialog.getByRole('img', { name: '我的参考图.jpg', exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: '导入提示词和参考图（1）', exact: true }).click()
   await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
-  await expect(page.getByRole('checkbox', { name: '原作配图.webp', exact: true })).toBeChecked()
+  await expect(page.getByRole('dialog', { name: '选择原作参考图' }).getByRole('checkbox')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => state.generated.length).toBe(1)
-  expect(state.generated[0].referenceUrls).toEqual(['/legacy-files/legacyWebp'])
+  expect(state.generated[0].referenceUrls).toEqual([expect.stringMatching(/^data:image\/jpeg;base64,/)])
 })
 
 test('uploaded references can be deselected and keep their selection when another image is removed', async ({ page }) => {
@@ -783,20 +783,21 @@ test('uploaded references can be deselected and keep their selection when anothe
 })
 
 
-test('source references deduplicate work attachments and fall back from missing thumbnails', async ({ page }) => {
+test('explicit references deduplicate IDs and URLs and fall back from missing thumbnails', async ({ page }) => {
   const state = await fixture(page)
-  state.source.files!.push({ ...state.source.referenceFiles![0]!, url: 'https://www.zhangyuapi.com/legacy-files/authorRef1' })
-  state.source.files![0]!.thumbnailUrl = '/legacy-files/broken-thumb'
+  state.source.referenceFiles!.push({ ...state.source.referenceFiles![0]!, url: 'https://www.zhangyuapi.com/legacy-files/authorRef1' })
+  state.source.referenceFiles!.push({ ...state.source.referenceFiles![1]!, id: 'sameUrl' })
+  state.source.referenceFiles![0]!.thumbnailUrl = '/legacy-files/broken-thumb'
   await page.route('**/legacy-files/broken-thumb', route => route.fulfill({ status: 404 }))
   await page.goto('/create/image?remix=source42&prepare=1')
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
-  await expect(dialog.getByRole('checkbox')).toHaveCount(3)
-  const result = dialog.locator('label.remix-image').filter({ has: page.getByRole('checkbox', { name: '原作成品.jpg', exact: true }) })
+  await expect(dialog.getByRole('checkbox')).toHaveCount(2)
+  const result = dialog.locator('label.remix-image').filter({ has: page.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true }) })
   await result.scrollIntoViewIfNeeded()
-  await expect(result.locator('img')).toHaveAttribute('src', '/legacy-files/authorResult')
+  await expect(result.locator('img')).toHaveAttribute('src', '/legacy-files/authorRef1')
   await expect.poll(() => result.locator('img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
   await dialog.getByRole('button', { name: '全选', exact: true }).click()
-  await expect(dialog.getByRole('status').filter({ hasText: /^已选择/ })).toHaveText('已选择 3 / 16 张')
+  await expect(dialog.getByRole('status').filter({ hasText: /^已选择/ })).toHaveText('已选择 2 / 16 张')
 })
 
 test('reference limit counts only selected uploads and allows replacing a deselected image', async ({ page }) => {
@@ -820,8 +821,7 @@ test('reference limit counts only selected uploads and allows replacing a desele
 
 test('retrying a canceled upload does not select it beyond the reference limit', async ({ page }) => {
   const state = await fixture(page)
-  state.source.files = Array.from({ length: 16 }, (_, index) => ({ id: `limit${index}`, name: `源图${index}.jpg`, type: 'image/jpeg', url: `/legacy-files/limit${index}` }))
-  state.source.referenceFiles = []
+  state.source.referenceFiles = Array.from({ length: 16 }, (_, index) => ({ id: `limit${index}`, name: `源图${index}.jpg`, type: 'image/jpeg', url: `/legacy-files/limit${index}` }))
   await page.addInitScript(() => {
     const read = FileReader.prototype.readAsDataURL
     let delayed = false
@@ -846,12 +846,11 @@ test('retrying a canceled upload does not select it beyond the reference limit',
 for (const kind of ['image', 'resource'] as const) test(`GIF references display and import in ${kind} remix`, async ({ page }) => {
   const state = await fixture(page, kind)
   const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
-  state.source.referenceFiles = []
-  state.source.files = [{ id: 'realGif', name: '原作.gif', type: 'image/gif', url: '/legacy-files/realGif' }]
+  state.source.referenceFiles = [{ id: 'realGif', name: '作者参考.gif', type: 'image/gif', url: '/legacy-files/realGif' }]
   await page.route('**/legacy-files/realGif', route => route.fulfill({ body: gif, contentType: 'image/gif' }))
   await page.goto(`/create/${kind === 'resource' ? 'text' : kind}?remix=source42&prepare=1`)
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
-  await dialog.getByRole('checkbox', { name: '原作.gif', exact: true }).check()
+  await dialog.getByRole('checkbox', { name: '作者参考.gif', exact: true }).check()
   await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '我的动图.gif', mimeType: 'image/gif', buffer: gif })
   await expect(dialog.getByRole('img', { name: '我的动图.gif', exact: true })).toHaveAttribute('src', /^data:image\/png;base64,/)
   await dialog.getByRole('button', { name: '导入提示词和参考图（2）', exact: true }).click()
@@ -862,4 +861,25 @@ for (const kind of ['image', 'resource'] as const) test(`GIF references display 
     expect(images).toHaveLength(2)
     expect(images.every((part: any) => part.image_url.url.startsWith('data:image/png;base64,'))).toBe(true)
   } else expect(state.generated[0].referenceUrls).toEqual(['/legacy-files/realGif', expect.stringMatching(/^data:image\/png;base64,/)])
+})
+
+
+test('remix shows the prompt and only classified references, never finished work images', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image?remix=source42&prepare=1')
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(dialog.getByRole('checkbox', { name: '原作成品.jpg', exact: true })).toHaveCount(0)
+  await expect(dialog.getByRole('checkbox')).toHaveCount(2)
+  await expect(dialog.locator('.remix-prompt p')).toBeVisible()
+  await expect(dialog.locator('.remix-prompt p')).toHaveText(state.source.prompt)
+  await expect(dialog.getByRole('heading', { name: state.source.title, exact: true })).toHaveCount(0)
+  await expect(dialog).not.toContainText('原作品模型：')
+  await dialog.getByRole('checkbox', { name: '作者参考图1.jpg', exact: true }).check()
+  await dialog.getByRole('button', { name: '导入提示词和参考图（1）', exact: true }).click()
+  await page.getByRole('button', { name: '选择原作参考图', exact: true }).click()
+  await expect(page.getByRole('checkbox', { name: '原作成品.jpg', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0].referenceUrls).toEqual(['/legacy-files/authorRef1'])
 })
