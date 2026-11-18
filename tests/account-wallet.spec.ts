@@ -79,7 +79,7 @@ for (const width of [1440, 390]) test(`community point previews use actual paid 
   const summary = page.getByRole('region', { name: '社区积分', exact: true })
   await expect(summary).toContainText('福利积分100积分')
   await expect(summary).toContainText('永久积分50,000积分')
-  await expect(page.locator('.header-actions .account-balance')).toContainText('50,100 积分')
+  await expect(page.locator('.header-actions .account-balance')).toBeHidden()
   await expect(page.locator('.balance-settings')).not.toContainText('8415.17')
   await expect(wallet(page).getByLabel('预计到账积分')).toHaveText('预计到账 50,000 永久积分')
   await expect(wallet(page).getByText('¥ 10.00', { exact: true })).toBeVisible()
@@ -296,10 +296,14 @@ test('wallet supports disabled payments and fits dark/light desktop and narrow m
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       const fields = (await wallet(page).locator('.wallet-topup-fields').boundingBox())!
       const quote = (await wallet(page).locator('.wallet-quote').boundingBox())!
-      if (width >= 640) {
+      if (width >= 1000) {
         expect(quote.x).toBeGreaterThanOrEqual(fields.x + fields.width)
         expect(quote.y).toBeCloseTo(fields.y, 0)
-      } else expect(quote.y).toBeGreaterThanOrEqual(fields.y + fields.height)
+      } else {
+        const nav = (await page.locator('.mobile-nav').boundingBox())!
+        expect(quote.y + quote.height).toBeLessThanOrEqual(nav.y + 1)
+        expect(quote.y).toBeGreaterThanOrEqual(0)
+      }
       const redemption = (await wallet(page).locator('.wallet-redemption').boundingBox())!
       const input = (await wallet(page).getByLabel('兑换码', { exact: true }).boundingBox())!
       const redeem = (await wallet(page).getByRole('button', { name: '兑换', exact: true }).boundingBox())!
@@ -308,13 +312,13 @@ test('wallet supports disabled payments and fits dark/light desktop and narrow m
       expect(input.height).toBe(44)
       expect(redeem.height).toBe(44)
       expect(redeem.x + redeem.width).toBeCloseTo(redemption.x + redemption.width, 0)
-      if (width >= 640) expect(redemption.width).toBeCloseTo(fields.width, 0)
+      if (width >= 1000) expect(redemption.width).toBeCloseTo(fields.width, 0)
       const sizes = await wallet(page).locator('.wallet-amounts button').evaluateAll(items => items.map(item => {
         const bounds = item.getBoundingClientRect()
         return { width: bounds.width, height: bounds.height, fits: item.scrollWidth <= item.clientWidth }
       }))
       expect(Math.max(...sizes.map(item => item.width)) - Math.min(...sizes.map(item => item.width))).toBeLessThan(1)
-      expect(sizes.every(item => item.height === 64 && item.fits)).toBe(true)
+      expect(sizes.every(item => item.height === (width >= 1000 ? 56 : 48) && item.fits)).toBe(true)
       await page.screenshot({ path: `.taste-skill/wallet-reuse-20261114/${mode}-${width}.png` })
     }
   }
@@ -325,4 +329,60 @@ test('wallet supports disabled payments and fits dark/light desktop and narrow m
   await expect(wallet(page).getByText('当前暂无可用的在线充值方式。')).toBeVisible()
   await expect(wallet(page).getByRole('button', { name: '使用兑换码' })).toBeVisible()
   await expect(wallet(page).getByRole('button', { name: '确认金额，去支付' })).toHaveCount(0)
+})
+
+test('topup amount, payment methods and confirmation stay in the first viewport', async ({ page }, info) => {
+  const fixture = await walletFixture(page)
+  Object.assign(fixture.overview, { quotaPerPoint: 100 })
+  fixture.overview.topup.amountOptions = [10, 20, 50, 100, 200, 500, 1000, 2000]
+  Object.assign(fixture.overview.topup.discounts, { 200: .97, 500: .96, 1000: .95, 2000: .94 })
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    linked: true, subject: '17', walletEnabled: true, accountUrl: 'https://accounts.example',
+    points: { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '99995750', permanentPoints: '0',
+      legacyApiQuota: 0, paidApiQuota: 0, totalApiQuota: 0, charityExpiringAt: null },
+  } }))
+  for (const [width, height] of [[1440, 900], [1000, 768], [768, 1024], [390, 844], [320, 667]]) {
+    await page.setViewportSize({ width, height })
+    await page.goto('/account?tab=balance')
+    const submit = wallet(page).getByRole('button', { name: '确认金额，去支付', exact: true })
+    await expect(submit).toBeEnabled()
+    for (const control of [submit, wallet(page).getByLabel('充值档位', { exact: true }),
+      wallet(page).getByLabel('微信支付', { exact: true }), wallet(page).locator('.wallet-amounts button').last()]) {
+      await expect(control).toBeInViewport({ ratio: 1 })
+    }
+    if (width < 1000) {
+      const methods = (await wallet(page).locator('.wallet-methods').boundingBox())!
+      const quote = (await wallet(page).locator('.wallet-quote').boundingBox())!
+      expect(methods.y + methods.height).toBeLessThanOrEqual(quote.y)
+      await expect(page.getByRole('button', { name: '返回账户设置', exact: true })).toBeInViewport({ ratio: 1 })
+    }
+    expect(await page.evaluate(() => scrollY)).toBe(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect(wallet(page)).not.toContainText('支付确认后，实付人民币本金')
+    await page.screenshot({ path: info.outputPath(`payment-first-${width}-${height}.png`), fullPage: false })
+  }
+})
+
+test('mobile quote failures keep retry and focused redemption controls reachable', async ({ page }) => {
+  await walletFixture(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  let failed = true
+  await page.route('**/api/new-api/wallet/quote', route => failed
+    ? route.fulfill({ status: 503, json: { success: false, message: '报价服务暂不可用，请稍后重试。'.repeat(12) } })
+    : route.fulfill({ json: { success: true, data: { userId: 17, amount: route.request().postDataJSON().amount, money: '2.50' } } }))
+  await page.goto('/account?tab=balance')
+  const submit = wallet(page).getByRole('button', { name: '确认金额，去支付', exact: true })
+  await expect(submit).toBeDisabled()
+  await expect(wallet(page).getByRole('alert')).toContainText('报价服务暂不可用')
+  await wallet(page).getByRole('button', { name: '使用兑换码', exact: true }).click()
+  const code = wallet(page).getByLabel('兑换码', { exact: true })
+  await code.scrollIntoViewIfNeeded()
+  await code.focus()
+  const input = (await code.boundingBox())!
+  const quote = (await wallet(page).locator('.wallet-quote').boundingBox())!
+  expect(input.y + input.height).toBeLessThanOrEqual(quote.y)
+  failed = false
+  await wallet(page).getByRole('button', { name: '重新报价', exact: true }).click()
+  await expect(submit).toBeEnabled()
+  await expect(wallet(page).locator('.wallet-quote').getByRole('alert')).toHaveCount(0)
 })

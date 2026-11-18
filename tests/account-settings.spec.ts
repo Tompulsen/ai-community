@@ -118,24 +118,20 @@ test('cover upload and removal save through the existing profile endpoint', asyn
   expect(fixture.mutations.filter(item => item.path === '/api/profile').at(-1)?.body.bannerId).toBe(null)
 })
 
-for (const entry of ['sidebar', 'header'] as const) {
-  test(`${entry} logout confirms unsaved edits before signing out either session`, async ({ page }) => {
-    const fixture = await mockUnifiedAccount(page, true)
-    await page.goto('/account')
-    await page.getByLabel('社区昵称', { exact: true }).fill('退出前的草稿')
-    if (entry === 'header') await page.getByLabel('账号菜单', { exact: true }).click()
-    const signout = page.locator(entry === 'header' ? '.account-popover' : '.settings-sidebar').getByRole('button', { name: '退出登录', exact: true })
-    await signout.click()
-    await page.getByRole('button', { name: '继续编辑', exact: true }).click()
-    await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('退出前的草稿')
-    expect(fixture.mutations.filter(item => item.path.endsWith('/logout'))).toEqual([])
-    if (entry === 'header') await page.getByLabel('账号菜单', { exact: true }).click()
-    await signout.click()
-    await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
-    await expect.poll(() => fixture.state.authenticated || fixture.state.accountAuthenticated).toBe(false)
-    await expect(page.getByRole('dialog')).not.toBeVisible()
-  })
-}
+test('settings logout confirms unsaved edits before signing out either session', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page, true)
+  await page.goto('/account')
+  await page.getByLabel('社区昵称', { exact: true }).fill('退出前的草稿')
+  const signout = page.locator('.settings-sidebar').getByRole('button', { name: '退出登录', exact: true })
+  await signout.click()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('退出前的草稿')
+  expect(fixture.mutations.filter(item => item.path.endsWith('/logout'))).toEqual([])
+  await signout.click()
+  await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
+  await expect.poll(() => fixture.state.authenticated || fixture.state.accountAuthenticated).toBe(false)
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+})
 
 test('homepage logout still works when no navigation is necessary', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)

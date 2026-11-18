@@ -66,6 +66,14 @@ delivery now includes the frontend and an independent community backend.
   Privacy settings control approval, newcomer age and list visibility; age uses
   the community joining timestamp. Existing pending requests remain manual after
   a rule change. Mutations bind the expected account and reuse existing tables.
+- Desktop account settings hide the shared search, balance and avatar header without
+  reserving its height. The global icon rail, settings navigation and logout remain;
+  mobile keeps its compact header.
+- Topup prioritizes amount selection, payment methods, the real quote, expected
+  credit and confirmation in the first viewport. Mobile balance settings collapse
+  the large sidebar and provide a return-to-settings control. The existing payment
+  summary stays above mobile navigation, retaining quote errors and retry; payment,
+  price-change confirmation and account isolation logic remain unchanged.
 - Account settings include six built-in palettes, separately selected for light
   and dark mode, plus system and local-time scheduled switching. Porcelain/Obsidian
   (瓷白/曜石) are the defaults, with botanical green (薄雾/松影) and berry

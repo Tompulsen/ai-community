@@ -60,7 +60,6 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await expect(page.locator('.balance-panel .account-balance')).toHaveCount(0)
   const indicator = page.locator('.account-balance').first()
   await expect(indicator).toHaveAttribute('title', '可用 123,456,789,012,350,678.123457 积分')
-  await expect(indicator).toHaveAccessibleName('我的账户，可用 123,456,789,012,350,678.123457 积分')
   await expect(indicator).toHaveAttribute('aria-description', '可用 123,456,789,012,350,678.123457 积分')
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
@@ -70,6 +69,7 @@ test('community points keep exact amounts, restrictions and unavailable state on
     if (width >= 1000) await expect(page.locator('.community-rail')).toBeVisible()
     else await expect(page.getByRole('navigation', { name: '手机导航', exact: true })).toBeVisible()
     await expect(indicator).toHaveText('123,456,789,012,350,678.123457 积分')
+    await expect(indicator).toHaveAccessibleName('我的账户，可用 123,456,789,012,350,678.123457 积分')
     const header = await page.locator(width >= 1000 ? '.header-actions' : '.mobile-account-tools').boundingBox()
     expect(header!.x).toBeGreaterThanOrEqual(0)
     expect(header!.x + header!.width).toBeLessThanOrEqual(width)

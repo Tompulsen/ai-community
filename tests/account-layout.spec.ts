@@ -16,20 +16,27 @@ for (const width of [1440, 390, 320]) {
       const pending = new Promise<void>(resolve => { release = resolve })
       await page.route('**/api/security/**', async route => { await pending; await route.fallback() })
       await page.goto('/discover')
-      await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
-      const entry = (await page.locator('.profile-toggle').boundingBox())!
-      await page.getByLabel('账号菜单', { exact: true }).click()
-      await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
+      if (width >= 1000) {
+        await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+        await page.getByLabel('账号菜单', { exact: true }).click()
+        await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
+      } else await page.goto('/account')
       await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
-      expect.soft((await page.locator('.profile-toggle').boundingBox())!.x).toBeCloseTo(entry.x, 1)
+      await expect(page.locator('.header-inner')).toBeHidden()
+      if (width >= 1000) {
+        await expect(page.locator('.community-rail .nav-link')).toHaveCount(4)
+        await expect(page.locator('.community-rail').getByRole('link', { name: '首页', exact: true })).toBeVisible()
+        expect(await page.locator('html').evaluate(element => getComputedStyle(element).getPropertyValue('--header-height'))).toBe('0px')
+      } else await expect(page.locator('.mobile-community-header')).toBeVisible()
 
-      const geometry = () => page.evaluate(() => ({
+      const geometry = () => page.evaluate(wide => ({
         scrollY,
-        boxes: ['.header-inner', '.page-heading', '.settings-sidebar', '.settings-main'].map(selector => {
+        boxes: ['.page-heading', '.settings-sidebar', '.settings-main'].map(selector => {
           const rect = document.querySelector(selector)!.getBoundingClientRect()
-          return [rect.x, rect.y, rect.width].map(value => Math.round(value * 10) / 10)
+          // Mobile content can add a classic scrollbar without changing alignment.
+          return [rect.x, rect.y, ...(wide ? [rect.width] : [])].map(value => Math.round(value * 10) / 10)
         }),
-      }))
+      }), width >= 1000)
       const baseline = await geometry()
       expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
       const nav = page.getByRole('navigation', { name: '账户设置', exact: true })
@@ -42,7 +49,20 @@ for (const width of [1440, 390, 320]) {
       for (const [label, tab] of [['我的账户', 'balance'], ['主题与外观', 'theme'], ['个人资料', 'profile']]) {
         await nav.getByRole('button', { name: label, exact: true }).click()
         await expect(page).toHaveURL(new RegExp(`tab=${tab}$`))
+        if (width < 1000 && tab === 'balance') {
+          await expect(page.locator('.settings-sidebar')).toBeHidden()
+          await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+          await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
+        }
         expect.soft(await geometry(), label).toEqual(baseline)
+        await expect(page.locator('.header-inner')).toBeHidden()
+        expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+      }
+      await page.screenshot({ path: test.info().outputPath(`settings-header-${width}.png`), fullPage: true })
+      if (width >= 1000) {
+        await page.locator('.community-rail').getByRole('link', { name: '首页', exact: true }).click()
+        await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toBeVisible()
+        await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
       }
       await page.goto('/create/text')
       await expect(page.locator('.studio-shell')).toBeVisible()

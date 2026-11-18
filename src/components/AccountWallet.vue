@@ -226,12 +226,11 @@ onBeforeUnmount(() => {
           <form v-if="data.topup.enabled" class="wallet-topup-form" @submit.prevent="pay()">
             <div class="wallet-topup-fields">
             <label class="field"><span>{{ pointsEnabled ? '充值档位' : '充值金额' }}</span><input v-model="amount" class="control" type="number" :min="data.topup.minAmount" step="1" inputmode="numeric" :disabled="busy" /></label>
-            <p v-if="pointsEnabled" class="form-note">选择充值档位后查看实付金额与到账积分。</p>
             <div v-if="data.topup.amountOptions.length" class="wallet-amounts" role="group" aria-label="快捷充值金额"><button v-for="value in data.topup.amountOptions" :key="value" type="button" :aria-pressed="numericAmount === value" :disabled="busy" @click="amount = String(value)"><span>{{ value }}</span><small v-if="data.topup.discounts?.[value]">{{ Math.round((1 - data.topup.discounts[value]!) * 100) }}% 优惠</small></button></div>
             <p v-if="!validAmount" class="form-note">请输入不小于 {{ data.topup.minAmount }} 的整数金额。<template v-if="data.quotaDisplayType === 'TOKENS'">数量须为 {{ data.quotaPerUnit }} tokens 的整数倍。</template></p>
             <fieldset class="wallet-methods"><legend>支付方式</legend><label v-for="item in data.topup.paymentMethods" :key="item.type"><input v-model="method" type="radio" name="wallet-topup-method" :value="item.type" :disabled="busy" />{{ item.name }}</label></fieldset>
             </div>
-            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><template v-if="pointsEnabled"><small v-if="quote?.amount === numericAmount" aria-label="预计到账积分">预计到账 {{ formatCnyPoints(quote.money) }} 永久积分</small><small>支付确认后，实付人民币本金按 ¥ 1 = 5,000 永久积分入账。</small></template><small v-else-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
+            <div class="wallet-quote"><div><span class="muted">实付金额</span><strong>¥ {{ quote?.amount === numericAmount ? quote.money : quoteError ? '暂不可用' : validAmount ? '计算中…' : '—' }}</strong><template v-if="pointsEnabled"><small v-if="quote?.amount === numericAmount" aria-label="预计到账积分">预计到账 {{ formatCnyPoints(quote.money) }} 永久积分</small></template><small v-else-if="validAmount">预计到账 {{ quota(data.quotaDisplayType === 'TOKENS' ? numericAmount : numericAmount * data.quotaPerUnit) }}</small></div><button class="button primary btn" type="submit" :disabled="!canPay || !validAmount || quote?.amount !== numericAmount">确认金额，去支付<ArrowUpRight :size="16" /></button><p v-if="quoteError" class="form-error" role="alert">{{ quoteError }} <button type="button" class="text-link" :disabled="busy || loading" @click="updateQuote">重新报价</button></p></div>
           </form>
           <p v-else class="muted">当前暂无可用的在线充值方式。</p>
           <div v-if="data.topup.redemptionEnabled" class="wallet-redemption">
@@ -266,16 +265,16 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .account-wallet { --wallet-summary-width: 224px; --wallet-column-gap: 24px; min-width: 0; padding-bottom: 0; border-bottom: 0; }
-.account-wallet .section-heading { margin-bottom: 8px; }.account-wallet .section-heading h2 { font-size: 16px; line-height: 24px; }
+.account-wallet > .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .wallet-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .wallet-tabs button { min-height: 44px; padding: 8px 12px; color: var(--muted); border-radius: 6px; }
 .wallet-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--surface-soft); }
 .wallet-section { padding-top: 16px; min-width: 0; }
 .wallet-topup-form { display: grid; grid-template-columns: minmax(0, 1fr) var(--wallet-summary-width); align-items: start; gap: var(--wallet-column-gap); }
-.wallet-topup-fields { display: grid; gap: 16px; min-width: 0; }.wallet-topup-fields > .field { font-size: 13px; }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; }
+.wallet-topup-fields { display: grid; gap: 12px; min-width: 0; }.wallet-topup-fields > .field { font-size: 13px; }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; }
 .wallet-topup-fields > .form-note { margin: 0; }
 .wallet-amounts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.wallet-amounts button { display: grid; grid-template-rows: 24px 16px; align-content: center; justify-items: center; gap: 2px; min-width: 0; height: 64px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
+.wallet-amounts button { display: grid; grid-template-rows: 20px 16px; align-content: center; justify-items: center; gap: 0; min-width: 0; min-height: 56px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
 .wallet-amounts button > span { font-size: 15px; line-height: 24px; }
 .wallet-amounts button[aria-pressed="true"] { border-color: var(--focus-ring); background: var(--surface-soft); }
 .wallet-amounts small { font-size: 11px; line-height: 16px; white-space: nowrap; color: var(--muted); }
@@ -284,7 +283,7 @@ onBeforeUnmount(() => {
 .wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer; }
 .wallet-methods label:has(:checked) { border-color: var(--focus-ring); background: var(--surface-soft); }
 .wallet-methods input { margin: 0; accent-color: var(--ink); }
-.wallet-quote { display: grid; gap: 16px; min-width: 0; padding: 0 0 0 24px; border-left: 1px solid var(--border); }
+.wallet-quote { position: sticky; top: 24px; display: grid; gap: 16px; min-width: 0; padding: 0 0 0 24px; border-left: 1px solid var(--border); }
 .wallet-quote > div { display: grid; gap: 6px; }
 .wallet-quote strong, .wallet-money { font-size: 28px; line-height: 36px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .wallet-quote > div > span, .wallet-quote small { font-size: 12px; line-height: 20px; }.wallet-quote small { color: var(--muted); overflow-wrap: anywhere; }.wallet-quote > .button { width: 100%; min-height: 44px; padding-inline: 10px; font-size: 13px; }
@@ -314,9 +313,20 @@ onBeforeUnmount(() => {
 .wallet-notice { margin-bottom: 16px; color: var(--ink); }
 .wallet-history-total { margin-bottom: 12px; }
 .account-wallet th, .account-wallet td { white-space: nowrap; }
-@media (max-width: 639px) {
+@media (max-width: 999px) {
   .wallet-plans, .wallet-topup-form { grid-template-columns: minmax(0, 1fr); }
-  .wallet-topup-form { gap: 20px; }.wallet-quote { gap: 16px; padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  .account-wallet:has(.wallet-topup-form) { padding-bottom: 240px; }
+  :global(html:has(.wallet-topup-form)) { scroll-padding-bottom: calc(var(--mobile-nav-height) + 256px); }
+  .wallet-section { padding-top: 8px; }
+  .wallet-topup-form { gap: 0; }
+  .wallet-topup-fields { gap: 8px; }
+  .wallet-topup-fields > .field { gap: 4px; }
+  .wallet-amounts button { min-height: 48px; padding: 4px; }
+  .wallet-quote { position: fixed; z-index: 18; inset: auto 0 var(--mobile-nav-height); grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; max-height: min(44dvh, 240px); overflow: auto; overscroll-behavior: contain; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); border-left: 0; border-top: 1px solid var(--border); background: var(--surface); }
+  .wallet-quote > div { gap: 0; }
+  .wallet-quote strong { font-size: 24px; line-height: 28px; }
+  .wallet-quote > .button { width: auto; min-height: 48px; }
+  .wallet-quote > .form-error { grid-column: 1 / -1; }
   .wallet-redemption { max-width: none; }
   .wallet-tabs { gap: 0; }.wallet-tabs button { padding-inline: 10px; font-size: 12px; }.wallet-methods { gap: 8px; }
 }

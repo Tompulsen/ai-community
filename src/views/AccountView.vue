@@ -248,7 +248,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 </script>
 
 <template>
-  <div :class="session.user ? 'page-container settings-page' : 'auth-page'">
+  <div :class="session.user ? 'page-container settings-page' : 'auth-page'" :data-settings-tab="session.user ? tab : undefined">
     <aside v-if="!session.user" class="auth-visual">
       <RouterLink to="/discover" class="auth-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <LoginCharacters :is-typing="isTyping" :show-password="showPassword" :password-length="password.length" />
@@ -320,7 +320,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <div v-else class="balance-settings">
           <section class="panel-section balance-panel">
             <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。</p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>
-            <div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" target="_blank" rel="noopener noreferrer">前往账户中心<ArrowUpRight :size="16" /></a></div>
+            <div class="balance-actions"><button type="button" class="icon-button balance-back" aria-label="返回账户设置" title="返回账户设置" @click="navigateTab('profile')"><ArrowLeft :size="18" /></button><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" aria-label="前往账户中心" title="前往账户中心" target="_blank" rel="noopener noreferrer"><span>前往账户中心</span><ArrowUpRight :size="16" /></a></div>
           </section>
           <AccountWallet :wallet-enabled="account?.walletEnabled" @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
         </div>
@@ -333,8 +333,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 
 <style scoped>
 .identity-choice { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; overflow-wrap: anywhere; white-space: normal; gap: 4px; padding: 12px 16px; }
-.settings-page { max-width: 1360px; }
-.settings-page .split-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 40px; align-items: start; }
+.settings-page { max-width: 1240px; }
+.settings-page .page-heading h1 { font-size: 24px; line-height: 32px; }
+.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 40px; align-items: start; }
 .settings-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }
 .settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); }
 .account-tabs { display: grid; gap: 24px; min-width: 0; }
@@ -385,12 +386,13 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .profile-save-status > svg { color: var(--green); }
 .profile-savebar .button { min-height: 44px; }
 .profile-leave-actions { justify-content: end; flex-wrap: wrap; }
-.balance-settings { display: grid; gap: 24px; }
+.balance-settings { display: grid; gap: 16px; }
 .balance-settings > .panel-section { padding-top: 0; }
-.balance-settings .balance-panel { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px 24px; padding: 0 0 16px; background: transparent; border-radius: 0; }
-.balance-summary { min-width: 0; }.balance-summary .section-heading { justify-content: flex-start; gap: 8px; margin-bottom: 0; color: var(--muted); }.balance-summary h2 { font-size: 14px; line-height: 20px; font-weight: 500; }.balance-summary .form-note { margin-top: 4px; }
-.account-balance { font-size: 28px; line-height: 36px; margin: 8px 0 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.balance-settings .balance-panel { display: flex; justify-content: space-between; align-items: center; gap: 12px 24px; padding: 0 0 12px; background: transparent; border-radius: 0; }
+.balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary .form-note { margin-top: 4px; }
+.account-balance { font-size: 20px; line-height: 28px; margin: 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.balance-back { display: none; }
 @media (max-width: 899px) {
   .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .settings-sidebar { position: static; }
@@ -483,6 +485,14 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
   .settings-page > .page-heading { display: none; }
   .settings-page .split-layout { gap: 16px; }
   .settings-sidebar { padding: 12px; background: var(--surface); border-radius: 16px; }
+  .settings-page[data-settings-tab="balance"] .split-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-page[data-settings-tab="balance"] .page-heading { display: none; }
+  .settings-page[data-settings-tab="balance"] .settings-sidebar { display: none; }
+  .balance-settings { gap: 8px; }
+  .balance-settings .balance-panel { gap: 8px; padding-bottom: 4px; }
+  .balance-actions { flex: none; gap: 4px; }
+  .balance-actions .button, .balance-back { display: inline-flex; width: 44px; min-height: 44px; padding: 0; }
+  .balance-actions .button > span { display: none; }
   .settings-search { border-radius: 10px; }
   .account-tabs { gap: 4px; margin: 0; padding-bottom: 8px; }
   .settings-nav-item { min-height: 44px; border-radius: 10px; font-size: 13px; }

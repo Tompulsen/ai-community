@@ -2,14 +2,15 @@ import { mkdir } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-test('account settings show the numeric Octopus account and real username at desktop and phone widths', async ({ page }) => {
+test('profile previews show the numeric Octopus account and real username at desktop and phone widths', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
   fixture.state.user.username = 'root'
   await mkdir('.impeccable/review/account-number', { recursive: true })
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 })
     await page.goto('/account')
-    const identity = page.getByLabel('章鱼号', { exact: true })
+    await page.locator('.profile-preview > summary').click()
+    const identity = page.locator('.profile-preview-body > span')
     await expect(identity).toHaveText('章鱼号：17')
     await expect(page.getByRole('textbox', { name: '登录用户名', exact: true })).toHaveValue('root')
     await expect(page.getByRole('textbox', { name: '登录用户名', exact: true })).toHaveAttribute('readonly', '')
@@ -19,7 +20,7 @@ test('account settings show the numeric Octopus account and real username at des
   }
   await page.getByRole('button', { name: '我的账户', exact: true }).click()
   await expect(page).toHaveURL(/tab=balance/)
-  await expect(page.getByLabel('章鱼号', { exact: true })).toHaveText('章鱼号：17')
+  await expect(page.locator('.profile-preview-body')).toHaveCount(0)
 })
 
 test('profile editing keeps the verified account number and username read-only', async ({ page }) => {
@@ -32,12 +33,13 @@ test('profile editing keeps the verified account number and username read-only',
   expect(mutation?.body).toMatchObject({ name: '章鱼小白' })
   expect(mutation?.body).not.toHaveProperty('accountId')
   expect(mutation?.body).not.toHaveProperty('username')
-  await expect(page.getByLabel('章鱼号', { exact: true })).toHaveText('章鱼号：17')
+  await expect(page.locator('.profile-preview-body > span')).toHaveText('章鱼号：17')
   await expect(page.getByRole('textbox', { name: '登录用户名', exact: true })).toHaveValue('octopusfixture')
   await page.reload()
   await expect(page.getByRole('textbox', { name: '社区昵称', exact: true })).toHaveValue('章鱼小白')
   await page.locator('.profile-preview > summary').click()
   await expect(page.locator('.profile-preview-body')).toContainText('章鱼号：17')
+  await page.goto('/discover')
   await page.locator('.profile-toggle').click()
   await expect(page.locator('.menu-title')).toHaveText('章鱼小白章鱼号：17')
 })
