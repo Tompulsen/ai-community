@@ -5,8 +5,54 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { getUser, hash, publicUser, readCookies, roleCondition } from './auth.ts'
+import { authServices, getUser, hash, publicUser, readCookies, roleCondition } from './auth.ts'
 import { compareStreamIds, createApplication, requireSameOrigin, staticPath } from './runtime.ts'
+
+test('visitor view keys use forwarded IPs only through trusted proxies', async t => {
+  const origin = 'https://community.example'
+  const keys = [], seen = new Set()
+  let views = 0
+  const app = createApplication({
+    config: { url: origin }, filesRoot: path.resolve('files'),
+    trustedProxies: ['loopback', '172.18.0.1'],
+    db: { async query(sql) {
+      if (sql.includes('UPDATE community_submission SET "viewsCount"')) return { rows: [{ viewsCount: ++views }] }
+      return { rows: [{ id: 'work1', approvedNoteId: 'note1', viewsCount: views }] }
+    } },
+    redis: { async set(key) {
+      keys.push(key)
+      if (seen.has(key)) return null
+      seen.add(key); return 'OK'
+    } },
+  })
+  t.after(() => app.close())
+  const cases = [
+    ['127.0.0.1', '198.51.100.11', '198.51.100.11', 1],
+    ['172.18.0.1', '203.0.113.99, 198.51.100.12', '198.51.100.12', 2],
+    ['198.51.100.20', '203.0.113.1', '198.51.100.20', 3],
+    ['198.51.100.20', '203.0.113.2', '198.51.100.20', 3],
+  ]
+  for (const [remoteAddress, forwarded, expected, count] of cases) {
+    const response = await app.inject({ method: 'POST', url: '/api/works/work1/view', remoteAddress,
+      headers: { origin, 'content-type': 'application/json', 'x-forwarded-for': forwarded }, payload: {} })
+    assert.equal(response.statusCode, 200, response.body)
+    assert.equal(response.json().viewsCount, count)
+    assert.equal(keys.at(-1), `community:view:work1:${hash(`ip:${expected}`)}`)
+  }
+})
+
+test('community sessions record the verified client IP instead of the proxy socket', async () => {
+  let stored
+  const db = { async query(sql) { return { rows: sql.includes('FROM "user"')
+    ? [{ id: '7', host: null, token: 'private', username: 'creator' }] : [] } } }
+  const auth = authServices({ db, config: { url: 'https://community.example' }, redis: {
+    async set(_key, value) { stored = JSON.parse(value) }, async zadd() {}, async expire() {},
+  } })
+  await auth.createSession('7', { getHeader() {}, setHeader() {} },
+    { socket: { remoteAddress: '172.18.0.1' }, headers: {} }, undefined,
+    { issuer: 'https://zhangyuapi.com', subject: '7', sessionHash: 'account-session' }, '198.51.100.11')
+  assert.equal(stored.ip, '198.51.100.11')
+})
 
 test('mutating requests require the exact site Origin and JSON', () => {
   assert.throws(() => requireSameOrigin({ method: 'POST', headers: { origin: 'https://other.example', 'content-type': 'application/json' } }, 'https://community.example'), { statusCode: 403 })

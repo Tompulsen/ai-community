@@ -1,10 +1,13 @@
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  test: {
+    include: ['src/**/*.test.ts', 'server/business/**/*.test.ts', 'server/native-account/wallet.test.ts'],
+  },
   resolve: {
     alias: {
       'elkjs/lib/elk.bundled.js': fileURLToPath(new URL('./src/studio-elk.ts', import.meta.url)),

@@ -159,7 +159,7 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
   function cookie(res: ServerResponse, value: string, maxAge: number): void {
     appendCookie(res, `${sessionCookie}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`)
   }
-  async function createSession(userId: string, res: ServerResponse, req?: IncomingMessage, expectedTokenHash?: string, account?: AccountSessionBinding): Promise<PublicUser> {
+  async function createSession(userId: string, res: ServerResponse, req?: IncomingMessage, expectedTokenHash?: string, account?: AccountSessionBinding, clientIp = req?.socket.remoteAddress || null): Promise<PublicUser> {
     const user = await getUser(db, userId)
     if (!user) throw httpError(403, '此账号当前不可用。')
     if (expectedTokenHash && user.tokenHash !== expectedTokenHash) throw httpError(409, '账号安全设置已变化，请重新登录。', 'CREDENTIAL_CHANGED')
@@ -170,7 +170,7 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
     const token = randomBytes(32).toString('base64url')
     const sessionHash = hash(token)
     const stored: StoredSession = { userId, tokenHash: user.tokenHash, createdAt: new Date().toISOString(),
-      ip: req?.socket.remoteAddress || null, userAgent: String(req?.headers['user-agent'] || '').slice(0, 512), ...(account ? { account } : {}) }
+      ip: clientIp, userAgent: String(req?.headers['user-agent'] || '').slice(0, 512), ...(account ? { account } : {}) }
     await redis.set(`community-next:session:${sessionHash}`, JSON.stringify(stored), 'EX', ttl)
     await redis.zadd(`community-next:sessions:${userId}`, Date.now(), sessionHash)
     await redis.expire(`community-next:sessions:${userId}`, ttl)

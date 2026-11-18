@@ -447,19 +447,40 @@ async function contentRows(ctx: RequestContext, options: Parameters<typeof conte
   return (await contentPage(ctx, options)).rows;
 }
 
-async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision = false) {
+async function packWorks(ctx: RequestContext, rows: CommunityRow[], includeRevision = (_row: CommunityRow) => false) {
+  const contents = rows.map(row => includeRevision(row) && row.pendingRevision ? { ...row, ...row.pendingRevision } : row);
+  const requests = new Map<string, [string, string]>();
+  for (const [index, content] of contents.entries()) for (const id of [...(content.fileIds ?? []), ...(content.generation?.referenceFileIds ?? [])]) {
+    const authorId = rows[index]!.authorId;
+    requests.set(JSON.stringify([id, authorId]), [id, authorId]);
+  }
+  const pairs = [...requests.values()];
+  const tagIds = [...new Set(contents.flatMap(content => content.tagIds ?? []))];
+  const [files, tags] = await Promise.all([
+    pairs.length ? ctx.db.query<DriveFileRow & { userId: string }>(`SELECT id,name,type,size,"userId","thumbnailAccessKey","storedInternal",properties FROM drive_file
+      WHERE (id,"userId") IN (SELECT * FROM unnest($1::varchar[],$2::varchar[]))`, [pairs.map(pair => pair[0]), pairs.map(pair => pair[1])]).then(result => result.rows) : [],
+    tagIds.length ? ctx.db.query<TagRow>('SELECT id,name,category FROM community_tag WHERE id=ANY($1::varchar[]) AND NOT "isDeleted" AND category=ANY($2::varchar[]) ORDER BY id',
+      [tagIds, [...new Set(contents.map(content => content.category))]]).then(result => result.rows) : [],
+  ]);
+  return Promise.all(rows.map((row, index) => packWork(ctx, row, includeRevision(row), {
+    files: files.filter(file => file.userId === row.authorId),
+    tags: tags.filter(tag => tag.category === contents[index]!.category && contents[index]!.tagIds?.includes(tag.id)),
+  })));
+}
+
+async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision = false, assets?: { files: DriveFileRow[]; tags: TagRow[] }) {
   const content = includeRevision && row.pendingRevision ? { ...row, ...row.pendingRevision } : row;
   const ids = content.fileIds ?? [];
-  const files = ids.length ? (await ctx.db.query<DriveFileRow>('SELECT id, name, type, size, "thumbnailAccessKey", "storedInternal",properties FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2', [ids, row.authorId])).rows : [];
+  const files = assets ? assets.files : ids.length ? (await ctx.db.query<DriveFileRow>('SELECT id, name, type, size, "thumbnailAccessKey", "storedInternal",properties FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2', [ids, row.authorId])).rows : [];
   const referenceIds = content.generation?.referenceFileIds ?? [];
-  const references = referenceIds.length ? (await ctx.db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'storedInternal'>>('SELECT id,name,type,"storedInternal" FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2', [referenceIds, row.authorId])).rows : [];
+  const references = assets ? assets.files : referenceIds.length ? (await ctx.db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'storedInternal'>>('SELECT id,name,type,"storedInternal" FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2', [referenceIds, row.authorId])).rows : [];
   const ordered = ids.flatMap(id => files.filter(file => file.id === id));
   const mediaUrl = (file: DriveFileRow | undefined) => file?.storedInternal ? `/legacy-files/${file.id}` : '';
   const image = ordered.find(file => file.type.startsWith('image/'));
   const video = ordered.find(file => file.type.startsWith('video/'));
   const coverAspectRatio = (image || video)?.properties?.previewAspectRatio;
   const tagIds = content.tagIds ?? [];
-  const tags = tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" AND category = $2 ORDER BY id', [tagIds, content.category])).rows : [];
+  const tags = assets ? assets.tags : tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" AND category = $2 ORDER BY id', [tagIds, content.category])).rows : [];
   const publicStatus = ['published', 'approved'].includes(row.status) && row.approvedNoteId;
   const publicParameters = readRemixParameters(content.generation?.parameters);
   return {
@@ -1223,14 +1244,14 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   }
   if ((path === '/api/works' || path === '/api/community/works') && method === 'GET') {
     const { rows, nextCursor } = await contentPage(ctx, { authorId: ctx.url.searchParams.get('authorId') || undefined });
-    return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row))), nextCursor });
+    return send(ctx, 200, { items: await packWorks(ctx, rows), nextCursor });
   }
   if (path === '/api/works' && method === 'POST') return createWork(ctx);
   if (path === '/api/library' && method === 'GET') {
     user(ctx);
     const tab = ctx.url.searchParams.get('tab') ?? ctx.url.searchParams.get('status');
     const { rows, nextCursor } = await contentPage(ctx, { scope: tab === 'saved' ? 'saved' : tab === 'liked' ? 'liked' : 'mine' });
-    return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row, row.authorId === viewer(ctx)))), nextCursor });
+    return send(ctx, 200, { items: await packWorks(ctx, rows, row => row.authorId === viewer(ctx)), nextCursor });
   }
   if (path === '/api/admin/submissions' && method === 'GET') {
     moderator(ctx);
@@ -1238,7 +1259,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
     const pending = await ctx.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count
       FROM community_submission s JOIN "user" u ON u.id=s."authorId"
       WHERE s.status='pending' OR s."pendingRevision" IS NOT NULL`);
-    return send(ctx, 200, { items: await Promise.all(rows.map(row => packWork(ctx, row, true))),
+    return send(ctx, 200, { items: await packWorks(ctx, rows, () => true),
       nextCursor, pendingCount: Number(pending.rows[0]?.count ?? 0) });
   }
   if ((match = /^\/api\/admin\/submissions\/([a-zA-Z0-9]+)\/review$/.exec(path)) && method === 'POST') return reviewWork(ctx, identifier(match[1]));

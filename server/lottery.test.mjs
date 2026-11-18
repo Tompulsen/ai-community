@@ -217,3 +217,68 @@ test('delivery validates the exact configured quota receipt before marking an aw
   assert.equal(writes[1][3], 3)
   assert.equal(JSON.parse(writes[1][1])[0].creditBlocked, true)
 })
+
+function pendingDelivery(fetcher) {
+  const row = { id: 'five-prize-draw', userId: 'owner', createdAt: new Date(), creditAttempts: 0,
+    creditPending: true, creditRetryAt: null, creditIssuer: 'https://accounts.test', creditSubject: '7',
+    prizes: Array.from({ length: 5 }, () => ({ status: 'pending', amountCents: 50, name: 'Credit' })) }
+  const client = {
+    async query(sql, args) {
+      if (sql.startsWith('SELECT * FROM community_lottery_draw')) return { rows: [structuredClone(row)] }
+      if (sql.startsWith('UPDATE community_lottery_draw')) Object.assign(row, {
+        prizes: JSON.parse(args[1]), creditPending: args[2], creditAttempts: args[3], creditRetryAt: args[4],
+      })
+      return { rows: [] }
+    },
+    release() {},
+  }
+  return { row, api: createLotteryService({
+    db: { connect: async () => client }, fetcher, logger: { warn() {} },
+    config: { url: 'https://community.test/', newApiSso: { issuer: 'https://accounts.test/', lotterySecret: 'x'.repeat(32) } },
+  }) }
+}
+
+test('five slow successful awards keep their retry budget and eventually all arrive', async t => {
+  const budgets = new WeakMap(), sent = [], credited = []
+  t.mock.method(AbortSignal, 'timeout', milliseconds => {
+    assert.equal(milliseconds, 8000)
+    const controller = new AbortController()
+    budgets.set(controller.signal, { controller, remaining: milliseconds })
+    return controller.signal
+  })
+  const { row, api } = pendingDelivery(async (_url, { body, signal }) => {
+    const request = JSON.parse(body), budget = budgets.get(signal)
+    sent.push(request.reference)
+    if (budget.remaining < 5000) {
+      budget.controller.abort()
+      throw signal.reason
+    }
+    budget.remaining -= 5000
+    credited.push(request.reference)
+    return new Response(JSON.stringify({ credited: true, reference: request.reference, user_id: 7, amount_cents: 50,
+      receipt: { id: credited.length, quota_added: 250000, quota_per_usd: '500000' } }))
+  })
+  for (let round = 0; round < 5; round++) {
+    row.creditRetryAt = null
+    await api.deliver(row.id)
+    assert.equal(row.prizes.filter(prize => prize.status === 'fulfilled').length, round + 1)
+    assert.equal(row.creditAttempts, 0)
+  }
+  assert.equal(row.creditPending, false)
+  assert.equal(row.creditRetryAt, null)
+  assert.deepEqual(credited, Array.from({ length: 5 }, (_, index) => `community_lottery_${row.id}_${index}`))
+  assert.deepEqual(sent, [credited[0], credited[1], credited[1], credited[2], credited[2], credited[3], credited[3], credited[4], credited[4]])
+})
+
+test('delivery still stops after three consecutive failures without progress', async () => {
+  let calls = 0
+  const { row, api } = pendingDelivery(async () => { calls++; throw new Error('Temporary upstream failure') })
+  for (let round = 0; round < 5; round++) {
+    row.creditRetryAt = null
+    await api.deliver(row.id)
+  }
+  assert.equal(calls, 3)
+  assert.equal(row.creditAttempts, 3)
+  assert.equal(row.creditPending, true)
+  assert(row.prizes.every(prize => prize.status === 'pending'))
+})

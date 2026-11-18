@@ -116,6 +116,83 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
+test('a full work page batches attachments, reference images and tags into four queries', async () => {
+  const rows = Array.from({ length: 24 }, (_, index) => ({ ...workRow, id: `work${index}`, category: 'image',
+    fileIds: [`file${index}`], tagIds: ['tag1'], generation: { prompt: 'Image', model: '', referenceFileIds: [`ref${index}`] } }));
+  const statements = [];
+  const ctx = context({ path: '/api/works?sort=latest&limit=24', query: async (sql, args) => {
+    statements.push(sql);
+    if (sql.includes('SELECT s.*')) return { rows };
+    if (sql.includes('FROM drive_file')) {
+      assert.match(sql, /\(id,"userId"\) IN \(SELECT \* FROM unnest/);
+      assert.equal(args[0].length, 48);
+      return { rows: args[0].map((id, index) => ({ id, userId: args[1][index], name: id, type: 'image/png', size: 10, storedInternal: true })) };
+    }
+    if (sql.includes('FROM community_tag')) return { rows: [{ id: 'tag1', name: 'Tag', category: 'image' }] };
+    return { rows: [] };
+  } });
+  await handleContent(ctx);
+  assert.equal(statements.length, 4);
+  assert.equal(ctx.result.payload.items.length, 24);
+  for (const [index, item] of ctx.result.payload.items.entries()) {
+    assert.equal(item.id, `work${index}`);
+    assert.deepEqual(item.files.map(file => file.id), [`file${index}`]);
+    assert.deepEqual(item.referenceFiles.map(file => file.id), [`ref${index}`]);
+    assert.deepEqual(item.tags, ['Tag']);
+  }
+});
+
+test('batched work media preserves owner isolation, reference rules and tag categories', async () => {
+  const rows = [{ ...workRow, category: 'image', fileIds: ['image1', 'foreign2'], tagIds: ['imageTag', 'videoTag'],
+    generation: { prompt: '', model: '', referenceFileIds: ['ref1', 'foreign2', 'refLink', 'video1'] } },
+  { ...workRow, id: 'work2', authorId: 'owner2', category: 'video', fileIds: ['foreign2'], tagIds: ['imageTag', 'videoTag'] }];
+  const files = [
+    { id: 'image1', userId: 'owner1', type: 'image/png', storedInternal: true },
+    { id: 'foreign2', userId: 'owner2', type: 'image/png', storedInternal: true },
+    { id: 'ref1', userId: 'owner1', type: 'image/png', storedInternal: true },
+    { id: 'refLink', userId: 'owner1', type: 'image/png', storedInternal: false },
+    { id: 'video1', userId: 'owner1', type: 'video/mp4', storedInternal: true },
+  ];
+  const ctx = context({ path: '/api/works?sort=latest', query: async sql => {
+    if (sql.includes('SELECT s.*')) return { rows };
+    if (sql.includes('FROM drive_file')) return { rows: files };
+    if (sql.includes('FROM community_tag')) {
+      assert.match(sql, /NOT "isDeleted"/);
+      return { rows: [{ id: 'imageTag', name: 'Image', category: 'image' }, { id: 'videoTag', name: 'Video', category: 'video' }] };
+    }
+    return { rows: [] };
+  } });
+  await handleContent(ctx);
+  const [first, second] = ctx.result.payload.items;
+  assert.deepEqual(first.files.map(file => file.id), ['image1']);
+  assert.deepEqual(first.referenceFiles.map(file => file.id), ['ref1']);
+  assert.deepEqual(first.tags, ['Image']);
+  assert.deepEqual(second.files.map(file => file.id), ['foreign2']);
+  assert.deepEqual(second.tags, ['Video']);
+});
+
+test('admin work batches select pending revision media and category without mixing published assets', async () => {
+  const ctx = context({ path: '/api/admin/submissions', user: { id: 'admin', isAdmin: true }, query: async (sql, args) => {
+    if (sql.includes('SELECT s.*')) return { rows: [{ ...workRow, fileIds: ['published1'], tagIds: ['publishedTag'],
+      pendingRevision: { ...workRow, category: 'video', fileIds: ['pending1'], tagIds: ['pendingTag'], title: 'Pending' } }] };
+    if (sql.includes('FROM drive_file')) {
+      assert.deepEqual(args, [['pending1'], ['owner1']]);
+      return { rows: [{ id: 'pending1', userId: 'owner1', type: 'video/mp4', storedInternal: true }] };
+    }
+    if (sql.includes('FROM community_tag')) {
+      assert.deepEqual(args, [['pendingTag'], ['video']]);
+      return { rows: [{ id: 'pendingTag', name: 'Video', category: 'video' }] };
+    }
+    return { rows: [] };
+  } });
+  await handleContent(ctx);
+  const item = ctx.result.payload.items[0];
+  assert.equal(item.title, 'Pending');
+  assert.equal(item.kind, 'video');
+  assert.deepEqual(item.files.map(file => file.id), ['pending1']);
+  assert.deepEqual(item.tags, ['Video']);
+});
+
 test('work authors and comments use the current local nickname while retaining verified account fields and content ownership', async () => {
   let nickname = '章鱼小白';
   const query = async sql => {
@@ -169,7 +246,7 @@ test('work covers expose only valid processed preview ratios', async () => {
     const ctx = context({ query: async sql => {
       if (sql.includes('FROM community_submission s')) return { rows: [{ ...workRow, category: 'image', fileIds: ['cover1'] }] };
       if (sql.includes('FROM drive_file')) return { rows: [{
-        id: 'cover1', name: 'Cover', type: 'image/jpeg', storedInternal: true, thumbnailAccessKey: 'thumbnail1',
+        id: 'cover1', userId: 'owner1', name: 'Cover', type: 'image/jpeg', storedInternal: true, thumbnailAccessKey: 'thumbnail1',
         properties: { width: 900, height: 300, previewAspectRatio: ratio },
       }] };
       return { rows: [] };

@@ -56,16 +56,20 @@ interface ApplicationOptions {
   config: AppConfig
   filesRoot: string
   distRoot?: string
+  trustedProxies?: string[]
 }
 
 type ModuleHandler = (ctx: RequestContext) => Promise<boolean>
 type RouteGroup = [HTTPMethods | HTTPMethods[], string[]]
 
-export function createApplication({ db, redis, config, filesRoot, distRoot = path.join(projectRoot, 'dist') }: ApplicationOptions): FastifyInstance {
+export function createApplication({ db, redis, config, filesRoot, distRoot = path.join(projectRoot, 'dist'),
+  trustedProxies = (process.env.TRUSTED_PROXY_CIDRS || 'loopback').split(',').map(value => value.trim()).filter(Boolean),
+}: ApplicationOptions): FastifyInstance {
   const origin = new URL(config.url).origin
   const auth = authServices({ db, redis, config })
   const app = Fastify({
     bodyLimit, requestTimeout: 120000, exposeHeadRoutes: false,
+    trustProxy: trustedProxies,
     routerOptions: { maxParamLength: 512 },
     ajv: { customOptions: { coerceTypes: false, useDefaults: false, removeAdditional: false } },
   })
@@ -102,7 +106,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
           .header('Cache-Control', 'private, no-store')
           .header('X-Content-Type-Options', 'nosniff').send(value)
       },
-      createSession: (userId, expectedTokenHash, account) => auth.createSession(userId, reply.raw, request.raw, expectedTokenHash, account),
+      createSession: (userId, expectedTokenHash, account) => auth.createSession(userId, reply.raw, request.raw, expectedTokenHash, account, request.ip),
       requireUser,
       requireAdmin: () => {
         const user = requireUser()

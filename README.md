@@ -57,6 +57,11 @@ docker pull ghcr.io/tompulsen/ai-community:latest
 文档服务继续沿用现有独立镜像。切换旧服务的步骤见 [MIGRATION.md](MIGRATION.md)，
 镜像发布本身不代表服务器已完成更新。
 
+生产环境统一使用一个 `web` 容器处理页面、接口、媒体处理及抽奖后台任务。
+发布使用 [单容器发布脚本](deploy/community/README.md)，固定已拉取镜像的 digest，
+先验证候选环境，再交接后台任务和切换入口。旧版本 `/assets/` 文件归档到
+OpenResty 可读目录，仅在当前资源返回 404 时回退，不再依赖旧应用实例常驻。
+
 ## 后端运行
 
 后端使用 Node.js 24 直接运行 TypeScript；`npm run build` 包含严格后端类型检查。
@@ -89,6 +94,10 @@ CONFIG_PATH=/app/.config/default.yml FILES_ROOT=/app/files npm start
 旧 `/studio` 页面 GET/HEAD 跳转 `/create`；`/studio/api/new-api/*` 仅作为本地
 账号接口兼容别名。旧 iframe 启动、交换和上下文接口返回 410。
 健康接口 `/healthz` 检查数据库和 Redis。
+
+访客 IP 默认只信任本机代理。Docker 部署通过 `TRUSTED_PROXY_CIDRS` 指定可信代理的
+IP 或 CIDR（逗号分隔）；单容器发布脚本会在未显式配置时加入 Web 主网络的网关地址。
+入口代理必须覆盖 `X-Forwarded-For` 为核实后的访客 IP，不透传客户端任意填写的值。
 
 页面与静态资源不依赖账号存储读取，账号服务短暂故障时仍可打开登录页；业务接口与
 附件继续按原规则鉴权。镜像构建会先运行单元测试和服务端测试，再执行类型检查与构建。

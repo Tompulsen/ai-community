@@ -284,6 +284,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
           try { prize.creditReceipt = lotteryCreditReceipt(response, reference, Number(row.creditSubject), prize.amountCents) }
           catch { throw Object.assign(new Error('LOTTERY_CREDIT_RESPONSE'), { permanent: true }) }
           prize.status = 'fulfilled'
+          row.creditAttempts = 0
           prize.fulfilledAt = new Date().toISOString()
           prize.note = `${(prize.amountCents / 100).toFixed(2)} USD`
         } catch (error) {
