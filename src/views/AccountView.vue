@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { ArrowLeft, ArrowRight, Check, ChevronDown, Eye, EyeOff, Image, LogOut, Palette, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { site } from '../site'
-import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus } from '../state'
+import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import FollowRequests from '../components/FollowRequests.vue'
@@ -53,6 +53,7 @@ const error = ref('')
 const busy = ref(false)
 const status = ref<AccountStatus | null>(null), statusReady = ref(false)
 const requiresVerification = ref(false), verificationCode = ref('')
+const identitySelection = ref<LoginIdentitySelection | null>(null)
 const challengeToken = ref(''), challengeVersion = ref(0)
 const resetRequested = computed(() => Boolean(resetToken.value))
 const centerUrl = computed(() => accountCenterUrl())
@@ -173,31 +174,41 @@ onMounted(async () => {
   } catch (cause) { error.value = errorMessage(cause) }
 })
 onBeforeUnmount(() => { active = false; profileOperation++; profileUpload?.abort(); resolveLeave?.(false); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
-async function signIn() {
-  if (busy.value) return
+async function signIn(selectionId?: string) {
+  if (busy.value || (identitySelection.value && !selectionId)) return
+  if (identitySelection.value && identitySelection.value.expiresAt <= Date.now() / 1000) {
+    await restartLogin(); error.value = '账号选择已过期，请重新登录。'; return
+  }
   busy.value = true
   error.value = ''
   try {
     const result = await login({
       login: identifier.value.trim(), password: password.value, turnstileToken: challengeToken.value,
       ...(requiresVerification.value ? { code: verificationCode.value.trim() } : {}),
+      ...(selectionId ? { selectionId } : {}),
       returnTo: loginReturnPath(route.query.returnTo),
     })
     password.value = ''
+    if (!active) return
+    if ('requiresIdentitySelection' in result) { identitySelection.value = result; return }
+    identitySelection.value = null
     if (result.requires2fa) { requiresVerification.value = true; return }
     verificationCode.value = ''
     const destination = loginReturnPath(route.query.returnTo)
     if (destination.split('?')[0] === '/account') await loadAccount()
     await router.replace(destination)
   } catch (cause) {
+    if (selectionId) await restartLogin()
     error.value = errorMessage(cause)
     if (!requiresVerification.value) { challengeToken.value = ''; challengeVersion.value++ }
   }
   finally { busy.value = false }
 }
-function restartLogin() {
+async function restartLogin() {
+  identitySelection.value = null; password.value = ''
   requiresVerification.value = false; verificationCode.value = ''; error.value = ''
   challengeToken.value = ''; challengeVersion.value++
+  try { await accountApi('login-cancel', {}) } catch (cause) { error.value = errorMessage(cause) }
 }
 async function saveProfile() {
   if (busy.value || !session.user || !name.value.trim()) return
@@ -245,16 +256,20 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ requiresVerification ? '请输入章鱼账号要求的验证码' : '使用章鱼账号登录' }}</p></div></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
     <div v-else-if="!session.user" class="account-entry">
       <ContentSkeleton v-if="!statusReady" layout="form" label="正在连接章鱼账号…" />
       <template v-else-if="status?.enabled && status.configured && status.passwordLoginEnabled">
-        <form class="auth-login-form" aria-label="登录章鱼账号" @submit.prevent="signIn">
-          <template v-if="!requiresVerification">
-            <label class="field"><span>章鱼账号</span><input v-model="identifier" class="control" autocomplete="username" placeholder="请输入章鱼账号用户名" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
+        <form class="auth-login-form" aria-label="登录章鱼账号" @submit.prevent="signIn()">
+          <template v-if="identitySelection">
+            <button v-for="candidate in identitySelection.candidates" :key="candidate.selection_id" type="button" class="button btn identity-choice" :disabled="busy" @click="signIn(candidate.selection_id)"><strong>登录 {{ candidate.username }}</strong><span class="muted">{{ candidate.account_label }}</span></button>
+            <button type="button" class="text-link auth-back" :disabled="busy" @click="restartLogin"><ArrowLeft :size="16" />返回账号登录</button>
+          </template>
+          <template v-else-if="!requiresVerification">
+            <label class="field"><span>用户名或邮箱</span><input v-model="identifier" class="control" autocomplete="username" placeholder="请输入用户名或邮箱" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
             <div class="field"><label for="account-password">密码</label><span class="auth-password"><input id="account-password" v-model="password" class="control" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" required :disabled="busy" /><button type="button" class="auth-password-toggle icon-button" :aria-label="showPassword ? '隐藏密码' : '显示密码'" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showPassword" :disabled="busy" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" :size="20" /><Eye v-else :size="20" /></button></span></div>
             <div class="login-options"><a v-if="recoveryUrl" class="text-link forgot-password" :href="recoveryUrl" target="_blank" rel="noopener noreferrer">忘记密码？</a></div>
             <AccountTurnstile v-if="status.turnstileSiteKey" :site-key="status.turnstileSiteKey" :reset-key="challengeVersion" :disabled="busy" @token="challengeToken = $event" />
@@ -263,9 +278,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
             <label class="field"><span>账号验证码或恢复码</span><input v-model="verificationCode" class="control" autocomplete="one-time-code" maxlength="32" required :disabled="busy" /></label>
             <button type="button" class="text-link auth-back" :disabled="busy" @click="restartLogin"><ArrowLeft :size="16" />返回账号登录</button>
           </template>
-          <button type="submit" class="button btn auth-button" :disabled="busy || (!requiresVerification && !!status.turnstileSiteKey && !challengeToken)"><span class="auth-button-label">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}</span><span class="auth-button-hover" aria-hidden="true">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}<ArrowRight :size="18" /></span></button>
+          <button v-if="!identitySelection" type="submit" class="button btn auth-button" :disabled="busy || (!requiresVerification && !!status.turnstileSiteKey && !challengeToken)"><span class="auth-button-label">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}</span><span class="auth-button-hover" aria-hidden="true">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}<ArrowRight :size="18" /></span></button>
         </form>
-        <p v-if="registerUrl && !requiresVerification" class="auth-browse">还没有章鱼账号？<a :href="registerUrl" target="_blank" rel="noopener noreferrer">注册账号<ArrowUpRight :size="14" /></a></p>
+        <p v-if="registerUrl && !requiresVerification && !identitySelection" class="auth-browse">还没有章鱼账号？<a :href="registerUrl" target="_blank" rel="noopener noreferrer">注册账号<ArrowUpRight :size="14" /></a></p>
       </template>
       <div v-else class="stack account-unavailable"><p class="muted">{{ statusReady && status ? '当前账号服务未开放密码登录。' : '暂时无法连接章鱼账号服务。' }}</p><a v-if="centerUrl" :href="centerUrl" class="button btn auth-button">前往章鱼账户中心<ArrowUpRight :size="16" /></a><button type="button" class="text-link" @click="loadStatus">重新连接</button></div>
       <p class="auth-browse">想先看看？<RouterLink to="/discover">浏览社区<ArrowUpRight :size="14" /></RouterLink></p>
@@ -317,6 +332,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 </template>
 
 <style scoped>
+.identity-choice { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; overflow-wrap: anywhere; white-space: normal; gap: 4px; padding: 12px 16px; }
 .settings-page { max-width: 1360px; }
 .settings-page .split-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 40px; align-items: start; }
 .settings-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }

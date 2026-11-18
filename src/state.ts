@@ -129,7 +129,7 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '')
   } catch { return '' }
 }
 
-export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'logout' | 'model-groups' | 'model-groups/select', body?: object, expectedUser?: string): Promise<T> {
+export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'login-select' | 'login-cancel' | 'login-identifiers' | 'logout' | 'model-groups' | 'model-groups/select', body?: object, expectedUser?: string): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/new-api/${route}`, {
@@ -210,18 +210,30 @@ export async function loadSession(force = false) {
   return sessionRequest
 }
 
-export async function login(credentials: { login: string; password: string; turnstileToken?: string; code?: string; returnTo?: string }) {
+export interface LoginIdentitySelection {
+  requiresIdentitySelection: true
+  candidates: { selection_id: string; username: string; account_label: string }[]
+  expiresAt: number
+}
+export interface LoginIdentifiers { username: string; email: string; login_identifiers: string[] }
+type LoginStep = LoginIdentitySelection | { requires2fa?: boolean; authenticated?: boolean }
+
+export async function login(credentials: { login: string; password: string; turnstileToken?: string; code?: string; selectionId?: string; returnTo?: string }) {
   invalidateSessionRead()
   const version = sessionVersion
   session.user = null
-  const result = credentials.code
-    ? await accountApi<{ requires2fa?: boolean }>('login-2fa', { code: credentials.code })
-    : await accountApi<{ requires2fa?: boolean }>('login', {
+  const result = credentials.selectionId
+    ? await accountApi<LoginStep>('login-select', { selection_id: credentials.selectionId })
+    : credentials.code
+    ? await accountApi<LoginStep>('login-2fa', { code: credentials.code })
+    : await accountApi<LoginStep>('login', {
       username: credentials.login, password: credentials.password,
       ...(credentials.turnstileToken ? { turnstile_token: credentials.turnstileToken } : {}),
     })
   if (version !== sessionVersion) throw new Error('登录状态已变化，请重新登录。')
-  if (result?.requires2fa) return { requires2fa: true }
+  if (result && 'requiresIdentitySelection' in result && result.requiresIdentitySelection) return result
+  if (result && 'requires2fa' in result && result.requires2fa) return { requires2fa: true }
+  if (!result || !('authenticated' in result) || result.authenticated !== true) throw new Error('登录未完成，请重新尝试。')
   automaticAccountSync = true
   await syncAccountSession(credentials.returnTo)
   if (version !== sessionVersion) throw new Error('登录状态已变化，请重新登录。')

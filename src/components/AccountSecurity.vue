@@ -1,12 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowUpRight, LogOut, ShieldCheck } from '@lucide/vue'
-import { accountCenterUrl, api, errorMessage, logout, notify, session } from '../state'
+import { accountCenterUrl, accountApi, api, errorMessage, logout, notify, session, type LoginIdentifiers } from '../state'
 
 interface Security { external: boolean; accountUrl?: string }
 interface Device { id: string; current: boolean; createdAt: string | null; ip: string | null; userAgent: string }
 interface LoginRecord { id: string; ip: string | null; userAgent: string; date: string; success: boolean }
 const security = ref<Security>()
+const identifiers = ref<LoginIdentifiers | null>(null)
+const identifiersError = ref('')
+let active = true, identifiersVersion = 0
+async function loadIdentifiers() {
+  const owner = session.user?.accountId, version = ++identifiersVersion
+  identifiers.value = null; identifiersError.value = ''
+  if (!owner) return
+  try {
+    const value = await accountApi<LoginIdentifiers>('login-identifiers', undefined, owner)
+    if (active && version === identifiersVersion && session.user?.accountId === owner) identifiers.value = value
+  } catch (cause) {
+    if (active && version === identifiersVersion) identifiersError.value = errorMessage(cause)
+  }
+}
+watch(() => session.user?.accountId, loadIdentifiers, { immediate: true })
+onBeforeUnmount(() => { active = false; identifiersVersion++ })
 const devices = ref<Device[]>([])
 const logins = ref<LoginRecord[]>([])
 const nextCursor = ref<string | null>(null)
@@ -51,6 +67,8 @@ async function moreLogins() {
       <section class="panel-section security-identity stack">
         <div class="section-heading"><h2>章鱼账号安全</h2><ShieldCheck :size="18" /></div>
         <p class="muted">密码、邮箱及账号验证统一在章鱼账户中心管理。</p>
+        <dl v-if="identifiers" class="login-identifiers"><dt>统一账号</dt><dd>{{ identifiers.username }}</dd><dt>邮箱</dt><dd>{{ identifiers.email || '未绑定' }}</dd><dt>可用登录名</dt><dd><span v-for="value in identifiers.login_identifiers" :key="value">{{ value }}</span><span v-if="!identifiers.login_identifiers.length">暂无唯一登录名，请前往账户中心处理。</span></dd></dl>
+        <div v-else-if="identifiersError" class="stack"><p class="notice-inline" role="alert">{{ identifiersError }}</p><button class="text-link" type="button" @click="loadIdentifiers">重新加载登录名</button></div>
         <a v-if="centerUrl" :href="centerUrl" class="button btn" target="_blank" rel="noopener noreferrer">管理章鱼账号<ArrowUpRight :size="16" /></a>
       </section>
       <section class="panel-section stack security-sessions">
@@ -72,6 +90,9 @@ async function moreLogins() {
 </template>
 
 <style scoped>
+.login-identifiers { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px 24px; overflow-wrap: anywhere; }
+.login-identifiers dt { color: var(--muted); }
+.login-identifiers dd { margin: 0; display: grid; gap: 4px; }
 .security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; align-items: start; }
 .security-settings > .notice-inline, .security-settings > .empty-state, .security-identity, .security-sessions, .security-history { grid-column: 1 / -1; }
 .security-settings .panel-section { padding: 0 0 32px; }

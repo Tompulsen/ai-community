@@ -35,6 +35,7 @@ export interface AccountSession {
   upstreamSessionId?: string;
   flowToken?: string;
   flowExpiresAt?: number;
+  identityCandidates?: { selection_id: string; username: string; account_label: string }[];
   selectedTokenId?: number;
   selectedKey?: string;
   createdAt: number;

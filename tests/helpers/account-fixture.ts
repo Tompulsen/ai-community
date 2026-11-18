@@ -8,7 +8,7 @@ export interface AccountMutation { path: string; body: Record<string, unknown> }
 export async function mockUnifiedAccount(page: Page, authenticated = false) {
   const state = {
     user: { ...accountUser }, authenticated, accountAuthenticated: authenticated,
-    requiresVerification: false, passwordLoginEnabled: true, turnstileSiteKey: '', syncFailure: false,
+    requiresVerification: false, requiresIdentitySelection: false, passwordLoginEnabled: true, turnstileSiteKey: '', syncFailure: false,
     devices: [
       { id: currentDevice, current: true, createdAt: '2026-11-13T00:00:00Z', ip: '127.0.0.1', userAgent: 'Fixture current device' },
       { id: otherDevice, current: false, createdAt: '2026-11-12T00:00:00Z', ip: '127.0.0.2', userAgent: 'Fixture other device' },
@@ -32,10 +32,18 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
       selectedGroup: 'auto', selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }],
     } } })
     if (path === '/api/new-api/login') {
+      if (state.requiresIdentitySelection) return route.fulfill({ json: { success: true, data: { requiresIdentitySelection: true, expiresAt: Math.floor(Date.now() / 1000) + 300, candidates: [{ selection_id: 'verified-choice', username: 'octopusfixture', account_label: '账号 #17' }] } } })
       if (state.requiresVerification) return route.fulfill({ json: { success: true, data: { requires2fa: true } } })
       state.accountAuthenticated = true
       return route.fulfill({ json: { success: true, data: { authenticated: true } } })
     }
+    if (path === '/api/new-api/login-select') {
+      if (state.requiresVerification) return route.fulfill({ json: { success: true, data: { requires2fa: true } } })
+      state.accountAuthenticated = true
+      return route.fulfill({ json: { success: true, data: { authenticated: true } } })
+    }
+    if (path === '/api/new-api/login-cancel') return route.fulfill({ json: { success: true } })
+    if (path === '/api/new-api/login-identifiers') return route.fulfill({ json: { success: true, data: { username: 'octopusfixture', email: 'creator@example.com', login_identifiers: ['octopusfixture', 'creator@example.com', 'legacy-creator'] } } })
     if (path === '/api/new-api/login-2fa') {
       state.accountAuthenticated = true
       return route.fulfill({ json: { success: true, data: { authenticated: true } } })
@@ -76,7 +84,7 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
 }
 
 export async function fillAccountLogin(page: Page) {
-  await page.getByRole('textbox', { name: '章鱼账号', exact: true }).fill('octopus-user')
+  await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('octopus-user')
   await page.getByLabel('密码', { exact: true }).fill('fixture-password')
   await page.getByRole('button', { name: '登录', exact: true }).click()
 }

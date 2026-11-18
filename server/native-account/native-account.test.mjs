@@ -391,3 +391,118 @@ test("native relay never falls back to a shared server API key", async t => {
   await assert.rejects(resolveRelayCredentials(request("/api/studio/generate", { method: "POST", body: "{}" })),
     { status: 503, code: "NEW_API_DISABLED" })
 })
+
+
+test('ambiguous login keeps choices server-side and requires an explicit choice before MFA', async t => {
+  configure(t)
+  const candidates = [{ selection_id: 'choice-one', username: 'creator', account_label: 'Account 7' }]
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const path = new URL(url).pathname
+    calls.push(path)
+    if (path === '/api/status') return envelope({ password_login_enabled: true })
+    assert.equal(options.headers.get('Origin'), 'https://accounts.test')
+    if (path === '/api/user/login') return envelope({ requires_identity_selection: true,
+      flow_token: 'private-identity-flow', expires_at: Math.floor(Date.now() / 1000) + 300, candidates })
+    assert.equal(path, '/api/user/login/select')
+    assert.deepEqual(JSON.parse(options.body), { flow_token: 'private-identity-flow', selection_id: 'choice-one' })
+    return envelope({ require_verification: true, flow_token: 'private-mfa-flow',
+      expires_at: Math.floor(Date.now() / 1000) + 300, methods: [{ method: '2fa', available: true }] })
+  })
+  const login = await handleAccountRequest(request('/api/new-api/login', { method: 'POST', body: JSON.stringify({ username: 'shared', password: 'current-password' }) }))
+  assert.equal(login.status, 200)
+  const publicData = await login.json()
+  assert.equal(publicData.data.requiresIdentitySelection, true)
+  assert.deepEqual(publicData.data.candidates, candidates)
+  assert.doesNotMatch(JSON.stringify(publicData), /private-|flow_token|access_token|refresh_token/)
+  const cookie = login.headers.get('set-cookie').split(';')[0]
+  const id = cookie.split('=')[1]
+  t.after(() => removeSessionById(id))
+  assert.equal((await readSessionById(id)).flowToken, 'private-identity-flow')
+  assert.deepEqual(calls, ['/api/status', '/api/user/login'])
+  const invalid = await handleAccountRequest(request('/api/new-api/login-select', { method: 'POST', headers: { cookie }, body: JSON.stringify({ selection_id: 'unverified-account' }) }))
+  assert.equal(invalid.status, 400)
+  assert.equal(calls.length, 2)
+  const csrf = await handleAccountRequest(request('/api/new-api/login-select', { method: 'POST', headers: { cookie, origin: 'https://attacker.test' }, body: JSON.stringify({ selection_id: 'choice-one' }) }))
+  assert.equal(csrf.status, 403)
+  const wrongStage = await handleAccountRequest(request('/api/new-api/login-2fa', { method: 'POST', headers: { cookie }, body: JSON.stringify({ code: '123456' }) }))
+  assert.equal(wrongStage.status, 401)
+  assert.equal(calls.length, 2)
+  const selected = await handleAccountRequest(request('/api/new-api/login-select', { method: 'POST', headers: { cookie }, body: JSON.stringify({ selection_id: 'choice-one' }) }))
+  assert.equal(selected.status, 200)
+  assert.deepEqual((await selected.json()).data, { requires2fa: true })
+  const newId = selected.headers.get('set-cookie').split(';')[0].split('=')[1]
+  t.after(() => removeSessionById(newId))
+  assert.notEqual(newId, id)
+  assert.equal(await readSessionById(id), null)
+  assert.equal((await readSessionById(newId)).flowToken, 'private-mfa-flow')
+  const replay = await handleAccountRequest(request('/api/new-api/login-select', { method: 'POST', headers: { cookie }, body: JSON.stringify({ selection_id: 'choice-one' }) }))
+  assert.equal(replay.status, 401)
+  assert.equal(calls.length, 3)
+})
+
+test('identity selection expiry and cancellation cannot create a session', async t => {
+  configure(t)
+  const pending = await session(t, { user: undefined, accessToken: undefined, refreshToken: undefined,
+    flowToken: 'private-choice', flowExpiresAt: Math.floor(Date.now() / 1000) - 1,
+    identityCandidates: [{ selection_id: 'choice-one', username: 'creator', account_label: 'Account 7' }] })
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('must not authenticate') })
+  const expired = await handleAccountRequest(pending.request('/api/new-api/login-select', { method: 'POST', body: JSON.stringify({ selection_id: 'choice-one' }) }))
+  assert.equal(expired.status, 401)
+  const canceled = await handleAccountRequest(pending.request('/api/new-api/login-cancel', { method: 'POST', body: '{}' }))
+  assert.equal(canceled.status, 200)
+  assert.equal(await readSessionById(pending.id), null)
+  assert.equal(fetch.mock.callCount(), 0)
+})
+
+
+test('choice confirmation signs in the selected identity once and keeps upstream credentials private', async t => {
+  configure(t)
+  const fixture = await session(t, { user: undefined, accessToken: undefined, refreshToken: undefined,
+    flowToken: 'private-choice', flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
+    identityCandidates: [{ selection_id: 'choice-two', username: 'creator', account_label: 'Account 7' }] })
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const path = new URL(url).pathname
+    if (path === '/api/token/') return envelope({ total: 2, items: [{ id: 1 }, { id: 2 }] })
+    assert.equal(path, '/api/user/login/select')
+    calls++
+    assert.deepEqual(JSON.parse(options.body), { flow_token: 'private-choice', selection_id: 'choice-two' })
+    return envelope({ user, access_token: 'selected-private-access', access_expires_at: Date.now() / 1000 + 3600,
+      session: { sid: 'selected-private-sid' } }, { 'Set-Cookie': 'new_api_refresh=selected-private-refresh; HttpOnly' })
+  })
+  const results = await Promise.all([1, 2].map(() => handleAccountRequest(fixture.request('/api/new-api/login-select', { method: 'POST', body: JSON.stringify({ selection_id: 'choice-two' }) }))))
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 401])
+  assert.equal(calls, 1)
+  const success = results.find(result => result.status === 200)
+  const data = await success.json()
+  assert.equal(data.data.authenticated, true)
+  assert.equal(data.data.user.id, user.id)
+  assert.doesNotMatch(JSON.stringify(data), /private|flow_token|access_token|refresh_token/)
+  const cookie = success.headers.get('set-cookie')
+  assert.match(cookie, /HttpOnly/)
+  const id = cookie.split(';')[0].split('=')[1]
+  t.after(() => removeSessionById(id))
+  assert.equal(await readSessionById(fixture.id), null)
+  assert.equal((await readSessionById(id)).user.id, user.id)
+})
+
+test('login identifiers require the expected authenticated account and expose only safe metadata', async t => {
+  configure(t)
+  const fixture = await session(t)
+  let malformed = false, calls = 0
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls++
+    assert.equal(new URL(url).pathname, '/api/user/self/login-identifiers')
+    assert.equal(options.headers.get('Authorization'), 'Bearer private-access')
+    return envelope({ username: 'creator', email: 'creator@example.test', login_identifiers: malformed ? [7] : ['creator', 'legacy-creator'], private: 'secret-must-not-leak' })
+  })
+  const response = await handleAccountRequest(fixture.request('/api/new-api/login-identifiers', { headers: { 'x-new-api-user': '7' } }))
+  assert.equal(response.status, 200)
+  assert.deepEqual((await response.json()).data, { username: 'creator', email: 'creator@example.test', login_identifiers: ['creator', 'legacy-creator'] })
+  assert.match(response.headers.get('cache-control'), /no-store/)
+  assert.equal((await handleAccountRequest(fixture.request('/api/new-api/login-identifiers', { headers: { 'x-new-api-user': '8' } }))).status, 409)
+  assert.equal(calls, 1)
+  malformed = true
+  assert.equal((await handleAccountRequest(fixture.request('/api/new-api/login-identifiers'))).status, 502)
+})

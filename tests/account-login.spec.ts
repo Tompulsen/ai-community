@@ -20,7 +20,7 @@ test('single account login fits desktop and small phones with accessible control
     await expect(page.getByLabel(/验证码|恢复码/)).toHaveCount(0)
     await expect(page.locator('.app-header, .app-footer, .mobile-nav')).toHaveCount(0)
     await expect(page.locator('.auth-visual')).toBeVisible({ visible: width >= 1024 })
-    await expect(page.getByRole('textbox', { name: '章鱼账号', exact: true })).toHaveCSS('height', '48px')
+    await expect(page.getByRole('textbox', { name: '用户名或邮箱', exact: true })).toHaveCSS('height', '48px')
     await expect(page.getByRole('link', { name: '忘记密码？', exact: true })).toHaveAttribute('href', 'https://accounts.example/forgot-password')
     await expect(page.getByRole('link', { name: '注册账号', exact: true })).toHaveAttribute('href', 'https://accounts.example/register')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -66,4 +66,41 @@ test('password signs into the account service and synchronizes community without
   expect(fixture.mutations.some(item => ['/api/session/login', '/api/session/register', '/api/account/connect'].includes(item.path))).toBe(false)
   expect(popups).toEqual([])
   await expect(page.locator('.app-header')).toBeVisible()
+})
+
+
+test('a verified ambiguous account still requires a choice before MFA and navigation', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  fixture.state.requiresIdentitySelection = true
+  fixture.state.requiresVerification = true
+  await page.setViewportSize({ width: 320, height: 844 })
+  await page.goto('/account?returnTo=%2Faccount%3Ftab%3Dsecurity')
+  await fillAccountLogin(page)
+  await expect(page.getByRole('heading', { name: '确认登录账号', exact: true })).toBeVisible()
+  expect(fixture.state.accountAuthenticated).toBe(false)
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/login-select')).toHaveLength(0)
+  await expect(page.getByLabel('密码', { exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([])
+  await page.screenshot({ path: '.impeccable/review/account-login/identity-selection-320.png', fullPage: true })
+  await page.getByRole('button', { name: '登录 octopusfixture 账号 #17', exact: true }).click()
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/login-select')).toEqual([{ path: '/api/new-api/login-select', body: { selection_id: 'verified-choice' } }])
+  await expect(page.getByLabel('账号验证码或恢复码')).toBeVisible()
+  expect(fixture.state.accountAuthenticated).toBe(false)
+  await page.getByLabel('账号验证码或恢复码').fill('123456')
+  await page.getByRole('button', { name: '验证并登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/account\?tab=security$/)
+  await expect(page.getByText('legacy-creator', { exact: true })).toBeVisible()
+})
+
+test('cancelling an account choice clears the password and cannot log in', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  fixture.state.requiresIdentitySelection = true
+  await page.goto('/account')
+  await fillAccountLogin(page)
+  await page.getByRole('button', { name: '返回账号登录', exact: true }).click()
+  await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
+  expect(fixture.state.accountAuthenticated).toBe(false)
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/login-select')).toHaveLength(0)
+  await expect.poll(() => fixture.mutations.filter(item => item.path === '/api/new-api/login-cancel').length).toBe(1)
 })

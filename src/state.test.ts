@@ -234,6 +234,22 @@ describe('real API state', () => {
     expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ returnTo: '/create/image' })
     expect(session.user).toEqual(user)
   })
+  it('does not synchronize or choose an identity until an explicit selection is submitted', async () => {
+    const candidates = [{ selection_id: 'only-choice', username: 'creator', account_label: 'Account 7' }]
+    fetchMock.mockImplementation((path: string) => path === '/api/new-api/login'
+      ? response({ success: true, data: { requiresIdentitySelection: true, candidates, expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+      : path === '/api/new-api/login-select'
+        ? response({ success: true, data: { requires2fa: true } })
+        : response({ user }))
+    const { login, session } = await import('./state')
+    expect(await login({ login: 'shared-name', password: 'current-password' })).toMatchObject({ requiresIdentitySelection: true, candidates })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(session.user).toBeNull()
+    expect(await login({ login: '', password: '', selectionId: 'only-choice' })).toEqual({ requires2fa: true })
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/new-api/login', '/api/new-api/login-select'])
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ selection_id: 'only-choice' })
+    expect(session.user).toBeNull()
+  })
   it('does not claim a successful login when account-to-community synchronization fails', async () => {
     fetchMock.mockImplementation((path: string) => path === '/api/new-api/login'
       ? response({ success: true, data: { authenticated: true } })

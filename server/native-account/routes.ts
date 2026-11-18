@@ -377,6 +377,44 @@ async function browserSession(req: AccountRequest) {
   return publicSession({ ...session, user: sanitizeUser(data) });
 }
 
+function validFlow(data: any) {
+  return typeof data?.flow_token === "string" && data.flow_token.length > 0 && data.flow_token.length <= 4096 &&
+    Number.isFinite(data.expires_at) && data.expires_at > Date.now() / 1000;
+}
+
+async function finishLogin(
+  req: AccountRequest,
+  result: Awaited<ReturnType<typeof upstream>>,
+  expectedPrevious?: { id: string; version: number },
+) {
+  if (result.data?.requires_identity_selection === true) {
+    const data = result.data;
+    const validText = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+    if (!validFlow(data) || !Array.isArray(data.candidates) || data.candidates.length < 1 || data.candidates.length > 4 ||
+      data.candidates.some((candidate: any) => !validText(candidate?.selection_id, 256) || !validText(candidate?.username, 128) || !validText(candidate?.account_label, 256)) ||
+      new Set(data.candidates.map((candidate: any) => candidate.selection_id)).size !== data.candidates.length) {
+      throw new NewApiError("账号服务返回了无效的账号选择，请重新登录", 502);
+    }
+    const candidates = data.candidates.map((candidate: any) => ({ selection_id: candidate.selection_id as string, username: candidate.username as string, account_label: candidate.account_label as string }));
+    const res = ok({ requiresIdentitySelection: true, candidates, expiresAt: data.expires_at });
+    await createSession(req, res, { flowToken: data.flow_token, flowExpiresAt: data.expires_at, identityCandidates: candidates }, expectedPrevious);
+    return res;
+  }
+  if (result.data?.require_verification) {
+    if (!validFlow(result.data) || !Array.isArray(result.data.methods) || !result.data.methods.some((method: any) => method?.method === "2fa" && method.available === true)) {
+      throw new NewApiError("此账号需要其他验证方式，请前往账号中心处理", 400);
+    }
+    const res = ok({ requires2fa: true });
+    await createSession(req, res, { flowToken: result.data.flow_token, flowExpiresAt: result.data.expires_at }, expectedPrevious);
+    return res;
+  }
+  const credentials = authBundle(result.data, result.refreshToken);
+  const bundle = { ...credentials, ...(await singleDefaultSelection(req, credentials)) };
+  const res = ok(publicSession({ ...bundle, createdAt: 0, expiresAt: 0, version: 0 }));
+  await createSession(req, res, bundle, expectedPrevious);
+  return res;
+}
+
 export async function handle(
   req: AccountRequest,
   path: string[],
@@ -460,34 +498,39 @@ export async function handle(
           ...upstreamRequestHints(req),
         },
       );
-      if (result.data?.require_verification) {
-        if (
-          !result.data.methods?.some(
-            (method: any) => method.method === "2fa" && method.available,
-          )
-        ) {
-          throw new NewApiError(
-            "此账号需要其他验证方式，请前往账号中心处理",
-            400,
-          );
+      return await finishLogin(req, result);
+    }
+
+    if (req.method === "POST" && route === "login-select") {
+      const input = await body(req);
+      const id = getSessionId(req);
+      if (!id) throw new NewApiError("验证已过期，请重新登录", 401);
+      const claimed = await withSessionLock(id, async () => {
+        const pending = await readSession(req);
+        if (!pending?.flowToken || !pending.identityCandidates || (pending.flowExpiresAt || 0) <= Date.now() / 1000) {
+          throw new NewApiError("验证已过期，请重新登录", 401);
         }
-        const res = ok({ requires2fa: true });
-        await createSession(req, res, {
-          flowToken: result.data.flow_token,
-          flowExpiresAt: result.data.expires_at,
-        });
-        return res;
-      }
-      const credentials = authBundle(result.data, result.refreshToken);
-      const bundle = {
-        ...credentials,
-        ...(await singleDefaultSelection(req, credentials)),
-      };
-      const res = ok(
-        publicSession({ ...bundle, createdAt: 0, expiresAt: 0, version: 0 }),
-      );
-      await createSession(req, res, bundle);
-      return res;
+        if (typeof input.selection_id !== "string" || !pending.identityCandidates.some(candidate => candidate.selection_id === input.selection_id)) {
+          throw new NewApiError("请选择已验证的账号", 400);
+        }
+        // Claim before contacting upstream so a double click cannot consume the flow twice.
+        await saveSession(id, { ...pending, flowToken: undefined, version: pending.version + 1 });
+        return { token: pending.flowToken, version: pending.version + 1 };
+      });
+      const result = await upstream("/api/user/login/select", {
+        method: "POST", body: { flow_token: claimed.token, selection_id: input.selection_id },
+        ...upstreamRequestHints(req),
+      });
+      return await finishLogin(req, result, { id, version: claimed.version });
+    }
+
+    if (req.method === "POST" && route === "login-cancel") {
+      const id = getSessionId(req);
+      if (id) await withSessionLock(id, async () => {
+        const pending = await readSession(req);
+        if (pending && !pending.user) await removeSessionById(id);
+      });
+      return ok();
     }
 
     if (req.method === "POST" && route === "login-2fa") {
@@ -495,6 +538,7 @@ export async function handle(
       const pending = await readSession(req);
       if (
         !pending?.flowToken ||
+        pending.identityCandidates ||
         (pending.flowExpiresAt || 0) <= Date.now() / 1000
       ) {
         throw new NewApiError("验证已过期，请重新登录", 401);
@@ -508,16 +552,7 @@ export async function handle(
         body: { flow_token: pending.flowToken, method: "2fa", code },
         ...upstreamRequestHints(req),
       });
-      const credentials = authBundle(result.data, result.refreshToken);
-      const bundle = {
-        ...credentials,
-        ...(await singleDefaultSelection(req, credentials)),
-      };
-      const res = ok(
-        publicSession({ ...bundle, createdAt: 0, expiresAt: 0, version: 0 }),
-      );
-      await createSession(req, res, bundle);
-      return res;
+      return await finishLogin(req, result, { id: getSessionId(req)!, version: pending.version });
     }
 
     if (req.method === "POST" && route === "logout") {
@@ -548,6 +583,15 @@ export async function handle(
 
     if (req.method === "GET" && route === "session") {
       return ok(await browserSession(req));
+    }
+
+    if (req.method === "GET" && route === "login-identifiers") {
+      const { data } = await accountRequest(req, "/api/user/self/login-identifiers", { maxResponseBytes: 32768 });
+      const valid = (value: unknown) => typeof value === "string" && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+      if (!valid(data?.username) || !data.username || !valid(data.email) || !Array.isArray(data.login_identifiers) || data.login_identifiers.length > 64 || data.login_identifiers.some((value: unknown) => !valid(value) || !value)) {
+        throw new NewApiError("无法读取登录账号信息，请稍后重试", 502);
+      }
+      return ok({ username: data.username, email: data.email, login_identifiers: data.login_identifiers });
     }
 
     if (req.method === "GET" && route === "groups") {
