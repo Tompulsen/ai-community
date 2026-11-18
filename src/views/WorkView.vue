@@ -133,7 +133,7 @@ async function share() {
         <div class="detail-visual-column">
           <button v-if="mobile && related.length" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button>
           <RouterLink to="/discover" class="icon-button detail-back" aria-label="返回发现" title="返回发现"><ArrowLeft :size="22" /></RouterLink>
-          <WorkMedia ref="mediaBrowser" class="detail-visual" :class="{ 'single-file': files.length < 2 && !work.referenceFiles?.length }" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
+          <WorkMedia ref="mediaBrowser" class="detail-visual" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
         </div>
         <section class="detail-info" aria-label="作品信息与评论">
           <div class="detail-actions">
@@ -214,9 +214,6 @@ async function share() {
 .detail-visual :deep(.detail-media > img), .detail-visual :deep(.detail-media > video) { max-height: 100%; object-fit: contain; }
 .detail-visual :deep(.media-controls) { min-height: 52px; padding: 4px 8px; gap: 4px; grid-template-columns: max-content max-content; justify-content: space-between; }
 .detail-visual :deep(.media-file-name) { display: none; }
-.detail-visual :deep(.material-group) { flex: none; margin: 0; padding: 12px; }
-.detail-visual :deep(.material-group:empty) { display: none; }
-.detail-visual.single-file :deep(.material-group:first-of-type) { display: none; }
 .detail-visual :deep(.resource-article) { flex: 1 0 auto; padding: 64px 20px 20px; }
 .detail-visual :deep(.resource-article pre) { font-size: 14px; line-height: 24px; }
 .detail-info { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 16px; }
@@ -302,6 +299,7 @@ async function share() {
   .detail-back { display: none; }
   .detail-visual { height: 100%; overflow: auto; padding-bottom: 260px; }
   .detail-visual :deep(.media-stage) { position: relative; flex: 1 0 100%; min-height: 140px; }
+  .detail-visual:has(.material-tray) :deep(.media-stage) { flex: 1 0 140px; }
   .detail-visual :deep(.media-controls) { position: absolute; z-index: 2; top: 8px; left: 8px; right: 8px; border: 0; border-radius: 12px; background: #172426c9; }
   .detail-visual :deep(.detail-media) { height: 100%; flex: 1; min-height: 0; background: #0b1011; }
   .detail-visual :deep(.detail-media:has(> video)) { width: calc(100% - 64px); }
