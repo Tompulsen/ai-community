@@ -3,6 +3,14 @@ import { readFile, mkdir } from 'node:fs/promises'
 import sharp from 'sharp'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
+async function openLibrary(page: Page) {
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+  if (await page.getByRole('button', { name: '创作台菜单', exact: true }).isVisible()) {
+    await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  }
+  await page.getByRole('button', { name: '作品库', exact: true }).click()
+}
+
 async function fixture(page: Page, count = 125, videoOnly = false, failImageOnce = false) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
@@ -44,7 +52,7 @@ async function fixture(page: Page, count = 125, videoOnly = false, failImageOnce
   await page.setViewportSize({ width: 390, height: 900 })
   await page.goto('/create/text')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await openLibrary(page)
   const library = page.getByRole('dialog', { name: '作品库', exact: true })
   await expect(library.locator('.gallery-item')).toHaveCount(Math.min(60, count))
   return { library, mediaReads, generationCalls }
@@ -94,7 +102,7 @@ test('image thumbnails are reduced to 384px, persisted across reload, and origin
   await expect.poll(() => previewMetadata(page)).toEqual([expect.objectContaining({ owner: '17', id: 'library-000', type: 'image/webp' })])
   mediaReads.length = 0
   await page.reload()
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await openLibrary(page)
   const reopened = page.getByRole('dialog', { name: '作品库', exact: true })
   await expect(reopened.getByRole('button', { name: '预览 作品 000', exact: true }).locator('img')).toBeVisible()
   expect(mediaReads).toHaveLength(0)
@@ -107,7 +115,7 @@ test('image thumbnails are reduced to 384px, persisted across reload, and origin
   await mkdir('.taste-skill/media-library-20261115', { recursive: true })
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
-    if (!await reopened.isVisible()) await page.getByRole('button', { name: '作品库', exact: true }).click()
+    if (!await reopened.isVisible()) await openLibrary(page)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await expect(reopened.getByRole('combobox', { name: '按模型筛选', exact: true })).toBeVisible()
     await page.screenshot({ path: `.taste-skill/media-library-20261115/gallery-${width}.png` })
@@ -131,7 +139,7 @@ test('video covers skip a black intro, show actual duration and reuse the cached
   await expect(library.locator('video')).toHaveCount(0)
   mediaReads.length = 0
   await page.reload()
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await openLibrary(page)
   const reopened = page.getByRole('dialog', { name: '作品库', exact: true })
   await expect(reopened.getByRole('button', { name: '预览 作品 000', exact: true })).toBeVisible()
   expect(mediaReads).toHaveLength(0)
@@ -144,13 +152,13 @@ test('automatic original download preference is persisted per account without re
   const { library, generationCalls } = await fixture(page, 1)
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
   const preference = library.getByRole('switch', { name: '自动下载原文件', exact: true })
-  await expect(preference).toBeChecked()
-  await preference.uncheck()
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-media-settings') || '{}').autoDownload)).toBe(false)
+  await expect(preference).not.toBeChecked()
+  await preference.check()
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-media-settings') || '{}').autoDownload)).toBe(true)
   await page.reload()
-  await page.getByRole('button', { name: '作品库', exact: true }).click()
+  await openLibrary(page)
   await page.getByRole('button', { name: '作品库设置', exact: true }).click()
-  await expect(page.getByRole('switch', { name: '自动下载原文件', exact: true })).not.toBeChecked()
+  await expect(page.getByRole('switch', { name: '自动下载原文件', exact: true })).toBeChecked()
   expect(generationCalls).toHaveLength(0)
 })
 
@@ -165,7 +173,7 @@ test('a failed thumbnail can be retried without blocking the original and fits b
   for (const theme of ['light', 'dark']) for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
     await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), theme)
-    if (!await library.isVisible()) await page.getByRole('button', { name: '作品库', exact: true }).click()
+    if (!await library.isVisible()) await openLibrary(page)
     await expect(library.getByRole('combobox', { name: '按时间筛选', exact: true })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `.taste-skill/media-library-20261115/gallery-${theme}-${width}.png` })

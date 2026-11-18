@@ -116,6 +116,26 @@ test('switching account aborts an outstanding original download without a late f
   expect(downloaded).toBe(0)
 })
 
+test('new accounts generate without downloading and can still download manually', async ({ page }) => {
+  await fixture(page)
+  let downloads = 0
+  page.on('download', () => downloads++)
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/manual.png' }] } }))
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  await page.evaluate(async () => {
+    await window.mediaTest.submitCreation({ kind: 'image', model: 'fixture', prompt: 'manual download', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 })
+  })
+  expect(await page.evaluate(() => window.mediaTest.mediaSettings.autoDownload)).toBe(false)
+  expect(await page.evaluate(() => window.mediaTest.mediaSettings.autoSaveGallery)).toBe(true)
+  await page.waitForTimeout(300)
+  expect(downloads).toBe(0)
+  expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].localSave)).toBeUndefined()
+  const downloaded = page.waitForEvent('download')
+  await page.evaluate(() => window.mediaTest.downloadCreation(window.mediaTest.creation.tasks[0]))
+  expect((await downloaded).suggestedFilename()).toMatch(/^creation-.*-1\.png$/)
+  expect(downloads).toBe(1)
+})
+
 test('completed generations automatically request originals only while the preference is enabled', async ({ page }) => {
   await fixture(page)
   let generations = 0, originals = 0, downloads = 0
@@ -127,6 +147,7 @@ test('completed generations automatically request originals only while the prefe
   page.on('download', () => downloads++)
   await page.evaluate(async () => {
     const studio = window.mediaTest
+    await studio.updateMediaSettings(true)
     const input = { kind: 'image', model: 'fixture', prompt: 'automatic download', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 }
     await studio.submitCreation(input)
   })

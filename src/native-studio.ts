@@ -82,7 +82,7 @@ export const creation = reactive({
   groupsLoading: false, groupSwitching: false, groupsError: '',
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
 })
-export const mediaSettings = reactive({ autoDownload: true, autoSaveGallery: true, loaded: false })
+export const mediaSettings = reactive({ autoDownload: false, autoSaveGallery: true, loaded: false })
 const controllers = new Map<string, AbortController>()
 const downloads = new Map<string, { controller: AbortController; promise: Promise<void> }>()
 const localMedia = reactive<Record<string, string>>({})
@@ -914,14 +914,14 @@ watch(() => activeOwner(), next => {
   mediaLoads.clear()
   creation.tasks = []; creation.selectedId = ''; creation.loaded = false
   creation.historyRevision++
-  mediaSettings.loaded = false; mediaSettings.autoDownload = true; mediaSettings.autoSaveGallery = true
+  mediaSettings.loaded = false; mediaSettings.autoDownload = false; mediaSettings.autoSaveGallery = true
   if (next) {
     try {
       const saved = JSON.parse(localStorage.getItem(`octopus:user-${next}:native-media-settings`) || 'null')
-      mediaSettings.autoDownload = saved?.autoDownload !== false
+      mediaSettings.autoDownload = saved?.autoDownload === true
       mediaSettings.autoSaveGallery = saved?.autoSaveGallery !== false
     }
-    catch { /* Invalid preferences use the original automatic-download default. */ }
+    catch { /* Invalid preferences keep downloads opt-in. */ }
     mediaSettings.loaded = true
   }
   creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.modelsLoaded = false; creation.storageError = ''
