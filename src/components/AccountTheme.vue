@@ -48,7 +48,7 @@ function preview(theme: Theme) {
         <label v-for="theme in appearance.themes.filter(item => item.mode === mode)" :key="theme.id" class="palette-option" :class="{ selected: themeState[mode] === theme.id }">
           <input type="radio" :name="`${mode}-palette`" :value="theme.id" :checked="themeState[mode] === theme.id" :aria-label="theme.name" @change="appearance.set({ [mode]: theme.id })" />
           <span class="theme-preview" :style="preview(theme)" aria-hidden="true"><span class="preview-rail"><i /><b /><b /></span><span class="preview-content"><span class="preview-heading"><i /><i /><i /></span><span class="preview-post"><i /><b /><b /><em /></span></span></span>
-          <span class="palette-caption"><span>{{ theme.name }}<small v-if="theme.id === 'sage'">默认</small></span><Check v-if="themeState[mode] === theme.id" :size="16" aria-hidden="true" /></span>
+          <span class="palette-caption"><span>{{ theme.name }}<small v-if="theme.id === 'cloud' || theme.id === 'sage'">默认</small></span><Check v-if="themeState[mode] === theme.id" :size="16" aria-hidden="true" /></span>
         </label>
       </fieldset>
     </div>
@@ -76,7 +76,7 @@ function preview(theme: Theme) {
 .theme-palette-group { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--border); }
 .theme-palettes { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .palette-option { position: relative; min-width: 0; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; }
-.palette-option.selected { border-color: var(--focus-ring); }
+.palette-option.selected { border-color: var(--blue); }
 .palette-option > input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
 .palette-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 48px; padding: 10px 12px; font-size: 13px; }
 .palette-caption > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }

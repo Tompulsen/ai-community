@@ -2,27 +2,27 @@
 name: 章鱼社区
 description: 作品在前，操作归位。
 colors:
-  canvas: "#121212"
-  primary: "#8fa68e"
-  primary-hover: "#aec2a8"
-  primary-soft: "#2c362c"
-  action-ink: "#1c1c1c"
-  surface: "#262626"
-  surface-soft: "#303030"
-  border: "#3c3d3a"
-  ink: "#f1f1ef"
-  muted: "#aaaca6"
+  canvas: "#151619"
+  primary: "#a8b4ff"
+  primary-hover: "#c0c8ff"
+  primary-soft: "#303951"
+  action-ink: "#151619"
+  surface: "#202226"
+  surface-soft: "#2b2e34"
+  border: "#383d46"
+  ink: "#eceef3"
+  muted: "#a6adba"
   success: "#a4cfb4"
   success-soft: "#293a30"
   pending: "#e3c38c"
   pending-soft: "#403728"
   danger: "#f1a0a7"
-  mobile-canvas: "#172426"
-  mobile-surface: "#1d2d30"
-  mobile-popup: "#233639"
-  mobile-primary: "#00a497"
-  mobile-ink: "#dadada"
-  mobile-muted: "#a5b6b8"
+  mobile-canvas: "#151619"
+  mobile-surface: "#202226"
+  mobile-popup: "#2b2e34"
+  mobile-primary: "#a8b4ff"
+  mobile-ink: "#eceef3"
+  mobile-muted: "#a6adba"
 typography:
   headline:
     fontFamily: '"Schibsted Grotesk", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif'
@@ -125,24 +125,37 @@ components:
 
 **Creative North Star: "作品在前，操作归位"**
 
-这是持续使用的创作社区界面。采用 tasteskill 的 charcoal-room-sage 配色，
-以用户最新提供的 Pinterest 截图为作品参考，采用紧凑瀑布流、炭灰界面、紧凑顶部导航、
-按原始比例展示的真实作品和鼠尾草绿操作。
+这是持续使用的创作社区界面。采用用户确认的中性背景与局部强调色配色，
+以用户提供的 Pinterest 截图为作品参考，采用紧凑瀑布流、中性界面、紧凑顶部导航、
+按原始比例展示的真实作品；默认品牌蓝，另提供植物绿和莓果红主题。
 
 品牌图标统一使用用户提供的蓝底章鱼图 `/assets/brand/octopus-community.jpg`，按原始比例显示。
 
 **Key Characteristics:**
 
 - 作品直接进入首屏，导航与筛选保持稳定。
-- 中性界面让内容提供颜色；鼠尾草绿标明主要操作与当前状态。
+- 中性界面让内容提供颜色；主题强调色标明主要操作与当前状态。
 - 创作、投稿、审核和账户状态分别表达。
 
 ## Colors
 
-主色用于主要操作；焦点和选择边框使用独立的中性 focus-ring，不随主色变绿。
-focus-ring 由正文色与页面背景混合生成，随明暗主题保持对比。炭灰是页面，稍浅的中性灰用于控件与工具。
+主色用于主要操作及主题卡片选中边框，保留勾选标记；键盘焦点使用独立的中性 focus-ring。
+focus-ring 由正文色与页面背景混合生成，随明暗主题保持对比。背景、面板和输入框以明度层次区分，普通分隔线保持低存在感。
 明亮正文与灰色元信息保持层级。绿色表示成功或已公开，琥珀色表示待处理，
 红色用于错误和删除；不能仅靠颜色传达状态。
+
+全局配色以 `public/theme-preload.js` 为运行时来源，桌面和手机共用，不再按视口替换色板。
+默认明亮主题为瓷白，暗色主题为曜石；薄雾与松影为植物绿，初雪与绯夜为莓果红。
+保留既有主题 ID 和浏览器偏好键，历史选择继续有效。布局、品牌图和作品原始颜色不变。
+
+| 主题 | 背景 | 面板 | 输入框/悬停 | 正文 | 次要文字 | 边框 | 强调色 |
+|---|---|---|---|---|---|---|---|
+| 瓷白 | #F7F8FA | #FFFFFF | #ECEEF2 | #20232B | #646B78 | #DDE1E7 | #4658D9 |
+| 曜石 | #151619 | #202226 | #2B2E34 | #ECEEF3 | #A6ADBA | #383D46 | #A8B4FF |
+| 薄雾 | #F6F8F7 | #FFFFFF | #EAF0ED | #222B27 | #5F6E65 | #DAE3DD | #267052 |
+| 松影 | #151C19 | #202A25 | #2B3931 | #E8EFEA | #A6B9AC | #3A4A40 | #8BD4AD |
+| 初雪 | #FAF7F8 | #FFFFFF | #F2EAEE | #2D252A | #75646E | #E6DCE1 | #A43865 |
+| 绯夜 | #1D181C | #2A2228 | #392D35 | #F2E9EE | #BEA8B5 | #4C3B46 | #F0A3C3 |
 
 访客 `/account` 入口是用户指定 CareerCompass 参考的局部例外：白底、深色文字、
 细灰边框，蓝色用于章鱼账号主入口与按钮悬停，输入与键盘焦点沿用中性边框。该配色只在访客账户入口及找回、验证状态内生效；
@@ -179,7 +192,7 @@ headline，手机页面标题为 24px/32px；详情标题也采用 24px/32px。
 通过 Teleport 在桌面左栏和小屏页头间移动，不复制会话、未读数或业务状态。
 桌面顶部高 64px，常驻搜索铺满剩余宽度，账号工具置于右侧；正文与搜索左右留白均为 16px。
 小于 1000px 的整套手机界面与交互以用户指定的 `community-studio-ui` 本地项目为准。
-默认深色背景 #172426、面板 #1d2d30、浮层 #233639、主色 #00a497；浅色及其他用户主题保留选择。
+手机与桌面共用当前全局主题，默认使用曜石暗色，不单独覆盖为青色；浅色及其他用户主题保留选择。
 首页页头高 52px（另加顶部安全区），依次为菜单、发现 / 视频 / 图片 / skill、搜索。
 分类使用文字与 20×3px 短线表达选中态，触控区域至少 44px；Skill 沿用旧项目的 resource 分类，
 可访问名称为「Skill 与资源」，包含现有文本、代码和 Skill，不新增后端类型。
@@ -403,7 +416,7 @@ headline，手机页面标题为 24px/32px；详情标题也采用 24px/32px。
 关注控件统一显示关注、已关注、互相关注、等待通过；操作期间禁用，失败保留原状态并提供重试。
 账户设置新增关注与隐私、关注申请和主题与外观。隐私修改显式保存并保护未保存输入；
 主题采用原生单选组、六个同结构配色预览和至少 44px 的交互目标，选择立即生效。
-默认保留炭灰鼠尾草，新增午夜蓝、深海青以及云白、暖纸、晴空；共用语义颜色变量，
+主题为瓷白、薄雾、初雪及曜石、松影、绯夜，默认瓷白与曜石；共用语义颜色变量，
 明暗模式分别记忆。定时切换按设备本地时间，支持跨午夜及页面从休眠恢复。
 登录页沿用独立浅色规范，作品封面上的文字维持媒体可读性。手机模式选择为两列，
 配色预览为两列，时间输入为一列；原生单选键盘操作、可见焦点及对比度均须验证。

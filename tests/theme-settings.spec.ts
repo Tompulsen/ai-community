@@ -11,11 +11,11 @@ test('themes apply immediately and retain separate light/dark palettes after rel
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'sage')
   await page.getByRole('radio', { name: '明亮模式', exact: true }).check()
   await expect(page.locator('html')).toHaveAttribute('data-color-scheme', 'light')
-  await page.getByRole('radio', { name: '暖纸', exact: true }).check()
+  await page.getByRole('radio', { name: '薄雾', exact: true }).check()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper')
-  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f5f0e5')
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f6f8f7')
   await page.getByRole('radio', { name: '暗色模式', exact: true }).check()
-  await page.getByRole('radio', { name: '深海青', exact: true }).check()
+  await page.getByRole('radio', { name: '绯夜', exact: true }).check()
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'jade')
   await page.getByRole('radio', { name: '明亮模式', exact: true }).check()
@@ -102,11 +102,24 @@ test('blocked preference storage keeps current theme usable and explains persist
 
 test('all palettes provide accessible controls on desktop and mobile', async ({ page }) => {
   await page.goto('/account?tab=theme')
-  for (const [mode, palettes] of [['明亮模式', ['云白', '暖纸', '晴空']], ['暗色模式', ['炭灰鼠尾草', '午夜蓝', '深海青']]] as const) {
+  for (const [mode, palettes] of [['明亮模式', ['瓷白', '薄雾', '初雪']], ['暗色模式', ['曜石', '松影', '绯夜']]] as const) {
     await page.getByRole('radio', { name: mode, exact: true }).check()
     for (const name of palettes) {
       await page.getByRole('radio', { name, exact: true }).check()
       expect((await new AxeBuilder({ page }).include('.theme-settings').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
+      const desktopColors = await page.locator('html').evaluate(element => {
+        const style = getComputedStyle(element)
+        return ['--p-bg', '--p-surface', '--surface-soft', '--p-action', '--p-ink', '--muted'].map(token => style.getPropertyValue(token))
+      })
+      const id = await page.locator('html').getAttribute('data-theme')
+      await page.screenshot({ path: `test-results/theme-${id}-desktop.png`, fullPage: true })
+      await page.setViewportSize({ width: 390, height: 844 })
+      expect(await page.locator('html').evaluate(element => {
+        const style = getComputedStyle(element)
+        return ['--p-bg', '--p-surface', '--surface-soft', '--p-action', '--p-ink', '--muted'].map(token => style.getPropertyValue(token))
+      })).toEqual(desktopColors)
+      expect((await new AxeBuilder({ page }).include('.theme-settings').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
+      await page.setViewportSize({ width: 1440, height: 1000 })
     }
   }
   await page.screenshot({ path: 'test-results/theme-desktop-dark.png', fullPage: true })

@@ -38,7 +38,7 @@ for (const width of [320, 390, 768]) {
     await page.goto('/discover')
     await expect(page.getByRole('heading', { name: '这里还没有作品' })).toBeVisible()
     await expect(page.locator('.app-header')).toHaveCSS('height', '52px')
-    await expect(page.locator('html')).toHaveCSS('background-color', 'rgb(23, 36, 38)')
+    await expect(page.locator('html')).toHaveCSS('background-color', 'rgb(21, 22, 25)')
     await expect(page.locator('.mobile-nav > a')).toHaveText(['首页', '创作', '消息', '我'])
     await expect(page.locator('.mobile-nav')).toHaveCSS('height', '58px')
     const top = (await page.locator('main').boundingBox())!.y
@@ -152,7 +152,7 @@ test('mobile reference palette, feed and menu remain accessible in both themes',
   for (const mode of ['dark', 'light'] as const) {
     await page.evaluate(mode => window.communityAppearance.set({ mode }), mode)
     await expect(page.locator('.mobile-discovery-nav').getByRole('link', { name: '视频', exact: true }))
-      .toHaveCSS('color', mode === 'dark' ? 'rgb(165, 182, 184)' : 'rgb(86, 98, 89)')
+      .toHaveCSS('color', mode === 'dark' ? 'rgb(166, 173, 186)' : 'rgb(100, 107, 120)')
     await expect(page.locator('.work-card')).toHaveCount(8)
     expect((await new AxeBuilder({ page }).include('.community-shell').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
     await page.screenshot({ path: test.info().outputPath(`mobile-feed-${mode}.png`) })

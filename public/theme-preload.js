@@ -7,17 +7,16 @@
 (() => {
   const key = 'ai-community-next:appearance:v1'
   const defaults = { mode: 'dark', light: 'cloud', dark: 'sage', lightStart: '07:00', darkStart: '19:00' }
+  // Keep palette IDs stable so existing browser preferences remain valid.
   const themes = [
-    { id: 'cloud', name: '云白', mode: 'light', colors: ['#f5f6f3', '#ffffff', '#ecefe8', '#c6cec3', '#1c241f', '#566259', '#3c6450', '#315440', '#e0ebdf', '#ffffff'] },
-    { id: 'paper', name: '暖纸', mode: 'light', colors: ['#f5f0e5', '#fffcf5', '#eee6d8', '#d2c7b4', '#342d22', '#716348', '#79592f', '#654823', '#efe3cc', '#ffffff'] },
-    { id: 'mist', name: '晴空', mode: 'light', colors: ['#f2f6fa', '#ffffff', '#e6eef5', '#bdcddd', '#1c2c3d', '#52677b', '#28618a', '#204f70', '#dceaf5', '#ffffff'] },
-    { id: 'sage', name: '炭灰鼠尾草', mode: 'dark', colors: ['#121212', '#262626', '#303030', '#3c3d3a', '#f1f1ef', '#aaaca6', '#8fa68e', '#aec2a8', '#2c362c', '#1c1c1c'] },
-    { id: 'midnight', name: '午夜蓝', mode: 'dark', colors: ['#101723', '#1c2636', '#273349', '#3a4c62', '#e6edf7', '#adbace', '#9bbbf0', '#bed1f3', '#243752', '#142238'] },
-    { id: 'jade', name: '深海青', mode: 'dark', colors: ['#111f20', '#1c3031', '#253e3e', '#3b5757', '#e2eeee', '#a3bdbb', '#6dd5bc', '#a0e6d4', '#254640', '#102a25'] },
+    { id: 'cloud', name: '瓷白', mode: 'light', colors: ['#f7f8fa', '#ffffff', '#eceef2', '#dde1e7', '#20232b', '#646b78', '#4658d9', '#3848ba', '#e8ecff', '#ffffff'] },
+    { id: 'paper', name: '薄雾', mode: 'light', colors: ['#f6f8f7', '#ffffff', '#eaf0ed', '#dae3dd', '#222b27', '#5f6e65', '#267052', '#1e5d43', '#e2f0e8', '#ffffff'] },
+    { id: 'mist', name: '初雪', mode: 'light', colors: ['#faf7f8', '#ffffff', '#f2eaee', '#e6dce1', '#2d252a', '#75646e', '#a43865', '#8c2f56', '#f8e4ed', '#ffffff'] },
+    { id: 'sage', name: '曜石', mode: 'dark', colors: ['#151619', '#202226', '#2b2e34', '#383d46', '#eceef3', '#a6adba', '#a8b4ff', '#c0c8ff', '#303951', '#151619'] },
+    { id: 'midnight', name: '松影', mode: 'dark', colors: ['#151c19', '#202a25', '#2b3931', '#3a4a40', '#e8efea', '#a6b9ac', '#8bd4ad', '#ade6c5', '#2b4034', '#151c19'] },
+    { id: 'jade', name: '绯夜', mode: 'dark', colors: ['#1d181c', '#2a2228', '#392d35', '#4c3b46', '#f2e9ee', '#bea8b5', '#f0a3c3', '#f7c0d7', '#49303f', '#1d181c'] },
   ]
   const tokens = ['--p-bg', '--p-surface', '--surface-soft', '--border', '--p-ink', '--muted', '--p-action', '--blue-hover', '--blue-soft', '--p-action-ink']
-  const mobile = window.matchMedia('(max-width: 999px)')
-  const referenceColors = ['#172426', '#1d2d30', '#233639', '#ffffff1a', '#dadada', '#a5b6b8', '#00a497', '#40c9bc', '#173e3d', '#071f1d']
   const media = window.matchMedia('(prefers-color-scheme: dark)')
   let prefs = { ...defaults }, storageError = '', timer
   function validTimes(light, dark) {
@@ -49,14 +48,13 @@
   }
   function reconcile() {
     clearTimeout(timer)
-    const mode = effectiveMode(), selected = themes.find(item => item.id === prefs[mode]), root = document.documentElement
-    const theme = mobile.matches && selected.id === 'sage' ? { ...selected, colors: referenceColors } : selected
+    const mode = effectiveMode(), theme = themes.find(item => item.id === prefs[mode]), root = document.documentElement
     root.dataset.theme = theme.id; root.dataset.colorScheme = mode
     tokens.forEach((token, index) => root.style.setProperty(token, theme.colors[index]))
     root.style.setProperty('--p-accent', theme.colors[6]); root.style.setProperty('--p-accent-ink', theme.colors[9]); root.style.setProperty('--p-muted', theme.colors[5])
     const semantic = mode === 'light'
-      ? ['#276441', '#e0f0e5', '#855410', '#f7ecd3', '#b42337', '#fce9ed', '#ffffff', '#899684']
-      : ['#a4cfb4', '#293a30', '#e3c38c', '#403728', '#f1a0a7', '#472d32', '#32191d', theme.colors[3]]
+      ? ['#276441', '#e0f0e5', '#855410', '#f7ecd3', '#b42337', '#fce9ed', '#ffffff', '#7b8490']
+      : ['#a4cfb4', '#293a30', '#e3c38c', '#403728', '#f1a0a7', '#472d32', '#32191d', '#78818e']
     ;['--green', '--green-soft', '--amber', '--amber-soft', '--danger', '--danger-soft', '--danger-ink', '--control-border'].forEach((token, index) => root.style.setProperty(token, semantic[index]))
     root.style.colorScheme = mode; root.style.backgroundColor = theme.colors[0]; root.style.color = theme.colors[4]
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme.colors[0])
@@ -82,7 +80,6 @@
   }
   prefs = read(); reconcile()
   media.addEventListener('change', reconcile)
-  mobile.addEventListener('change', reconcile)
   document.addEventListener('visibilitychange', reconcile)
   window.addEventListener('focus', reconcile)
   window.addEventListener('pageshow', reconcile)

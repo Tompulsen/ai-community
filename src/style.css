@@ -7,8 +7,8 @@
 }
 
 :root {
-  --p-bg: #121212; --p-surface: #262626; --p-ink: #f1f1ef; --p-muted: #9a9b96;
-  --p-accent: #8fa68e; --p-accent-ink: #1c1c1c; --p-action: #8fa68e; --p-action-ink: #1c1c1c;
+  --p-bg: #151619; --p-surface: #202226; --p-ink: #eceef3; --p-muted: #a6adba;
+  --p-accent: #a8b4ff; --p-accent-ink: #151619; --p-action: #a8b4ff; --p-action-ink: #151619;
   --p-inv-bg: #c8c5ba; --p-inv-surface: #bab8ae; --p-inv-ink: #1c1c1c; --p-inv-muted: #454442;
   --p-inv-accent: #1c1c1c; --p-inv-accent-ink: #c8c5ba; --p-inv-action: #1c1c1c; --p-inv-action-ink: #c8c5ba;
   --font-display: "Schibsted Grotesk", system-ui, sans-serif;
@@ -27,14 +27,14 @@
   -webkit-font-smoothing: antialiased;
   --canvas: var(--p-bg);
   --surface: var(--p-surface);
-  --surface-soft: #303030;
-  --border: #3c3d3a;
+  --surface-soft: #2b2e34;
+  --border: #383d46;
   --ink: var(--p-ink);
-  --muted: #aaaca6;
+  --muted: #a6adba;
   --focus-ring: color-mix(in srgb, var(--ink) 70%, var(--canvas));
   --blue: var(--p-action);
-  --blue-hover: #aec2a8;
-  --blue-soft: #2c362c;
+  --blue-hover: #c0c8ff;
+  --blue-soft: #303951;
   --action-ink: var(--p-action-ink);
   --green: #a4cfb4;
   --green-soft: #293a30;
@@ -43,7 +43,7 @@
   --danger: #f1a0a7;
   --danger-soft: #472d32;
   --danger-ink: #32191d;
-  --control-border: #4a4c46;
+  --control-border: #78818e;
   --bg: var(--canvas);
   --card: var(--surface);
   --action: var(--blue);
@@ -614,7 +614,7 @@ dialog::backdrop { background: #0000009c; }
   .mobile-nav { padding-inline: 6px; background: var(--surface); }
   .mobile-nav > a, .mobile-nav > button { color: var(--ink); }
   .mobile-nav > a > span { position: relative; }
-  .mobile-nav .mobile-publish > span { display: grid; place-items: center; width: 44px; height: 36px; border-radius: 10px; background: var(--blue); color: #fff; }
+  .mobile-nav .mobile-publish > span { display: grid; place-items: center; width: 44px; height: 36px; border-radius: 10px; background: var(--blue); color: var(--action-ink); }
   .mobile-nav > :is(a, button):active { background: var(--surface-soft); }
   .mobile-nav > :is(a, button):focus-visible { outline-offset: -4px; }
   .mobile-unread { position: absolute; left: calc(100% - 3px); top: -9px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 10px; line-height: 16px; background: var(--blue); color: var(--action-ink); }

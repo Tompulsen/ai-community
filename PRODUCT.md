@@ -54,7 +54,7 @@ delivery now includes the frontend and an independent community backend.
   work count are omitted. Clearing conditions preserves content type and browse
   mode; restoring defaults resets the complete selection. Following requires login.
 - The whole mobile surface follows the user's local community-studio-ui reference:
-  teal default dark palette, natural-ratio two-column feed, large profile hero with
+  natural-ratio two-column feed, large profile hero with
   four shortcuts and three-column work grid, keyboard/swipe profile tabs, immersive
   work preview with separate comments and related-work drawers, compact messages,
   publishing, login and settings. The existing APIs, permissions, account and wallet
@@ -67,8 +67,10 @@ delivery now includes the frontend and an independent community backend.
   the community joining timestamp. Existing pending requests remain manual after
   a rule change. Mutations bind the expected account and reuse existing tables.
 - Account settings include six built-in palettes, separately selected for light
-  and dark mode, plus system and local-time scheduled switching. The existing
-  charcoal/sage theme remains the default. Preferences apply before app rendering
+  and dark mode, plus system and local-time scheduled switching. Porcelain/Obsidian
+  (瓷白/曜石) are the defaults, with botanical green (薄雾/松影) and berry
+  (初雪/绯夜) alternatives. Desktop and mobile use the same selected palette.
+  Existing palette IDs and saved preferences remain valid. Preferences apply before app rendering
   and persist per browser, with same-browser tab synchronization and an explicit
   error when storage is unavailable. They do not synchronize across devices.
 - Publishing, saved work, notifications and administration have distinct places.
