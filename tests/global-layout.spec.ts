@@ -62,7 +62,7 @@ const pages = [
   { path: '/community?creator=layout-user', title: user.name },
   { path: '/community?tab=announcements', title: '社区' },
   { path: '/account', title: '账户设置' },
-  { path: '/activities', title: '推广中心' },
+  { path: '/activities', title: '福利中心' },
   { path: '/admin', title: '管理后台' },
   { path: `/messages/${peer.id}`, title: '消息' },
   { path: `/work/${work.id}`, title: work.title },

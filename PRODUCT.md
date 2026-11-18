@@ -31,7 +31,7 @@ delivery now includes the frontend and an independent community backend.
 
 ## Capabilities and Constraints
 
-- Public navigation groups home (首页), the promotion center, community and the
+- Public navigation groups home (首页), the welfare center, community and the
   creation desk in that order. Community pages use a 64px icon rail on desktop
   and bottom navigation on smaller screens. Logo, navigation, existing tools,
   submission and messages occupy the rail; settings stay at its bottom.
@@ -98,7 +98,7 @@ delivery now includes the frontend and an independent community backend.
   filters, exposing safe summaries without raw configuration or credentials.
 - A community-tools launcher groups existing destinations in an icon grid,
   including work search, discovery, announcements, creators, saved work, messages,
-  creation, promotions and account tools. Unread badges reuse the shared inbox;
+  creation, welfare and account tools. Unread badges reuse the shared inbox;
   private destinations resume after sign-in and management remains role-gated.
   Reload and navigation retain existing unsaved-edit protection.
   Desktop menus open to the right of the rail; changing the desktop breakpoint closes
@@ -119,6 +119,13 @@ delivery now includes the frontend and an independent community backend.
 - The runtime uses actual account and work data; synthetic state is removed.
 - Native creation reuses the authenticated Octopus account; lottery uses real transaction and
   receipt logic. Do not replay paid requests as harmless tests.
+- The welfare center (福利中心) supports a daily pool resetting at 00:00 Asia/Shanghai.
+  Each user may spend one earned lottery ticket per day. Defaults are 200 places:
+  6,000 points × 40, 4,000 × 50, 2,000 × 50, and “🤡 非常遗憾” at 1,000 × 60.
+  Admins independently edit prize names, points, daily quantities and the total daily limit.
+  Active quantities must sum to that limit; probability follows remaining quantities.
+  Pending delivery still consumes the place, and configuration edits never refund today's usage.
+  Existing ticket balances, historical receipts and legacy lottery settings remain compatible.
 - Image and video creation display the submitted prompt, references and parameters
   beside a model response with real status and elapsed time. Inputs stay editable
   during generation, and the send control can stop local waiting. Existing gallery

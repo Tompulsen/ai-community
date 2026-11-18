@@ -33,7 +33,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     const nav = width >= 1000 ? desktop : mobile
     await expect(nav).toBeVisible()
     await expect(width >= 1000 ? mobile : desktop).toBeHidden()
-    await expect(nav.getByRole('link')).toHaveText(width >= 1000 ? ['首页', '推广中心', '社区', '创作台'] : ['首页', '创作', '消息', '我'])
+    await expect(nav.getByRole('link')).toHaveText(width >= 1000 ? ['首页', '福利中心', '社区', '创作台'] : ['首页', '创作', '消息', '我'])
     await expect(nav.getByRole('link', { name: '首页', exact: true })).toHaveAttribute('aria-current', 'page')
     await expect(nav.getByRole('link', { name: width >= 1000 ? '创作台' : '创作', exact: true })).toHaveAttribute('href', width >= 1000 ? '/create' : '/create/video')
     if (width >= 1000) {
@@ -260,8 +260,8 @@ test('guests keep login and submission destinations', async ({ page }) => {
   await page.getByRole('link', { name: '投稿', exact: true }).click()
   await expect(page).toHaveURL(/\/account(?:\?|$)/)
   await expect(page.getByRole('form', { name: '登录章鱼账号', exact: true })).toBeVisible()
-  await expect(page.locator('.community-rail')).toHaveCount(0)
-  await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toHaveCount(0)
+  await expect(page.locator('.community-rail')).toBeHidden()
+  await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toBeHidden()
 })
 
 test('mobile categories retain pending search text, independent tags and browser history', async ({ page }) => {

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, toRaw } from 'vue'
 import { ChevronDown, ChevronUp, Plus, RefreshCw, Save, Search, Trash2 } from '@lucide/vue'
 import type { LotteryCreditReceipt, LotterySettings, LotteryPrize } from '../../server/business/lottery'
 import { api, errorMessage, notify, queryString, session } from '../state'
+import { defaultDailyLotteryPrizes, lotteryPointsToCents } from '../../shared/lottery-daily'
 
 interface Config { version: number; settings: LotterySettings }
 interface User { id: string; name: string; username: string }
@@ -22,6 +23,27 @@ const draft = ref<Config | null>(null)
 const loading = ref(true), saving = ref(false), error = ref(''), saved = ref(false)
 const percentages = ref<Record<string, number>>({})
 const probabilitiesEdited = ref(false)
+const pointsPerUsd = ref<number | null>(null)
+const prizeEditorVersion = ref(0)
+const dailyMode = computed(() => draft.value?.settings.dailyLimit !== undefined)
+const dailyQuota = computed(() => draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((sum, prize) => sum + Math.max(0, Number(prize.stock) || 0), 0) ?? 0)
+const dailyPoints = computed(() => pointsPerUsd.value ? draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((sum, prize) => sum + prize.amountCents / 100 * pointsPerUsd.value! * Math.max(0, Number(prize.stock) || 0), 0) ?? 0 : null)
+function useDailyDefaults() {
+  if (!draft.value || !pointsPerUsd.value) return
+  try {
+    draft.value.settings.prizes = defaultDailyLotteryPrizes(pointsPerUsd.value)
+    draft.value.settings.dailyLimit = 200
+    prizeEditorVersion.value++
+    probabilitiesEdited.value = false; saved.value = false; error.value = ''
+  } catch { error.value = '当前兑换比例无法精确配置默认积分，请检查账户积分设置。' }
+}
+function setPoints(prize: LotteryPrize, event: Event) {
+  const input = event.target as HTMLInputElement
+  try {
+    prize.amountCents = lotteryPointsToCents(Number(input.value), pointsPerUsd.value ?? 0)
+    input.setCustomValidity('')
+  } catch { input.setCustomValidity(`请输入可精确发放的积分，当前每 ${pointsPerUsd.value ? pointsPerUsd.value / 100 : '—'} 积分调整。`) }
+}
 const baseline = ref('')
 const reloadPrompt = ref(false)
 const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value })
@@ -46,10 +68,11 @@ const blockedReasons = { UPSTREAM_REJECTED_OR_INVALID_RECEIPT: '上游拒绝或�
 const dateTime = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '未安排'
 function message(cause: unknown) {
   const value = errorMessage(cause)
-  return ({ LOTTERY_CONFLICT: '配置或次数已变化，请重新读取后再提交。', LOTTERY_INVALID: '奖项、概率或次数参数无效，请检查后重试。', LOTTERY_UNAVAILABLE: '奖励发放服务暂不可用，请检查章鱼账号的发放配置。' } as Record<string, string>)[value] || value
+  return ({ LOTTERY_DAILY_QUOTA_INVALID: '启用奖项的每日名额合计必须等于每日总人数上限。', LOTTERY_CONFLICT: '配置或次数已变化，请重新读取后再提交。', LOTTERY_INVALID: '奖项、概率或次数参数无效，请检查后重试。', LOTTERY_UNAVAILABLE: '奖励发放服务暂不可用，请检查章鱼账号的发放配置。' } as Record<string, string>)[value] || value
 }
 function setDraft(value: Config) {
   draft.value = value
+  prizeEditorVersion.value++
   const enabled = value.settings.prizes.filter(prize => prize.enabled)
   const total = enabled.reduce((sum, prize) => sum + prize.weight, 0)
   const entries = enabled.map(prize => ({ id: prize.id, exact: total ? prize.weight / total * 10000 : 0 }))
@@ -63,7 +86,15 @@ function setDraft(value: Config) {
 }
 async function loadConfig() {
   loading.value = true; error.value = ''; reloadPrompt.value = false
-  try { setDraft(await api<Config>('/api/admin/lottery/config')) }
+  try {
+    const [config, display] = await Promise.all([
+      api<Config>('/api/admin/lottery/config'),
+      api<{ success: boolean; data: { pointsPerUsd?: number } }>('/api/new-api/status').catch(() => null),
+    ])
+    const rate = display?.success ? display.data?.pointsPerUsd : undefined
+    pointsPerUsd.value = typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? rate : null
+    setDraft(config)
+  }
   catch (cause) { error.value = message(cause) }
   finally { loading.value = false }
 }
@@ -72,13 +103,13 @@ function refreshConfig() {
   else void loadConfig()
 }
 function addPrize() {
-  draft.value?.settings.prizes.push({ id: crypto.randomUUID(), name: '', description: '', weight: 1, stock: -1, enabled: true, amountCents: 50, kind: 'balance' })
+  draft.value?.settings.prizes.push({ id: crypto.randomUUID(), name: '', description: '', weight: 1, stock: dailyMode.value ? 0 : -1, enabled: true, amountCents: 50, kind: 'balance' })
   probabilitiesEdited.value = true; saved.value = false
 }
 function removePrize(index: number) { draft.value?.settings.prizes.splice(index, 1); probabilitiesEdited.value = true; saved.value = false }
 function probability(prize: LotteryPrize) {
   const available = draft.value?.settings.prizes.filter(item => item.enabled && item.stock !== 0) || []
-  const weight = (item: LotteryPrize) => probabilitiesEdited.value ? Number(percentages.value[item.id] || 0) : item.weight
+  const weight = (item: LotteryPrize) => dailyMode.value ? Math.max(0, Number(item.stock) || 0) : probabilitiesEdited.value ? Number(percentages.value[item.id] || 0) : item.weight
   const total = available.reduce((sum, item) => sum + weight(item), 0)
   return prize.enabled && prize.stock !== 0 && total ? (weight(prize) / total * 100).toFixed(2) : '0.00'
 }
@@ -86,7 +117,10 @@ async function saveConfig() {
   if (!draft.value || saving.value) return
   error.value = ''; saved.value = false
   const value = structuredClone(toRaw(draft.value))
-  if (probabilitiesEdited.value) {
+  if (dailyMode.value) {
+    if (dailyQuota.value !== value.settings.dailyLimit) { error.value = '启用奖项的每日名额合计必须等于每日总人数上限。'; return }
+    for (const prize of value.settings.prizes) prize.weight = Math.max(1, prize.stock)
+  } else if (probabilitiesEdited.value) {
     const enabled = value.settings.prizes.filter(prize => prize.enabled)
     if (enabled.length && (Math.abs(probabilityTotal.value - 100) > 0.001 || enabled.some(prize => {
       const percent = percentages.value[prize.id]
@@ -208,18 +242,26 @@ onMounted(() => {
           <h3 class="config-title">任务奖励</h3>
           <div class="rule-grid"><div v-for="(label, key) in ruleNames" :key="key" class="stack"><label class="check-label"><input v-model="draft.settings[key].enabled" type="checkbox" />{{ label }}</label><div class="fields"><label class="field"><span>达成数量</span><input v-model.number="draft.settings[key].threshold" class="control" type="number" min="1" max="1000000" step="1" required /></label><label class="field"><span>奖励次数</span><input v-model.number="draft.settings[key].tickets" class="control" type="number" min="1" max="1000" step="1" required /></label></div></div></div>
           <label class="field"><span>获赞统计</span><select v-model="draft.settings.likesMode" class="control"><option value="work">单件作品累计</option><option value="total">所有作品累计</option></select></label>
-          <div class="section-heading prize-heading"><h3>奖项</h3><button type="button" class="button subtle btn" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>
-          <p class="form-note">有库存且已启用的奖项参与抽取。库存填 −1 表示不限；金额单位为美元。</p>
-          <p class="probability-total" role="status">设定概率合计 <strong>{{ probabilityTotal.toFixed(2) }}%</strong></p>
-          <article v-for="(prize, index) in draft.settings.prizes" :key="prize.id" class="prize-editor">
+          <div class="section-heading prize-heading"><h3>每日奖池</h3><button type="button" class="button subtle btn" :disabled="!pointsPerUsd" @click="useDailyDefaults">填入默认 200 名奖池</button></div>
+          <label class="check-label"><input type="checkbox" :checked="dailyMode" @change="draft.settings.dailyLimit = ($event.target as HTMLInputElement).checked ? 200 : undefined" />每日重置，每人每天限抽 1 次</label>
+          <template v-if="dailyMode">
+            <label class="field"><span>每日总人数上限</span><input v-model.number="draft.settings.dailyLimit" class="control" type="number" min="1" max="1000000" step="1" required /></label>
+            <p class="form-note">北京时间 00:00 重置。每次消耗 1 次抽奖机会，概率按剩余名额自动计算。修改奖项不会退还当天已用名额。</p>
+            <p class="probability-total" role="status">每日名额合计 <strong>{{ dailyQuota }} 名</strong><span> · 每日奖池 <strong>{{ dailyPoints === null ? '待核对' : dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) }} 积分</strong></span></p>
+          </template>
+          <div class="section-heading prize-heading"><h3>奖项独立配置</h3><button type="button" class="button subtle btn" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>
+          <p class="form-note">名称、单次奖励和名额均可单独编辑。{{ pointsPerUsd ? `当前奖励每 ${pointsPerUsd / 100} 积分调整，按实际账户兑换比例发放。` : '积分兑换比例暂不可用，当前显示原奖励金额。' }}</p>
+          <p v-if="!dailyMode" class="probability-total" role="status">设定概率合计 <strong>{{ probabilityTotal.toFixed(2) }}%</strong> · 库存填 −1 表示不限</p>
+          <article v-for="(prize, index) in draft.settings.prizes" :key="`${prizeEditorVersion}-${prize.id}`" class="prize-editor">
             <div class="section-heading"><label class="check-label"><input v-model="prize.enabled" type="checkbox" @change="probabilitiesEdited = true" />启用奖项</label><button type="button" class="icon-button" :title="`移除奖项 ${index + 1}`" :aria-label="`移除奖项 ${index + 1}`" @click="removePrize(index)"><Trash2 :size="16" /></button></div>
             <div class="prize-fields">
               <label class="field"><span>名称</span><input v-model="prize.name" class="control" maxlength="80" required /></label>
-              <label class="field"><span>类型</span><select v-model="prize.kind" class="control" @change="prize.amountCents = prize.kind === 'empty' ? 0 : 50"><option value="balance">账户余额</option><option value="empty">未中奖</option></select></label>
-              <label v-if="prize.kind === 'balance'" class="field"><span>金额（美元）</span><input :value="(prize.amountCents / 100).toFixed(2)" class="control" type="number" min="0.01" max="10000" step="0.01" required @change="prize.amountCents = Math.round(Number(($event.target as HTMLInputElement).value) * 100)" /></label>
-              <label class="field"><span>设定概率（%）</span><input v-model.number="percentages[prize.id]" class="control" type="number" min="0.01" max="100" step="0.01" :disabled="!prize.enabled" required @input="probabilitiesEdited = true" /></label>
-              <label class="field"><span>剩余库存</span><input v-model.number="prize.stock" class="control" type="number" min="-1" max="1000000" step="1" required /></label>
-              <div class="field"><span>当前实际概率</span><strong>{{ probability(prize) }}%</strong></div>
+              <label class="field"><span>类型</span><select v-model="prize.kind" class="control" @change="prize.amountCents = prize.kind === 'empty' ? 0 : 50"><option value="balance">积分奖励</option><option value="empty">未中奖（无积分）</option></select></label>
+              <label v-if="prize.kind === 'balance' && pointsPerUsd" class="field"><span>单次奖励（积分）</span><input :value="prize.amountCents / 100 * pointsPerUsd" class="control" type="number" :min="pointsPerUsd / 100" :max="pointsPerUsd * 10000" :step="pointsPerUsd / 100" required @input="setPoints(prize, $event)" /></label>
+              <label v-else-if="prize.kind === 'balance'" class="field"><span>金额（美元）</span><input :value="(prize.amountCents / 100).toFixed(2)" class="control" type="number" min="0.01" max="10000" step="0.01" required @change="prize.amountCents = Math.round(Number(($event.target as HTMLInputElement).value) * 100)" /></label>
+              <label v-if="!dailyMode" class="field"><span>设定概率（%）</span><input v-model.number="percentages[prize.id]" class="control" type="number" min="0.01" max="100" step="0.01" :disabled="!prize.enabled" required @input="probabilitiesEdited = true" /></label>
+              <label class="field"><span>{{ dailyMode ? '每日名额' : '剩余库存' }}</span><input v-model.number="prize.stock" class="control" type="number" :min="dailyMode ? 0 : -1" max="1000000" step="1" required /></label>
+              <div class="field"><span>{{ dailyMode ? '初始中奖概率（自动）' : '当前实际概率' }}</span><strong>{{ probability(prize) }}%</strong></div>
             </div>
             <label class="field"><span>说明</span><textarea v-model="prize.description" class="control" rows="2" maxlength="500" /></label>
           </article>

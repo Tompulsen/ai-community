@@ -4,13 +4,13 @@ SPDX-FileCopyrightText: 2026 Community contributors
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowUpRight, Gift, Link2, Ticket, Users, Heart, Copy, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 import { formatPoints } from '../../shared/studio/community-wallet'
 
 interface Rule { enabled: boolean; threshold: number; tickets: number }
-interface Prize { id: string; name: string; description: string; amountCents: number; kind: 'balance' | 'empty'; weight: number; stock: number; enabled: boolean }
+interface Prize { id: string; name: string; description: string; amountCents: number; kind: 'balance' | 'empty'; weight: number; stock: number; enabled: boolean; dailyQuota?: number }
 interface Award { prizeId: string; name: string; description: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note?: string; legacyPoints?: string | null }
 interface Draw { id: string; createdAt: string; prizes: Award[] }
 interface PendingDraw { requestId: string; count: 1 | 3 | 5 }
@@ -18,6 +18,7 @@ interface LotteryStatus {
   settings: { enabled: boolean; prizes: Prize[]; invites: Rule; followers: Rule; likes: Rule; likesMode: string; wheel: { theme: 'teal' | 'violet' | 'sunset'; title: string; subtitle: string; buttonText: string; rulesText: string } }
   balance: number; counts: { invites: number; followers: number; likes: number; bestWorkLikes: number }
   earned: { invites: number; followers: number; likes: number }; accountLinked: boolean; creditReady: boolean; inviteUrl: string
+  daily?: { date: string; timezone: string; resetsAt: string; limit: number; used: number; remaining: number; participated: boolean } | null
 }
 const tab = ref('draw')
 const tabs = [{ id: 'draw', label: '抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
@@ -30,10 +31,14 @@ function rewardAmount(value: Prize | Award) {
     ? `${formatPoints(value.legacyPoints)} 积分（永久积分）` : '永久积分，数额待核对'
   const rate = pointDisplay.value.pointsPerUsd
   return rate && Number.isFinite(rate) && rate > 0
-    ? `约 ${(value.amountCents / 100 * rate).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分（永久积分）` : '积分待核对'
+    ? `${status.value?.daily ? '' : '约 '}${(value.amountCents / 100 * rate).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} 积分（永久积分）` : '积分待核对'
 }
 const count = ref<1 | 3 | 5>(1), pending = ref<PendingDraw | null>(null), wheelRotation = ref(0)
-const drawCounts = [1, 3, 5] as const
+const allDrawCounts = [1, 3, 5] as const
+const drawCounts = computed(() => status.value?.daily ? [1] as const : allDrawCounts)
+const dailyPoints = computed(() => pointDisplay.value?.pointsPerUsd && status.value?.daily
+  ? status.value.settings.prizes.reduce((sum, prize) => sum + (prize.dailyQuota ?? 0) * prize.amountCents / 100 * pointDisplay.value!.pointsPerUsd!, 0) : null)
+const prizeLabel = (name: string) => name.replace(/^🤡\s*/, '')
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
 const rules = computed(() => status.value ? [
   { key: 'invites' as const, label: '邀请朋友', icon: Users, rule: status.value.settings.invites, count: status.value.counts.invites },
@@ -44,7 +49,7 @@ const awardLabels = { pending: '待发放', fulfilled: '已到账', empty: '未�
 const appearance = computed(() => status.value?.settings.wheel ?? { theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' })
 const availablePrizes = computed(() => status.value?.settings.prizes.filter(prize => prize.enabled && prize.weight > 0 && prize.stock !== 0) || [])
 const totalWeight = computed(() => availablePrizes.value.reduce((sum, prize) => sum + prize.weight, 0))
-const drawDisabled = computed(() => drawing.value || loading.value || (!pending.value && (!status.value?.settings.enabled || !status.value.accountLinked || !status.value.creditReady || status.value.balance < count.value || !availablePrizes.value.length)))
+const drawDisabled = computed(() => drawing.value || loading.value || (!pending.value && (!status.value?.settings.enabled || !status.value.accountLinked || !status.value.creditReady || status.value.balance < count.value || !availablePrizes.value.length || Boolean(status.value.daily && (status.value.daily.participated || !status.value.daily.remaining)))))
 const wheelSlots = computed(() => {
   const prizes = [...(status.value?.settings.prizes || [])]
   const winner = result.value?.prizes.at(-1)
@@ -57,11 +62,12 @@ const wheelSegments = computed(() => wheelSlots.value.map((prize, index, slots) 
   const point = (degree: number, radius: number) => ({ x: 200 + Math.cos(degree * Math.PI / 180) * radius, y: 200 + Math.sin(degree * Math.PI / 180) * radius })
   const center = -90 + index * angle
   const start = point(center - angle / 2, 184), end = point(center + angle / 2, 184), label = point(center, 128)
-  return { ...prize, index, path: `M200 200 L${start.x} ${start.y} A184 184 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, label, rotate: center + 90 }
+  const points = 'amountCents' in prize && pointDisplay.value?.pointsPerUsd ? (Number(prize.amountCents) / 100 * pointDisplay.value.pointsPerUsd).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : ''
+  return { ...prize, index, points, path: `M200 200 L${start.x} ${start.y} A184 184 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, label, rotate: center + 90 }
 }))
 function drawMessage(cause: unknown) {
   const value = errorMessage(cause)
-  return ({ LOTTERY_INSUFFICIENT: '抽奖次数不足。', LOTTERY_ACCOUNT_REQUIRED: '请先连接章鱼账号。', LOTTERY_UNAVAILABLE: '活动或奖励发放暂不可用。', LOTTERY_INVALID: '本次抽奖参数无效，请重新参与。', LOTTERY_CONFLICT: '本次抽奖凭证与原请求不一致，请刷新后核对。', LOTTERY_FORBIDDEN: '当前账号暂不能参与活动。' } as Record<string, string>)[value] || value
+  return ({ LOTTERY_DAILY_USED: '今天已参与，明天再来领取福利。', LOTTERY_DAILY_SINGLE: '每日福利每人每天限抽 1 次。', LOTTERY_DAILY_EXHAUSTED: '今日名额已领完，北京时间 00:00 后再来。', LOTTERY_INSUFFICIENT: '抽奖次数不足。', LOTTERY_ACCOUNT_REQUIRED: '请先连接章鱼账号。', LOTTERY_UNAVAILABLE: '活动或奖励发放暂不可用。', LOTTERY_INVALID: '本次抽奖参数无效，请重新参与。', LOTTERY_CONFLICT: '本次抽奖凭证与原请求不一致，请刷新后核对。', LOTTERY_FORBIDDEN: '当前账号暂不能参与活动。' } as Record<string, string>)[value] || value
 }
 async function loadRecords(append = false) {
   if (!session.user || recordsLoading.value) return
@@ -76,7 +82,7 @@ function restorePending() {
   if (!session.user) return
   try {
     const value: unknown = JSON.parse(sessionStorage.getItem(drawStorageKey.value) || 'null')
-    if (value && typeof value === 'object' && 'requestId' in value && typeof value.requestId === 'string' && /^[a-zA-Z0-9_-]{16,64}$/.test(value.requestId) && 'count' in value && drawCounts.includes(value.count as 1 | 3 | 5)) {
+    if (value && typeof value === 'object' && 'requestId' in value && typeof value.requestId === 'string' && /^[a-zA-Z0-9_-]{16,64}$/.test(value.requestId) && 'count' in value && allDrawCounts.includes(value.count as 1 | 3 | 5)) {
       pending.value = value as PendingDraw; count.value = pending.value.count
     }
   } catch { /* Ignore invalid local state without issuing a new draw. */ }
@@ -90,12 +96,22 @@ async function load() {
       api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
         .then(value => { if (value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data }).catch(() => {}),
     ])
-    status.value = lottery; restorePending(); await loadRecords()
+    status.value = lottery; if (lottery.daily) count.value = 1
+    restorePending(); scheduleReset(); await loadRecords()
   }
   catch (cause) { error.value = drawMessage(cause) }
   finally { loading.value = false }
 }
 onMounted(() => { void load() })
+let resetTimer: ReturnType<typeof setTimeout> | undefined
+function scheduleReset() {
+  clearTimeout(resetTimer)
+  if (status.value?.daily) {
+    const delay = new Date(status.value.daily.resetsAt).getTime() - Date.now() + 1000
+    if (delay > 0 && delay < 86402000) resetTimer = setTimeout(() => { if (!drawing.value) void load() }, delay)
+  }
+}
+onBeforeUnmount(() => clearTimeout(resetTimer))
 async function draw() {
   if (!session.user || drawDisabled.value) return
   const storageKey = drawStorageKey.value
@@ -110,9 +126,12 @@ async function draw() {
   try { receipt = await api<Draw>('/api/lottery/draw', { method: 'POST', body: pending.value }) }
   catch (cause) {
     const code = errorMessage(cause)
-    if (['LOTTERY_INSUFFICIENT', 'LOTTERY_ACCOUNT_REQUIRED', 'LOTTERY_UNAVAILABLE', 'LOTTERY_INVALID', 'LOTTERY_FORBIDDEN', 'LOTTERY_CONFLICT'].includes(code)) {
+    if (['LOTTERY_DAILY_USED', 'LOTTERY_DAILY_SINGLE', 'LOTTERY_DAILY_EXHAUSTED', 'LOTTERY_INSUFFICIENT', 'LOTTERY_ACCOUNT_REQUIRED', 'LOTTERY_UNAVAILABLE', 'LOTTERY_INVALID', 'LOTTERY_FORBIDDEN', 'LOTTERY_CONFLICT'].includes(code)) {
       pending.value = null
       try { sessionStorage.removeItem(storageKey) } catch { /* Keep the same safe request if local cleanup is unavailable. */ }
+    }
+    if (code.startsWith('LOTTERY_DAILY_')) {
+      try { status.value = await api<LotteryStatus>('/api/lottery/status'); count.value = 1; scheduleReset() } catch { /* Keep the authoritative draw error visible. */ }
     }
     error.value = drawMessage(cause); drawing.value = false; return
   }
@@ -125,7 +144,7 @@ async function draw() {
     wheelRotation.value += 1440 + (target - wheelRotation.value % 360 + 360) % 360
   }
   notify('抽奖结果已记录。')
-  try { status.value = await api<LotteryStatus>('/api/lottery/status'); await loadRecords() }
+  try { status.value = await api<LotteryStatus>('/api/lottery/status'); if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
   catch (cause) { error.value = `抽奖已完成，账户信息刷新失败：${drawMessage(cause)}` }
   finally { drawing.value = false }
 }
@@ -137,28 +156,32 @@ async function copyInvite() {
 
 <template>
   <div class="page-container activity-page">
-    <div class="page-heading"><h1>推广中心</h1><button class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" /></button></div>
+    <div class="page-heading"><div><h1>福利中心</h1><p class="welfare-intro">参与社区任务，赢取每日积分福利。</p></div><button class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" /></button></div>
     <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status">
-      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note">奖励到账后计入 New API 可用余额，统一折算为社区永久积分。¥1 = 5,000 积分，奖池预计数额和到账记录以账户余额为准。</p>
+      <section v-if="status.daily" class="daily-overview" aria-label="今日福利">
+        <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
+        <p>每人每天限 1 次 · 消耗 1 次机会<br /><span>北京时间 00:00 重置</span></p>
+      </section>
+      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note reward-note">奖励统一折算为社区永久积分，到账结果可在奖励记录和我的账户查看。</p>
       <div v-if="tab === 'draw'" class="activity-layout lottery-layout">
         <section class="panel-section draw-section">
-          <div class="section-heading"><h2>{{ appearance.title || '幸运抽奖' }}</h2><Ticket :size="20" /></div><p v-if="appearance.subtitle" class="muted">{{ appearance.subtitle }}</p>
+          <div class="section-heading"><h2>{{ appearance.title || '每日幸运转盘' }}</h2><Ticket :size="20" /></div><p v-if="appearance.subtitle" class="muted">{{ appearance.subtitle }}</p>
           <div class="lottery-wheel" :class="`theme-${appearance.theme}`" data-testid="lottery-wheel">
-            <svg viewBox="0 0 400 400" aria-hidden="true"><circle cx="200" cy="200" r="195" class="wheel-rim" /><g class="wheel-disc" :style="{ transform: `rotate(${wheelRotation}deg)` }"><g v-for="segment in wheelSegments" :key="`${segment.id}-${segment.index}`"><path :d="segment.path" :class="segment.index % 2 ? 'wheel-alternate' : 'wheel-sector'" /><text :x="segment.label.x" :y="segment.label.y" :transform="`rotate(${segment.rotate},${segment.label.x},${segment.label.y})`" text-anchor="middle" dominant-baseline="middle">{{ wheelSegments.length > 12 ? segment.index + 1 : segment.name.length > 6 ? `${segment.name.slice(0, 5)}…` : segment.name }}</text></g></g></svg>
+            <svg viewBox="0 0 400 400" aria-hidden="true"><circle cx="200" cy="200" r="195" class="wheel-rim" /><g class="wheel-disc" :style="{ transform: `rotate(${wheelRotation}deg)` }"><g v-for="segment in wheelSegments" :key="`${segment.id}-${segment.index}`"><path :d="segment.path" :class="segment.index % 2 ? 'wheel-alternate' : 'wheel-sector'" /><text :x="segment.label.x" :y="segment.label.y" :transform="`rotate(${segment.rotate},${segment.label.x},${segment.label.y})`" text-anchor="middle" dominant-baseline="middle"><tspan :x="segment.label.x" :dy="segment.points ? -9 : 0">{{ wheelSegments.length > 12 ? segment.index + 1 : Array.from(segment.name).length > 9 ? `${Array.from(segment.name).slice(0, 8).join('')}…` : segment.name }}</tspan><tspan v-if="segment.points && wheelSegments.length <= 8" :x="segment.label.x" dy="23" class="wheel-points">{{ segment.points }} 积分</tspan></text></g></g></svg>
             <span class="wheel-pointer" aria-hidden="true" />
-            <button v-if="session.user" class="wheel-center" :disabled="drawDisabled" :aria-label="pending ? '核对上次抽奖结果' : `抽奖 ${count} 次`" :aria-busy="drawing" @click="draw">{{ drawing ? '确认中' : pending ? '核对' : appearance.buttonText || 'GO' }}</button><RouterLink v-else to="/account" class="wheel-center">登录</RouterLink>
+            <button v-if="session.user" class="wheel-center" :disabled="drawDisabled" :aria-label="drawing ? '确认中' : pending ? '核对上次抽奖结果' : `${appearance.buttonText || 'GO'}，抽奖 ${count} 次`" :aria-busy="drawing" @click="draw">{{ drawing ? '确认中' : pending ? '核对' : appearance.buttonText || 'GO' }}</button><RouterLink v-else to="/account" class="wheel-center">登录</RouterLink>
           </div>
-          <p class="caption-5 wheel-caption">扇区仅展示奖项，中奖概率以奖池为准。</p>
-          <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
-          <button v-if="session.user" class="button primary btn" :disabled="drawDisabled" @click="draw"><Gift :size="17" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
-          <p v-if="pending && !drawing" class="form-note">上次结果尚未确认，再次核对会使用同一凭证。</p><p v-if="!status.settings.enabled" class="form-note">活动暂未开放。</p><p v-else-if="!status.creditReady" class="form-note">奖励发放服务暂不可用。</p><RouterLink v-else-if="!status.accountLinked && session.user" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink><p v-else-if="status.balance < count && session.user && !pending" class="form-note">本次需要 {{ count }} 次机会，当前次数不足。</p>
+          <p class="caption-5 wheel-caption">{{ status.daily ? '按剩余名额抽取，奖励以当前奖池为准。' : '扇区仅展示奖项，中奖概率以奖池为准。' }}</p>
+          <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div v-if="!status.daily" class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
+          <button v-if="session.user" class="button primary btn" :disabled="drawDisabled" @click="draw"><Gift :size="17" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : status.daily?.participated ? '今日已参与' : status.daily && !status.daily.remaining ? '今日名额已领完' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
+          <p v-if="pending && !drawing" class="form-note">上次结果尚未确认，再次核对会使用同一凭证。</p><p v-if="!status.settings.enabled" class="form-note">活动暂未开放。</p><p v-else-if="!status.creditReady" class="form-note">奖励发放服务暂不可用。</p><RouterLink v-else-if="!status.accountLinked && session.user" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink><p v-else-if="status.daily?.participated && !pending" class="form-note">今天的福利已领取，明天再来。</p><p v-else-if="status.daily && !status.daily.remaining && !pending" class="form-note">今日名额已领完，明天 00:00 重置。</p><p v-else-if="status.balance < count && session.user && !pending" class="form-note">本次需要 {{ count }} 次机会，当前次数不足。</p>
           <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents"> · {{ rewardAmount(award) }}</span></p></div><button class="text-link" @click="tab = 'records'">查看奖励记录<ArrowUpRight :size="15" /></button></div>
           <p v-if="appearance.rulesText" class="activity-rules">{{ appearance.rulesText }}</p>
         </section>
-        <section class="panel-section prize-section"><div class="section-heading"><h2>奖池</h2><Gift :size="18" /></div><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="avatar" :class="prize.kind === 'empty' ? 'rose' : 'green'"><Gift :size="18" /></span><div><strong>{{ prize.name }}</strong><p class="caption-5">{{ prize.description }}<span v-if="prize.amountCents"> · {{ rewardAmount(prize) }}</span></p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
+        <section class="panel-section prize-section"><div class="section-heading"><h2>{{ status.daily ? '今日奖池' : '奖池' }}</h2><Gift :size="18" /></div><p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="prize-icon" aria-hidden="true"><span v-if="prize.name.includes('🤡')" class="clown-icon">🤡</span><Gift v-else :size="20" /></span><div><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }}</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
         <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2><Ticket :size="18" /></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
         <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2><Link2 :size="18" /></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
       </div>
@@ -170,20 +193,34 @@ async function copyInvite() {
 
 <style scoped>
 .activity-page { max-width: 1360px; }
+.welfare-intro { color: var(--muted); font-size: 14px; line-height: 22px; margin-top: 8px; }
+.daily-overview { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.daily-overview dl { display: flex; flex-wrap: wrap; gap: 16px 48px; margin: 0; }
+.daily-overview dt { color: var(--muted); font-size: 13px; line-height: 20px; }
+.daily-overview dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.daily-overview strong { font-size: 28px; line-height: 36px; font-weight: 600; }
+.daily-overview dd span, .daily-overview p { color: var(--muted); font-size: 13px; line-height: 22px; }
+.daily-overview p { margin: 0; }
+.reward-note { margin-bottom: 16px; }
+.pool-caption { color: var(--muted); font-size: 13px; line-height: 20px; margin: -4px 0 16px; }
+.prize-icon { width: 28px; flex: 0 0 28px; padding-top: 3px; color: var(--blue); }
+.clown-icon { font-size: 24px; line-height: 28px; }
+.prize-item .prize-amount { color: var(--ink); font-size: 15px; font-weight: 500; line-height: 24px; }
+.lottery-wheel .wheel-points { font-size: 16px; font-weight: 600; }
 .activity-page > .tabs { margin-bottom: 16px; }
 .lottery-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .lottery-layout > .panel-section { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .lottery-layout > .panel-section > .section-heading { margin-bottom: 16px; }
 .lottery-layout > .panel-section > .section-heading h2 { font-size: 16px; line-height: 24px; }
-.draw-section { min-width: 0; min-height: 480px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(176px, 1fr); align-items: start; align-content: start; align-self: stretch; column-gap: 24px; row-gap: 16px; grid-column: 1; grid-row: 1 / span 3; }
+.draw-section { min-width: 0; min-height: 400px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(176px, 1fr); align-items: start; align-content: start; align-self: start; column-gap: 24px; row-gap: 16px; grid-column: 1; grid-row: 1; }
 .draw-section > :not(.lottery-wheel) { grid-column: 2; }
 .lottery-layout > .draw-section > .section-heading { margin: 0; }
 .lottery-layout > .draw-section > .section-heading h2 { font-size: 20px; line-height: 28px; }
 .draw-section > .button { width: fit-content; min-width: 176px; margin-top: 0; }
 .draw-section > .form-note { margin-top: 0; }
 .prize-section { grid-column: 2; grid-row: 1; }
-.chances-section { grid-column: 2; grid-row: 2; }
-.account-section { grid-column: 2; grid-row: 3; }
+.chances-section { grid-column: 1; grid-row: 2; }
+.account-section { grid-column: 2; grid-row: 2; }
 .lottery-wheel { --wheel-accent: var(--blue); --wheel-light: color-mix(in srgb, var(--blue) 16%, var(--surface)); --wheel-alternate: var(--surface); --wheel-ink: var(--ink); grid-column: 1; grid-row: 1 / span 8; align-self: center; justify-self: center; width: min(100%, 340px); aspect-ratio: 1; margin: 0; position: relative; }
 .theme-violet { --wheel-accent: #bdabef; --wheel-light: color-mix(in srgb, #bdabef 20%, var(--surface)); --wheel-alternate: color-mix(in srgb, #bdabef 6%, var(--surface)); }
 .theme-sunset { --wheel-accent: #edb17e; --wheel-light: color-mix(in srgb, #edb17e 20%, var(--surface)); --wheel-alternate: color-mix(in srgb, #e8c78f 6%, var(--surface)); }
@@ -222,12 +259,21 @@ async function copyInvite() {
 .activity-page .data-table { font-variant-numeric: tabular-nums; }
 .activity-loading { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
 .activity-loading .skeleton { height: 400px; border-radius: 8px; }
+@media (max-width: 999px) {
+  .activity-page > .page-heading h1 { display: none; }
+  .welfare-intro { margin-top: 0; }
+}
 @media (max-width: 899px) {
   .lottery-layout, .activity-loading { grid-template-columns: minmax(0, 1fr); }
   .draw-section { grid-template-columns: minmax(208px, 280px) minmax(0, 1fr); column-gap: 24px; min-height: 0; }
   .lottery-layout > .panel-section { grid-column: auto; grid-row: auto; }
 }
 @media (max-width: 639px) {
+  .daily-overview { align-items: flex-start; flex-direction: column; gap: 12px; padding-top: 4px; }
+  .daily-overview dl { width: 100%; justify-content: space-between; gap: 12px; }
+  .daily-overview strong { font-size: 24px; line-height: 32px; }
+  .daily-overview p br { display: none; }
+  .daily-overview p span { display: block; }
   .lottery-layout > .panel-section { padding: 16px; }
   .draw-section { display: flex; flex-direction: column; gap: 16px; }
   .draw-section > .section-heading { width: 100%; }

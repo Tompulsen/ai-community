@@ -25,7 +25,7 @@ const tools = computed<Tool[]>(() => [
   { label: '图片', icon: Image, to: '/discover?kind=image' },
   { label: '视频', icon: Video, to: '/discover?kind=video' },
   { label: '创作台', icon: WandSparkles, to: '/create', member: true },
-  { label: '推广中心', icon: Gift, to: '/activities' },
+  { label: '福利中心', icon: Gift, to: '/activities' },
   { label: session.user ? '个人主页' : '个人资料', icon: UserRound, to: session.user ? `/community?creator=${encodeURIComponent(session.user.id)}` : '/account?tab=profile', member: true },
   { label: '账号设置', icon: Settings, to: '/account?tab=profile', member: true },
   { label: '账户余额', icon: Wallet, to: '/account?tab=balance', member: true },

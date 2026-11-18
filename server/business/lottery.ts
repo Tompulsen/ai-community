@@ -10,6 +10,7 @@ export type LotteryWheel = { theme: 'teal' | 'violet' | 'sunset'; title: string;
 export type LotteryPrize = { id: string; name: string; description: string; weight: number; stock: number; enabled: boolean; amountCents: number; kind: 'balance' | 'empty' };
 export type LotterySettings = {
 	enabled: boolean;
+	dailyLimit?: number;
 	invites: LotteryRule;
 	likes: LotteryRule;
 	followers: LotteryRule;

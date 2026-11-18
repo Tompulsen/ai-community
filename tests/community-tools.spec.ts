@@ -22,7 +22,7 @@ test('tools use real destinations and category counts without writing data', asy
   const destinations = {
     '发现': '/discover', '公告，2 条未读': '/community?tab=announcements', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
-    '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '推广中心': '/activities',
+    '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '福利中心': '/activities',
     '账号设置': '/account?tab=profile', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
     '主题外观': '/account?tab=theme', '关注申请': '/account?tab=following',
   }

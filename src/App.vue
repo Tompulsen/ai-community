@@ -84,7 +84,7 @@ function resizeViewport() {
 }
 const links = [
   { path: '/discover', label: '首页', icon: House },
-  { path: '/activities', label: '推广中心', icon: Gift },
+  { path: '/activities', label: '福利中心', icon: Gift },
   { path: '/community', label: '社区', icon: Users },
   { path: '/create', label: '创作台', icon: WandSparkles },
 ]
