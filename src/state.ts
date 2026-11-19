@@ -125,7 +125,10 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '')
   try {
     const url = new URL(session.accountUrl)
     if (url.protocol !== 'https:' || url.username || url.password) return ''
-    return new URL(`/${path}`, url.origin).href
+    const target = new URL(`/${path}`, url.origin)
+    const invite = rememberLotteryInvite()
+    if (path === 'register' && invite && /^wf[a-zA-Z0-9]{24}$/.test(invite)) target.searchParams.set('aff', invite)
+    return target.href
   } catch { return '' }
 }
 
@@ -151,7 +154,7 @@ export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'log
 
 export async function syncAccountSession(returnTo?: string, signal?: AbortSignal) {
   return api<{ user: SessionUser; returnTo?: string }>('/api/account/session', {
-    method: 'POST', signal, body: { lotteryInviterId: rememberLotteryInvite(), ...(returnTo ? { returnTo } : {}) },
+    method: 'POST', signal, body: { ...(returnTo ? { returnTo } : {}) },
   })
 }
 

@@ -5,8 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowUpRight, Gift, Link2, Ticket, Users, Heart, Copy, RefreshCw } from '@lucide/vue'
+import { ArrowUpRight, Gift, Link2, Ticket, Users, Heart, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
+import ReferralBenefits from '../components/ReferralBenefits.vue'
+import { useRoute } from 'vue-router'
 import { formatPoints } from '../../shared/studio/community-wallet'
 
 interface Rule { enabled: boolean; threshold: number; tickets: number }
@@ -20,7 +22,8 @@ interface LotteryStatus {
   earned: { invites: number; followers: number; likes: number }; accountLinked: boolean; creditReady: boolean; inviteUrl: string
   daily?: { date: string; timezone: string; resetsAt: string; limit: number; used: number; remaining: number; participated: boolean } | null
 }
-const tab = ref('draw')
+const route = useRoute()
+const tab = ref(route.query.invite ? 'tasks' : 'draw')
 const tabs = [{ id: 'draw', label: '抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
 const loading = ref(true), drawing = ref(false), recordsLoading = ref(false), error = ref('')
@@ -41,7 +44,6 @@ const dailyPoints = computed(() => pointDisplay.value?.pointsPerUsd && status.va
 const prizeLabel = (name: string) => name.replace(/^🤡\s*/, '')
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
 const rules = computed(() => status.value ? [
-  { key: 'invites' as const, label: '邀请朋友', icon: Users, rule: status.value.settings.invites, count: status.value.counts.invites },
   { key: 'followers' as const, label: '收获关注', icon: Users, rule: status.value.settings.followers, count: status.value.counts.followers },
   { key: 'likes' as const, label: status.value.settings.likesMode === 'work' ? '单件作品获赞' : '作品累计获赞', icon: Heart, rule: status.value.settings.likes, count: status.value.settings.likesMode === 'work' ? status.value.counts.bestWorkLikes : status.value.counts.likes },
 ].filter(item => item.rule.enabled) : [])
@@ -148,10 +150,7 @@ async function draw() {
   catch (cause) { error.value = `抽奖已完成，账户信息刷新失败：${drawMessage(cause)}` }
   finally { drawing.value = false }
 }
-async function copyInvite() {
-  try { await navigator.clipboard.writeText(status.value?.inviteUrl || ''); notify('邀请链接已复制。') }
-  catch { notify('复制失败，请手动选择链接。') }
-}
+
 </script>
 
 <template>
@@ -185,7 +184,7 @@ async function copyInvite() {
         <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2><Ticket :size="18" /></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
         <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2><Link2 :size="18" /></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
       </div>
-      <div v-else-if="tab === 'tasks'" class="activity-layout"><section class="panel-section"><h2>活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div><p v-if="!rules.length" class="muted">当前没有开放的任务。</p></section><section class="panel-section"><h2>邀请朋友</h2><dl class="info-list"><div><dt>有效邀请</dt><dd>{{ status.counts.invites }}</dd></div><div><dt>已获得机会</dt><dd>{{ status.earned.invites }}</dd></div></dl><template v-if="session.user && status.inviteUrl"><p class="invite-url">{{ status.inviteUrl }}</p><button class="button btn" @click="copyInvite"><Copy :size="16" />复制邀请链接</button></template><RouterLink v-else to="/account" class="button btn">登录</RouterLink></section></div>
+      <div v-else-if="tab === 'tasks'" class="stack"><ReferralBenefits /><section v-if="rules.length" class="panel-section"><h2>其他活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div></section></div>
       <section v-else class="panel-section"><div class="section-heading"><h2>奖励记录</h2><button class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" />刷新</button></div><div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td>{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td>{{ award.name }}</td><td>{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
     </template>
   </div>

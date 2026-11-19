@@ -15,6 +15,7 @@ import { Redis } from 'ioredis'
 import { authServices, httpError, newId } from './auth.ts'
 import { handleContent } from './content.ts'
 import { handleLottery, startPendingWorker } from './lottery.ts'
+import { handleReferral } from './referral.ts'
 import { handleAccount } from './account.ts'
 import { handleSocial } from './social.ts'
 import { handleFollowing } from './following.ts'
@@ -171,6 +172,10 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['GET', ['/api/newapi/callback', '/auth/newapi', '/api/newapi/config', '/api/account']],
     ['POST', ['/api/account/session', '/api/account/connect', '/api/newapi/start', '/api/account/finish', '/api/newapi/finish',
       '/api/newapi/studio/start', '/api/newapi/studio/exchange', '/api/newapi/studio/context', '/api/newapi/studio/validate']],
+  ])
+  register(handleReferral, [
+    ['GET', ['/api/referrals/status', '/api/admin/referrals/config']],
+    ['PATCH', ['/api/admin/referrals/config']],
   ])
   register(handleLottery, [
     ['GET', ['/api/lottery/status', '/api/lottery/records', '/api/admin/lottery/config', '/api/admin/lottery/account', '/api/admin/lottery/records']],

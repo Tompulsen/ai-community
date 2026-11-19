@@ -235,6 +235,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     const row = rows[0]
     if (!row) fail('LOTTERY_UNAVAILABLE', 500)
     row.settings = normalizeLotterySettings(row.settings)
+    row.settings.invites.enabled = false
     return row
   }
 
@@ -338,7 +339,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
           likes: result?.counts.works.reduce((sum, work) => sum + work.likes, 0) ?? 0,
           bestWorkLikes: result?.counts.works.reduce((best, work) => Math.max(best, work.likes), 0) ?? 0,
         },
-        inviteUrl: userId ? `${new URL(config.url).origin}/activities?invite=${encodeURIComponent(userId)}` : '',
+        inviteUrl: '',
       }
     })
   }
@@ -454,6 +455,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       const current = await configuration(client, true)
       if (version !== current.version) fail('LOTTERY_CONFLICT', 409)
       const settings = normalizeLotterySettings({ ...normalized, wheel: normalized.wheel ?? current.settings.wheel })
+      settings.invites.enabled = false
       for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) settings.wheel[key] = settings.wheel[key].trim()
       settings.wheel.buttonText ||= 'GO'
       await client.query('UPDATE community_lottery_config SET version=version+1,settings=$2::jsonb WHERE id=$1', ['default', JSON.stringify(settings)])

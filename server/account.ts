@@ -6,7 +6,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import bcrypt from 'bcryptjs'
-import { lotteryInviter } from './business/lottery.ts'
 import { readAccountSession } from './account-session.ts'
 import { handleAccountRequest, getNewApiConfig } from './native-account/index.ts'
 import { communityWalletEnabled } from './native-account/community-wallet.ts'
@@ -190,7 +189,7 @@ export async function bindExternalAccount(ctx: RequestContext, accountIssuer: st
   })
 }
 
-async function provision(ctx: RequestContext, accountIssuer: string, identity: Identity, inviterId?: string): Promise<CredentialUser> {
+async function provision(ctx: RequestContext, accountIssuer: string, identity: Identity): Promise<CredentialUser> {
   identity = newApiIdentity(identity)
   const { rows: metaRows } = await ctx.db.query<SignupMeta>('SELECT "rootUserId" FROM meta LIMIT 1')
   const meta = metaRows[0]
@@ -216,11 +215,6 @@ async function provision(ctx: RequestContext, accountIssuer: string, identity: I
     await client.query('INSERT INTO user_profile ("userId","autoAcceptFollowed",password,email,"emailVerified") VALUES ($1,true,$2,NULL,false)', [id, password])
     await client.query('INSERT INTO used_username (username,"createdAt") VALUES ($1,NOW()) ON CONFLICT (username) DO NOTHING', [lower])
     await client.query('INSERT INTO external_account (issuer,subject,"userId","createdAt") VALUES ($1,$2,$3,NOW())', [accountIssuer, identity.sub, id])
-    const inviter = lotteryInviter(inviterId)
-    if (inviter && inviter !== id) {
-      await client.query(`INSERT INTO community_lottery_referral ("userId","inviterId","createdAt")
-        SELECT $1,id,NOW() FROM "user" WHERE id=$2 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL`, [id, inviter])
-    }
     return availableUser(client, id)
   })
 }
@@ -230,7 +224,7 @@ async function synchronizeSession(ctx: RequestContext) {
   const account = await readAccountSession(ctx.config, ctx.req)
   const user = await provision(ctx, account.binding.issuer, {
     sub: account.binding.subject, preferred_username: account.username, name: account.name,
-  }, lotteryInviter(ctx.body.lotteryInviterId))
+  })
   await rememberPublicIdentity(ctx.db, {
     issuer: account.binding.issuer, subject: account.binding.subject, userId: user.id, username: account.username,
   })
