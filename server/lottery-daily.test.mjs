@@ -100,7 +100,10 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     const rows = (await pool.query(`SELECT p->>'prizeId' AS id,count(*)::integer AS count FROM community_lottery_draw CROSS JOIN LATERAL jsonb_array_elements(prizes) p GROUP BY 1 ORDER BY 1`)).rows
     assert.deepEqual(rows.map(r => [r.id, r.count]), [['daily-first',40],['daily-fourth',60],['daily-second',50],['daily-third',50]])
     assert.equal((await service.status()).daily.remaining, 0)
-    assert.deepEqual((await service.getConfig()).settings, dailySettings())
+    const expected = dailySettings()
+    expected.invites.enabled = false
+    assert.deepEqual((await service.getConfig()).settings, expected)
+    assert.deepEqual((await pool.query('SELECT settings FROM community_lottery_config')).rows[0].settings, dailySettings())
   })
   await t.test('next day resets availability; an old request replay does not use the new day', async () => {
     await reset()
