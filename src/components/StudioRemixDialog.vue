@@ -9,9 +9,12 @@ import { remixReferenceFiles } from '../studio-remix'
 import { prepareStudioImage } from '../studio-image-upload'
 import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
+import StudioBilling from './StudioBilling.vue'
+import { readRemixParameters } from '../../shared/studio/remix-parameters'
 
 const props = defineProps<{ source: Work; issue: string; ready: boolean; busy: boolean; canFallback: boolean }>()
-const emit = defineEmits<{ apply: [files: StudioFile[]]; cancel: []; retry: []; fallback: [] }>()
+const emit = defineEmits<{ apply: [files: StudioFile[]]; background: [files: StudioFile[]]; cancel: []; retry: []; fallback: [] }>()
+const parameters = computed(() => readRemixParameters(props.source.generation?.parameters))
 const dialog = ref<HTMLDialogElement>(), upload = ref<HTMLInputElement>()
 const selected = ref<string[]>([]), own = ref<StudioFile[]>([]), error = ref(''), importing = ref(false)
 const failed = ref<string[]>([]), failedThumbnails = ref<string[]>([]), selectedOwn = ref<string[]>([])
@@ -49,7 +52,7 @@ async function addFiles(event: Event) {
   try { await materials.add(values) } catch (cause) { error.value = errorMessage(cause) }
 }
 function cancel() { if (!props.busy) { controller.abort(); emit('cancel') } }
-async function apply(withReferences: boolean) {
+async function apply(withReferences: boolean, background = false) {
   if (blocked.value || withReferences && materials.failed.value) return
   error.value = ''; importing.value = true
   const owner = session.user?.id, source = props.source
@@ -70,7 +73,8 @@ async function apply(withReferences: boolean) {
     }
     if (images.length > limit.value) throw new Error('参考图数量超过上限，请先移除部分图片。')
     if (controller.signal.aborted || owner !== session.user?.id || source !== props.source) return
-    emit('apply', images)
+    if (background) emit('background', images)
+    else emit('apply', images)
   } catch (cause) { if (!controller.signal.aborted) error.value = errorMessage(cause) }
   finally { importing.value = false }
 }
@@ -82,6 +86,10 @@ async function apply(withReferences: boolean) {
     <div class="remix-body">
       <p v-if="!ready" class="form-note" role="status">正在读取提示词和参考图…</p>
       <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
+      <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
+        <p>使用原作模型 {{ source.model || '（未提供）' }} 和已公开参数。后台生成会消耗积分，提交后返回作品，你可以继续浏览并在小窗中查看进度。</p>
+        <StudioBilling :model="source.model" :kind="source.kind" :quantity="parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="parameters?.protocol ?? 'openai'" />
+      </section>
       <h3>本次使用的参考图</h3>
       <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>
       <div class="remix-tools"><button type="button" class="button btn" :disabled="pending || count >= limit || materials.snapshot.value.items.length >= limit" @click="upload?.click()"><LoaderCircle v-if="materials.pending.value" :size="18" /><ImagePlus v-else :size="18" />上传我的参考图</button><span class="form-note">最多 {{ limit }} 张，每张 20 MB</span><input ref="upload" hidden type="file" aria-label="上传我的参考图" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic,image/heif,.heic,.heif" multiple :disabled="pending" @change="addFiles" /></div>
@@ -111,7 +119,7 @@ async function apply(withReferences: boolean) {
       <p v-if="issue" class="form-error" role="alert">{{ issue }} <button v-if="canFallback" type="button" class="text-link" :disabled="pending" @click="emit('fallback')">使用当前配置</button><button type="button" class="text-link" :disabled="pending" @click="emit('retry')">重新读取原作</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
-    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button type="button" class="button btn" :class="{ primary: !count }" :disabled="blocked || !source.prompt.trim()" @click="apply(false)">仅导入提示词</button><button v-if="count" type="button" class="button btn primary" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button></footer>
+    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button type="button" class="button btn" :class="{ primary: !count && source.kind === 'resource' }" :disabled="blocked || !source.prompt.trim()" @click="apply(false)">仅导入提示词</button><button v-if="count" type="button" class="button btn" :class="{ primary: source.kind === 'resource' }" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button><button v-if="source.kind !== 'resource'" type="button" class="button btn primary" :disabled="blocked || materials.failed.value || !source.prompt.trim() || !source.model" @click="apply(true, true)">后台生成同款</button></footer>
   </dialog>
 </template>
 
@@ -127,6 +135,8 @@ async function apply(withReferences: boolean) {
 .remix-body h3 { margin: 20px 0 8px; font-size: 15px; line-height: 24px; }
 .remix-prompt h3 { margin-top: 0; }
 .remix-prompt p { max-height: 160px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; }
+.remix-background { display: grid; gap: 12px; margin-top: 20px; }
+.remix-background > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .remix-tools, .remix-section-heading, .remix-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .remix-section-heading h3 { margin: 0 auto 0 0; }
 .remix-section-heading { margin-bottom: 12px; }

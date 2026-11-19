@@ -195,7 +195,10 @@ function applySourceReferences(files: WorkFile[]) {
 }
 watch(() => session.user?.id, async () => {
   if (!session.user) return
-  await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); chooseModel()
+  const preparingRemix = props.remixPreparing
+  await initializeCreation()
+  // CreateView owns configuration restoration while preparing a remix.
+  if (!preparingRemix) { await loadCreationGroups(); await loadCreationModels(); chooseModel() }
 }, { immediate: true })
 async function addReferences(event: Event) {
   const input = event.target as HTMLInputElement
@@ -223,8 +226,12 @@ function removeReference(index: number) {
   if (!references.value.length) skipAutomaticReference.value = true
   else materials.removeAt(index)
 }
-async function generate() {
-  if (!canGenerate.value) return
+function generate() { return submit() }
+async function submit(onRegistered?: () => void) {
+  if (!canGenerate.value) {
+    if (onRegistered && !videoParameterIssue.value && !imageParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
+    return
+  }
   const kind = props.kind, owner = session.user?.id
   const chat = currentConversation.value || ensureMediaConversation(props.kind)
   const scope = draftScope()
@@ -277,6 +284,7 @@ async function generate() {
       }
       if (owner === session.user?.id) chats.preparing[chat.id] = false
       preparing = false
+      onRegistered?.()
     }, () => owner === session.user?.id && chats.sessions.some(item => item.id === chat.id))
     if (result.phase === 'error' && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
       prompt.value = submittedPrompt; references.value = JSON.parse(submittedReferences)
@@ -372,7 +380,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext })
+defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit })
 </script>
 
 <template>

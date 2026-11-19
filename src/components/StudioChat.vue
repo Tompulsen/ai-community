@@ -176,7 +176,13 @@ async function openAttachment(url: string | undefined, kind: 'image' | 'video' =
 }
 watch(() => current.value?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined })
 watch(() => session.user?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined; error.value = ''; edited.value = undefined })
-watch(() => session.user?.id, async () => { if (!session.user) return; await initializeCreation(); await loadCreationGroups(); await loadCreationModels(); await loadChats() }, { immediate: true })
+watch(() => session.user?.id, async () => {
+  if (!session.user) return
+  const preparingRemix = props.remixPreparing
+  await initializeCreation()
+  if (!preparingRemix) { await loadCreationGroups(); await loadCreationModels() }
+  await loadChats()
+}, { immediate: true })
 function chooseModel() {
   if (props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const saved = current.value.textModel || current.value.model
