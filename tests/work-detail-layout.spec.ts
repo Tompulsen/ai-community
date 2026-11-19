@@ -63,12 +63,12 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
   for (const width of [2560, 1440, 1280, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
     await expect(page.getByRole('heading', { name: work.title, exact: true })).toBeVisible()
-    await page.locator('.detail-media > img').evaluate((image: HTMLImageElement) => image.decode())
+    await page.locator('.detail-media img').evaluate((image: HTMLImageElement) => image.decode())
     const boxes = await page.evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().toJSON()
-      const img = document.querySelector<HTMLImageElement>('.detail-media > img')!
+      const img = document.querySelector<HTMLImageElement>('.detail-media img')!
       return { focus: box('.detail-focus'), related: box('.related-works'), media: box('.detail-media'),
-        info: box('.detail-info'), composer: box('.comment-input-row'), img: box('.detail-media > img'),
+        info: box('.detail-info'), composer: box('.comment-input-row'), img: box('.detail-media img'),
         fit: getComputedStyle(img).objectFit, overflow: document.documentElement.scrollWidth > innerWidth }
     })
     expect(boxes.overflow).toBe(false)
@@ -131,7 +131,7 @@ test('prompt disclosure, file navigation, reference images and preview remain us
   await expect(page.locator('.prompt-section p')).toHaveText(work.prompt)
   await expect(page.getByRole('button', { name: '复制提示词' })).toBeVisible()
   await page.locator('.detail-visual .media-page-controls').getByRole('button', { name: '下一个文件' }).click()
-  await expect(page.locator('.detail-media > img')).toHaveAttribute('alt', landscape.name)
+  await expect(page.locator('.detail-media img')).toHaveAttribute('alt', landscape.name)
   await page.getByRole('button', { name: '预览 reference.png', exact: true }).click()
   await expect(page.locator('.media-page-controls')).toContainText('参考图')
   await page.getByRole('button', { name: '放大预览' }).click()
@@ -152,13 +152,15 @@ test('one finished work and one reference remain visibly separated and independe
     await expect(references.getByRole('heading')).toHaveText('参考图 · 1')
     await expect(results.getByRole('button')).toHaveCount(1)
     await expect(references.getByRole('button')).toHaveCount(1)
-    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', portrait.url)
+    await expect(page.locator('.detail-media img')).toHaveAttribute('src', portrait.url)
     await references.getByRole('button', { name: `预览 ${landscape.name}`, exact: true }).click()
-    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', landscape.url)
-    await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 参考图')
+    await expect(page.locator('.detail-media img')).toHaveAttribute('src', landscape.url)
+    if (width < 1000) { await expect(page.getByRole('dialog', { name: '作品文件预览' })).toBeVisible(); await page.keyboard.press('Escape') }
+    else await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 参考图')
     await results.getByRole('button', { name: `预览 ${portrait.name}`, exact: true }).click()
-    await expect(page.locator('.detail-media > img')).toHaveAttribute('src', portrait.url)
-    await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 作品')
+    await expect(page.locator('.detail-media img')).toHaveAttribute('src', portrait.url)
+    if (width < 1000) { await expect(page.getByRole('dialog', { name: '作品文件预览' })).toBeVisible(); await page.keyboard.press('Escape') }
+    else await expect(page.locator('.media-page-controls')).toContainText('1 / 1 · 作品')
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   }
 })
@@ -258,4 +260,81 @@ test('desktop keyboard reaches the action row after the work information', async
   expect(await page.locator('.detail-info-scroll').evaluate(element => element.contains(document.activeElement))).toBe(true)
   await page.keyboard.press('Tab')
   await expect(like).toBeFocused()
+})
+
+test('mobile work and reference thumbnails open a full-screen viewer with separate controls', async ({ page }) => {
+  await fixture(page, { ...work, title: '预览测试作品', author: '测试作者', body: '作品说明', prompt: '测试提示词', referenceFiles: [landscape] }, false)
+  for (const [width, height] of [[390, 844], [320, 568], [844, 390]]) {
+    await page.setViewportSize({ width, height })
+    await page.goto('/work/detailwork')
+    await expect(page.locator('.media-stage > .media-controls')).toHaveCount(0)
+    for (const [name, url] of [[portrait.name, portrait.url], [landscape.name, landscape.url]]) {
+      const trigger = page.getByRole('button', { name: `预览 ${name}`, exact: true })
+      expect(await trigger.evaluate(element => {
+        const bounds = element.getBoundingClientRect()
+        return element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))
+      })).toBe(true)
+      await trigger.click()
+      const viewer = page.getByRole('dialog', { name: '作品文件预览', exact: true })
+      await expect(viewer).toBeVisible()
+      const picture = viewer.locator('img')
+      await picture.evaluate((image: HTMLImageElement) => image.decode())
+      await expect(picture).toHaveAttribute('src', new URL(url!, page.url()).href)
+      const boxes = await viewer.evaluate(element => {
+        const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect().toJSON()
+        return { dialog: element.getBoundingClientRect().toJSON(), image: box('img'), actions: box('.lightbox-actions'), controls: box('.lightbox-controls') }
+      })
+      expect(boxes.dialog.width).toBe(width)
+      expect(boxes.dialog.height).toBe(height)
+      expect(boxes.image.top).toBeGreaterThanOrEqual(boxes.actions.bottom)
+      expect(boxes.image.bottom).toBeLessThanOrEqual(boxes.controls.top)
+      expect(boxes.image.left).toBeGreaterThanOrEqual(0)
+      expect(boxes.image.right).toBeLessThanOrEqual(width)
+      await viewer.getByRole('button', { name: '放大', exact: true }).click()
+      await expect(viewer.getByRole('status', { name: '缩放比例' })).toHaveText('150%')
+      await viewer.getByRole('button', { name: '重置缩放', exact: true }).click()
+      await expect(viewer.getByRole('status', { name: '缩放比例' })).toHaveText('100%')
+      await viewer.getByRole('button', { name: '关闭预览', exact: true }).click()
+      await expect(trigger).toBeFocused()
+    }
+    await page.getByRole('button', { name: `完整预览 ${landscape.name}`, exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '作品文件预览', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+  }
+})
+
+test('mobile non-image files retain a native original-file link', async ({ page }) => {
+  const document = { id: 'guide', name: '使用说明.pdf', type: 'application/pdf', url: '/__detail/guide.pdf' }
+  await fixture(page, { ...work, files: [portrait, document] }, false)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/work/detailwork')
+  const link = page.getByRole('link', { name: '预览 使用说明.pdf', exact: true })
+  await expect(link).toHaveAttribute('href', document.url)
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+})
+
+test('closing a mobile thumbnail preview after switching to desktop restores a surviving control', async ({ page }) => {
+  await fixture(page, work, false)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/work/detailwork')
+  await page.getByRole('button', { name: `预览 ${portrait.name}`, exact: true }).click()
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.locator('.material-tray')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: `完整预览 ${portrait.name}`, exact: true })).toBeFocused()
+})
+
+test('closing a desktop video preview after switching to mobile restores the video thumbnail', async ({ page }) => {
+  const clip = { id: 'clip', name: 'clip.mp4', type: 'video/mp4', url: '/__detail/clip.mp4' }
+  await fixture(page, { ...work, kind: 'video', files: [clip] }, false)
+  await page.route('**/__detail/clip.mp4', route => route.fulfill({ contentType: 'video/mp4', path: 'tests/fixtures/poster-black-intro.mp4' }))
+  await page.goto('/work/detailwork')
+  await page.getByRole('button', { name: '放大预览', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '作品文件预览', exact: true })).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.locator('.media-stage > .media-controls')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: '预览 clip.mp4', exact: true })).toBeFocused()
 })

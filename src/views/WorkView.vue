@@ -132,20 +132,21 @@ async function share() {
       <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" /></Teleport>
       <article class="detail-focus" :key="work.id" aria-label="作品详情">
         <div class="detail-visual-column">
-          <button v-if="mobile" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button>
-          <WorkMedia ref="mediaBrowser" class="detail-visual" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'" />
+          <WorkMedia ref="mediaBrowser" :mobile="mobile" class="detail-visual" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'">
+            <template #overlay><button v-if="mobile" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button></template>
+          </WorkMedia>
         </div>
         <section class="detail-info" aria-label="作品信息与评论">
           <div class="detail-info-scroll">
             <div class="detail-creator">
               <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="creator-line"><span class="avatar blue"><img v-if="work.avatarUrl" :src="work.avatarUrl" :alt="work.author" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></span><div><strong>{{ work.author }}</strong><span class="caption-5">{{ new Date(work.date).toLocaleDateString('zh-CN') }} 发布</span></div></RouterLink>
-              <FollowButton :user-id="work.authorId" author />
+              <FollowButton v-if="!mobile" :user-id="work.authorId" author />
             </div>
             <h1>{{ work.title }}</h1>
             <section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
             <div class="detail-create">
               <RouterLink :to="{ path: `/create/${work.kind === 'resource' ? 'text' : work.kind}`, query: { remix: work.id, prepare: '1' } }" class="button btn primary remix-button"><WandSparkles :size="20" aria-hidden="true" /><span>制作同款</span><ChevronRight :size="18" aria-hidden="true" /></RouterLink>
-              <span v-if="work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
+              <span v-if="!mobile && work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
             </div>
             <details class="detail-metadata" :open="!mobile">
               <summary>提示词与作品信息</summary>
@@ -164,6 +165,10 @@ async function share() {
             </Teleport>
           </div>
           <div class="detail-actions">
+            <div v-if="mobile" class="mobile-author">
+              <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="avatar" :aria-label="`查看 ${work.author} 的主页`"><img v-if="work.avatarUrl" :src="work.avatarUrl" alt="" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></RouterLink>
+              <FollowButton :user-id="work.authorId" author icon-only />
+            </div>
             <button class="icon-button like-work" :class="{ selected: work.liked }" :aria-label="`喜欢作品，${work.likes} 赞`" :aria-pressed="work.liked" :disabled="pendingActions.has(`liked:${work.id}`)" @click="toggleWork(work, 'liked')"><Heart :size="20" :fill="work.liked ? 'currentColor' : 'none'" /><span>{{ work.likes }}</span></button>
             <button v-if="['published', 'approved'].includes(work.status)" class="icon-button" aria-label="跳转评论" title="发表评论" @click="focusComments"><MessageSquare :size="20" /></button>
             <button class="icon-button" aria-label="通过私信分享作品" title="私信分享" @click="openShare"><Send :size="20" /></button>
@@ -211,8 +216,8 @@ async function share() {
 .detail-visual { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow-y: auto; }
 .detail-visual :deep(.media-stage) { display: flex; flex-direction: column; flex: 1 0 320px; min-height: 0; border: 0; border-radius: 0; }
 .detail-visual :deep(.detail-media) { flex: 1; height: 0; min-height: 0; background: var(--canvas); }
-.detail-visual :deep(.detail-media > img), .detail-visual :deep(.detail-media > video) { max-height: 100%; object-fit: contain; }
-.detail-visual :deep(.media-controls) { min-height: 52px; padding: 4px 8px; gap: 4px; grid-template-columns: max-content max-content; justify-content: space-between; }
+.detail-visual :deep(.media-image-preview), .detail-visual :deep(.detail-media > video) { max-height: 100%; object-fit: contain; }
+.detail-visual :deep(.media-stage > .media-controls) { min-height: 52px; padding: 4px 8px; gap: 4px; grid-template-columns: max-content max-content; justify-content: space-between; }
 .detail-visual :deep(.media-file-name) { display: none; }
 .detail-visual :deep(.resource-article) { flex: 1 0 auto; padding: 28px; }
 .detail-visual :deep(.resource-article pre) { font-size: 14px; line-height: 24px; }
@@ -280,7 +285,7 @@ async function share() {
   .detail-visual { height: auto; max-height: none; overflow: visible; }
   .detail-visual :deep(.media-stage) { flex: auto; }
   .detail-visual :deep(.detail-media) { flex: none; height: auto; min-height: 240px; }
-  .detail-visual :deep(.detail-media > img), .detail-visual :deep(.detail-media > video) { height: auto; max-height: 52svh; }
+  .detail-visual :deep(.media-image-preview), .detail-visual :deep(.detail-media > video) { height: auto; max-height: 52svh; }
   .detail-actions { gap: 0; }
   .detail-info { padding-inline: 12px; }
   .detail-info-scroll { overflow: visible; }
@@ -303,14 +308,15 @@ async function share() {
   .detail-visual { height: 100%; overflow: auto; padding-bottom: 260px; }
   .detail-visual :deep(.media-stage) { position: relative; flex: 1 0 100%; min-height: 140px; }
   .detail-visual:has(.material-tray) :deep(.media-stage) { flex: 1 0 140px; }
-  .detail-visual :deep(.media-controls) { position: absolute; z-index: 2; top: 8px; left: 8px; right: 8px; border: 0; border-radius: 12px; background: #172426c9; }
   .detail-visual :deep(.detail-media) { height: 100%; flex: 1; min-height: 0; background: #0b1011; }
   .detail-visual :deep(.detail-media:has(> video)) { width: calc(100% - 64px); }
-  .detail-visual :deep(.detail-media > img), .detail-visual :deep(.detail-media > video) { width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
+  .detail-visual :deep(.media-image-preview), .detail-visual :deep(.detail-media > video) { width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
   .detail-visual :deep(.resource-article) { padding: 24px 20px; background: #0b1011; }
   .detail-info { display: contents; border: 0; }
   .detail-info-scroll { position: absolute; bottom: 0; left: 0; right: 60px; max-height: 260px; padding: 38px 14px 16px; background: linear-gradient(transparent, #0b1011ed 34%); overflow-y: auto; display: flex; flex-direction: column; }
   .detail-info-scroll:has(.detail-metadata[open]) { max-height: calc(100% - 12px); padding-top: 16px; background: #172426f5; border-radius: 16px 16px 0 0; }
+  .detail-info-scroll:not(:has(.detail-metadata[open])) { pointer-events: none; }
+  .detail-info-scroll > * { pointer-events: auto; }
   .detail-creator { order: -1; margin: 0 0 8px; }
   .creator-line { margin: 0; }
   .creator-line .avatar { width: 28px; height: 28px; }
@@ -322,7 +328,6 @@ async function share() {
   .detail-info-scroll:has(.detail-metadata[open]) .work-body { display: block; }
   .detail-create { margin-top: 8px; }
   .detail-create .remix-button { min-height: 44px; background: var(--blue); color: var(--action-ink); border: 0; border-radius: 10px; padding-inline: 12px; }
-  .view-count { font-size: 10px; }
   .detail-metadata { margin-top: 0; border: 0; }
   .remix-button { width: auto; font-size: 12px; }
   .remix-button > svg:last-child { display: none; }
@@ -330,7 +335,13 @@ async function share() {
   .detail-actions { position: absolute; right: 6px; bottom: 16px; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 0; min-height: 0; width: 48px; border: 0; }
   .detail-actions .icon-button, .detail-actions .save-detail { display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 48px; min-width: 44px; min-height: 48px; height: auto; margin: 0; padding: 4px; border: 0; border-radius: 24px; background: #0b1011a6; color: #fff; font-size: 11px; }
   .detail-actions .selected, .detail-actions [aria-pressed="true"] { color: var(--blue); }
-  .mobile-related-toggle { position: absolute; z-index: 3; left: 0; top: 35%; width: 32px; height: 48px; border-radius: 0 12px 12px 0; background: #172426cc; color: #fff; }
+  .mobile-author { position: relative; flex: none; width: 48px; height: 76px; }
+  .mobile-author > .avatar { width: 48px; height: 48px; border: 2px solid #fff; background: #314347; color: #fff; font-size: 18px; }
+  .mobile-author > .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .mobile-author :deep(.follow-control) { position: absolute; top: 32px; left: 2px; }
+  .mobile-author:not(:has(.follow-control)) { height: 48px; }
+  .detail-visual :deep(.material-tray) { padding-right: 64px; }
+  .mobile-related-toggle { position: absolute; z-index: 3; left: 0; top: 35%; width: 44px; height: 48px; border-radius: 0 12px 12px 0; background: #172426cc; color: #fff; }
   .mobile-comments-dialog { position: fixed; inset: auto 0 0; width: 100%; max-width: 100%; max-height: min(82dvh, calc(100dvh - 24px)); margin: 0; padding: 0 0 env(safe-area-inset-bottom); border-radius: 20px 20px 0 0; overflow: auto; }
   .mobile-comments-dialog[open] { display: flex; flex-direction: column; }
   .mobile-comments-dialog .dialog-heading { flex: none; }
@@ -345,4 +356,8 @@ async function share() {
   #mobile-related-content { flex: 1; min-height: 0; padding: 0 12px 16px; }
 }
 
+@media (max-width: 999px) and (max-height: 650px) {
+  .detail-actions { gap: 2px; bottom: 10px; }
+  .detail-actions .icon-button, .detail-actions .save-detail { min-height: 44px; }
+}
 </style>

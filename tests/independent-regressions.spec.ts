@@ -157,13 +157,21 @@ for (const width of [1440, 390]) {
     const media = page.locator('.detail-media')
     await expect(media.getByRole('img', { name: 'first.png', exact: true })).toBeVisible()
     await expect.poll(() => media.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
-    await page.getByRole('button', { name: '下一个文件', exact: true }).click()
-    await expect(media.getByRole('img', { name: 'second.png', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: '下一个文件', exact: true }).click()
-    await expect(media.getByRole('img', { name: 'first.png', exact: true })).toBeVisible()
+    if (width >= 1000) {
+      await page.getByRole('button', { name: '下一个文件', exact: true }).click()
+      await expect(media.getByRole('img', { name: 'second.png', exact: true })).toBeVisible()
+      await page.getByRole('button', { name: '下一个文件', exact: true }).click()
+      await expect(media.getByRole('img', { name: 'first.png', exact: true })).toBeVisible()
+    } else {
+      await page.getByRole('button', { name: '预览 second.png', exact: true }).click()
+      await expect(page.getByRole('dialog', { name: '作品文件预览' }).getByRole('img')).toHaveAttribute('alt', 'second.png')
+      await page.keyboard.press('Escape')
+    }
     await page.getByRole('button', { name: '预览 reference.png', exact: true }).click()
-    await expect(media.getByRole('img', { name: 'reference.png', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: '放大预览', exact: true }).click()
+    if (width >= 1000) {
+      await expect(media.getByRole('img', { name: 'reference.png', exact: true })).toBeVisible()
+      await page.getByRole('button', { name: '放大预览', exact: true }).click()
+    }
     const preview = page.getByRole('dialog', { name: '作品文件预览', exact: true })
     await expect(preview.getByRole('img', { name: 'reference.png', exact: true })).toBeVisible()
     await preview.getByRole('button', { name: '关闭预览', exact: true }).click()

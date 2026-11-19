@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const author = { id: 'author25', username: 'author', name: '作品作者', bio: '分享创作过程', count: 1, worksCount: 1, followed: false, requested: false, followsYou: false, isLocked: false, followersCount: 3, followingCount: 2 }
-const work = { id: 'followwork', authorId: author.id, title: '关注功能测试作品', author: author.name, avatar: '作', kind: 'resource', cover: '', body: '作品正文', prompt: '', tags: [], model: '', date: '2026-11-13T00:00:00Z', status: 'published', version: 1, likes: 0, liked: false, saved: false, owned: false, fileIds: [] }
+const work = { id: 'followwork', authorId: author.id, title: '关注功能测试作品', author: author.name, avatar: '作', kind: 'resource', cover: '', body: '作品正文', prompt: '', tags: [], model: '', date: '2026-11-13T00:00:00Z', status: 'published', version: 1, viewsCount: 42, likes: 0, liked: false, saved: false, owned: false, fileIds: [] }
 
 async function fixture(page: Page, authenticated = true) {
   const account = await mockUnifiedAccount(page, authenticated)
@@ -71,6 +71,73 @@ test('guest follow preserves the return path and an author never follows themsel
   await page.reload()
   await expect(page.getByRole('heading', { name: work.title })).toBeVisible()
   await expect(page.getByRole('button', { name: '关注作者', exact: true })).toHaveCount(0)
+})
+
+test('mobile avatar badge follows and unfollows without the old text button or view count', async ({ page }) => {
+  const { state } = await fixture(page)
+  for (const [width, height] of [[390, 844], [320, 568], [844, 390]]) {
+    await page.setViewportSize({ width, height })
+    await page.goto('/work/followwork')
+    const rail = page.locator('.detail-actions'), badge = rail.locator('.follow-button')
+    await expect(badge).toBeEnabled()
+    await expect(page.locator('.detail-creator .follow-button')).toHaveCount(0)
+    await expect(page.locator('.view-count')).toHaveCount(0)
+    await expect(page.getByText(/次浏览/)).toHaveCount(0)
+    await expect(badge).toHaveText('')
+    await expect(badge.locator('.lucide-plus')).toBeVisible()
+    await expect(rail.getByRole('link', { name: `查看 ${author.name} 的主页`, exact: true })).toHaveAttribute('href', `/community?creator=${author.id}`)
+    const bounds = await badge.boundingBox()
+    expect(bounds!.width).toBeGreaterThanOrEqual(44)
+    expect(bounds!.height).toBeGreaterThanOrEqual(44)
+    await badge.click()
+    await expect(badge).toHaveAttribute('aria-label', '取消关注')
+    await expect(badge).toHaveAttribute('aria-pressed', 'true')
+    await expect(badge.locator('.lucide-check')).toBeVisible()
+    await badge.click()
+    await expect(badge).toHaveAttribute('aria-label', '关注作者')
+    await expect(badge).toHaveAttribute('aria-pressed', 'false')
+    await expect(badge.locator('.lucide-plus')).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+  expect(state.writes).toEqual(Array.from({ length: 3 }, () => [{ active: true }, { active: false }]).flat())
+})
+
+test('mobile follow badge retains error recovery and withdrawal of a private follow request', async ({ page }) => {
+  const { state } = await fixture(page); state.author.isLocked = true
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.goto('/work/followwork')
+  const badge = page.locator('.mobile-author .follow-button')
+  state.failFollow = true
+  await badge.click()
+  const error = page.getByRole('alert').filter({ hasText: '关注失败' })
+  await expect(error).toBeVisible()
+  expect((await error.boundingBox())!.x).toBeGreaterThanOrEqual(0)
+  expect(await page.locator('.like-work').evaluate(element => {
+    const bounds = element.getBoundingClientRect()
+    return element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))
+  })).toBe(true)
+  await expect(badge).toHaveAttribute('aria-label', '关注作者')
+  state.failFollow = false
+  await badge.click()
+  await expect(badge).toHaveAttribute('aria-label', '撤回关注申请')
+  await expect(badge.locator('.lucide-clock-3')).toBeVisible()
+  await badge.click()
+  await expect(badge).toHaveAttribute('aria-label', '关注作者')
+  expect((await new AxeBuilder({ page }).include('.detail-focus').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
+})
+
+test('mobile guest badge preserves the login return path and hides follow for the author', async ({ page }) => {
+  const { account, state } = await fixture(page, false)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/work/followwork')
+  const link = page.locator('.mobile-author').getByRole('link', { name: '关注作者', exact: true })
+  await expect(link).toHaveAttribute('href', '/account?returnTo=/work/followwork')
+  await expect(link.locator('.lucide-plus')).toBeVisible()
+  account.state.authenticated = true; account.state.user.id = author.id
+  await page.reload()
+  await expect(page.locator('.mobile-author > .avatar')).toBeVisible()
+  await expect(page.locator('.follow-control')).toHaveCount(0)
+  expect(state.writes).toEqual([])
 })
 
 async function settingsFixture(page: Page) {
