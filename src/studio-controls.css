@@ -1,0 +1,14 @@
+:where(.studio-popover, .studio-model-dialog, .studio-gallery, .model-price-card, dialog[aria-labelledby="token-editor-title"]) select {
+  --control-size: var(--control-height-compact);
+  --control-font-size: var(--font-size-field);
+  --control-line-height: 20px;
+  --control-padding: 6px 12px;
+}
+@media (pointer: coarse), (max-width: 999px) {
+  :where(.studio-popover, .studio-model-dialog, .studio-gallery, .model-price-card, dialog[aria-labelledby="token-editor-title"]) select {
+    --control-size: var(--control-height);
+    --control-font-size: var(--font-size-input);
+    --control-line-height: 24px;
+    --control-padding: 8px 12px;
+  }
+}

@@ -177,7 +177,13 @@ test('long configured names fit both the site header and guest login branding', 
   for (const width of [1024, 320]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/admin')
-    await expect(page.locator('.brand')).toHaveText(fixture.state.settings.brand)
+    await expect(page).toHaveTitle(`管理 · ${fixture.state.settings.brand}`)
+    if (width >= 1000) {
+      const brand = page.locator('.rail-brand')
+      await expect(brand).toBeVisible()
+      await expect(brand).toHaveAccessibleName(`${fixture.state.settings.brand}首页`)
+      await expect(brand.locator('span')).toHaveText(fixture.state.settings.brand.slice(0, 1))
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   }
   fixture.account.state.authenticated = false; fixture.account.state.accountAuthenticated = false

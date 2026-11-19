@@ -87,7 +87,10 @@ button, a, input, select, textarea { transition: background-color 200ms var(--ea
 input, textarea { caret-color: var(--blue); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 img, video { max-width: 100%; display: block; }
-svg { flex-shrink: 0; stroke-width: 1.7; vertical-align: middle; }
+svg { flex-shrink: 0; vertical-align: middle; }
+.lucide { stroke-width: var(--icon-stroke-width); }
+.button > .lucide { width: var(--icon-size-action); height: var(--icon-size-action); }
+.icon-button > .lucide { width: var(--icon-size-tool); height: var(--icon-size-tool); }
 h1, h2, h3, p, pre { margin: 0; }
 h1 { font-size: 28px; line-height: 36px; font-weight: 500; text-wrap: balance; }
 h2 { font-size: 18px; line-height: 28px; font-weight: 600; text-wrap: balance; }
@@ -177,7 +180,7 @@ summary::-webkit-details-marker { display: none; }
 .field input[type="file"] { width: 100%; min-width: 0; max-width: 100%; font-size: 14px; }
 .field input[type="file"]::file-selector-button { min-height: 40px; margin-right: 12px; padding: 8px 12px; border: 0; border-radius: var(--radius); background: var(--surface-soft); color: var(--ink); font: inherit; cursor: pointer; }
 .field input[type="file"]::file-selector-button:hover { background: var(--blue-soft); color: var(--blue); }
-.control { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--control-border); border-radius: var(--radius); outline: none; background: var(--surface); resize: vertical; }
+.control { width: 100%; min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 1px solid var(--control-border); border-radius: var(--radius); outline: none; background: var(--surface); font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, var(--line-height-input)); resize: vertical; }
 .control:focus { border-color: var(--focus-ring); }
 .control:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .control:disabled { background: var(--surface-soft); }

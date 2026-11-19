@@ -27,7 +27,7 @@ const shortcuts = computed(() => [
 
 <template>
   <section class="panel-section admin-overview" :aria-busy="loading">
-    <div class="section-heading"><div><h2>管理概览</h2><p class="form-note">查看全量待办与近期新增，快速进入常用管理。</p></div><button class="button subtle btn" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
+    <div class="section-heading"><div><h2>管理概览</h2></div><button class="button subtle btn" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="emit('refresh')">重试</button></p>
     <ContentSkeleton v-if="loading" label="正在加载管理概览…" />
     <template v-else-if="!error && overview">
@@ -52,7 +52,6 @@ const shortcuts = computed(() => [
 .admin-overview { padding-top: 0; border-bottom: 0; }
 .admin-overview > .section-heading { align-items: start; }
 .admin-overview > .section-heading > div { flex: 1; min-width: 0; }
-.admin-overview > .section-heading .form-note { margin-top: 8px; font-size: 14px; }
 .overview-summary { padding: 24px; background: var(--surface); border-radius: 8px; }
 .summary-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 h3 { font-size: 16px; font-weight: 500; }

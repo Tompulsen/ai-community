@@ -5,6 +5,7 @@ import { ChevronDown, ImagePlus, PenLine, Plus, Save, SlidersHorizontal, Upload,
 import WorkAttachments from './WorkAttachments.vue'
 import { kindLabels, type Work, type WorkFile, type WorkKind } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session, uploadFile } from '../state'
+import '../publication-controls.css'
 
 const props = defineProps<{ open: boolean; work?: Work | null }>()
 const emit = defineEmits<{ close: []; saved: [work: Work] }>()
@@ -199,15 +200,15 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(
           </section>
           <div class="editor-content">
           <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
-          <details ref="extra" class="editor-extras">
-            <summary><SlidersHorizontal :size="18" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="draft.prompt.trim() || references.length">{{ draft.prompt.trim() ? '含提示词' : '' }}{{ draft.prompt.trim() && references.length ? ' · ' : '' }}{{ references.length ? `${references.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="18" aria-hidden="true" /></summary>
+          <details ref="extra" class="editor-extras publication-extras">
+            <summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="draft.prompt.trim() || references.length">{{ draft.prompt.trim() ? '含提示词' : '' }}{{ draft.prompt.trim() && references.length ? ' · ' : '' }}{{ references.length ? `${references.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary>
             <div class="editor-fields">
               <label v-if="draft.kind !== 'resource'" class="field"><span>作品简介</span><textarea v-model="draft.body" class="control" rows="2" maxlength="20000" /></label>
               <fieldset class="editor-tags"><legend>标签 <span>{{ draft.tags.length }}/3</span></legend>
                 <p v-if="tagsLoading" class="form-note" role="status">正在加载标签…</p>
                 <div v-else-if="tagsError" class="tag-error"><p class="form-note">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
                 <label v-if="tagOptions.length > 8" class="field"><span class="editor-sr-only">搜索标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
-                <div class="editor-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="!draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
+                <div class="editor-tag-options publication-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag publication-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="!draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
                 <p v-if="!tagsLoading && !tagsError && !visibleTags.length" class="form-note">{{ tagQuery ? '没有匹配的标签' : '暂无可用标签' }}</p>
               </fieldset>
               <label class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="3" maxlength="100000" /></label>
@@ -257,21 +258,9 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(
 .write-content:hover { color: var(--ink); }
 .resource-content { margin-block-start: 16px; }
 .resource-content .control { background: var(--surface); }
-.editor-extras > summary { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 12px; cursor: pointer; list-style: none; font-size: 14px; color: var(--ink); background: var(--canvas); border-radius: 6px; }
-.editor-extras > summary > svg { flex: none; color: var(--muted); }
-.editor-extras > summary > svg:last-child { margin-inline-start: auto; }
-.editor-extras > summary:hover { background: var(--surface-soft); }
-.editor-extras > summary::-webkit-details-marker { display: none; }
-.editor-extras > summary small { display: block; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
-.editor-extras[open] > summary > svg:last-child { transform: rotate(180deg); }
-.editor-extras > .editor-fields { padding-top: 24px; }
 .editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
 .editor-tags legend { margin-bottom: 8px; font-size: 14px; }
 .editor-tags legend span { margin-left: 8px; color: var(--muted); font-size: 12px; }
-.editor-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 192px; overflow-y: auto; }
-.editor-tag { display: flex; align-items: center; gap: 8px; min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; cursor: pointer; overflow-wrap: anywhere; }
-.editor-tag.selected { background: var(--surface-soft); border-color: var(--focus-ring); }
-.editor-tag:has(input:disabled) { opacity: .5; cursor: default; }
 .tag-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .editor-feedback:has(> p) { padding: 8px 24px; }
 .editor-dialog .dialog-footer { flex: none; }

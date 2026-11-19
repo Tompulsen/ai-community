@@ -12,30 +12,34 @@
   --line-height-help: 20px;
   --space-label: 4px;
   --radius-popover: 8px;
+  --icon-stroke-width: 1.8;
+  --icon-size-action: 16px;
+  --icon-size-tool: 20px;
+  --icon-size-nav: 22px;
 }
 
-select.select-control {
+select:is(.control, .select-control) {
   min-width: 0;
   width: 100%;
   min-height: var(--control-size, var(--control-height));
   font-size: var(--control-font-size, var(--font-size-input));
-  line-height: var(--line-height-input);
+  line-height: var(--control-line-height, var(--line-height-input));
 }
 
 @supports (appearance: base-select) {
-  select.select-control,
-  select.select-control::picker(select) {
+  select:is(.control, .select-control),
+  select:is(.control, .select-control)::picker(select) {
     appearance: base-select;
   }
 
-  select.select-control {
+  select:is(.control, .select-control) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-small);
   }
 
-  select.select-control::picker(select) {
+  select:is(.control, .select-control)::picker(select) {
     box-sizing: border-box;
     inline-size: anchor-size(width);
     max-inline-size: calc(100% - var(--space-section));
@@ -48,18 +52,18 @@ select.select-control {
     color: var(--ink);
     font-family: var(--font-text);
     font-size: var(--control-font-size, var(--font-size-input));
-    line-height: var(--line-height-input);
+    line-height: var(--control-line-height, var(--line-height-input));
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
   }
 
-  select.select-control::picker-icon {
+  select:is(.control, .select-control)::picker-icon {
     color: var(--muted);
     font-size: var(--font-size-help);
   }
 
-  select.select-control option {
+  select:is(.control, .select-control) option {
     display: flex;
     align-items: center;
     gap: var(--space-small);
@@ -73,28 +77,28 @@ select.select-control {
     cursor: pointer;
   }
 
-  select.select-control option:checked {
+  select:is(.control, .select-control) option:checked {
     background: var(--surface-soft);
     font-weight: 500;
   }
 
-  select.select-control option::checkmark {
+  select:is(.control, .select-control) option::checkmark {
     order: 1;
     margin-inline-start: auto;
     color: var(--ink);
   }
 
   @media (hover: hover) {
-    select.select-control:enabled:hover { background: var(--surface-soft); }
-    select.select-control option:hover { background: var(--surface-soft); }
+    select:is(.control, .select-control):enabled:hover { background: var(--surface-soft); }
+    select:is(.control, .select-control) option:hover { background: var(--surface-soft); }
   }
 
-  select.select-control:focus-visible,
-  select.select-control option:focus-visible {
+  select:is(.control, .select-control):focus-visible,
+  select:is(.control, .select-control) option:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: var(--focus-outline-offset);
   }
 
-  select.select-control:active { background: var(--surface-soft); }
-  select.select-control:disabled { opacity: .55; cursor: not-allowed; }
+  select:is(.control, .select-control):active { background: var(--surface-soft); }
+  select:is(.control, .select-control):disabled { opacity: .55; cursor: not-allowed; }
 }

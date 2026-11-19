@@ -30,7 +30,7 @@ function preview(theme: Theme) {
     <fieldset class="theme-modes"><legend>界面模式</legend>
       <label v-for="option in modes" :key="option.value" class="mode-option" :class="{ selected: themeState.mode === option.value }">
         <input type="radio" name="appearance-mode" :value="option.value" :checked="themeState.mode === option.value" @change="appearance.set({ mode: option.value })" />
-        <component :is="option.icon" :size="20" aria-hidden="true" /><span>{{ option.label }}</span>
+        <component :is="option.icon" :size="16" aria-hidden="true" /><span>{{ option.label }}</span>
       </label>
     </fieldset>
     <p class="theme-current" role="status"><span>当前显示：{{ themeState.current === 'dark' ? '暗色模式' : '明亮模式' }}</span><span>{{ currentTheme.name }}</span></p>
@@ -68,7 +68,7 @@ function preview(theme: Theme) {
 .theme-modes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--settings-space-related); }
 .theme-modes legend, .theme-palettes legend { font-size: 14px; font-weight: 500; margin-bottom: var(--settings-space-row); }
 .theme-palettes legend svg { margin-right: var(--settings-space-related); }
-.mode-option { position: relative; display: flex; align-items: center; justify-content: center; gap: var(--settings-space-related); min-height: var(--settings-control-height); padding: var(--settings-space-related); border: 1px solid transparent; border-radius: 6px; background: var(--surface); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.mode-option { position: relative; display: flex; align-items: center; justify-content: center; gap: var(--settings-space-related); min-height: var(--settings-control-height); padding: var(--settings-space-related); border: 1px solid transparent; border-radius: 6px; background: var(--surface); font-size: var(--font-size-field); white-space: nowrap; cursor: pointer; }
 .mode-option:hover, .palette-option:hover { border-color: var(--muted); }
 .mode-option.selected { background: var(--surface-soft); border-color: var(--focus-ring); color: var(--ink); }
 .mode-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
@@ -98,7 +98,7 @@ function preview(theme: Theme) {
 .theme-footnote { margin-top: var(--settings-space-group); font-size: 12px; line-height: 20px; }
 @container appearance (max-width: 560px) {
   .theme-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mode-option { justify-content: flex-start; padding-inline: var(--settings-space-row); font-size: 14px; }
+  .mode-option { justify-content: flex-start; padding-inline: var(--settings-space-row); }
   .theme-palettes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--settings-space-row); }
   .schedule-times { grid-template-columns: 1fr; }
   .theme-schedule { padding: var(--settings-space-group); }

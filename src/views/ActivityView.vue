@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowUpRight, Gift, Link2, Ticket, Users, Heart, RefreshCw } from '@lucide/vue'
+import { ArrowUpRight, Gift, Ticket, Users, Heart, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 import ReferralBenefits from '../components/ReferralBenefits.vue'
 import { useRoute } from 'vue-router'
@@ -180,9 +180,9 @@ async function draw() {
           <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents"> · {{ rewardAmount(award) }}</span></p></div><button class="text-link" @click="tab = 'records'">查看奖励记录<ArrowUpRight :size="15" /></button></div>
           <p v-if="appearance.rulesText" class="activity-rules">{{ appearance.rulesText }}</p>
         </section>
-        <section class="panel-section prize-section"><div class="section-heading"><h2>{{ status.daily ? '今日奖池' : '奖池' }}</h2><Gift :size="18" /></div><p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="prize-icon" aria-hidden="true"><span v-if="prize.name.includes('🤡')" class="clown-icon">🤡</span><Gift v-else :size="20" /></span><div><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }}</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
-        <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2><Ticket :size="18" /></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
-        <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2><Link2 :size="18" /></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
+        <section class="panel-section prize-section"><div class="section-heading"><h2>{{ status.daily ? '今日奖池' : '奖池' }}</h2></div><p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="prize-icon" aria-hidden="true"><Gift :size="20" /></span><div><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }}</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
+        <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
+        <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
       </div>
       <div v-else-if="tab === 'tasks'" class="stack"><ReferralBenefits /><section v-if="rules.length" class="panel-section"><h2>其他活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div></section></div>
       <section v-else class="panel-section"><div class="section-heading"><h2>奖励记录</h2><button class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" />刷新</button></div><div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td>{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td>{{ award.name }}</td><td>{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
@@ -203,12 +203,12 @@ async function draw() {
 .reward-note { margin-bottom: 16px; }
 .pool-caption { color: var(--muted); font-size: 13px; line-height: 20px; margin: -4px 0 16px; }
 .prize-icon { width: 28px; flex: 0 0 28px; padding-top: 3px; color: var(--blue); }
-.clown-icon { font-size: 24px; line-height: 28px; }
 .prize-item .prize-amount { color: var(--ink); font-size: 15px; font-weight: 500; line-height: 24px; }
 .lottery-wheel .wheel-points { font-size: 16px; font-weight: 600; }
 .activity-page > .tabs { margin-bottom: 16px; }
 .lottery-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.lottery-layout > .panel-section { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.lottery-layout > .panel-section { padding: 16px 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; }
+.lottery-layout > .draw-section, .lottery-layout > .prize-section { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .lottery-layout > .panel-section > .section-heading { margin-bottom: 16px; }
 .lottery-layout > .panel-section > .section-heading h2 { font-size: 16px; line-height: 24px; }
 .draw-section { min-width: 0; min-height: 400px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(176px, 1fr); align-items: start; align-content: start; align-self: start; column-gap: 24px; row-gap: 16px; grid-column: 1; grid-row: 1; }
@@ -274,7 +274,6 @@ async function draw() {
   .daily-overview strong { font-size: 24px; line-height: 32px; }
   .daily-overview p br { display: none; }
   .daily-overview p span { display: block; }
-  .lottery-layout > .panel-section { padding: 16px; }
   .draw-section { display: flex; flex-direction: column; gap: 16px; }
   .draw-section > .section-heading { width: 100%; }
   .lottery-wheel { width: min(100%, 280px); align-self: center; order: 1; }

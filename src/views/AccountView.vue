@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
+import { ArrowLeft, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
@@ -212,7 +212,7 @@ async function restartLogin() {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '欢迎回来！' }}</h1><p v-if="!session.user && !resetRequested">{{ identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '登录章鱼账号' }}</h1><p v-if="!session.user && !resetRequested">{{ identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
@@ -234,7 +234,7 @@ async function restartLogin() {
             <label class="field"><span>账号验证码或恢复码</span><input v-model="verificationCode" class="control" autocomplete="one-time-code" maxlength="32" required :disabled="busy" /></label>
             <button type="button" class="text-link auth-back" :disabled="busy" @click="restartLogin"><ArrowLeft :size="16" />返回账号登录</button>
           </template>
-          <button v-if="!identitySelection" type="submit" class="button btn auth-button" :disabled="busy || (!requiresVerification && !!status.turnstileSiteKey && !challengeToken)"><span class="auth-button-label">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}</span><span class="auth-button-hover" aria-hidden="true">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}<ArrowRight :size="18" /></span></button>
+          <button v-if="!identitySelection" type="submit" class="button btn auth-button" :disabled="busy || (!requiresVerification && !!status.turnstileSiteKey && !challengeToken)"><span class="auth-button-label">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}</span></button>
         </form>
         <p v-if="registerUrl && !requiresVerification && !identitySelection" class="auth-browse">还没有章鱼账号？<a :href="registerUrl" target="_blank" rel="noopener noreferrer">注册账号<ArrowUpRight :size="14" /></a></p>
       </template>
@@ -355,10 +355,7 @@ async function restartLogin() {
 .login-options { display: flex; justify-content: flex-end; min-height: 44px; }
 .forgot-password { min-height: 44px; font-size: 14px; }
 .auth-button { position: relative; display: flex; justify-content: center; width: 100%; height: 48px; min-height: 48px; padding: 8px 24px; border: 1px solid var(--auth-button-border); border-radius: 999px; overflow: hidden; background: var(--auth-canvas); color: var(--auth-ink); font-size: 16px; font-weight: 500; white-space: nowrap; }
-.auth-button-label { display: inline-block; transition: transform 300ms ease-out, opacity 300ms ease-out; }
-.auth-button-hover { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; gap: 8px; border-radius: inherit; background: var(--blue); color: var(--auth-canvas); opacity: 0; transition: opacity 300ms ease-out; pointer-events: none; }
-.auth-button:enabled:is(:hover, :focus-visible) .auth-button-label { transform: translateX(48px); opacity: 0; }
-.auth-button:enabled:is(:hover, :focus-visible) .auth-button-hover { opacity: 1; }
+.auth-button:enabled:is(:hover, :focus-visible) { border-color: var(--blue); background: var(--blue); color: var(--action-ink); }
 .auth-octopus { align-items: center; gap: var(--auth-brand-gap); border-color: var(--blue); background: var(--blue); color: var(--auth-canvas); font-weight: 600; }
 .auth-octopus:enabled:is(:hover, :focus-visible) { border-color: var(--blue-hover); background: var(--blue-hover); }
 .auth-octopus-mark { flex: none; width: 24px; height: 24px; border-radius: 6px; object-fit: cover; }
@@ -378,7 +375,6 @@ async function restartLogin() {
   .auth-mobile-brand { display: flex; justify-content: center; margin-bottom: 48px; color: var(--ink); }
   .auth-mobile-brand .auth-brand-mark { background: var(--auth-brand-mobile); }
 }
-@media (prefers-reduced-motion: reduce) { .auth-button-label, .auth-button-hover { transition: none; }.auth-button:enabled:is(:hover, :focus-visible) .auth-button-label { transform: none; } }
 @media (max-width: 639px) {
   .auth-panel { padding: 32px 24px; }
   .auth-heading { margin-bottom: 32px; }
@@ -410,7 +406,6 @@ async function restartLogin() {
   .auth-form .control { border-radius: 12px; background: var(--surface); color: var(--ink); }
   .auth-button { border-radius: 12px; }
   .auth-octopus { color: var(--action-ink); }
-  .auth-button-hover { color: var(--action-ink); }
 }
 
 </style>

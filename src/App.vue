@@ -398,7 +398,7 @@ function restoreMessageTrigger() {
   .rail-scroll::-webkit-scrollbar { display: none; }
   .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
   .community-rail .nav-link, .community-rail .header-submission, .community-rail .message-trigger, .rail-settings, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 8px; color: var(--muted); }
-  .community-rail :deep(.rail-icon) { flex: none; width: 22px; height: 22px; stroke-width: 1.8; }
+  .community-rail :deep(.rail-icon) { flex: none; width: var(--icon-size-nav); height: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-rail .rail-label { display: none; }
   .community-rail .nav-link:hover, .community-rail .header-submission:hover, .community-rail .message-trigger:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
   .community-rail :is(.nav-link, .rail-settings)[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }

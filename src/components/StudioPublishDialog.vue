@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Send, Upload, X } from '@lucide/vue'
+import { ChevronDown, Send, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
 import type { Work } from '../data'
 import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
+import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
 interface Tag { id: string; category: string; name: string }
@@ -99,7 +100,7 @@ defineExpose({ open })
         <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
         <label v-if="direct || category === 'resource'" class="field"><span>{{ direct ? '评论内容' : '资源内容' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" /></label>
         <template v-if="!direct">
-          <details ref="extra" class="publish-details publish-extras"><summary><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></summary><div class="stack">
+          <details ref="extra" class="publish-details publish-extras publication-extras"><summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary><div class="stack">
           <label v-if="category !== 'resource'" class="field"><span>作品简介</span><textarea v-model="text" class="control" rows="2" maxlength="2500" :disabled="busy || locked" /></label>
           <fieldset class="publish-tags" :disabled="busy || locked" aria-describedby="publish-tags-hint">
             <legend>作品标签 <span>{{ tagIds.length }} / 3</span></legend>
@@ -108,7 +109,7 @@ defineExpose({ open })
             <div v-else-if="tagsError" class="stack"><p class="form-error" role="alert">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
             <template v-else-if="tags.length">
               <label v-if="tags.length > 8" class="field"><span class="studio-sr-only">搜索作品标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
-              <div class="publish-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
+              <div class="publish-tag-options publication-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag publication-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
               <p v-if="!visibleTags.length" class="form-note">没有匹配的标签，试试其他关键词。</p>
             </template>
             <p v-else class="form-note">暂无可用标签。</p>
@@ -135,23 +136,15 @@ defineExpose({ open })
 .publish-preview img, .publish-preview video { width: min(220px, 70vw); max-height: 200px; object-fit: contain; border-radius: 8px; background: var(--surface); }
 .form-note a { color: var(--blue); }
 .publish-context { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
-.publish-extras { border-top: 1px solid var(--border); }
-.publish-extras > summary { color: var(--muted); }
-.publish-extras > summary small { display: block; font-size: 12px; line-height: 20px; }
 .studio-publish-dialog .dialog-body > .button { position: sticky; bottom: 0; flex: none; }
 .publish-tags, .publish-references { border: 0; padding: 0; margin: 0; min-width: 0; }
 .publish-tags legend, .publish-references legend { padding: 0; margin-bottom: 8px; }
 .publish-tags legend span { color: var(--muted); margin-left: 8px; font-size: 12px; }
-.publish-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 192px; overflow-y: auto; margin-top: 12px; padding: 3px; }
-.publish-tag { min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); overflow-wrap: anywhere; }
-.publish-tag[aria-pressed=true] { border-color: var(--blue); background: var(--blue-soft); color: var(--ink); }
-.publish-tag:disabled { opacity: .5; }
+.publish-tag-options { margin-top: 12px; }
 .publish-reference-options { display: grid; gap: 8px; margin-top: 12px; }
 .publish-reference-options label { display: flex; gap: 12px; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
 .publish-reference-options img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
 .publish-reference-options span { min-width: 0; }
-.publish-details summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
-.publish-details > div { margin-top: 8px; }
 .publish-rights { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 22px; min-height: 44px; }
 .publish-rights input { margin-top: 4px; flex-shrink: 0; }
 @media (max-width: 639px) { .studio-publish-dialog { max-width: calc(100vw - 16px); } }

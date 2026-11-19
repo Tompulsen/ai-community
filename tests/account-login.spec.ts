@@ -13,7 +13,7 @@ test('single account login fits desktop and small phones with accessible control
     await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 })
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto('/account')
-    await expect(page.getByRole('heading', { name: '欢迎回来！', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '登录章鱼账号', exact: true })).toBeVisible()
     const form = page.getByRole('form', { name: '登录章鱼账号', exact: true })
     await expect(form).toBeVisible()
     await expect(page.getByText('或使用社区账号', { exact: true })).toHaveCount(0)

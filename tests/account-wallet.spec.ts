@@ -3,6 +3,9 @@ import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
+// Mock gateways are intercepted below; the UI preview's form-action policy would block them.
+test.use({ bypassCSP: true })
+
 async function walletFixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   let balance = 12.5, balanceFails = false, redeemFails = false

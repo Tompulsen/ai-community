@@ -271,31 +271,31 @@ onBeforeUnmount(() => {
 .wallet-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--surface-soft); }
 .wallet-section { padding-top: 16px; min-width: 0; }
 .wallet-topup-form { display: grid; grid-template-columns: minmax(0, 1fr) var(--wallet-summary-width); align-items: start; gap: var(--wallet-column-gap); }
-.wallet-topup-fields { display: grid; gap: 12px; min-width: 0; }.wallet-topup-fields > .field { font-size: 13px; }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; }
+.wallet-topup-fields { display: grid; gap: 12px; min-width: 0; }.wallet-topup-fields > .field { font-size: var(--font-size-field); }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; font-size: var(--font-size-input); }
 .wallet-topup-fields > .form-note { margin: 0; }
 .wallet-amounts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .wallet-amounts button { display: grid; grid-template-rows: 20px 16px; align-content: center; justify-items: center; gap: 0; min-width: 0; min-height: 56px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
-.wallet-amounts button > span { font-size: 15px; line-height: 24px; }
+.wallet-amounts button > span { font-size: var(--font-size-field); line-height: 24px; }
 .wallet-amounts button[aria-pressed="true"] { border-color: var(--focus-ring); background: var(--surface-soft); }
-.wallet-amounts small { font-size: 11px; line-height: 16px; white-space: nowrap; color: var(--muted); }
+.wallet-amounts small { font-size: var(--font-size-help); line-height: 16px; white-space: nowrap; color: var(--muted); }
 .wallet-methods { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
-.wallet-methods legend { padding: 0; margin-bottom: 8px; font-size: 13px; font-weight: 500; }
-.wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer; }
+.wallet-methods legend { padding: 0; margin-bottom: 8px; font-size: var(--font-size-field); font-weight: 500; }
+.wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: var(--font-size-field); cursor: pointer; }
 .wallet-methods label:has(:checked) { border-color: var(--focus-ring); background: var(--surface-soft); }
 .wallet-methods input { margin: 0; accent-color: var(--ink); }
 .wallet-quote { position: sticky; top: 24px; display: grid; gap: 16px; min-width: 0; padding: 0 0 0 24px; border-left: 1px solid var(--border); }
 .wallet-quote > div { display: grid; gap: 6px; }
 .wallet-quote strong, .wallet-money { font-size: 28px; line-height: 36px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.wallet-quote > div > span, .wallet-quote small { font-size: 12px; line-height: 20px; }.wallet-quote small { color: var(--muted); overflow-wrap: anywhere; }.wallet-quote > .button { width: 100%; min-height: 44px; padding-inline: 10px; font-size: 13px; }
+.wallet-quote > div > span, .wallet-quote small { font-size: var(--font-size-help); line-height: 20px; }.wallet-quote small { color: var(--muted); overflow-wrap: anywhere; }.wallet-quote > .button { width: 100%; min-height: 44px; padding-inline: 10px; font-size: var(--font-size-field); }
 .wallet-redemption { max-width: calc(100% - var(--wallet-summary-width) - var(--wallet-column-gap)); margin-top: 24px; border-top: 1px solid var(--border); padding-top: 8px; }
-.wallet-redemption-toggle { min-height: 44px; gap: 8px; color: var(--muted); font-size: 13px; }
+.wallet-redemption-toggle { min-height: 44px; gap: 8px; color: var(--muted); font-size: var(--font-size-field); }
 .wallet-redemption-toggle:hover, .wallet-redemption-toggle[aria-expanded="true"] { color: var(--ink); }
 .wallet-redemption-toggle[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }
 .wallet-redeem { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px 12px; margin-top: 8px; }
 .wallet-redeem-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.wallet-redeem .control { width: 100%; min-width: 0; height: 44px; min-height: 44px; font-size: 13px; }
-.wallet-redeem > .button { min-width: 80px; height: 44px; min-height: 44px; align-self: end; margin: 0; font-size: 13px; }
-.wallet-redeem > a { grid-column: 1 / -1; justify-self: start; min-height: 44px; font-size: 13px; }
+.wallet-redeem .control { width: 100%; min-width: 0; height: 44px; min-height: 44px; font-size: var(--font-size-input); }
+.wallet-redeem > .button { min-width: 80px; height: 44px; min-height: 44px; align-self: end; margin: 0; font-size: var(--font-size-field); }
+.wallet-redeem > a { grid-column: 1 / -1; justify-self: start; min-height: 44px; font-size: var(--font-size-field); }
 .wallet-plans { margin-top: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .wallet-plan { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; }
 .wallet-plan p { overflow-wrap: anywhere; }
@@ -328,6 +328,6 @@ onBeforeUnmount(() => {
   .wallet-quote > .button { width: auto; min-height: 48px; }
   .wallet-quote > .form-error { grid-column: 1 / -1; }
   .wallet-redemption { max-width: none; }
-  .wallet-tabs { gap: 0; }.wallet-tabs button { padding-inline: 10px; font-size: 12px; }.wallet-methods { gap: 8px; }
+  .wallet-tabs { gap: 0; }.wallet-tabs button { padding-inline: 10px; font-size: var(--font-size-field); }.wallet-methods { gap: 8px; }
 }
 </style>

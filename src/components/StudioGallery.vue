@@ -230,6 +230,7 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
 .gallery-tab { min-height: 32px; padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }.gallery-tab[aria-selected="true"] { color: var(--ink); background: var(--surface-soft); }
 .gallery-toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(100px, 120px) minmax(120px, 180px) minmax(110px, 140px); gap: 12px; align-items: center; }
 .gallery-toolbar .control { width: 100%; min-width: 0; height: 38px; border: 0; border-radius: 8px; background: var(--surface); font-size: 13px; }
+.gallery-toolbar select.control { height: auto; font-size: var(--control-font-size, var(--font-size-input)); }
 .gallery-search { display: flex; align-items: center; position: relative; min-width: 0; color: var(--muted); }.gallery-search > svg { position: absolute; left: 12px; pointer-events: none; }.gallery-search input { padding-left: 38px; }
 .gallery-info-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 12px; }
 .gallery-stats, .gallery-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }.gallery-stats { font-size: 12px; color: var(--muted); }.gallery-actions { gap: 6px; }

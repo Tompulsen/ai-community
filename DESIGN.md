@@ -456,7 +456,7 @@ tokens、视频及其他不能完整预估的计费明确标为按实际用量�
 | 触控命中尺寸 | `--target-size` | 44px | 已接入共享 token；粗指针与混合触控设备不能仅按桌面宽度缩小 |
 | 字段、输入、帮助字号 | `--font-size-field` / `--font-size-input` / `--font-size-help` | 14 / 16 / 12px | 已接入 `src/controls.css`；对应 frontmatter field/input/helper |
 | 字段、输入、帮助行高 | `--line-height-field` / `--line-height-input` / `--line-height-help` | 21 / 24 / 20px | 已接入 `src/controls.css`；不以固定高度裁切多行内容 |
-| 图标线宽与本体 | `--icon-stroke-width` / `--icon-size-action` / `--icon-size-tool` / `--icon-size-nav` | 1.8 / 16 / 20 / 22px | 待接入；stroke-width 为无单位值 |
+| 图标线宽与本体 | `--icon-stroke-width` / `--icon-size-action` / `--icon-size-tool` / `--icon-size-nav` | 1.8 / 16 / 20 / 22px | 已接入共享 token、Lucide、普通按钮、图标按钮及桌面导航；stroke-width 为无单位值 |
 | 标签到说明 | `--space-label` | 4px | 已接入 `src/controls.css`；对应 spacing.compact |
 | 字段内部、控件内距 | `--space-small` / `--space-control` | 8 / 12px | 已有；对应 spacing.related/control |
 | 相邻字段、分组、主列 | `--space-group` / `--space-section` / `--space-page` | 16 / 24 / 32px | 已有；对应 spacing.group/gutter/section |
@@ -498,7 +498,7 @@ tokens、视频及其他不能完整预估的计费明确标为按实际用量�
 | 切换页面或内容视图 | 链接或页签 | 页签切视图，单选改数据；外观不能掩盖不同语义 |
 | 执行操作 | button；导航使用链接 | 保存、刷新和删除不能伪装成标签或可点击文字块 |
 
-需要统一展开菜单外观时，复用 `src/controls.css` 的 `select-control`：
+普通 `select.control` 自动复用 `src/controls.css` 的菜单外观；自定义布局的选择框使用 `select-control`：
 保留原生 select、option 和键盘行为，通过 `appearance: base-select` 与 `::picker(select)` 主题化。
 触发器宽度由字段布局约束，不随最长选项改变；选项菜单可在顶层滚动，使用语义表面与中性选中态。
 用 `@supports` 渐进增强；不支持该能力的浏览器保留可操作的原生选择器，不额外引入 JavaScript 选择器库。

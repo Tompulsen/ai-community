@@ -152,7 +152,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .profile-bio { min-height: 88px; resize: vertical; }
 .profile-identity { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0; overflow-wrap: anywhere; }
 .profile-identity > div { display: flex; gap: 8px; }.profile-identity dd { margin: 0; color: var(--ink); }
-.profile-preview { font-size: 12px; color: var(--muted); }.profile-preview summary { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 24px; }.profile-preview[open] summary svg { transform: rotate(180deg); }.profile-preview-body { display: grid; gap: 4px; padding-top: 8px; }.profile-preview-body p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.profile-preview { font-size: 12px; color: var(--muted); }.profile-preview summary { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: var(--control-height); }.profile-preview[open] summary svg { transform: rotate(180deg); }.profile-preview-body { display: grid; gap: 4px; padding-top: 8px; }.profile-preview-body p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .profile-savebar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .profile-save-status { display: flex; align-items: center; gap: 4px; }
 .profile-save-status svg { color: var(--green); }

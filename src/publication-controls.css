@@ -1,0 +1,41 @@
+.publication-extras > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px;
+  list-style: none;
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+.publication-extras > summary::-webkit-details-marker { display: none; }
+.publication-extras > summary:hover { background: var(--surface-soft); }
+.publication-extras > summary > svg { flex: none; color: var(--muted); }
+.publication-extras > summary > svg:last-child { margin-inline-start: auto; }
+.publication-extras > summary > span { min-width: 0; }
+.publication-extras > summary small { display: block; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
+.publication-extras[open] > summary > svg:last-child { transform: rotate(180deg); }
+.publication-extras > div { margin-top: 24px; }
+.publication-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 192px; overflow-y: auto; }
+.publication-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.publication-tag:hover:not(:disabled):not(:has(input:disabled)), .publication-tag:has(input:focus-visible) { background: var(--surface-soft); }
+.publication-tag.selected, .publication-tag[aria-pressed="true"] { background: var(--surface-soft); border-color: var(--focus-ring); }
+.publication-tag:disabled, .publication-tag:has(input:disabled) { opacity: .5; cursor: default; }
+.publication-tag:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

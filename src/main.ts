@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import './style.css'
 import './controls.css'
+import './studio-controls.css'
 import App from './App.vue'
 import { router } from './router'
 import { continuousCorners } from './continuous-corners'

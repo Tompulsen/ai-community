@@ -147,7 +147,7 @@ async function review() {
 
 <template>
   <div class="page-container admin-page">
-    <header class="page-heading admin-heading"><div><h1>管理后台</h1><p>管理内容，打理你的社区。</p></div><RouterLink to="/discover" class="button subtle btn"><ArrowUpRight :size="16" aria-hidden="true" />访问社区</RouterLink></header>
+    <header class="page-heading admin-heading"><div><h1>管理后台</h1></div><RouterLink to="/discover" class="button subtle btn"><ArrowUpRight :size="16" aria-hidden="true" />访问社区</RouterLink></header>
     <ContentSkeleton v-if="booting" label="正在加载管理后台…" />
     <div v-else-if="!allowed" class="empty-state"><ShieldCheck :size="30" aria-hidden="true" /><h2>需要审核员权限</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink><RouterLink v-else to="/discover" class="button btn">返回发现</RouterLink></div>
     <div v-else class="admin-layout">
@@ -184,7 +184,6 @@ async function review() {
 <style scoped>
 .admin-page { max-width: 1440px; }
 .admin-heading { align-items: center; margin-bottom: 32px; }
-.admin-heading p { margin-top: 8px; color: var(--muted); }
 .admin-layout { grid-template-columns: 184px minmax(0, 1fr); gap: 32px; }
 .admin-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }
 .admin-identity { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; padding: 14px 12px; background: var(--surface); border-radius: 6px; }
@@ -227,7 +226,6 @@ async function review() {
 }
 @media (max-width: 639px) {
   .admin-heading { gap: 12px; margin-bottom: 20px; }
-  .admin-heading p { font-size: 12px; }
   .admin-heading .button { padding-inline: 10px; }
   .review-toolbar { align-items: stretch; gap: 12px; margin-bottom: 16px; }
   .review-toolbar .tabs { width: 100%; gap: 20px; }

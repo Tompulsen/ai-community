@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { ChevronDown, Play, Plug, RefreshCw, Sparkles } from '@lucide/vue'
+import { ChevronDown, Play, Plug, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
@@ -62,7 +62,7 @@ async function saveConfig() {
   <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="chat.skillIds.length"> · {{ chat.skillIds.length }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><Sparkles class="skill-icon" :size="20" aria-hidden="true" /><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /></label><p v-if="!loading && !chats.skills.some(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" class="muted skill-empty">{{ query ? '没有匹配的技能' : '暂无可用技能' }}</p></div>
+    <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /></label><p v-if="!loading && !chats.skills.some(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" class="muted skill-empty">{{ query ? '没有匹配的技能' : '暂无可用技能' }}</p></div>
     <details class="mcp-section"><summary><Plug :size="18" /><span>MCP 工具</span><ChevronDown :size="15" /></summary><p v-if="!enabled" class="muted">当前账号未启用 MCP 工具。</p>
     <div class="model-tools" v-show="enabled"><label v-for="item in servers" :key="item.id" class="skill-row"><input v-model="chat.settings.mcpServers" type="checkbox" :value="item.id" :disabled="item.status === 'paused'" @change="saveChats()" /><span>允许模型使用 {{ item.id }}</span></label></div>
     <template v-if="enabled">
