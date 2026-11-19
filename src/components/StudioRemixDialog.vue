@@ -13,7 +13,7 @@ import StudioBilling from './StudioBilling.vue'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../../shared/studio/image-params'
 
-const props = defineProps<{ source: Work; issue: string; ready: boolean; busy: boolean; canFallback: boolean; backgroundOnly?: boolean }>()
+const props = defineProps<{ source: Work; issue: string; loading: boolean; ready: boolean; busy: boolean; canFallback: boolean; backgroundOnly?: boolean }>()
 const emit = defineEmits<{ apply: [files: StudioFile[]]; background: [files: StudioFile[]]; cancel: []; retry: []; fallback: []; workbench: [] }>()
 const parameters = computed(() => readRemixParameters(props.source.generation?.parameters))
 const geminiImage = computed(() => props.source.kind === 'image' && usesGeminiImageChat(props.source.model))
@@ -86,11 +86,11 @@ async function apply(withReferences: boolean, background = false) {
   <dialog ref="dialog" class="studio-remix-dialog" aria-labelledby="remix-heading" @cancel.prevent="cancel">
     <header class="dialog-heading"><h2 id="remix-heading">制作同款</h2><button type="button" class="icon-button" aria-label="关闭制作同款" :disabled="busy" @click="cancel"><X :size="20" /></button></header>
     <div class="remix-body">
-      <p v-if="!ready" class="form-note" role="status">正在读取提示词和参考图…</p>
+      <p v-if="loading" class="form-note" role="status">正在读取作品和可用模型…</p>
       <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
       <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
-        <p>使用原作模型 {{ source.model || '（未提供）' }} 和已公开参数。后台生成会消耗积分，提交后{{ backgroundOnly ? '留在当前作品页' : '返回作品' }}，你可以继续浏览并在小窗中查看进度。</p>
-        <StudioBilling :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
+        <p>沿用模型 {{ source.model || '（未提供）' }} 和公开参数，使用当前账号可用分组。后台生成会消耗积分，提交后{{ backgroundOnly ? '留在当前作品页' : '返回作品' }}，你可以继续浏览并在小窗中查看进度。</p>
+        <StudioBilling v-if="ready && !issue" :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
       </section>
       <h3>本次使用的参考图</h3>
       <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>

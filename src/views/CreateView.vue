@@ -87,7 +87,7 @@ watch([() => route.query.from, () => route.query.remix, () => session.user?.id, 
   if (sourceId) {
     let next: Work | null = null
     try {
-      const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(sourceId)}`)
+      const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(sourceId)}`, { signal: AbortSignal.timeout(20000) })
       if (current !== revision) return
       next = { ...result.work, prompt: result.work.generation?.prompt ?? (result.work.prompt || result.work.body || ''), model: result.work.generation?.model || result.work.model }
       sourceOwner = session.user.id; sourceCanFallback.value = true
@@ -240,7 +240,7 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
       <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
-      <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="files => importRemix(files, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
+      <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="files => importRemix(files, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>
 </template>

@@ -74,6 +74,8 @@ export function modelKind(item: CreationModel): CreationKind {
   if (item.configuredKind) return item.configuredKind
   const override = modelType(item.id)
   if (override !== 'auto') return override === 'chat' ? 'text' : override
+  const detected = item.kinds?.[0]
+  if (detected === 'image' || detected === 'video') return detected
   const group = groupKind(creation.selectedGroup || '')
   if (group) return group
   return item.kinds?.[0] || 'text'

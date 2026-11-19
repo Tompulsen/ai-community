@@ -56,6 +56,17 @@ it('uses group aliases but explicit overrides win and can be reset', async () =>
   p.setModelType('alias', 'auto')
   expect(p.modelKind({ id: 'alias' })).toBe('image')
 })
+it('preserves recognized media types across groups while honoring explicit settings', async () => {
+  const p = await fixture()
+  p.creation.selectedGroup = '视频'
+  const image = { id: 'gpt-image-2', kinds: ['image' as const] }
+  expect(p.modelKind(image)).toBe('image')
+  p.creation.selectedGroup = '生图'
+  expect(p.modelKind({ id: 'sora-2', kinds: ['video'] })).toBe('video')
+  p.setModelType(image.id, 'chat')
+  expect(p.modelKind(image)).toBe('text')
+  expect(p.modelKind({ ...image, configuredKind: 'image' })).toBe('image')
+})
 it('does not partially apply failed saves or allow settings while a group changes', async () => {
   const p = await fixture()
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => { throw new Error('quota') } })

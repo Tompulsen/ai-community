@@ -92,6 +92,7 @@ test('guest background choice requests login on the work page without submitting
 async function fixture(page: Page, initialPath = '/create/image', kind: 'image' | 'video' = 'image') {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
+  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: [] } } }))
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
   let finish!: () => void, submissions = 0
   const requests: any[] = [], controls = { unavailable: false, reject: false, disconnect: false, recoveries: 0, modelsWait: null as Promise<void> | null }

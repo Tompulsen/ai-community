@@ -413,7 +413,7 @@ export function loadCreationModels(): Promise<void> {
   modelReadGroup = group
   creation.modelsLoading = true; creation.modelsLoaded = false; creation.modelsError = ''
   modelRead = (async () => { try {
-    const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models')
+    const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models', { signal: AbortSignal.timeout(20000) })
     if (version !== epoch || revision !== modelRevision || group !== creation.selectedGroup) return
     creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string')
     creation.modelTokenId = Number.isSafeInteger(result.tokenId) && result.tokenId! > 0 ? result.tokenId! : null

@@ -36,7 +36,7 @@ async function prepare() {
   dialog.value?.close(); background.value = true; loading.value = true; issue.value = ''
   const version = ++revision
   try {
-    const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.source.id)}`)
+    const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.source.id)}`, { signal: AbortSignal.timeout(20000) })
     if (!current(version)) return
     source.value = { ...result.work, prompt: result.work.generation?.prompt ?? (result.work.prompt || result.work.body || ''), model: result.work.generation?.model || result.work.model }
     if (source.value.kind !== 'image' && source.value.kind !== 'video') throw new Error('此作品请进入工作台生成。')
@@ -92,7 +92,7 @@ async function cancel() {
   </dialog>
   <template v-else>
     <div hidden inert><StudioWorkspace v-if="chats.ready && creation.loaded && mediaKind && !loading && !issue" ref="workspace" :kind="mediaKind" remix-preparing /></div>
-    <StudioRemixDialog :source="source" :issue="issue" :ready="ready" :busy="busy" :can-fallback="false" background-only @background="generate" @cancel="cancel" @retry="prepare" @workbench="workbench" />
+    <StudioRemixDialog :source="source" :issue="issue" :loading="loading" :ready="ready" :busy="busy" :can-fallback="false" background-only @background="generate" @cancel="cancel" @retry="prepare" @workbench="workbench" />
   </template>
 </template>
 

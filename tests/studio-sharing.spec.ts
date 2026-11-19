@@ -14,6 +14,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   await mockPublicationTags(page)
+  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: ['fixture-image', 'fixture-video', 'fixture-text', 'gpt-image-2'].flatMap(model => ['auto', '生图', 'original'].map(group => ({ model, group }))) } } }))
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
   const source: Work = { id: 'source42', title: '原作海底城市', authorId: '26', author: '原作者', avatar: '原', kind, prompt: '海底城市与发光的水母', model: `fixture-${kind === 'resource' ? 'text' : kind}`, version: 1, tags: [], status: 'published', date: '2026-11-13', likes: 0, owned: false, saved: false, liked: false,
     fileIds: ['authorResult'], cover: '/legacy-files/authorResult', files: [{ id: 'authorResult', name: '原作成品.jpg', type: 'image/jpeg', url: '/legacy-files/authorResult' }],
@@ -333,7 +334,7 @@ test('image remix restores model, group and full public settings, then republish
     const read = ++modelReads, tokenId = group === '生图' ? 52 : 41
     // Overlapping initialization reads must not finish source restoration before the selected group's models.
     if (read === 2 || read === 3) await new Promise(resolve => setTimeout(resolve, read === 2 ? 150 : 400))
-    await route.fulfill({ json: { tokenId, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
+    await route.fulfill({ json: { tokenId, items: [{ id: group === '生图' ? 'gpt-image-2' : 'other-image', kinds: ['image'] }] } })
   })
   await page.goto('/create/image?remix=source42')
   const groupPicker = await openGroupPicker(page)
@@ -478,6 +479,7 @@ test('failed original group selection does not replay its POST or silently gener
   const state = await fixture(page)
   state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original' } }
   let attempts = 0
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'other-image', kinds: ['image'] }] } }))
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
   await page.route('**/api/new-api/model-groups/select', route => { attempts++; return route.fulfill({ status: 409, json: { success: false, message: '原作分组不可用。' } }) })
   await page.goto('/create/image?remix=source42')
@@ -522,12 +524,14 @@ test('switching source during a slow group restore leaves the newer source and g
   state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original', aspect_ratio: '4:3', n: 3 } }
   let group = 'auto', release!: () => void, started = false
   const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === 'auto' ? 41 : 52, items: [{ id: group === 'auto' ? 'newer-image' : 'fixture-image', kinds: ['image'] }] } }))
+  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: [{ model: 'fixture-image', group: 'original' }, { model: 'newer-image', group: 'auto' }] } } }))
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
   await page.route('**/api/new-api/model-groups/select', async route => {
     started = true; await gate; group = route.request().postDataJSON().group
     return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'auto' ? 41 : 52 } } })
   })
-  await page.route('**/api/works/sourceB', route => route.fulfill({ json: { work: { ...state.source, id: 'sourceB', title: '原作森林', prompt: '森林里的萤火虫',
+  await page.route('**/api/works/sourceB', route => route.fulfill({ json: { work: { ...state.source, id: 'sourceB', title: '原作森林', prompt: '森林里的萤火虫', model: 'newer-image',
     generation: { parameters: { version: 1, kind: 'image', group: 'auto', aspect_ratio: '1:1', n: 1 } } } } }))
   await page.goto('/create/image?remix=source42')
   await expect.poll(() => started).toBe(true)
