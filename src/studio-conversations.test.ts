@@ -144,6 +144,7 @@ it('rejects deletion of running or uncertain media tasks before changing either 
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
   for (const phase of ['running', 'paused', 'attention'] as const) {
     p.creation.tasks[0]!.phase = phase
+    expect(p.conversationGenerating(image)).toBe(phase === 'running')
     expect(p.isConversationBusy(image)).toBe(true)
     await expect(p.removeChats([image.id, 'text'])).rejects.toThrow('核对')
     expect(p.chats.sessions).toHaveLength(3)

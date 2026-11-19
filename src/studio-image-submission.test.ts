@@ -87,3 +87,38 @@ it('keeps streamed preflight validation rejection editable instead of waiting fo
   expect(result.error).toBe('参考图过大')
   expect(p.send).toHaveBeenCalledTimes(1)
 })
+it('ends a synchronous upstream 504 without querying or automatically submitting again', async () => {
+  const p = await fixture()
+  p.send.mockImplementationOnce(async () => Response.json({ status: 'indeterminate', protocol: 'sync', error: 'Provider API error: bad response status code 504', outputs: [] }))
+  const task = await p.submitCreation(p.input)
+  expect(task.phase).toBe('error')
+  expect(task.error).toContain('504')
+  expect(task.error).toContain('扣费')
+  await p.resumeCreation(task)
+  expect(p.send).toHaveBeenCalledTimes(1)
+  const { api } = await import('./state')
+  expect(api).not.toHaveBeenCalled()
+})
+it('restores an old synchronous 504 record as ended without a query', async () => {
+  const p = await fixture(), user = p.session.user
+  const task = await p.submitCreation(p.input)
+  const saved = { ...task, protocol: 'sync', phase: 'attention', urls: [], error: 'Provider API error: bad response status code 504' }
+  p.session.user = null
+  const { nextTick } = await import('vue')
+  await nextTick()
+  localStorage.setItem('octopus:user-fixture-owner:native-creation-history:v2-fallback', JSON.stringify([saved]))
+  p.session.user = user
+  await p.initializeCreation()
+  expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'error', error: saved.error })
+  const { api } = await import('./state')
+  expect(api).not.toHaveBeenCalled()
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it('preserves recovery for an asynchronous task that has an upstream ID even when a query times out', async () => {
+  const p = await fixture()
+  p.send.mockImplementationOnce(async () => Response.json({ status: 'indeterminate', protocol: 'async', upstreamId: 'known-task', error: 'Query failed with status code 504', outputs: [] }))
+  const task = await p.submitCreation(p.input)
+  expect(task).toMatchObject({ phase: 'attention', upstreamId: 'known-task' })
+  expect(p.creationRequestTimedOut(task)).toBe(false)
+  expect(p.send).toHaveBeenCalledTimes(1)
+})

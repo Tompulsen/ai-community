@@ -178,6 +178,9 @@ function validTask(value: unknown): value is CreationTask {
     && Array.isArray(value.references) && value.references.every(file => record(file) && typeof file.url === 'string' && typeof file.name === 'string')
     && typeof value.protocol === 'string' && ['submitting', 'running', 'paused', 'complete', 'error', 'attention'].includes(String(value.phase))
 }
+export function creationRequestTimedOut(task: CreationTask): boolean {
+  return task.protocol === 'sync' && !task.upstreamId && /\b504\b|gateway\s+timeout/i.test(task.error || '')
+}
 function safeResultUrl(value: unknown): string | undefined {
   if (typeof value !== 'string') return
   if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value)) return value
@@ -360,13 +363,17 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress <= 1 && progress > 0 ? progress * 100 : progress))
+  const detail = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
-    task.phase = 'attention'; task.error = '任务结果暂时无法确认，记录已保留，请先核对使用记录，避免重复生成。'
+    task.phase = 'attention'; task.error = `${detail ? detail + ' ' : ''}任务结果暂时无法确认，记录已保留，请先核对使用记录，避免重复生成。`
+    if (status === 'indeterminate' && creationRequestTimedOut(task)) {
+      task.phase = 'error'; task.error = `${detail} 本次请求已超时，未收到生成结果。扣费请核对账号使用记录，重试需手动发起。`
+    }
     return true
   }
   if (['failed', 'cancelled', 'canceled', 'error'].includes(status)) {
     task.phase = 'error'
-    task.error = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : '上游任务未成功完成。'
+    task.error = detail || '上游任务未成功完成。'
     return true
   }
   if ((urls.length || text || task.toolCalls?.length) && (!status || ['complete', 'completed', 'success', 'succeeded'].includes(status))) {
@@ -470,6 +477,7 @@ export function selectCreationGroup(group: string): Promise<void> {
 }
 export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
+  if (creationRequestTimedOut(task)) { task.phase = 'error'; await persist(); return }
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
@@ -744,7 +752,7 @@ export function initializeCreation() {
     if (version !== epoch) return
     creation.tasks = Array.isArray(stored) ? stored.filter(validTask).filter(task => task.owner === owner).map(task => ({
       ...task, conversationId: validId(task.conversationId) ? task.conversationId : undefined,
-      phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
+      phase: ['attention', 'paused'].includes(task.phase) && creationRequestTimedOut(task) ? 'error' : task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
       localSave: task.localSave?.state === 'saving' ? { ...task.localSave, state: 'failed', error: '上次下载准备已中断，可重试保存剩余文件。' } : task.localSave,
     })) : []
     if (saved === undefined) await importLegacy(version)

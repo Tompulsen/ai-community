@@ -3,8 +3,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { GripVertical, Image as ImageIcon, LoaderCircle, MessageSquare, MoreHorizontal, Video } from '@lucide/vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import type { NativeChat } from '../native-chat'
-import { conversationKind, isConversationBusy } from '../studio-conversations'
+import { conversationGenerating, type NativeChat } from '../native-chat'
+import { conversationKind } from '../studio-conversations'
 import { formatChatTime } from '../../shared/studio/chat-time'
 
 const props = defineProps<{
@@ -49,11 +49,11 @@ const icon = (chat: NativeChat) => ({ text: MessageSquare, image: ImageIcon, vid
     <div v-for="chat in rows" :key="chat.id" class="conversation-row" :data-conversation-id="chat.id" :data-project-id="chat.projectId || ''">
       <label v-if="selecting" class="conversation-record studio-record" :data-kind="conversationKind(chat)" :class="{ selected: selectedIds.has(chat.id) }">
         <input type="checkbox" :aria-label="`选择对话：${chat.topic}`" :checked="selectedIds.has(chat.id)" :disabled="disabled" @change="emit('toggle', chat.id)" />
-        <span>{{ chat.topic }}</span><LoaderCircle v-if="isConversationBusy(chat)" :size="14" aria-label="尚未结束" />
+        <span>{{ chat.topic }}</span><LoaderCircle v-if="conversationGenerating(chat)" :size="14" aria-label="尚未结束" />
       </label>
       <template v-else>
         <button type="button" class="conversation-record studio-record" :data-kind="conversationKind(chat)" :class="{ active: chat.id === activeId }" :aria-label="chat.topic" :aria-current="chat.id === activeId ? 'page' : undefined" :title="chat.topic" :disabled="disabled" @click="emit('select', chat.id)">
-          <component :is="icon(chat)" :size="17" aria-hidden="true" /><span>{{ chat.topic }}</span><LoaderCircle v-if="isConversationBusy(chat)" :size="14" aria-label="尚未结束" /><time v-else-if="times.get(chat.id)?.iso" :datetime="times.get(chat.id)!.iso" :title="times.get(chat.id)!.full" aria-hidden="true">{{ times.get(chat.id)!.label }}</time>
+          <component :is="icon(chat)" :size="17" aria-hidden="true" /><span>{{ chat.topic }}</span><LoaderCircle v-if="conversationGenerating(chat)" :size="14" aria-label="尚未结束" /><time v-else-if="times.get(chat.id)?.iso" :datetime="times.get(chat.id)!.iso" :title="times.get(chat.id)!.full" aria-hidden="true">{{ times.get(chat.id)!.label }}</time>
         </button>
         <button type="button" class="row-tool conversation-more" :aria-label="`对话操作：${chat.topic}`" title="对话操作" aria-haspopup="menu" :aria-expanded="menuId === chat.id" :disabled="disabled" @click="emit('menu', $event, chat)"><MoreHorizontal :size="15" /></button>
         <button type="button" class="row-tool conversation-drag-handle" :aria-label="`调整会话顺序：${chat.topic}`" title="拖动排序，Alt + 方向键调整" :disabled="disabled || !sortable" @keydown.up="keyboardMove($event, chat.id, -1)" @keydown.down="keyboardMove($event, chat.id, 1)"><GripVertical :size="15" /></button>

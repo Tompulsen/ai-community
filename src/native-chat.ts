@@ -91,9 +91,12 @@ export function conversationMediaTasks(chat: NativeChat): CreationTask[] {
   return creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' &&
     (ids.has(task.id) || !claimed.has(task.id) && task.kind === chat.creationKind && (task.conversationId || task.id) === (chat.mediaConversationId || chat.id)))
 }
-export function conversationBusy(chat: NativeChat) {
+export function conversationGenerating(chat: NativeChat) {
   return Boolean(chats.busy[chat.id] || chats.preparing[chat.id] || chat.messages.some(message => message.streaming) ||
-    conversationMediaTasks(chat).some(task => ['submitting', 'running', 'paused', 'attention'].includes(task.phase)))
+    conversationMediaTasks(chat).some(task => ['submitting', 'running'].includes(task.phase)))
+}
+export function conversationBusy(chat: NativeChat) {
+  return conversationGenerating(chat) || conversationMediaTasks(chat).some(task => ['paused', 'attention'].includes(task.phase))
 }
 function restoreMessage(message: NativeMessage): NativeMessage {
   return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }

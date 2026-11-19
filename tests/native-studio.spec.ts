@@ -407,6 +407,43 @@ test('asynchronous video waits can stop and recover with GET using the original 
   expect(state.mutations.some(item => item.path.includes('authorize'))).toBe(false)
 })
 
+test('a synchronous provider timeout ends the request without offering or sending a result query', async ({ page }, info) => {
+  await fixture(page)
+  let submissions = 0, queries = 0
+  const result = { status: 'indeterminate', protocol: 'sync', outputs: [], error: 'Provider API error: bad response status code 504' }
+  await page.route('**/api/creation/generate', route => { submissions++; return route.fulfill({ json: result }) })
+  await page.route('**/api/creation/requests/**', route => { queries++; return route.fulfill({ json: result }) })
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只猫')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('请求超时')
+  await expect(page.locator('.studio-sidebar [aria-label="尚未结束"]')).toHaveCount(0)
+  await expect(page.locator('.task-elapsed')).toHaveCount(0)
+  await expect(page.locator('.task-message')).toContainText('504')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toBeEnabled()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEnabled()
+  await page.clock.setFixedTime(new Date(Date.now() + 8 * 60 * 60 * 1000))
+  await expect(page.locator('.task-status')).toContainText('请求超时')
+  await expect(page.locator('.task-elapsed')).toHaveCount(0)
+  await expect(page.locator('.studio-sidebar [aria-label="尚未结束"]')).toHaveCount(0)
+  await expect(page.locator('.task-message')).toContainText('504')
+  await expect(page.locator('.task-message')).toContainText('扣费')
+  expect(submissions).toBe(1)
+  await page.screenshot({ path: info.outputPath('provider-timeout.png') })
+  await page.reload()
+  await expect(page.locator('.task-status')).toContainText('请求超时')
+  await expect(page.locator('.task-elapsed')).toHaveCount(0)
+  await expect(page.locator('.studio-sidebar [aria-label="尚未结束"]')).toHaveCount(0)
+  await expect(page.locator('.task-message')).toContainText('504')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  expect(queries).toBe(0)
+  expect(submissions).toBe(1)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('provider-timeout-mobile.png') })
+})
+
 test('an uncertain paid request stays in history and is never automatically submitted again', async ({ page }) => {
   await fixture(page)
   let submissions = 0

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, Maximize, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
-import { copyCreationImage, downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, type NativeChat } from '../../native-chat'
 import { confirmStudioDelete } from '../../studio-confirm'
 import { isConversationBusy } from '../../studio-conversations'
@@ -43,9 +43,11 @@ const menuItems = computed<StudioMenuAction[]>(() => {
 })
 watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
+const timedOut = computed(() => creationRequestTimedOut(props.task))
 const version = computed(() => mediaVersion(props.conversation, props.task.id))
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '结果待确认' }
 const elapsed = computed(() => {
+  if (timedOut.value || props.task.phase === 'paused' || props.task.phase === 'attention') return ''
   const end = working.value ? now.value : props.task.settledAt
   if (!Number.isFinite(end)) return ''
   const seconds = Math.max(0, Math.floor((end! - props.task.createdAt) / 1000))
@@ -73,7 +75,7 @@ async function remove() {
     <template #status>
       <template v-if="role === 'assistant'">
         <StudioAiStatus v-if="working" class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="task.kind === 'video' ? '正在生成视频' : task.preview ? '正在生成图片' : undefined" :timer="false" :elapsed="elapsed" />
-        <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' }" :role="task.phase === 'error' ? 'alert' : 'status'">{{ phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
+        <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' }" :role="task.phase === 'error' ? 'alert' : 'status'">{{ task.phase === 'error' && timedOut ? '请求超时' : phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
       </template>
     </template>
     <template v-if="role === 'user'">
