@@ -42,7 +42,7 @@ function logSummary(type: string, value: unknown) {
       communityPullToRefresh: '下拉刷新', uploadLimits: '上传限制', defaultModels: '默认模型', ads: '广告位' }
     add('变更项', [...new Set(Object.keys(object(info.config ?? info.settings)).flatMap(key => labels[key] ? [labels[key]] : []))].join('、'))
   } else if (type === 'updateCommunityAds') target = { label: '广告位设置', to: '/admin?tab=ads' }
-  else if (type === 'createAnnouncement' || type === 'deleteAnnouncement') target = { label: '社区公告', to: '/community?tab=announcements' }
+  else if (type === 'createAnnouncement' || type === 'deleteAnnouncement') target = { label: '公告管理', to: '/admin?tab=announcements' }
   else if (type === 'updateAnnouncement') {
     if (validId(info.announcementId)) add('公告编号', info.announcementId)
     const fields = Array.isArray(info.fields) ? info.fields : []

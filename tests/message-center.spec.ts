@@ -118,6 +118,11 @@ test('desktop message menu survives pointer entry and supports keyboard focus an
   await expect(page.locator('header').getByTitle('通知', { exact: true })).toHaveCount(0)
   await trigger(page).hover()
   await expect(popover(page)).toBeVisible()
+  const triggerBounds = (await trigger(page).boundingBox())!
+  const popoverBounds = (await popover(page).boundingBox())!
+  expect(popoverBounds.y).toBeGreaterThanOrEqual(triggerBounds.y + triggerBounds.height)
+  expect(popoverBounds.x).toBeGreaterThanOrEqual(0)
+  expect(popoverBounds.x + popoverBounds.width).toBeLessThanOrEqual(page.viewportSize()!.width)
   for (const category of categories) {
     const button = popover(page).getByRole('button', { name: new RegExp(category.label) })
     await expect(button).toHaveAttribute('aria-haspopup', 'dialog')
@@ -218,7 +223,7 @@ test('reading each message class updates the shared header without double-counti
   await page.goto('/messages?tab=announcement')
   await expect(trigger(page)).toHaveAttribute('aria-label', '消息，9 条未读')
   await page.locator('.inbox-notification').filter({ hasText: '测试系统公告1' }).locator('.inbox-notification-link').click()
-  await expect(page).toHaveURL('/community?tab=announcements')
+  await expect(page).toHaveURL('/messages?tab=announcement')
   await expect(trigger(page)).toHaveAttribute('aria-label', '消息，8 条未读')
   expect(fixture.mutations.find(item => item.path === '/api/notifications/read')?.body.ids).toEqual(['announcement1'])
 

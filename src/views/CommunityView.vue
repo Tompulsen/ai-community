@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, Bookmark, ChevronDown, Heart, Images, LockKeyhole, Megaphone, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
+import { useRoute } from 'vue-router'
+import { ArrowUpRight, Bookmark, Heart, Images, LockKeyhole, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
-import { type Announcement, type Creator, type Work } from '../data'
+import { type Creator, type Work } from '../data'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import FollowButton from '../components/FollowButton.vue'
 import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
@@ -16,10 +16,8 @@ import type { SessionUser } from '../data'
 import { confirmStudioDelete } from '../studio-confirm'
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const route = useRoute()
-const router = useRouter()
-const tab = ref(route.query.tab === 'announcements' ? 'announcements' : 'creators')
 const creatorId = computed(() => typeof route.query.creator === 'string' ? route.query.creator : '')
-const creators = ref<Creator[]>([]), announcements = ref<Announcement[]>([]), creator = ref<Creator | null>(null), works = ref<Work[]>([])
+const creators = ref<Creator[]>([]), creator = ref<Creator | null>(null), works = ref<Work[]>([])
 const profileTabs = [{ value: 'works', label: '作品' }, { value: 'saved', label: '收藏' }, { value: 'liked', label: '喜欢' }] as const
 const profileTab = ref<'works' | 'saved' | 'liked'>('works'), people = ref<Creator[]>([])
 const filters = ref<ProfileWorkFilters>({ kind: 'all', visibility: 'all', from: '', to: '' })
@@ -88,9 +86,9 @@ async function load() {
       creator.value = { ...result.user, count: result.user.worksCount ?? result.user.count ?? 0 }; seedRelationships([creator.value], captured)
       await loadCollection()
     } else {
-      const [peopleResult, news] = await Promise.all([api<{ items: Creator[] }>('/api/creators'), api<{ items: Announcement[] }>('/api/announcements')])
+      const peopleResult = await api<{ items: Creator[] }>('/api/creators')
       if (current !== loadId || owner !== session.user?.id) return
-      creators.value = peopleResult.items; seedRelationships(peopleResult.items, captured); announcements.value = news.items
+      creators.value = peopleResult.items; seedRelationships(peopleResult.items, captured)
     }
   } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
   finally { if (current === loadId) loading.value = false }
@@ -166,8 +164,6 @@ async function deleteSelectedWorks() {
   } catch (cause) { if (current()) collectionError.value = `${removed ? `已删除 ${removed} 件。` : ''}${errorMessage(cause)} 剩余作品已保留，请核对后重试。` }
   finally { deleting.value = false }
 }
-watch(() => route.query.tab, value => { tab.value = value === 'announcements' ? 'announcements' : 'creators' })
-function selectTab(value: 'creators' | 'announcements') { void router.push({ path: '/community', query: { tab: value } }) }
 function updateRelationship(result: Relationship) {
   for (const item of [...creators.value, ...people.value, ...(creator.value ? [creator.value] : [])]) if (item.id === result.id) Object.assign(item, result)
   if (isOwnProfile.value && creator.value) {
@@ -196,7 +192,6 @@ async function removeFollower() {
   <div class="page-container community-page" :class="{ 'creator-page': creatorId }">
     <div v-if="!creatorId" class="community-toolbar">
       <h1>社区</h1>
-      <div class="tabs" aria-label="社区分类"><button class="tab" :class="{ active: tab === 'creators' }" :aria-pressed="tab === 'creators'" @click="selectTab('creators')"><Users :size="16" />创作者</button><button class="tab" :class="{ active: tab === 'announcements' }" :aria-pressed="tab === 'announcements'" @click="selectTab('announcements')"><Megaphone :size="16" />社区公告</button></div>
     </div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
     <template v-else-if="creatorId">
@@ -254,7 +249,7 @@ async function removeFollower() {
       </template><div v-else-if="!error" class="empty-state"><Users :size="28" /><h1>未找到这位创作者</h1></div>
     </template>
     <template v-else>
-      <section v-if="tab === 'creators'" class="creators-grid" aria-label="社区创作者">
+      <section class="creators-grid" aria-label="社区创作者">
         <article v-for="item in creators" :key="item.id" class="creator-card card">
           <RouterLink :to="{ path: '/community', query: { creator: item.id } }" class="creator-identity"><span class="avatar blue"><img v-if="item.avatarUrl" :src="item.avatarUrl" :alt="item.name || item.username" /><span v-else>{{ (item.name || item.username).slice(0, 1) }}</span></span><div class="creator-name"><h2>{{ item.name || item.username }}</h2><p v-if="creatorIdentity(item)" class="caption-5">{{ creatorIdentity(item) }}</p></div><ArrowUpRight :size="16" /></RouterLink>
           <p v-if="item.bio" class="creator-summary">{{ item.bio }}</p>
@@ -262,7 +257,6 @@ async function removeFollower() {
         </article>
         <div v-if="!creators.length && !error" class="empty-state"><Users :size="28" /><h2>暂无创作者</h2></div>
       </section>
-      <section v-else class="announcement-list" aria-label="社区公告"><details v-for="item in announcements" :key="item.id" class="announcement-item"><summary><strong>{{ item.title }}</strong><time class="caption-5">{{ item.createdAt ? new Date(item.createdAt).toLocaleDateString('zh-CN') : item.date }}</time><ChevronDown :size="17" /></summary><div class="announcement-body"><p>{{ item.body || item.text }}</p></div></details><div v-if="!announcements.length && !error" class="empty-state"><Megaphone :size="28" /><h2>暂无公告</h2></div></section>
       <CommunityAds :slots="['communityAd3', 'communityAd4']" />
     </template>
   </div>
@@ -273,7 +267,6 @@ async function removeFollower() {
 .person-actions > button { min-height: 44px; }
 .community-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
 .community-toolbar h1, .profile-copy h1 { margin: 0; color: var(--ink); font-size: 28px; line-height: 36px; font-weight: 600; }
-.community-toolbar .tabs { margin: 0; }
 .creators-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .creator-card { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 176px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: none; }
 .creator-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -289,14 +282,6 @@ async function removeFollower() {
 .creator-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: auto; padding-top: 4px; }
 .creator-footer .button { flex: 0 0 auto; min-height: 34px; padding: 6px 10px; font-size: 12px; }
 .creators-grid > .empty-state { grid-column: 1 / -1; }
-.announcement-list { max-width: 960px; margin: 0; }
-.announcement-item { margin: 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
-.announcement-item summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 20px; align-items: center; gap: 16px; padding: 22px 0; list-style: none; cursor: pointer; }
-.announcement-item summary::-webkit-details-marker { display: none; }
-.announcement-item summary strong { color: var(--ink); font-size: 15px; line-height: 24px; font-weight: 500; overflow-wrap: anywhere; }
-.announcement-item summary svg { color: var(--muted); }
-.announcement-item[open] summary svg { transform: rotate(180deg); }
-.announcement-body { padding: 0 36px 24px 0; color: var(--muted); font-size: 14px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .profile-banner { display: block; width: 100%; height: 180px; object-fit: cover; border-radius: var(--radius); margin-bottom: 28px; }
 .creator-page { padding-top: 24px; }
 .creator-profile { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: start; gap: 20px; margin: 8px 0 24px; }
@@ -337,10 +322,6 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .creators-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .creator-card { min-height: 160px; padding: 18px; }
   .creator-footer .button { min-height: 44px; }
-  .announcement-item summary { gap: 10px; padding: 18px 0; }
-  .announcement-item summary strong { font-size: 14px; }
-  .announcement-item time { font-size: 11px; }
-  .announcement-body { padding-right: 0; }
   .profile-banner { height: 120px; margin-bottom: 24px; }
   .creator-page { padding-top: 16px; }
   .creator-profile { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; margin: 8px 0 20px; }

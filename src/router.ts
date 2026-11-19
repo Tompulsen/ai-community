@@ -28,6 +28,9 @@ export const router = createRouter({
 })
 
 router.beforeEach((to, from) => {
+  if (to.path === '/community' && to.query.tab === 'announcements' && !to.query.creator) {
+    return { path: '/messages', query: { tab: 'announcement' } }
+  }
   if (to.path === '/account' && !session.user && !to.query.returnTo && !to.query.newapi && !to.query.reset
     && from.matched.length && !from.path.startsWith('/account')) {
     return { path: to.path, query: { ...to.query, returnTo: loginReturnPath(from.fullPath) } }

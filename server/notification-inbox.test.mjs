@@ -67,6 +67,7 @@ test('notification totals cover retained history and independent cursors exhaust
   const head = await f.request()
   assert.deepEqual(head.unreadCounts, { activity: 69, announcement: 65 })
   assert.equal(head.items.length, 60)
+  assert(head.items.filter(item => item.type === 'announcement').every(item => item.url === '/messages?tab=announcement'))
   assert.equal(head.readThrough.activity, streamId(75)); assert.match(head.readThrough.announcement, /^[a-f0-9]{32}$/)
   for (const [category, total] of [['activity', 75], ['announcement', 65]]) {
     const ids = head.items.filter(item => item.type === category).map(item => item.id)

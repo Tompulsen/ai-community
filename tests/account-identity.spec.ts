@@ -41,6 +41,6 @@ test('profile editing keeps the verified account number and username read-only',
   await page.locator('.profile-preview > summary').click()
   await expect(page.locator('.profile-preview-body')).toContainText('章鱼号：17')
   await page.goto('/discover')
-  await page.locator('.profile-toggle').click()
+  await page.locator('.profile-toggle').hover()
   await expect(page.locator('.menu-title')).toHaveText('章鱼小白章鱼号：17')
 })

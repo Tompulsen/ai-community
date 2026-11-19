@@ -91,6 +91,8 @@ test('community points keep exact amounts, restrictions and unavailable state on
   await expect(summary).toHaveCount(0)
   await expect(page.locator('.balance-panel')).toContainText('积分余额暂不可用')
   await expect(page.locator('.balance-panel')).not.toContainText('999999')
+  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+  await page.getByTitle('社区工具', { exact: true }).click()
   await expect(indicator).toHaveText('—')
   expect(errors).toEqual([])
 })

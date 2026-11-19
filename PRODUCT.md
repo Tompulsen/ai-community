@@ -31,14 +31,16 @@ delivery now includes the frontend and an independent community backend.
 
 ## Capabilities and Constraints
 
-- Public navigation groups home (首页), the welfare center, community and the
-  creation desk in that order. Community pages use a 64px icon rail on desktop
+- Public navigation groups home (首页), community and the creation desk in that
+  order. Community pages use a 64px icon rail on desktop
   and bottom navigation on smaller screens. Logo, navigation, existing tools,
-  submission and messages occupy the rail; settings stay at its bottom.
+  and submission occupy the rail; settings stay at its bottom.
   Personal works and saved works remain reachable through existing tools.
 - Home begins with segmented recommendations, latest and following modes, a
   horizontal type/tag rail. Desktop community pages have a persistent full-width top search,
-  with account balance and the account menu at the right. Below 1000px a compact
+  with messages, welfare, account balance and the account menu at the right.
+  Welfare is adjacent to points; announcements remain inside the message center.
+  Below 1000px a compact
   header contains the menu, discovery/video/image/Skill links and expandable search.
   Skill retains the incumbent resource category (text, code and Skills). Mobile
   category links live in the 52px header; browse modes and content tags move into

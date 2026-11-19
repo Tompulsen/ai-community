@@ -208,7 +208,7 @@ async function restartLogin() {
     <aside v-if="!session.user" class="auth-visual">
       <RouterLink to="/discover" class="auth-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <LoginCharacters :is-typing="isTyping" :show-password="showPassword" :password-length="password.length" />
-      <div class="auth-visual-footer"><RouterLink to="/discover">发现作品</RouterLink><RouterLink to="/community?tab=announcements">社区公告</RouterLink></div>
+      <div class="auth-visual-footer"><RouterLink to="/discover">发现作品</RouterLink><RouterLink to="/messages?tab=announcement">公告</RouterLink></div>
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>

@@ -16,7 +16,7 @@ const query = ref('')
 const tools = computed<Tool[]>(() => [
   { label: '通知', icon: Bell, to: '/messages?tab=activity', member: true, count: inbox.counts.activity, category: 'activity' },
   { label: '发现', icon: Compass, to: '/discover' },
-  { label: '公告', icon: Megaphone, to: '/community?tab=announcements', count: inbox.counts.announcement, category: 'announcement' },
+  { label: '公告', icon: Megaphone, to: '/messages?tab=announcement', member: true, count: inbox.counts.announcement, category: 'announcement' },
   { label: '搜索', icon: Search, action: 'search' },
   { label: '创作者', icon: Users, to: '/community?tab=creators' },
   { label: '收藏', icon: Bookmark, to: '/library?tab=saved', member: true },

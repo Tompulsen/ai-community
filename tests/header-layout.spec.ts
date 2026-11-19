@@ -17,7 +17,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/discover')
-    if (width >= 1000) await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+    if (width >= 1000) await expect(page.locator('.profile-toggle')).toBeVisible()
     else await expect(page.getByRole('navigation', { name: '作品分类', exact: true })).toBeVisible()
     const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
     if (width >= 1000) {
@@ -33,7 +33,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     const nav = width >= 1000 ? desktop : mobile
     await expect(nav).toBeVisible()
     await expect(width >= 1000 ? mobile : desktop).toBeHidden()
-    await expect(nav.getByRole('link')).toHaveText(width >= 1000 ? ['首页', '福利中心', '社区', '创作台'] : ['首页', '创作', '消息', '我'])
+    await expect(nav.getByRole('link')).toHaveText(width >= 1000 ? ['首页', '社区', '创作台'] : ['首页', '创作', '消息', '我'])
     await expect(nav.getByRole('link', { name: '首页', exact: true })).toHaveAttribute('aria-current', 'page')
     await expect(nav.getByRole('link', { name: width >= 1000 ? '创作台' : '创作', exact: true })).toHaveAttribute('href', width >= 1000 ? '/create' : '/create/video')
     if (width >= 1000) {
@@ -47,8 +47,32 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       expect(main.x).toBe(64)
       expect(header.height).toBe(64)
       expect(search.x).toBe(80)
-      expect(search.width).toBeGreaterThan(width - 320)
+      expect(search.width).toBeGreaterThan(width / 2)
       expect(search.x + search.width).toBeLessThanOrEqual(account.x)
+      const actions = page.locator('.header-actions')
+      const message = actions.getByTitle('消息', { exact: true })
+      const welfare = actions.getByRole('link', { name: '福利中心', exact: true })
+      await expect(message).toHaveCount(1)
+      await expect(welfare).toHaveCount(1)
+      await expect(welfare).toHaveAttribute('href', '/activities')
+      const items = [page.locator('.header-search-slot'), message, welfare, actions.locator('.account-balance'), actions.locator('.profile-toggle')]
+      let previousRight = 0
+      for (const item of items) {
+        const box = (await item.boundingBox())!
+        expect(box.x).toBeGreaterThanOrEqual(previousRight)
+        expect(box.y).toBeGreaterThanOrEqual(header.y)
+        expect(box.y + box.height).toBeLessThanOrEqual(header.y + header.height)
+        previousRight = box.x + box.width
+      }
+      for (const icon of [message, welfare]) {
+        const box = (await icon.boundingBox())!
+        expect([box.width, box.height]).toEqual([44, 44])
+        expect(await icon.locator('svg').evaluate(element => {
+          const bounds = element.getBoundingClientRect()
+          return [bounds.width, bounds.height, getComputedStyle(element).strokeWidth]
+        })).toEqual([22, 22, '1.8px'])
+      }
+      await expect(page.locator('.community-rail .message-trigger, .community-rail .nav-link[href="/activities"]')).toHaveCount(0)
       for (const link of await nav.getByRole('link').all()) {
         const bounds = (await link.boundingBox())!
         expect(bounds.x).toBeGreaterThanOrEqual(0)

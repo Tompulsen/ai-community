@@ -75,6 +75,10 @@ test('logs paginate with parameterized filters and expose only allowlisted summa
 
 test('announcement and role changes keep filterable safe summaries in the existing log DTO', async () => {
   for (const entry of [
+    { type: 'createAnnouncement', label: '发布公告', info: {}, details: [],
+      target: { label: '公告管理', to: '/admin?tab=announcements' } },
+    { type: 'deleteAnnouncement', label: '删除公告', info: {}, details: [],
+      target: { label: '公告管理', to: '/admin?tab=announcements' } },
     { type: 'updateAnnouncement', label: '修改公告',
       info: { announcementId: 'a1', fields: ['title', 'text', 'isActive', 'password', 'constructor'],
         title: 'private-title', text: 'private-body', reason: 'private-reason', token: 'secret-token' },

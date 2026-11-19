@@ -20,7 +20,7 @@ test('tools use real destinations and category counts without writing data', asy
   await expect(panel(page)).toBeVisible()
   await expect(panel(page).locator('.tool-item')).toHaveCount(18)
   const destinations = {
-    '发现': '/discover', '公告，2 条未读': '/community?tab=announcements', '通知，7 条未读': '/messages?tab=activity',
+    '发现': '/discover', '公告，2 条未读': '/messages?tab=announcement', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
     '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '福利中心': '/activities',
     '账号设置': '/account', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
@@ -51,27 +51,27 @@ test('search opens the existing work search with encoded keywords', async ({ pag
   await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toHaveValue(keywords)
 })
 
-test('community tabs and launcher destinations stay in sync on repeated visits', async ({ page }) => {
+test('announcement and creator tools stay in sync on repeated visits and browser history', async ({ page }) => {
   await toolsFixture(page)
   await page.goto('/community')
   await launcher(page).click()
   await panel(page).getByRole('link', { name: /^公告/ }).click()
-  await expect(page.getByRole('region', { name: '社区公告', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '创作者', exact: true }).click()
-  await expect(page.getByRole('region', { name: '社区创作者', exact: true })).toBeVisible()
-  await launcher(page).click()
-  await panel(page).getByRole('link', { name: /^公告/ }).click()
-  await expect(page.getByRole('region', { name: '社区公告', exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/messages\?tab=announcement$/)
+  await expect(page.getByRole('region', { name: '公告', exact: true })).toBeVisible()
   await launcher(page).click()
   await panel(page).getByRole('link', { name: '创作者', exact: true }).click()
   await expect(page).toHaveURL(/tab=creators$/)
-  await page.getByRole('button', { name: '社区公告', exact: true }).click()
-  await expect(page).toHaveURL(/tab=announcements$/)
+  await expect(page.getByRole('region', { name: '社区创作者', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '社区公告', exact: true })).toHaveCount(0)
   await page.goBack()
+  await expect(page).toHaveURL(/\/messages\?tab=announcement$/)
+  await expect(page.getByRole('region', { name: '公告', exact: true })).toBeVisible()
+  await page.goForward()
   await expect(page.getByRole('region', { name: '社区创作者', exact: true })).toBeVisible()
 })
 
-test('guest notification entry returns to its category after login', async ({ page }) => {
+for (const [label, category] of [['通知', 'activity'], ['公告', 'announcement']]) {
+test(`guest ${category} entry returns to its category after login`, async ({ page }) => {
   const fixture = await toolsFixture(page, false)
   await page.goto('/community')
   await launcher(page).click()
@@ -79,13 +79,14 @@ test('guest notification entry returns to its category after login', async ({ pa
   await expect(panel(page).getByRole('link', { name: '内容管理', exact: true })).toHaveCount(0)
   expect(fixture.reads.filter(path => path.startsWith('/api/messages') || path === '/api/notifications')).toEqual([])
   await expect(panel(page).getByRole('link', { name: '个人资料', exact: true })).toHaveAttribute('href', '/account?returnTo=/account?tab=profile')
-  await panel(page).getByRole('link', { name: '通知', exact: true }).click()
+  await panel(page).getByRole('link', { name: label, exact: true }).click()
   await expect(page).toHaveURL(/\/account\?returnTo=/)
-  expect(new URL(page.url()).searchParams.get('returnTo')).toBe('/messages?tab=activity')
+  expect(new URL(page.url()).searchParams.get('returnTo')).toBe(`/messages?tab=${category}`)
   await fillAccountLogin(page)
-  await expect(page).toHaveURL(/\/messages\?tab=activity$/)
-  await expect(page.getByRole('navigation', { name: '消息分类', exact: true }).getByRole('link', { name: /互动消息/ })).toHaveAttribute('aria-current', 'page')
+  await expect(page).toHaveURL(`/messages?tab=${category}`)
+  await expect(page.getByRole('navigation', { name: '消息分类', exact: true }).getByRole('link', { name: category === 'announcement' ? /公告/ : /互动消息/ })).toHaveAttribute('aria-current', 'page')
 })
+}
 
 test('keyboard, outside click and other header menus close the launcher predictably', async ({ page }) => {
   await toolsFixture(page)
@@ -99,7 +100,7 @@ test('keyboard, outside click and other header menus close the launcher predicta
   await launcher(page).click()
   await page.getByRole('searchbox', { name: '搜索作品', exact: true }).click()
   await expect(panel(page)).not.toBeVisible()
-  await page.getByLabel('账号菜单', { exact: true }).click()
+  await page.locator('.profile-toggle').hover()
   await expect(page.locator('.account-popover')).toBeVisible()
   await launcher(page).click()
   await expect(page.locator('.account-popover')).not.toBeVisible()
@@ -162,7 +163,7 @@ test('launcher fits narrow guest and member screens with accessible controls', a
       await page.setViewportSize({ width, height: width < 400 ? 740 : 900 })
       await page.goto('/discover')
       if (width >= 1000) {
-        if (authenticated) await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+        if (authenticated) await expect(page.locator('.profile-toggle')).toBeVisible()
         else await expect(page.locator('.header-login')).toBeVisible()
       } else await expect(page.getByRole('navigation', { name: '作品分类' })).toBeVisible()
       await launcher(page).click()

@@ -101,7 +101,7 @@ test('global session retry returns to loading instead of showing guest actions',
 test('community navigation reuses the account without a second session read or login', async ({ page }) => {
   const account = await mockUnifiedAccount(page, true)
   await page.goto('/discover')
-  await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+  await expect(page.locator('.profile-toggle')).toBeVisible()
   const readsBefore = account.reads.filter(path => path === '/api/session').length
   await page.getByRole('link', { name: '创作台', exact: true }).first().click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeVisible()

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Bell, ChevronDown, Gift, Heart, House, LogOut, MessageSquare, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
+import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -78,14 +78,13 @@ function resizeViewport() {
   viewportHeight.value = window.visualViewport?.height || window.innerHeight
   const wide = window.innerWidth >= 1000
   if (wide !== wideViewport.value) {
+    clearTimeout(hoverCloseTimer)
     document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false })
     wideViewport.value = wide
   }
-  positionMessagePopover()
 }
 const links = [
   { path: '/discover', label: '首页', icon: House },
-  { path: '/activities', label: '福利中心', icon: Gift },
   { path: '/community', label: '社区', icon: Users },
   { path: '/create', label: '创作台', icon: PanelsTopLeft },
 ]
@@ -99,11 +98,10 @@ const messageLinks: { category: InboxCategory; label: string; icon: typeof Bell 
   { category: 'activity', label: '互动消息', icon: Heart },
 ]
 const unreadCount = computed(() => session.user ? inbox.counts.announcement + inbox.counts.messages + inbox.counts.activity : 0)
-const messageMenu = ref<HTMLDetailsElement>()
-const messagePopoverTop = ref(80)
+const messageMenu = ref<HTMLDetailsElement>(), profileMenu = ref<HTMLDetailsElement>()
 const messageCenter = ref<InstanceType<typeof MessageCenterDialog>>()
 let poll: ReturnType<typeof setInterval> | undefined
-let messageCloseTimer: ReturnType<typeof setTimeout> | undefined
+let hoverCloseTimer: ReturnType<typeof setTimeout> | undefined
 function refreshActiveIdentity() {
   if (session.user && document.visibilityState !== 'hidden') void loadSession(true)
 }
@@ -117,7 +115,7 @@ onMounted(() => {
   window.addEventListener('resize', resizeViewport)
 })
 onBeforeUnmount(() => {
-  clearInterval(poll); clearTimeout(messageCloseTimer); clearTimeout(searchTimer)
+  clearInterval(poll); clearTimeout(hoverCloseTimer); clearTimeout(searchTimer)
   window.removeEventListener('focus', refreshActiveIdentity)
   window.removeEventListener('pageshow', refreshActiveIdentity)
   document.removeEventListener('visibilitychange', refreshActiveIdentity)
@@ -126,6 +124,7 @@ onBeforeUnmount(() => {
 })
 watch(() => route.fullPath, () => {
   clearTimeout(searchTimer)
+  clearTimeout(hoverCloseTimer)
   searchQuery.value = typeof route.query.q === 'string' ? route.query.q : ''
   messageCenter.value?.close()
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { menu.open = false })
@@ -133,8 +132,10 @@ watch(() => route.fullPath, () => {
 watch([() => route.meta.title, () => site.brand], () => { document.title = `${String(route.meta.title || '首页')} · ${site.brand}` }, { immediate: true })
 watch(() => session.user?.id, id => {
   clearInterval(poll)
+  clearTimeout(hoverCloseTimer)
   messageCenter.value?.close()
   if (messageMenu.value) messageMenu.value.open = false
+  if (profileMenu.value) profileMenu.value.open = false
   if (!id) return
   void loadInbox()
   poll = setInterval(() => { if (document.visibilityState === 'visible') void loadInbox(true) }, 45000)
@@ -167,29 +168,20 @@ function toggleHeaderMenu(event: Event) {
   if (!opened.open) return
   if (mobileCommunity.value) mobileSearchOpen.value = false
   document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (menu !== opened) menu.open = false })
-  if (opened.classList.contains('messages-menu')) { void loadInbox(); positionMessagePopover() }
+  if (opened.classList.contains('messages-menu')) void loadInbox()
 }
-function positionMessagePopover() {
-  if (!desktopCommunity.value || !messageMenu.value?.open) return
-  void nextTick(() => {
-    const menu = messageMenu.value
-    const popover = menu?.querySelector<HTMLElement>('.message-popover')
-    if (menu && popover) messagePopoverTop.value = Math.max(8, Math.min(menu.getBoundingClientRect().top, window.innerHeight - popover.offsetHeight - 12))
-  })
+function openHoverMenu(event: Event, menu: HTMLDetailsElement | undefined) {
+  if (event instanceof PointerEvent && event.pointerType !== 'mouse') return
+  if (!(event instanceof FocusEvent && menu === profileMenu.value) && !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return
+  clearTimeout(hoverCloseTimer)
+  if (menu && !menu.open) menu.open = true
 }
-function openMessages(event: Event) {
-  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches || event instanceof PointerEvent && event.pointerType !== 'mouse') return
-  clearTimeout(messageCloseTimer)
-  if (messageMenu.value && !messageMenu.value.open) {
-    messageMenu.value.open = true
-    positionMessagePopover()
-  }
-}
-function leaveMessages(event: Event) {
-  if (event instanceof FocusEvent && event.relatedTarget instanceof Node && messageMenu.value?.contains(event.relatedTarget)) return
-  clearTimeout(messageCloseTimer)
-  messageCloseTimer = setTimeout(() => {
-    if (messageMenu.value && !messageMenu.value.contains(document.activeElement)) messageMenu.value.open = false
+function leaveHoverMenu(event: Event, menu: HTMLDetailsElement | undefined) {
+  const boundary = event.currentTarget as HTMLElement
+  if (event instanceof FocusEvent && event.relatedTarget instanceof Node && boundary.contains(event.relatedTarget)) return
+  clearTimeout(hoverCloseTimer)
+  hoverCloseTimer = setTimeout(() => {
+    if (menu && !boundary.matches(':hover') && !boundary.contains(document.activeElement)) menu.open = false
   }, 120)
 }
 function dismissMenus(event: Event) {
@@ -199,10 +191,16 @@ function dismissMenus(event: Event) {
     if (event.type === 'keydown') mobileSearchButton.value?.focus()
   }
   if (event.type === 'click' && (event.target as HTMLElement).closest('.header-menu')) return
-  document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => { if (event.type === 'keydown') menu.querySelector('summary')?.focus(); menu.open = false })
+  document.querySelectorAll<HTMLDetailsElement>('.header-menu[open]').forEach(menu => {
+    if (event.type === 'keydown') {
+      const trigger = menu === profileMenu.value ? menu.previousElementSibling : menu.querySelector('summary')
+      if (trigger instanceof HTMLElement) trigger.focus()
+    }
+    menu.open = false
+  })
 }
 function showMessageCenter(category: InboxCategory) {
-  clearTimeout(messageCloseTimer)
+  clearTimeout(hoverCloseTimer)
   if (messageMenu.value) messageMenu.value.open = false
   messageCenter.value?.open(category)
 }
@@ -218,7 +216,7 @@ function restoreMessageTrigger() {
     <a href="#main" class="skip-link">跳至内容</a>
     <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏">
       <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
-      <div class="rail-scroll" @scroll.passive="positionMessagePopover"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
+      <div class="rail-scroll"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
       <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
     </aside>
     <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen, 'mobile-profile-header': profilePage }">
@@ -252,19 +250,23 @@ function restoreMessageTrigger() {
       <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">{{ link.label }}</span></RouterLink></nav></Teleport>
       <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
       <div class="header-tools"><form v-if="communityShell" id="header-search" class="header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
-      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Send class="submission-icon rail-icon" :size="22" aria-hidden="true" /><span class="submission-label rail-label">投稿</span></RouterLink>
-        <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openMessages" @pointerleave="leaveMessages" @focusin="openMessages" @focusout="leaveMessages">
+      <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Send class="submission-icon rail-icon" :size="22" aria-hidden="true" /><span class="submission-label rail-label">投稿</span></RouterLink></div></Teleport>
+        <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openHoverMenu($event, messageMenu)" @pointerleave="leaveHoverMenu($event, messageMenu)" @focusin="openHoverMenu($event, messageMenu)" @focusout="leaveHoverMenu($event, messageMenu)">
           <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare class="rail-icon" :size="22" aria-hidden="true" /><span v-if="unreadCount" class="message-count" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
-          <div class="menu-popover message-popover" :style="desktopCommunity ? { top: `${messagePopoverTop}px` } : undefined">
+          <div class="menu-popover message-popover">
             <template v-if="session.user"><button v-for="item in messageLinks" :key="item.category" type="button" class="message-menu-link" aria-haspopup="dialog" @click="showMessageCenter(item.category)"><component :is="item.icon" :size="17" /><span>{{ item.label }}</span><span v-if="inbox.counts[item.category]" class="message-category-count">{{ inbox.counts[item.category] > 99 ? '99+' : inbox.counts[item.category] }}</span></button></template>
             <div v-else-if="sessionStatus === 'guest'" class="message-login"><p>登录即可查看关注动态</p><RouterLink to="/account" class="button primary btn">立即登录</RouterLink></div>
             <div v-else class="message-login"><p>{{ sessionStatus === 'loading' ? '正在加载账号…' : '账号暂时无法加载' }}</p><button v-if="sessionStatus === 'error'" type="button" class="button btn subtle" @click="loadSession(true)">重新加载</button></div>
           </div>
-        </details></div></Teleport>
+        </details>
+        <RouterLink v-if="desktopCommunity" to="/activities" class="icon-button header-welfare" aria-label="福利中心" title="福利中心" :aria-current="isCurrent('/activities') ? 'page' : undefined"><Gift class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
         <template v-if="session.user">
         <AccountBalance />
-        <details class="header-menu profile-menu" @toggle="toggleHeaderMenu"><summary class="profile-toggle" :class="{ selected: route.path === '/library' }" aria-label="账号菜单" title="账号菜单"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" :alt="session.user.name || session.user.username" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span><ChevronDown :size="13" /></summary><div class="menu-popover account-popover"><div class="menu-title">{{ session.user.name || session.user.username }}<span v-if="session.user.accountId" class="caption-5">章鱼号：{{ session.user.accountId }}</span></div>
-          <RouterLink :to="{ path: '/community', query: { creator: session.user.id } }"><Users :size="16" />个人主页</RouterLink><RouterLink to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
+        <div class="profile-menu" @pointerleave="leaveHoverMenu($event, profileMenu)" @focusout="leaveHoverMenu($event, profileMenu)">
+          <RouterLink :to="meDestination" class="profile-toggle" aria-label="个人主页" aria-describedby="account-preview-identity" :aria-current="ownProfile ? 'page' : undefined" @pointerenter="openHoverMenu($event, profileMenu)" @focus="openHoverMenu($event, profileMenu)"><span class="avatar blue"><img v-if="session.user.avatarUrl" :src="session.user.avatarUrl" alt="" /><span v-else>{{ (session.user.name || session.user.username).slice(0, 1) }}</span></span></RouterLink>
+          <details ref="profileMenu" class="header-menu profile-disclosure" @toggle="toggleHeaderMenu"><summary hidden>账户预览</summary><div class="menu-popover account-popover" @pointerenter="openHoverMenu($event, profileMenu)"><div id="account-preview-identity" class="menu-title">{{ session.user.name || session.user.username }}<span v-if="session.user.accountId" class="caption-5">章鱼号：{{ session.user.accountId }}</span></div>
+            <RouterLink :to="meDestination"><Users :size="16" />个人主页</RouterLink><RouterLink v-if="!desktopCommunity" to="/account"><Settings :size="16" />账号设置</RouterLink><RouterLink v-if="session.user.isAdmin || session.user.isModerator" to="/admin"><ShieldCheck :size="16" />内容管理</RouterLink><button v-if="!desktopCommunity" class="menu-command" :disabled="signingOut" @click="signOut"><LogOut :size="16" />退出登录</button></div></details>
+        </div>
       </template><RouterLink v-else-if="sessionStatus === 'guest'" to="/account" class="button primary btn header-login">登录</RouterLink><span v-else-if="sessionStatus === 'loading' && !studioPage" class="header-session-status" role="status">账号加载中…</span><button v-else-if="sessionStatus === 'error'" type="button" class="icon-button" aria-label="重新加载账号" title="重新加载账号" @click="loadSession(true)"><RefreshCw :size="18" /></button></div></div>
     </div></header>
     <div v-show="mobileCommunity && mobileSearchOpen" id="mobile-community-search" class="mobile-search-panel" @keydown.esc.stop.prevent="toggleMobileSearch">
@@ -274,7 +276,7 @@ function restoreMessageTrigger() {
     <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
     <main id="main" tabindex="-1"><RouterView :key="route.path.startsWith('/account') ? route.path : `${studioPage ? '/create' : route.path}:${session.user?.id || 'guest'}`" /></main>
     <BackgroundStudio />
-    <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/community?tab=announcements">社区公告</RouterLink></footer>
+    <footer v-if="!guestAccount && !studioPage" class="app-footer"><span>{{ site.brand }}</span><RouterLink to="/messages?tab=announcement">公告</RouterLink></footer>
     <nav v-if="!guestAccount && !workPage" class="mobile-nav" aria-label="手机导航">
       <RouterLink to="/discover" :class="{ active: feedPage }" :aria-current="feedPage ? 'page' : undefined">首页</RouterLink>
       <RouterLink to="/create/video" :class="{ active: studioPage }" :aria-current="studioPage ? 'page' : undefined">创作</RouterLink>
@@ -361,9 +363,14 @@ function restoreMessageTrigger() {
 }
 :global(#app:has(.account-entry-shell)) { padding-bottom: 0; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-menu { position: relative; display: flex; flex: none; align-items: center; }
+.profile-toggle { display: flex; align-items: center; justify-content: center; inline-size: 44px; min-block-size: 44px; padding: 0; border-radius: var(--radius); }
+.profile-disclosure { position: static; }
+.profile-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.account-popover::before { content: ''; position: absolute; inset: auto 0 100%; block-size: 12px; }
 .account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }
 .message-trigger { position: relative; }
-.message-count { position: absolute; right: -3px; top: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; padding: 0 3px; font-variant-numeric: tabular-nums; }
+.message-count { position: absolute; right: 0; top: 0; min-width: 16px; height: 18px; display: grid; place-items: center; border: 2px solid var(--canvas); border-radius: 9px; background: var(--blue); color: var(--action-ink); font-size: 10px; line-height: 14px; padding: 0 3px; font-variant-numeric: tabular-nums; }
 .message-popover { min-width: 192px; padding: 8px; }
 .message-popover::before { content: ''; position: absolute; bottom: 100%; left: 0; right: 0; height: 12px; }
 .message-popover > .message-menu-link { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 8px 12px; gap: 10px; border-radius: 4px; font-size: 14px; text-align: left; }
@@ -391,25 +398,26 @@ function restoreMessageTrigger() {
   .community-shell .header-tools { gap: 16px; }
   .community-shell .header-search-slot { flex: 1; }
   .community-shell .header-actions { flex: none; }
+  .community-shell .header-actions :is(.message-trigger, .header-welfare) { position: relative; flex: none; inline-size: 44px; block-size: 44px; min-block-size: 44px; padding: 0; border-radius: var(--radius); color: var(--muted); }
+  .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
+  .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
+  .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px 0; background: var(--canvas); border-right: 1px solid var(--border); }
   .rail-brand { display: grid; place-items: center; flex: none; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 8px; }
   .rail-brand img { border-radius: 6px; }
   .rail-scroll { flex: 1; width: 100%; min-height: 0; padding: 0 8px 12px; overflow-y: auto; scrollbar-width: none; }
   .rail-scroll::-webkit-scrollbar { display: none; }
   .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-  .community-rail .nav-link, .community-rail .header-submission, .community-rail .message-trigger, .rail-settings, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 8px; color: var(--muted); }
+  .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 8px; color: var(--muted); }
   .community-rail :deep(.rail-icon) { flex: none; width: var(--icon-size-nav); height: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-rail .rail-label { display: none; }
-  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .community-rail .message-trigger:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
-  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .message-trigger, .rail-settings):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"], .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after, .header-welfare[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
+  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .community-rail .message-count { top: 2px; right: 0; min-width: 16px; height: 18px; padding-inline: 3px; border: 2px solid var(--canvas); border-radius: 9px; font-size: 10px; line-height: 14px; }
-  .community-rail .messages-menu[open] > .message-trigger, .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
   .community-rail :deep(.tools-panel) { left: 76px; right: auto; top: 72px; max-height: calc(100dvh - 88px); }
-  .community-rail .message-popover { position: fixed; left: 76px; right: auto; max-width: calc(100vw - 88px); }
-  .community-rail .message-popover::before { inset: 0 auto 0 -12px; width: 12px; height: auto; }
   .rail-settings { margin-top: 8px; }
 }
 @media (max-width: 999px) {

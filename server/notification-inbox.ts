@@ -114,7 +114,7 @@ export async function handleNotifications(ctx: RequestContext): Promise<boolean>
       WHERE ${announcementScope} AND ($2::varchar IS NULL OR a.id<$2) ORDER BY a.id DESC LIMIT 31`, [owner, category === 'announcement' ? cursor : null])).rows
     const activityItems = category === 'announcement' ? [] : await packActivity(ctx, older.slice(0, pageSize), snapshot.visible)
     const items = [...activityItems, ...announcements.slice(0, pageSize).map(row => ({ id: row.id, type: 'announcement', title: row.title, text: row.text,
-      createdAt: row.updatedAt?.toISOString() || null, isRead: !!row.readId, url: '/community?tab=announcements' }))]
+      createdAt: row.updatedAt?.toISOString() || null, isRead: !!row.readId, url: '/messages?tab=announcement' }))]
     let announcementSnapshot: string | null = null
     const unreadIds = summary.rows[0]?.unreadIds
     if (!cursor && unreadIds?.length) {

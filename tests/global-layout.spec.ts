@@ -60,7 +60,7 @@ const pages = [
   { path: '/library', title: '我的作品' },
   { path: '/community', title: '社区' },
   { path: '/community?creator=layout-user', title: user.name },
-  { path: '/community?tab=announcements', title: '社区' },
+  { path: '/messages?tab=announcement', title: '消息' },
   { path: '/account', title: '账户设置' },
   { path: '/activities', title: '福利中心' },
   { path: '/admin', title: '管理后台' },
@@ -86,7 +86,10 @@ for (const width of [320, 390, 768, 1000, 1440]) {
       expect(content!.x + content!.width, target.path).toBeLessThanOrEqual(width)
       const path = new URL(target.path, 'http://localhost:18775').pathname
       const navigationPath = path.startsWith('/work/') ? '/discover' : path
-      if (['/discover', '/community', '/activities'].includes(navigationPath)) {
+      if (navigationPath === '/activities' && width >= 1000) {
+        await expect(page.locator('.header-welfare')).toHaveAttribute('aria-current', 'page')
+      }
+      if (['/discover', '/community'].includes(navigationPath)) {
         const navigation = page.getByRole('navigation', { name: width >= 1000 ? '主导航' : '手机导航', exact: true })
         const active = navigation.locator('a.active')
         await expect(active).toHaveCount(1)

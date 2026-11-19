@@ -132,13 +132,31 @@ test('settings logout confirms unsaved edits before signing out either session',
   await expect(page.getByRole('dialog')).not.toBeVisible()
 })
 
-test('homepage logout still works when no navigation is necessary', async ({ page }) => {
+test('community profile menu omits duplicate settings and logout while rail settings can sign out', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
   await page.goto('/discover')
-  await page.getByLabel('账号菜单', { exact: true }).click()
-  await page.locator('.account-popover').getByRole('button', { name: '退出登录', exact: true }).click()
+  await page.locator('.profile-toggle').hover()
+  const menu = page.locator('.account-popover')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('link', { name: '个人主页', exact: true })).toBeVisible()
+  await expect(menu.getByRole('link', { name: '账号设置', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('button', { name: '退出登录', exact: true })).toHaveCount(0)
+  await page.screenshot({ path: test.info().outputPath('community-profile-menu.png') })
+  await page.locator('.community-rail').getByRole('link', { name: '账号设置', exact: true }).click()
+  await page.locator('.settings-sidebar').getByRole('button', { name: '退出登录', exact: true }).click()
   await expect.poll(() => fixture.state.authenticated || fixture.state.accountAuthenticated).toBe(false)
-  await expect(page).toHaveURL(/\/discover$/)
+  await expect(page).toHaveURL(/\/account$/)
+})
+
+test('Studio retains account actions when the community rail is hidden', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.goto('/create/text')
+  await expect(page.locator('.studio-shell')).toBeVisible()
+  await expect(page.locator('.community-rail')).toBeHidden()
+  await page.locator('.profile-toggle').hover()
+  const menu = page.locator('.account-popover')
+  await expect(menu.getByRole('link', { name: '账号设置', exact: true })).toBeVisible()
+  await expect(menu.getByRole('button', { name: '退出登录', exact: true })).toBeVisible()
 })
 
 test('account panels fit desktop, tablet and narrow phones with accessible controls', async ({ page }) => {

@@ -58,7 +58,7 @@ export function notificationCategory(item: InboxNotification): 'announcement' | 
   return item.id.startsWith('redis:') ? 'activity' : 'announcement'
 }
 export function notificationDestination(item: InboxNotification): string {
-  if (notificationCategory(item) === 'announcement') return '/community?tab=announcements'
+  if (notificationCategory(item) === 'announcement') return '/messages?tab=announcement'
   if (item.url && /^\/(?:work\/|community(?:\?|$)|messages(?:\/|\?|$)|library(?:\?|$)|activities(?:\?|$)|account(?:\?|$))/.test(item.url)) return item.url
   return item.actor?.id ? `/community?creator=${encodeURIComponent(item.actor.id)}` : '/community'
 }

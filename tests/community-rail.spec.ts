@@ -5,10 +5,13 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 async function expectRail(page: Page) {
   const rail = page.getByRole('complementary', { name: '社区侧栏' })
   await expect(rail).toBeVisible()
-  await expect(rail.getByRole('navigation', { name: '主导航' }).getByRole('link')).toHaveCount(4)
+  await expect(rail.getByRole('navigation', { name: '主导航' }).getByRole('link')).toHaveCount(3)
   await expect(rail.getByRole('link', { name: '首页', exact: true })).toBeVisible()
   await expect(rail.getByTitle('社区工具', { exact: true })).toBeVisible()
-  await expect(rail.getByTitle('消息', { exact: true })).toBeVisible()
+  await expect(rail.getByTitle('消息', { exact: true })).toHaveCount(0)
+  await expect(rail.getByRole('link', { name: '福利中心', exact: true })).toHaveCount(0)
+  await expect(page.locator('.header-actions').getByTitle('消息', { exact: true })).toBeVisible()
+  await expect(page.locator('.header-actions').getByRole('link', { name: '福利中心', exact: true })).toBeVisible()
 }
 
 for (const initialPath of ['/discover', '/create/text']) {
@@ -30,6 +33,10 @@ for (const initialPath of ['/discover', '/create/text']) {
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(page.locator('.community-rail')).toBeHidden()
     await expect(page.locator('.mobile-community-header')).toBeVisible()
+    await expect(page.locator('.mobile-nav a[href="/messages"]')).toBeVisible()
+    await page.getByTitle('社区工具', { exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '社区工具', exact: true }).getByRole('link', { name: '福利中心', exact: true })).toHaveAttribute('href', '/activities')
+    await page.keyboard.press('Escape')
     await page.setViewportSize({ width: 1440, height: 1000 })
     await expectRail(page)
     await page.screenshot({ path: test.info().outputPath('community-rail-restored.png') })
@@ -61,8 +68,8 @@ for (const mode of ['light', 'dark']) {
     await page.goto('/discover')
     await expectRail(page)
     const rail = page.locator('.community-rail')
-    const controls = rail.locator('.nav-link, .tools-trigger, .header-submission, .message-trigger, .rail-settings')
-    await expect(controls).toHaveCount(8)
+    const controls = rail.locator('.nav-link, .tools-trigger, .header-submission, .rail-settings')
+    await expect(controls).toHaveCount(6)
     for (const control of await controls.all()) {
       const title = await control.getAttribute('title')
       expect(title).toBeTruthy()
@@ -80,15 +87,15 @@ for (const mode of ['light', 'dark']) {
     await expect(current).toHaveAttribute('aria-current', 'page')
     expect(await current.evaluate(element => getComputedStyle(element, '::after').display)).toBe('block')
     expect(await rail.locator('.header-submission').evaluate(element => getComputedStyle(element, '::after').content)).toBe('none')
-    await expect(rail.locator('.message-count')).toHaveText('99+')
-    const badge = (await rail.locator('.message-count').boundingBox())!
-    const trigger = (await rail.locator('.message-trigger').boundingBox())!
+    await expect(page.locator('.header-actions .message-count')).toHaveText('99+')
+    const badge = (await page.locator('.header-actions .message-count').boundingBox())!
+    const trigger = (await page.locator('.header-actions .message-trigger').boundingBox())!
     expect(badge.x + badge.width).toBeLessThanOrEqual(trigger.x + trigger.width)
     expect(badge.y).toBeGreaterThanOrEqual(trigger.y)
     await current.focus()
     await page.keyboard.press('Tab')
-    await expect(rail.getByRole('link', { name: '福利中心', exact: true })).toBeFocused()
-    const result = await new AxeBuilder({ page }).include('.community-rail').analyze()
+    await expect(rail.getByRole('link', { name: '社区', exact: true })).toBeFocused()
+    const result = await new AxeBuilder({ page }).include('.community-rail').include('.app-header').analyze()
     expect(result.violations.map(issue => ({ id: issue.id, nodes: issue.nodes.map(node => node.target) }))).toEqual([])
     await page.screenshot({ path: test.info().outputPath(`community-rail-${mode}.png`) })
     await rail.getByRole('link', { name: '账号设置', exact: true }).click()

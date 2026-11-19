@@ -17,14 +17,13 @@ for (const width of [1440, 390, 320]) {
       await page.route('**/api/security/**', async route => { await pending; await route.fallback() })
       await page.goto('/discover')
       if (width >= 1000) {
-        await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
-        await page.getByLabel('账号菜单', { exact: true }).click()
-        await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
+        await expect(page.locator('.profile-toggle')).toBeVisible()
+        await page.locator('.community-rail').getByRole('link', { name: '账号设置', exact: true }).click()
       } else await page.goto('/account?tab=privacy')
       await expect(page.locator('.privacy-settings')).toBeVisible()
       await expect(page.locator('.header-inner')).toBeHidden()
       if (width >= 1000) {
-        await expect(page.locator('.community-rail .nav-link')).toHaveCount(4)
+        await expect(page.locator('.community-rail .nav-link')).toHaveCount(3)
         await expect(page.locator('.community-rail').getByRole('link', { name: '首页', exact: true })).toBeVisible()
         expect(await page.locator('html').evaluate(element => getComputedStyle(element).getPropertyValue('--header-height'))).toBe('0px')
       } else await expect(page.locator('.mobile-community-header')).toBeVisible()
@@ -66,7 +65,7 @@ for (const width of [1440, 390, 320]) {
       if (width >= 1000) {
         await page.locator('.community-rail').getByRole('link', { name: '首页', exact: true }).click()
         await expect(page.getByRole('searchbox', { name: '搜索作品', exact: true })).toBeVisible()
-        await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
+        await expect(page.locator('.profile-toggle')).toBeVisible()
       }
       await page.goto('/create/text')
       await expect(page.locator('.studio-shell')).toBeVisible()

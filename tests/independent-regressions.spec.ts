@@ -89,20 +89,39 @@ test('pagination appends results and a new search discards the old cursor', asyn
   expect(unexpected).toEqual([])
 })
 
-test('community direct navigation and refresh preserve the announcements tab', async ({ page }) => {
-  const unexpected = await mockApp(page)
-  await page.route('**/api/announcements', route => route.fulfill({ json: {
-    items: [{ id: 'fixture-news', title: '回归测试公告', body: '公告正文', date: '2026-11-12' }],
+test('legacy community announcements redirect to the message center and survive refresh', async ({ page }) => {
+  const unexpected = await mockApp(page, true)
+  await page.route('**/api/notifications', route => route.fulfill({ json: {
+    items: [{ id: 'fixture-news', type: 'announcement', title: '回归测试公告', text: '公告正文', isRead: true }],
   } }))
   await page.goto('/community?tab=announcements')
   for (let pass = 0; pass < 2; pass++) {
-    await expect(page).toHaveURL(/\/community\?tab=announcements$/)
-    await expect(page.getByRole('heading', { name: '社区', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '社区公告', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    await page.locator('summary').filter({ hasText: '回归测试公告' }).click()
-    await expect(page.getByText('公告正文', { exact: true })).toBeVisible()
+    await expect(page).toHaveURL(/\/messages\?tab=announcement$/)
+    await expect(page.getByRole('heading', { name: '消息', exact: true })).toBeVisible()
+    await expect(page.getByRole('navigation', { name: '消息分类' }).getByRole('link', { name: '公告', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByRole('region', { name: '公告', exact: true })).toContainText('公告正文')
     if (pass === 0) await page.reload()
   }
+  expect(unexpected).toEqual([])
+})
+
+test('community shows creators without duplicate announcements or announcement requests', async ({ page }) => {
+  const unexpected = await mockApp(page, true), announcementRequests: string[] = []
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/announcements') announcementRequests.push(request.url()) })
+  await page.route('**/api/creators', route => route.fulfill({ json: { items: [{ ...user, count: 0 }] } }))
+  await page.goto('/community')
+  const creators = page.getByRole('region', { name: '社区创作者', exact: true })
+  await expect(creators).toContainText(user.name)
+  await expect(page.getByRole('region', { name: '社区公告', exact: true })).toHaveCount(0)
+  await expect(page.locator('.community-toolbar .tabs')).toHaveCount(0)
+  await expect(page.locator('.app-footer').getByRole('link', { name: '公告', exact: true })).toHaveAttribute('href', '/messages?tab=announcement')
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect(creators).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: test.info().outputPath(`community-creators-${width}.png`), fullPage: true })
+  }
+  expect(announcementRequests).toEqual([])
   expect(unexpected).toEqual([])
 })
 

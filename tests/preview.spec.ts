@@ -43,7 +43,7 @@ test('does not expose an administrator page to an ordinary member', async ({ pag
   await page.route('**/api/session', route => route.fulfill({ json: { user } }))
   await page.goto('/admin')
   await expect(page.getByRole('heading', { name: '需要审核员权限', exact: true })).toBeVisible()
-  await page.getByLabel('账号菜单', { exact: true }).click()
+  await page.locator('.profile-toggle').hover()
   await expect(page.getByRole('link', { name: '内容管理', exact: true })).toHaveCount(0)
 })
 
