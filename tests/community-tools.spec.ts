@@ -23,7 +23,7 @@ test('tools use real destinations and category counts without writing data', asy
     '发现': '/discover', '公告，2 条未读': '/community?tab=announcements', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
     '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '福利中心': '/activities',
-    '账号设置': '/account?tab=profile', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
+    '账号设置': '/account', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
     '主题外观': '/account?tab=theme', '关注申请': '/account?tab=following',
   }
   for (const [name, path] of Object.entries(destinations)) await expect(panel(page).getByRole('link', { name, exact: true })).toHaveAttribute('href', path)
@@ -116,13 +116,13 @@ test('keyboard, outside click and other header menus close the launcher predicta
 
 test('tool navigation and reload preserve the unsaved profile guard', async ({ page }) => {
   await toolsFixture(page)
-  await page.goto('/account')
+  await page.goto('/community?creator=fixtureAccountUser&edit=profile')
   await page.getByLabel('社区昵称', { exact: true }).fill('尚未保存的个人资料')
   await launcher(page).click()
   await panel(page).getByRole('link', { name: '收藏', exact: true }).click()
   await expect(panel(page)).not.toBeVisible()
   await page.getByRole('button', { name: '继续编辑', exact: true }).click()
-  await expect(page).toHaveURL(/\/account$/)
+  await expect(page).toHaveURL(/edit=profile$/)
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('尚未保存的个人资料')
   await launcher(page).click()
   const prompt = page.waitForEvent('dialog')
@@ -144,7 +144,7 @@ test('switching accounts closes tools and updates identity, privileges and unrea
   fixture.state.user = { ...fixture.state.user, id: 'secondAccount', isAdmin: false, isModerator: false, name: '另一个账号' }
   Object.assign(fixture.counts, { announcement: 0, activity: 0, messages: 0 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('另一个账号')
+  await expect(page.locator('.settings-main')).toContainText('关注与隐私')
   await expect(panel(page)).not.toBeVisible()
   await launcher(page).click()
   await expect(panel(page).getByRole('searchbox')).toHaveValue('')

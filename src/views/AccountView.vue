@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Check, ChevronDown, ChevronRight, Eye, EyeOff, Image, LogOut, Palette, Save, Search, Trash2, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
-import type { SessionUser } from '../data'
+import { ArrowLeft, ArrowRight, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import { site } from '../site'
-import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus, type LoginIdentitySelection } from '../state'
+import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import FollowRequests from '../components/FollowRequests.vue'
@@ -17,24 +16,22 @@ import ContentSkeleton from '../components/ContentSkeleton.vue'
 import LoginCharacters from '../components/LoginCharacters.vue'
 import AccountTurnstile from '../components/AccountTurnstile.vue'
 import { loginReturnPath } from '../login-navigation'
+import '../settings-tokens.css'
 
 interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean; walletEnabled?: boolean; points?: CommunityWallet | null }
 const route = useRoute()
 const router = useRouter()
-const settingTabs = ['profile', 'privacy', 'following', 'theme', 'security', 'balance']
-const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'profile'
+const settingTabs = ['privacy', 'following', 'theme', 'security', 'balance']
+const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'privacy'
 const tab = ref(readTab(route.query.tab))
 const mobileSettings = inject<ComputedRef<boolean>>('mobile-community', computed(() => false))
 const settingsDetail = computed(() => typeof route.query.tab === 'string' && settingTabs.includes(route.query.tab))
 const showPanel = computed(() => !mobileSettings.value || settingsDetail.value)
 const privacyPanel = ref<InstanceType<typeof AccountPrivacy>>(), privacyDirty = ref(false)
 const settingsQuery = ref(''), settingsNav = ref<HTMLElement>(), settingsMain = ref<HTMLElement>()
-const avatarInput = ref<HTMLInputElement>(), bannerInput = ref<HTMLInputElement>()
-const avatarFailed = ref(false), bannerFailed = ref(false)
 const leaveDialog = ref<HTMLDialogElement>()
 let resolveLeave: ((discard: boolean) => void) | undefined
 const settingsItems = [
-  { id: 'profile', label: '个人资料', icon: UserRound, group: '账号设置', keywords: '昵称 名称 头像 封面 简介 profile' },
   { id: 'privacy', label: '关注与隐私', icon: LockKeyhole, group: '账号设置', keywords: '关注 审批 粉丝 隐私 公开 privacy' },
   { id: 'security', label: '账号安全', icon: ShieldCheck, group: '账号设置', keywords: '密码 邮箱 验证 登录 设备 会话 security' },
   { id: 'balance', label: '我的账户', icon: Wallet, group: '账号设置', keywords: '账户中心 余额 充值 钱包 balance' },
@@ -45,13 +42,9 @@ const settingsGroups = computed(() => {
   return ['账号设置', '偏好设置'].map(label => ({ label, items: settingsItems.filter(item => item.group === label && (!query || (item.label + item.keywords).toLocaleLowerCase().includes(query))) })).filter(group => group.items.length)
 })
 const resetToken = ref(typeof route.query.reset === 'string' ? route.query.reset : undefined)
-const avatarId = ref<string | null>(null), bannerId = ref<string | null>(null)
-const avatarUrl = ref(''), bannerUrl = ref('')
 const identifier = ref('')
 const password = ref('')
 const showPassword = ref(false), isTyping = ref(false)
-const name = ref('')
-const bio = ref('')
 const error = ref('')
 const busy = ref(false)
 const status = ref<AccountStatus | null>(null), statusReady = ref(false)
@@ -63,22 +56,12 @@ const centerUrl = computed(() => accountCenterUrl())
 const registerUrl = computed(() => accountCenterUrl('register'))
 const recoveryUrl = computed(() => accountCenterUrl('forgot-password'))
 let active = true
-const saved = ref(false)
 const account = ref<Account | null>(null)
-const uploading = ref<'avatar' | 'banner' | null>(null)
-const baseline = ref(JSON.stringify(['', '', null, null]))
-let profileOwner: string | undefined, profileOperation = 0
-let profileUpload: AbortController | undefined
-const profileValue = () => JSON.stringify([name.value, bio.value, avatarId.value, bannerId.value])
-const dirty = computed(() => profileValue() !== baseline.value)
 function navigateTab(value: string) {
   if (value !== tab.value || !showPanel.value) void router.push({ path: '/account', query: { tab: value } })
 }
-function revealProfileField(event: FocusEvent) {
-  if (event.target instanceof HTMLElement) event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-}
 function confirmLeave() {
-  if (!session.user || (!dirty.value && !uploading.value && !privacyDirty.value)) return true
+  if (!session.user || !privacyDirty.value) return true
   if (resolveLeave) return false
   leaveDialog.value?.showModal()
   return new Promise<boolean>(resolve => { resolveLeave = resolve })
@@ -86,15 +69,13 @@ function confirmLeave() {
 function finishLeave(discard: boolean) {
   if (discard) {
     privacyPanel.value?.discard(); privacyDirty.value = false
-    profileOperation++; profileUpload?.abort(); profileUpload = undefined
-    restoreProfile(session.user); busy.value = false; uploading.value = null; saved.value = false
   }
   leaveDialog.value?.close(); resolveLeave?.(discard); resolveLeave = undefined
 }
 onBeforeRouteLeave(confirmLeave)
 onBeforeRouteUpdate(to => !settingsDetail.value && to.query.tab === tab.value ? true : confirmLeave())
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (session.user && (dirty.value || uploading.value || privacyDirty.value)) { event.preventDefault(); event.returnValue = '' }
+  if (session.user && privacyDirty.value) { event.preventDefault(); event.returnValue = '' }
 }
 async function signOutFromSettings() {
   if (busy.value || !(await confirmLeave())) return
@@ -102,21 +83,13 @@ async function signOutFromSettings() {
   try { await logout() } catch (cause) { if (active) error.value = errorMessage(cause) }
   finally { if (active) busy.value = false }
 }
-function restoreProfile(user: SessionUser | null) {
-  name.value = user?.name || user?.username || ''; bio.value = user?.bio || ''
-  avatarId.value = user?.avatarId || null; bannerId.value = user?.bannerId || null
-  avatarUrl.value = user?.avatarUrl || ''; bannerUrl.value = user?.bannerUrl || ''
-  baseline.value = profileValue()
-}
-watch(() => session.user, user => {
-  if (user?.id !== profileOwner) {
-    if (resolveLeave) finishLeave(false)
-    profileUpload?.abort(); profileUpload = undefined
-    profileOwner = user?.id; profileOperation++
-    account.value = null; saved.value = false; error.value = ''; busy.value = false; uploading.value = null
-    restoreProfile(user)
-  } else if (!busy.value && !dirty.value) restoreProfile(user)
-}, { immediate: true, flush: 'sync' })
+watch(() => session.user?.id, () => {
+  if (resolveLeave) finishLeave(false)
+  account.value = null; error.value = ''; busy.value = false
+}, { flush: 'sync' })
+watch([() => session.user?.id, () => route.query.tab], ([id, value]) => {
+  if (id && value === 'profile') void router.replace({ path: '/community', query: { creator: id, edit: 'profile' } })
+}, { immediate: true })
 watch(() => route.query.tab, async (value, previous) => {
   tab.value = readTab(value)
   if (!mobileSettings.value) return
@@ -134,8 +107,6 @@ watch([tab, () => session.user?.id, settingsQuery], async () => {
   const nav = settingsNav.value, item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
   if (nav && item && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = item.offsetLeft - nav.offsetLeft - 8
 }, { immediate: true })
-watch(avatarUrl, () => { avatarFailed.value = false })
-watch(bannerUrl, () => { bannerFailed.value = false })
 watch(() => session.user?.id, (id, previous) => {
   if (!id && previous && active && !statusReady.value) void loadStatus()
 })
@@ -190,9 +161,10 @@ onMounted(async () => {
     else await loadStatus()
   } catch (cause) { error.value = errorMessage(cause) }
 })
-onBeforeUnmount(() => { active = false; profileOperation++; profileUpload?.abort(); resolveLeave?.(false); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
+onBeforeUnmount(() => { active = false; resolveLeave?.(false); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
 async function signIn(selectionId?: string) {
   if (busy.value || (identitySelection.value && !selectionId)) return
+  const returnTo = loginReturnPath(route.query.returnTo), legacyProfile = route.query.tab === 'profile' && !route.query.returnTo
   if (identitySelection.value && identitySelection.value.expiresAt <= Date.now() / 1000) {
     await restartLogin(); error.value = '账号选择已过期，请重新登录。'; return
   }
@@ -203,7 +175,7 @@ async function signIn(selectionId?: string) {
       login: identifier.value.trim(), password: password.value, turnstileToken: challengeToken.value,
       ...(requiresVerification.value ? { code: verificationCode.value.trim() } : {}),
       ...(selectionId ? { selectionId } : {}),
-      returnTo: loginReturnPath(route.query.returnTo),
+      returnTo,
     })
     password.value = ''
     if (!active) return
@@ -211,7 +183,9 @@ async function signIn(selectionId?: string) {
     identitySelection.value = null
     if (result.requires2fa) { requiresVerification.value = true; return }
     verificationCode.value = ''
-    const destination = loginReturnPath(route.query.returnTo)
+    const destination = legacyProfile && session.user
+      ? `/community?creator=${encodeURIComponent(session.user.id)}&edit=profile`
+      : returnTo
     if (destination.split('?')[0] === '/account') await loadAccount()
     await router.replace(destination)
   } catch (cause) {
@@ -226,41 +200,6 @@ async function restartLogin() {
   requiresVerification.value = false; verificationCode.value = ''; error.value = ''
   challengeToken.value = ''; challengeVersion.value++
   try { await accountApi('login-cancel', {}) } catch (cause) { error.value = errorMessage(cause) }
-}
-async function saveProfile() {
-  if (busy.value || !session.user || !name.value.trim()) return
-  const owner = session.user.id, operation = ++profileOperation
-  const current = () => active && operation === profileOperation && session.user?.id === owner
-  busy.value = true
-  saved.value = false
-  error.value = ''
-  try {
-    const result = await api<{ user: SessionUser }>('/api/profile', { method: 'PATCH', body: { name: name.value.trim(), bio: bio.value.trim(), avatarId: avatarId.value, bannerId: bannerId.value } })
-    if (!current()) return
-    await loadSession(true)
-    if (!current()) return
-    const updated = result.user
-    session.user = { ...session.user!, name: updated.name, bio: updated.bio, avatarId: updated.avatarId, bannerId: updated.bannerId, avatarUrl: updated.avatarUrl, bannerUrl: updated.bannerUrl }
-    restoreProfile(session.user)
-    saved.value = true
-  } catch (cause) { if (current()) error.value = errorMessage(cause) }
-  finally { if (current()) busy.value = false }
-}
-async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
-  const input = event.target as HTMLInputElement, file = input.files?.[0]
-  if (!file || busy.value || !session.user) return
-  const owner = session.user.id, operation = ++profileOperation
-  const current = () => active && operation === profileOperation && session.user?.id === owner
-  busy.value = true; uploading.value = field; error.value = ''; saved.value = false
-  const controller = new AbortController(); profileUpload = controller
-  try {
-    if (!file.type.startsWith('image/')) throw new Error('请选择图片。')
-    const uploaded = await uploadFile(file, controller.signal)
-    if (!current()) return
-    if (field === 'avatar') { avatarId.value = uploaded.id; avatarUrl.value = uploaded.url }
-    else { bannerId.value = uploaded.id; bannerUrl.value = uploaded.url }
-  } catch (cause) { if (current()) error.value = errorMessage(cause) }
-  finally { if (profileUpload === controller) profileUpload = undefined; if (current()) { busy.value = false; uploading.value = null }; input.value = '' }
 }
 </script>
 
@@ -307,38 +246,14 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
-            <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :data-setting="item.id" :class="{ active: showPanel && tab === item.id }" :aria-current="showPanel && tab === item.id ? 'page' : undefined" :aria-pressed="showPanel && tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /><ChevronRight class="settings-nav-chevron" :size="16" aria-hidden="true" /></button>
+            <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :data-setting="item.id" :class="{ active: showPanel && tab === item.id }" :aria-current="showPanel && tab === item.id ? 'page' : undefined" :aria-pressed="showPanel && tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /><ChevronRight class="settings-nav-chevron" :size="16" aria-hidden="true" /></button>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
         </nav>
         <div class="settings-sidebar-footer"><a v-if="centerUrl" :href="centerUrl" class="settings-nav-item" target="_blank" rel="noopener noreferrer"><ArrowUpRight :size="18" aria-hidden="true" /><span>章鱼账户中心</span></a><button type="button" class="settings-nav-item signout" :disabled="busy" @click="signOutFromSettings"><LogOut :size="18" aria-hidden="true" /><span>退出登录</span></button></div>
       </aside>
       <div v-show="showPanel" ref="settingsMain" class="settings-main" tabindex="-1">
-        <section v-if="tab === 'profile'" class="panel-section profile-section">
-          <div class="section-heading profile-heading"><div><h2>个人资料</h2><p class="form-note">设置你在社区中展示的公开信息。</p></div></div>
-          <form id="profile-form" class="profile-form" @submit.prevent="saveProfile">
-            <div class="profile-fields" @focusin="revealProfileField">
-            <div class="profile-media">
-              <div class="profile-media-row">
-                <div class="profile-row-label"><h3>头像</h3><p>展示在作品与评论中</p></div>
-                <div class="profile-avatar-area"><img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" class="profile-avatar" @error="avatarFailed = true" /><div v-else class="profile-avatar profile-placeholder" :aria-label="avatarFailed ? '头像暂时无法显示' : '尚未设置头像'">{{ (name || session.user.username).slice(0, 1) }}</div><div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="avatarInput?.click()"><Upload :size="16" aria-hidden="true" />更换头像</button><button v-if="avatarId" type="button" class="icon-button" aria-label="移除头像" title="移除头像" :disabled="busy" @click="avatarId = null; avatarUrl = ''; saved = false"><Trash2 :size="16" aria-hidden="true" /></button></div></div>
-              </div>
-              <div class="profile-media-row">
-                <div class="profile-row-label"><h3>主页封面</h3><p>用于你的个人主页</p></div>
-                <div class="profile-cover"><a v-if="bannerUrl && !bannerFailed" :href="bannerUrl" target="_blank" rel="noopener noreferrer" class="profile-cover-thumbnail" aria-label="查看完整封面" title="查看完整封面"><img :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /></a><div v-else class="profile-cover-empty" role="img" :aria-label="bannerFailed ? '封面暂时无法显示' : '尚未设置封面'"><Image :size="24" aria-hidden="true" /></div><div class="profile-media-actions"><button type="button" class="button subtle cover-button btn" :disabled="busy" @click="bannerInput?.click()"><Image :size="16" aria-hidden="true" />更换封面</button><button v-if="bannerId" type="button" class="icon-button" aria-label="移除封面" title="移除封面" :disabled="busy" @click="bannerId = null; bannerUrl = ''; saved = false"><Trash2 :size="16" aria-hidden="true" /></button></div></div>
-              </div>
-            </div>
-            <input id="profile-avatar" ref="avatarInput" hidden type="file" aria-label="头像" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" />
-            <input id="profile-banner" ref="bannerInput" hidden type="file" aria-label="主页封面" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" />
-            <div class="profile-field-group"><label class="field"><span>社区昵称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" aria-describedby="profile-name-help" @input="saved = false" /></label><div class="field-caption"><p id="profile-name-help">用于作品、评论和个人主页，不影响章鱼账号登录。</p><span>{{ name.length }}/50</span></div></div>
-            <div class="profile-field-group"><label class="field"><span>个人简介</span><textarea v-model="bio" class="control profile-bio" rows="3" maxlength="1500" :disabled="busy" aria-describedby="profile-bio-help" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label><div class="field-caption"><p id="profile-bio-help">让大家更了解你。</p><span>{{ bio.length }}/1500</span></div></div>
-            <div class="profile-identity"><dl><dt>登录用户名</dt><dd>{{ session.user.username }}</dd><template v-if="session.user.accountId"><dt>章鱼号</dt><dd>{{ session.user.accountId }}</dd></template></dl><a v-if="centerUrl" :href="centerUrl" class="text-link" target="_blank" rel="noopener noreferrer">管理账号<ArrowUpRight :size="14" aria-hidden="true" /></a></div>
-            <details class="profile-preview"><summary><Eye :size="16" aria-hidden="true" />预览个人资料<ChevronDown class="preview-chevron" :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name || session.user.username }}</strong><span v-if="session.user.accountId">章鱼号：{{ session.user.accountId }}</span><p>{{ bio || '还没有填写个人简介。' }}</p></div></details>
-            </div>
-            <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved" :size="15" aria-hidden="true" /><span v-else class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传' + (uploading === 'avatar' ? '头像…' : '封面…') : busy ? '正在保存资料…' : saved ? '资料已保存' : dirty ? '有未保存的修改' : '资料已同步' }}</p><button class="button primary btn" :disabled="busy"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存资料' }}</button></footer>
-          </form>
-        </section>
-        <AccountPrivacy v-else-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
+        <AccountPrivacy v-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
         <FollowRequests v-else-if="tab === 'following'" />
         <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
@@ -351,18 +266,23 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         </div>
       </div>
     </div>
-    <dialog v-if="session.user" ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">{{ privacyDirty ? '保留隐私设置修改？' : '保留资料修改？' }}</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>{{ privacyDirty ? '隐私设置尚未保存。离开后，未保存的修改将丢失。' : '资料尚未确认保存。离开后，未保存的文字和图片选择将丢失。' }}</p><div class="table-actions profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
+    <dialog v-if="session.user" ref="leaveDialog" class="compact-dialog" aria-labelledby="privacy-leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="privacy-leave-heading">保留隐私设置修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>隐私设置尚未保存。离开后，未保存的修改将丢失。</p><div class="table-actions settings-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
     </div></div>
   </div>
 </template>
 
 <style scoped>
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · nav: kept · signature: compact settings rows · states: loading empty error full · modes: light+dark · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, preserve the community account model and existing navigation */
+/* Hallmark · waive 24b · existing balance action uses 6px by 10px padding · DESIGN.md preserves the compact account-center action while this redesign focuses on settings */
+/* Hallmark · dismissed 49 · identity-choice contains a username and account_label on separate lines; the existing identity picker preserves both while auth-button actions stay on one line */
 .identity-choice { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; overflow-wrap: anywhere; white-space: normal; gap: 4px; padding: 12px 16px; }
-.settings-page { max-width: 1200px; }
-.settings-page .page-heading h1 { font-size: 24px; line-height: 32px; }
-.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 48px; align-items: start; }
+.settings-page { max-width: var(--settings-width); padding-top: var(--settings-space-section); }
+.settings-page .page-heading { min-height: 32px; margin-bottom: var(--settings-space-section); }
+.settings-page .page-heading h1 { font-size: 24px; line-height: 32px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: var(--settings-space-layout); align-items: start; }
 .settings-sidebar { position: sticky; top: 24px; min-width: 0; }
-.settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); border-color: var(--control-border); }
+.settings-search { width: 100%; min-height: var(--settings-control-height); margin-bottom: var(--settings-space-section); background: var(--surface); border-color: var(--control-border); }
 .account-tabs { display: grid; gap: 24px; min-width: 0; }
 .settings-nav-group { display: grid; gap: 4px; }
 .settings-nav-group h2 { margin: 0 12px 8px; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
@@ -370,87 +290,41 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .settings-nav-item > span:first-of-type { flex: 1; }
 .settings-nav-item > svg { flex-shrink: 0; }
 .settings-nav-item:hover { background: var(--surface); color: var(--ink); }
+.settings-nav-item { white-space: nowrap; }
+.settings-nav-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .settings-nav-item.active { background: var(--surface-soft); color: var(--ink); }
 .settings-nav-item.active::after { content: ''; width: 12px; height: 2px; flex: none; border-radius: 1px; background: currentColor; }
 .settings-nav-chevron { display: none; }
-.draft-dot, .save-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex-shrink: 0; }
-.save-dot { background: var(--green); }
-.save-dot.dirty { background: var(--amber); }
+.draft-dot { width: 12px; height: 2px; border-radius: 1px; background: var(--amber); flex-shrink: 0; }
 .settings-sidebar-footer { display: grid; gap: 4px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
 .settings-sidebar-footer .signout { color: var(--danger); }
 .settings-no-results { display: grid; gap: 12px; padding: 16px 12px; color: var(--muted); }
 .settings-no-results .text-link { justify-self: start; min-height: 44px; }
-.settings-main { min-width: 0; max-width: 760px; }
+.settings-main { min-width: 0; }
 .settings-main:focus { outline: none; }
+.settings-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.panel-section) { border-top: 0; padding-top: 0; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading) { align-items: flex-start; margin-bottom: 24px; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading h2) { font-size: 20px; line-height: 28px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading) { align-items: flex-start; margin-bottom: var(--settings-space-group); }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading h2) { font-size: 20px; line-height: 28px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading .form-note) { margin-top: 8px; font-size: 14px; line-height: 20px; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: 48px; font-size: 16px; background: var(--surface); border-radius: 6px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: var(--settings-control-height); font-size: 16px; background: var(--surface); border-radius: 6px; }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.button) { min-height: 44px; }
-.profile-section { padding-top: 0; border: 0; }
-.profile-heading .form-note { margin-top: 8px; font-size: 14px; }
-.profile-form { display: flex; flex-direction: column; max-height: calc(100dvh - 220px); min-height: 0; }
-.profile-fields { display: grid; gap: 24px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 24px 0; scroll-padding-block: 16px; }
-.profile-media { display: grid; border-block: 1px solid var(--border); }
-.profile-media-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: center; gap: 24px; padding-block: 16px; }
-.profile-media-row + .profile-media-row { border-top: 1px solid var(--border); }
-.profile-row-label h3 { font-size: 14px; line-height: 20px; font-weight: 500; }
-.profile-row-label p { color: var(--muted); font-size: 12px; line-height: 20px; margin-top: 4px; }
-.profile-avatar-area, .profile-cover { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; min-width: 0; }
-.profile-avatar { width: 64px; height: 64px; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-soft); }
-.profile-placeholder { display: grid; place-items: center; font-size: 24px; color: var(--ink); }
-.profile-cover-thumbnail, .profile-cover-empty { display: grid; place-items: center; width: 112px; height: 64px; flex: none; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
-.profile-cover-thumbnail { display: block; }
-.profile-cover-thumbnail img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
-.profile-media-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.profile-media-actions .icon-button { width: 44px; height: 44px; border-color: transparent; background: transparent; color: var(--muted); }
-.profile-media-actions .icon-button:hover { color: var(--danger); background: var(--danger-soft); }
-.profile-field-group { display: grid; gap: 8px; min-width: 0; }
-.field-caption { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; color: var(--muted); font-size: 12px; line-height: 20px; }
-.field-caption > span { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.profile-form .control { background: var(--surface); }
-.profile-bio { min-height: 96px; }
-.profile-identity { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; padding: 16px; background: var(--surface); border-radius: 6px; }
-.profile-identity dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 24px; margin: 0; min-width: 0; font-size: 12px; line-height: 20px; }
-.profile-identity dt { color: var(--muted); }
-.profile-identity dd { margin: 0; overflow-wrap: anywhere; }
-.profile-identity .text-link { min-height: 44px; color: var(--ink); }
-.profile-preview { border-bottom: 1px solid var(--border); }
-.profile-preview summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 12px 0; cursor: pointer; list-style: none; color: var(--muted); }
-.profile-preview summary::-webkit-details-marker { display: none; }
-.profile-preview summary:hover { color: var(--ink); }
-.preview-chevron { margin-left: auto; color: var(--muted); }
-.profile-preview[open] .preview-chevron { transform: rotate(180deg); }
-.profile-preview-body { display: grid; gap: 8px; padding: 16px; margin-bottom: 16px; background: var(--surface); border-radius: 6px; overflow-wrap: anywhere; }
-.profile-preview-body > strong { font-size: 18px; font-weight: 500; }
-.profile-preview-body > span { color: var(--muted); font-size: 12px; }
-.profile-preview-body > p { white-space: pre-wrap; }
-.profile-savebar { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; background: var(--canvas); border-top: 1px solid var(--border); }
-.profile-form :is(input, textarea, summary, a, button) { scroll-margin-block: 16px; }
-.profile-save-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.profile-save-status > svg { color: var(--green); }
-.profile-savebar .button { min-height: 44px; }
-.profile-leave-actions { justify-content: end; flex-wrap: wrap; }
+.settings-leave-actions { justify-content: end; flex-wrap: wrap; }
 .balance-settings { display: grid; gap: 16px; }
 .balance-settings > .panel-section { padding-top: 0; }
 .balance-settings .balance-panel { display: flex; justify-content: space-between; align-items: center; gap: 12px 24px; padding: 0 0 12px; background: transparent; border-radius: 0; }
-.balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary .form-note { margin-top: 4px; }
+.balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary h2 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }.balance-summary .form-note { margin-top: 4px; }
 .account-balance { font-size: 20px; line-height: 28px; margin: 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 @media (max-width: 639px) {
-  .profile-media-row { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .profile-row-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
-  .profile-row-label p { margin-top: 0; }
-  .profile-savebar .button { margin-left: auto; }
   .balance-settings .balance-panel { padding-bottom: 16px; }.balance-actions .button, .balance-actions .icon-button { min-height: 44px; }
 }
 
-.auth-page { --canvas: #fff; --surface: #fff; --surface-soft: #f8fafc; --ink: #101828; --muted: #667085; --border: #e4e7ec; --blue: #3f51b5; --blue-hover: #34449b; --blue-soft: #eef0fb; --action: var(--blue); --action-ink: #fff; --bg: #fff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100svh; background: #fff; color: var(--ink); color-scheme: light; }
-.auth-visual { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; min-width: 0; gap: 40px; padding: 48px; overflow: hidden; background: linear-gradient(135deg, #87909f, #6b7280 50%, #4b5563); color: #fff; }
+.auth-page { --canvas: var(--auth-canvas); --surface: var(--auth-canvas); --surface-soft: var(--auth-surface-soft); --ink: var(--auth-ink); --muted: var(--auth-muted); --border: var(--auth-border); --blue: var(--auth-primary); --blue-hover: var(--auth-primary-hover); --blue-soft: var(--auth-primary-soft); --action: var(--blue); --action-ink: var(--auth-canvas); --bg: var(--auth-canvas); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100svh; background: var(--auth-canvas); color: var(--ink); color-scheme: light; }
+.auth-visual { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; min-width: 0; gap: 40px; padding: 48px; overflow: hidden; background: linear-gradient(135deg, var(--auth-visual-start), var(--auth-visual-mid) 50%, var(--auth-visual-end)); color: var(--auth-canvas); }
 .auth-brand { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; max-width: 100%; font-size: 20px; font-weight: 700; line-height: 28px; }
 .auth-brand > span { min-width: 0; overflow-wrap: anywhere; }
-.auth-brand-mark { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: #ffffff1a; }
+.auth-brand-mark { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--auth-brand-wash); }
 .auth-visual > :deep(.login-characters) { align-self: center; margin-block: 40px; }
 .auth-visual-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 32px; font-size: 12px; }
 .auth-visual-footer a { display: inline-flex; align-items: center; min-height: 44px; }
@@ -459,7 +333,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .auth-form { width: 100%; max-width: 420px; }
 .auth-mobile-brand { display: none; }
 .auth-heading { justify-content: center; min-height: 0; margin-bottom: 40px; text-align: center; }
-.auth-heading h1 { font-size: 30px; line-height: 40px; font-weight: 700; }
+.auth-heading h1 { font-size: 30px; line-height: 40px; font-weight: 700; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .auth-heading p { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 24px; }
 .connection-state { margin-bottom: 24px; color: var(--muted); font-size: 14px; line-height: 24px; }
 .connection-state p { margin: 0; }
@@ -471,7 +345,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .auth-login-form { display: flex; flex-direction: column; gap: 24px; }
 .auth-form .field { gap: 8px; font-size: 14px; color: var(--ink); }
-.auth-form .control { width: 100%; min-width: 0; height: 48px; min-height: 48px; padding: 10px 18px; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: var(--ink); font-size: 16px; line-height: 24px; }
+.auth-form .control { width: 100%; min-width: 0; height: 48px; min-height: 48px; padding: var(--auth-control-padding); border: 1px solid var(--border); border-radius: 999px; background: var(--auth-canvas); color: var(--ink); font-size: 16px; line-height: 24px; }
 .auth-form .control::placeholder { color: var(--muted); }
 .auth-form .control:focus { border-color: var(--focus-ring); }
 .auth-password { position: relative; display: block; width: 100%; }
@@ -480,31 +354,31 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .auth-password-toggle:hover { background: transparent; color: var(--ink); }
 .login-options { display: flex; justify-content: flex-end; min-height: 44px; }
 .forgot-password { min-height: 44px; font-size: 14px; }
-.auth-button { position: relative; display: flex; justify-content: center; width: 100%; height: 48px; min-height: 48px; padding: 8px 24px; border: 1px solid #dce1eb; border-radius: 999px; overflow: hidden; background: #fff; color: #101828; font-size: 16px; font-weight: 500; }
+.auth-button { position: relative; display: flex; justify-content: center; width: 100%; height: 48px; min-height: 48px; padding: 8px 24px; border: 1px solid var(--auth-button-border); border-radius: 999px; overflow: hidden; background: var(--auth-canvas); color: var(--auth-ink); font-size: 16px; font-weight: 500; white-space: nowrap; }
 .auth-button-label { display: inline-block; transition: transform 300ms ease-out, opacity 300ms ease-out; }
-.auth-button-hover { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; gap: 8px; border-radius: inherit; background: var(--blue); color: #fff; opacity: 0; transition: opacity 300ms ease-out; pointer-events: none; }
-.auth-button:not(:disabled):is(:hover, :focus-visible) .auth-button-label { transform: translateX(48px); opacity: 0; }
-.auth-button:not(:disabled):is(:hover, :focus-visible) .auth-button-hover { opacity: 1; }
-.auth-octopus { align-items: center; gap: 10px; border-color: var(--blue); background: var(--blue); color: #fff; font-weight: 600; }
-.auth-octopus:not(:disabled):is(:hover, :focus-visible) { border-color: var(--blue-hover); background: var(--blue-hover); }
+.auth-button-hover { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; gap: 8px; border-radius: inherit; background: var(--blue); color: var(--auth-canvas); opacity: 0; transition: opacity 300ms ease-out; pointer-events: none; }
+.auth-button:enabled:is(:hover, :focus-visible) .auth-button-label { transform: translateX(48px); opacity: 0; }
+.auth-button:enabled:is(:hover, :focus-visible) .auth-button-hover { opacity: 1; }
+.auth-octopus { align-items: center; gap: var(--auth-brand-gap); border-color: var(--blue); background: var(--blue); color: var(--auth-canvas); font-weight: 600; }
+.auth-octopus:enabled:is(:hover, :focus-visible) { border-color: var(--blue-hover); background: var(--blue-hover); }
 .auth-octopus-mark { flex: none; width: 24px; height: 24px; border-radius: 6px; object-fit: cover; }
-.auth-browse { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 32px; color: var(--muted); font-size: 14px; line-height: 24px; }
+.auth-browse { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: var(--auth-link-gap); margin-top: 32px; color: var(--muted); font-size: 14px; line-height: 24px; }
 .auth-browse a { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--ink); font-weight: 500; }
 .auth-browse a:hover { text-decoration: underline; text-underline-offset: 4px; }
 .auth-back { min-height: 44px; margin-bottom: 16px; font-size: 14px; }
-.auth-form > .notice-inline { margin: 0 0 24px; padding: 12px 16px; border: 1px solid #fecdca; border-radius: 8px; background: #fff4f3; color: #b42318; }
+.auth-form > .notice-inline { margin: 0 0 24px; padding: 12px 16px; border: 1px solid var(--auth-notice-border); border-radius: 8px; background: var(--auth-notice-bg); color: var(--auth-notice-ink); }
 .auth-form :deep(.password-recovery) { max-width: none; padding: 0; }
 .auth-form :deep(.password-recovery h2) { display: none; }
-.auth-form :deep(.password-recovery .control) { border-radius: 999px; background: #fff; font-size: 16px; }
+.auth-form :deep(.password-recovery .control) { border-radius: 999px; background: var(--auth-canvas); font-size: 16px; }
 .auth-form > .panel-section { margin: 0; padding: 0; border: 0; }
 @media (max-width: 1023px) {
   .auth-page { grid-template-columns: minmax(0, 1fr); }
   .auth-visual { display: none; }
   .auth-panel { min-height: 100svh; padding: 40px 24px; }
   .auth-mobile-brand { display: flex; justify-content: center; margin-bottom: 48px; color: var(--ink); }
-  .auth-mobile-brand .auth-brand-mark { background: #f2f4f7; }
+  .auth-mobile-brand .auth-brand-mark { background: var(--auth-brand-mobile); }
 }
-@media (prefers-reduced-motion: reduce) { .auth-button-label, .auth-button-hover { transition: none; }.auth-button:not(:disabled):is(:hover, :focus-visible) .auth-button-label { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .auth-button-label, .auth-button-hover { transition: none; }.auth-button:enabled:is(:hover, :focus-visible) .auth-button-label { transform: none; } }
 @media (max-width: 639px) {
   .auth-panel { padding: 32px 24px; }
   .auth-heading { margin-bottom: 32px; }
@@ -524,7 +398,6 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
   .settings-sidebar-footer { margin-top: 32px; border-top: 0; padding-top: 0; }
   .settings-sidebar-footer .settings-nav-item { min-height: 48px; border-bottom: 0; }
   .settings-main { width: 100%; margin-inline: auto; }
-  .profile-form { max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 128px); }
   .balance-settings { gap: 8px; }
   .balance-settings .balance-panel { gap: 8px; padding-bottom: 4px; }
   .balance-actions { flex: none; gap: 4px; }

@@ -16,6 +16,7 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
   }
   const mutations: AccountMutation[] = []
   const reads: string[] = []
+  let privacy = { isLocked: false, autoAcceptFollowed: false, followApprovalLocalSeconds: null, followingVisibility: 'public', followersVisibility: 'public' }
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
     if (request.method() === 'GET') reads.push(path)
@@ -24,6 +25,11 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
       user: state.authenticated ? state.user : null, csrfToken: 'unified-account-fixture',
       authentication: 'zhangyu', accountUrl,
     } })
+    if (path === `/api/users/${state.user.id}`) return route.fulfill({ json: { user: { ...state.user, worksCount: 0, followingCount: 0, followersCount: 0, receivedLikesCount: 0 } } })
+    if (path === '/api/account/privacy') {
+      if (request.method() === 'PATCH') privacy = { ...privacy, ...request.postDataJSON() }
+      return route.fulfill({ json: { settings: privacy, version: 'fixture-version' } })
+    }
     if (path === '/api/new-api/status') return route.fulfill({ json: { success: true, data: {
       enabled: true, configured: true, publicUrl: accountUrl, passwordLoginEnabled: state.passwordLoginEnabled,
       turnstileSiteKey: state.turnstileSiteKey,

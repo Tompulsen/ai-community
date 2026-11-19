@@ -17,7 +17,7 @@ import { studioSidebarWidth } from './studio-preferences'
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const accountSettings = computed(() => route.path === '/account' && !!session.user)
-const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['profile', 'privacy', 'following', 'theme', 'security', 'balance'].includes(route.query.tab))
+const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['privacy', 'following', 'theme', 'security', 'balance'].includes(route.query.tab))
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)

@@ -11,6 +11,8 @@ import { api, errorMessage, loadSession, queryString, session } from '../state'
 import FollowButton from '../components/FollowButton.vue'
 import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
 import ProfileWorkControls, { type ProfileWorkFilters } from '../components/ProfileWorkControls.vue'
+import ProfileEditor from '../components/ProfileEditor.vue'
+import type { SessionUser } from '../data'
 import { confirmStudioDelete } from '../studio-confirm'
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const route = useRoute()
@@ -28,6 +30,12 @@ const peopleDialog = ref<HTMLDialogElement>(), peopleMode = ref<'followers' | 'f
 const peopleLoading = ref(false), peopleError = ref('')
 const removeDialog = ref<HTMLDialogElement>(), removing = ref<Creator | null>(null), removeBusy = ref(false)
 const isOwnProfile = computed(() => Boolean(creator.value && creator.value.id === session.user?.id))
+const editingProfile = computed(() => isOwnProfile.value && route.query.edit === 'profile')
+const profileEditLink = computed(() => ({ path: '/community', query: { ...route.query, creator: creatorId.value, edit: 'profile' } }))
+function profileSaved(user: SessionUser) {
+  if (creator.value?.id === user.id && user.id === session.user?.id)
+    Object.assign(creator.value, { name: user.name, bio: user.bio, avatarUrl: user.avatarUrl, bannerUrl: user.bannerUrl })
+}
 const collectionPrivate = computed(() => profileTab.value !== 'works' && !isOwnProfile.value)
 const collectionLabel = computed(() => profileTabs.find(item => item.value === profileTab.value)!.label)
 const selectedItems = computed(() => works.value.filter(work => work.owned && selectedWorks.value.has(work.id)))
@@ -193,20 +201,20 @@ async function removeFollower() {
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
     <template v-else-if="creatorId">
       <template v-if="creator">
-        <section v-if="mobile" class="mobile-profile" aria-label="个人资料">
+        <section v-if="mobile && !editingProfile" class="mobile-profile" aria-label="个人资料">
           <div class="profile-hero"><img v-if="creator.bannerUrl" class="profile-hero-banner" :src="creator.bannerUrl" alt="" /><div class="profile-hero-identity"><span class="avatar blue"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></span><div><h1>{{ creator.name || creator.username }}</h1><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
-          <div class="mobile-profile-body"><div class="mobile-profile-stats"><button type="button" aria-label="查看关注" @click="openPeople('following')"><strong>{{ creator.followingCount ?? 0 }}</strong>关注</button><button type="button" aria-label="查看粉丝" @click="openPeople('followers')"><strong>{{ creator.followersCount ?? 0 }}</strong>粉丝</button><span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong>获赞</span><RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="14" />编辑资料</RouterLink></div>
-            <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><RouterLink v-else-if="isOwnProfile" to="/account?tab=profile" class="profile-add-bio">添加个人简介<Pencil :size="13" /></RouterLink>
+          <div class="mobile-profile-body"><div class="mobile-profile-stats"><button type="button" aria-label="查看关注" @click="openPeople('following')"><strong>{{ creator.followingCount ?? 0 }}</strong>关注</button><button type="button" aria-label="查看粉丝" @click="openPeople('followers')"><strong>{{ creator.followersCount ?? 0 }}</strong>粉丝</button><span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong>获赞</span><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="button btn subtle"><Pencil :size="14" />编辑资料</RouterLink></div>
+            <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><RouterLink v-else-if="isOwnProfile" :to="profileEditLink" class="profile-add-bio">添加个人简介<Pencil :size="13" /></RouterLink>
             <div v-if="!isOwnProfile" class="profile-actions"><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></div>
             <nav v-if="isOwnProfile" class="profile-shortcuts" aria-label="个人主页工具"><RouterLink to="/library"><LayoutGrid :size="22" />作品管理</RouterLink><button type="button" @click="profileTab = 'saved'"><Bookmark :size="22" />我的收藏</button><RouterLink to="/create/video"><WandSparkles :size="22" />创作</RouterLink><RouterLink to="/account"><Settings :size="22" />设置</RouterLink></nav>
           </div>
         </section>
-        <template v-else><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
+        <template v-else-if="!editingProfile"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
         <div class="creator-profile">
           <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></span>
           <div class="profile-copy">
             <div class="profile-heading"><h1>{{ creator.name || creator.username }}</h1><div class="profile-actions">
-              <RouterLink v-if="isOwnProfile" to="/account?tab=profile" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/account?tab=following" class="button btn subtle">关注申请</RouterLink>
+              <RouterLink v-if="isOwnProfile" :to="profileEditLink" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/account?tab=following" class="button btn subtle">关注申请</RouterLink>
               <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
             </div></div>
             <div class="profile-stats" aria-label="创作者统计">
@@ -219,8 +227,9 @@ async function removeFollower() {
           </div>
         </div>
         </template>
-        <div class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
-        <div id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
+        <ProfileEditor v-if="editingProfile" @saved="profileSaved" />
+        <div v-show="!editingProfile" class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
+        <div v-show="!editingProfile" id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
         <div v-if="collectionPrivate" class="empty-state profile-private"><LockKeyhole :size="28" /><h2>{{ collectionLabel }}仅本人可见</h2></div>
         <template v-else>
           <div v-if="selecting && isOwnProfile && profileTab === 'works'" class="profile-selection" role="toolbar" aria-label="作品批量操作"><label><input type="checkbox" aria-label="全选当前作品" :checked="allSelected" :disabled="deleting || collectionLoading" @change="selectedWorks = allSelected ? new Set() : new Set(works.filter(work => work.owned).map(work => work.id))" />全选当前页</label><span role="status">已选 {{ selectedItems.length }} 件</span><button type="button" class="icon-button" title="删除所选作品" aria-label="删除所选作品" :disabled="deleting || !selectedItems.length" @click="deleteSelectedWorks"><Trash2 :size="17" /></button><button type="button" class="icon-button" title="退出批量管理" aria-label="退出批量管理" :disabled="deleting" @click="selecting = false; selectedWorks = new Set()"><X :size="18" /></button></div>

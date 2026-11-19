@@ -105,7 +105,7 @@ for (const width of [1440, 390]) test(`community point previews use actual paid 
 
 test('preloads after deliberate hover, reuses reads on entry and loads other tabs only on demand', async ({ page }) => {
   const fixture = await walletFixture(page)
-  await page.goto('/account?tab=profile')
+  await page.goto('/account')
   const entry = page.locator('.settings-nav-item').filter({ hasText: '我的账户' })
   await expect(entry).toBeVisible()
   await page.clock.install()
@@ -131,7 +131,7 @@ test('preloads after deliberate hover, reuses reads on entry and loads other tab
   await wallet(page).getByRole('button', { name: '余额充值', exact: true }).click()
   await expect(wallet(page).getByText('¥ 2.50', { exact: true })).toBeVisible()
   expect(fixture.readPaths).toEqual(['/api/new-api/wallet/topup', '/api/new-api/wallet/plans', '/api/new-api/wallet/history'])
-  await page.locator('.settings-nav-item').filter({ hasText: '个人资料' }).click()
+  await page.locator('.settings-nav-item').filter({ hasText: '关注与隐私' }).click()
   await entry.click()
   await expect(wallet(page).getByText('¥ 2.50', { exact: true })).toBeVisible()
   expect(fixture.readPaths).toHaveLength(3)

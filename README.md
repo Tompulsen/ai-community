@@ -19,10 +19,17 @@ New API 账户与模型网关继续独立保留。业务及数据契约见 [MIGR
 
 ```sh
 npm ci
-npm run dev -- --host 127.0.0.1 --port 18775 --strictPort
+npm run dev:design
 ```
 
 访问 `http://127.0.0.1:18775/discover`。
+
+此预览仅用于 UI 调试，默认使用已登录的模拟账号，不读取线上接口，也不需要数据库、
+Redis 或真实账号配置。资料、隐私和上传图片仅保存在预览进程内存中，重启后重置；
+支付、兑换、模型生成等未模拟操作返回本地提示，不会产生真实业务请求。
+可直接打开 `/account` 或 `/community?creator=previewCreator&edit=profile`。
+浏览器预览检查运行 `npx playwright test tests/design-preview.spec.ts`，无需拦截或替换接口。
+`npm run dev` 仍为普通 Vite 服务，不提供模拟 API。
 
 ```sh
 npm run build

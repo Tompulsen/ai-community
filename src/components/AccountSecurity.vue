@@ -92,28 +92,40 @@ async function moreLogins() {
 </template>
 
 <style scoped>
-.login-identifiers { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px 24px; overflow-wrap: anywhere; margin: 0; padding-block: 16px; border-block: 1px solid var(--border); }
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · signature: identity and device ledger · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, keep the verified identity beside actual device records */
+.login-identifiers { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--settings-space-group) var(--settings-space-section); overflow-wrap: anywhere; margin: 0; padding-block: var(--settings-space-group); border-block: 1px solid var(--border); }
 .login-identifiers dt { color: var(--muted); }
-.login-identifiers dd { margin: 0; display: grid; gap: 4px; }
-.security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.login-identifiers dd { margin: 0; display: grid; gap: var(--settings-space-label); }
+.security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--settings-space-section); align-items: start; }
 .security-settings > .notice-inline, .security-settings > .empty-state, .security-identity, .security-sessions, .security-history { grid-column: 1 / -1; }
-.security-settings .panel-section { padding: 0 0 24px; }
-.security-settings .panel-section + .panel-section { border-top: 1px solid var(--border); padding-top: 24px; }
-.security-settings .stack { gap: 16px; }
-.security-settings h2 { font-size: 16px; line-height: 24px; }
+.security-settings .panel-section { padding-bottom: var(--settings-space-group); }
+.security-settings .panel-section + .panel-section { border-top: 1px solid var(--border); padding-top: var(--settings-space-section); }
+.security-settings .stack { gap: var(--settings-space-row); }
+.security-settings h2 { font-size: 16px; line-height: 24px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .security-identity > .section-heading { margin: 0; }
 .security-identity > .button { align-self: flex-start; }
-.security-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.security-actions { display: flex; flex-wrap: wrap; gap: var(--settings-space-related); align-items: center; }
 .security-actions .button { flex: 0 1 auto; }
-.device-row { display: flex; align-items: flex-start; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); }
-.device-row > svg { color: var(--muted); margin-top: 4px; }
+.device-row { display: flex; align-items: flex-start; gap: var(--settings-space-row); padding-block: var(--settings-space-row); border-bottom: 1px solid var(--border); }
+.device-row > svg { color: var(--muted); margin-top: var(--settings-space-label); }
 .device-row strong { font-weight: 500; font-size: 14px; }
-.device-current { margin-inline-start: auto; padding: 4px 8px; border-radius: 4px; background: var(--surface-soft); color: var(--muted); font-size: 12px; flex: none; }
+.device-current { margin-inline-start: auto; padding: var(--settings-space-label) var(--settings-space-related); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font-size: 12px; flex: none; }
 .device-row:last-of-type { border-bottom: 0; }
 .device-row > div { min-width: 0; overflow-wrap: anywhere; }
 .device-row .icon-button { flex: 0 0 44px; width: 44px; height: 44px; }
-.device-row p { margin-top: 4px; }
+.device-row p { margin-top: var(--settings-space-label); }
 .security-sessions > .button, .security-history > .button { align-self: flex-start; }
-@media (max-width: 639px) { .security-actions .button { flex: 1 1 auto; } .device-row { gap: 16px; } }
-@media (max-width: 399px) { .login-identifiers { grid-template-columns: 80px minmax(0, 1fr); gap: 12px 16px; } }
+.security-settings .button { white-space: nowrap; }
+.security-settings .button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.security-settings .button:active { background: var(--surface-soft); }
+.security-settings .button:disabled { opacity: .55; cursor: not-allowed; }
+@media (min-width: 1280px) {
+  .security-settings { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--settings-space-layout); }
+  .security-settings .security-identity { grid-column: 1; grid-row: span 2; padding-inline-end: var(--settings-space-layout); border-inline-end: 1px solid var(--border); }
+  .security-settings .security-sessions, .security-settings .security-history { grid-column: 2; }
+  .security-settings .security-sessions { border-top: 0; }
+}
+@media (max-width: 639px) { .security-actions .button { flex: 1 1 auto; } }
+@media (max-width: 399px) { .login-identifiers { grid-template-columns: 80px minmax(0, 1fr); gap: var(--settings-space-row) var(--settings-space-group); } }
 </style>

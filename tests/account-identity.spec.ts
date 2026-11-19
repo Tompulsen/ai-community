@@ -18,15 +18,14 @@ test('profile previews show the numeric Octopus account and real username at des
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `.impeccable/review/account-number/${width}.png`, fullPage: true })
   }
-  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
-  await page.getByRole('button', { name: '我的账户', exact: true }).click()
+  await page.goto('/account?tab=balance')
   await expect(page).toHaveURL(/tab=balance/)
   await expect(page.locator('.profile-preview-body')).toHaveCount(0)
 })
 
 test('profile editing keeps the verified account number and username read-only', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
-  await page.goto('/account')
+  await page.goto('/community?creator=fixtureAccountUser&edit=profile')
   await page.getByRole('textbox', { name: '社区昵称', exact: true }).fill('章鱼小白')
   await page.getByRole('button', { name: '保存资料', exact: true }).click()
   await expect(page.getByRole('status')).toContainText('资料已保存')
@@ -34,6 +33,7 @@ test('profile editing keeps the verified account number and username read-only',
   expect(mutation?.body).toMatchObject({ name: '章鱼小白' })
   expect(mutation?.body).not.toHaveProperty('accountId')
   expect(mutation?.body).not.toHaveProperty('username')
+  await page.locator('.profile-preview > summary').click()
   await expect(page.locator('.profile-preview-body > span')).toHaveText('章鱼号：17')
   await expect(page.locator('.profile-identity dd').first()).toHaveText('octopusfixture')
   await page.reload()

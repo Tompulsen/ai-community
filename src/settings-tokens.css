@@ -1,0 +1,38 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · modes: light+dark · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, preserve the community's own controls and account divisions */
+/* Hallmark · dismissed 74 · the existing auth-page login surface is preserved verbatim; this token only replaces its duplicated literal */
+:root {
+  --settings-space-label: 4px;
+  --settings-space-related: 8px;
+  --settings-space-row: 12px;
+  --settings-space-group: 16px;
+  --settings-space-section: 24px;
+  --settings-space-layout: 32px;
+  --settings-width: 1280px;
+  --settings-control-width: 208px;
+  --settings-control-height: 44px;
+  --auth-canvas: #fff;
+  --auth-ink: #101828;
+  --auth-muted: #667085;
+  --auth-surface-soft: #f8fafc;
+  --auth-border: #e4e7ec;
+  --auth-primary: #3f51b5;
+  --auth-primary-hover: #34449b;
+  --auth-primary-soft: #eef0fb;
+  --auth-visual-start: #87909f;
+  --auth-visual-mid: #6b7280;
+  --auth-visual-end: #4b5563;
+  --auth-brand-wash: #ffffff1a;
+  --auth-button-border: #dce1eb;
+  --auth-notice-border: #fecdca;
+  --auth-notice-bg: #fff4f3;
+  --auth-notice-ink: #b42318;
+  --auth-brand-mobile: #f2f4f7;
+  --auth-control-padding: 10px 18px;
+  --auth-brand-gap: 10px;
+  --auth-link-gap: 6px;
+}
+
+html:has(.settings-page), body:has(.settings-page) { overflow-x: clip; }
+body:has(.settings-page) .mobile-sign-out { white-space: nowrap; }
+body:has(.settings-page) .search-control { border-color: var(--control-border); }

@@ -1,0 +1,28 @@
+[
+ {
+  "axes": "neutral / Schibsted Grotesk / existing theme accent",
+  "signature": "aligned settings rows and compact palette swatches",
+  "sections": [
+   "privacy rows",
+   "security ledger",
+   "appearance swatches"
+  ],
+  "prompt": "使用 Hallmark 优化设置页",
+  "nav": "kept community shell and settings directory",
+  "depth": "full",
+  "finishReview": "subagent: ship; no blocking findings",
+  "shape": "app screen",
+  "entry": "src/views/AccountView.vue",
+  "verification": "29 browser tests; build; typecheck; 0 FAIL; 0 REFLEX; wiring retained",
+  "imagery": "actual local UI screenshots",
+  "scope": "app",
+  "footer": "kept",
+  "waived": [
+   "24b"
+  ],
+  "theme": "brand (locked DESIGN.md)",
+  "mode": "redesign",
+  "photos": [],
+  "date": "2026-11-19"
+ }
+]

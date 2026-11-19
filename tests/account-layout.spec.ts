@@ -20,8 +20,8 @@ for (const width of [1440, 390, 320]) {
         await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
         await page.getByLabel('账号菜单', { exact: true }).click()
         await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
-      } else await page.goto('/account?tab=profile')
-      await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
+      } else await page.goto('/account?tab=privacy')
+      await expect(page.locator('.privacy-settings')).toBeVisible()
       await expect(page.locator('.header-inner')).toBeHidden()
       if (width >= 1000) {
         await expect(page.locator('.community-rail .nav-link')).toHaveCount(4)
@@ -54,7 +54,7 @@ for (const width of [1440, 390, 320]) {
       release()
       await expect(page.getByRole('heading', { name: '登录会话', exact: true })).toBeVisible()
       if (width >= 1000) expect.soft(await geometry(), 'security loaded').toEqual(baseline)
-      for (const [label, tab] of [['我的账户', 'balance'], ['主题与外观', 'theme'], ['个人资料', 'profile']]) {
+      for (const [label, tab] of [['我的账户', 'balance'], ['主题与外观', 'theme'], ['关注与隐私', 'privacy']]) {
         await openSetting(label)
         await expect(page).toHaveURL(new RegExp(`tab=${tab}$`))
         if (width < 1000) await expect(page.locator('.settings-sidebar')).toBeHidden()

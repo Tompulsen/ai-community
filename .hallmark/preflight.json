@@ -1,0 +1,15 @@
+{
+  "scanned": "2026-11-19",
+  "findings": {
+    "fonts": "Local Schibsted Grotesk and the existing Chinese system stack, src/style.css:1",
+    "palette": "Six existing light/dark palettes, DESIGN.md:147 and public/theme-preload.js",
+    "spacing": "Existing 4px scale and 44px touch targets, DESIGN.md:75",
+    "framework": "Vue 3 with Vite; existing account components",
+    "preview": "Local-only mock data at http://127.0.0.1:18775/account"
+  },
+  "preserve": ["Theme identities", "Routes and handlers", "Profile/settings separation", "Draft guards", "Local-only preview"],
+  "introduce": ["Compact settings rows", "Bounded centered layout", "Two-column security at wide widths", "Palette swatches"],
+  "scope": "app",
+  "depth": "full",
+  "baseline": { "floor": 34, "reflex": 12, "warnings": 5 }
+}

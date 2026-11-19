@@ -33,7 +33,7 @@ function preview(theme: Theme) {
         <component :is="option.icon" :size="20" aria-hidden="true" /><span>{{ option.label }}</span>
       </label>
     </fieldset>
-    <p class="theme-current" role="status">当前显示：{{ themeState.current === 'dark' ? '暗色模式' : '明亮模式' }} · {{ currentTheme.name }}</p>
+    <p class="theme-current" role="status"><span>当前显示：{{ themeState.current === 'dark' ? '暗色模式' : '明亮模式' }}</span><span>{{ currentTheme.name }}</span></p>
     <div v-if="themeState.mode === 'schedule'" class="theme-schedule">
       <div class="schedule-times">
         <label class="field"><span>切换到明亮模式</span><input v-model="lightStart" class="control" type="time" step="60" required :aria-invalid="!valid" aria-describedby="schedule-help schedule-error" @input="updateTime" /></label>
@@ -47,7 +47,7 @@ function preview(theme: Theme) {
       <fieldset class="theme-palettes"><legend><component :is="mode === 'light' ? Sun : Moon" :size="18" aria-hidden="true" />{{ mode === 'light' ? '明亮模式使用的主题' : '暗色模式使用的主题' }}</legend>
         <label v-for="theme in appearance.themes.filter(item => item.mode === mode)" :key="theme.id" class="palette-option" :class="{ selected: themeState[mode] === theme.id }">
           <input type="radio" :name="`${mode}-palette`" :value="theme.id" :checked="themeState[mode] === theme.id" :aria-label="theme.name" @change="appearance.set({ [mode]: theme.id })" />
-          <span class="theme-preview" :style="preview(theme)" aria-hidden="true"><span class="preview-rail"><i /><b /><b /></span><span class="preview-content"><span class="preview-heading"><i /><i /><i /></span><span class="preview-post"><i /><b /><b /><em /></span></span></span>
+          <span class="theme-preview" :style="preview(theme)" aria-hidden="true"><span class="preview-paper" /><span class="preview-surface" /><span class="preview-soft" /><span class="preview-accent" /></span>
           <span class="palette-caption"><span>{{ theme.name }}<small v-if="theme.id === 'cloud' || theme.id === 'sage'">默认</small></span><Check v-if="themeState[mode] === theme.id" :size="16" aria-hidden="true" /></span>
         </label>
       </fieldset>
@@ -57,52 +57,51 @@ function preview(theme: Theme) {
 </template>
 
 <style scoped>
-.theme-settings { max-width: 960px; container: appearance / inline-size; }
-.theme-settings .section-heading { gap: 16px; margin-bottom: 24px; }
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · signature: actual palette swatches · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, show the existing six community palettes instead of generic window drawings */
+.theme-settings { width: 100%; container: appearance / inline-size; }
+.theme-settings .section-heading { gap: var(--settings-space-group); margin-bottom: var(--settings-space-section); flex-wrap: wrap; }
+.theme-settings .section-heading h2 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.theme-settings .section-heading .button { white-space: nowrap; }
 .theme-settings .form-note { display: block; }
-.theme-modes, .theme-palettes { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.theme-modes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.theme-modes legend, .theme-palettes legend { font-size: 14px; font-weight: 500; margin-bottom: 16px; }
-.theme-palettes legend svg { margin-right: 8px; }
-.mode-option { position: relative; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 48px; padding: 12px 8px; border: 1px solid transparent; border-radius: 6px; background: var(--surface); font-size: 12px; cursor: pointer; }
+.theme-modes, .theme-palettes { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: var(--settings-space-row); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.theme-modes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--settings-space-related); }
+.theme-modes legend, .theme-palettes legend { font-size: 14px; font-weight: 500; margin-bottom: var(--settings-space-row); }
+.theme-palettes legend svg { margin-right: var(--settings-space-related); }
+.mode-option { position: relative; display: flex; align-items: center; justify-content: center; gap: var(--settings-space-related); min-height: var(--settings-control-height); padding: var(--settings-space-related); border: 1px solid transparent; border-radius: 6px; background: var(--surface); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .mode-option:hover, .palette-option:hover { border-color: var(--muted); }
 .mode-option.selected { background: var(--surface-soft); border-color: var(--focus-ring); color: var(--ink); }
 .mode-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .mode-option:has(:focus-visible), .palette-option:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .mode-option input:focus-visible, .palette-option input:focus-visible { outline: none; }
-.theme-current { margin: 12px 0 24px; color: var(--muted); font-size: 12px; }
-.theme-schedule { margin: 0 0 24px; padding: 16px; background: var(--surface); border-radius: 6px; }
-.schedule-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.mode-option:active, .palette-option:active { background: var(--surface-soft); }
+.theme-settings button:disabled, .theme-settings input:disabled { cursor: not-allowed; opacity: .55; }
+.theme-current { display: flex; align-items: center; flex-wrap: wrap; gap: var(--settings-space-related); margin-block: var(--settings-space-row) var(--settings-space-group); color: var(--muted); font-size: 12px; }
+.theme-current > span + span { padding-inline-start: var(--settings-space-related); border-inline-start: 1px solid var(--border); }
+.theme-schedule { margin-bottom: var(--settings-space-group); padding: var(--settings-space-group); background: var(--surface); border-radius: 6px; }
+.schedule-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--settings-space-group); }
 .schedule-times input { font-variant-numeric: tabular-nums; font-size: 16px; }
-.theme-palette-group { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--border); }
-.theme-palettes { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.theme-palette-group { padding-top: var(--settings-space-group); margin-top: var(--settings-space-group); border-top: 1px solid var(--border); }
+.theme-palettes { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--settings-space-group); }
 .palette-option { position: relative; min-width: 0; border: 2px solid var(--border); border-radius: 8px; cursor: pointer; }
 .palette-option.selected { border-color: var(--blue); }
 .palette-option > input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
-.palette-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 48px; padding: 12px; font-size: 14px; }
-.palette-caption > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.palette-caption { display: flex; justify-content: space-between; align-items: center; gap: var(--settings-space-related); min-height: var(--settings-control-height); padding: var(--settings-space-related) var(--settings-space-row); font-size: 14px; white-space: nowrap; }
+.palette-caption > span { display: flex; align-items: center; flex-wrap: wrap; gap: var(--settings-space-related); }
 .palette-caption small { color: var(--muted); font-size: 12px; }
 .palette-caption svg { color: var(--blue); }
-.theme-preview { display: flex; height: 112px; background: var(--preview-bg); overflow: hidden; border-radius: 6px 6px 0 0; }
-.preview-rail { width: 28%; background: var(--preview-surface); display: flex; align-items: center; flex-direction: column; gap: 14px; padding: 14px 0; }
-.preview-rail i { width: 22px; height: 22px; border-radius: 50%; background: var(--preview-accent); }
-.preview-rail b { width: 12px; height: 12px; border: 2px solid var(--preview-muted); border-radius: 4px; }
-.preview-rail b:first-of-type { border-color: var(--preview-accent); }
-.preview-content { flex: 1; padding: 14px 12px 0; min-width: 0; }
-.preview-heading { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 20px; }
-.preview-heading i { width: 6px; height: 6px; border-radius: 50%; background: var(--preview-accent); opacity: .7; }
-.preview-post { position: relative; display: grid; gap: 9px; padding: 12px; border-radius: 8px 8px 0 0; background: var(--preview-surface); }
-.preview-post i { width: 45%; height: 6px; background: var(--preview-accent); border-radius: 2px; }
-.preview-post b { width: 90%; height: 4px; background: var(--preview-muted); border-radius: 2px; }
-.preview-post b:first-of-type { width: 68%; background: var(--preview-ink); }
-.preview-post em { width: 28%; height: 10px; border-radius: 3px; background: var(--preview-soft); }
-.theme-footnote { margin-top: 24px; }
+.theme-preview { display: grid; grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr)) minmax(0, .65fr); height: 64px; background: var(--preview-bg); overflow: clip; border-radius: 6px 6px 0 0; }
+.preview-paper { background: var(--preview-bg); }
+.preview-surface { background: var(--preview-surface); }
+.preview-soft { background: var(--preview-soft); }
+.preview-accent { background: var(--preview-accent); }
+.theme-footnote { margin-top: var(--settings-space-group); font-size: 12px; line-height: 20px; }
 @container appearance (max-width: 560px) {
   .theme-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mode-option { justify-content: flex-start; padding-inline: 12px; font-size: 14px; }
-  .theme-palettes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .mode-option { justify-content: flex-start; padding-inline: var(--settings-space-row); font-size: 14px; }
+  .theme-palettes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--settings-space-row); }
   .schedule-times { grid-template-columns: 1fr; }
-  .theme-schedule { padding: 16px; }
+  .theme-schedule { padding: var(--settings-space-group); }
 }
 @media (forced-colors: active) { .palette-option.selected, .mode-option.selected { outline: 2px solid Highlight; } }
 </style>
