@@ -157,7 +157,7 @@ test('community status and model prices use the configured quota per point, inde
     return Response.json({ success: true, data: [
       { model_name: 'image', enable_groups: ['default'], quota_type: 1, model_price: 0.02 },
       { model_name: 'chat', enable_groups: ['default'], quota_type: 0, model_ratio: 0.2, completion_ratio: 2 },
-    ], group_ratio: { default: 1 } })
+    ], group_ratio: { default: 1 }, auto_groups: ['default'] })
   })
   const status = await handleAccountRequest(request('/api/new-api/status'))
   assert.equal(status.status, 200)
@@ -166,6 +166,9 @@ test('community status and model prices use the configured quota per point, inde
   const pricing = (await prices.json()).data
   assert.equal(pricing.currency, '积分')
   assert.equal(pricing.rows[0].price, '积分 100')
+  assert.equal(pricing.rows[0].requestPrice, 100)
+  assert.equal(pricing.rows[0].imageCountMultiplier, true)
+  assert.deepEqual(pricing.autoGroups, ['default'])
   assert.equal(pricing.rows[1].price, '输入 积分 2,000 / 输出 积分 4,000')
   process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = '700000'
   const scaled = await handleAccountRequest(request('/api/new-api/status'))

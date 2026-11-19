@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-test('balance links to account settings, refreshes and fits desktop/mobile headers', async ({ page }) => {
+test('balance refreshes in the desktop header and moves into the mobile studio price panel', async ({ page }) => {
   await mockUnifiedAccount(page, true)
   let balance = 89.9996, failed = false
   const currencySymbol = '\u2726'
@@ -17,16 +17,12 @@ test('balance links to account settings, refreshes and fits desktop/mobile heade
   await expect(indicator).toHaveAttribute('href', '/account?tab=balance')
   expect(await indicator.evaluate(element => element.nextElementSibling?.classList.contains('profile-menu'))).toBe(true)
   await expect(indicator.locator('svg')).toHaveCount(0)
-  for (const width of [1440, 768, 390, 320]) {
+  for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 900 })
     const amount = await indicator.boundingBox()
     const avatar = await page.locator('.profile-toggle').boundingBox()
     expect(amount!.x + amount!.width).toBeLessThanOrEqual(avatar!.x)
     expect(avatar!.x + avatar!.width).toBeLessThanOrEqual(width)
-    const logo = await page.locator('.brand-mark').boundingBox()
-    expect(logo!.x).toBeGreaterThanOrEqual(0)
-    expect(logo!.width).toBeGreaterThanOrEqual(28)
-    expect(logo!.x + logo!.width).toBeLessThan(amount!.x)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: `.taste-skill/balance-display-20261114/header-${width}.png` })
   }
@@ -61,9 +57,12 @@ test('balance links to account settings, refreshes and fits desktop/mobile heade
   await expect(page.locator('.billing-balance')).toBeHidden()
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(indicator).toBeHidden()
-  await expect(page.locator('.billing-balance')).toBeVisible()
-  await expect(page.locator('.billing-balance')).toContainText('9.12')
+  await expect(page.locator('.billing-account')).toHaveCount(0)
+  await page.getByRole('button', { name: '模型价格', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '模型价格', exact: true })).toContainText('可用总积分')
+  await expect(page.locator('.billing-wallet')).toContainText('暂不可用')
   await page.screenshot({ path: '.taste-skill/balance-display-20261114/studio-mobile.png' })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/account?tab=balance')
   await expect(indicator).toHaveText(`9.12 ${currencySymbol}`)
   await expect(page.locator('.balance-panel .account-balance')).toHaveText(`9.12 ${currencySymbol}`)

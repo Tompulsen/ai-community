@@ -3,6 +3,8 @@ export type ModelPriceRow = {
   group: string;
   billing: string;
   price: string;
+  requestPrice?: number;
+  imageCountMultiplier?: boolean;
   details?: {
     unit: "request" | "tokens";
     tiers: {
@@ -22,6 +24,7 @@ export type ModelPricing = {
   pricingUrl: string;
   fetchedAt: string;
   currency: string;
+  autoGroups?: string[];
 };
 
 type CatalogModel = {
@@ -67,6 +70,8 @@ const tokenLabels: Record<string, string> = {
   cr: "缓存读取",
   cc: "缓存写入",
   cc1h: "缓存写入（1小时）",
+  img: "图片输入",
+  img_cr: "图片缓存读取",
 };
 
 // Locate only top-level delimiters, respecting quoted tier labels. This is a
@@ -124,7 +129,7 @@ function simpleDynamic(expression: string): SimplePrice | null {
     return positive(Number(fixed[1])) ? { perRequest: Number(fixed[1]) } : null;
   const tokens: Record<string, number> = {};
   for (const term of tier[1].split("+")) {
-    const match = /^\s*(p|c|cr|cc|cc1h)\s*\*\s*(\d+(?:\.\d+)?)\s*$/.exec(term);
+    const match = /^\s*(p|c|cr|cc|cc1h|img|img_cr)\s*\*\s*(\d+(?:\.\d+)?)\s*$/.exec(term);
     if (
       !match ||
       !positive(Number(match[2])) ||
@@ -166,10 +171,11 @@ function dynamicPriceTiers(expression: string): PriceTier[] | null {
 export function modelPriceRows(
   catalog: unknown,
   status: Record<string, unknown>,
-): { rows: ModelPriceRow[]; currency: string } {
+): Pick<ModelPricing, "rows" | "currency" | "autoGroups"> {
   const data = catalog as {
     data?: CatalogModel[];
     group_ratio?: Record<string, unknown>;
+    auto_groups?: unknown;
   };
   if (
     !Array.isArray(data?.data) ||
@@ -200,6 +206,8 @@ export function modelPriceRows(
       let billing = "未配置",
         price = "请查看模型广场";
       let details: ModelPriceRow["details"];
+      let requestPrice: number | undefined;
+      let imageCountMultiplier = false;
       const dynamic =
         (Boolean(model.billing_mode) && model.billing_mode !== "ratio") ||
         Boolean(model.billing_expr) ||
@@ -219,6 +227,8 @@ export function modelPriceRows(
               )
             : null;
         if (parsed) {
+          if (parsed.length === 1 && parsed[0].perRequest !== undefined)
+            requestPrice = parsed[0].perRequest * ratio * display.rate;
           details = {
             unit: parsed[0].perRequest !== undefined ? "request" : "tokens",
             tiers: parsed.map((tier) => {
@@ -262,6 +272,8 @@ export function modelPriceRows(
             .join("\n");
         }
       } else if (model.quota_type === 1 && positive(model.model_price)) {
+        requestPrice = model.model_price * ratio * display.rate;
+        imageCountMultiplier = true;
         billing = "每次请求";
         price = amount(model.model_price * ratio);
         details = { unit: "request", tiers: [{ perRequest: price }] };
@@ -291,8 +303,12 @@ export function modelPriceRows(
         billing,
         price,
         ...(details ? { details } : {}),
+        ...(positive(requestPrice) ? { requestPrice, imageCountMultiplier } : {}),
       });
     }
   }
-  return { rows, currency: display.symbol };
+  const autoGroups = Array.isArray(data.auto_groups)
+    ? [...new Set(data.auto_groups.filter((group): group is string => typeof group === "string" && group.length > 0))]
+    : [];
+  return { rows, currency: display.symbol, autoGroups };
 }

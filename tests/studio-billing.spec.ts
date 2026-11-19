@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-const longPrice = '上下文 ≤ 272,000 tokens：输入 $7 / 输出 $35 / 缓存读取 $0.7；上下文 > 272,000 tokens：输入 $14 / 输出 $52.5 / 缓存读取 $1.4'
+const longPrice = '上下文 ≤ 272,000 tokens：输入 35,000 积分 / 输出 175,000 积分 / 缓存读取 3,500 积分；上下文 > 272,000 tokens：输入 70,000 积分 / 输出 262,500 积分 / 缓存读取 7,000 积分'
 const models = [
   { id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] },
 ]
@@ -16,7 +16,7 @@ for (const kind of ['text', 'image', 'video']) {
       return route.fulfill({ json: { tokenId: 41, items: models } })
     })
     await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: {
-      rows: models.map(model => ({ model: model.id, group: 'auto', price: longPrice, billing: '上下文分档 · 每百万 tokens' })),
+      rows: models.map(model => ({ model: model.id, group: 'auto', price: longPrice, billing: '上下文分档 · 每百万 tokens' })), userId: 17, currency: '积分',
     } } }))
     await page.goto(`/create/${kind}`)
     await expect(page.getByRole('combobox', { name: '模型', exact: true })).not.toHaveValue('')
@@ -51,6 +51,7 @@ for (const kind of ['text', 'image', 'video']) {
     await trigger.click()
     await panel.getByRole('button', { name: '查看全部定价', exact: true }).click()
     await expect(page.locator('.studio-account-view')).toBeVisible()
+    await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
     await page.getByRole('button', { name: '返回创作', exact: true }).click()
     await expect(input).toHaveValue('保留输入内容')
     expect(submissions).toBe(0)
@@ -64,7 +65,7 @@ test('pricing has error recovery and a missing-price state', async ({ page }) =>
   await page.route('**/api/creation/**', route => route.fulfill({ json: { tokenId: 41, items: models } }))
   await page.route('**/api/new-api/model-pricing', route => failed
     ? route.fulfill({ status: 503, json: { message: 'Unavailable' } })
-    : route.fulfill({ json: { success: true, data: { rows: [] } } }))
+    : route.fulfill({ json: { success: true, data: { rows: [], userId: 17, currency: '积分' } } }))
   await page.goto('/create/image')
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
   const panel = page.getByRole('dialog', { name: '模型价格', exact: true })
