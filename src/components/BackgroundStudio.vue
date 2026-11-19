@@ -27,7 +27,7 @@ watch(() => ({
   }
   index.value = 0
 }, { immediate: true, flush: 'sync' })
-const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && (active(item.phase) || ['paused', 'attention'].includes(item.phase) || unread.value.includes(item.id))))
+const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && (active(item.phase) || unread.value.includes(item.id))))
 const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
 const progress = computed(() => typeof task.value?.progress === 'number' && Number.isFinite(task.value.progress) ? Math.max(0, Math.min(100, task.value.progress)) : undefined)
 async function open(value: CreationTask) {

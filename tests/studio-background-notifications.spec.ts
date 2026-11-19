@@ -160,6 +160,8 @@ async function startImage(page: Page, prompt: string) {
 }
 
 async function leaveWorkbench(page: Page) {
+  const menu = page.getByRole('button', { name: '打开侧边栏', exact: true })
+  if (await menu.isVisible()) await menu.click()
   await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
   await expect(page).toHaveURL(/\/discover$/)
 }
@@ -179,6 +181,53 @@ test('previously completed history stays quiet in the community and after reload
   await expect(page.locator('.app-header')).toBeVisible()
   await expect(dock(page)).toHaveCount(0)
   expect(state.submissions()).toBe(0)
+})
+
+for (const width of [390, 1440]) test(`viewing an uncertain task acknowledges its reminder until a new result at ${width}px`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const state = await fixture(page, '/work/backgroundsource')
+  state.controls.disconnect = true
+  try {
+    await page.getByRole('button', { name: '制作同款', exact: true }).click()
+    await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+    await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
+    await expect.poll(state.submissions).toBe(1)
+    state.finish()
+    await expect(dock(page)).toContainText('结果待确认')
+    await dock(page).getByRole('button', { name: '查看任务', exact: true }).click()
+    await expect(page).toHaveURL(/\/create\/image/)
+    await expect(page.locator('.task-status')).toContainText('结果待确认')
+    await leaveWorkbench(page)
+    await expect(dock(page)).toHaveCount(0)
+    await page.reload()
+    await expect(page.locator('.app-header')).toBeVisible()
+    await expect(dock(page)).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath(`acknowledged-task-${width}.png`) })
+    await page.evaluate(async () => {
+      const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!
+      const studio = await import(/* @vite-ignore */ path)
+      const task = studio.creation.tasks.find(item => item.sourceWorkId === 'backgroundsource')
+      await studio.resumeCreation(task)
+    })
+    await expect(dock(page)).toContainText('生成完成')
+    expect(state.controls.recoveries).toBe(1)
+    expect(state.submissions()).toBe(1)
+  } finally { state.finish() }
+})
+
+test('a stopped task viewed in the workbench stays in history without a persistent community reminder', async ({ page }) => {
+  const state = await fixture(page)
+  let queries = 0
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'pending', upstreamId: 'paused-image', tokenId: 41, protocol: 'async', outputs: [] } }))
+  await page.route('**/api/creation/tasks/**', route => { queries++; return route.fulfill({ json: { status: 'pending', outputs: [] } }) })
+  try {
+    await startImage(page, '保留停止等待的任务')
+    await expect.poll(() => queries).toBeGreaterThan(0)
+    await page.getByRole('button', { name: '停止等待', exact: true }).click()
+    await expect(page.locator('.task-status')).toContainText('等待已暂停')
+    await leaveWorkbench(page)
+    await expect(dock(page)).toHaveCount(0)
+  } finally { state.finish() }
 })
 
 test('an image completed after leaving the workbench appears once and viewing acknowledges it', async ({ page }) => {

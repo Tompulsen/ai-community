@@ -91,7 +91,7 @@ async function markActivity(ctx: RequestContext, ids: string[], snapshot: Awaite
 async function markAnnouncements(ctx: RequestContext, ids: string[]) {
   if (!ids.length) return
   await ctx.db.query(`INSERT INTO announcement_read(id,"userId","announcementId")
-    SELECT selected.id,$1,a.id FROM unnest($2::varchar[],$3::varchar[]) AS selected(id,"announcementId")
+    SELECT selected.id,$1::varchar,a.id FROM unnest($2::varchar[],$3::varchar[]) AS selected(id,"announcementId")
     JOIN announcement a ON a.id=selected."announcementId" WHERE ${announcementScope}
     ON CONFLICT ("userId","announcementId") DO NOTHING`, [ctx.requireUser().id, ids.map(() => ctx.newId()), ids])
 }
