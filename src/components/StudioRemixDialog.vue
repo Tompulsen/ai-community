@@ -88,7 +88,7 @@ async function apply(withReferences: boolean, background = false) {
       <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
       <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
         <p>使用原作模型 {{ source.model || '（未提供）' }} 和已公开参数。后台生成会消耗积分，提交后返回作品，你可以继续浏览并在小窗中查看进度。</p>
-        <StudioBilling :model="source.model" :kind="source.kind" :quantity="parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="parameters?.protocol ?? 'openai'" />
+        <StudioBilling :model="source.model" :kind="source.kind" :quantity="parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="parameters?.protocol ?? 'openai'" hide-catalog />
       </section>
       <h3>本次使用的参考图</h3>
       <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>
