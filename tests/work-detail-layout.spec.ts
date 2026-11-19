@@ -138,7 +138,7 @@ test('prompt disclosure, file navigation, reference images and preview remain us
   await expect(page.getByRole('dialog', { name: '作品文件预览' })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: '作品文件预览' })).toBeHidden()
-  await expect(page.getByRole('link', { name: '制作同款' })).toHaveAttribute('href', '/create/image?remix=detailwork&prepare=1')
+  await expect(page.getByRole('button', { name: '制作同款' })).toHaveAttribute('aria-haspopup', 'dialog')
 })
 
 test('one finished work and one reference remain visibly separated and independently selectable', async ({ page }) => {
@@ -182,7 +182,7 @@ test('resource content and guest login work when recommendations fail', async ({
   await page.goto('/work/detailwork')
   await expect(page.locator('.resource-article')).toContainText('资源正文')
   await expect(page.getByRole('link', { name: '登录后发表评论' })).toHaveAttribute('href', '/account?returnTo=/work/detailwork')
-  await expect(page.getByRole('link', { name: '制作同款' })).toHaveAttribute('href', '/create/text?remix=detailwork&prepare=1')
+  await expect(page.getByRole('button', { name: '制作同款' })).toHaveAttribute('aria-haspopup', 'dialog')
   await expect(page.locator('.related-works')).toContainText('同类作品暂时无法加载。')
   await expect(page.getByRole('button', { name: '重试加载', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '收藏', exact: true }).click()

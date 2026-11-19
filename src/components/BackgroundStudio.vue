@@ -14,7 +14,7 @@ let pointer: { id: number; x: number; y: number; left: number; top: number; targ
 const position = computed(() => point.value ? { left: `${point.value.x}px`, top: `${point.value.y}px`, right: 'auto', bottom: 'auto' } : {})
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const active = (phase: string) => ['submitting', 'running'].includes(phase)
-const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '结果待核对' }
+const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '结果待确认' }
 watch(() => ({
   owner: session.user?.id, studio: studioPage.value,
   phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
@@ -97,9 +97,9 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
     <template v-if="!hidden">
       <div class="dock-content" role="status" aria-live="polite"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" /><LoaderCircle v-else-if="active(task.phase)" :size="20" /><CircleAlert v-else :size="20" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
       <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0])" alt="本次生成的图片" /></button>
-      <p v-if="task.error || error" class="dock-error form-error" role="alert">{{ error || task.error }}</p>
-      <p v-if="task.phase === 'paused' || task.phase === 'attention'" class="dock-note muted">核对原任务不会重新提交生成。</p>
-      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><button v-if="task.phase === 'paused' || task.phase === 'attention'" class="button btn" :disabled="checking" @click="check"><RefreshCw :size="16" />{{ checking ? '核对中…' : '核对任务' }}</button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
+      <p v-if="error || task.phase === 'error' && task.error" class="dock-error form-error" role="alert">{{ error || task.error }}</p>
+      <details v-if="task.error && (task.phase === 'paused' || task.phase === 'attention')" :key="task.id" class="dock-note muted"><summary>查看详情</summary><p>{{ task.error }}</p></details>
+      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><button v-if="task.phase === 'paused' || task.phase === 'attention'" class="button btn" :disabled="checking" @click="check"><RefreshCw :size="16" />{{ checking ? '查询中…' : '查询结果' }}</button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
     </template>
   </aside>
 </template>
@@ -125,5 +125,6 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
 .dock-preview { display: block; margin: 0 16px 12px; width: calc(100% - 32px); }
 .dock-preview img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
 .dock-error, .dock-note { margin: 0 16px 12px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.dock-note summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }.dock-note p { margin: 0; }
 @media (max-width: 999px) { .background-dock { right: 16px; bottom: calc(80px + env(safe-area-inset-bottom)); } }
 </style>

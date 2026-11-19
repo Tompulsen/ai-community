@@ -7,7 +7,7 @@ import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/o
 import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatResponseMetrics } from '../shared/studio/types'
 import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
-import { usesGeminiImageChat } from '../shared/studio/image-params'
+import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
 import { captureTaskSnapshot, deleteTaskRecords, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
 
@@ -505,6 +505,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
   input = JSON.parse(JSON.stringify(input)) as CreationInput
+  normalizeImageRequest(input)
   if (input.mediaBranch) {
     const { mediaBranchTask } = await import('./studio-conversations')
     if (input.kind === 'text' || !mediaBranchTask(input.kind, input.conversationId, input.mediaBranch.taskId))

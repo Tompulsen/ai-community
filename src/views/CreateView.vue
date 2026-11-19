@@ -14,9 +14,8 @@ import StudioSubmitPreference from '../components/StudioSubmitPreference.vue'
 import StudioLibraryDialog from '../components/StudioLibraryDialog.vue'
 import StudioSourceReferences from '../components/StudioSourceReferences.vue'
 import StudioPublishDialog from '../components/StudioPublishDialog.vue'
-import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
-import { readRemixParameters } from '../../shared/studio/remix-parameters'
-import { groupKind, modelKind } from '../model-preferences'
+import { creation, initializeCreation, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
+import { restoreRemixModels } from '../studio-remix-models'
 import StudioRemixDialog from '../components/StudioRemixDialog.vue'
 import type { StudioFile } from '../use-studio-materials'
 import '../studio-composer.css'
@@ -92,25 +91,14 @@ watch([() => route.query.from, () => route.query.remix, () => session.user?.id, 
       if (current !== revision) return
       next = { ...result.work, prompt: result.work.generation?.prompt ?? (result.work.prompt || result.work.body || ''), model: result.work.generation?.model || result.work.model }
       sourceOwner = session.user.id; sourceCanFallback.value = true
-      const parameters = readRemixParameters(next.generation?.parameters)
-      if (next.generation?.parameters !== undefined && (!parameters || parameters.kind !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error('原作生成参数无效，请使用当前配置。')
-      await initializeCreation(); await waitCreationGroup()
+      await initializeCreation(); await loadChats(); await waitCreationGroup()
       if (current !== revision) return
-      await loadCreationGroups()
-      if (current !== revision) return
-      if (creation.groupsError) throw new Error(creation.groupsError)
-      if (preparingRemix.value && previousRemixGroup === undefined) previousRemixGroup = creation.selectedGroup
-      const preferredGroup = parameters?.group || (next.kind !== 'resource' ? creation.groups.find(group => groupKind(group.id) === next!.kind)?.id : undefined)
-      if (preferredGroup && creation.selectedGroup !== preferredGroup) {
-        if (!creation.groups.some(group => group.id === preferredGroup)) throw new Error(`当前账号无法使用原作分组“${preferredGroup}”，请选择可用配置。`)
-        await selectCreationGroup(preferredGroup)
-        if (current !== revision) return
-        if (creation.groupsError || creation.selectedGroup !== preferredGroup) throw new Error(creation.groupsError || '未能恢复原作分组，请确认当前配置。')
-      } else await loadCreationModels()
-      if (current !== revision) return
-      if (creation.modelsError) throw new Error(creation.modelsError)
-      const originalModel = creation.models.find(model => model.id === next!.model)
-      if (next.model && (!originalModel || modelKind(originalModel) !== (next.kind === 'resource' ? 'text' : next.kind))) throw new Error(`原作模型“${next.model}”在当前分组不可用，请选择替代模型。`)
+      const conversation = typeof route.query.conversation === 'string' ? chats.sessions.find(item => item.id === route.query.conversation) : currentConversation.value
+      // A saved conversation owns its model and draft; the source is only a reference now.
+      if (!preparingRemix.value && conversation?.sourceWorkId === sourceId && (conversation.messages.length || kind.value === 'text' || conversation.mediaDrafts?.[kind.value])) return
+      await restoreRemixModels(next, () => current === revision, group => {
+        if (preparingRemix.value && previousRemixGroup === undefined) previousRemixGroup = group
+      })
     } catch (cause) { if (current === revision) sourceIssue.value = errorMessage(cause) }
     finally { if (current === revision) { source.value = next || previousSource; sourceLoading.value = false } }
   }
@@ -251,7 +239,7 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" />
+      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="files => importRemix(files, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>

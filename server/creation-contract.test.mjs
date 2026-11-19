@@ -154,8 +154,11 @@ test('Gemini image models retain their existing single chat-completions transpor
   assert.equal(buildCreationPayload({ ...input, model: 'gpt-image-2', referenceUrls: [] }).path, 'v1/images/generations')
   assert.throws(() => buildCreationPayload({ ...input, protocol: 'async' }), { statusCode: 400 })
   assert.throws(() => buildCreationPayload({ ...input, n: 2 }), { statusCode: 400 })
-  assert.throws(() => buildCreationPayload({ ...input, imageOptions: { seed: '42' } }), { statusCode: 400 })
-  assert.throws(() => buildCreationPayload({ ...input, size: '1200x900', exactSize: true }), { statusCode: 400 })
+  const inherited = validateCreationInput({ ...input, size: '1200x900', exactSize: true, imageOptions: { seed: '42' } })
+  assert.equal(inherited.size, 'auto')
+  assert.equal(inherited.exactSize, undefined)
+  assert.equal(inherited.imageOptions.seed, '')
+  assert.deepEqual(JSON.parse(buildCreationPayload(inherited).body), body)
 })
 
 test('OpenAI video uses existing multipart transport while compatible model families retain JSON metadata', () => {

@@ -30,13 +30,14 @@ import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
 
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean }>()
-const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string] }>()
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; model: [] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
 const ime = createImeGuard()
 const imageOptions = reactive(imageOptionsSchema.parse({}))
 const videoOptions = reactive(videoOptionsSchema.parse({ mode: 'text-to-video' }))
 const protocol = ref('openai')
 const manualSize = ref(''), restoringParameters = ref(false)
+const remixApplied = ref(false)
 const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode))
 const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
@@ -58,8 +59,8 @@ const busy = computed(() => currentConversation.value && isConversationBusy(curr
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
-const imageParameterIssue = computed(() => props.kind === 'image' && usesGeminiImageChat(model.value) && (imageOptions.seed || manualSize.value && manualSize.value !== 'auto') ? '当前 Gemini 图片兼容接口不支持固定尺寸或随机种子，请使用自动尺寸并清空 seed，或选择其他模型。' : '')
-const canGenerate = computed(() => chats.ready && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !imageParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
+const submissionIssue = computed(() => error.value || videoParameterIssue.value)
+const canGenerate = computed(() => chats.ready && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && models.value.some(item => item.id === model.value) && Boolean(prompt.value.trim()))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 onUnmounted(() => { live = false; draftRevision++; materialSubmission?.abort() })
@@ -132,7 +133,7 @@ watch(() => [session.user?.id, currentConversation.value?.id, props.kind, curren
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, restoringParameters], () => {
-  if (!session.user || restoringParameters.value || !live) return
+  if (!session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
   const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value }))
   try { localStorage.setItem(draftKey(), JSON.stringify(draft)) }
   catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
@@ -143,6 +144,11 @@ watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOpt
   }
 }, { deep: true, flush: 'sync' })
 watch(model, value => { if (!restoringTask.value && value !== parameterModel.value) parameterModel.value = '' })
+watch([model, () => props.kind, restoringParameters], () => {
+  if (restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value)) return
+  manualSize.value = ''; imageOptions.seed = ''; protocol.value = 'openai'; count.value = 1
+})
+function modelChanged() { error.value = ''; emit('model') }
 watch(videoLimits, limits => {
   if (props.remixPreparing || !limits || props.kind !== 'video') return
   if (props.source?.generation?.parameters?.kind === 'video' && sourceWorkId.value === props.source.id) return
@@ -164,6 +170,7 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
   await nextTick()
   if (!live || owner !== session.user?.id || !fresh && source !== props.source || kind !== props.kind || conversation !== currentConversation.value) return false
   restoringParameters.value = true
+  remixApplied.value = true
   sourceWorkId.value = source.id
   blank.value = true; prompt.value = source.prompt
   references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId }))
@@ -229,7 +236,7 @@ function removeReference(index: number) {
 function generate() { return submit() }
 async function submit(onRegistered?: () => void) {
   if (!canGenerate.value) {
-    if (onRegistered && !videoParameterIssue.value && !imageParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
+    if (onRegistered && !videoParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
     return
   }
   const kind = props.kind, owner = session.user?.id
@@ -316,7 +323,7 @@ async function useTask(task: CreationTask) {
   blank.value = false
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
   parameterModel.value = task.model
-  restoringParameters.value = true; manualSize.value = task.request.size; finishRestore()
+  restoringParameters.value = true; manualSize.value = task.request.exactSize ? task.request.size : ''; finishRestore()
   sourceWorkId.value = task.sourceWorkId
   ratio.value = task.request.aspect_ratio; count.value = task.request.n; duration.value = task.request.duration
   const image = imageOptionsSchema.safeParse(task.request.imageOptions || {}), video = videoOptionsSchema.safeParse(task.request.videoOptions || { mode: 'text-to-video' })
@@ -380,7 +387,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit })
+defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue })
 </script>
 
 <template>
@@ -397,7 +404,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
             <StudioMediaParameters :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" v-model:ratio="ratio" v-model:count="count" v-model:duration="duration" v-model:size="size" :kind="kind" :model="model" @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
-        <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @keys="emit('keys')" /></div>
+        <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" @update:model-value="modelChanged" @keys="emit('keys')" /></div>
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
         <button v-else-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
         <button v-else class="composer-submit generation-button" :title="submitting ? '正在准备…' : '开始生成'" :aria-label="submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
@@ -408,7 +415,6 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
       <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels">重试</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="creation.storageError" class="form-error" role="alert">{{ creation.storageError }}</p>
       <p v-if="videoParameterIssue" class="form-error" role="alert">{{ videoParameterIssue }}</p>
-      <p v-if="imageParameterIssue" class="form-error" role="alert">{{ imageParameterIssue }}</p>
     </form>
 
   </section>

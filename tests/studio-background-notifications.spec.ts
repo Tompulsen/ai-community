@@ -5,6 +5,90 @@ import AxeBuilder from '@axe-core/playwright'
 
 const dock = (page: Page) => page.getByRole('complementary', { name: '后台生成任务', exact: true })
 
+for (const width of [320, 390, 1440]) test(`remix choices stay on the work and restore keyboard focus at ${width}px`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 844 })
+  const state = await fixture(page, '/work/backgroundsource')
+  const entry = page.getByRole('button', { name: '制作同款', exact: true })
+  await entry.click()
+  const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
+  await expect(dialog.getByRole('button', { name: '进入工作台生成' })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /^后台生成(?:$|\s)/ })).toBeVisible()
+  await expect(page).toHaveURL(/\/work\/backgroundsource$/)
+  expect(state.submissions()).toBe(0)
+  expect((await new AxeBuilder({ page }).include('.remix-choice-dialog').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`remix-choices-${width}.png`) })
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(entry).toBeFocused()
+  await expect(page).toHaveURL(/\/work\/backgroundsource$/)
+  state.finish()
+})
+
+test('canceling background preparation preserves the original workbench draft', async ({ page }) => {
+  const state = await fixture(page)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留我的原有草稿')
+  await page.goto('/work/backgroundsource')
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await expect(page.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.goto('/create/image')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留我的原有草稿')
+  expect(state.submissions()).toBe(0)
+  state.finish()
+})
+
+test('canceling background preparation preserves an existing Gemini remix draft unchanged', async ({ page }) => {
+  const state = await fixture(page, '/work/backgroundsource')
+  const draft = { prompt: '不要修改我的同款草稿', model: 'gemini-3-pro-image', sourceWorkId: 'oldsource', manualSize: '1200x900', count: 3, protocol: 'async', imageOptions: { seed: '42' }, references: [] }
+  await page.evaluate(value => {
+    const key = 'octopus:user-17:native-chat', stored = JSON.parse(localStorage.getItem(key)!)
+    const chat = stored.state.sessions.find((item: any) => item.id === 'current-session')
+    chat.sourceWorkId = value.sourceWorkId; chat.mediaDrafts = { image: value }
+    localStorage.setItem(key, JSON.stringify(stored))
+  }, draft)
+  await page.reload()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await expect(page.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/shared\/studio\/chat-persistence\.ts(?:\?|$)/.test(name)).at(-1)!
+    const { readChatSnapshot } = await import(/* @vite-ignore */ path)
+    const stored = await readChatSnapshot('octopus:user-17:native-chat')
+    return stored.state.sessions.find((item: any) => item.id === 'current-session').mediaDrafts.image
+  })).toEqual(draft)
+  expect(state.submissions()).toBe(0)
+  state.finish()
+})
+
+test('switching accounts closes an unsubmitted background dialog without creating a task', async ({ page }) => {
+  const state = await fixture(page, '/work/backgroundsource')
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await expect(page.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
+  state.account.state.user.id = '18'; state.account.state.user.accountId = '18'
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(state.submissions()).toBe(0)
+  state.finish()
+})
+
+test('guest background choice requests login on the work page without submitting', async ({ page }) => {
+  const state = await fixture(page, '/work/backgroundsource')
+  state.account.state.authenticated = false; state.account.state.accountAuthenticated = false
+  await page.reload()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
+  await expect(page.getByRole('dialog')).toContainText('请先登录后使用后台生成')
+  await expect(page.getByRole('link', { name: '去登录', exact: true })).toHaveAttribute('href', '/account?returnTo=/work/backgroundsource')
+  await expect(page).toHaveURL(/\/work\/backgroundsource$/)
+  expect(state.submissions()).toBe(0)
+  state.finish()
+})
+
 async function fixture(page: Page, initialPath = '/create/image', kind: 'image' | 'video' = 'image') {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
@@ -149,9 +233,12 @@ for (const kind of ['image', 'video'] as const) for (const [width, scheme] of [[
     await page.setViewportSize({ width, height: 900 })
     await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'paper', dark: 'sage' })), scheme)
     const state = await fixture(page, '/work/backgroundsource', kind)
+    const navigated: string[] = []
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigated.push(new URL(frame.url()).pathname) })
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
     try {
-      await page.getByRole('link', { name: '制作同款', exact: true }).click()
+      await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
       const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
       await dialog.getByRole('checkbox', { name: '作者参考图.jpg', exact: true }).check()
       await expect(dialog.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
@@ -190,6 +277,7 @@ for (const kind of ['image', 'video'] as const) for (const [width, scheme] of [[
       expect(after.y).toBeGreaterThanOrEqual(0); expect(after.y + after.height).toBeLessThanOrEqual(width === 1440 ? 720 : 488)
       await page.screenshot({ path: info.outputPath(`dock-${kind}-${width}.png`) })
       expect((await new AxeBuilder({ page }).include('.background-dock').analyze()).violations).toEqual([])
+      expect(navigated.some(path => path.startsWith('/create/'))).toBe(false)
       await dock(page).getByRole('button', { name: '查看结果', exact: true }).click()
       await expect(page).toHaveURL(new RegExp(`/create/${kind}`))
       await expect(page.locator('.creation-request').filter({ hasText: state.source.prompt })).toHaveCount(1)
@@ -202,7 +290,8 @@ for (const kind of ['image', 'video'] as const) for (const [width, scheme] of [[
 for (const kind of ['image', 'video'] as const) test(`background ${kind} refuses missing model`, async ({ page }) => {
   const state = await fixture(page, '/work/backgroundsource', kind)
   state.controls.unavailable = true
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
   await expect(dialog.getByRole('alert')).toContainText('不可用')
   await expect(dialog.getByRole('button', { name: '后台生成同款' })).toBeDisabled()
@@ -214,7 +303,8 @@ test('background remix waits for a model refresh before allowing submission', as
   const state = await fixture(page, '/work/backgroundsource')
   let release!: () => void
   try {
-    await page.getByRole('link', { name: '制作同款', exact: true }).click()
+    await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
     const submit = page.getByRole('button', { name: '后台生成同款', exact: true })
     await expect(submit).toBeEnabled()
     state.controls.modelsWait = new Promise<void>(resolve => { release = resolve })
@@ -236,10 +326,13 @@ test('background remix waits for a model refresh before allowing submission', as
 test('background remix preserves invalid video duration for editing and sends no generation', async ({ page }) => {
   const state = await fixture(page, '/work/backgroundsource', 'video')
   state.source.generation.parameters.duration = 999
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
   await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
-  await expect(page.getByRole('region', { name: '创作工作台', exact: true }).getByRole('alert')).toHaveText('原作时长或分辨率不受当前模型支持，请在高级参数中调整。')
-  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  await expect(page).toHaveURL(/\/work\/backgroundsource$/)
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('原作时长或分辨率不受当前模型支持')
+  await expect(page.getByRole('button', { name: '后台生成同款', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '进入工作台调整', exact: true })).toBeVisible()
   expect(state.submissions()).toBe(0)
   state.finish()
 })
@@ -248,14 +341,17 @@ for (const disconnect of [false, true]) test(`background failure is visible and 
   const state = await fixture(page, '/work/backgroundsource')
   state.controls.reject = !disconnect; state.controls.disconnect = disconnect
   try {
-    await page.getByRole('link', { name: '制作同款', exact: true }).click()
+    await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
     await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
     await expect(page).toHaveURL(/\/work\/backgroundsource$/)
     await expect.poll(state.submissions).toBe(1)
     state.finish()
-    await expect(dock(page)).toContainText(disconnect ? '结果待核对' : '生成失败')
+    await expect(dock(page)).toContainText(disconnect ? '结果待确认' : '生成失败')
     if (disconnect) {
-      await dock(page).getByRole('button', { name: '核对任务', exact: true }).click()
+      await expect(dock(page).getByRole('alert')).toHaveCount(0)
+      await expect(dock(page).locator('details')).not.toHaveAttribute('open')
+      await dock(page).getByRole('button', { name: '查询结果', exact: true }).click()
       await expect(dock(page)).toContainText('生成完成')
       expect(state.controls.recoveries).toBe(1)
     }
@@ -266,7 +362,8 @@ for (const disconnect of [false, true]) test(`background failure is visible and 
 test('switching accounts clears background task details', async ({ page }) => {
   const state = await fixture(page, '/work/backgroundsource')
   try {
-    await page.getByRole('link', { name: '制作同款', exact: true }).click()
+    await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
     await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
     await expect(dock(page)).toBeVisible()
     state.account.state.user.id = '18'; state.account.state.user.accountId = '18'

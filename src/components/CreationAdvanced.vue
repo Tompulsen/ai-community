@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
-import { IMAGE_QUALITIES, IMAGE_RESOLUTIONS } from '../../shared/studio/image-params'
+import { IMAGE_QUALITIES, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 const image = defineModel<ImageOptions>('image', { required: true })
 const video = defineModel<VideoOptions>('video', { required: true })
 const protocol = defineModel<string>('protocol', { required: true })
 const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string; embedded?: boolean; hidePrimary?: boolean }>()
 const capabilities = computed(() => videoCapabilities(props.model, video.value.mode))
+const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model))
 const modes = { 'text-to-video': '文生视频', 'image-to-video': '图生视频', 'first-last-frame': '首尾帧', 'reference-to-video': '多图参考' }
 function compression(event: Event) {
   const input = event.target as HTMLInputElement, value = input.valueAsNumber
@@ -19,12 +20,12 @@ function compression(event: Event) {
   <details class="advanced-options" :class="{ embedded }" :open="embedded">
     <summary v-show="!embedded">高级参数</summary>
     <div class="advanced-fields">
-      <label class="field"><span>请求方式</span><select v-model="protocol" class="control" @change="image.imageStream = false"><option value="openai">同步</option><option value="async">异步任务</option></select></label>
+      <label v-if="!geminiImage" class="field"><span>请求方式</span><select v-model="protocol" class="control" @change="image.imageStream = false"><option value="openai">同步</option><option value="async">异步任务</option></select></label>
       <template v-if="kind === 'image'">
         <label v-if="!hidePrimary" class="field"><span>分辨率</span><select v-model="image.resolution" class="control"><option v-for="value in IMAGE_RESOLUTIONS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value.toUpperCase() }}</option></select></label>
         <label v-if="!hidePrimary" class="field"><span>画质</span><select v-model="image.quality" class="control"><option v-for="value in IMAGE_QUALITIES" :key="value" :value="value">{{ value }}</option></select></label>
         <label class="field"><span>风格</span><select v-model="image.style" class="control"><option :value="undefined">默认</option><option value="natural">自然</option><option value="vivid">生动</option></select></label>
-        <label class="field"><span>随机种子</span><input v-model="image.seed" class="control" inputmode="numeric" pattern="[0-9]*" placeholder="随机（模型需支持 seed）" /></label>
+        <label v-if="!geminiImage" class="field"><span>随机种子</span><input v-model="image.seed" class="control" inputmode="numeric" pattern="[0-9]*" placeholder="随机（模型需支持 seed）" /></label>
         <label class="field"><span>输出格式</span><select v-model="image.imageOutputFormat" class="control"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
         <label class="field"><span>背景</span><select v-model="image.imageBackground" class="control"><option value="auto">自动</option><option value="opaque">不透明</option><option value="transparent">透明</option></select></label>
         <div v-if="image.imageOutputFormat !== 'png'" class="field compression-field"><span>压缩质量</span><div class="compression-control"><input :value="image.imageOutputCompression" aria-label="压缩质量" type="range" min="0" max="100" step="1" @input="compression" /><label class="compression-number"><input :value="image.imageOutputCompression" aria-label="压缩质量数值" class="control" type="number" min="0" max="100" step="1" @change="compression" /><span aria-hidden="true">%</span></label></div></div>

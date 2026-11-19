@@ -61,7 +61,8 @@ for (const kind of ['image', 'video', 'resource'] as const) test(`guest mobile $
   const mode = kind === 'resource' ? 'text' : kind
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/work/source42')
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   await page.getByRole('link', { name: '登录', exact: true }).click()
   await expect.poll(() => new URL(page.url()).searchParams.get('returnTo')).toBe(`/create/${mode}?remix=source42&prepare=1`)
   await fillAccountLogin(page)
@@ -78,7 +79,8 @@ test('remix starts with the prompt only, keeps selected and uploaded references,
   const state = await fixture(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/work/source42')
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/image\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
@@ -244,7 +246,8 @@ test('loading author references does not restore an attachment removed during th
 test('video remix opens the video workspace and only offers community publication', async ({ page }) => {
   const state = await fixture(page, 'video')
   await page.goto('/work/source42')
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/video\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
@@ -259,7 +262,8 @@ test('video remix opens the video workspace and only offers community publicatio
 test('text remix keeps source attribution and selected images when sharing only the generated answer', async ({ page }) => {
   const state = await fixture(page, 'resource')
   await page.goto('/work/source42')
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   await page.getByRole('dialog', { name: '制作同款', exact: true }).getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page).toHaveURL(/create\/text\?remix=source42$/)
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue(state.source.prompt)
@@ -400,6 +404,76 @@ test('unavailable original model requires an explicit fallback and never submits
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
 })
 
+test('completed remix keeps its chosen model when the original model is retired', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image?remix=source42')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  state.source.model = 'retired-model'
+  await page.reload()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('继续生成另一幅')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(2)
+  expect(state.generated[1].model).toBe('fixture-image')
+})
+
+test('choosing an available replacement clears the old model warning', async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = 'retired-model'
+  await page.goto('/create/image?remix=source42')
+  await expect(page.getByRole('alert')).toContainText('retired-model')
+  const picker = await openGroupPicker(page)
+  await picker.getByRole('button', { name: /fixture-image/ }).first().click()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0].model).toBe('fixture-image')
+})
+
+test('reusing an automatically sized image keeps automatic sizing in its next request', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只猫')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await page.getByRole('button', { name: '复用参数', exact: true }).click()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => state.generated.length).toBe(2)
+  expect(state.generated[0].exactSize).not.toBe(true)
+  expect(state.generated[1].exactSize).not.toBe(true)
+  expect(state.generated[1].size).toBe(state.generated[0].size)
+})
+
+for (const switchModel of [false, true]) test(`Gemini remix adapts inherited size and seed and sends a single compatible request${switchModel ? ' after switching models' : ''}`, async ({ page }) => {
+  const state = await fixture(page)
+  state.source.model = switchModel ? 'fixture-image' : 'gemini-3-pro-image'
+  state.source.generation = { parameters: { version: 1, kind: 'image', protocol: 'async', size: '1200x900', aspect_ratio: '4:3', n: 3, imageOptions: { seed: '42' } } }
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { items: [{ id: 'gemini-3-pro-image', kinds: ['image'] }, { id: 'fixture-image', kinds: ['image'] }] } }))
+  await page.goto('/create/image?remix=source42')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
+  if (switchModel) {
+    const picker = await openGroupPicker(page)
+    await picker.getByRole('button', { name: /gemini-3-pro-image/ }).first().click()
+  }
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(page.getByLabel('图片数量', { exact: true })).toHaveValue('1')
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.getByLabel('随机种子', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.generated).toHaveLength(1)
+  expect(state.generated[0]).toMatchObject({ model: 'gemini-3-pro-image', size: 'auto', aspect_ratio: '4:3', n: 1, protocol: 'openai', imageOptions: { seed: '' } })
+  expect(state.generated[0].exactSize).not.toBe(true)
+})
+
 test('failed original group selection does not replay its POST or silently generate with a different group', async ({ page }) => {
   const state = await fixture(page)
   state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original' } }
@@ -476,7 +550,8 @@ test('remix entry imports public prompt, author references and own files without
   state.source.prompt = '作品描述并不是生成提示词'
   state.source.generation = { prompt: '公开的完整提示词\n保留第二行', model: 'fixture-image' }
   await page.goto('/work/source42')
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('checkbox')).toHaveCount(2)
@@ -555,7 +630,8 @@ test('repeated remix imports create separate drafts while cancel keeps the exist
   await page.goto('/create/image?remix=source42&prepare=1')
   await page.getByRole('button', { name: '取消', exact: true }).click()
   await expect(page).toHaveURL(/work\/source42$/)
-  await page.getByRole('link', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: '制作同款', exact: true }).click()
+  await page.getByRole('button', { name: /^进入工作台生成(?:$|\s)/ }).click()
   await page.getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(prompt).toHaveValue(state.source.prompt)
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
@@ -590,7 +666,7 @@ test('remix validation blocks invalid uploads and permits explicit model fallbac
   state.source.model = 'removed-original-model'
   await page.goto('/create/image?remix=source42&prepare=1')
   const dialog = page.getByRole('dialog', { name: '制作同款', exact: true })
-  await expect(dialog.getByRole('alert')).toContainText('请选择替代模型')
+  await expect(dialog.getByRole('alert')).toContainText('暂不可用，请选择其他模型')
   await expect(dialog.getByRole('button', { name: '仅导入提示词', exact: true })).toBeDisabled()
   await dialog.getByRole('button', { name: '使用当前配置', exact: true }).click()
   await dialog.getByLabel('上传我的参考图', { exact: true }).setInputFiles({ name: '无效.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })

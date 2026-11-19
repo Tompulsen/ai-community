@@ -44,7 +44,7 @@ const menuItems = computed<StudioMenuAction[]>(() => {
 watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
 const version = computed(() => mediaVersion(props.conversation, props.task.id))
-const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '需要核对' }
+const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '结果待确认' }
 const elapsed = computed(() => {
   const end = working.value ? now.value : props.task.settledAt
   if (!Number.isFinite(end)) return ''
@@ -73,7 +73,7 @@ async function remove() {
     <template #status>
       <template v-if="role === 'assistant'">
         <StudioAiStatus v-if="working" class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="task.kind === 'video' ? '正在生成视频' : task.preview ? '正在生成图片' : undefined" :timer="false" :elapsed="elapsed" />
-        <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' || task.phase === 'attention' }" :role="task.phase === 'error' || task.phase === 'attention' ? 'alert' : 'status'">{{ phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
+        <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' }" :role="task.phase === 'error' ? 'alert' : 'status'">{{ phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
       </template>
     </template>
     <template v-if="role === 'user'">
@@ -82,8 +82,11 @@ async function remove() {
     </template>
     <template v-else>
       <progress v-if="working && task.progress != null" class="generation-progress" :value="task.progress" max="100" aria-label="模型返回的生成进度" />
-      <p v-if="task.error" class="task-message">{{ task.error }}</p>
-      <div v-if="task.phase === 'paused' || task.phase === 'attention' || task.phase === 'error'" class="creation-recovery"><button v-if="task.phase !== 'error'" class="button subtle btn" @click="perform(() => resumeCreation(task))"><Play :size="15" />继续查询</button><button v-else class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
+      <p v-if="task.error && task.phase === 'error'" class="task-message">{{ task.error }}</p>
+      <div v-if="task.phase === 'paused' || task.phase === 'attention' || task.phase === 'error'" class="creation-recovery">
+        <button v-if="task.phase !== 'error'" class="studio-tool" @click="perform(() => resumeCreation(task))"><Play :size="15" />查询结果</button><button v-else class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button>
+        <details v-if="task.error && task.phase !== 'error'" class="task-details"><summary>查看详情</summary><p>{{ task.error }}</p></details>
+      </div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media"><figure v-for="(url, index) in task.urls" :key="url">
         <template v-if="task.kind === 'video'"><video :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" @dblclick="emit('preview', task, index)" /><button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button></template>
@@ -119,8 +122,10 @@ async function remove() {
 .compact-image-response .creation-media { width: min(680px, 100%); grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
 .generation-progress { display: block; width: min(100%, 360px); height: 4px; margin-bottom: 12px; accent-color: var(--muted); }
 .task-status { color: var(--muted); font-size: 12px; }.task-error { color: var(--danger, #b64646); }
-.task-message { color: var(--amber); font-size: 14px; line-height: 24px; margin-block: 0 16px; overflow-wrap: anywhere; }
-.creation-recovery { margin-bottom: 12px; }.stream-preview { display: block; max-width: 100%; max-height: 480px; }
+.task-message { color: var(--danger); font-size: 14px; line-height: 24px; margin-block: 0 16px; overflow-wrap: anywhere; }
+.creation-recovery { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 8px; }
+.task-details { color: var(--muted); font-size: 12px; line-height: 20px; }.task-details summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }.task-details p { margin: 0; max-width: 65ch; overflow-wrap: anywhere; }
+.stream-preview { display: block; max-width: 100%; max-height: 480px; }
 .creation-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px; width: min(880px, 100%); }
 .creation-media figure { position: relative; margin: 0; min-width: 0; }.video-expand { position: absolute; top: 8px; right: 8px; color: white; background: rgb(0 0 0 / 65%); }
 .creation-media video { width: 100%; max-height: 600px; display: block; object-fit: contain; }

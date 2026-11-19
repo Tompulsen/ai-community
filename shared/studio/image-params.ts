@@ -4,6 +4,14 @@ export function usesGeminiImageChat(model: string) {
   return /^gemini-(?:.*-)?(?:image|nano-banana)(?:-|$)/.test(model.toLowerCase().split("/").pop() ?? "");
 }
 
+export function normalizeImageRequest(input: { kind: string; model: string; size?: string; exactSize?: boolean; imageOptions?: { seed?: string } }) {
+  if (input.kind !== 'image' || !usesGeminiImageChat(input.model)) return;
+  // The chat transport omits these Images-only settings, including inherited remix values.
+  input.size = 'auto';
+  delete input.exactSize;
+  if (input.imageOptions) input.imageOptions.seed = '';
+}
+
 const IMAGE_GENERATION_CONFIG_KEYS = [
   "providerName",
   "size",
@@ -191,6 +199,7 @@ export function imageRequestSize(
   resolution?: string,
   model = "",
 ) {
+  if (usesGeminiImageChat(model)) return "auto";
   const ratio = imageRatio(size);
   const tier = imageResolution(resolution);
   const [width, height] = (ratio === "auto" ? "1:1" : ratio)

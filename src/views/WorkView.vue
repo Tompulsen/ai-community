@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft, ChevronRight, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, Send, WandSparkles, X } from '@lucide/vue'
 import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork, uploadFile } from '../state'
@@ -8,6 +8,10 @@ import RelatedWorks from '../components/RelatedWorks.vue'
 import FollowButton from '../components/FollowButton.vue'
 import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
+const WorkRemixDialog = defineAsyncComponent(() => import('../components/WorkRemixDialog.vue'))
+const remixOpen = ref(false), remixButton = ref<HTMLButtonElement>()
+function openRemix() { mediaBrowser.value?.pause(); remixOpen.value = true }
+async function closeRemix() { remixOpen.value = false; await nextTick(); remixButton.value?.focus() }
 
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const mediaBrowser = ref<InstanceType<typeof WorkMedia>>()
@@ -30,7 +34,7 @@ let controller: AbortController | undefined
 async function load() {
   controller?.abort()
   const active = new AbortController(); controller = active
-  commentsDialog.value?.close(); relatedDialog.value?.close()
+  commentsDialog.value?.close(); relatedDialog.value?.close(); remixOpen.value = false
   loading.value = true; error.value = ''; work.value = null; comments.value = []; commentsCursor.value = null
   replyTo.value = null; commentText.value = ''; commentFiles.value = []; promptExpanded.value = false
   try {
@@ -127,6 +131,7 @@ async function share() {
 <template>
   <div v-if="loading" class="empty-state" role="status">正在加载作品…</div>
   <div v-else-if="work" class="page-container detail-page">
+    <WorkRemixDialog v-if="remixOpen" :key="work.id" :source="work" @close="closeRemix" />
     <header v-if="!mobile" class="detail-toolbar"><RouterLink to="/discover" class="detail-return"><ArrowLeft :size="20" aria-hidden="true" /><span>返回发现</span></RouterLink><div class="detail-context"><span>{{ kindLabels[work.kind] }}作品</span><span v-if="work.viewsCount !== undefined"><Eye :size="16" aria-hidden="true" />{{ work.viewsCount.toLocaleString('zh-CN') }} 次浏览</span></div></header>
     <div class="detail-layout">
       <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" /></Teleport>
@@ -145,7 +150,7 @@ async function share() {
             <h1>{{ work.title }}</h1>
             <section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
             <div class="detail-create">
-              <RouterLink :to="{ path: `/create/${work.kind === 'resource' ? 'text' : work.kind}`, query: { remix: work.id, prepare: '1' } }" class="button btn primary remix-button"><WandSparkles :size="20" aria-hidden="true" /><span>制作同款</span><ChevronRight :size="18" aria-hidden="true" /></RouterLink>
+              <button ref="remixButton" type="button" class="button btn primary remix-button" aria-haspopup="dialog" @click="openRemix"><WandSparkles :size="20" aria-hidden="true" /><span>制作同款</span><ChevronRight :size="18" aria-hidden="true" /></button>
               <span v-if="!mobile && work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
             </div>
             <details class="detail-metadata" :open="!mobile">

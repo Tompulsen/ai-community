@@ -11,10 +11,12 @@ import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import StudioBilling from './StudioBilling.vue'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
+import { usesGeminiImageChat } from '../../shared/studio/image-params'
 
-const props = defineProps<{ source: Work; issue: string; ready: boolean; busy: boolean; canFallback: boolean }>()
-const emit = defineEmits<{ apply: [files: StudioFile[]]; background: [files: StudioFile[]]; cancel: []; retry: []; fallback: [] }>()
+const props = defineProps<{ source: Work; issue: string; ready: boolean; busy: boolean; canFallback: boolean; backgroundOnly?: boolean }>()
+const emit = defineEmits<{ apply: [files: StudioFile[]]; background: [files: StudioFile[]]; cancel: []; retry: []; fallback: []; workbench: [] }>()
 const parameters = computed(() => readRemixParameters(props.source.generation?.parameters))
+const geminiImage = computed(() => props.source.kind === 'image' && usesGeminiImageChat(props.source.model))
 const dialog = ref<HTMLDialogElement>(), upload = ref<HTMLInputElement>()
 const selected = ref<string[]>([]), own = ref<StudioFile[]>([]), error = ref(''), importing = ref(false)
 const failed = ref<string[]>([]), failedThumbnails = ref<string[]>([]), selectedOwn = ref<string[]>([])
@@ -87,8 +89,8 @@ async function apply(withReferences: boolean, background = false) {
       <p v-if="!ready" class="form-note" role="status">正在读取提示词和参考图…</p>
       <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
       <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
-        <p>使用原作模型 {{ source.model || '（未提供）' }} 和已公开参数。后台生成会消耗积分，提交后返回作品，你可以继续浏览并在小窗中查看进度。</p>
-        <StudioBilling :model="source.model" :kind="source.kind" :quantity="parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="parameters?.protocol ?? 'openai'" hide-catalog />
+        <p>使用原作模型 {{ source.model || '（未提供）' }} 和已公开参数。后台生成会消耗积分，提交后{{ backgroundOnly ? '留在当前作品页' : '返回作品' }}，你可以继续浏览并在小窗中查看进度。</p>
+        <StudioBilling :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
       </section>
       <h3>本次使用的参考图</h3>
       <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>
@@ -119,7 +121,7 @@ async function apply(withReferences: boolean, background = false) {
       <p v-if="issue" class="form-error" role="alert">{{ issue }} <button v-if="canFallback" type="button" class="text-link" :disabled="pending" @click="emit('fallback')">使用当前配置</button><button type="button" class="text-link" :disabled="pending" @click="emit('retry')">重新读取原作</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
-    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button type="button" class="button btn" :class="{ primary: !count && source.kind === 'resource' }" :disabled="blocked || !source.prompt.trim()" @click="apply(false)">仅导入提示词</button><button v-if="count" type="button" class="button btn" :class="{ primary: source.kind === 'resource' }" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button><button v-if="source.kind !== 'resource'" type="button" class="button btn primary" :disabled="blocked || materials.failed.value || !source.prompt.trim() || !source.model" @click="apply(true, true)">后台生成同款</button></footer>
+    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button v-if="backgroundOnly" type="button" class="button btn" :disabled="pending" @click="emit('workbench')">进入工作台调整</button><template v-else><button type="button" class="button btn" :class="{ primary: !count && source.kind === 'resource' }" :disabled="blocked || !source.prompt.trim()" @click="apply(false)">仅导入提示词</button><button v-if="count" type="button" class="button btn" :class="{ primary: source.kind === 'resource' }" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button></template><button v-if="source.kind !== 'resource'" type="button" class="button btn primary" :disabled="blocked || materials.failed.value || !source.prompt.trim() || !source.model" @click="apply(true, true)"><LoaderCircle v-if="pending" :size="18" />后台生成同款</button></footer>
   </dialog>
 </template>
 

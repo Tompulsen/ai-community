@@ -42,6 +42,20 @@ it('awaits durable conversation registration before the paid POST and sends an i
   expect(body.references).toBeUndefined()
   expect(task.conversationPending).toBe(false)
 })
+it('stores the compatible Gemini parameters before registration and sends only one request', async () => {
+  const p = await fixture()
+  p.input.model = 'gemini-3-pro-image'
+  p.input.size = '1200x900'; p.input.exactSize = true
+  p.input.imageOptions = { seed: '42' } as any
+  const task = await p.submitCreation(p.input)
+  expect(p.send).toHaveBeenCalledTimes(1)
+  const body = JSON.parse(p.send.mock.calls[0]![1]!.body as string)
+  expect(body).toMatchObject({ model: p.input.model, size: 'auto', imageOptions: { seed: '' } })
+  expect(body.exactSize).toBeUndefined()
+  expect(task.request).toMatchObject({ size: 'auto', imageOptions: { seed: '' } })
+  expect(task.request.exactSize).toBeUndefined()
+  expect(p.input.imageOptions?.seed).toBe('42')
+})
 it('keeps a registration failure unsubmitted and excluded from automatic conversation synchronization', async () => {
   const p = await fixture()
   await expect(p.submitCreation(p.input, async () => { throw new Error('disk full') })).rejects.toThrow('disk full')
