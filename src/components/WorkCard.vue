@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue'
 import type { Work } from '../data'
 import { statusLabels } from '../data'
 import { pendingActions, toggleWork } from '../state'
-const props = defineProps<{ work: Work; management?: boolean; eager?: boolean }>()
+const props = defineProps<{ work: Work; management?: boolean; eager?: boolean; thumbnailOnly?: boolean }>()
 const failed = ref(false)
 const measuredRatio = ref<number>()
 const coverRatio = computed(() => {
@@ -33,7 +33,7 @@ function measureCover(event: Event) {
 </script>
 
 <template>
-  <article class="work-card" :class="{ 'work-card-managed': management }" :data-work-id="work.id">
+  <article class="work-card" :class="{ 'work-card-managed': management, 'work-card-thumbnail': thumbnailOnly }" :data-work-id="work.id">
     <div class="work-card-content">
     <RouterLink :to="`/work/${work.id}`" class="work-cover" :class="{ 'resource-cover': work.kind === 'resource' }" :style="{ aspectRatio: coverRatio }" :aria-label="coverLabel">
       <template v-if="work.kind === 'resource'"><div class="resource-top"><FileText :size="22" /><span>{{ work.tags.includes('Skill') ? 'SKILL' : '创作笔记' }}</span></div><strong class="resource-heading">{{ work.title }}</strong><p>{{ work.body?.split('\n').filter(Boolean).slice(0, 3).join(' ') }}</p><span v-if="!management" class="resource-bottom">阅读内容 <ArrowUpRight :size="16" /></span></template>
@@ -43,8 +43,8 @@ function measureCover(event: Event) {
       <span v-if="work.kind === 'video'" class="video-badge"><Play :size="12" fill="currentColor" /> {{ work.duration || '视频' }}</span>
       <span v-if="management" class="cover-status" :class="work.status">{{ work.revisionPending ? '修改待审核' : statusLabels[work.status] }}</span>
     </RouterLink>
-    <button class="save-work icon-button" :class="{ selected: work.saved }" :aria-label="`${work.saved ? '取消收藏' : '收藏'}：${work.title}`" :aria-pressed="work.saved" :title="work.saved ? '取消收藏' : '收藏作品'" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" /></button>
-    <div class="work-information">
+    <button v-if="!thumbnailOnly" class="save-work icon-button" :class="{ selected: work.saved }" :aria-label="`${work.saved ? '取消收藏' : '收藏'}：${work.title}`" :aria-pressed="work.saved" :title="work.saved ? '取消收藏' : '收藏作品'" :disabled="pendingActions.has(`saved:${work.id}`)" @click="toggleWork(work, 'saved')"><Bookmark :size="17" :fill="work.saved ? 'currentColor' : 'none'" /></button>
+    <div v-if="!thumbnailOnly" class="work-information">
       <RouterLink :to="`/work/${work.id}`" class="work-title title-4" :title="work.title">{{ work.title }}</RouterLink>
       <div class="work-meta">
         <RouterLink :to="{ path: '/community', query: { creator: work.authorId } }" class="work-author" :title="work.author"><span class="work-author-avatar" aria-hidden="true"><img v-if="work.avatarUrl" :src="work.avatarUrl" alt="" loading="lazy" /><span v-else>{{ work.avatar || work.author.slice(0, 1) }}</span></span><span>{{ work.author }}</span></RouterLink>
@@ -108,4 +108,7 @@ function measureCover(event: Event) {
   .resource-cover { padding: 12px 12px 40px; }
   .resource-heading { font-size: 16px; line-height: 22px; }
 }
+.work-card-thumbnail .resource-cover { padding: 10px; }
+.work-card-thumbnail .resource-top, .work-card-thumbnail .resource-bottom, .work-card-thumbnail .resource-cover > p { display: none; }
+.work-card-thumbnail .resource-heading { margin: 0; font-size: 12px; line-height: 18px; -webkit-line-clamp: 4; }
 </style>

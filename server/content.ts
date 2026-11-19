@@ -359,8 +359,15 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
         OR EXISTS (SELECT 1 FROM external_account identity WHERE identity."userId"=u.id AND identity.issuer=${issuer} AND identity.username ILIKE ${parameter})
         OR EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND t.name ILIKE ${parameter}))`);
     }
-    const tag = ctx.url.searchParams.get('tag');
-    if (tag) conditions.push(`EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND (t.id = ${add(text(tag, 100))} OR t.name = $${params.length}))`);
+    const tags = ctx.url.searchParams.getAll('tag').filter(Boolean);
+    if (tags.length > 3) fail(400, 'Choose at most three tags');
+    if (tags.length) {
+      const matches = [...new Set(tags)].map(tag => {
+        const parameter = add(text(tag, 100));
+        return `(t.id = ${parameter} OR t.name = ${parameter})`;
+      });
+      conditions.push(`EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND (${matches.join(' OR ')}))`);
+    }
     const status = ctx.url.searchParams.get('status');
     const visibility = ctx.url.searchParams.get('visibility');
     if (visibility && visibility !== 'all') {

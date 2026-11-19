@@ -45,6 +45,21 @@ test('admin status filters include the stored states displayed as published and 
   }
 });
 
+test('related works match any requested tag while keeping category and public visibility guards', async () => {
+  let statement, values;
+  const ctx = context({ path: '/api/works?kind=image&sort=latest&tag=摄影&tag=光影&limit=20', query: async (sql, parameters) => { statement = sql; values = parameters; return { rows: [] }; } });
+  await handleContent(ctx);
+  assert.equal(ctx.result.status, 200);
+  assert(values.includes('image'));
+  assert(values.includes('摄影'));
+  assert(values.includes('光影'));
+  assert.match(statement, /t\.id=ANY\(s\."tagIds"\) AND t\.category=s\.category AND NOT t\."isDeleted"/);
+  assert.match(statement, /\(t\.id = \$\d+ OR t\.name = \$\d+\) OR \(t\.id = \$\d+ OR t\.name = \$\d+\)/);
+  assert(statement.includes(publicVisibilitySql));
+  const tooMany = context({ path: '/api/works?sort=latest&tag=a&tag=b&tag=c&tag=d' });
+  await assert.rejects(handleContent(tooMany), error => error.statusCode === 400);
+});
+
 test('an arbitrary account id never grants access to private library', async () => {
   let queried = false;
   const ctx = context({ path: '/api/library?userId=anotheruser', query: async () => { queried = true; return { rows: [] }; } });
