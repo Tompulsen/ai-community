@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowUpRight, LogOut, ShieldCheck } from '@lucide/vue'
+import { ArrowUpRight, LogOut, Monitor, ShieldCheck } from '@lucide/vue'
 import { accountCenterUrl, accountApi, api, errorMessage, logout, notify, session, type LoginIdentifiers } from '../state'
 
 interface Security { external: boolean; accountUrl?: string }
@@ -74,7 +74,9 @@ async function moreLogins() {
       <section class="panel-section stack security-sessions">
         <h2>登录会话</h2>
         <div v-for="device in devices" :key="device.id" class="device-row">
+          <Monitor :size="20" aria-hidden="true" />
           <div><strong>{{ device.current ? '当前设备' : '其他设备' }}</strong><p class="caption-5 muted">{{ device.userAgent || '已有登录设备' }}</p><p class="caption-5 muted">{{ date(device.createdAt) }} · {{ device.ip || '来源未记录' }}</p></div>
+          <span v-if="device.current" class="device-current">当前</span>
         </div>
         <button type="button" class="button btn" :disabled="busy" @click="signOut"><LogOut :size="16" />退出当前设备</button>
       </section>
@@ -90,23 +92,28 @@ async function moreLogins() {
 </template>
 
 <style scoped>
-.login-identifiers { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px 24px; overflow-wrap: anywhere; }
+.login-identifiers { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px 24px; overflow-wrap: anywhere; margin: 0; padding-block: 16px; border-block: 1px solid var(--border); }
 .login-identifiers dt { color: var(--muted); }
 .login-identifiers dd { margin: 0; display: grid; gap: 4px; }
-.security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; align-items: start; }
+.security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
 .security-settings > .notice-inline, .security-settings > .empty-state, .security-identity, .security-sessions, .security-history { grid-column: 1 / -1; }
-.security-settings .panel-section { padding: 0 0 32px; }
+.security-settings .panel-section { padding: 0 0 24px; }
+.security-settings .panel-section + .panel-section { border-top: 1px solid var(--border); padding-top: 24px; }
 .security-settings .stack { gap: 16px; }
-.security-settings h2 { font-size: 18px; line-height: 28px; }
+.security-settings h2 { font-size: 16px; line-height: 24px; }
 .security-identity > .section-heading { margin: 0; }
 .security-identity > .button { align-self: flex-start; }
 .security-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .security-actions .button { flex: 0 1 auto; }
-.device-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.device-row { display: flex; align-items: flex-start; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.device-row > svg { color: var(--muted); margin-top: 4px; }
+.device-row strong { font-weight: 500; font-size: 14px; }
+.device-current { margin-inline-start: auto; padding: 4px 8px; border-radius: 4px; background: var(--surface-soft); color: var(--muted); font-size: 12px; flex: none; }
 .device-row:last-of-type { border-bottom: 0; }
 .device-row > div { min-width: 0; overflow-wrap: anywhere; }
 .device-row .icon-button { flex: 0 0 44px; width: 44px; height: 44px; }
 .device-row p { margin-top: 4px; }
 .security-sessions > .button, .security-history > .button { align-self: flex-start; }
 @media (max-width: 639px) { .security-actions .button { flex: 1 1 auto; } .device-row { gap: 16px; } }
+@media (max-width: 399px) { .login-identifiers { grid-template-columns: 80px minmax(0, 1fr); gap: 12px 16px; } }
 </style>

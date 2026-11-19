@@ -17,6 +17,7 @@ import { studioSidebarWidth } from './studio-preferences'
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
 const accountSettings = computed(() => route.path === '/account' && !!session.user)
+const accountSettingDetail = computed(() => accountSettings.value && typeof route.query.tab === 'string' && ['profile', 'privacy', 'following', 'theme', 'security', 'balance'].includes(route.query.tab))
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
@@ -222,7 +223,8 @@ function restoreMessageTrigger() {
     </aside>
     <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen, 'mobile-profile-header': profilePage }">
       <div class="mobile-header-row">
-        <button v-if="profilePage || workPage" type="button" class="icon-button mobile-back" aria-label="返回上一页" @click="mobileBack"><ArrowLeft :size="22" /></button>
+        <button v-if="accountSettingDetail" type="button" class="icon-button mobile-back" aria-label="返回账户设置" title="返回账户设置" @click="router.push('/account')"><ArrowLeft :size="22" /></button>
+        <button v-else-if="profilePage || workPage" type="button" class="icon-button mobile-back" aria-label="返回上一页" @click="mobileBack"><ArrowLeft :size="22" /></button>
         <CommunityTools v-else v-slot="{ close }" compact @toggle="toggleHeaderMenu" @message="showMessageCenter">
           <div class="mobile-account-tools">
             <template v-if="session.user">
@@ -242,7 +244,7 @@ function restoreMessageTrigger() {
           <RouterLink v-for="link in discoveryLinks" :key="link.kind" :to="discoveryDestination(link.kind)" :aria-label="link.description || link.label" :title="link.description" :aria-current="route.path === '/discover' && (route.query.kind || 'all') === link.kind ? 'page' : undefined">{{ link.label }}</RouterLink>
         </nav>
         <component v-else :is="profilePage || workPage ? 'strong' : 'h1'" class="mobile-page-title">{{ mobilePageTitle }}</component>
-        <div class="mobile-header-actions"><button ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>
+        <div class="mobile-header-actions"><button v-if="!accountSettings" ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>
       </div>
     </header>
     <header v-else-if="!guestAccount" v-show="!accountSettings" class="app-header"><div class="header-inner">

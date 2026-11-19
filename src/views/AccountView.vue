@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Check, ChevronDown, Eye, EyeOff, Image, LogOut, Palette, Save, Search, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
+import { ArrowRight, Check, ChevronDown, ChevronRight, Eye, EyeOff, Image, LogOut, Palette, Save, Search, Trash2, Upload, UserRound, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, uploadFile, type AccountStatus, type LoginIdentitySelection } from '../state'
@@ -24,8 +24,11 @@ const router = useRouter()
 const settingTabs = ['profile', 'privacy', 'following', 'theme', 'security', 'balance']
 const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'profile'
 const tab = ref(readTab(route.query.tab))
+const mobileSettings = inject<ComputedRef<boolean>>('mobile-community', computed(() => false))
+const settingsDetail = computed(() => typeof route.query.tab === 'string' && settingTabs.includes(route.query.tab))
+const showPanel = computed(() => !mobileSettings.value || settingsDetail.value)
 const privacyPanel = ref<InstanceType<typeof AccountPrivacy>>(), privacyDirty = ref(false)
-const settingsQuery = ref(''), settingsNav = ref<HTMLElement>()
+const settingsQuery = ref(''), settingsNav = ref<HTMLElement>(), settingsMain = ref<HTMLElement>()
 const avatarInput = ref<HTMLInputElement>(), bannerInput = ref<HTMLInputElement>()
 const avatarFailed = ref(false), bannerFailed = ref(false)
 const leaveDialog = ref<HTMLDialogElement>()
@@ -69,7 +72,10 @@ let profileUpload: AbortController | undefined
 const profileValue = () => JSON.stringify([name.value, bio.value, avatarId.value, bannerId.value])
 const dirty = computed(() => profileValue() !== baseline.value)
 function navigateTab(value: string) {
-  if (value !== tab.value) void router.push({ path: '/account', query: { tab: value } })
+  if (value !== tab.value || !showPanel.value) void router.push({ path: '/account', query: { tab: value } })
+}
+function revealProfileField(event: FocusEvent) {
+  if (event.target instanceof HTMLElement) event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 function confirmLeave() {
   if (!session.user || (!dirty.value && !uploading.value && !privacyDirty.value)) return true
@@ -86,7 +92,7 @@ function finishLeave(discard: boolean) {
   leaveDialog.value?.close(); resolveLeave?.(discard); resolveLeave = undefined
 }
 onBeforeRouteLeave(confirmLeave)
-onBeforeRouteUpdate(confirmLeave)
+onBeforeRouteUpdate(to => !settingsDetail.value && to.query.tab === tab.value ? true : confirmLeave())
 function beforeUnload(event: BeforeUnloadEvent) {
   if (session.user && (dirty.value || uploading.value || privacyDirty.value)) { event.preventDefault(); event.returnValue = '' }
 }
@@ -111,7 +117,18 @@ watch(() => session.user, user => {
     restoreProfile(user)
   } else if (!busy.value && !dirty.value) restoreProfile(user)
 }, { immediate: true, flush: 'sync' })
-watch(() => route.query.tab, value => { tab.value = readTab(value) })
+watch(() => route.query.tab, async (value, previous) => {
+  tab.value = readTab(value)
+  if (!mobileSettings.value) return
+  await nextTick()
+  if (settingsDetail.value) settingsMain.value?.focus({ preventScroll: true })
+  else {
+    const target = settingsNav.value?.querySelector<HTMLButtonElement>(`[data-setting="${previous === 'following' ? 'privacy' : readTab(previous)}"]`)
+      || settingsNav.value?.querySelector<HTMLButtonElement>('button')
+    target?.focus({ preventScroll: true })
+  }
+  window.scrollTo({ top: 0 })
+})
 watch([tab, () => session.user?.id, settingsQuery], async () => {
   await nextTick()
   const nav = settingsNav.value, item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
@@ -248,7 +265,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 </script>
 
 <template>
-  <div :class="session.user ? 'page-container settings-page' : 'auth-page'" :data-settings-tab="session.user ? tab : undefined">
+  <div :class="session.user ? 'page-container settings-page' : 'auth-page'" :data-settings-tab="session.user ? tab : undefined" :data-settings-detail="session.user ? settingsDetail : undefined">
     <aside v-if="!session.user" class="auth-visual">
       <RouterLink to="/discover" class="auth-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <LoginCharacters :is-typing="isTyping" :show-password="showPassword" :password-length="password.length" />
@@ -286,30 +303,38 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
       <p class="auth-browse">想先看看？<RouterLink to="/discover">浏览社区<ArrowUpRight :size="14" /></RouterLink></p>
     </div>
     <div v-else class="split-layout">
-      <aside class="settings-sidebar">
+      <aside v-show="!mobileSettings || !settingsDetail" class="settings-sidebar">
         <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
-            <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" :aria-pressed="tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /></button>
+            <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :data-setting="item.id" :class="{ active: showPanel && tab === item.id }" :aria-current="showPanel && tab === item.id ? 'page' : undefined" :aria-pressed="showPanel && tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'profile' && dirty || item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /><ChevronRight class="settings-nav-chevron" :size="16" aria-hidden="true" /></button>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
         </nav>
         <div class="settings-sidebar-footer"><a v-if="centerUrl" :href="centerUrl" class="settings-nav-item" target="_blank" rel="noopener noreferrer"><ArrowUpRight :size="18" aria-hidden="true" /><span>章鱼账户中心</span></a><button type="button" class="settings-nav-item signout" :disabled="busy" @click="signOutFromSettings"><LogOut :size="18" aria-hidden="true" /><span>退出登录</span></button></div>
       </aside>
-      <div class="settings-main">
+      <div v-show="showPanel" ref="settingsMain" class="settings-main" tabindex="-1">
         <section v-if="tab === 'profile'" class="panel-section profile-section">
           <div class="section-heading profile-heading"><div><h2>个人资料</h2><p class="form-note">设置你在社区中展示的公开信息。</p></div></div>
           <form id="profile-form" class="profile-form" @submit.prevent="saveProfile">
-            <div class="profile-card">
-              <div class="profile-cover"><img v-if="bannerUrl && !bannerFailed" :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /><div v-else class="profile-cover-empty"><Image :size="26" aria-hidden="true" /><span>{{ bannerFailed ? '封面暂时无法显示' : '添加一张属于你的主页封面' }}</span></div><button type="button" class="button cover-button btn" :disabled="busy" @click="bannerInput?.click()"><Image :size="16" aria-hidden="true" />更换封面</button></div>
-              <div class="profile-avatar-area"><img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" class="profile-avatar" @error="avatarFailed = true" /><div v-else class="profile-avatar profile-placeholder" :aria-label="avatarFailed ? '头像暂时无法显示' : '尚未设置头像'">{{ (name || session.user.username).slice(0, 1) }}</div><div class="profile-avatar-actions"><button type="button" class="button primary btn" :disabled="busy" @click="avatarInput?.click()"><Upload :size="16" aria-hidden="true" />更换头像</button><button v-if="avatarId" type="button" class="button subtle btn" :disabled="busy" @click="avatarId = null; avatarUrl = ''; saved = false">移除头像</button><button v-if="bannerId" type="button" class="button subtle btn" :disabled="busy" @click="bannerId = null; bannerUrl = ''; saved = false">移除封面</button></div><p class="form-note">头像与封面上传后，点击“保存资料”生效。</p></div>
+            <div class="profile-fields" @focusin="revealProfileField">
+            <div class="profile-media">
+              <div class="profile-media-row">
+                <div class="profile-row-label"><h3>头像</h3><p>展示在作品与评论中</p></div>
+                <div class="profile-avatar-area"><img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" class="profile-avatar" @error="avatarFailed = true" /><div v-else class="profile-avatar profile-placeholder" :aria-label="avatarFailed ? '头像暂时无法显示' : '尚未设置头像'">{{ (name || session.user.username).slice(0, 1) }}</div><div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="avatarInput?.click()"><Upload :size="16" aria-hidden="true" />更换头像</button><button v-if="avatarId" type="button" class="icon-button" aria-label="移除头像" title="移除头像" :disabled="busy" @click="avatarId = null; avatarUrl = ''; saved = false"><Trash2 :size="16" aria-hidden="true" /></button></div></div>
+              </div>
+              <div class="profile-media-row">
+                <div class="profile-row-label"><h3>主页封面</h3><p>用于你的个人主页</p></div>
+                <div class="profile-cover"><a v-if="bannerUrl && !bannerFailed" :href="bannerUrl" target="_blank" rel="noopener noreferrer" class="profile-cover-thumbnail" aria-label="查看完整封面" title="查看完整封面"><img :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /></a><div v-else class="profile-cover-empty" role="img" :aria-label="bannerFailed ? '封面暂时无法显示' : '尚未设置封面'"><Image :size="24" aria-hidden="true" /></div><div class="profile-media-actions"><button type="button" class="button subtle cover-button btn" :disabled="busy" @click="bannerInput?.click()"><Image :size="16" aria-hidden="true" />更换封面</button><button v-if="bannerId" type="button" class="icon-button" aria-label="移除封面" title="移除封面" :disabled="busy" @click="bannerId = null; bannerUrl = ''; saved = false"><Trash2 :size="16" aria-hidden="true" /></button></div></div>
+              </div>
             </div>
             <input id="profile-avatar" ref="avatarInput" hidden type="file" aria-label="头像" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" />
             <input id="profile-banner" ref="bannerInput" hidden type="file" aria-label="主页封面" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" />
             <div class="profile-field-group"><label class="field"><span>社区昵称</span><input v-model="name" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" aria-describedby="profile-name-help" @input="saved = false" /></label><div class="field-caption"><p id="profile-name-help">用于作品、评论和个人主页，不影响章鱼账号登录。</p><span>{{ name.length }}/50</span></div></div>
-            <div class="profile-field-group"><label class="field"><span>登录用户名</span><input :value="session.user.username" class="control" readonly aria-describedby="profile-username-help" /></label><div class="field-caption"><p id="profile-username-help">由章鱼账户中心管理。</p></div></div>
-            <div class="profile-field-group"><label class="field"><span>个人简介</span><textarea v-model="bio" class="control profile-bio" rows="6" maxlength="1500" :disabled="busy" aria-describedby="profile-bio-help" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label><div class="field-caption"><p id="profile-bio-help">让大家更了解你。</p><span>{{ bio.length }}/1500</span></div></div>
+            <div class="profile-field-group"><label class="field"><span>个人简介</span><textarea v-model="bio" class="control profile-bio" rows="3" maxlength="1500" :disabled="busy" aria-describedby="profile-bio-help" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label><div class="field-caption"><p id="profile-bio-help">让大家更了解你。</p><span>{{ bio.length }}/1500</span></div></div>
+            <div class="profile-identity"><dl><dt>登录用户名</dt><dd>{{ session.user.username }}</dd><template v-if="session.user.accountId"><dt>章鱼号</dt><dd>{{ session.user.accountId }}</dd></template></dl><a v-if="centerUrl" :href="centerUrl" class="text-link" target="_blank" rel="noopener noreferrer">管理账号<ArrowUpRight :size="14" aria-hidden="true" /></a></div>
             <details class="profile-preview"><summary><Eye :size="16" aria-hidden="true" />预览个人资料<ChevronDown class="preview-chevron" :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name || session.user.username }}</strong><span v-if="session.user.accountId">章鱼号：{{ session.user.accountId }}</span><p>{{ bio || '还没有填写个人简介。' }}</p></div></details>
+            </div>
             <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved" :size="15" aria-hidden="true" /><span v-else class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传' + (uploading === 'avatar' ? '头像…' : '封面…') : busy ? '正在保存资料…' : saved ? '资料已保存' : dirty ? '有未保存的修改' : '资料已同步' }}</p><button class="button primary btn" :disabled="busy"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存资料' }}</button></footer>
           </form>
         </section>
@@ -320,7 +345,7 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
         <div v-else class="balance-settings">
           <section class="panel-section balance-panel">
             <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。</p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>
-            <div class="balance-actions"><button type="button" class="icon-button balance-back" aria-label="返回账户设置" title="返回账户设置" @click="navigateTab('profile')"><ArrowLeft :size="18" /></button><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" aria-label="前往账户中心" title="前往账户中心" target="_blank" rel="noopener noreferrer"><span>前往账户中心</span><ArrowUpRight :size="16" /></a></div>
+            <div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" aria-label="前往账户中心" title="前往账户中心" target="_blank" rel="noopener noreferrer"><span>前往账户中心</span><ArrowUpRight :size="16" /></a></div>
           </section>
           <AccountWallet :wallet-enabled="account?.walletEnabled" @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
         </div>
@@ -333,11 +358,11 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 
 <style scoped>
 .identity-choice { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; overflow-wrap: anywhere; white-space: normal; gap: 4px; padding: 12px 16px; }
-.settings-page { max-width: 1240px; }
+.settings-page { max-width: 1200px; }
 .settings-page .page-heading h1 { font-size: 24px; line-height: 32px; }
-.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 40px; align-items: start; }
-.settings-sidebar { position: sticky; top: calc(var(--header-height) + 24px); min-width: 0; }
-.settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); }
+.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 48px; align-items: start; }
+.settings-sidebar { position: sticky; top: 24px; min-width: 0; }
+.settings-search { width: 100%; min-height: 44px; margin-bottom: 24px; background: var(--surface); border-color: var(--control-border); }
 .account-tabs { display: grid; gap: 24px; min-width: 0; }
 .settings-nav-group { display: grid; gap: 4px; }
 .settings-nav-group h2 { margin: 0 12px 8px; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
@@ -345,7 +370,9 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .settings-nav-item > span:first-of-type { flex: 1; }
 .settings-nav-item > svg { flex-shrink: 0; }
 .settings-nav-item:hover { background: var(--surface); color: var(--ink); }
-.settings-nav-item.active { background: var(--blue-soft); color: var(--blue-hover); }
+.settings-nav-item.active { background: var(--surface-soft); color: var(--ink); }
+.settings-nav-item.active::after { content: ''; width: 12px; height: 2px; flex: none; border-radius: 1px; background: currentColor; }
+.settings-nav-chevron { display: none; }
 .draft-dot, .save-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex-shrink: 0; }
 .save-dot { background: var(--green); }
 .save-dot.dirty { background: var(--amber); }
@@ -353,35 +380,54 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .settings-sidebar-footer .signout { color: var(--danger); }
 .settings-no-results { display: grid; gap: 12px; padding: 16px 12px; color: var(--muted); }
 .settings-no-results .text-link { justify-self: start; min-height: 44px; }
-.settings-main { min-width: 0; }
+.settings-main { min-width: 0; max-width: 760px; }
+.settings-main:focus { outline: none; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.panel-section) { border-top: 0; padding-top: 0; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading) { align-items: flex-start; margin-bottom: 24px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading h2) { font-size: 20px; line-height: 28px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading .form-note) { margin-top: 8px; font-size: 14px; line-height: 20px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: 48px; font-size: 16px; background: var(--surface); border-radius: 6px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.button) { min-height: 44px; }
 .profile-section { padding-top: 0; border: 0; }
 .profile-heading .form-note { margin-top: 8px; font-size: 14px; }
-.profile-form { display: grid; gap: 24px; }
-.profile-card { background: var(--surface); border-radius: 8px; overflow: hidden; }
-.profile-cover { position: relative; height: 180px; background: var(--surface-soft); }
-.profile-cover > img { width: 100%; height: 100%; object-fit: cover; }
-.profile-cover-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-size: 12px; padding: 24px 16px 48px; }
-.profile-cover .cover-button { position: absolute; top: 16px; right: 16px; background: var(--canvas); min-height: 44px; }
-.profile-avatar-area { position: relative; display: flex; flex-direction: column; align-items: center; padding: 0 24px 24px; }
-.profile-avatar { display: block; width: 96px; height: 96px; flex-shrink: 0; margin-top: -48px; border: 4px solid var(--surface); border-radius: 50%; object-fit: cover; background: var(--blue-soft); }
-.profile-placeholder { display: grid; place-items: center; font-size: 32px; color: var(--blue-hover); }
-.profile-avatar-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.profile-avatar-actions .button { min-height: 44px; }
-.profile-avatar-area > .form-note { margin-top: 12px; text-align: center; }
+.profile-form { display: flex; flex-direction: column; max-height: calc(100dvh - 220px); min-height: 0; }
+.profile-fields { display: grid; gap: 24px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 24px 0; scroll-padding-block: 16px; }
+.profile-media { display: grid; border-block: 1px solid var(--border); }
+.profile-media-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: center; gap: 24px; padding-block: 16px; }
+.profile-media-row + .profile-media-row { border-top: 1px solid var(--border); }
+.profile-row-label h3 { font-size: 14px; line-height: 20px; font-weight: 500; }
+.profile-row-label p { color: var(--muted); font-size: 12px; line-height: 20px; margin-top: 4px; }
+.profile-avatar-area, .profile-cover { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; min-width: 0; }
+.profile-avatar { width: 64px; height: 64px; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-soft); }
+.profile-placeholder { display: grid; place-items: center; font-size: 24px; color: var(--ink); }
+.profile-cover-thumbnail, .profile-cover-empty { display: grid; place-items: center; width: 112px; height: 64px; flex: none; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
+.profile-cover-thumbnail { display: block; }
+.profile-cover-thumbnail img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
+.profile-media-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.profile-media-actions .icon-button { width: 44px; height: 44px; border-color: transparent; background: transparent; color: var(--muted); }
+.profile-media-actions .icon-button:hover { color: var(--danger); background: var(--danger-soft); }
 .profile-field-group { display: grid; gap: 8px; min-width: 0; }
 .field-caption { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; color: var(--muted); font-size: 12px; line-height: 20px; }
 .field-caption > span { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .profile-form .control { background: var(--surface); }
-.profile-bio { min-height: 168px; }
-.profile-preview { background: var(--surface); border-radius: 6px; }
-.profile-preview summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 12px 16px; cursor: pointer; }
+.profile-bio { min-height: 96px; }
+.profile-identity { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; padding: 16px; background: var(--surface); border-radius: 6px; }
+.profile-identity dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 24px; margin: 0; min-width: 0; font-size: 12px; line-height: 20px; }
+.profile-identity dt { color: var(--muted); }
+.profile-identity dd { margin: 0; overflow-wrap: anywhere; }
+.profile-identity .text-link { min-height: 44px; color: var(--ink); }
+.profile-preview { border-bottom: 1px solid var(--border); }
+.profile-preview summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 12px 0; cursor: pointer; list-style: none; color: var(--muted); }
+.profile-preview summary::-webkit-details-marker { display: none; }
+.profile-preview summary:hover { color: var(--ink); }
 .preview-chevron { margin-left: auto; color: var(--muted); }
 .profile-preview[open] .preview-chevron { transform: rotate(180deg); }
-.profile-preview-body { display: grid; gap: 8px; padding: 0 20px 20px; overflow-wrap: anywhere; }
+.profile-preview-body { display: grid; gap: 8px; padding: 16px; margin-bottom: 16px; background: var(--surface); border-radius: 6px; overflow-wrap: anywhere; }
 .profile-preview-body > strong { font-size: 18px; font-weight: 500; }
 .profile-preview-body > span { color: var(--muted); font-size: 12px; }
 .profile-preview-body > p { white-space: pre-wrap; }
-.profile-savebar { position: sticky; bottom: calc(var(--mobile-nav-height) + 12px); z-index: 5; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 14px 20px; background: var(--surface-soft); border-radius: 8px; }
+.profile-savebar { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; background: var(--canvas); border-top: 1px solid var(--border); }
+.profile-form :is(input, textarea, summary, a, button) { scroll-margin-block: 16px; }
 .profile-save-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .profile-save-status > svg { color: var(--green); }
 .profile-savebar .button { min-height: 44px; }
@@ -392,26 +438,10 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 .balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary .form-note { margin-top: 4px; }
 .account-balance { font-size: 20px; line-height: 28px; margin: 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
-.balance-back { display: none; }
-@media (max-width: 899px) {
-  .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .settings-sidebar { position: static; }
-  .settings-search { margin-bottom: 12px; }
-  .account-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 12px; }
-  .settings-nav-group { display: contents; }
-  .settings-nav-group h2 { display: none; }
-  .settings-nav-item { flex-shrink: 0; }
-  .settings-sidebar-footer { display: flex; flex-wrap: wrap; margin-top: 0; padding-top: 8px; gap: 8px; }
-  .settings-sidebar-footer .settings-nav-item { padding-inline: 8px; font-size: 12px; }
-}
 @media (max-width: 639px) {
-  .profile-cover { height: 160px; }
-  .profile-cover-empty { padding: 60px 16px 48px; }
-  .profile-cover-empty > svg { display: none; }
-  .profile-avatar-area { padding-inline: 16px; }
-  .profile-avatar { width: 88px; height: 88px; margin-top: -44px; }
-  .profile-heading .form-note { font-size: 12px; }
-  .profile-savebar { padding: 12px; bottom: var(--mobile-nav-height); }
+  .profile-media-row { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .profile-row-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+  .profile-row-label p { margin-top: 0; }
   .profile-savebar .button { margin-left: auto; }
   .balance-settings .balance-panel { padding-bottom: 16px; }.balance-actions .button, .balance-actions .icon-button { min-height: 44px; }
 }
@@ -481,24 +511,25 @@ async function uploadProfile(event: Event, field: 'avatar' | 'banner') {
 }
 
 @media (max-width: 999px) {
-  .settings-page { padding-top: 12px; }
-  .settings-page > .page-heading { display: none; }
-  .settings-page .split-layout { gap: 16px; }
-  .settings-sidebar { padding: 12px; background: var(--surface); border-radius: 16px; }
-  .settings-page[data-settings-tab="balance"] .split-layout { grid-template-columns: minmax(0, 1fr); }
-  .settings-page[data-settings-tab="balance"] .page-heading { display: none; }
-  .settings-page[data-settings-tab="balance"] .settings-sidebar { display: none; }
+  .settings-page { padding-top: 24px; }
+  .settings-page .page-heading { display: none; }
+  .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .settings-sidebar { position: static; max-width: 760px; margin-inline: auto; width: 100%; }
+  .settings-search { margin-bottom: 24px; min-height: 48px; }
+  .account-tabs { display: grid; gap: 24px; }
+  .settings-nav-group { gap: 0; }
+  .settings-nav-group h2 { margin-inline: 0; }
+  .settings-nav-item { min-height: 56px; border-radius: 0; padding-inline: 0; font-size: 14px; border-bottom: 1px solid var(--border); }
+  .settings-nav-chevron { display: block; color: var(--muted); }
+  .settings-sidebar-footer { margin-top: 32px; border-top: 0; padding-top: 0; }
+  .settings-sidebar-footer .settings-nav-item { min-height: 48px; border-bottom: 0; }
+  .settings-main { width: 100%; margin-inline: auto; }
+  .profile-form { max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 128px); }
   .balance-settings { gap: 8px; }
   .balance-settings .balance-panel { gap: 8px; padding-bottom: 4px; }
   .balance-actions { flex: none; gap: 4px; }
-  .balance-actions .button, .balance-back { display: inline-flex; width: 44px; min-height: 44px; padding: 0; }
+  .balance-actions .button { display: inline-flex; width: 44px; min-height: 44px; padding: 0; }
   .balance-actions .button > span { display: none; }
-  .settings-search { border-radius: 10px; }
-  .account-tabs { gap: 4px; margin: 0; padding-bottom: 8px; }
-  .settings-nav-item { min-height: 44px; border-radius: 10px; font-size: 13px; }
-  .settings-page .control { font-size: 16px; border-radius: 10px; }
-  .settings-page .profile-cover { border-radius: 16px 16px 0 0; }
-  .profile-savebar { border-radius: 12px; }
   .auth-page { --canvas: var(--p-bg); --surface: var(--p-surface); --surface-soft: var(--p-surface); --ink: var(--p-ink); --muted: var(--p-muted); --border: color-mix(in srgb, var(--p-ink) 20%, transparent); --blue: var(--p-action); --blue-hover: var(--p-action); --blue-soft: color-mix(in srgb, var(--p-action) 15%, transparent); --action-ink: var(--p-action-ink); background: var(--canvas); color: var(--ink); color-scheme: inherit; }
   .auth-panel { padding: 28px 24px; min-height: 100dvh; }
   .auth-mobile-brand { margin-bottom: 40px; }

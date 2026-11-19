@@ -54,9 +54,9 @@ onBeforeUnmount(() => { generation++; controller?.abort(); emit('dirty', false) 
     <form v-else-if="settings" class="stack" @submit.prevent="save">
       <fieldset :disabled="saving" class="privacy-fields">
         <legend>关注审批</legend>
-        <label class="privacy-switch"><input v-model="settings.isLocked" type="checkbox" /><span><strong>关注请求需要批准</strong><small>新关注会先成为申请；已有粉丝不受影响，公开作品仍可正常浏览。</small></span></label>
+        <label class="privacy-switch"><span><strong>关注请求需要批准</strong><small>新关注会先成为申请；已有粉丝不受影响，公开作品仍可正常浏览。</small></span><input v-model="settings.isLocked" type="checkbox" /></label>
         <label class="field"><span>新账号关注审批</span><select v-model="settings.followApprovalLocalSeconds" class="control" :disabled="settings.isLocked"><option v-for="item in presets" :key="String(item.value)" :value="item.value">{{ item.label }}</option><option v-if="customPeriod" :value="settings.followApprovalLocalSeconds">已有自定义设置（{{ settings.followApprovalLocalSeconds }} 秒）</option></select><small class="form-note">按账号加入本社区的时间计算。开启全部审批后，所有新关注均需批准。</small></label>
-        <label class="privacy-switch"><input v-model="settings.autoAcceptFollowed" type="checkbox" /><span><strong>自动允许我关注的人的关注请求</strong><small>你已经关注的作者可以直接回关，无需再次审批。</small></span></label>
+        <label class="privacy-switch"><span><strong>自动允许我关注的人的关注请求</strong><small>你已经关注的作者可以直接回关，无需再次审批。</small></span><input v-model="settings.autoAcceptFollowed" type="checkbox" /></label>
       </fieldset>
       <fieldset :disabled="saving" class="privacy-fields"><legend>列表公开范围</legend>
         <label class="field"><span>关注列表可见范围</span><select v-model="settings.followingVisibility" class="control"><option value="public">公开</option><option value="followers">仅我的粉丝</option><option value="private">仅自己</option></select></label>
@@ -72,14 +72,29 @@ onBeforeUnmount(() => { generation++; controller?.abort(); emit('dirty', false) 
 </template>
 
 <style scoped>
-.privacy-settings { max-width: 800px; }
-.privacy-fields { border: 0; margin: 0; padding: 0; display: grid; gap: 24px; min-width: 0; }
+.privacy-settings { max-width: 800px; container: privacy / inline-size; }
+.privacy-fields { border: 0; margin: 0; padding: 0; display: grid; gap: 0; min-width: 0; }
 .privacy-fields + .privacy-fields { padding-top: 24px; border-top: 1px solid var(--border); }
-.privacy-fields legend { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
-.privacy-switch { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; min-height: 44px; }
-.privacy-switch input { width: 20px; height: 20px; flex: 0 0 auto; margin: 2px 0; accent-color: var(--action); }
-.privacy-switch span { display: grid; gap: 6px; min-width: 0; }
-.privacy-switch small { color: var(--muted); font-size: 13px; line-height: 1.65; }
-.privacy-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.privacy-fields legend { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+.privacy-switch { display: flex; align-items: center; justify-content: space-between; gap: 24px; cursor: pointer; min-height: 64px; padding-block: 16px; }
+.privacy-switch input { appearance: none; position: relative; width: 40px; height: 24px; flex: none; margin: 0; background: var(--surface-soft); border: 1px solid var(--control-border); border-radius: 999px; cursor: pointer; }
+.privacy-switch input::before { content: ''; position: absolute; inset-block-start: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); }
+.privacy-switch input:checked { background: var(--blue); border-color: var(--blue); }
+.privacy-switch input:checked::before { inset-inline-start: 19px; background: var(--action-ink); }
+.privacy-switch span { display: grid; gap: 4px; min-width: 0; }
+.privacy-switch strong { font-size: 14px; font-weight: 500; }
+.privacy-switch small { color: var(--muted); font-size: 12px; line-height: 20px; }
+.privacy-fields > .field { display: grid; grid-template-columns: minmax(0, 1fr) 200px; align-items: center; gap: 8px 24px; padding-block: 16px; }
+.privacy-fields > .field .control { grid-column: 2; grid-row: 1 / 3; }
+.privacy-fields > .field small { grid-column: 1; font-size: 12px; line-height: 20px; }
+.privacy-actions { display: flex; flex-wrap: wrap; gap: 12px; padding-block: 16px; border-top: 1px solid var(--border); }
 .privacy-actions button, select.control { min-height: 44px; }
+@container privacy (max-width: 560px) {
+  .privacy-fields > .field { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .privacy-fields > .field .control { grid-column: auto; grid-row: auto; }
+}
+@media (forced-colors: active) {
+  .privacy-switch input { appearance: auto; }
+  .privacy-switch input::before { display: none; }
+}
 </style>

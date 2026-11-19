@@ -20,7 +20,7 @@ for (const width of [1440, 390, 320]) {
         await expect(page.getByLabel('账号菜单', { exact: true })).toBeVisible()
         await page.getByLabel('账号菜单', { exact: true }).click()
         await page.locator('.profile-menu').getByRole('link', { name: '账号设置', exact: true }).click()
-      } else await page.goto('/account')
+      } else await page.goto('/account?tab=profile')
       await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
       await expect(page.locator('.header-inner')).toBeHidden()
       if (width >= 1000) {
@@ -40,21 +40,25 @@ for (const width of [1440, 390, 320]) {
       const baseline = await geometry()
       expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
       const nav = page.getByRole('navigation', { name: '账户设置', exact: true })
-      await nav.getByRole('button', { name: '账号安全', exact: true }).click()
+      const openSetting = async (name: string) => {
+        if (width < 1000) {
+          await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+          await expect(page.locator('.settings-main')).toBeHidden()
+          await expect(page.locator('.settings-sidebar')).toBeVisible()
+        }
+        await nav.getByRole('button', { name, exact: true }).click()
+      }
+      await openSetting('账号安全')
       await expect(page.getByRole('status')).toHaveText('正在加载安全设置…')
-      expect.soft(await geometry(), 'security loading').toEqual(baseline)
+      if (width >= 1000) expect.soft(await geometry(), 'security loading').toEqual(baseline)
       release()
       await expect(page.getByRole('heading', { name: '登录会话', exact: true })).toBeVisible()
-      expect.soft(await geometry(), 'security loaded').toEqual(baseline)
+      if (width >= 1000) expect.soft(await geometry(), 'security loaded').toEqual(baseline)
       for (const [label, tab] of [['我的账户', 'balance'], ['主题与外观', 'theme'], ['个人资料', 'profile']]) {
-        await nav.getByRole('button', { name: label, exact: true }).click()
+        await openSetting(label)
         await expect(page).toHaveURL(new RegExp(`tab=${tab}$`))
-        if (width < 1000 && tab === 'balance') {
-          await expect(page.locator('.settings-sidebar')).toBeHidden()
-          await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
-          await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('测试创作者')
-        }
-        expect.soft(await geometry(), label).toEqual(baseline)
+        if (width < 1000) await expect(page.locator('.settings-sidebar')).toBeHidden()
+        else expect.soft(await geometry(), label).toEqual(baseline)
         await expect(page.locator('.header-inner')).toBeHidden()
         expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
       }

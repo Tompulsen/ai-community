@@ -44,7 +44,7 @@ test('profile preview is plain text and unsaved edits survive cancelled navigati
   await page.getByRole('button', { name: '继续编辑', exact: true }).click()
   await expect(page).toHaveURL(/\/account$/)
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('未保存的昵称')
-  await page.getByRole('navigation', { name: '账户设置', exact: true }).getByRole('link', { name: '我的作品' }).click()
+  await page.locator('.community-rail').getByRole('link', { name: '首页', exact: true }).click()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).not.toBeVisible()
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('未保存的昵称')
@@ -162,10 +162,17 @@ test('account panels fit desktop, tablet and narrow phones with accessible contr
         expect(change.x + change.width).toBeLessThanOrEqual(cover.x + cover.width)
         expect(change.y).toBeGreaterThanOrEqual(cover.y)
         expect(change.y + change.height).toBeLessThanOrEqual(cover.y + cover.height)
+        await expect(page.getByRole('button', { name: '保存资料', exact: true })).toBeInViewport()
+        const fields = (await page.locator('.profile-fields').boundingBox())!
+        const savebar = (await page.locator('.profile-savebar').boundingBox())!
+        expect(fields.y + fields.height).toBeLessThanOrEqual(savebar.y + 1)
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-      const current = page.locator('.account-tabs [aria-current="page"]')
-      await expect(current).toBeInViewport()
+      if (width >= 1000) await expect(page.locator('.account-tabs [aria-current="page"]')).toBeInViewport()
+      else {
+        await expect(page.locator('.settings-sidebar')).toBeHidden()
+        await expect(page.getByRole('button', { name: '返回账户设置', exact: true })).toBeVisible()
+      }
       await page.screenshot({ path: `.impeccable/review/account-settings/${tab}-${width}.png`, fullPage: true })
       if (width === 1440 || width === 390) {
         const result = await new AxeBuilder({ page }).include('.settings-page').analyze()
@@ -173,4 +180,97 @@ test('account panels fit desktop, tablet and narrow phones with accessible contr
       }
     }
   }
+})
+
+test('mobile settings directory, return navigation and resize preserve protected drafts', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.setViewportSize({ width: 390, height: 740 })
+  await page.goto('/account')
+  const nav = page.getByRole('navigation', { name: '账户设置', exact: true })
+  await expect(page.locator('.settings-main')).toBeHidden()
+  await expect(nav.getByRole('button')).toHaveCount(5)
+  await page.screenshot({ path: test.info().outputPath('settings-directory-390.png') })
+  expect((await new AxeBuilder({ page }).include('.settings-page').analyze()).violations).toEqual([])
+  await nav.getByRole('button', { name: '个人资料', exact: true }).click()
+  await expect(page).toHaveURL(/tab=profile$/)
+  await expect(page.locator('.settings-sidebar')).toBeHidden()
+  await expect(page.locator('.settings-main')).toBeFocused()
+  await page.getByLabel('社区昵称', { exact: true }).fill('手机上的未保存昵称')
+  await page.getByLabel('个人简介', { exact: true }).focus()
+  const bio = (await page.getByLabel('个人简介', { exact: true }).boundingBox())!
+  const savebar = (await page.locator('.profile-savebar').boundingBox())!
+  expect(bio.y + bio.height).toBeLessThanOrEqual(savebar.y)
+  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '保留资料修改？' })).toBeVisible()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('手机上的未保存昵称')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(nav).toBeVisible()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('手机上的未保存昵称')
+  await page.setViewportSize({ width: 390, height: 740 })
+  await page.getByRole('button', { name: '保存资料', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('资料已保存')
+  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+  await expect(nav.getByRole('button', { name: '个人资料', exact: true })).toBeFocused()
+  await page.getByRole('searchbox', { name: '搜索设置' }).fill('外观')
+  await nav.getByRole('button', { name: '主题与外观', exact: true }).click()
+  await expect(page.getByRole('radio', { name: '明亮模式', exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.locator('.theme-settings')).toBeVisible()
+  await page.goBack()
+  await expect(nav).toBeVisible()
+  await expect(page.locator('.settings-main')).toBeHidden()
+})
+
+test('mobile deep links and invalid tabs return focus to the settings directory', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.setViewportSize({ width: 320, height: 740 })
+  await page.goto('/account?tab=following')
+  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '关注与隐私', exact: true })).toBeFocused()
+  await page.getByRole('searchbox', { name: '搜索设置' }).fill('密码')
+  await page.getByTitle('社区工具', { exact: true }).click()
+  await page.locator('.tools-grid').getByRole('link', { name: '关注申请', exact: true }).click()
+  await page.getByRole('button', { name: '返回账户设置', exact: true }).click()
+  await expect(page.getByRole('navigation', { name: '账户设置', exact: true }).getByRole('button', { name: '账号安全', exact: true })).toBeFocused()
+  await page.goto('/account?tab=invalid')
+  await expect(page.locator('.settings-sidebar')).toBeVisible()
+  await expect(page.getByRole('button', { name: '返回账户设置', exact: true })).toHaveCount(0)
+})
+
+test('a desktop root profile draft can be reopened from the mobile directory', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.goto('/account')
+  await page.getByLabel('社区昵称', { exact: true }).fill('缩窄窗口也保留')
+  await page.setViewportSize({ width: 390, height: 740 })
+  await page.getByRole('button', { name: '个人资料', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '保留资料修改？' })).not.toBeVisible()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('缩窄窗口也保留')
+  await page.getByRole('button', { name: '保存资料', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('资料已保存')
+})
+
+for (const width of [320, 390, 1440]) test(`profile controls and saved media remain reachable in a short viewport at ${width}px`, async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page, true)
+  Object.assign(fixture.state.user, {
+    avatarId: 'avatar', avatarUrl: '/assets/brand/octopus-community.jpg',
+    bannerId: 'banner', bannerUrl: '/assets/brand/octopus-community.jpg',
+  })
+  await page.setViewportSize({ width, height: width === 1440 ? 740 : 620 })
+  if (width === 1440) await page.addInitScript(() => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode: 'light' })))
+  await page.goto('/account?tab=profile')
+  await expect(page.getByAltText('当前头像')).toBeVisible()
+  await expect(page.getByAltText('当前主页封面')).toBeVisible()
+  await expect(page.getByRole('link', { name: '查看完整封面', exact: true })).toHaveAttribute('href', '/assets/brand/octopus-community.jpg')
+  await expect(page.getByRole('button', { name: '保存资料', exact: true })).toBeInViewport()
+  await page.screenshot({ path: test.info().outputPath(`compact-profile-${width}.png`) })
+  await page.getByLabel('个人简介', { exact: true }).fill('简短视口中的资料也可以继续编辑')
+  const bio = (await page.getByLabel('个人简介', { exact: true }).boundingBox())!
+  const footer = (await page.locator('.profile-savebar').boundingBox())!
+  expect(bio.y + bio.height).toBeLessThanOrEqual(footer.y)
+  await page.locator('.profile-preview summary').click()
+  await expect(page.locator('.profile-preview-body')).toBeInViewport()
+  await page.getByRole('button', { name: '保存资料', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('资料已保存')
+  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body).toMatchObject({ avatarId: 'avatar', bannerId: 'banner' })
 })
