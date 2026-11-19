@@ -3,9 +3,9 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Send, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
-import { kindLabels, type Work } from '../data'
+import type { Work } from '../data'
 import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
-const dialog = ref<HTMLDialogElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
+const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
 interface Tag { id: string; category: string; name: string }
 const tags = ref<Tag[]>([]), tagIds = ref<string[]>([]), tagQuery = ref(''), tagsLoading = ref(false), tagsError = ref('')
@@ -42,6 +42,10 @@ function toggleTag(id: string) {
   if (tagIds.value.includes(id)) tagIds.value = tagIds.value.filter(value => value !== id)
   else if (tagIds.value.length < 3) tagIds.value.push(id)
 }
+function revealInvalid(event: Event) {
+  const details = (event.target as HTMLInputElement).closest('details')
+  if (details) details.open = true
+}
 async function open(value: CreationTask, target: CreationDestination = 'community', currentText?: string) {
   if (busy.value || value.phase !== 'complete' || value.owner !== session.user?.id) return
   const current = ++revision
@@ -55,6 +59,7 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
   tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagQuery.value = ''; tagsError.value = ''; rights.value = Boolean(previous)
   if (target === 'community' && !previous?.work) void loadTags()
   await nextTick(); if (current !== revision) return
+  if (extra.value) extra.value.open = false
   dialog.value?.showModal()
   if (previous?.work) {
     busy.value = true
@@ -67,8 +72,8 @@ async function submit() {
   if (!task.value || busy.value || result.value) return
   error.value = ''
   if (!direct.value && !locked.value) {
-    if (tagsLoading.value || tagsError.value) { error.value = '请先加载作品标签后再提交。'; return }
-    if (tagIds.value.length < 1 || tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id))) { error.value = '请选择 1–3 个当前分类的作品标签。'; return }
+    if (tagIds.value.length && (tagsLoading.value || tagsError.value)) { if (extra.value) extra.value.open = true; error.value = '请先加载所选作品标签后再提交。'; return }
+    if (tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id))) { if (extra.value) extra.value.open = true; error.value = '请最多选择 3 个当前分类的作品标签。'; return }
     if (!rights.value) { error.value = '请先确认作品发布权。'; return }
   }
   const details: PublicationDetails | undefined = direct.value ? undefined : { tagIds: [...tagIds.value], prompt: prompt.value, sourceUrl: sourceUrl.value.trim(), license: license.value.trim(), referenceIndices: [...referenceIndices.value].sort((a, b) => a - b) }
@@ -79,7 +84,7 @@ async function submit() {
     if (current !== revision) return
     result.value = response.work
     notify(resultMessage.value)
-  } catch (cause) { if (current === revision) { error.value = errorMessage(cause); if (!direct.value && !locked.value && (cause as { status?: number }).status === 400) void loadTags() } }
+  } catch (cause) { if (current === revision) { error.value = errorMessage(cause); if (!direct.value && !locked.value) { if (extra.value) extra.value.open = true; if ((cause as { status?: number }).status === 400) void loadTags() } } }
   finally { if (current === revision) busy.value = false }
 }
 defineExpose({ open })
@@ -87,17 +92,18 @@ defineExpose({ open })
 <template>
   <Teleport to="body"><dialog ref="dialog" class="compact-dialog studio-publish-dialog" aria-labelledby="studio-publish-title" @cancel="busy && $event.preventDefault()">
     <div class="dialog-heading"><h2 id="studio-publish-title">{{ heading }}</h2><button class="icon-button" aria-label="关闭发布作品" :disabled="busy" @click="dialog?.close()"><X :size="18" /></button></div>
-    <form v-if="task" class="dialog-body stack" @submit.prevent="submit">
+    <form v-if="task" class="dialog-body stack" @submit.prevent="submit" @invalid.capture="revealInvalid">
       <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url)" :alt="task.prompt" /></template></div>
       <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，按社区审核设置公开。</p>
       <template v-if="!result">
-        <p v-if="!direct" class="publish-context">{{ kindLabels[category] }} · {{ task.model }}<span>已带入生成结果与参数</span></p>
         <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
-        <label class="field"><span>{{ direct ? '评论内容' : '作品简介' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" :placeholder="direct ? '分享你的同款创作' : '介绍作品、创作过程或填写文本作品内容…'" /></label>
+        <label v-if="direct || category === 'resource'" class="field"><span>{{ direct ? '评论内容' : '资源内容' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" /></label>
         <template v-if="!direct">
+          <details ref="extra" class="publish-details publish-extras"><summary><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></summary><div class="stack">
+          <label v-if="category !== 'resource'" class="field"><span>作品简介</span><textarea v-model="text" class="control" rows="2" maxlength="2500" :disabled="busy || locked" /></label>
           <fieldset class="publish-tags" :disabled="busy || locked" aria-describedby="publish-tags-hint">
             <legend>作品标签 <span>{{ tagIds.length }} / 3</span></legend>
-            <p id="publish-tags-hint" class="form-note">选择 1–3 个{{ kindLabels[category] }}标签，让作品更容易被发现。</p>
+            <p id="publish-tags-hint" class="form-note">最多选择 3 个标签。</p>
             <p v-if="tagsLoading" role="status" class="form-note">正在加载标签…</p>
             <div v-else-if="tagsError" class="stack"><p class="form-error" role="alert">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
             <template v-else-if="tags.length">
@@ -105,12 +111,14 @@ defineExpose({ open })
               <div class="publish-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
               <p v-if="!visibleTags.length" class="form-note">没有匹配的标签，试试其他关键词。</p>
             </template>
-            <p v-else class="form-note">此分类暂无可用标签，请联系管理员添加后重试。</p>
+            <p v-else class="form-note">暂无可用标签。</p>
           </fieldset>
           <label class="field"><span>生成提示词（选填）</span><textarea v-model="prompt" class="control" rows="4" maxlength="100000" :disabled="busy || locked" aria-describedby="publish-prompt-hint" /></label>
+          <p class="publish-context">{{ task.model }}</p>
           <p id="publish-prompt-hint" class="form-note">制作同款会使用这里的提示词和选中的参考图，作品简介不会作为提示词导入。</p>
           <fieldset v-if="task.references.length" class="publish-references" :disabled="busy || locked"><legend>公开参考图</legend><p class="form-note">仅勾选你希望随作品公开、供他人制作同款的参考图。</p><div class="publish-reference-options"><label v-for="(reference, index) in task.references" :key="index"><input v-model="referenceIndices" type="checkbox" :value="index" /><img :src="mediaSource(reference.url)" alt="" /><span>{{ reference.name || `参考图 ${index + 1}` }}</span></label></div></fieldset>
-          <details class="publish-details"><summary>补充来源与授权（选填）</summary><div class="stack"><label class="field"><span>来源链接</span><input v-model="sourceUrl" class="control" type="url" maxlength="2000" placeholder="https://" :disabled="busy || locked" /></label><label class="field"><span>授权说明</span><input v-model="license" class="control" maxlength="200" placeholder="例如：允许署名分享，商用请联系作者" :disabled="busy || locked" /></label></div></details>
+          <label class="field"><span>来源链接</span><input v-model="sourceUrl" class="control" type="url" maxlength="2000" placeholder="https://" :disabled="busy || locked" /></label><label class="field"><span>授权说明</span><input v-model="license" class="control" maxlength="200" :disabled="busy || locked" /></label>
+          </div></details>
           <label class="publish-rights"><input v-model="rights" type="checkbox" :disabled="busy || locked" /><span>我确认拥有作品发布权，并已核实所填写的来源与授权说明。</span></label>
         </template>
         <p v-if="locked && !busy" class="form-note">将使用上次提交的内容重试，避免重复发布。</p>
@@ -127,7 +135,10 @@ defineExpose({ open })
 .publish-preview img, .publish-preview video { width: min(220px, 70vw); max-height: 200px; object-fit: contain; border-radius: 8px; background: var(--surface); }
 .form-note a { color: var(--blue); }
 .publish-context { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
-.publish-context span { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 4px; }
+.publish-extras { border-top: 1px solid var(--border); }
+.publish-extras > summary { color: var(--muted); }
+.publish-extras > summary small { display: block; font-size: 12px; line-height: 20px; }
+.studio-publish-dialog .dialog-body > .button { position: sticky; bottom: 0; flex: none; }
 .publish-tags, .publish-references { border: 0; padding: 0; margin: 0; min-width: 0; }
 .publish-tags legend, .publish-references legend { padding: 0; margin-bottom: 8px; }
 .publish-tags legend span { color: var(--muted); margin-left: 8px; font-size: 12px; }

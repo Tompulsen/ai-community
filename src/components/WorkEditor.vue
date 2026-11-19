@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowDown, ArrowUp, ArrowLeftRight, FileText, ImagePlus, Save, Trash2, Upload, X } from '@lucide/vue'
+import { ChevronDown, ImagePlus, PenLine, Plus, Save, SlidersHorizontal, Upload, X } from '@lucide/vue'
+import WorkAttachments from './WorkAttachments.vue'
 import { kindLabels, type Work, type WorkFile, type WorkKind } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session, uploadFile } from '../state'
 
@@ -10,7 +11,11 @@ const emit = defineEmits<{ close: []; saved: [work: Work] }>()
 const dialog = ref<HTMLDialogElement>()
 const leaveDialog = ref<HTMLDialogElement>()
 const router = useRouter()
-const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: '', model: '', sourceUrl: '', license: '' })
+const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: [] as string[], model: '', sourceUrl: '', license: '' })
+const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), referenceInput = ref<HTMLInputElement>()
+const writing = ref(false), autoKind = ref(true), tagQuery = ref(''), tagOptions = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
+const visibleTags = computed(() => [...new Set([...draft.tags, ...tagOptions.value])].filter(name => name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
+let tagLoadId = 0
 const files = ref<WorkFile[]>([])
 const references = ref<WorkFile[]>([])
 const version = ref(0)
@@ -27,7 +32,11 @@ const snapshot = () => JSON.stringify({ ...draft, files: files.value.map(file =>
 const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
 function fill(work?: Work | null) {
-  Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: work?.tags.join('，') || '', model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
+  Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
+  writing.value = work?.kind === 'resource'
+  autoKind.value = !work || work.status === 'draft' && work.kind !== 'resource' && !work.generation?.parameters && !(work.files || []).some(file => file.type.startsWith(`${work.kind}/`))
+  tagQuery.value = ''; tagsError.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
+  if (extra.value) extra.value.open = false
   files.value = [...(work?.files || [])]
   references.value = [...(work?.referenceFiles || [])]
   version.value = work?.version || 0
@@ -43,11 +52,41 @@ watch(() => [props.open, props.work?.id] as const, async ([open]) => {
   loading.value = true
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.work.id)}`)
-    if (current === loadId) fill(result.work)
+    if (current === loadId) { fill(result.work); void loadTags() }
   } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
   finally { if (current === loadId) loading.value = false }
 }, { immediate: true })
 
+async function loadTags() {
+  const current = ++tagLoadId, kind = draft.kind
+  tagsLoading.value = true; tagsError.value = ''
+  try {
+    const result = await api<{ items: { name: string; category: WorkKind }[] }>(`/api/tags?kind=${kind}`)
+    if (current !== tagLoadId) return
+    if (!Array.isArray(result.items)) throw new Error('标签暂时不可用。')
+    tagOptions.value = result.items.filter(tag => tag.category === kind).map(tag => tag.name)
+  } catch (cause) { if (current === tagLoadId) tagsError.value = errorMessage(cause) }
+  finally { if (current === tagLoadId) tagsLoading.value = false }
+}
+watch([() => props.open, () => draft.kind], ([open]) => { if (open) void loadTags() }, { immediate: true })
+function toggleTag(name: string) {
+  if (draft.tags.includes(name)) draft.tags = draft.tags.filter(value => value !== name)
+  else if (draft.tags.length < 3) draft.tags.push(name)
+}
+function inferKind() {
+  if (!autoKind.value) return
+  const kind: WorkKind = writing.value || files.value.some(file => !/^(image|video)\//.test(file.type)) ? 'resource'
+    : files.value.some(file => file.type.startsWith('video/')) ? 'video' : 'image'
+  if (draft.kind !== kind) { draft.kind = kind; draft.tags = [] }
+}
+function writeContent() { writing.value = true; inferKind() }
+function useFiles() { writing.value = false; inferKind() }
+function showUpload() { fileInput.value?.click() }
+function invalidField(event: Event) {
+  const input = event.target as HTMLInputElement
+  const details = input.closest('details')
+  if (details) details.open = true
+}
 function confirmLeave() {
   if (!props.open) return true
   if (saving.value || uploading.value || resolveLeave) return false
@@ -88,6 +127,7 @@ async function choose(event: Event, reference = false) {
       const uploaded = await uploadFile(file, request.signal)
       if (current !== loadId || session.user?.id !== owner) return
       target.value.push(uploaded)
+      if (!reference) inferKind()
     }
   } catch (cause) { if (current === loadId && !request.signal.aborted) error.value = errorMessage(cause) }
   finally { if (current === loadId) uploading.value = false }
@@ -105,18 +145,25 @@ function changeRole(index: number, reference: boolean) {
   const file = from[index]
   if (!file || to.length >= 16 || (!reference && !file.type.startsWith('image/'))) return
   from.splice(index, 1); to.push(file)
+  inferKind()
+  if (!reference && extra.value) extra.value.open = true
+}
+function removeFile(index: number, reference = false) {
+  const target = reference ? references.value : files.value
+  target.splice(index, 1)
+  if (!reference) inferKind()
 }
 async function save(status: 'draft' | 'pending') {
   if (saving.value || uploading.value || loading.value) return
   if (!draft.title.trim()) { error.value = '请填写作品标题。'; return }
-  if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { error.value = '来源请填写完整的 http 或 https 链接。'; return }
-  if (draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
-  if (draft.kind === 'resource' && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
+  if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
+  if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
+  if (status !== 'draft' && draft.kind === 'resource' && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
   saving.value = true; error.value = ''
   const current = loadId, owner = session.user?.id
   try {
     const body = {
-      ...draft, title: draft.title.trim(), tags: [...new Set(draft.tags.split(/[,，\s]+/).filter(Boolean))].slice(0, 10),
+      ...draft, title: draft.title.trim(), tags: [...draft.tags],
       fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
     }
@@ -128,30 +175,56 @@ async function save(status: 'draft' | 'pending') {
     notify(result.work.revisionPending || result.work.status === 'pending' ? '作品已提交审核。' : result.work.status === 'draft' ? '草稿已保存。' : '作品已保存。')
     requestId.value = crypto.randomUUID()
     emit('close')
-  } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
+  } catch (cause) { if (current === loadId) { error.value = errorMessage(cause); if (extra.value) extra.value.open = true } }
   finally { if (current === loadId) saving.value = false }
 }
-onBeforeUnmount(() => { loadId++; controller?.abort(); removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
+onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
 </script>
 
 <template>
   <dialog ref="dialog" class="editor-dialog" aria-labelledby="work-editor-heading" @close="props.open && emit('close')" @cancel.prevent="close">
     <div class="dialog-heading"><h2 id="work-editor-heading">{{ work ? '编辑作品' : '发布作品' }}</h2><button class="icon-button" aria-label="关闭作品编辑" :disabled="saving || uploading" @click="close"><X :size="20" /></button></div>
-    <form class="dialog-body stack" @submit.prevent="save('pending')">
-      <p v-if="loading" role="status">正在加载作品…</p>
-      <fieldset :disabled="loading || saving || uploading" class="editor-fields">
-        <div class="editor-columns"><label class="field"><span>作品类型</span><select v-model="draft.kind" class="control"><option v-for="(label, value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></label><label class="field"><span>作品标题</span><input v-model="draft.title" class="control" maxlength="100" required /></label></div>
-        <label class="field"><span>{{ draft.kind === 'resource' ? '资源内容' : '创作说明' }}</span><textarea v-model="draft.body" class="control" rows="4" maxlength="20000" /></label>
-        <label class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="4" maxlength="100000" /></label>
-        <div class="editor-columns"><label class="field"><span>标签</span><input v-model="draft.tags" class="control" maxlength="500" placeholder="用逗号分隔" /></label><label class="field"><span>模型</span><input v-model="draft.model" class="control" maxlength="100" /></label><label class="field"><span>来源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" /></label><label class="field"><span>授权许可</span><input v-model="draft.license" class="control" maxlength="200" /></label></div>
-        <section v-for="group in [{ reference: false, title: '作品文件', items: files }, { reference: true, title: '参考图', items: references }]" :key="group.title" class="attachment-section">
-          <div class="section-heading"><h3 class="title-4">{{ group.title }} · {{ group.items.length }}/16</h3><label class="button subtle btn"><ImagePlus :size="16" />添加文件<input type="file" multiple :accept="group.reference ? 'image/*' : undefined" aria-label="添加附件" @change="choose($event, group.reference)" /></label></div>
-          <ul v-if="group.items.length" class="attachment-list"><li v-for="(file, index) in group.items" :key="file.id"><a :href="file.url" target="_blank" rel="noopener noreferrer" class="file-name"><img v-if="file.type.startsWith('image/')" :src="file.thumbnailUrl || file.url" :alt="file.name" /><FileText v-else :size="22" /><span>{{ file.name }}</span></a><div class="table-actions"><button type="button" class="icon-button" aria-label="向前移动" title="向前移动" :disabled="index === 0" @click="move(index, group.reference, -1)"><ArrowUp :size="15" /></button><button type="button" class="icon-button" aria-label="向后移动" title="向后移动" :disabled="index === group.items.length - 1" @click="move(index, group.reference, 1)"><ArrowDown :size="15" /></button><button v-if="group.reference || file.type.startsWith('image/')" type="button" class="icon-button" :aria-label="group.reference ? '移至作品文件' : '移至参考图'" :title="group.reference ? '移至作品文件' : '移至参考图'" @click="changeRole(index, group.reference)"><ArrowLeftRight :size="15" /></button><button type="button" class="icon-button" :aria-label="`移除 ${file.name}`" title="移除附件" @click="group.items.splice(index, 1)"><Trash2 :size="15" /></button></div></li></ul>
-          <p v-else class="form-note">暂无{{ group.title }}</p>
-        </section>
-      </fieldset>
-      <p v-if="uploading" role="status">正在上传文件…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
-      <div class="dialog-footer"><span class="caption-5">{{ work?.revisionPending ? '本次保存将更新待审核修改。' : '' }}</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || uploading" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || uploading"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交作品' }}</button></div></div>
+    <form class="editor-form" @submit.prevent="save('pending')" @invalid.capture="invalidField">
+      <div class="editor-scroll">
+        <p v-if="loading" role="status">正在加载作品…</p>
+        <fieldset :disabled="loading || saving || uploading" class="editor-fields editor-layout">
+          <legend class="editor-sr-only">作品信息</legend>
+          <section class="attachment-section editor-media" aria-label="作品文件">
+            <input ref="fileInput" type="file" multiple hidden aria-label="添加作品文件" @change="choose($event)" />
+            <button v-if="!files.length && !writing" type="button" class="upload-area" @click="showUpload"><ImagePlus :size="40" :stroke-width="1.8" aria-hidden="true" /><span>添加作品</span></button>
+            <div v-else class="section-heading"><span class="form-note">{{ draft.kind === 'resource' ? '资源' : kindLabels[draft.kind] }} · {{ files.length }}/16</span><button type="button" class="button subtle btn" @click="showUpload"><Plus :size="16" aria-hidden="true" />添加文件</button></div>
+            <WorkAttachments :files="files" featured @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
+            <label v-if="draft.kind === 'resource'" class="field resource-content"><span>资源内容</span><textarea v-model="draft.body" class="control" rows="7" maxlength="20000" /></label>
+            <button v-if="autoKind && (writing || !files.length)" type="button" class="write-content" @click="writing ? useFiles() : writeContent()"><ImagePlus v-if="writing" :size="16" aria-hidden="true" /><PenLine v-else :size="16" aria-hidden="true" />{{ writing ? '使用文件投稿' : '填写内容' }}</button>
+          </section>
+          <div class="editor-content">
+          <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
+          <details ref="extra" class="editor-extras">
+            <summary><SlidersHorizontal :size="18" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="draft.prompt.trim() || references.length">{{ draft.prompt.trim() ? '含提示词' : '' }}{{ draft.prompt.trim() && references.length ? ' · ' : '' }}{{ references.length ? `${references.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="18" aria-hidden="true" /></summary>
+            <div class="editor-fields">
+              <label v-if="draft.kind !== 'resource'" class="field"><span>作品简介</span><textarea v-model="draft.body" class="control" rows="2" maxlength="20000" /></label>
+              <fieldset class="editor-tags"><legend>标签 <span>{{ draft.tags.length }}/3</span></legend>
+                <p v-if="tagsLoading" class="form-note" role="status">正在加载标签…</p>
+                <div v-else-if="tagsError" class="tag-error"><p class="form-note">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
+                <label v-if="tagOptions.length > 8" class="field"><span class="editor-sr-only">搜索标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
+                <div class="editor-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="!draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
+                <p v-if="!tagsLoading && !tagsError && !visibleTags.length" class="form-note">{{ tagQuery ? '没有匹配的标签' : '暂无可用标签' }}</p>
+              </fieldset>
+              <label class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="3" maxlength="100000" /></label>
+              <div class="editor-columns"><label class="field"><span>模型</span><input v-model="draft.model" class="control" maxlength="100" /></label><label class="field"><span>来源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" /></label></div>
+              <label class="field"><span>授权许可</span><input v-model="draft.license" class="control" maxlength="200" /></label>
+              <section class="attachment-section" aria-label="参考图">
+                <div class="section-heading"><h3 class="title-4">参考图 · {{ references.length }}/16</h3><button type="button" class="button subtle btn" @click="referenceInput?.click()"><ImagePlus :size="16" aria-hidden="true" />添加参考图</button></div>
+                <input ref="referenceInput" type="file" multiple accept="image/*" hidden aria-label="添加参考图" @change="choose($event, true)" />
+                <WorkAttachments :files="references" reference @move="(index, direction) => move(index, true, direction)" @role="index => changeRole(index, true)" @remove="index => removeFile(index, true)" />
+              </section>
+            </div>
+          </details>
+          </div>
+        </fieldset>
+      </div>
+      <div class="editor-feedback"><p v-if="uploading" role="status">正在上传文件…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p></div>
+      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || uploading" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || uploading"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
     </form>
   </dialog>
   <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">
@@ -161,31 +234,67 @@ onBeforeUnmount(() => { loadId++; controller?.abort(); removeGuard(); window.rem
 </template>
 
 <style scoped>
-.editor-dialog { width: 840px; max-width: calc(100vw - 32px); }
+.editor-dialog { width: 880px; max-width: calc(100dvw - 32px); background: var(--surface); }
+.editor-dialog[open] { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); overflow: hidden; }
+.editor-dialog > .dialog-heading { flex: none; padding: 16px 24px; }
+.editor-dialog > .dialog-heading .icon-button { width: 44px; height: 44px; }
+.editor-form { display: flex; flex-direction: column; min-height: 0; }
+.editor-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.editor-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
-.editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.attachment-section { min-width: 0; padding-top: 8px; }
-.attachment-section input[type=file] { display: none; }
-.attachment-list { padding: 0; margin: 0; list-style: none; }
-.attachment-list li { display: flex; align-items: center; gap: 8px; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 8px 0; }
-.file-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.file-name img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
-.file-name span { overflow-wrap: anywhere; }
-.table-actions { flex-shrink: 0; }
-@media (max-width: 639px) { .editor-columns { grid-template-columns: 1fr; } .attachment-list li { flex-wrap: wrap; } .table-actions { margin-left: auto; } }
-
-@media (max-width: 999px) {
-  .editor-dialog { width: calc(100vw - 24px); max-width: 680px; border-radius: 16px; }
-  .editor-dialog .dialog-heading { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-  .editor-columns { grid-template-columns: minmax(0, 1fr); }
-  .editor-fields { gap: 20px; }
-  .editor-dialog .control { font-size: 16px; min-height: 44px; border-radius: 10px; }
-  .editor-dialog .dialog-footer { position: sticky; bottom: -16px; z-index: 1; margin: 0 -16px -16px; padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); }
-  .editor-dialog .dialog-footer > div { display: flex; flex: 1; gap: 8px; }
-  .editor-dialog .dialog-footer .button { flex: 1; min-height: 44px; justify-content: center; }
-  .attachment-section { padding: 12px; background: var(--surface-soft); border-radius: 12px; }
+.editor-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 0; }
+.editor-media { padding: 24px; background: var(--canvas); }
+.editor-content { min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+.editor-title small { color: var(--muted); font-size: 12px; line-height: 16px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.editor-title .control { min-height: 48px; font-size: 16px; }
+.editor-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.attachment-section { min-width: 0; }
+.upload-area { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; width: 100%; min-height: 280px; border: 1px dashed var(--control-border); border-radius: 8px; color: var(--muted); background: var(--surface); }
+.upload-area > span { font-size: 16px; line-height: 24px; font-weight: 500; color: var(--ink); }
+.upload-area:hover:not(:disabled) { color: var(--ink); background: var(--surface-soft); border-color: var(--focus-ring); }
+.upload-area:active:not(:disabled) { transform: translateY(1px); }
+.write-content { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; width: 100%; margin-top: 8px; color: var(--muted); font-size: 14px; border-radius: 6px; }
+.write-content:hover { color: var(--ink); }
+.resource-content { margin-block-start: 16px; }
+.resource-content .control { background: var(--surface); }
+.editor-extras > summary { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 12px; cursor: pointer; list-style: none; font-size: 14px; color: var(--ink); background: var(--canvas); border-radius: 6px; }
+.editor-extras > summary > svg { flex: none; color: var(--muted); }
+.editor-extras > summary > svg:last-child { margin-inline-start: auto; }
+.editor-extras > summary:hover { background: var(--surface-soft); }
+.editor-extras > summary::-webkit-details-marker { display: none; }
+.editor-extras > summary small { display: block; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
+.editor-extras[open] > summary > svg:last-child { transform: rotate(180deg); }
+.editor-extras > .editor-fields { padding-top: 24px; }
+.editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
+.editor-tags legend { margin-bottom: 8px; font-size: 14px; }
+.editor-tags legend span { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.editor-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: 192px; overflow-y: auto; }
+.editor-tag { display: flex; align-items: center; gap: 8px; min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; cursor: pointer; overflow-wrap: anywhere; }
+.editor-tag.selected { background: var(--surface-soft); border-color: var(--focus-ring); }
+.editor-tag:has(input:disabled) { opacity: .5; cursor: default; }
+.tag-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.editor-feedback:has(> p) { padding: 8px 24px; }
+.editor-dialog .dialog-footer { flex: none; }
+.editor-dialog .dialog-footer > div { width: 100%; justify-content: space-between; }
+.editor-dialog .dialog-footer .button { min-height: 44px; }
+.editor-dialog .dialog-footer .primary { min-width: 144px; }
+.editor-dialog .dialog-footer .subtle { background: transparent; color: var(--muted); }
+.editor-dialog .dialog-footer .subtle:hover { background: var(--surface-soft); color: var(--ink); }
+@media (max-width: 699px) {
+  .editor-dialog { width: calc(100dvw - 24px); max-width: none; }
+  .editor-dialog[open] { max-height: calc(100dvh - 24px); }
+  .editor-dialog > .dialog-heading { padding: 12px 16px; }
+  .editor-layout { grid-template-columns: minmax(0, 1fr); }
+  .editor-media, .editor-content { padding: 16px; }
+  .editor-content { gap: 16px; }
+  .upload-area { min-height: 180px; gap: 12px; }
+  .upload-area > svg:first-child { width: 32px; height: 32px; }
+  .editor-dialog .control { font-size: 16px; min-height: 44px; }
+  .editor-dialog .dialog-footer { padding: 12px 16px; }
+  .editor-dialog .dialog-footer > div { gap: 8px; }
+  .editor-dialog .dialog-footer .primary { min-width: 128px; }
   .attachment-section .section-heading { flex-wrap: wrap; gap: 8px; }
-  .attachment-section .button, .table-actions .icon-button { min-height: 44px; min-width: 44px; }
+  .editor-feedback:has(> p) { padding-inline: 16px; }
 }
 
 </style>

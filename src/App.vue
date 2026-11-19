@@ -400,7 +400,7 @@ function restoreMessageTrigger() {
   .community-rail .rail-label { display: none; }
   .community-rail .nav-link:hover, .community-rail .header-submission:hover, .community-rail .message-trigger:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
   .community-rail :is(.nav-link, .rail-settings)[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 2px); width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
   .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .message-trigger, .rail-settings):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
   .community-rail .message-count { top: 2px; right: 0; min-width: 16px; height: 18px; padding-inline: 3px; border: 2px solid var(--canvas); border-radius: 9px; font-size: 10px; line-height: 14px; }

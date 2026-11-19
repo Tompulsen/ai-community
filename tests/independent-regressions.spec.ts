@@ -30,6 +30,7 @@ async function mockApp(page: Page, authenticated = false) {
     if (!url.pathname.startsWith('/api/')) return route.continue()
     if (request.method() === 'GET') {
       if (url.pathname === '/api/session') return route.fulfill({ json: { user: authenticated ? user : null, csrfToken: 'fixture-csrf' } })
+      if (url.pathname === '/api/account') return route.fulfill({ json: { linked: authenticated, balance: 12.5, currencySymbol: 'USD' } })
       if (url.pathname === '/api/site') return route.fulfill({ json: { brand: '章鱼社区', logoUrl: '' } })
       if (url.pathname === '/api/works') return route.fulfill({ json: { items: [work], nextCursor: null } })
       if (url.pathname === `/api/works/${work.id}`) return route.fulfill({ json: { work } })
@@ -108,6 +109,7 @@ test('community direct navigation and refresh preserve the announcements tab', a
 test('draft conflict preserves every edited field and retries with version and CSRF', async ({ page }) => {
   const unexpected = await mockApp(page, true)
   const draft: Work = { ...work, status: 'draft', sourceUrl: 'https://example.invalid/original', license: 'CC0' }
+  await page.route('**/api/tags**', route => route.fulfill({ json: { items: [{ id: 'regression-tag', name: '回归', category: 'resource' }] } }))
   await page.route('**/api/library**', route => route.fulfill({ json: { items: [draft], nextCursor: null } }))
   const writes: { body: Record<string, unknown>; csrf: string | undefined }[] = []
   await page.route(`**/api/works/${work.id}`, route => {
@@ -120,11 +122,13 @@ test('draft conflict preserves every edited field and retries with version and C
   await page.getByRole('button', { name: `编辑作品：${work.title}`, exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '编辑作品', exact: true })
   await expect(dialog.getByLabel('作品标题', { exact: true })).toHaveValue(draft.title)
+  await dialog.getByText('补充信息（选填）', { exact: true }).click()
   const fields = {
     '作品标题': '保留的标题', '资源内容': '保留的资源正文', '生成提示词': '保留的提示词',
-    '标签': '回归', '模型': '保留的模型', '来源链接': 'https://example.invalid/edited', '授权许可': 'CC-BY-4.0',
+    '模型': '保留的模型', '来源链接': 'https://example.invalid/edited', '授权许可': 'CC-BY-4.0',
   }
   for (const [label, value] of Object.entries(fields)) await dialog.getByLabel(label, { exact: true }).fill(value)
+  await dialog.getByRole('checkbox', { name: '回归', exact: true }).check()
   for (let attempt = 1; attempt <= 2; attempt++) {
     await dialog.getByRole('button', { name: '保存修改', exact: true }).click()
     await expect(dialog.getByRole('alert')).toHaveText('作品已被修改，请刷新后重试。')

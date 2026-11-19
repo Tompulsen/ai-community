@@ -858,7 +858,7 @@ async function preparePublication(task: CreationTask, title: string, destination
   const previous = task.publications?.[destination]
   if (previous?.work) return { work: previous.work }
   if (!previous && details && destination === 'community') {
-    if (details.tagIds.length < 1 || details.tagIds.length > 3 || new Set(details.tagIds).size !== details.tagIds.length) throw new Error('请选择 1–3 个作品标签。')
+    if (details.tagIds.length > 3 || new Set(details.tagIds).size !== details.tagIds.length) throw new Error('最多选择 3 个作品标签。')
     if (details.prompt.length > 100000 || details.license.length > 200 || details.sourceUrl.length > 2000) throw new Error('作品信息超过字数上限。')
     if (details.sourceUrl) {
       let url: URL
