@@ -1,0 +1,100 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · signature: themed native pickers · modes: light+dark · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, keep community themes and native selection behaviour */
+:root {
+  --control-height: 44px;
+  --control-height-compact: 36px;
+  --target-size: 44px;
+  --font-size-field: 14px;
+  --font-size-input: 16px;
+  --font-size-help: 12px;
+  --line-height-field: 21px;
+  --line-height-input: 24px;
+  --line-height-help: 20px;
+  --space-label: 4px;
+  --radius-popover: 8px;
+}
+
+select.select-control {
+  min-width: 0;
+  width: 100%;
+  min-height: var(--control-size, var(--control-height));
+  font-size: var(--control-font-size, var(--font-size-input));
+  line-height: var(--line-height-input);
+}
+
+@supports (appearance: base-select) {
+  select.select-control,
+  select.select-control::picker(select) {
+    appearance: base-select;
+  }
+
+  select.select-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-small);
+  }
+
+  select.select-control::picker(select) {
+    box-sizing: border-box;
+    inline-size: anchor-size(width);
+    max-inline-size: calc(100% - var(--space-section));
+    max-block-size: min(320px, 60dvh);
+    margin-block: var(--space-label);
+    padding: var(--space-label);
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius-popover);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-text);
+    font-size: var(--control-font-size, var(--font-size-input));
+    line-height: var(--line-height-input);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+
+  select.select-control::picker-icon {
+    color: var(--muted);
+    font-size: var(--font-size-help);
+  }
+
+  select.select-control option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-small);
+    min-block-size: var(--control-size, var(--target-size));
+    padding: var(--space-label) var(--space-control);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--ink);
+    white-space: normal;
+    overflow-wrap: break-word;
+    cursor: pointer;
+  }
+
+  select.select-control option:checked {
+    background: var(--surface-soft);
+    font-weight: 500;
+  }
+
+  select.select-control option::checkmark {
+    order: 1;
+    margin-inline-start: auto;
+    color: var(--ink);
+  }
+
+  @media (hover: hover) {
+    select.select-control:enabled:hover { background: var(--surface-soft); }
+    select.select-control option:hover { background: var(--surface-soft); }
+  }
+
+  select.select-control:focus-visible,
+  select.select-control option:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: var(--focus-outline-offset);
+  }
+
+  select.select-control:active { background: var(--surface-soft); }
+  select.select-control:disabled { opacity: .55; cursor: not-allowed; }
+}

@@ -307,8 +307,8 @@ async function restartLogin() {
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading) { align-items: flex-start; margin-bottom: var(--settings-space-group); }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading h2) { font-size: 20px; line-height: 28px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading .form-note) { margin-top: 8px; font-size: 14px; line-height: 20px; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: var(--settings-control-height); font-size: 16px; background: var(--surface); border-radius: 6px; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.button) { min-height: 44px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: var(--control-size, var(--settings-control-height)); font-size: var(--control-font-size, var(--font-size-input)); background: var(--surface); border-radius: 6px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.button) { min-height: var(--control-size, var(--control-height)); }
 .settings-leave-actions { justify-content: end; flex-wrap: wrap; }
 .balance-settings { display: grid; gap: 16px; }
 .balance-settings > .panel-section { padding-top: 0; }

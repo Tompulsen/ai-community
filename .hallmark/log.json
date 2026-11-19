@@ -1,5 +1,31 @@
 [
  {
+  "signature": "compact privacy rows and themed native picker",
+  "mode": "redesign",
+  "nav": "kept community shell and settings directory",
+  "sections": [
+   "follow approval",
+   "list visibility",
+   "explicit save"
+  ],
+  "shape": "app screen",
+  "verification": "37 related browser tests; build; 0 FAIL; 0 REFLEX; 20 links, 16 fields, 19 handlers retained",
+  "entry": "src/components/AccountPrivacy.vue",
+  "footer": "kept",
+  "depth": "full",
+  "imagery": "real local UI before and after screenshots",
+  "finishReview": "subagent: ship; no blocking findings",
+  "photos": [],
+  "theme": "brand (locked DESIGN.md)",
+  "prompt": "使用 Hallmark 优化偏大且使用系统默认下拉的隐私设置页",
+  "scope": "app",
+  "waived": [
+   "24b"
+  ],
+  "axes": "neutral / Schibsted Grotesk / existing theme accent",
+  "date": "2026-11-19"
+ },
+ {
   "axes": "neutral / Schibsted Grotesk / existing theme accent",
   "signature": "aligned settings rows and compact palette swatches",
   "sections": [

@@ -2,15 +2,17 @@
 /* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, preserve the community's own controls and account divisions */
 /* Hallmark · dismissed 74 · the existing auth-page login surface is preserved verbatim; this token only replaces its duplicated literal */
 :root {
-  --settings-space-label: 4px;
-  --settings-space-related: 8px;
-  --settings-space-row: 12px;
-  --settings-space-group: 16px;
-  --settings-space-section: 24px;
-  --settings-space-layout: 32px;
+  --settings-space-label: var(--space-label);
+  --settings-space-related: var(--space-small);
+  --settings-space-row: var(--space-control);
+  --settings-space-group: var(--space-group);
+  --settings-space-section: var(--space-section);
+  --settings-space-layout: var(--space-page);
   --settings-width: 1280px;
   --settings-control-width: 208px;
-  --settings-control-height: 44px;
+  --settings-control-height: var(--control-height);
+  --settings-form-width: 720px;
+  --settings-compact-control-width: 192px;
   --auth-canvas: #fff;
   --auth-ink: #101828;
   --auth-muted: #667085;
