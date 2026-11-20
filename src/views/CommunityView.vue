@@ -40,12 +40,8 @@ function chooseProfileImage(field: 'avatar' | 'banner') {
   const rect = profileRegion.value?.getBoundingClientRect()
   if (rect && creator.value?.bannerUrl) bannerAspect.value = rect.width / rect.height
   else bannerAspect.value = mobile.value ? 1.2 : 4
-  mediaPicker.value?.choose(field, bannerAspect.value)
+  mediaPicker.value?.preview(field, field === 'avatar' ? creator.value?.avatarUrl : creator.value?.bannerUrl, bannerAspect.value)
 }
-watch(editingProfile, editing => {
-  const rect = profileRegion.value?.getBoundingClientRect()
-  if (editing && rect && creator.value?.bannerUrl) bannerAspect.value = rect.width / rect.height
-})
 function cancelMedia() {
   mediaOperation++; mediaController?.abort(); mediaBusy.value = false; mediaError.value = ''; mediaRetry.value = undefined
 }
@@ -238,9 +234,9 @@ async function removeFollower() {
     <template v-else-if="creatorId">
       <template v-if="creator">
         <section v-if="mobile && !editingProfile" ref="profileRegion" class="mobile-profile profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料">
-          <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="更换封面背景" title="更换封面背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
+          <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="查看背景" title="查看背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
           <img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
-          <div class="profile-hero"><div class="profile-hero-identity"><component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '更换头像' : undefined" :title="isOwnProfile ? '更换头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></component><div><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料"><Pencil :size="16" aria-hidden="true" /></RouterLink></div><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
+          <div class="profile-hero"><div class="profile-hero-identity"><component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></component><div><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料"><Pencil :size="16" aria-hidden="true" /></RouterLink></div><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
           <div class="mobile-profile-body"><div class="mobile-profile-stats"><button type="button" aria-label="查看关注" @click="openPeople('following')"><strong>{{ creator.followingCount ?? 0 }}</strong>关注</button><button type="button" aria-label="查看粉丝" @click="openPeople('followers')"><strong>{{ creator.followersCount ?? 0 }}</strong>粉丝</button><span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong>获赞</span></div>
             <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><RouterLink v-else-if="isOwnProfile" :to="profileEditLink" class="profile-add-bio">添加个人简介<Pencil :size="13" /></RouterLink>
             <div v-if="!isOwnProfile" class="profile-actions"><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></div>
@@ -248,9 +244,9 @@ async function removeFollower() {
           </div>
         </section>
         <section v-else-if="!editingProfile" ref="profileRegion" class="profile-header profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
-        <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="更换封面背景" title="更换封面背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
+        <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="查看背景" title="查看背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
         <div class="creator-profile">
-          <component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '更换头像' : undefined" :title="isOwnProfile ? '更换头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></component>
+          <component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></component>
           <div class="profile-copy">
             <div class="profile-heading"><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料"><Pencil :size="16" aria-hidden="true" /></RouterLink></div><div class="profile-actions">
               <RouterLink v-if="isOwnProfile" to="/messages?tab=activity#follow-requests" class="button btn subtle">关注申请</RouterLink>
@@ -269,7 +265,7 @@ async function removeFollower() {
         <ProfileImageCropper v-if="isOwnProfile && !editingProfile" :key="`${session.user?.id}:${creatorId}`" ref="mediaPicker" @cropped="saveProfileImage" />
         <p v-if="mediaBusy" class="profile-media-status" role="status">{{ mediaProgress < 100 ? `图片上传中 ${mediaProgress}%` : '正在保存图片…' }}</p>
         <p v-if="mediaError" class="notice-inline" role="alert">{{ mediaError }} <button v-if="mediaRetry" type="button" class="text-link" @click="saveProfileImage(mediaRetry.file, mediaRetry.field)">重试保存</button></p>
-        <ProfileEditor v-if="editingProfile" :banner-aspect="bannerAspect" @saved="profileSaved" />
+        <ProfileEditor v-if="editingProfile" @saved="profileSaved" />
         <div v-show="!editingProfile" class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
         <div v-show="!editingProfile" id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
         <div v-if="collectionPrivate" class="empty-state profile-private"><LockKeyhole :size="28" /><h2>{{ collectionLabel }}仅本人可见</h2></div>

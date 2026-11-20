@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
 
-for (const width of [390, 1440]) for (const target of ['work', 'profile'] as const) {
+for (const width of [390, 1440]) for (const target of ['work'] as const) {
   test(`${target} previews a slow upload immediately and queues one save at ${width}px`, async ({ page }) => {
     const account = await mockUnifiedAccount(page, true)
     const image = await readFile('public/assets/brand/octopus-community.jpg')
@@ -54,7 +54,7 @@ for (const width of [390, 1440]) for (const target of ['work', 'profile'] as con
   })
 }
 
-for (const target of ['work', 'profile'] as const) {
+for (const target of ['work'] as const) {
   test(`${target} keeps a failed upload preview and retries before saving`, async ({ page }) => {
     await mockUnifiedAccount(page, true)
     const image = await readFile('public/assets/brand/octopus-community.jpg')

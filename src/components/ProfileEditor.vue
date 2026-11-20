@@ -1,33 +1,22 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { Check, ChevronDown, Image, Save, Trash2, Upload, X } from '@lucide/vue'
+import { Check, ChevronDown, Save, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { api, errorMessage, loadSession, session } from '../state'
-import { useFileUploads, type UploadFile } from '../use-file-uploads'
-import FileUploadStatus from './FileUploadStatus.vue'
-import ProfileImageCropper from './ProfileImageCropper.vue'
-
-const props = withDefaults(defineProps<{ bannerAspect?: number }>(), { bannerAspect: 4 })
 const emit = defineEmits<{ saved: [user: SessionUser] }>()
 const route = useRoute(), router = useRouter()
-const cropper = ref<InstanceType<typeof ProfileImageCropper>>(), nameInput = ref<HTMLInputElement>()
+const nameInput = ref<HTMLInputElement>()
 const leaveDialog = ref<HTMLDialogElement>()
-const name = ref(''), bio = ref(''), avatarId = ref<string | null>(null), bannerId = ref<string | null>(null)
-const avatarUrl = ref(''), bannerUrl = ref(''), avatarFailed = ref(false), bannerFailed = ref(false)
+const name = ref(''), bio = ref('')
 const busy = ref(false), error = ref(''), saved = ref(false)
-const uploads = useFileUploads(), uploading = uploads.uploading
-const avatarSelection = ref<UploadFile>(), bannerSelection = ref<UploadFile>()
 const baseline = ref('')
-const value = () => JSON.stringify([name.value, bio.value, avatarId.value, bannerId.value])
-const dirty = computed(() => Boolean(avatarSelection.value || bannerSelection.value) || value() !== baseline.value)
+const value = () => JSON.stringify([name.value, bio.value])
+const dirty = computed(() => value() !== baseline.value)
 let active = true, operation = 0, owner: string | undefined
 let resolveLeave: ((discard: boolean) => void) | undefined
 function restore(user: SessionUser | null) {
-  uploads.reset(); avatarSelection.value = undefined; bannerSelection.value = undefined
   name.value = user?.name || user?.username || ''; bio.value = user?.bio || ''
-  avatarId.value = user?.avatarId || null; bannerId.value = user?.bannerId || null
-  avatarUrl.value = user?.avatarUrl || ''; bannerUrl.value = user?.bannerUrl || ''
   baseline.value = value()
 }
 watch(() => session.user, user => {
@@ -36,10 +25,6 @@ watch(() => session.user, user => {
     busy.value = false; saved.value = false; error.value = ''; restore(user)
   } else if (!busy.value && !dirty.value) restore(user)
 }, { immediate: true, flush: 'sync' })
-watch(avatarUrl, () => { avatarFailed.value = false })
-watch(bannerUrl, () => { bannerFailed.value = false })
-watch(() => avatarSelection.value?.upload?.result, file => { if (file && avatarFailed.value) avatarUrl.value = file.url })
-watch(() => bannerSelection.value?.upload?.result, file => { if (file && bannerFailed.value) bannerUrl.value = file.url })
 function confirmLeave() {
   if (!session.user || (!dirty.value && !busy.value)) return true
   if (resolveLeave) return false
@@ -74,39 +59,17 @@ async function saveProfile() {
   const current = () => active && currentOperation === operation && session.user?.id === account
   busy.value = true; saved.value = false; error.value = ''
   try {
-    await uploads.wait([avatarSelection.value, bannerSelection.value].filter((file): file is UploadFile => Boolean(file)))
-    if (!current()) return
-    if (avatarSelection.value) avatarId.value = avatarSelection.value.id
-    if (bannerSelection.value) bannerId.value = bannerSelection.value.id
     const result = await api<{ user: SessionUser }>('/api/profile', { method: 'PATCH', body: {
-      name: name.value.trim(), bio: bio.value.trim(), avatarId: avatarId.value, bannerId: bannerId.value,
+      name: name.value.trim(), bio: bio.value.trim(),
     } })
     if (!current()) return
     await loadSession(true)
     if (!current()) return
     const updated = result.user
-    session.user = { ...session.user!, name: updated.name, bio: updated.bio, avatarId: updated.avatarId,
-      bannerId: updated.bannerId, avatarUrl: updated.avatarUrl, bannerUrl: updated.bannerUrl }
+    session.user = { ...session.user!, name: updated.name, bio: updated.bio }
     restore(session.user); saved.value = true; emit('saved', session.user)
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
   finally { if (current()) busy.value = false }
-}
-function uploadProfile(file: File, field: 'avatar' | 'banner') {
-  if (busy.value || !session.user) return
-  const selection = field === 'avatar' ? avatarSelection : bannerSelection
-  if (selection.value) uploads.remove(selection.value)
-  selection.value = uploads.add([file])[0]!
-  if (field === 'avatar') avatarUrl.value = selection.value.url
-  else bannerUrl.value = selection.value.url
-  error.value = ''; saved.value = false
-}
-function removeImage(field: 'avatar' | 'banner') {
-  const selection = field === 'avatar' ? avatarSelection : bannerSelection
-  if (selection.value) uploads.remove(selection.value)
-  selection.value = undefined
-  if (field === 'avatar') { avatarId.value = null; avatarUrl.value = '' }
-  else { bannerId.value = null; bannerUrl.value = '' }
-  saved.value = false
 }
 </script>
 
@@ -115,24 +78,13 @@ function removeImage(field: 'avatar' | 'banner') {
     <header class="editor-heading"><h1 id="profile-editor-heading">编辑个人资料</h1><button type="button" class="icon-button" aria-label="关闭资料编辑" title="关闭资料编辑" @click="close"><X :size="20" /></button></header>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <form class="profile-form" @submit.prevent="saveProfile">
-      <div class="profile-media">
-        <div class="profile-media-item">
-          <button type="button" class="profile-avatar profile-image-button" aria-label="更换头像" title="更换头像" :disabled="busy" @click="cropper?.choose('avatar')"><img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" @error="avatarFailed = true" /><span v-else class="profile-placeholder">{{ (name || session.user?.username || '我').slice(0, 1) }}</span></button>
-          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="cropper?.choose('avatar')"><Upload :size="16" />更换头像</button><button v-if="avatarId || avatarSelection" type="button" class="icon-button" aria-label="移除头像" title="移除头像" :disabled="busy" @click="removeImage('avatar')"><Trash2 :size="16" /></button><FileUploadStatus v-if="avatarSelection" :file="avatarSelection" :disabled="busy" @retry="uploads.retry(avatarSelection)" /></div>
-        </div>
-        <div class="profile-media-item">
-          <button type="button" class="profile-cover profile-image-button" aria-label="更换封面" title="更换封面" :disabled="busy" @click="cropper?.choose('banner', props.bannerAspect)"><img v-if="bannerUrl && !bannerFailed" :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /><Image v-else :size="24" /></button>
-          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="cropper?.choose('banner', props.bannerAspect)"><Image :size="16" />更换封面</button><button v-if="bannerId || bannerSelection" type="button" class="icon-button" aria-label="移除封面" title="移除封面" :disabled="busy" @click="removeImage('banner')"><Trash2 :size="16" /></button><FileUploadStatus v-if="bannerSelection" :file="bannerSelection" :disabled="busy" @retry="uploads.retry(bannerSelection)" /></div>
-        </div>
-      </div>
-      <ProfileImageCropper :key="session.user?.id" ref="cropper" @cropped="uploadProfile" />
       <label class="field"><span class="field-label"><span id="profile-name-label">社区昵称</span><span class="field-count" aria-hidden="true">{{ name.length }}/50</span></span><input ref="nameInput" v-model="name" aria-labelledby="profile-name-label" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label>
       <label class="field"><span class="field-label"><span id="profile-bio-label">个人简介</span><span class="field-count" aria-hidden="true">{{ bio.length }}/1500</span></span><textarea v-model="bio" aria-labelledby="profile-bio-label" class="control profile-bio" rows="3" maxlength="1500" :disabled="busy" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label>
       <dl class="profile-identity"><div><dt>登录用户名</dt><dd>{{ session.user?.username }}</dd></div><div v-if="session.user?.accountId"><dt>章鱼号</dt><dd>{{ session.user.accountId }}</dd></div></dl>
       <details class="profile-preview"><summary>预览个人资料<ChevronDown :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name }}</strong><span v-if="session.user?.accountId">章鱼号：{{ session.user.accountId }}</span><p>{{ bio }}</p></div></details>
-      <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved && !dirty" :size="15" />{{ uploading ? (busy ? '已安排保存，上传完成后自动保存资料。' : '图片正在上传，可继续编辑资料。') : busy ? '正在保存资料…' : saved && !dirty ? '资料已保存' : dirty ? '有未保存的修改' : '' }}</p><div class="profile-save-actions"><button type="button" class="button subtle btn" @click="close">取消</button><button class="button primary btn" :disabled="busy || !name.trim()"><Save :size="16" />{{ busy ? '正在保存…' : '保存资料' }}</button></div></footer>
+      <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved && !dirty" :size="15" />{{ busy ? '正在保存资料…' : saved && !dirty ? '资料已保存' : dirty ? '有未保存的修改' : '' }}</p><div class="profile-save-actions"><button type="button" class="button subtle btn" @click="close">取消</button><button class="button primary btn" :disabled="busy || !name.trim()"><Save :size="16" />{{ busy ? '正在保存…' : '保存资料' }}</button></div></footer>
     </form>
-    <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)" @close="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">保留资料修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>资料尚未确认保存。离开后，未保存的文字和图片选择将丢失。</p><div class="profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
+    <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)" @close="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">保留资料修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>资料尚未确认保存。离开后，未保存的文字修改将丢失。</p><div class="profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
   </section>
 </template>
 
@@ -140,20 +92,8 @@ function removeImage(field: 'avatar' | 'banner') {
 .profile-editor { container: profile-editor / inline-size; width: 100%; max-width: 760px; margin: 0 auto 24px; }
 .editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .editor-heading h1 { font-size: 20px; line-height: 28px; }
-.editor-heading .icon-button, .profile-media-actions .icon-button { width: 44px; height: 44px; flex: none; }
+.editor-heading .icon-button { width: 44px; height: 44px; flex: none; }
 .profile-form { display: grid; gap: 16px; }
-.profile-media { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-.profile-media-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.profile-avatar { width: 64px; height: 64px; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-soft); }
-.profile-image-button { display: grid; place-items: center; padding: 0; border: 0; overflow: hidden; color: var(--muted); cursor: pointer; }
-.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.profile-placeholder { display: grid; place-items: center; color: var(--muted); font-size: 24px; }
-.profile-cover { width: 112px; height: 64px; flex: none; background: var(--surface-soft); border-radius: 6px; }
-.profile-cover img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
-.profile-media-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.profile-media-actions .button { padding-inline: 8px; }
-.profile-media-actions .icon-button { color: var(--muted); }
-.profile-media-actions .icon-button:hover { color: var(--danger); background: var(--danger-soft); }
 .field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .field-count, .profile-identity, .profile-save-status { color: var(--muted); font-size: 12px; line-height: 20px; }
 .field-count { font-variant-numeric: tabular-nums; }
@@ -171,11 +111,6 @@ dialog:modal { overscroll-behavior: contain; }
 dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 @media (max-width: 999px) { .profile-editor { padding: 16px; } }
 @container profile-editor (max-width: 559px) {
-  .profile-media { gap: 12px; }
-  .profile-media-item { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .profile-media-actions { gap: 0; }
-  .profile-media-actions .button { gap: 4px; padding-inline: 4px; font-size: 12px; }
-  .profile-media-actions .icon-button { width: 36px; }
   .profile-save-actions { margin-left: auto; }
 }
 </style>

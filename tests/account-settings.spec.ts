@@ -97,25 +97,6 @@ test('switching account cancels an open leave prompt and clears the old draft', 
   expect(fixture.mutations.filter(item => item.path === '/api/profile')).toEqual([])
 })
 
-test('cover upload and removal save through the existing profile endpoint', async ({ page }) => {
-  const fixture = await mockUnifiedAccount(page, true)
-  await page.route('**/api/uploads/limits', route => route.fulfill({ json: { imagesMb: 20, videosMb: 20, filesMb: 20, maxFileSizeMb: 20 } }))
-  await page.route('**/api/uploads', route => route.fulfill({ json: { file: { id: 'cover123', type: 'image/png', name: 'cover.png', size: 68, url: '/assets/brand/octopus-community.jpg' } } }))
-  await page.goto('/community?creator=fixtureAccountUser&edit=profile')
-  const chooser = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: '更换封面', exact: true }).click()
-  await (await chooser).setFiles({ name: 'cover.png', mimeType: 'image/png', buffer: Buffer.from('fixture image') })
-  await expect(page.getByAltText('当前主页封面')).toBeVisible()
-  await page.getByRole('button', { name: '保存资料', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText('资料已保存')
-  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body.bannerId).toBe('cover123')
-  await page.getByRole('button', { name: '移除封面', exact: true }).click()
-  await expect(page.getByAltText('当前主页封面')).toHaveCount(0)
-  await expect(page.getByRole('status')).toContainText('有未保存的修改')
-  await page.getByRole('button', { name: '保存资料', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText('资料已保存')
-  expect(fixture.mutations.filter(item => item.path === '/api/profile').at(-1)?.body.bannerId).toBe(null)
-})
 
 test('settings logout confirms unsaved edits before signing out either session', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
@@ -263,9 +244,8 @@ for (const width of [320, 390, 1440]) test(`profile controls and saved media rem
   await page.setViewportSize({ width, height: width === 1440 ? 740 : 620 })
   if (width === 1440) await page.addInitScript(() => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode: 'light' })))
   await page.goto('/account?tab=profile')
-  await expect(page.getByAltText('当前头像')).toBeVisible()
-  await expect(page.getByAltText('当前主页封面')).toBeVisible()
-  await expect(page.getByRole('link', { name: '查看完整封面', exact: true })).toHaveAttribute('href', '/assets/brand/octopus-community.jpg')
+  await expect(page.locator('.profile-editor')).toBeVisible()
+  await expect(page.locator('.profile-editor .profile-media')).toHaveCount(0)
   if (width === 1440) await expect(page.getByRole('button', { name: '保存资料', exact: true })).toBeInViewport()
   expect(await page.locator('.profile-editor').evaluate(element => getComputedStyle(element).overflowY)).toBe('visible')
   await page.screenshot({ path: test.info().outputPath(`compact-profile-${width}.png`) })
@@ -277,7 +257,8 @@ for (const width of [320, 390, 1440]) test(`profile controls and saved media rem
   await expect(page.locator('.profile-preview-body')).toBeVisible()
   await page.getByRole('button', { name: '保存资料', exact: true }).click()
   await expect(page.getByRole('status')).toContainText('资料已保存')
-  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body).toMatchObject({ avatarId: 'avatar', bannerId: 'banner' })
+  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body).toEqual({ name: '测试创作者', bio: '简短视口中的资料也可以继续编辑' })
+  expect(fixture.state.user).toMatchObject({ avatarId: 'avatar', bannerId: 'banner' })
 })
 
 for (const mode of ['light', 'dark']) test(`homepage editor fits a short desktop viewport in ${mode} mode`, async ({ page }) => {

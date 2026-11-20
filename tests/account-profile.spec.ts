@@ -46,21 +46,20 @@ test('returning to the page preserves unsaved profile text', async ({ page }) =>
   await expect(page.getByLabel('个人简介', { exact: true })).toHaveValue('切换窗口后继续编辑')
 })
 
-test('an uploaded avatar stays in the draft after session refresh and reaches the profile save', async ({ page }) => {
+test('saving text after session refresh preserves existing avatar and cover', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page, true)
-  await page.route('**/api/uploads/limits', route => route.fulfill({ json: { imagesMb: 20, videosMb: 20, filesMb: 20, maxFileSizeMb: 20 } }))
-  await page.route('**/api/uploads', route => route.fulfill({ json: { file: { id: 'avatar123', type: 'image/png', name: 'avatar.png', size: 68, url: '/assets/brand/octopus-community.jpg' } } }))
+  Object.assign(fixture.state.user, { avatarId: 'old-avatar', bannerId: 'old-banner' })
   await page.goto('/community?creator=fixtureAccountUser&edit=profile')
-  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue(fixture.state.user.name)
-  await page.locator('input[type="file"]').first().setInputFiles({ name: 'avatar.jpg', mimeType: 'image/jpeg', buffer: await readFile('public/assets/brand/octopus-community.jpg') })
-  await page.getByRole('button', { name: '确认裁切', exact: true }).click()
-  await expect(page.getByAltText('当前头像')).toBeVisible()
-  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/session')
+  await page.getByLabel('社区昵称', { exact: true }).fill('保留图片的新名字')
+  Object.assign(fixture.state.user, { avatarId: 'new-avatar', bannerId: 'new-banner' })
+  const refreshed = page.waitForResponse('**/api/session')
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await refreshed
-  await expect(page.getByAltText('当前头像')).toBeVisible()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('保留图片的新名字')
   await page.getByRole('button', { name: '保存资料', exact: true }).click()
-  await expect.poll(() => fixture.mutations.find(item => item.path === '/api/profile')?.body.avatarId).toBe('avatar123')
+  await expect(page.getByRole('status')).toContainText('资料已保存')
+  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body).toEqual({ name: '保留图片的新名字', bio: '' })
+  expect(fixture.state.user).toMatchObject({ avatarId: 'new-avatar', bannerId: 'new-banner' })
 })
 
 test('temporary session failure preserves the draft and a refused save keeps it editable', async ({ page }) => {
@@ -92,8 +91,8 @@ test('switching accounts while upload limits are pending never uploads into the 
     await route.fulfill({ json: { imagesMb: 20, videosMb: 20, filesMb: 20, maxFileSizeMb: 20 } })
   })
   await page.route('**/api/uploads', route => { uploaded = true; return route.fulfill({ json: { file: { id: 'wrongAccountFile' } } }) })
-  await page.goto('/community?creator=fixtureAccountUser&edit=profile')
-  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue(fixture.state.user.name)
+  await page.goto('/community?creator=fixtureAccountUser')
+  await expect(page.getByRole('button', { name: '查看头像', exact: true })).toBeVisible()
   await page.getByLabel('头像', { exact: true }).setInputFiles({ name: 'private.jpg', mimeType: 'image/jpeg', buffer: await readFile('public/assets/brand/octopus-community.jpg') })
   await page.getByRole('button', { name: '确认裁切', exact: true }).click()
   await expect.poll(() => requested).toBe(true)
