@@ -64,7 +64,7 @@ onBeforeUnmount(() => { generation++; controller?.abort(); emit('dirty', false) 
       </fieldset>
       <p v-if="error" class="error-message" role="alert">{{ error }}</p>
       <p v-if="saved && !dirty" role="status">隐私设置已保存。</p>
-      <div class="privacy-actions"><p class="form-note">待处理的<RouterLink to="/account?tab=following" class="text-link">关注申请</RouterLink>仍需手动确认。</p><div><button type="submit" class="button btn primary" :disabled="saving || !dirty"><Save :size="16" aria-hidden="true" />{{ saving ? '正在保存…' : '保存隐私设置' }}</button><button v-if="error" type="button" class="button btn subtle" :disabled="saving" @click="load">放弃更改并重新加载</button></div></div>
+      <div class="privacy-actions"><p class="form-note">待处理的<RouterLink to="/messages?tab=activity#follow-requests" class="text-link">关注申请</RouterLink>仍需手动确认。</p><div><button type="submit" class="button btn primary" :disabled="saving || !dirty"><Save :size="16" aria-hidden="true" />{{ saving ? '正在保存…' : '保存隐私设置' }}</button><button v-if="error" type="button" class="button btn subtle" :disabled="saving" @click="load">放弃更改并重新加载</button></div></div>
     </form>
     <div v-else-if="error"><p class="error-message" role="alert">{{ error }}</p><button class="button btn" @click="load">重新加载</button></div>
   </section>

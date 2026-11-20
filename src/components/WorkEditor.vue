@@ -3,8 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRouter } from 'vue-router'
 import { ChevronDown, ImagePlus, PenLine, Plus, Save, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import WorkAttachments from './WorkAttachments.vue'
-import { kindLabels, type Work, type WorkFile, type WorkKind } from '../data'
-import { api, errorMessage, notify, safeExternalUrl, session, uploadFile } from '../state'
+import { kindLabels, type Work, type WorkKind } from '../data'
+import { api, errorMessage, notify, safeExternalUrl, session } from '../state'
+import { useFileUploads, type UploadFile } from '../use-file-uploads'
 import '../publication-controls.css'
 
 const props = defineProps<{ open: boolean; work?: Work | null }>()
@@ -17,15 +18,15 @@ const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), re
 const writing = ref(false), autoKind = ref(true), tagQuery = ref(''), tagOptions = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const visibleTags = computed(() => [...new Set([...draft.tags, ...tagOptions.value])].filter(name => name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
 let tagLoadId = 0
-const files = ref<WorkFile[]>([])
-const references = ref<WorkFile[]>([])
+const files = ref<UploadFile[]>([])
+const references = ref<UploadFile[]>([])
+const uploads = useFileUploads()
 const version = ref(0)
 const error = ref('')
 const loading = ref(false)
-const uploading = ref(false)
+const uploading = uploads.uploading
 const saving = ref(false)
 const requestId = ref(crypto.randomUUID())
-let controller: AbortController | undefined
 let loadId = 0
 let resolveLeave: ((leave: boolean) => void) | undefined
 const baseline = ref('')
@@ -33,6 +34,7 @@ const snapshot = () => JSON.stringify({ ...draft, files: files.value.map(file =>
 const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
 function fill(work?: Work | null) {
+  uploads.reset()
   Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
   writing.value = work?.kind === 'resource'
   autoKind.value = !work || work.status === 'draft' && work.kind !== 'resource' && !work.generation?.parameters && !(work.files || []).some(file => file.type.startsWith(`${work.kind}/`))
@@ -45,7 +47,7 @@ function fill(work?: Work | null) {
 }
 watch(() => [props.open, props.work?.id] as const, async ([open]) => {
   const current = ++loadId
-  if (!open) { dialog.value?.close(); return }
+  if (!open) { uploads.reset(); dialog.value?.close(); return }
   error.value = ''; loading.value = false; fill(props.work)
   await nextTick()
   if (!dialog.value?.open) dialog.value?.showModal()
@@ -80,6 +82,7 @@ function inferKind() {
     : files.value.some(file => file.type.startsWith('video/')) ? 'video' : 'image'
   if (draft.kind !== kind) { draft.kind = kind; draft.tags = [] }
 }
+watch(() => files.value.map(file => file.type), inferKind)
 function writeContent() { writing.value = true; inferKind() }
 function useFiles() { writing.value = false; inferKind() }
 function showUpload() { fileInput.value?.click() }
@@ -90,7 +93,7 @@ function invalidField(event: Event) {
 }
 function confirmLeave() {
   if (!props.open) return true
-  if (saving.value || uploading.value || resolveLeave) return false
+  if (saving.value && !uploading.value || resolveLeave) return false
   if (!dirty.value) return true
   leaveDialog.value?.showModal()
   return new Promise<boolean>(resolve => { resolveLeave = resolve })
@@ -108,30 +111,20 @@ const removeGuard = router.beforeEach(confirmLeave)
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 watch(() => session.user?.id, (_owner, previous) => {
   if (!previous && !session.ready) return
-  loadId++; controller?.abort(); finishLeave(false); fill(); loading.value = false
-  saving.value = false; uploading.value = false; requestId.value = crypto.randomUUID()
+  loadId++; finishLeave(false); fill(); loading.value = false
+  saving.value = false; requestId.value = crypto.randomUUID()
   if (props.open) emit('close')
 }, { flush: 'sync' })
-async function choose(event: Event, reference = false) {
+function choose(event: Event, reference = false) {
   const input = event.target as HTMLInputElement
   const selected = [...(input.files || [])]
   input.value = ''
-  if (!selected.length || uploading.value) return
+  if (!selected.length || saving.value || loading.value) return
   const target = reference ? references : files
   if (target.value.length + selected.length > 16) { error.value = '作品文件和参考图各最多 16 个。'; return }
   if (reference && selected.some(file => !file.type.startsWith('image/'))) { error.value = '参考素材请选择图片。'; return }
-  uploading.value = true; error.value = ''
-  const current = loadId, owner = session.user?.id, request = new AbortController()
-  controller = request
-  try {
-    for (const file of selected) {
-      const uploaded = await uploadFile(file, request.signal)
-      if (current !== loadId || session.user?.id !== owner) return
-      target.value.push(uploaded)
-      if (!reference) inferKind()
-    }
-  } catch (cause) { if (current === loadId && !request.signal.aborted) error.value = errorMessage(cause) }
-  finally { if (current === loadId) uploading.value = false }
+  error.value = ''; target.value.push(...uploads.add(selected))
+  if (!reference) inferKind()
 }
 function move(index: number, reference: boolean, direction: number) {
   const target = reference ? references.value : files.value
@@ -151,11 +144,12 @@ function changeRole(index: number, reference: boolean) {
 }
 function removeFile(index: number, reference = false) {
   const target = reference ? references.value : files.value
-  target.splice(index, 1)
+  const [removed] = target.splice(index, 1)
+  if (removed) uploads.remove(removed)
   if (!reference) inferKind()
 }
 async function save(status: 'draft' | 'pending') {
-  if (saving.value || uploading.value || loading.value) return
+  if (saving.value || loading.value) return
   if (!draft.title.trim()) { error.value = '请填写作品标题。'; return }
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
@@ -163,6 +157,8 @@ async function save(status: 'draft' | 'pending') {
   saving.value = true; error.value = ''
   const current = loadId, owner = session.user?.id
   try {
+    await uploads.wait([...files.value, ...references.value])
+    if (current !== loadId || session.user?.id !== owner) return
     const body = {
       ...draft, title: draft.title.trim(), tags: [...draft.tags],
       fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
@@ -179,7 +175,7 @@ async function save(status: 'draft' | 'pending') {
   } catch (cause) { if (current === loadId) { error.value = errorMessage(cause); if (extra.value) extra.value.open = true } }
   finally { if (current === loadId) saving.value = false }
 }
-onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
+onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
 </script>
 
 <template>
@@ -188,13 +184,13 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(
     <form class="editor-form" @submit.prevent="save('pending')" @invalid.capture="invalidField">
       <div class="editor-scroll">
         <p v-if="loading" role="status">正在加载作品…</p>
-        <fieldset :disabled="loading || saving || uploading" class="editor-fields editor-layout">
+        <fieldset :disabled="loading || saving" class="editor-fields editor-layout">
           <legend class="editor-sr-only">作品信息</legend>
           <section class="attachment-section editor-media" aria-label="作品文件">
             <input ref="fileInput" type="file" multiple hidden aria-label="添加作品文件" @change="choose($event)" />
             <button v-if="!files.length && !writing" type="button" class="upload-area" @click="showUpload"><ImagePlus :size="40" :stroke-width="1.8" aria-hidden="true" /><span>添加作品</span></button>
             <div v-else class="section-heading"><span class="form-note">{{ draft.kind === 'resource' ? '资源' : kindLabels[draft.kind] }} · {{ files.length }}/16</span><button type="button" class="button subtle btn" @click="showUpload"><Plus :size="16" aria-hidden="true" />添加文件</button></div>
-            <WorkAttachments :files="files" featured @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
+            <WorkAttachments :files="files" featured @retry="index => uploads.retry(files[index]!)" @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
             <label v-if="draft.kind === 'resource'" class="field resource-content"><span>资源内容</span><textarea v-model="draft.body" class="control" rows="7" maxlength="20000" /></label>
             <button v-if="autoKind && (writing || !files.length)" type="button" class="write-content" @click="writing ? useFiles() : writeContent()"><ImagePlus v-if="writing" :size="16" aria-hidden="true" /><PenLine v-else :size="16" aria-hidden="true" />{{ writing ? '使用文件投稿' : '填写内容' }}</button>
           </section>
@@ -217,15 +213,15 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; controller?.abort(); removeGuard(
               <section class="attachment-section" aria-label="参考图">
                 <div class="section-heading"><h3 class="title-4">参考图 · {{ references.length }}/16</h3><button type="button" class="button subtle btn" @click="referenceInput?.click()"><ImagePlus :size="16" aria-hidden="true" />添加参考图</button></div>
                 <input ref="referenceInput" type="file" multiple accept="image/*" hidden aria-label="添加参考图" @change="choose($event, true)" />
-                <WorkAttachments :files="references" reference @move="(index, direction) => move(index, true, direction)" @role="index => changeRole(index, true)" @remove="index => removeFile(index, true)" />
+                <WorkAttachments :files="references" reference @retry="index => uploads.retry(references[index]!)" @move="(index, direction) => move(index, true, direction)" @role="index => changeRole(index, true)" @remove="index => removeFile(index, true)" />
               </section>
             </div>
           </details>
           </div>
         </fieldset>
       </div>
-      <div class="editor-feedback"><p v-if="uploading" role="status">正在上传文件…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p></div>
-      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || uploading" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || uploading"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
+      <div class="editor-feedback"><p v-if="uploading" role="status">{{ saving ? '已安排提交，上传完成后自动保存。' : '文件正在上传，可继续填写作品信息。' }}</p><p v-if="error" class="form-error" role="alert">{{ error }}</p></div>
+      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
     </form>
   </dialog>
   <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">

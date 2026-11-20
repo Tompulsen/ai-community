@@ -4,7 +4,8 @@ import { RouterLink, useRoute } from 'vue-router'
 import { ArrowLeft, ArrowUpRight, Bell, CheckCheck, Images, MessageSquare, RefreshCw, Search, Send, X } from '@lucide/vue'
 import type { Creator, Work, WorkFile } from '../data'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
-import { inbox, loadInbox, loadMoreNotifications, markAllInboxRead, markDirectRead, markInboxRead, notificationCategory, notificationDestination, type InboxCategory } from '../inbox'
+import { inbox, isFollowRequestNotification, loadInbox, loadMoreNotifications, markAllInboxRead, markDirectRead, markInboxRead, notificationCategory, notificationDestination, type InboxCategory, type InboxNotification } from '../inbox'
+import FollowRequests from '../components/FollowRequests.vue'
 
 interface Message { id: string; text: string; date: string; owned: boolean; read?: boolean; file?: WorkFile; sharedWorkId?: string }
 interface Thread { user: Creator; lastMessage?: Message | null; unread: number; canSend?: boolean; reason?: string }
@@ -23,6 +24,11 @@ function selectCategory(category: InboxCategory) { if (props.embedded) { floatin
 function selectPeer(id: string) { if (props.embedded) floatingPeer.value = id }
 const currentCategory = computed(() => categories.find(item => item.value === activeTab.value)!)
 const notifications = computed(() => inbox.notifications.filter(item => notificationCategory(item) === activeTab.value))
+const followRequests = ref<InstanceType<typeof FollowRequests>>()
+function openNotification(item: InboxNotification) {
+  if (!item.isRead) void markInboxRead([item.id])
+  if (isFollowRequestNotification(item)) void followRequests.value?.showReceived()
+}
 const threads = ref<Thread[]>([]), threadCursor = ref<string | null>(null), threadLoading = ref(false)
 const user = ref<Creator | null>(null), messages = ref<Message[]>([]), messageCursor = ref<string | null>(null), messageLoading = ref(false)
 const canSend = ref(false), reason = ref(''), error = ref(''), sendError = ref(''), sending = ref(false)
@@ -94,6 +100,7 @@ onMounted(async () => {
 onBeforeUnmount(() => { pageGeneration++; searchGeneration++; controller.abort(); clearInterval(poll); clearTimeout(searchTimer); shareDialog.value?.close() })
 function refresh() {
   void loadInbox(true)
+  if (activeTab.value === 'activity') void followRequests.value?.refresh()
   if (activeTab.value === 'messages') { void loadThreads(); void loadMessages() }
 }
 async function send(text: string, sharedWorkId?: string) {
@@ -127,12 +134,13 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
     <nav v-if="session.user" class="tabs inbox-categories" aria-label="消息分类"><component :is="embedded ? 'button' : RouterLink" v-for="item in categories" :key="item.value" :to="embedded ? undefined : item.to" :type="embedded ? 'button' : undefined" class="tab" :class="{ active: activeTab === item.value }" :aria-current="activeTab === item.value ? 'page' : undefined" @click="selectCategory(item.value)"><span>{{ item.label }}</span><span v-if="inbox.counts[item.value]" class="unread-badge" :aria-label="`${inbox.counts[item.value]} 条未读`">{{ inbox.counts[item.value] > 99 ? '99+' : inbox.counts[item.value] }}</span></component></nav>
     <div v-if="!session.user && session.ready" class="empty-state"><MessageSquare :size="28" /><h2>登录后查看消息</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink></div>
     <section v-else-if="activeTab !== 'messages'" class="inbox-panel" :aria-label="currentCategory.label">
+      <FollowRequests v-if="activeTab === 'activity' && session.user" id="follow-requests" ref="followRequests" />
       <p v-if="inbox.notificationError" class="form-error" role="alert">{{ inbox.notificationError }} <button class="text-link" :disabled="inbox.loading" @click="loadInbox(true)">重试</button></p>
       <div v-if="inbox.loading && !notifications.length" class="empty-state" role="status">正在加载消息…</div>
-      <div v-else-if="!notifications.length && !inbox.notificationError" class="empty-state"><Bell :size="28" /><h2>暂无{{ currentCategory.label }}</h2></div>
+      <div v-else-if="!notifications.length && !inbox.notificationError" class="empty-state"><Bell :size="28" /><h2>{{ activeTab === 'activity' ? '暂无其他互动通知' : `暂无${currentCategory.label}` }}</h2></div>
       <article v-for="item in notifications" :key="item.id" class="inbox-notification" :class="{ unread: !item.isRead }">
         <RouterLink v-if="item.actor" :to="{ path: '/community', query: { creator: item.actor.id } }" class="inbox-actor" @click="!item.isRead && markInboxRead([item.id])"><span class="avatar blue"><img v-if="item.actor.avatarUrl" :src="item.actor.avatarUrl" :alt="item.actor.name || item.actor.username" /><span v-else>{{ (item.actor.name || item.actor.username || '用').slice(0, 1) }}</span></span></RouterLink>
-        <RouterLink :to="notificationDestination(item)" class="inbox-notification-link" @click="!item.isRead && markInboxRead([item.id])"><strong>{{ item.title || currentCategory.label }}</strong><p v-if="item.text || item.body">{{ item.text || item.body }}</p><time v-if="item.createdAt" class="caption-5">{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time></RouterLink>
+        <component :is="isFollowRequestNotification(item) ? 'button' : RouterLink" :to="isFollowRequestNotification(item) ? undefined : notificationDestination(item)" :type="isFollowRequestNotification(item) ? 'button' : undefined" class="inbox-notification-link" @click="openNotification(item)"><strong>{{ item.title || currentCategory.label }}</strong><p v-if="item.text || item.body">{{ item.text || item.body }}</p><time v-if="item.createdAt" class="caption-5">{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time></component>
         <span v-if="!item.isRead" class="inbox-unread" aria-label="未读">未读</span>
       </article>
       <div class="notification-pagination"><button v-if="inbox.nextCursors[activeTab]" class="button btn" :disabled="inbox.loadingMore[activeTab] || inbox.loading || inbox.markingRead" @click="loadMoreNotifications(activeTab)">{{ inbox.loadingMore[activeTab] ? '正在加载…' : '加载更早通知' }}</button><p v-if="activeTab === 'activity' && notifications.length" class="form-note">显示当前保留的互动通知；全部已读仅处理本次查看时已有的通知。</p></div>
@@ -164,7 +172,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 .inbox-notification { display: flex; align-items: flex-start; gap: 16px; padding: 24px 16px; border-bottom: 1px solid var(--border); min-width: 0; }
 .inbox-notification.unread { background: var(--surface); }
 .inbox-actor { flex-shrink: 0; }
-.inbox-notification-link { display: block; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.inbox-notification-link { display: block; flex: 1; min-width: 0; overflow-wrap: anywhere; text-align: start; }
 .inbox-notification-link strong { display: block; color: var(--ink); font-size: 14px; line-height: 24px; font-weight: 500; }
 .inbox-notification-link p { margin-top: 8px; max-width: 72ch; color: var(--muted); white-space: pre-wrap; font-size: 14px; line-height: 24px; }
 .inbox-notification-link time { display: block; margin-top: 12px; }

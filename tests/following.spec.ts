@@ -172,6 +172,7 @@ async function settingsFixture(page: Page) {
 test('received requests approve/reject and sent requests cancel with identity binding', async ({ page }) => {
   const state = await settingsFixture(page)
   await page.goto('/account?tab=following')
+  await expect(page).toHaveURL('/messages?tab=activity#follow-requests')
   await page.getByRole('button', { name: '通过', exact: true }).first().click()
   await expect(page.getByRole('status').filter({ hasText: '已通过' })).toBeVisible()
   await page.getByRole('button', { name: '拒绝', exact: true }).click()

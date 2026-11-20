@@ -14,9 +14,11 @@ async function fixture(page: Page, type = 'image/jpeg') {
     id: `tag${index}`, name, category: new URL(route.request().url()).searchParams.get('kind'),
   })) } }))
   await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 100, imagesMb: 20, videosMb: 100, filesMb: 20 } }))
-  await page.route('**/api/uploads', route => route.fulfill({ json: { file: {
-    id: `file${++uploads}`, name: `作品${uploads}`, type, url: '/simple-preview.jpg',
-  } } }))
+  await page.route('**/api/uploads', route => {
+    const payload = route.request().postDataBuffer()?.toString() || ''
+    const index = payload.includes('filename="second.jpg"') ? 2 : payload.includes('filename="first.jpg"') ? 1 : ++uploads
+    return route.fulfill({ json: { file: { id: `file${index}`, name: `作品${index}`, type, url: '/simple-preview.jpg' } } })
+  })
   await page.route('**/api/works', route => {
     if (route.request().method() !== 'POST') return route.fallback()
     const body = route.request().postDataJSON()

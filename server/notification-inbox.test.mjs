@@ -59,6 +59,15 @@ function fixture() {
   }
 }
 
+test('follow request notifications point at the interaction inbox', async () => {
+  const f = fixture()
+  f.events.push([streamId(90), ['data', JSON.stringify({ type: 'receiveFollowRequest', notifierId: 'peer' })]])
+  const head = await f.request()
+  const request = head.items.find(item => item.id === `redis:${streamId(90)}`)
+  assert.equal(request.type, 'activity')
+  assert.equal(request.url, '/messages?tab=activity#follow-requests')
+})
+
 test('notification totals cover retained history and independent cursors exhaust both categories without duplicates', async () => {
   const f = fixture(); f.reads[streamId(10)] = '1'
   f.events.push([streamId(80), ['data', JSON.stringify({ type: 'message', notifierId: 'peer' })]],

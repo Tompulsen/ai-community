@@ -68,7 +68,7 @@ async function packActivity(ctx: RequestContext, entries: Awaited<ReturnType<typ
     const workId = typeof data.workId === 'string' && idPattern.test(data.workId) ? data.workId : old?.workId
     const commentId = typeof data.commentId === 'string' ? data.commentId : old && old.noteId !== old.rootId ? old.noteId : null
     const type = String(data.type || '')
-    const url = type === 'receiveFollowRequest' ? '/account?tab=following' : workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}` : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
+    const url = type === 'receiveFollowRequest' ? '/messages?tab=activity#follow-requests' : workId ? `/work/${workId}${commentId ? `#comment-${encodeURIComponent(commentId)}` : ''}` : type === 'message' && actor ? `/messages?peer=${actor.id}` : actor ? `/community?creator=${actor.id}` : '/community'
     const timestamp = Number(streamId.split('-')[0])
     return { id: `redis:${streamId}`, type: type === 'message' ? 'message' : 'activity', title: names[type] || '社区通知',
       text: typeof data.text === 'string' ? data.text : actorDto?.name || '', isRead, url, actor: actorDto,

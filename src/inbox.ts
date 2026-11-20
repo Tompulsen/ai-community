@@ -59,8 +59,18 @@ export function notificationCategory(item: InboxNotification): 'announcement' | 
 }
 export function notificationDestination(item: InboxNotification): string {
   if (notificationCategory(item) === 'announcement') return '/messages?tab=announcement'
+  if (isFollowRequestNotification(item)) return '/messages?tab=activity#follow-requests'
   if (item.url && /^\/(?:work\/|community(?:\?|$)|messages(?:\/|\?|$)|library(?:\?|$)|activities(?:\?|$)|account(?:\?|$))/.test(item.url)) return item.url
   return item.actor?.id ? `/community?creator=${encodeURIComponent(item.actor.id)}` : '/community'
+}
+export function isFollowRequestNotification(item: InboxNotification): boolean {
+  if (notificationCategory(item) !== 'activity' || !item.url?.startsWith('/')) return false
+  try {
+    const url = new URL(item.url, 'https://community.invalid')
+    return url.origin === 'https://community.invalid' && (
+      url.pathname === '/account' && url.searchParams.get('tab') === 'following'
+      || url.pathname === '/messages' && url.searchParams.get('tab') === 'activity' && url.hash === '#follow-requests')
+  } catch { return false }
 }
 const validCount = (value: unknown, fallback: number) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : fallback
 function compareNoticeIds(a: string, b: string) {

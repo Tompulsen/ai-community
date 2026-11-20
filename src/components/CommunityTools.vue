@@ -30,7 +30,7 @@ const tools = computed<Tool[]>(() => [
   { label: '账号设置', icon: Settings, to: '/account', member: true },
   { label: '账户余额', icon: Wallet, to: '/account?tab=balance', member: true },
   { label: '主题外观', icon: Palette, to: '/account?tab=theme', member: true },
-  { label: '关注申请', icon: UserPlus, to: '/account?tab=following', member: true },
+  { label: '关注申请', icon: UserPlus, to: '/messages?tab=activity#follow-requests', member: true, category: 'activity' },
   { label: '刷新', icon: RefreshCw, action: 'refresh' },
 ])
 function destination(tool: Tool) {

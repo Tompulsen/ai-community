@@ -28,6 +28,9 @@ export const router = createRouter({
 })
 
 router.beforeEach((to, from) => {
+  if (to.path === '/account' && to.query.tab === 'following') {
+    return { path: '/messages', query: { tab: 'activity' }, hash: '#follow-requests' }
+  }
   if (to.path === '/community' && to.query.tab === 'announcements' && !to.query.creator) {
     return { path: '/messages', query: { tab: 'announcement' } }
   }

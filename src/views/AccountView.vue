@@ -6,7 +6,6 @@ import { site } from '../site'
 import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
-import FollowRequests from '../components/FollowRequests.vue'
 import AccountTheme from '../components/AccountTheme.vue'
 import AccountWallet from '../components/AccountWallet.vue'
 import CommunityWalletSummary from '../components/CommunityWalletSummary.vue'
@@ -21,7 +20,7 @@ import '../settings-tokens.css'
 interface Account { linked: boolean; issuer?: string; subject?: string; balance: number | null; currency?: string; currencySymbol?: string; accountUrl?: string; studioReady?: boolean; walletEnabled?: boolean; points?: CommunityWallet | null }
 const route = useRoute()
 const router = useRouter()
-const settingTabs = ['privacy', 'following', 'theme', 'security', 'balance']
+const settingTabs = ['privacy', 'theme', 'security', 'balance']
 const readTab = (value: unknown) => typeof value === 'string' && settingTabs.includes(value) ? value : 'privacy'
 const tab = ref(readTab(route.query.tab))
 const mobileSettings = inject<ComputedRef<boolean>>('mobile-community', computed(() => false))
@@ -96,7 +95,7 @@ watch(() => route.query.tab, async (value, previous) => {
   await nextTick()
   if (settingsDetail.value) settingsMain.value?.focus({ preventScroll: true })
   else {
-    const target = settingsNav.value?.querySelector<HTMLButtonElement>(`[data-setting="${previous === 'following' ? 'privacy' : readTab(previous)}"]`)
+    const target = settingsNav.value?.querySelector<HTMLButtonElement>(`[data-setting="${readTab(previous)}"]`)
       || settingsNav.value?.querySelector<HTMLButtonElement>('button')
     target?.focus({ preventScroll: true })
   }
@@ -254,7 +253,6 @@ async function restartLogin() {
       </aside>
       <div v-show="showPanel" ref="settingsMain" class="settings-main" tabindex="-1">
         <AccountPrivacy v-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
-        <FollowRequests v-else-if="tab === 'following'" />
         <AccountTheme v-else-if="tab === 'theme'" />
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">

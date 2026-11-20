@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowLeftRight, ArrowUp, FileText, Trash2 } from '@lucide/vue'
-import type { WorkFile } from '../data'
+import type { UploadFile } from '../use-file-uploads'
+import FileUploadStatus from './FileUploadStatus.vue'
 
-defineProps<{ files: WorkFile[]; reference?: boolean; featured?: boolean }>()
-const emit = defineEmits<{ move: [index: number, direction: number]; role: [index: number]; remove: [index: number] }>()
+defineProps<{ files: UploadFile[]; reference?: boolean; featured?: boolean }>()
+const emit = defineEmits<{ move: [index: number, direction: number]; role: [index: number]; remove: [index: number]; retry: [index: number] }>()
 </script>
 
 <template>
   <ul class="attachment-list" :class="{ featured }">
-    <li v-for="(file, index) in files" :key="file.id">
+    <li v-for="(file, index) in files" :key="file.upload ? file.url : file.id">
       <a v-if="featured && index === 0 && file.type.startsWith('image/')" :href="file.url" target="_blank" rel="noopener noreferrer" class="attachment-preview" :aria-label="`查看 ${file.name}`"><img :src="file.url" :alt="file.name" /></a>
       <video v-if="file.type.startsWith('video/')" :src="file.url" :aria-label="file.name" controls playsinline preload="metadata" />
       <a v-else :href="file.url" target="_blank" rel="noopener noreferrer" class="file-name" :title="file.name"><img v-if="file.type.startsWith('image/') && !(featured && index === 0)" :src="file.thumbnailUrl || file.url" alt="" /><FileText v-else-if="!file.type.startsWith('image/')" :size="24" aria-hidden="true" /><span>{{ file.name }}</span></a>
@@ -18,6 +19,7 @@ const emit = defineEmits<{ move: [index: number, direction: number]; role: [inde
         <button v-if="reference || file.type.startsWith('image/')" type="button" class="icon-button" :aria-label="reference ? '移至作品文件' : '移至参考图'" :title="reference ? '移至作品文件' : '移至参考图'" @click="emit('role', index)"><ArrowLeftRight :size="16" /></button>
         <button type="button" class="icon-button" :aria-label="`移除 ${file.name}`" title="移除附件" @click="emit('remove', index)"><Trash2 :size="16" /></button>
       </div>
+      <FileUploadStatus :file="file" @retry="emit('retry', index)" />
     </li>
   </ul>
 </template>

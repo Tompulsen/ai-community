@@ -209,7 +209,7 @@ async function removeFollower() {
           <span class="avatar blue profile-avatar"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></span>
           <div class="profile-copy">
             <div class="profile-heading"><h1>{{ creator.name || creator.username }}</h1><div class="profile-actions">
-              <RouterLink v-if="isOwnProfile" :to="profileEditLink" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/account?tab=following" class="button btn subtle">关注申请</RouterLink>
+              <RouterLink v-if="isOwnProfile" :to="profileEditLink" class="button btn subtle"><Pencil :size="16" />编辑资料</RouterLink><RouterLink v-if="isOwnProfile" to="/messages?tab=activity#follow-requests" class="button btn subtle">关注申请</RouterLink>
               <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
             </div></div>
             <div class="profile-stats" aria-label="创作者统计">

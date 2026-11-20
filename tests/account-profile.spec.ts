@@ -83,7 +83,8 @@ test('switching accounts while upload limits are pending never uploads into the 
   const fixture = await mockUnifiedAccount(page, true)
   let release!: () => void
   const wait = new Promise<void>(resolve => { release = resolve })
-  let requested = false, uploaded = false
+  let requested = false, uploaded = false, cancelled = false
+  page.on('requestfailed', request => { if (new URL(request.url()).pathname === '/api/uploads/limits') cancelled = true })
   await page.route('**/api/uploads/limits', async route => {
     requested = true; await wait
     await route.fulfill({ json: { imagesMb: 20, videosMb: 20, filesMb: 20, maxFileSizeMb: 20 } })
@@ -96,9 +97,8 @@ test('switching accounts while upload limits are pending never uploads into the 
   fixture.state.user = { ...fixture.state.user, id: 'secondAccount', accountId: '18', username: 'second', name: '第二个账号' }
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveCount(0)
-  const completed = page.waitForResponse('**/api/uploads/limits')
-  release(); await completed
-  await page.waitForTimeout(100)
+  release()
+  await expect.poll(() => cancelled).toBe(true)
   expect(uploaded).toBe(false)
   await page.goto('/community?creator=secondAccount&edit=profile')
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('第二个账号')
