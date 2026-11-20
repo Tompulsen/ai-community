@@ -231,7 +231,10 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
     if (parameters?.model && !modelsForKind(entry.kind).some(model => model.id === parameters.model)) throw new Error('首页所选模型当前不可用，请返回首页重新选择。')
     if (parameters?.model) modelChoices[entry.kind] = ''
     const next = newChat(entry.kind)
-    next.mediaDrafts = { [entry.kind]: { ...parameters, prompt: entry.prompt, references: entry.references } }
+    if (entry.kind === 'text') {
+      const { model, settings, system, skillIds, search, compressionThreshold, sendMemory, toolContext, files } = entry.parameters
+      Object.assign(next, { textModel: model, settings, formatOverride: settings.format, system, skillIds, search, compressionThreshold, sendMemory, toolContext, draft: entry.prompt, draftFiles: files })
+    } else next.mediaDrafts = { [entry.kind]: { ...entry.parameters, prompt: entry.prompt, references: entry.references } }
     await saveChats(true)
     if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return
     armStudioEntryStart(next.id, owner)
@@ -239,13 +242,14 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
     await router.replace({ query: { conversation: next.id, start: '1' } })
   } catch (cause) { if (!cancelled && entryLive && owner === session.user?.id) error.value = errorMessage(cause) }
 }, { immediate: true, flush: 'post' })
-watch([() => route.query.start, () => route.query.conversation, workspace, () => workspace.value?.restoringParameters, () => workspace.value?.canGenerate, () => chats.activeId, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsLoading, () => creation.groupSwitching, () => creation.groupsLoading], async () => {
+const entryReady = computed(() => kind.value === 'text' ? chat.value?.canSend : workspace.value?.canGenerate && !workspace.value.restoringParameters)
+watch([() => route.query.start, () => route.query.conversation, workspace, chat, entryReady, () => chats.activeId, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsLoading, () => creation.groupSwitching, () => creation.groupsLoading], async () => {
   const id = route.query.conversation, owner = session.user?.id
-  if (route.query.start !== '1' || typeof id !== 'string' || id !== chats.activeId || !owner || !chats.ready || !creation.loaded || !workspace.value?.canGenerate || workspace.value.restoringParameters || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
-  const target = workspace.value, requestedKind = kind.value
+  if (route.query.start !== '1' || typeof id !== 'string' || id !== chats.activeId || !owner || !chats.ready || !creation.loaded || !entryReady.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  const target = kind.value === 'text' ? chat.value : workspace.value, requestedKind = kind.value
   await nextTick()
-  if (!entryLive || kind.value !== requestedKind || owner !== session.user?.id || chats.activeId !== id || route.query.conversation !== id || route.query.start !== '1' || workspace.value !== target || !target.canGenerate || target.restoringParameters || !claimStudioEntryStart(id, owner)) return
-  const pending = target.generateBackground(() => {})
+  if (!entryLive || kind.value !== requestedKind || owner !== session.user?.id || chats.activeId !== id || route.query.conversation !== id || route.query.start !== '1' || (kind.value === 'text' ? chat.value : workspace.value) !== target || !entryReady.value || !claimStudioEntryStart(id, owner)) return
+  const pending = requestedKind === 'text' ? chat.value!.send() : workspace.value!.generateBackground(() => {})
   const { start: _, ...query } = route.query
   await router.replace({ query })
   await pending

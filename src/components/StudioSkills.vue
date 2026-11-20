@@ -2,9 +2,10 @@
 import { onUnmounted, ref, watch } from 'vue'
 import { ChevronDown, Play, Plug, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
-import { chats, saveChats, type NativeChat, type Skill } from '../native-chat'
+import { chats, saveChats as persistChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
-const props = defineProps<{ chat: NativeChat; embedded?: boolean }>()
+const props = defineProps<{ chat: NativeChat; embedded?: boolean; transient?: boolean }>()
+function saveChats(required = false) { if (!props.transient) return persistChats(required) }
 const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(false), servers = ref<{ id: string; status: string }[]>([])
 const server = ref(''), tool = ref(''), tools = ref<{ name: string; description?: string; inputSchema?: unknown }[]>([]), args = ref('{}'), result = ref(''), busy = ref(false), config = ref('{"mcpServers":{}}')
 let revision = 0

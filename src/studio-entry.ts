@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { imageOptionsSchema, videoOptionsSchema } from '../shared/studio/options'
+import { chatOptionsSchema, imageOptionsSchema, videoOptionsSchema } from '../shared/studio/options'
 
-const entrySchema = z.object({
+const mediaEntrySchema = z.object({
   owner: z.string().nullable(), kind: z.enum(['image', 'video']),
   prompt: z.string().trim().min(1).max(100000),
   parameters: z.object({
@@ -13,6 +13,17 @@ const entrySchema = z.object({
   }).optional(),
   references: z.array(z.object({ name: z.string(), url: z.string().startsWith('data:image/') })).max(16),
 })
+const textEntrySchema = z.object({
+  owner: z.string().nullable(), kind: z.literal('text'), prompt: z.string().trim().max(100000),
+  parameters: z.object({
+    model: z.string().max(200), group: z.string().min(1).max(200).nullable(), tokenId: z.number().int().positive().nullable(),
+    settings: chatOptionsSchema.omit({ messages: true }), system: z.string().max(100000),
+    skillIds: z.array(z.string().min(1).max(200)).max(100), search: z.enum(['off', 'quick', 'deep']),
+    compressionThreshold: z.number().int().min(500).max(2000000), sendMemory: z.boolean(), toolContext: z.string().max(1000000),
+    files: z.array(z.object({ name: z.string().max(300), type: z.string().max(200), size: z.number().nonnegative(), content: z.string().max(28 * 1024 ** 2), isText: z.boolean() })).max(10),
+  }),
+}).refine(value => Boolean(value.prompt || value.parameters.files.length), '请输入消息或添加附件。')
+const entrySchema = z.discriminatedUnion('kind', [mediaEntrySchema, textEntrySchema])
 export type StudioEntry = z.infer<typeof entrySchema>
 const entryKey = (id: string) => 'ai-community-next:studio-entry:' + id
 export function saveStudioEntry(value: StudioEntry) {

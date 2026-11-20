@@ -1,18 +1,27 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Image, Video, X } from '@lucide/vue'
+import { Image, MessageSquare, Video, X } from '@lucide/vue'
 import { errorMessage, session } from '../state'
 import { clearStudioEntry, saveStudioEntry, type StudioEntry } from '../studio-entry'
 import StudioWorkspace from './StudioWorkspace.vue'
+import StudioChat from './StudioChat.vue'
 import '../studio-composer.css'
 
 const StudioAccountTools = defineAsyncComponent(() => import('./StudioAccountTools.vue'))
-const router = useRouter(), kind = ref<'image' | 'video'>('image')
+const router = useRouter(), kind = ref<'text' | 'image' | 'video'>('image'), mediaKind = ref<'image' | 'video'>('image')
+const chat = ref<InstanceType<typeof StudioChat>>()
 const busy = ref(false), error = ref(''), workspace = ref<InstanceType<typeof StudioWorkspace>>()
 const accountDialog = ref<HTMLDialogElement>(), accountTool = ref<'prices' | 'keys'>('prices')
 const accountOpen = ref(false)
 const accountHeading = computed(() => accountTool.value === 'prices' ? '模型广场' : '密钥')
+async function changeKind(value: 'text' | 'image' | 'video', model?: string) {
+  kind.value = value
+  if (value !== 'text') mediaKind.value = value
+  await nextTick()
+  const target = value === 'text' ? chat.value : workspace.value
+  if (target && model) target.model = model
+}
 let live = true
 onBeforeUnmount(() => { live = false; accountDialog.value?.close() })
 watch(() => session.user?.id, () => { error.value = ''; accountDialog.value?.close() })
@@ -37,15 +46,17 @@ async function send(value: StudioEntry) {
   <section class="discovery-creation" aria-labelledby="discovery-creation-heading">
     <h2 id="discovery-creation-heading">今天，想创作什么？</h2>
     <div class="creation-modes" role="group" aria-label="快捷创作类型">
-      <button type="button" :aria-pressed="kind === 'image'" :disabled="busy" @click="kind = 'image'"><Image :size="18" aria-hidden="true" />图片生成</button>
-      <button type="button" :aria-pressed="kind === 'video'" :disabled="busy" @click="kind = 'video'"><Video :size="18" aria-hidden="true" />视频生成</button>
+      <button type="button" :aria-pressed="kind === 'text'" :disabled="busy" @click="changeKind('text')"><MessageSquare :size="18" aria-hidden="true" />文本对话</button>
+      <button type="button" :aria-pressed="kind === 'image'" :disabled="busy" @click="changeKind('image')"><Image :size="18" aria-hidden="true" />图片生成</button>
+      <button type="button" :aria-pressed="kind === 'video'" :disabled="busy" @click="changeKind('video')"><Video :size="18" aria-hidden="true" />视频生成</button>
     </div>
-    <StudioWorkspace ref="workspace" class="discovery-workspace" :kind="kind" entry-only :entry-pending="busy" @kind="kind = $event" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
+    <StudioChat v-show="kind === 'text'" ref="chat" class="discovery-workspace" :mode="kind" entry-only :entry-pending="busy" @kind="changeKind" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
+    <StudioWorkspace v-show="kind !== 'text'" ref="workspace" class="discovery-workspace" :kind="mediaKind" entry-only :entry-pending="busy" @kind="changeKind" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <Teleport to="body">
       <dialog ref="accountDialog" class="discovery-account-dialog" :aria-label="accountHeading" @close="accountOpen = false" @click="($event.target === accountDialog) && accountDialog?.close()">
         <header><h2>{{ accountHeading }}</h2><button type="button" class="icon-button" :aria-label="'关闭' + accountHeading" @click="accountDialog?.close()"><X :size="20" aria-hidden="true" /></button></header>
-        <StudioAccountTools v-if="accountOpen" :view="accountTool" :model="workspace?.model" />
+        <StudioAccountTools v-if="accountOpen" :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" />
       </dialog>
     </Teleport>
   </section>
@@ -73,13 +84,18 @@ h2 { margin: 0 0 20px; text-align: center; font-size: 28px; line-height: 40px; f
   .discovery-creation { margin: 16px auto 28px; }
   h2 { margin-bottom: 16px; font-size: 22px; line-height: 32px; }
   .creation-modes { margin-bottom: 16px; }
-  .creation-modes button { min-width: 128px; }
+  .creation-modes button { min-width: 0; padding-inline: 12px; gap: 6px; }
   .discovery-workspace :deep(.studio-composer) { padding: 12px; }
   .discovery-workspace :deep(.composer-input) { min-height: 88px; }
-  .discovery-workspace :deep(.studio-composer-tools) { display: grid; grid-template-columns: minmax(0, 1fr) 44px; }
-  .discovery-workspace :deep(.studio-composer-actions) { grid-column: 1; grid-row: 1; justify-content: flex-start; }
+  .discovery-workspace :deep(.studio-composer-tools) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) 44px; }
+  .discovery-workspace :deep(.studio-composer-actions) { grid-column: 1 / 4; grid-row: 1; justify-content: flex-start; }
   .discovery-workspace :deep(.studio-composer-models) { grid-column: 1; grid-row: 2; }
-  .discovery-workspace :deep(.composer-submit) { grid-column: 2; grid-row: 1 / 3; align-self: end; }
+  .discovery-workspace :deep(.billing-compact) { grid-column: 2; grid-row: 2; max-width: 112px; justify-self: end; }
+  .discovery-workspace :deep(.composer-submit) { grid-column: 3; grid-row: 2; }
   .discovery-account-dialog { padding: 16px; }
+}
+@media (max-width: 480px) {
+  .creation-modes button { gap: 4px; padding-inline: 8px; font-size: 12px; white-space: nowrap; }
+  .creation-modes button svg { flex: none; width: 16px; height: 16px; }
 }
 </style>

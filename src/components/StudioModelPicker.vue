@@ -8,8 +8,8 @@ import { session, errorMessage } from '../state'
 import { favoriteModel, modelChoices, modelFormat, modelKind, modelPreferences, modelType, setModelFormat, setModelType, toggleModelFavorite, type ModelType } from '../model-preferences'
 import { modelCategories, modelDescription, modelVendor, searchModels, kindLabels } from '../../shared/studio/model-catalog'
 import { CHAT_API_FORMATS, type ChatApiFormat } from '../../shared/studio/chat-api-format'
-const props = defineProps<{ modelValue: string; kind: CreationKind; inlineMedia?: boolean }>()
-const emit = defineEmits<{ 'update:modelValue': [value: string]; keys: []; kind: [value: 'image' | 'video'] }>()
+const props = defineProps<{ modelValue: string; kind: CreationKind; inlineSelection?: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: string]; keys: []; kind: [value: CreationKind, model: string] }>()
 const route = useRoute(), router = useRouter(), id = `model-picker-${useId()}`
 const dialog = ref<HTMLDialogElement>(), search = ref<HTMLInputElement>()
 const open = ref(false), query = ref(''), category = ref('all'), expanded = ref(''), error = ref('')
@@ -17,7 +17,7 @@ const groupsOpen = ref(false), sourceSelector = ref<HTMLDivElement>(), groupTrig
 const groups = computed(() => creation.groups.filter(group => group.id !== '').sort((a, b) => a.id === 'auto' ? -1 : b.id === 'auto' ? 1 : 0))
 const selectedGroup = computed(() => groups.value.find(group => group.id === creation.selectedGroup))
 const busy = computed(() => creation.modelsLoading || creation.groupSwitching || creation.groupsLoading)
-const matching = computed(() => searchModels(creation.models, query.value).filter(item => !props.inlineMedia || modelKind(item) !== 'text'))
+const matching = computed(() => searchModels(creation.models, query.value))
 const categories = computed(() => modelCategories(matching.value, favoriteModel))
 const visible = computed(() => matching.value.filter(item => category.value === 'all'
   || (category.value === 'favorites' ? favoriteModel(item.id) : modelVendor(item.id).name === category.value)))
@@ -72,9 +72,9 @@ async function choose(item: CreationModel) {
   if (busy.value || !current) return
   const kind = modelKind(current)
   close()
-  if (props.inlineMedia && (kind === 'image' || kind === 'video')) {
-    if (kind !== props.kind) { emit('kind', kind); await nextTick() }
-    emit('update:modelValue', item.id)
+  if (props.inlineSelection) {
+    if (kind !== props.kind) emit('kind', kind, item.id)
+    else emit('update:modelValue', item.id)
   }
   else if (kind === props.kind) emit('update:modelValue', item.id)
   else {

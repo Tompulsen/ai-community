@@ -24,6 +24,66 @@ async function prepare(page: Page, rows = [image], autoGroups = ['image']) {
 }
 
 const pricingPanel = (page: Page) => page.getByRole('dialog', { name: '模型价格', exact: true })
+test('homepage cost sits beside send, updates with quantity and opens details without submitting', async ({ page }, testInfo) => {
+  await prepare(page)
+  let submissions = 0
+  page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/api/creation/generate')) submissions++ })
+  await page.goto('/discover')
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  const trigger = composer.getByRole('button', { name: /^预计积分消耗/ })
+  await expect(trigger).toHaveText('150 积分')
+  await expect(page.getByRole('button', { name: '模型价格', exact: true })).toHaveCount(0)
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('保留输入内容')
+  await composer.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.getByRole('spinbutton', { name: '图片数量', exact: true }).fill('3')
+  await page.keyboard.press('Escape')
+  await expect(trigger).toHaveText('450 积分')
+  for (const [width, theme] of [[1440, 'light'], [390, 'dark'], [320, 'light']] as const) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(mode => window.communityAppearance.set({ mode }), theme)
+    const before = await composer.boundingBox(), cost = (await trigger.boundingBox())!
+    const send = (await composer.getByRole('button', { name: '发送到创作台', exact: true }).boundingBox())!
+    expect(cost.x + cost.width).toBeLessThanOrEqual(send.x)
+    expect(send.x - cost.x - cost.width).toBeLessThanOrEqual(16)
+    expect(Math.abs(cost.y + cost.height / 2 - send.y - send.height / 2)).toBeLessThanOrEqual(1)
+    await page.screenshot({ path: testInfo.outputPath('inline-cost-' + width + '-' + theme + '.png') })
+    await trigger.click()
+    await expect(pricingPanel(page).locator('.billing-cost-value')).toHaveText('450 积分')
+    await expect(pricingPanel(page).locator('.billing-wallet-value')).toContainText('999,597,840')
+    const panel = (await pricingPanel(page).boundingBox())!
+    expect(panel.x).toBeGreaterThanOrEqual(0)
+    expect(panel.x + panel.width).toBeLessThanOrEqual(width)
+    expect(panel.y).toBeGreaterThanOrEqual(0)
+    expect(panel.y + panel.height).toBeLessThanOrEqual(900)
+    expect(await composer.boundingBox()).toEqual(before)
+    await page.screenshot({ path: testInfo.outputPath('inline-cost-details-' + width + '-' + theme + '.png') })
+    await page.keyboard.press('Escape')
+    await expect(trigger).toBeFocused()
+    await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留输入内容')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+  expect(submissions).toBe(0)
+})
+
+test('homepage cost keeps ranges, actual-use pricing and unavailable prices distinct', async ({ page }) => {
+  const { state } = await prepare(page, [image, { ...image, group: 'default', requestPrice: 50 }], ['default', 'image'])
+  await page.goto('/discover')
+  const trigger = page.getByRole('button', { name: /^预计积分消耗/ })
+  await expect(trigger).toHaveText('50–150 积分')
+  state.rows = [{ ...image, model: 'sora-2' }]
+  await trigger.click()
+  await pricingPanel(page).getByRole('button', { name: '刷新积分与价格', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '视频生成', exact: true }).click()
+  await expect(trigger).toHaveText('按量计费')
+  state.failedPrice = true
+  await trigger.click()
+  await pricingPanel(page).getByRole('button', { name: '刷新积分与价格', exact: true }).click()
+  await expect(pricingPanel(page).getByRole('alert')).toContainText('价格读取失败')
+  await page.keyboard.press('Escape')
+  await expect(trigger).toHaveText('查看价格')
+})
+
 async function openPrice(page: Page, kind = 'image') {
   await page.goto(`/create/${kind}`)
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
@@ -144,7 +204,9 @@ test('an account change clears old values and ignores its late price response', 
   account.state.wallet.permanentPoints = '10'; account.state.wallet.charityPoints = '0'
   await page.route('**/api/account', route => route.fulfill({ json: { linked: true, subject: '19', walletEnabled: true, points: { ...wallet, permanentPoints: '10', charityPoints: '0' } } }))
   await page.evaluate(async () => {
-    const { session } = await import('/src/state.ts')
+    const stateUrl = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname === '/src/state.ts')?.name
+    if (!stateUrl) throw new Error('Active session module was not loaded')
+    const { session } = await import(stateUrl)
     session.user = { ...session.user, accountId: '19' }
   })
   release()

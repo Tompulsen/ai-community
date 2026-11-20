@@ -1,10 +1,11 @@
 <!-- Settings hierarchy adapted from octopus_chat model-config.tsx (MIT). -->
 <script setup lang="ts">
 import { ChevronDown } from '@lucide/vue'
-import { saveChats, type NativeChat } from '../native-chat'
+import { saveChats as persistChats, type NativeChat } from '../native-chat'
 import { CHAT_API_FORMATS } from '../../shared/studio/chat-api-format'
 import { REASONING_EFFORT_OPTIONS } from '../../shared/studio/chat-params'
-defineProps<{ chat: NativeChat; format?: string }>()
+const props = defineProps<{ chat: NativeChat; format?: string; transient?: boolean }>()
+function saveChats() { if (!props.transient) return persistChats() }
 defineEmits<{ format: [event: Event] }>()
 </script>
 <template>

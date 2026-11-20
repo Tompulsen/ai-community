@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+import { createHash } from 'node:crypto'
 import { mockUnifiedAccount, fillAccountLogin } from './helpers/account-fixture'
 
 async function fixture(page: Page, authenticated = true, delayed = false) {
@@ -10,16 +11,181 @@ async function fixture(page: Page, authenticated = true, delayed = false) {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/creation/models') {
       if (delayed) await new Promise(resolve => setTimeout(resolve, 900))
-      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'gpt-image-1', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] }] } })
+      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'gpt-image-1', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] }, { id: 'claude-opus', kinds: ['text'] }] } })
     }
     if (path === '/api/creation/generate') {
       calls.push(route.request().postDataJSON())
-      return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/entry.png' }], tokenId: 41, protocol: 'sync' } })
+      return route.fulfill({ json: { status: 'succeeded', outputs: calls.at(-1).kind === 'text' ? [{ text: '文本生成完成' }] : [{ url: 'https://media.example/entry.png' }], tokenId: 41, protocol: 'sync' } })
     }
     return route.fulfill({ json: { items: [] } })
   })
   return { ...account, calls }
 }
+
+test('homepage reuses text controls and carries configuration and files into Studio once', async ({ page }) => {
+  const { calls } = await fixture(page)
+  const body = '使用简短中文回答。'
+  await page.route('**/api/creation/skills/catalog', route => route.fulfill({ json: { items: [{ id: 'short', name: '简短回答', description: '简洁表达', body, sha256: createHash('sha256').update(body).digest('hex') }] } }))
+  const searches: unknown[] = []
+  await page.route('**/api/creation/search', route => { searches.push(route.request().postDataJSON()); return route.fulfill({ json: { sources: [] } }) })
+  await page.goto('/create/text')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('原有文本草稿保持完整')
+  await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+  await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'claude-opus', exact: true }).click()
+  await expect(page).toHaveURL('http://localhost:18775/discover')
+  await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('claude-opus')
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('请整理这份材料')
+  await composer.getByLabel('添加附件', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('首页附件内容') })
+  await composer.getByRole('button', { name: '联网搜索：联网', exact: true }).click()
+  await page.getByRole('button', { name: '快速搜索', exact: true }).click()
+  await composer.getByRole('button', { name: '技能与工具', exact: true }).click()
+  await page.getByRole('checkbox', { name: /简短回答/ }).check()
+  await page.keyboard.press('Escape')
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  const parameters = page.getByRole('dialog', { name: '对话参数', exact: true })
+  await parameters.getByRole('spinbutton', { name: '最大输出 Tokens', exact: true }).fill('2048')
+  await parameters.getByRole('combobox', { name: '推理强度', exact: true }).selectOption('high')
+  await parameters.getByRole('switch', { name: '流式输出', exact: true }).uncheck()
+  await parameters.getByRole('textbox', { name: '系统提示词', exact: true }).fill('你是材料整理助手')
+  await parameters.getByText('高级参数', { exact: true }).click()
+  await parameters.getByRole('combobox', { name: '接口格式', exact: true }).selectOption('responses')
+  await parameters.getByRole('spinbutton', { name: 'Top P', exact: true }).fill('0.85')
+  await parameters.getByRole('spinbutton', { name: '历史压缩阈值', exact: true }).fill('12000')
+  await parameters.getByRole('switch', { name: '保留历史摘要', exact: true }).uncheck()
+  await page.keyboard.press('Escape')
+  expect(calls).toHaveLength(0)
+  await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ kind: 'text', model: 'claude-opus', chatOptions: { format: 'responses', max_tokens: 2048, reasoningEffort: 'high', stream: false, top_p: 0.85 } })
+  expect(JSON.stringify(calls[0].chatOptions.messages)).toContain('你是材料整理助手')
+  const file = calls[0].chatOptions.messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : []).find((part: any) => part.type === 'file').file
+  expect(file.filename).toBe('notes.txt')
+  expect(Buffer.from(file.file_data.split(',')[1], 'base64').toString()).toBe('首页附件内容')
+  expect(JSON.stringify(calls[0].chatOptions.messages)).toContain(body)
+  expect(searches).toEqual([expect.objectContaining({ mode: 'quick', query: '请整理这份材料' })])
+  await expect(page).toHaveURL(new RegExp('/create/text'))
+  await expect.poll(() => new URL(page.url()).searchParams.has('start')).toBe(false)
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
+  expect(calls).toHaveLength(1)
+  const drafts = await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname === '/src/native-chat.ts')?.name
+    if (!path) throw new Error('Active chat module was not loaded')
+    const { chats } = await import(path)
+    return chats.sessions.map((chat: any) => ({ draft: chat.draft, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory, skillIds: chat.skillIds, textModel: chat.textModel }))
+  })
+  expect(drafts).toContainEqual(expect.objectContaining({ draft: '原有文本草稿保持完整' }))
+  expect(drafts).toContainEqual(expect.objectContaining({ textModel: 'claude-opus', compressionThreshold: 12000, sendMemory: false, skillIds: ['short'] }))
+})
+
+test('homepage switches between text and media models without leaving the page or changing existing text drafts', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await page.goto('/discover')
+  await page.getByRole('button', { name: '文本对话', exact: true }).click()
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('保留首页文本草稿')
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  await page.getByRole('dialog', { name: '对话参数', exact: true }).getByRole('spinbutton', { name: '最大输出 Tokens', exact: true }).fill('1234')
+  await page.keyboard.press('Escape')
+  for (const model of ['gpt-image-1', 'sora-2', 'claude-opus']) {
+    await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+    await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: model, exact: true }).click()
+    await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(model)
+    await expect(page).toHaveURL('http://localhost:18775/discover')
+  }
+  await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留首页文本草稿')
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '对话参数', exact: true }).getByRole('spinbutton', { name: '最大输出 Tokens', exact: true })).toHaveValue('1234')
+  expect(calls).toHaveLength(0)
+})
+
+test('guest text input and configuration survive login before the single Studio send', async ({ page }) => {
+  const { calls } = await fixture(page, false)
+  await page.goto('/discover')
+  await page.getByRole('button', { name: '文本对话', exact: true }).click()
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('登录后继续文本创作')
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  await page.getByRole('dialog', { name: '对话参数', exact: true }).getByRole('spinbutton', { name: '最大输出 Tokens', exact: true }).fill('3072')
+  await page.keyboard.press('Escape')
+  await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await page.getByRole('main').getByRole('link', { name: '登录', exact: true }).click()
+  await fillAccountLogin(page)
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ kind: 'text', model: 'gpt-5', chatOptions: { max_tokens: 3072 } })
+})
+
+test('homepage keeps the latest text while attachment preparation finishes', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await page.goto('/discover')
+  await page.getByRole('button', { name: '文本对话', exact: true }).click()
+  await page.evaluate(() => {
+    const read = FileReader.prototype.readAsDataURL
+    FileReader.prototype.readAsDataURL = function(file: Blob) {
+      FileReader.prototype.readAsDataURL = read
+      ;(window as any).releaseHomepageFile = () => read.call(this, file)
+    }
+  })
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  const input = composer.getByRole('textbox', { name: '创作描述', exact: true })
+  await input.fill('等待附件时的初始文字')
+  await composer.getByLabel('添加附件', { exact: true }).setInputFiles({ name: 'pending.txt', mimeType: 'text/plain', buffer: Buffer.from('附件') })
+  await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await expect(composer.getByRole('button', { name: '取消发送', exact: true })).toBeVisible()
+  await input.fill('等待期间补全的最新文字')
+  await page.evaluate(() => (window as any).releaseHomepageFile())
+  await expect.poll(() => calls.length).toBe(1)
+  expect(JSON.stringify(calls[0].chatOptions.messages)).toContain('等待期间补全的最新文字')
+  expect(JSON.stringify(calls[0].chatOptions.messages)).not.toContain('等待附件时的初始文字')
+})
+
+test('homepage text configuration fits both themes on desktop and phones and resets for a different account', async ({ page }, testInfo) => {
+  const { calls } = await fixture(page)
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/discover')
+  await page.getByRole('button', { name: '文本对话', exact: true }).click()
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('跨屏幕排版检查')
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate(mode => window.communityAppearance.set({ mode }), theme)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 950 })
+      await expect(composer.getByRole('button', { name: '发送到创作台', exact: true })).toBeVisible()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      const controls = await composer.locator('.studio-composer-models, .billing-compact, .composer-submit').evaluateAll(elements => elements.map(element => { const { x, y, width, height } = element.getBoundingClientRect(); return { x, y, width, height } }))
+      expect(controls.every(box => box.x >= 0 && box.x + box.width <= width)).toBe(true)
+      for (let index = 1; index < controls.length; index++) expect(controls[index].x).toBeGreaterThanOrEqual(controls[index - 1].x + controls[index - 1].width - 1)
+      await page.screenshot({ path: testInfo.outputPath('text-composer-' + width + '-' + theme + '.png'), fullPage: true })
+      await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: '对话参数', exact: true })
+      const box = await dialog.boundingBox()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width)
+      await page.screenshot({ path: testInfo.outputPath('text-' + width + '-' + theme + '.png'), fullPage: true })
+      await page.keyboard.press('Escape')
+    }
+    expect((await new AxeBuilder({ page }).include('.discovery-creation').analyze()).violations).toEqual([])
+  }
+  await page.setViewportSize({ width: 1440, height: 950 })
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  await page.getByRole('dialog', { name: '对话参数', exact: true }).getByRole('spinbutton', { name: '最大输出 Tokens', exact: true }).fill('9999')
+  await page.keyboard.press('Escape')
+  await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname === '/src/state.ts')?.name
+    if (!path) throw new Error('Active session module was not loaded')
+    const { session } = await import(path)
+    session.user = { ...session.user, id: '18', accountId: 18 }
+  })
+  await page.getByRole('button', { name: '文本对话', exact: true }).click()
+  await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('')
+  await composer.getByRole('button', { name: '对话参数', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '对话参数', exact: true }).getByRole('spinbutton', { name: '最大输出 Tokens', exact: true })).toHaveValue('4096')
+  expect(calls).toHaveLength(0)
+  expect(errors).toEqual([])
+})
 
 for (const kind of ['image', 'video'] as const) {
   test('homepage hands ' + kind + ' prompt and reference to Studio once', async ({ page }) => {
@@ -60,7 +226,7 @@ test('homepage exposes Studio controls and carries image settings into generatio
   await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
   await composer.getByRole('combobox', { name: '模型', exact: true }).click()
   const models = page.getByRole('dialog', { name: '选择模型', exact: true })
-  await expect(models.getByRole('button', { name: 'gpt-5', exact: true })).toHaveCount(0)
+  await expect(models.getByRole('button', { name: 'gpt-5', exact: true })).toBeVisible()
   await models.getByRole('button', { name: 'gpt-image-1', exact: true }).click()
   await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-1')
   await composer.getByRole('button', { name: '高级参数', exact: true }).click()
@@ -70,7 +236,7 @@ test('homepage exposes Studio controls and carries image settings into generatio
   await parameters.getByRole('radio', { name: '高', exact: true }).check()
   await parameters.getByRole('spinbutton', { name: '图片数量', exact: true }).fill('2')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: '模型价格', exact: true }).click()
+  await composer.getByRole('button', { name: /^预计积分消耗/ }).click()
   await expect(page.getByRole('dialog', { name: '模型价格', exact: true })).toContainText('gpt-image-1')
   await page.getByRole('button', { name: '查看全部定价', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '模型广场', exact: true })).toBeVisible()

@@ -10,7 +10,7 @@ import { formatInvocationPoints, invocationPoints, selectedModelPrices } from '.
 import StudioPopover from './StudioPopover.vue'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 
-const props = withDefaults(defineProps<{ model: string; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; refreshKey?: number; hideCatalog?: boolean }>(), { kind: 'text' })
+const props = withDefaults(defineProps<{ model: string; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
 const emit = defineEmits<{ prices: [] }>()
 const menu = ref<InstanceType<typeof StudioPopover>>()
 const prices = ref<ModelPricing>(), loading = ref(false), error = ref('')
@@ -22,6 +22,7 @@ const cost = computed(() => quote.value ? quote.value.min === quote.value.max
 const groupName = computed(() => creation.selectedGroup === 'auto' ? '自动分组' : creation.groups.find(group => group.id === creation.selectedGroup)?.name || creation.selectedGroup)
 const quantityLabel = computed(() => props.kind === 'image' ? `本次 ${props.quantity ?? 1} 张` : props.kind === 'video' && props.duration ? `本次 ${props.duration} 秒视频` : quote.value ? '单次请求' : '本次调用')
 const pointsPricing = computed(() => prices.value?.currency === '积分')
+const compactLabel = computed(() => quote.value ? cost.value + ' 积分' : loading.value ? '计价中…' : pointsPricing.value && rows.value.length ? '按量计费' : '查看价格')
 const usageBased = computed(() => rows.value.some(row => row.details?.unit === 'tokens'))
 function billingLabel(row: ModelPriceRow) {
   return props.kind === 'image' && props.protocol !== 'async' && row.imageCountMultiplier ? '每张图片 · 已含分组倍率' : row.billing
@@ -53,9 +54,9 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
 </script>
 
 <template>
-  <div class="studio-billing" aria-label="模型费用与可用积分">
-    <div class="billing-controls"><StudioPopover ref="menu" label="模型价格" :width="440">
-      <template #trigger><CircleDollarSign :size="15" aria-hidden="true" /><span>模型价格</span><ChevronDown :size="13" aria-hidden="true" /></template>
+  <div class="studio-billing" :class="{ 'billing-compact': compact }" aria-label="模型费用与可用积分">
+    <div class="billing-controls"><StudioPopover ref="menu" label="模型价格" :trigger-label="compact ? '预计积分消耗：' + compactLabel + '，查看详情' : undefined" :width="440">
+      <template #trigger><span v-if="compact" class="billing-estimate" aria-live="polite">{{ compactLabel }}</span><template v-else><CircleDollarSign :size="15" aria-hidden="true" /><span>模型价格</span></template><ChevronDown :size="13" aria-hidden="true" /></template>
       <div class="billing-details">
         <div class="billing-model-row"><strong class="billing-model">{{ model || '尚未选择模型' }}</strong><span v-if="groupName" class="billing-group">{{ groupName }}</span></div>
         <div class="billing-summary" aria-live="polite">
@@ -91,6 +92,10 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
 <style scoped>
 .studio-billing { display: flex; flex: none; align-items: center; min-width: 0; margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 .billing-controls { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.billing-compact { margin: 0; max-width: 180px; }
+.billing-compact .billing-controls { flex: 1; flex-wrap: nowrap; }
+.billing-compact :deep(.studio-tool) { min-width: 0; min-height: 44px; max-width: 100%; color: var(--ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+.billing-estimate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .billing-details { display: grid; gap: 16px; color: var(--ink); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .billing-details p { margin: 0; }
 .billing-model-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }

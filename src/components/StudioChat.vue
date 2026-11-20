@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, L
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
-import { chats, newChat, loadChats, saveChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
+import { chats, createEmptyChat, newChat, loadChats, saveChats as persistChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
 import { prepareStudioImage } from '../studio-image-upload'
@@ -46,9 +46,12 @@ import { isConversationBusy, mediaTasksForConversation } from '../studio-convers
 import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
 import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
-const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean }>(), { mode: 'text', headerVisible: true })
-const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
-const current = computed(() => chats.sessions.find(chat => chat.id === chats.activeId))
+import type { StudioEntry } from '../studio-entry'
+const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean; entryOnly?: boolean; entryPending?: boolean }>(), { mode: 'text', headerVisible: true })
+const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
+const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
+const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
+function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
@@ -104,7 +107,8 @@ onBeforeUnmount(() => transcriptObserver.disconnect())
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
-const busy = computed(() => restoringTask.value || current.value && isConversationBusy(current.value))
+const busy = computed(() => props.entryPending || restoringTask.value || !props.entryOnly && current.value && isConversationBusy(current.value))
+const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
 const mediaByMessage = computed(() => {
@@ -177,16 +181,17 @@ async function openAttachment(url: string | undefined, kind: 'image' | 'video' =
 watch(() => current.value?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined })
 watch(() => session.user?.id, () => { attachmentDialog.value?.close(); attachmentImage.value = undefined; error.value = ''; edited.value = undefined })
 watch(() => session.user?.id, async () => {
+  if (props.entryOnly) { entryChat.value = createEmptyChat(); model.value = '' }
   if (!session.user) return
   const preparingRemix = props.remixPreparing
   await initializeCreation()
   if (!preparingRemix && props.mode === 'text') { await loadCreationGroups(); await loadCreationModels() }
-  await loadChats()
+  if (!props.entryOnly) await loadChats()
 }, { immediate: true })
 function chooseModel() {
   if (props.mode !== 'text' || props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const saved = current.value.textModel || current.value.model
-  const next = takeModelChoice('text', models.value) || (models.value.some(item => item.id === saved) ? saved! : models.value[0]?.id || '')
+  const next = (!props.entryOnly && takeModelChoice('text', models.value)) || (models.value.some(item => item.id === saved) ? saved! : models.value[0]?.id || '')
   model.value = next
   if (next && current.value.textModel !== next) { current.value.textModel = next; void saveChats() }
 }
@@ -294,6 +299,7 @@ async function applySourceReferences(selected: WorkFile[]) {
   finally { referenceLoading.value = false }
 }
 async function send() {
+  if (props.entryOnly) return sendEntry()
   if (!current.value || props.sourceBlocked || busy.value || waitingForMaterials.value || referenceLoading.value || materials.failed.value || !models.value.some(item => item.id === model.value)) return
   nearBottom.value = true
   const text = prompt.value, quote = draftQuote.value, chat = current.value, owner = session.user?.id
@@ -324,6 +330,20 @@ async function send() {
     const submitted = await sendChat(chat, text, attached, acceptedModel, undefined, undefined, { quote })
     if (!submitted) restoreDraft()
   } catch (cause) { restoreDraft(); if (current.value?.id === chat.id && owner === session.user?.id) error.value = errorMessage(cause) }
+}
+async function sendEntry() {
+  if (!canSend.value || !current.value) return
+  const chat = current.value, owner = session.user?.id, preparation = new AbortController()
+  const acceptedModel = model.value, group = creation.selectedGroup, tokenId = creation.modelTokenId
+  materialSubmission = preparation; waitingForMaterials.value = true; error.value = ''
+  try {
+    await materials.wait(preparation.signal)
+    if (!live || preparation.signal.aborted || owner !== session.user?.id || current.value?.id !== chat.id || props.mode !== 'text') return
+    if (acceptedModel !== model.value || group !== creation.selectedGroup || tokenId !== creation.modelTokenId) throw new Error('模型或分组已变化，请重新发送。')
+    const parameters = JSON.parse(JSON.stringify({ model: acceptedModel, group, tokenId, settings: { ...chat.settings, format: currentFormat.value }, system: chat.system, skillIds: chat.skillIds, search: chat.search, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory, toolContext: chat.toolContext, files: files.value }))
+    emit('entry', { owner: owner || null, kind: 'text', prompt: prompt.value, parameters })
+  } catch (cause) { if (live && !preparation.signal.aborted && owner === session.user?.id) error.value = errorMessage(cause) }
+  finally { if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false } }
 }
 async function regenerate(message: NativeMessage) {
   if (!current.value || props.sourceBlocked || busy.value || !models.value.some(item => item.id === model.value)) return
@@ -409,18 +429,18 @@ async function useTask(task: CreationTask) {
 }
 function toggleSelection() { selecting.value = !selecting.value; selectedTurns.value = [] }
 const hasMedia = computed(() => mediaTasks.value.length > 0)
-defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
+defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, canSend, send, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
 </script>
 <template>
   <div class="native-chat" aria-label="对话工作台" @dragenter="dragEnter" @dragover="dragOver" @dragleave="dragLeave" @drop="dropFiles">
     <div v-if="dragging" class="attachment-drop-hint" role="status"><Plus :size="24" />添加附件</div>
     <section v-if="current" class="chat-main">
-      <Teleport defer to="#studio-header-conversation">
+      <Teleport v-if="!entryOnly" defer to="#studio-header-conversation">
         <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="20" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="20" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
       </Teleport>
       <div v-if="selecting" class="creation-selection" role="group" aria-label="消息多选操作"><label><input type="checkbox" aria-label="全选当前消息" :checked="!!mediaTasks.length && selectedTurns.length === mediaTasks.length" @change="selectedTurns = ($event.target as HTMLInputElement).checked ? mediaTasks.map(task => task.id) : []" />全选</label><span role="status">已选 {{ selectedTurns.length }} 轮</span><button class="icon-button" type="button" :disabled="!selectedTurns.length || busy" aria-label="删除所选消息" title="删除所选消息" @click="removeTurns"><Trash2 :size="17" /></button><button class="icon-button" type="button" aria-label="退出消息多选" title="退出多选" @click="selecting = false; selectedTurns = []"><X :size="17" /></button></div>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
-      <div class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
+      <div v-if="!entryOnly" class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
         <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
         <div v-else ref="messagesContent" class="chat-transcript">
         <template v-for="(message, messageIndex) in current.messages" :key="message.id">
@@ -456,24 +476,25 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
         </template>
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
-      <StudioResponseMetrics v-if="mode === 'text'" :key="current.id" :messages="current.messages" />
-      <StudioBilling v-if="mode === 'text'" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
-      <form v-if="mode === 'text'" class="chat-composer studio-composer" @submit.prevent="send">
+      <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
+      <StudioBilling v-if="mode === 'text' && !entryOnly" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
+      <form v-if="mode === 'text'" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
         <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
-        <label class="field"><span class="studio-sr-only">消息</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
+        <label class="field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '消息' }}</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
         <StudioMaterialStatus :items="materialItems" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
-          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Puzzle :size="20" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" embedded /></StudioPopover></span>
+          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Puzzle :size="20" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" :transient="entryOnly" embedded /></StudioPopover></span>
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="20" /></template>
-              <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" embedded /></details></div>
-              <StudioChatParameters :key="current.id" :chat="current" :format="currentFormat" @format="changeFormat" />
+              <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" :transient="entryOnly" embedded /></details></div>
+              <StudioChatParameters :key="current.id" :chat="current" :format="currentFormat" :transient="entryOnly" @format="changeFormat" />
             </StudioPopover>
           </div>
-          <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" @keys="emit('keys')" /></div>
+          <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @keys="emit('keys')" /></div>
+          <StudioBilling v-if="entryOnly" compact :model="model" @prices="emit('prices')" />
           <button v-if="waitingForMaterials" class="composer-submit" type="button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
           <button v-else-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-          <button v-else class="composer-submit send-button" title="发送" aria-label="发送" :disabled="busy || sourceBlocked || referenceLoading || materials.failed.value || !models.some(item => item.id === model) || creation.groupSwitching || creation.modelsLoading || (!prompt.trim() && !files.length && !materials.snapshot.value.items.length)"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
+          <button v-else class="composer-submit send-button" :title="entryOnly ? '发送到创作台' : '发送'" :aria-label="entryOnly ? '发送到创作台' : '发送'" :disabled="!canSend"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
         <div v-if="current.search !== 'off'" class="composer-feedback"><p class="search-cost">搜索与回答分别按章鱼账号配置计费。</p></div><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
