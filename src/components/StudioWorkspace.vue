@@ -387,7 +387,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue })
+defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
 </script>
 
 <template>

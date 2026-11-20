@@ -38,24 +38,25 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     await expect(nav.getByRole('link', { name: width >= 1000 ? '创作台' : '创作', exact: true })).toHaveAttribute('href', width >= 1000 ? '/create' : '/create/video')
     if (width >= 1000) {
       const search = (await page.locator('.header-search-slot').boundingBox())!
-      const account = (await page.locator('.profile-toggle').boundingBox())!
+      const creation = (await page.locator('.discovery-creation').boundingBox())!
       const rail = (await page.locator('.community-rail').boundingBox())!
       expect(rail.x).toBe(0)
-      expect(rail.width).toBe(64)
+      expect(rail.width).toBe(72)
       expect(rail.height).toBe(900)
-      expect(header.x).toBe(64)
-      expect(main.x).toBe(64)
+      expect(header.x).toBe(72)
+      expect(main.x).toBe(72)
       expect(header.height).toBe(64)
-      expect(search.x).toBe(80)
-      expect(search.width).toBeGreaterThan(width / 2)
-      expect(search.x + search.width).toBeLessThanOrEqual(account.x)
+      expect(search.width).toBeGreaterThanOrEqual(220)
+      expect(search.width).toBeLessThanOrEqual(320)
+      expect(search.x + search.width).toBeLessThanOrEqual(width)
+      expect(search.y).toBeGreaterThanOrEqual(creation.y + creation.height)
       const actions = page.locator('.header-actions')
       const message = actions.getByTitle('消息', { exact: true })
       const welfare = actions.getByRole('link', { name: '福利中心', exact: true })
       await expect(message).toHaveCount(1)
       await expect(welfare).toHaveCount(1)
       await expect(welfare).toHaveAttribute('href', '/activities')
-      const items = [page.locator('.header-search-slot'), message, welfare, actions.locator('.account-balance'), actions.locator('.profile-toggle')]
+      const items = [message, welfare, actions.locator('.account-balance'), actions.locator('.profile-toggle')]
       let previousRight = 0
       for (const item of items) {
         const box = (await item.boundingBox())!
@@ -76,7 +77,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       for (const link of await nav.getByRole('link').all()) {
         const bounds = (await link.boundingBox())!
         expect(bounds.x).toBeGreaterThanOrEqual(0)
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(64)
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(72)
         await expect(link.locator('svg')).toHaveCount(1)
       }
       await expect(page.locator('.community-rail .community-actions')).toBeVisible()
@@ -109,7 +110,10 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
     const modes = page.getByRole('group', { name: '浏览方式', exact: true })
     await expect(modes.getByRole('button')).toHaveText(['推荐', '最新', '关注'])
     await expect(modes.getByRole('button', { name: '推荐', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    if (width >= 1000) expect((await page.locator('.discovery-toolbar').boundingBox())!.y).toBeCloseTo(header.height + 16, 1)
+    if (width >= 1000) {
+      const creation = (await page.locator('.discovery-creation').boundingBox())!
+      expect((await page.locator('.discovery-toolbar').boundingBox())!.y).toBeGreaterThanOrEqual(creation.y + creation.height)
+    }
     if (width >= 1000) await expect(page.getByRole('group', { name: '作品类型' }).getByRole('button')).toHaveCount(4)
     else await expect(page.getByRole('group', { name: '作品类型' })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -266,7 +270,7 @@ test('short desktop sidebar scrolls without covering settings and menus close ac
   const panel = page.getByRole('dialog', { name: '社区工具', exact: true })
   await expect(panel).toBeVisible()
   const bounds = (await panel.boundingBox())!
-  expect(bounds.x).toBe(76)
+  expect(bounds.x).toBe(100)
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(360)
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(panel).not.toBeVisible()
@@ -367,7 +371,7 @@ for (const theme of [{ mode: 'light', id: 'cloud' }, { mode: 'dark', id: 'sage' 
       JSON.stringify({ mode: theme.mode, [theme.mode]: theme.id })), theme)
     await page.goto('/discover')
     await page.evaluate(async () => { await document.fonts.ready })
-    const button = page.locator('#header-search .gooey-submit')
+    const button = page.locator('.discovery-search .gooey-submit')
     const sample = () => button.evaluate(element => {
       const root = element.closest('.gooey-input')!
       const animations = element.getAnimations()

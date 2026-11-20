@@ -15,7 +15,7 @@ export function loginReturnPath(value: unknown, fallback = '/discover'): string 
       Object.assign(allowed, { kind: /^(all|image|video|resource)$/, q: /^[^\u0000-\u001f\u007f\\]{0,500}$/,
         tag: /^[^\u0000-\u001f\u007f\\]{1,100}$/, sort: /^(featured|latest|following)$/ })
       break
-    case 'create': Object.assign(allowed, { from: id, remix: id, prepare: /^1$/ }); break
+    case 'create': Object.assign(allowed, { from: id, remix: id, prepare: /^1$/, entry: accountFlowId }); break
     case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
     case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/, edit: /^profile$/ }); break
     case 'account': allowed.tab = /^(profile|balance|security|privacy|following|theme)$/; break

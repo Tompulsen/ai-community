@@ -6,6 +6,8 @@ import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
+import DiscoveryComposer from '../components/DiscoveryComposer.vue'
+import GooeyInput from '../components/GooeyInput.vue'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import { kindLabels, type Work } from '../data'
 
@@ -91,9 +93,11 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 <template>
   <div class="page-container discover-page">
     <h1 class="discover-heading-sr">首页</h1>
+    <DiscoveryComposer />
     <Teleport to="#mobile-discovery-filters" :disabled="!mobile" defer>
     <div v-if="mobile" class="mobile-filter-actions"><button type="button" class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" />刷新</button><button type="button" class="button btn subtle" :aria-expanded="filtersOpen" aria-controls="discovery-filters" @click="filtersOpen = !filtersOpen"><SlidersHorizontal :size="16" />筛选<span v-if="hasConditions" class="filter-dot" /></button><button type="button" class="text-link" :disabled="!hasConditions" @click="reset">清除条件</button></div>
     <div v-show="!mobile || filtersOpen" id="discovery-filters" class="discovery-toolbar">
+      <form v-if="!mobile" class="discovery-search header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="load()"><GooeyInput v-model="query" persistent placeholder="搜索作品、提示词或创作者" /></form>
       <div class="browse-modes" role="group" aria-label="浏览方式">
         <button v-for="mode in browseModes" :key="mode.value" class="browse-mode" :class="{ active: order === mode.value }" :aria-pressed="order === mode.value" @click="order = mode.value">{{ mode.label }}</button>
       </div>
@@ -129,7 +133,15 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
 <style scoped>
 .discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .discover-page { max-width: none; padding-top: 16px; }
-.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 24px; padding-bottom: 0; margin-bottom: 24px; }
+.discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(220px, 320px); align-items: center; gap: 24px; padding-bottom: 0; margin-bottom: 24px; }
+.discovery-search { grid-column: 3; grid-row: 1; position: relative; width: 100%; height: 44px; min-width: 0; }
+.browse-modes { grid-column: 1; grid-row: 1; }
+.tag-navigation { grid-column: 2; grid-row: 1; }
+@media (min-width: 1000px) and (max-width: 1279px) {
+  .discovery-toolbar { grid-template-columns: minmax(0, 1fr) 260px; gap: 12px 24px; }
+  .tag-navigation { grid-column: 1; grid-row: 2; }
+  .discovery-search { grid-column: 2; grid-row: 1 / 3; }
+}
 .browse-modes { display: flex; align-items: center; padding: 4px; border-radius: 18px; }
 .browse-mode { min-height: 28px; min-width: 60px; padding: 2px 10px; border: 2px solid transparent; border-radius: 14px; color: var(--muted); line-height: 20px; font-weight: 500; white-space: nowrap; }
 .browse-mode:hover { color: var(--ink); }
@@ -176,7 +188,8 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
   .mobile-filter-actions .button { gap: 6px; min-height: 44px; padding-inline: 10px; }
   .mobile-filter-actions .text-link { margin-left: auto; min-height: 44px; }
   .filter-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
-  .discovery-toolbar { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+  .discovery-toolbar { grid-template-columns: minmax(0, 1fr); margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+  .browse-modes, .tag-navigation { grid-column: 1; grid-row: auto; }
   .browse-modes { width: 100%; }
   .browse-mode { flex: 1; }
   .tag-rail { flex-wrap: wrap; gap: 6px; overflow: visible; }

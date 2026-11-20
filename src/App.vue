@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
+import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, Palette, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -23,6 +23,25 @@ const communityShell = computed(() => !guestAccount.value && !studioPage.value)
 const wideViewport = ref(window.innerWidth >= 1000)
 const desktopCommunity = computed(() => communityShell.value && wideViewport.value)
 const mobileCommunity = computed(() => communityShell.value && !wideViewport.value)
+const railExpanded = ref(false)
+const railHint = ref<{ label: string; top: number } | null>(null)
+async function toggleRail() {
+  railHint.value = null
+  railExpanded.value = !railExpanded.value
+  document.querySelectorAll<HTMLDetailsElement>('.community-rail .header-menu[open]').forEach(menu => { menu.open = false })
+  await nextTick()
+  document.querySelector<HTMLButtonElement>('.community-rail .rail-toggle')?.focus({ preventScroll: true })
+}
+function showRailHint(event: Event) {
+  if (!(event.target instanceof Element) || !desktopCommunity.value) return
+  if (event.target.closest('.rail-tooltip')) return
+  const control = event.target.closest<HTMLElement>('a, button, summary')
+  const label = control?.getAttribute('aria-label')
+  if (!control || !label) return
+  if (control.closest('.tools-panel') || (railExpanded.value && !control.matches('.rail-toggle, .rail-theme'))) { railHint.value = null; return }
+  const bounds = control.getBoundingClientRect()
+  railHint.value = { label, top: Math.max(24, Math.min(window.innerHeight - 24, bounds.top + bounds.height / 2)) }
+}
 provide('mobile-community', mobileCommunity)
 const feedPage = computed(() => route.path === '/discover')
 const profilePage = computed(() => route.path === '/community' && !!route.query.creator)
@@ -75,6 +94,7 @@ function searchWorks() {
 }
 const viewportHeight = ref(window.visualViewport?.height || window.innerHeight)
 function resizeViewport() {
+  railHint.value = null
   viewportHeight.value = window.visualViewport?.height || window.innerHeight
   const wide = window.innerWidth >= 1000
   if (wide !== wideViewport.value) {
@@ -123,6 +143,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeViewport)
 })
 watch(() => route.fullPath, () => {
+  railHint.value = null
   clearTimeout(searchTimer)
   clearTimeout(hoverCloseTimer)
   searchQuery.value = typeof route.query.q === 'string' ? route.query.q : ''
@@ -212,12 +233,22 @@ function restoreMessageTrigger() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'account-settings-shell': accountSettings, 'studio-shell': studioPage, 'community-shell': communityShell, 'work-shell': workPage, 'profile-shell': profilePage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'account-settings-shell': accountSettings, 'studio-shell': studioPage, 'community-shell': communityShell, 'rail-expanded': desktopCommunity && railExpanded, 'work-shell': workPage, 'profile-shell': profilePage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
-    <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏">
-      <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
-      <div class="rail-scroll"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
-      <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
+    <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏" @pointerover="showRailHint" @focusin="showRailHint" @pointerleave="railHint = null" @focusout="railHint = null" @pointerdown="railHint = null" @keydown.esc="railHint = null" @scroll.capture="railHint = null">
+      <div class="rail-heading">
+        <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else class="rail-brand-fallback">{{ site.brand.slice(0, 1) }}</span><span class="rail-brand-label">{{ site.brand }}</span></RouterLink>
+        <button v-if="railExpanded" type="button" class="rail-toggle icon-button" aria-label="收起侧栏" title="收起侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><PanelLeftClose class="rail-icon" :size="22" aria-hidden="true" /></button>
+      </div>
+      <div class="rail-primary">
+        <div class="rail-scroll"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
+      </div>
+      <div class="rail-utilities">
+        <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings && route.query.tab !== 'theme' ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">账号设置</span></RouterLink>
+        <RouterLink to="/account?tab=theme" class="rail-theme icon-button" aria-label="主题外观" title="主题外观" :aria-current="accountSettings && route.query.tab === 'theme' ? 'page' : undefined"><Palette class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
+        <button v-if="!railExpanded" type="button" class="rail-toggle icon-button" aria-label="展开侧栏" title="展开侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><PanelLeftOpen class="rail-icon" :size="22" aria-hidden="true" /></button>
+      </div>
+      <div v-if="railHint" class="rail-tooltip" role="tooltip" aria-hidden="true" :style="{ top: railHint.top + 'px' }"><span>{{ railHint.label }}</span></div>
     </aside>
     <header v-if="mobileCommunity" class="app-header mobile-community-header" :class="{ 'mobile-search-open': mobileSearchOpen, 'mobile-profile-header': profilePage }">
       <div class="mobile-header-row">
@@ -249,7 +280,7 @@ function restoreMessageTrigger() {
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">{{ link.label }}</span></RouterLink></nav></Teleport>
       <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
-      <div class="header-tools"><form v-if="communityShell" id="header-search" class="header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
+      <div class="header-tools"><form v-if="communityShell && !feedPage" id="header-search" class="header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
       <div class="header-actions"><Teleport to="#community-rail-actions" :disabled="!desktopCommunity" defer><div class="community-actions"><CommunityTools @toggle="toggleHeaderMenu" /><RouterLink v-if="communityShell && (sessionStatus === 'authenticated' || sessionStatus === 'guest')" :to="session.user ? { path: route.path, query: { ...route.query, publish: '1' } } : { path: '/account' }" class="header-submission" aria-label="投稿" title="投稿"><Send class="submission-icon rail-icon" :size="22" aria-hidden="true" /><span class="submission-label rail-label">投稿</span></RouterLink></div></Teleport>
         <details ref="messageMenu" class="header-menu messages-menu" @toggle="toggleHeaderMenu" @pointerenter="openHoverMenu($event, messageMenu)" @pointerleave="leaveHoverMenu($event, messageMenu)" @focusin="openHoverMenu($event, messageMenu)" @focusout="leaveHoverMenu($event, messageMenu)">
           <summary class="icon-button message-trigger" :aria-label="unreadCount ? `消息，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '消息'" :aria-description="unreadCount > 99 ? `共 ${unreadCount} 条未读消息` : undefined" title="消息"><MessageSquare class="rail-icon" :size="22" aria-hidden="true" /><span v-if="unreadCount" class="message-count" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
@@ -391,34 +422,78 @@ function restoreMessageTrigger() {
 @media (min-width: 1000px) {
   :global(:root:has(.community-shell)) { --header-height: 64px; }
   :global(:root:has(.community-shell:is(.account-settings-shell, .profile-shell))) { --header-height: 0px; }
-  .community-shell { margin-left: 64px; }
+  .community-shell { --community-rail-width: 72px; --rail-control-size: 36px; margin-left: var(--community-rail-width); }
+  .community-shell.rail-expanded { --community-rail-width: 248px; }
   .community-shell > .app-header { height: 64px; }
   .community-shell .header-inner { display: flex; }
   .community-shell .header-inner > .brand { display: none; }
-  .community-shell .header-tools { gap: 16px; }
+  .community-shell .header-tools { justify-content: flex-end; gap: 16px; }
   .community-shell .header-search-slot { flex: 1; }
   .community-shell .header-actions { flex: none; }
   .community-shell .header-actions :is(.message-trigger, .header-welfare) { position: relative; flex: none; inline-size: 44px; block-size: 44px; min-block-size: 44px; padding: 0; border-radius: var(--radius); color: var(--muted); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px 0; background: var(--canvas); border-right: 1px solid var(--border); }
-  .rail-brand { display: grid; place-items: center; flex: none; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 8px; }
-  .rail-brand img { border-radius: 6px; }
-  .rail-scroll { flex: 1; width: 100%; min-height: 0; padding: 0 8px 12px; overflow-y: auto; scrollbar-width: none; }
-  .rail-scroll::-webkit-scrollbar { display: none; }
+  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; align-items: center; justify-items: center; gap: 24px; width: var(--community-rail-width, 72px); padding: 16px 12px; }
+  .rail-heading { display: flex; align-items: center; justify-content: center; width: 64px; min-width: 0; height: 56px; }
+  .rail-primary, .rail-utilities, .rail-brand { background: var(--surface); box-shadow: 0 4px 16px #0000000d; }
+  .rail-primary, .rail-utilities { display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px; border-radius: 32px; }
+  .rail-primary { min-height: 0; max-height: 100%; }
+  .rail-utilities { gap: 8px; }
+  .rail-brand { display: flex; align-items: center; justify-content: center; flex: none; width: 56px; height: 56px; min-width: 0; border-radius: 16px; }
+  .rail-brand img { flex: none; width: 32px; height: 32px; border-radius: 8px; }
+  .rail-brand-fallback { display: grid; place-items: center; flex: none; width: 32px; height: 32px; }
+  .rail-brand-label { display: none; }
+  .rail-scroll { flex: 0 1 auto; width: 48px; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: none; }
   .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-  .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 8px; color: var(--muted); }
+  .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .rail-theme, .rail-toggle, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 16px; color: var(--muted); }
   .community-rail :deep(.rail-icon) { flex: none; width: var(--icon-size-nav); height: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-rail .rail-label { display: none; }
-  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"], .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :is(.nav-link, .rail-settings)[aria-current="page"]::after, .header-welfare[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
-  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-  .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .rail-theme:hover, .rail-toggle:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"] { color: var(--canvas); background: var(--ink); }
+  .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"]::after { display: none; }
+  .header-welfare[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
+  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
   .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
-  .community-rail :deep(.tools-panel) { left: 76px; right: auto; top: 72px; max-height: calc(100dvh - 88px); }
-  .rail-settings { margin-top: 8px; }
+  .community-rail :deep(.tools-panel) { left: calc(var(--community-rail-width) + 12px); right: auto; top: 72px; max-height: calc(100dvh - 88px); }
+  .rail-tooltip { position: fixed; z-index: 60; left: calc(var(--community-rail-width) - 4px); transform: translateY(-50%); padding-left: 12px; max-width: calc(100vw - var(--community-rail-width) - 12px); }
+  .rail-tooltip > span { display: block; padding: 8px 12px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+  .community-shell:not(.rail-expanded) .community-rail { grid-template-rows: var(--rail-control-size) minmax(0, 1fr) auto; padding-inline: 6px; padding-top: calc((64px - var(--rail-control-size)) / 2); }
+  .community-shell:not(.rail-expanded) .rail-heading { width: calc(var(--rail-control-size) + 16px); height: var(--rail-control-size); }
+  .community-shell:not(.rail-expanded) .rail-brand { width: var(--rail-control-size); height: var(--rail-control-size); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-control-size); height: var(--rail-control-size); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) .rail-scroll { width: var(--rail-control-size); }
+  .community-shell:not(.rail-expanded) .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle), .community-shell:not(.rail-expanded) .community-rail :deep(.tools-trigger) { width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) .community-rail :deep(.rail-icon) { width: 20px; height: 20px; }
+  .rail-expanded .community-rail { align-items: stretch; gap: 16px; padding: 20px; }
+  .rail-expanded .community-rail::before { content: ''; position: absolute; z-index: -1; inset: 12px; border-radius: 24px; background: var(--surface); box-shadow: 0 4px 16px #0000000d; }
+  .rail-expanded .rail-heading { justify-content: space-between; width: 100%; }
+  .rail-expanded .rail-brand { justify-content: flex-start; flex: 1; gap: 10px; width: auto; background: transparent; box-shadow: none; }
+  .rail-expanded .rail-brand-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; }
+  .rail-expanded .rail-primary, .rail-expanded .rail-utilities { width: 100%; padding: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .rail-expanded .rail-primary { align-self: stretch; }
+  .rail-expanded .rail-scroll { width: 100%; height: 100%; }
+  .rail-expanded .community-rail .desktop-nav { justify-self: stretch; gap: 4px; width: 100%; }
+  .rail-expanded .community-rail :is(.nav-link, .header-submission) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 12px; border-radius: 12px; }
+  .rail-expanded .community-rail .rail-label { display: inline; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
+  .rail-expanded .community-rail .community-actions { align-items: stretch; }
+  .rail-expanded .community-rail :deep(.tools-trigger) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 12px; border-radius: 12px; }
+  .rail-expanded .community-rail :deep(.tools-trigger)::after { content: '社区工具'; font-size: 14px; font-weight: 500; }
+  .rail-expanded .rail-utilities { flex-direction: row; align-items: center; gap: 4px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .rail-expanded .rail-settings { justify-content: flex-start; flex: 1; gap: 12px; width: auto; padding-inline: 12px; border: 0; border-radius: 12px; }
+  .rail-expanded .rail-theme, .rail-expanded .rail-toggle { width: 44px; height: 44px; min-height: 44px; border-radius: 12px; }
+}
+@media (min-width: 1000px) and (any-pointer: coarse) {
+  .community-shell { --rail-control-size: 44px; }
+}
+@media (min-width: 1000px) and (max-height: 640px) {
+  .community-rail { gap: 12px; padding-block: 12px; }
+  .rail-utilities { gap: 4px; }
+  .community-rail .desktop-nav, .community-rail .community-actions { gap: 4px; }
+  .community-rail .community-actions { margin-top: 8px; padding-top: 8px; }
+  .rail-expanded .community-rail { gap: 12px; padding-block: 16px; }
 }
 @media (max-width: 999px) {
   :global(:root:has(.community-shell)) { --header-height: calc(52px + env(safe-area-inset-top)); }

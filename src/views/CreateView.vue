@@ -3,7 +3,8 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
 import { api, errorMessage, session, sessionStatus } from '../state'
-import { chats, chatDeletion, loadChats, newChat, undoRemovedChats } from '../native-chat'
+import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats } from '../native-chat'
+import { armStudioEntryStart, claimStudioEntryStart, clearStudioEntry, readStudioEntry } from '../studio-entry'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
@@ -36,7 +37,8 @@ const sidebarMedia = window.matchMedia('(min-width: 1000px)')
 const menuInSidebar = ref(sidebarMedia.matches)
 function moveMenu() { accountMenu.value?.close(); menuInSidebar.value = sidebarMedia.matches }
 onMounted(() => sidebarMedia.addEventListener('change', moveMenu))
-onBeforeUnmount(() => { revision++; sidebarMedia.removeEventListener('change', moveMenu) })
+let entryLive = true
+onBeforeUnmount(() => { entryLive = false; revision++; sidebarMedia.removeEventListener('change', moveMenu) })
 const sidebar = ref<InstanceType<typeof StudioSidebar>>(), mobileGallery = ref<InstanceType<typeof StudioLibraryDialog>>()
 const pendingNew = ref(false)
 type MediaAction = 'editTask' | 'regenerate' | 'useTask' | 'chooseReference'
@@ -60,20 +62,20 @@ watch([kind, () => chats.ready, () => creation.loaded], async () => {
   if (!chats.ready || !creation.loaded) return
   const requestedKind = kind.value, owner = session.user?.id
   await syncMediaConversations()
-  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse) return
+  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse || route.query.entry) return
   const active = chats.sessions.find(chat => chat.id === chats.activeId)
   const preferred = active || chats.sessions[0] || newChat(requestedKind)
   preferred.composerKind = requestedKind
   activateConversation(preferred.id)
 }, { immediate: true })
 watch([() => route.query.conversation, workspace, () => chats.ready, () => creation.loaded], async () => {
-  const id = route.query.conversation
+  const id = route.query.conversation, entryStart = route.query.start === '1'
   if (typeof id !== 'string' || !chats.ready || !creation.loaded) return
   const selected = chats.sessions.find(chat => chat.id === id)
   if (!selected) return
   activateConversation(id)
   await nextTick()
-  if (chats.activeId === id) workspace.value?.openConversation()
+  if (chats.activeId === id && !entryStart) workspace.value?.openConversation()
 }, { flush: 'post' })
 let revision = 0
 watch([() => route.query.from, () => route.query.remix, () => session.user?.id, sourceRetry], async () => {
@@ -149,6 +151,7 @@ function clearContext() {
   else void workspace.value?.clearContext()
 }
 function syncSource(id?: string) {
+  if (route.query.entry || route.query.start) return
   if (id && (route.query.remix === id || route.query.from === id)) return
   source.value = null
   void router.replace({ query: id ? { remix: id } : {} })
@@ -204,6 +207,35 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
       void router.replace({ query: restored ? task?.sourceWorkId ? { remix: task.sourceWorkId } : {} : query })
     }
   }
+}, { flush: 'post' })
+watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () => creation.loaded, kind], async (_, __, onCleanup) => {
+  const id = route.query.entry, owner = session.user?.id
+  if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded) return
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  try {
+    const entry = readStudioEntry(id)
+    if (entry.owner && entry.owner !== owner) throw new Error('账号已切换，请返回首页重新提交创作。')
+    if (entry.kind !== kind.value) throw new Error('创作类型已改变，请返回首页重新提交。')
+    const next = newChat(entry.kind)
+    next.mediaDrafts = { [entry.kind]: { prompt: entry.prompt, references: entry.references } }
+    await saveChats(true)
+    if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return
+    armStudioEntryStart(next.id, owner)
+    clearStudioEntry(id)
+    await router.replace({ query: { conversation: next.id, start: '1' } })
+  } catch (cause) { if (!cancelled && entryLive && owner === session.user?.id) error.value = errorMessage(cause) }
+}, { immediate: true, flush: 'post' })
+watch([() => route.query.start, () => route.query.conversation, workspace, () => workspace.value?.restoringParameters, () => workspace.value?.canGenerate, () => chats.activeId, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.modelsLoading, () => creation.groupSwitching, () => creation.groupsLoading], async () => {
+  const id = route.query.conversation, owner = session.user?.id
+  if (route.query.start !== '1' || typeof id !== 'string' || id !== chats.activeId || !owner || !chats.ready || !creation.loaded || !workspace.value?.canGenerate || workspace.value.restoringParameters || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  const target = workspace.value, requestedKind = kind.value
+  await nextTick()
+  if (!entryLive || kind.value !== requestedKind || owner !== session.user?.id || chats.activeId !== id || route.query.conversation !== id || route.query.start !== '1' || workspace.value !== target || !target.canGenerate || target.restoringParameters || !claimStudioEntryStart(id, owner)) return
+  const pending = target.generateBackground(() => {})
+  const { start: _, ...query } = route.query
+  await router.replace({ query })
+  await pending
 }, { flush: 'post' })
 </script>
 
