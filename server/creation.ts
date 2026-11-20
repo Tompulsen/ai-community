@@ -91,10 +91,12 @@ async function remember(ctx: RequestContext, kind: CreationKind, result: Result)
   if (result.upstreamId) await ctx.redis.set(taskKey(ctx, kind, result.upstreamId, result.protocol), JSON.stringify(owner), 'EX', taskTtl)
   if (result.mediaPath) await ctx.redis.set(mediaKey(ctx, mediaPath(result.mediaPath)), JSON.stringify(owner), 'EX', taskTtl)
 }
-function ownedResponse(value: unknown, credentials: Credentials) {
+function ownedResponse(value: unknown, credentials: Credentials, requireOwner = false) {
   const envelope = record(value) ? value : {}
   const data = record(envelope.data) ? envelope.data : envelope
   const userId = data.user_id ?? envelope.user_id
+  if (requireOwner && userId === undefined)
+    throw httpError(403, '旧任务缺少可验证的账号归属，无法恢复。')
   if (userId !== undefined && String(userId) !== String(credentials.userId))
     throw httpError(403, '此任务不属于当前章鱼账号。')
 }
@@ -132,7 +134,7 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
   else req.headers.set('x-new-api-token', requestedToken)
   const credentials = await svc.credentials(req, path)
   let data = await upstreamJson(req, credentials, path, svc)
-  ownedResponse(data, credentials)
+  ownedResponse(data, credentials, !saved)
   const envelope = record(data) ? data : {}
   const details = record(envelope.data) ? envelope.data : envelope
   if (kind === 'video' && protocol === 'plugin' && ['completed', 'succeeded', 'success', 'done'].includes(String(details.status).toLowerCase())) {

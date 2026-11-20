@@ -17,7 +17,6 @@ let noticeTimer: ReturnType<typeof setTimeout>
 let sessionRequest: Promise<void> | undefined
 let sessionController: AbortController | undefined
 let sessionVersion = 0
-let automaticAccountSync = true
 
 export function notify(message: string) {
   notice.value = message
@@ -187,7 +186,7 @@ export async function loadSession(force = false) {
       session.csrfToken = result.csrfToken || ''
       session.accountUrl = result.accountUrl || session.accountUrl
       if (!result.user) session.user = null
-      if (!result.user && result.authentication === 'zhangyu' && automaticAccountSync) {
+      if (!result.user && result.authentication === 'zhangyu') {
         try {
           await syncAccountSession(undefined, controller.signal)
           if (version !== sessionVersion) return
@@ -241,7 +240,6 @@ export async function login(credentials: { login: string; password: string; turn
   if (result && 'requiresIdentitySelection' in result && result.requiresIdentitySelection) return result
   if (result && 'requires2fa' in result && result.requires2fa) return { requires2fa: true }
   if (!result || !('authenticated' in result) || result.authenticated !== true) throw new Error('登录未完成，请重新尝试。')
-  automaticAccountSync = true
   await syncAccountSession(credentials.returnTo)
   if (version !== sessionVersion) throw new Error('登录状态已变化，请重新登录。')
   invalidateSessionRead()
@@ -252,18 +250,11 @@ export async function login(credentials: { login: string; password: string; turn
 
 export async function logout() {
   invalidateSessionRead()
-  automaticAccountSync = false
-  session.user = null
-  const results = await Promise.allSettled([
-    api('/api/session/logout', { method: 'POST', body: {} }),
-    accountApi('logout', {}),
-  ])
+  await api('/api/session/logout', { method: 'POST', body: {} })
   session.user = null
   session.csrfToken = ''
   session.error = ''
   session.ready = true
-  const failed = results.find(result => result.status === 'rejected')
-  if (failed?.status === 'rejected') throw new Error('部分登录状态未能退出，请重试。')
 }
 
 export const pendingActions = reactive(new Set<string>())

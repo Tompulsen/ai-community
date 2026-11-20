@@ -11,7 +11,7 @@ import { handleAccountRequest, getNewApiConfig } from './native-account/index.ts
 import { communityWalletEnabled } from './native-account/community-wallet.ts'
 import { parseCommunityWallet, type CommunityWallet } from '../shared/studio/community-wallet.ts'
 import { rememberPublicIdentity } from './public-identity.ts'
-import { hash as sessionTokenHash, publicUser } from './auth.ts'
+import { getUser, publicUser } from './auth.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 interface Identity {
@@ -228,15 +228,18 @@ async function synchronizeSession(ctx: RequestContext) {
   await rememberPublicIdentity(ctx.db, {
     issuer: account.binding.issuer, subject: account.binding.subject, userId: user.id, username: account.username,
   })
-  let result
-  if (ctx.user?.id === user.id) result = publicUser(ctx.user)
-  else {
-    result = await ctx.createSession(user.id, sessionTokenHash(user.token), account.binding)
-    await ctx.db.query('INSERT INTO signin(id,"userId",ip,headers,success) VALUES($1,$2,$3,$4,true)',
+  const profile = ctx.user?.id === user.id ? ctx.user : await getUser(ctx.db, user.id)
+  if (!profile) fail('SSO_ACCOUNT_UNAVAILABLE')
+  // Keep one audit entry per account session without creating another login credential.
+  await transaction(ctx.db, async client => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`account-signin:${account.binding.sessionHash}`])
+    await client.query(`INSERT INTO signin(id,"userId",ip,headers,success) SELECT $1,$2,$3,$4,true
+      WHERE NOT EXISTS (SELECT 1 FROM signin WHERE "userId"=$2 AND headers->>'accountSessionHash'=$5)`,
       [ctx.newId(), user.id, ctx.ip || ctx.req.socket.remoteAddress || null,
-        JSON.stringify({ 'user-agent': String(ctx.req.headers['user-agent'] || '').slice(0, 512) })])
-  }
-  return { user: { ...result, accountId: account.binding.subject, username: account.username },
+        JSON.stringify({ 'user-agent': String(ctx.req.headers['user-agent'] || '').slice(0, 512), accountSessionHash: account.binding.sessionHash }),
+        account.binding.sessionHash])
+  })
+  return { user: publicUser({ ...profile, accountId: account.binding.subject, username: account.username }),
     returnTo: newApiReturnPath(ctx.body.returnTo ?? '/discover') }
 }
 

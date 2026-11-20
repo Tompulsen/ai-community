@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM node:24-alpine AS build
 WORKDIR /app
+RUN apk add --no-cache ffmpeg
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html tsconfig*.json vite.config.ts ./

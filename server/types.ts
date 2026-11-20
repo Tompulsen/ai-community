@@ -61,7 +61,6 @@ export interface RequestContext {
   ip?: string
   newId(): string
   json(status: number, value: unknown): void
-  createSession(userId: string, expectedTokenHash?: string, account?: AccountSessionBinding): Promise<PublicUser>
   requireUser(): SessionUser
   requireAdmin(): SessionUser
 }

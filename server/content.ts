@@ -15,7 +15,8 @@ import { notifyUser } from './social.ts';
 import { handleFollowing } from './following.ts';
 import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './media.ts';
 import { getUser } from './auth.ts';
-import { imageExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
+import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
+import { privateMetadataFreeVideo } from './video-privacy.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
@@ -950,20 +951,22 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
     } finally { await descriptor.close(); }
   }
   const storageKey = role === 'thumbnail' ? file.thumbnailAccessKey : role === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
-  const privacy = file.properties?.communityImagePrivacy;
-  if (type && imageExtensions[type] && storageKey && (!isRecord(privacy) || privacy[storageKey] !== 1)) {
+  const video = Boolean(type && videoExtensions[type]);
+  const privacyKey = video ? 'communityVideoPrivacy' : 'communityImagePrivacy';
+  const privacy = file.properties?.[privacyKey];
+  if (type && (imageExtensions[type] || video) && storageKey && (!isRecord(privacy) || privacy[storageKey] !== 1)) {
     try {
-      const sanitized = await privateMetadataFreeImage(path);
+      const sanitized = video ? await privateMetadataFreeVideo(path, type) : await privateMetadataFreeImage(path);
       metadata = await stat(path);
       type = sanitized.type;
-      const marker = `jsonb_set(COALESCE(properties,'{}'::jsonb),'{communityImagePrivacy}', COALESCE(properties->'communityImagePrivacy','{}'::jsonb)||jsonb_build_object($2::text,1))`;
+      const marker = `jsonb_set(COALESCE(properties,'{}'::jsonb),'{${privacyKey}}', COALESCE(properties->'${privacyKey}','{}'::jsonb)||jsonb_build_object($2::text,1))`;
       const updated = role === 'original'
         ? await ctx.db.query(`UPDATE drive_file SET size=$3,md5=$4,type=$5,name=$6,properties=${marker} WHERE id=$1 AND "accessKey"=$2`, [file.id, storageKey, sanitized.size, sanitized.md5, type, publicImageName({ ...file, type })])
         : await ctx.db.query(`UPDATE drive_file SET "webpublicType"=CASE WHEN "webpublicAccessKey"=$2 THEN $3::varchar ELSE "webpublicType" END,properties=${marker} WHERE id=$1 AND ("thumbnailAccessKey"=$2 OR "webpublicAccessKey"=$2)`, [file.id, storageKey, type]);
-      if (updated.rowCount === 0) fail(503, '图片状态已变化，请稍后重试。');
+      if (updated.rowCount === 0) fail(503, '媒体状态已变化，请稍后重试。');
     } catch (error) {
       if (isRecord(error) && error.statusCode === 503) throw error;
-      fail(503, '图片暂时无法安全提供，请稍后重试。');
+      fail(503, '媒体暂时无法安全提供，请稍后重试。');
     }
   }
   const mime = type && inlineTypes.has(type) ? type : 'application/octet-stream';

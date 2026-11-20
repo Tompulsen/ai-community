@@ -73,6 +73,7 @@ async function moreLogins() {
       </section>
       <section class="panel-section stack security-sessions">
         <h2>登录会话</h2>
+        <p v-if="!devices.length" class="muted">登录设备统一在章鱼账户中心管理。</p>
         <div v-for="device in devices" :key="device.id" class="device-row">
           <Monitor :size="20" aria-hidden="true" />
           <div><strong>{{ device.current ? '当前设备' : '其他设备' }}</strong><p class="caption-5 muted">{{ device.userAgent || '已有登录设备' }}</p><p class="caption-5 muted">{{ date(device.createdAt) }} · {{ device.ip || '来源未记录' }}</p></div>

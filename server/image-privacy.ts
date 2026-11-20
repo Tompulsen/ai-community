@@ -6,9 +6,13 @@ import { httpError } from './auth.ts';
 export const imageExtensions: Readonly<Record<string, string>> = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif',
 };
+export const videoExtensions: Readonly<Record<string, string>> = {
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv', 'audio/ogg': 'ogg', 'application/ogg': 'ogg',
+};
 
 export function publicImageName(file: { id: string; name: string; type: string }): string {
-  return imageExtensions[file.type] ? `zhangyu-${file.id}.${imageExtensions[file.type]}` : file.name;
+  const extension = imageExtensions[file.type] ?? videoExtensions[file.type];
+  return extension ? `zhangyu-${file.id}.${extension}` : file.name;
 }
 
 interface SanitizedImage { path: string; type: string; size: number; md5: string }

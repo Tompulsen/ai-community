@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, readFile, readdir, rmdir, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -40,6 +41,7 @@ async function uploadFixture(t, mode = 'success') {
   const ctx = {
     user: actor, requireUser: () => actor, newId: () => 'upload1', config: { url: 'https://community.example' },
     filesRoot: root, request: { isMultipart: () => false },
+    redis: { async eval() { return 1; }, async zrem() { return 1; } },
     body: { name: 'notes.txt', type: 'text/plain', data: Buffer.from('uploaded content').toString('base64') },
     db: { query, connect: async () => ({ query, release(discard) { state.released = true; state.discarded = discard; } }) },
   };
@@ -66,6 +68,56 @@ test('image upload stores only sanitized bytes and records their actual size, ty
   assert.equal(name, 'zhangyu-upload1.webp');
   assert.equal(dto.name, name);
   assert.equal(properties.communityImagePrivacy[key], 1);
+});
+
+test('upload capacity reservations reject before reading or writing and always release after an attempt', async t => {
+  for (const result of [0, -1]) await t.test(String(result), async t => {
+    const f = await uploadFixture(t);
+    f.ctx.redis.eval = async (...args) => {
+      assert.equal(args[1], 1);
+      assert.equal(args[2], 'community-next:uploads:reserved');
+      const reservation = JSON.parse(args[5]);
+      assert.equal(reservation[0], '17');
+      assert(reservation[3] > reservation[2]);
+      return result;
+    };
+    await assert.rejects(uploadMedia(f.ctx), { statusCode: result === 0 ? 429 : 503 });
+    assert.deepEqual(await f.files(), []);
+    assert.equal(f.state.inserted, undefined);
+  });
+  for (const mode of ['success', 'rejected']) await t.test(mode, async t => {
+    const f = await uploadFixture(t, mode);
+    let released = 0;
+    f.ctx.redis.zrem = async () => { released++; return 1; };
+    if (mode === 'success') await uploadMedia(f.ctx);
+    else await assert.rejects(uploadMedia(f.ctx), { statusCode: 403 });
+    assert.equal(released, 1);
+  });
+});
+
+test('video upload stores one sanitized file with the actual checksum and privacy marker', async t => {
+  if (spawnSync('ffmpeg', ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0) return t.skip('FFmpeg is unavailable');
+  const f = await uploadFixture(t);
+  const source = join(f.root, 'fixture');
+  const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=16x16:r=2:d=0.5',
+    '-c:v', 'mpeg4', '-metadata', 'comment=PRIVATE-UPLOAD', '-f', 'mp4', source], { windowsHide: true, encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const original = await readFile(source);
+  assert(original.includes(Buffer.from('PRIVATE-UPLOAD')));
+  await unlink(source);
+  f.ctx.body = { name: 'PRIVATE-CUSTOMER.mp4', type: 'video/mp4', data: original.toString('base64') };
+  const dto = await uploadMedia(f.ctx);
+  const files = await f.files();
+  assert.equal(files.length, 1);
+  const bytes = await readFile(join(f.root, files[0]));
+  assert(!bytes.includes(Buffer.from('PRIVATE-UPLOAD')));
+  const [, , md5, name, type, size, , key, properties] = f.state.inserted;
+  assert.equal(md5, createHash('md5').update(bytes).digest('hex'));
+  assert.equal(size, bytes.length);
+  assert.equal(type, 'video/mp4');
+  assert.equal(name, 'zhangyu-upload1.mp4');
+  assert.equal(dto.name, name);
+  assert.equal(properties.communityVideoPrivacy[key], 1);
 });
 
 test('an upload never deletes its original after a lost commit acknowledgement', async t => {

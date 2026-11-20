@@ -41,17 +41,9 @@ test('visitor view keys use forwarded IPs only through trusted proxies', async t
   }
 })
 
-test('community sessions record the verified client IP instead of the proxy socket', async () => {
-  let stored
-  const db = { async query(sql) { return { rows: sql.includes('FROM "user"')
-    ? [{ id: '7', host: null, token: 'private', username: 'creator' }] : [] } } }
-  const auth = authServices({ db, config: { url: 'https://community.example' }, redis: {
-    async set(_key, value) { stored = JSON.parse(value) }, async zadd() {}, async expire() {},
-  } })
-  await auth.createSession('7', { getHeader() {}, setHeader() {} },
-    { socket: { remoteAddress: '172.18.0.1' }, headers: {} }, undefined,
-    { issuer: 'https://zhangyuapi.com', subject: '7', sessionHash: 'account-session' }, '198.51.100.11')
-  assert.equal(stored.ip, '198.51.100.11')
+test('community auth no longer exposes a separate session minting API', () => {
+  const auth = authServices({ db: {}, redis: {}, config: { url: 'https://community.example' } })
+  assert.equal(Object.hasOwn(auth, 'createSession'), false)
 })
 
 test('mutating requests require the exact site Origin and JSON', () => {
@@ -99,17 +91,16 @@ test('Redis notification read cursors compare numerically', () => {
   assert.equal(compareStreamIds('99-2', '100-0'), -1)
 })
 
-test('logout clears local and Studio cookies and the community record even while Studio is unavailable', async t => {
+test('logout expires legacy community cookies without depending on retired community storage', async t => {
   const origin = 'https://community.example'
-  const token = 'c'.repeat(43), sessionHash = hash(token), removed = [], sorted = []
+  const token = 'c'.repeat(43)
   let fetches = 0
   t.mock.method(globalThis, 'fetch', async () => { fetches++; return new Response('{}', { status: 502 }) })
   const app = createApplication({
     db: { query() { assert.fail('Logout must not depend on profile queries') } },
     redis: {
-      get: async key => key === `community-next:session:${sessionHash}` ? JSON.stringify({ userId: 'creator123' }) : null,
-      async del(key) { removed.push(key) },
-      async zrem(...args) { sorted.push(args) },
+      async get() { assert.fail('Retired community sessions must not be read') },
+      async del() { assert.fail('Retired community sessions must not be required for logout') },
     },
     config: { url: origin, newApiSso: { issuer: 'https://accounts.example' } }, filesRoot: path.resolve('files'),
   })
@@ -120,8 +111,6 @@ test('logout clears local and Studio cookies and the community record even while
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), { user: null })
   assert.equal(fetches, 0)
-  assert.deepEqual(removed, [`community-next:session:${sessionHash}`])
-  assert.deepEqual(sorted, [['community-next:sessions:creator123', sessionHash]])
   const cookies = response.headers['set-cookie']
   assert(cookies.some(value => /^community_session=;.*Max-Age=0/.test(value)))
   assert(cookies.some(value => /^octopus_new_api_session=;.*Max-Age=0/.test(value)))

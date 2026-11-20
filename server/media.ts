@@ -5,13 +5,14 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, statfs, unlink } from 'node:fs/promises';
 import { basename, relative, resolve, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
-import { imageExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
+import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
+import { privateMetadataFreeVideo } from './video-privacy.ts';
 import { httpError, roleCondition } from './auth.ts';
 import type { Database, RequestContext } from './types.ts';
 
@@ -167,11 +168,29 @@ async function classify(path: string, size: number, requested: string): Promise<
 export async function uploadMedia(ctx: RequestContext) {
   const actor = ctx.requireUser();
   const policy = await uploadPolicy(ctx);
-  const tempLimit = Math.floor(Math.min(policy.maximum, Math.max(...Object.values(policy.limits)) * MiB));
+  let tempLimit = Math.floor(Math.min(policy.maximum, Math.max(...Object.values(policy.limits)) * MiB));
   if (tempLimit < 1 || policy.capacity < 1 || !policy.mimeTypes.length) throw httpError(403, '此账号暂不允许上传文件。');
   const root = resolve(ctx.filesRoot);
   await mkdir(root, { recursive: true });
   const accessKey = randomBytes(24).toString('hex'), target = resolve(root, accessKey);
+  const used = (await ctx.db.query<{ size: string }>('SELECT COALESCE(SUM(size),0)::text AS size FROM drive_file WHERE "userId"=$1 AND "storedInternal" AND NOT "isLink"', [actor.id])).rows[0];
+  const available = Math.max(0, policy.capacity - Number(used?.size ?? 0));
+  tempLimit = Math.min(tempLimit, available);
+  if (tempLimit < 1) throw httpError(413, '文件空间已不足。');
+  const disk = await statfs(root);
+  const diskBudget = Math.min(4096 * MiB, Math.max(0, disk.bavail * disk.bsize - 256 * MiB));
+  const reservationKey = 'community-next:uploads:reserved';
+  // Include the source and bounded conversion output, including a full-resolution raster image.
+  const reservation = JSON.stringify([actor.id, accessKey, tempLimit, tempLimit * 3 + 512 * MiB]);
+  const reserved = Number(await ctx.redis.eval(
+    'redis.call("ZREMRANGEBYSCORE",KEYS[1],"-inf",ARGV[1]); local actor=0; local total=0; local count=0; '
+    + 'for _,v in ipairs(redis.call("ZRANGE",KEYS[1],0,-1)) do local r=cjson.decode(v); total=total+r[4]; '
+    + 'if r[1]==ARGV[2] then actor=actor+r[3]; count=count+1 end end; '
+    + 'local incoming=cjson.decode(ARGV[3]); if count>=2 or actor+incoming[3]>tonumber(ARGV[4]) then return 0 end; '
+    + 'if total+incoming[4]>tonumber(ARGV[5]) then return -1 end; '
+    + 'redis.call("ZADD",KEYS[1],tonumber(ARGV[1])+900000,ARGV[3]); redis.call("EXPIRE",KEYS[1],901); return 1',
+    1, reservationKey, Date.now(), actor.id, reservation, available, diskBudget));
+  if (reserved !== 1) throw httpError(reserved === 0 ? 429 : 503, '上传任务繁忙或可用空间不足，请稍后重试。');
   let size = 0, name = '', requested = 'application/octet-stream', wrote = false;
   let commitAttempted = false, fileId: string | undefined;
   const checksum = createHash('md5');
@@ -215,12 +234,12 @@ export async function uploadMedia(ctx: RequestContext) {
     const id = ctx.newId(), url = new URL(`/legacy-files/${id}`, ctx.config.url).href;
     fileId = id;
     let md5 = checksum.digest('hex');
-    const image = Boolean(imageExtensions[type]);
-    if (image) {
+    const image = Boolean(imageExtensions[type]), video = Boolean(videoExtensions[type]);
+    if (image || video) {
       let sanitized;
-      try { sanitized = await privateMetadataFreeImage(target); } catch (error) {
+      try { sanitized = image ? await privateMetadataFreeImage(target) : await privateMetadataFreeVideo(target, type, limit); } catch (error) {
         if (error instanceof Error && 'statusCode' in error && error.statusCode === 503) throw error;
-        throw httpError(400, '图片无法安全处理，请重新导出后上传。');
+        throw httpError(400, '媒体无法安全处理，请重新导出后上传。');
       }
       size = sanitized.size; type = sanitized.type; md5 = sanitized.md5;
       name = publicImageName({ id, name, type });
@@ -229,6 +248,7 @@ export async function uploadMedia(ctx: RequestContext) {
     const processing = type.startsWith('image/') || type.startsWith('video/') || type === 'application/ogg';
     const properties: Values = processing ? { communityMedia: { version: 1, state: 'pending', attempts: 0, updatedAt: Date.now() } } : {};
     if (image) properties.communityImagePrivacy = { [accessKey]: 1 };
+    if (video) properties.communityVideoPrivacy = { [accessKey]: 1 };
     const client = await ctx.db.connect();
     let discardClient = false;
     try {
@@ -252,7 +272,7 @@ export async function uploadMedia(ctx: RequestContext) {
     if (commitAttempted) console.error(JSON.stringify({ code: 'UPLOAD_COMMIT_UNCERTAIN', fileId, storageKeys: [accessKey] }));
     else if (wrote) await unlink(target).catch(() => {});
     throw error;
-  }
+  } finally { await ctx.redis.zrem(reservationKey, reservation).catch(() => {}); }
 }
 
 async function confinedFile(root: string, key: string): Promise<string> {

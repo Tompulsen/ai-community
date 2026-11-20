@@ -5,9 +5,9 @@
 import assert from 'node:assert/strict'
 import test, { after, beforeEach } from 'node:test'
 import { accountSessionHash, readAccountSession, accountSessionVerifier } from './account-session.ts'
-import { authServices, hash, publicUser, roleCondition } from './auth.ts'
+import { authServices, publicUser, roleCondition } from './auth.ts'
 import { handleAccount } from './account.ts'
-import { saveSession, removeSessionById } from './native-account/index.ts'
+import { saveSession, removeSessionById, readSessionById } from './native-account/index.ts'
 
 const opaque = 's'.repeat(43)
 const config = { url: 'https://community.test', newApiSso: { issuer: 'https://accounts.test' } }
@@ -36,6 +36,46 @@ after(async () => {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+})
+
+function logoutFixture() {
+  const token = 'c'.repeat(43)
+  const headers = {}
+  const redis = {
+    async get() { assert.fail('Legacy community session storage must not be read') },
+    async del() { assert.fail('Legacy community session storage must not be required') },
+  }
+  const auth = authServices({ db: {}, redis, config })
+  const ctx = {
+    req: { method: 'POST', url: '/api/session/logout', headers: { cookie: `community_session=${token}; octopus_new_api_session=${opaque}` } },
+    res: { getHeader: key => headers[key], setHeader: (key, value) => { headers[key] = value } },
+    url: new URL('/api/session/logout', config.url),
+    json(status, value) { assert.equal(status, 200); assert.deepEqual(value, { user: null }) },
+  }
+  return { auth, ctx, headers }
+}
+
+test('logout revokes the single native session and expires legacy cookies without using community session storage', async t => {
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline fixture') })
+  const fixture = logoutFixture()
+  await fixture.auth.handleAuth(fixture.ctx)
+  assert.equal(await readSessionById(opaque), null)
+  assert.equal(fixture.headers['Set-Cookie'].length, 2)
+  assert(fixture.headers['Set-Cookie'].every(value => value.includes('Max-Age=0')))
+})
+
+test('unavailable native session storage cannot clear the browser credentials needed to retry logout', async t => {
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline fixture') })
+  const fixture = logoutFixture()
+  const secret = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = ''
+  try {
+    await assert.rejects(fixture.auth.handleAuth(fixture.ctx), /账号服务配置不完整/)
+    assert.equal(fixture.headers['Set-Cookie'], undefined)
+  } finally { process.env.NEW_API_SESSION_SECRET = secret }
+  assert.notEqual(await readSessionById(opaque), null)
+  await fixture.auth.handleAuth(fixture.ctx)
+  assert.equal(await readSessionById(opaque), null)
 })
 
 test('account bridge reads the native sealed session and only sends account authentication upstream', async t => {
@@ -92,24 +132,23 @@ test('only successful account checks are cached and explicit session checks bypa
 })
 
 function authenticationFixture() {
-  const stored = new Map(), deleted = [], snapshots = []
+  const snapshots = []
   const mapping = { valid: true }
+  const permissions = { admin: false }
   const user = { id: '7', username: 'creator', host: null, token: 'native-generation' }
-  const communityToken = 'c'.repeat(43), sessionHash = hash(communityToken)
-  stored.set(`community-next:session:${sessionHash}`, JSON.stringify({
-    userId: user.id, tokenHash: hash(user.token),
-    account: { issuer: 'https://accounts.test', subject: '7', sessionHash: accountSessionHash(request()) },
-  }))
+  const sessionHash = accountSessionHash(request())
   const db = { async query(sql, values = []) {
     if (sql.includes('FROM "user" u JOIN')) return { rows: [user] }
     if (sql.startsWith('SELECT 1 FROM external_account')) return { rows: mapping.valid ? [{}] : [] }
     if (sql.startsWith('UPDATE external_account')) { snapshots.push(values); return { rows: [] } }
+    if (sql.startsWith('SELECT id,target')) return { rows: permissions.admin
+      ? [{ id: 'admin', target: 'conditional', condFormula: { type: 'isLocal' }, isAdministrator: true }] : [] }
     if (sql.includes('FROM role') || sql.includes('FROM meta')) return { rows: [] }
     assert.fail('Unexpected auth query: ' + sql)
   } }
-  const redis = { get: async key => stored.get(key) ?? null, async del(key) { deleted.push(key); stored.delete(key) } }
-  return { auth: authServices({ db, redis, config }), user, stored, deleted, snapshots, mapping, sessionHash,
-    req: { url: '/api/session', headers: { cookie: `community_session=${communityToken}; octopus_new_api_session=${opaque}` } } }
+  const redis = new Proxy({}, { get() { assert.fail('Community authentication must only use native session storage') } })
+  return { auth: authServices({ db, redis, config }), user, snapshots, mapping, permissions, sessionHash,
+    req: { url: '/api/session', headers: { cookie: `octopus_new_api_session=${opaque}` } } }
 }
 
 test('community authentication retains identity only while the same real account session remains valid', async t => {
@@ -119,7 +158,6 @@ test('community authentication retains identity only while the same real account
   assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, fixture.user.id)
   expired = true
   assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
-  assert.deepEqual(fixture.deleted, [`community-next:session:${fixture.sessionHash}`])
 })
 
 test('verified account number and username replace the private profile handle without changing ownership or roles', async t => {
@@ -146,20 +184,80 @@ test('verified account number and username replace the private profile handle wi
   ])
 })
 
-test('changing the account cookie or presenting a legacy unbound session immediately clears old community identity', async () => {
-  for (const mode of ['changed', 'unbound', 'old-internal-id']) {
+test('legacy community cookies cannot authenticate without a valid native account session', async () => {
+  for (const cookie of [`community_session=${'c'.repeat(43)}`,
+    `community_session=${'c'.repeat(43)}; octopus_new_api_session=${'b'.repeat(43)}`]) {
     const fixture = authenticationFixture()
-    if (mode === 'changed') fixture.req.headers.cookie = fixture.req.headers.cookie.replace(opaque, 'b'.repeat(43))
-    else {
-      const key = `community-next:session:${fixture.sessionHash}`
-      const stored = JSON.parse(fixture.stored.get(key))
-      if (mode === 'unbound') delete stored.account
-      else stored.userId = 'oldInternal123'
-      fixture.stored.set(key, JSON.stringify(stored))
-    }
+    fixture.req.headers.cookie = cookie
     assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
     assert.deepEqual(fixture.snapshots, [])
   }
+})
+
+test('a native cookie alone authenticates with current community roles and suspension rules', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const fixture = authenticationFixture()
+  assert.equal((await fixture.auth.authenticate(fixture.req)).sessionHash, fixture.sessionHash)
+  fixture.user.isSuspended = true
+  assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
+  fixture.user.isSuspended = false
+  fixture.user.id = 'oldInternalId'
+  assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
+})
+
+test('cached native account checks still reload community administrator permissions on every request', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return envelope() })
+  const fixture = authenticationFixture()
+  fixture.req.url = '/api/works'
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.isAdmin, false)
+  fixture.permissions.admin = true
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.isAdmin, true)
+  fixture.permissions.admin = false
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.isAdmin, false)
+  assert.equal(calls, 1)
+})
+
+test('session reads expire stale community cookies without minting a replacement or changing the native identity', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const fixture = authenticationFixture()
+  fixture.req.method = 'GET'
+  fixture.req.headers.cookie += `; community_session=${'x'.repeat(43)}`
+  const user = (await fixture.auth.authenticate(fixture.req)).user
+  const headers = {}
+  let response
+  await fixture.auth.handleAuth({ req: fixture.req, url: new URL('/api/session', config.url), user,
+    res: { getHeader: key => headers[key], setHeader: (key, value) => { headers[key] = value } },
+    json(status, value) { assert.equal(status, 200); response = value } })
+  assert.equal(response.user.id, '7')
+  assert.equal(headers['Set-Cookie'].length, 1)
+  assert.match(headers['Set-Cookie'][0], /^community_session=;.*Max-Age=0/)
+  assert.notEqual(await readSessionById(opaque), null)
+})
+
+test('cached native identities stop immediately after native session revocation', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return envelope() })
+  const fixture = authenticationFixture()
+  fixture.req.url = '/api/works'
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '7')
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '7')
+  assert.equal(calls, 1)
+  await removeSessionById(opaque)
+  assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
+  assert.equal(calls, 1)
+})
+
+test('native account switching selects the new community profile instead of the previous identity', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const fixture = authenticationFixture()
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '7')
+  await saveSession('b'.repeat(43), { ...(await readSessionById(opaque)), user: { id: 8, username: 'other' } })
+  fixture.req.headers.cookie = `octopus_new_api_session=${'b'.repeat(43)}`
+  t.mock.method(globalThis, 'fetch', async () => envelope({ id: 8, username: 'other' }))
+  fixture.user.id = '8'
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '8')
+  await removeSessionById('b'.repeat(43))
 })
 
 test('missing exact account mappings cannot persist a verified username snapshot', async t => {
@@ -195,12 +293,13 @@ test('numeric account IDs use the independent creation timestamp for age based r
 })
 
 function synchronizationFixture(existing = true) {
-  const response = {}, sessions = [], inserts = [], queries = [], snapshots = []
+  const response = {}, inserts = [], queries = [], snapshots = []
   const state = { numericIdOccupied: false, usernameOccupied: false, mappedUserId: '7' }
-  const user = { id: '7', username: 'creator', name: 'Creator', token: 'native-generation', password: 'retained-password' }
+  const user = { id: '7', username: 'creator', name: 'Creator', host: null, token: 'native-generation', password: 'retained-password' }
   async function query(sql, values = []) {
     queries.push(sql)
     if (sql.startsWith('SELECT "rootUserId"')) return { rows: [{ rootUserId: 'admin123' }] }
+    if (sql.includes('FROM role')) return { rows: [] }
     if (sql.startsWith('SELECT "userId" FROM external_account')) return { rows: existing ? [{ userId: state.mappedUserId }] : [] }
     if (sql.includes('FROM "user" u JOIN user_profile')) return { rows: [user] }
     if (sql.startsWith('SELECT id FROM "user" WHERE id=')) return { rows: state.numericIdOccupied ? [{ id: '7' }] : [] }
@@ -213,21 +312,22 @@ function synchronizationFixture(existing = true) {
   const ctx = { req: { method: 'POST', ...request(), socket: { remoteAddress: '127.0.0.1' } },
     url: new URL('/api/account/session', config.url), body: { returnTo: '/create/image' }, config, user: null,
     db: { query, connect: async () => ({ query, release() {} }) }, redis: { eval: async () => 1 },
-    newId: () => 'new123', async createSession(...args) { sessions.push(args); return { id: user.id, username: 'creator', name: user.name } },
+    newId: () => 'new123',
     json(status, value) { response.status = status; response.value = value } }
-  return { ctx, response, sessions, inserts, queries, snapshots, user, state }
+  return { ctx, response, inserts, queries, snapshots, user, state }
 }
 
-test('existing external subject reuses the original local user and binds a credential-free community session', async t => {
+test('existing external subject reuses its profile without minting another session', async t => {
   t.mock.method(globalThis, 'fetch', async () => envelope())
-  const { ctx, response, sessions, inserts, snapshots, user } = synchronizationFixture()
+  const { ctx, response, inserts, snapshots } = synchronizationFixture()
   assert.equal(await handleAccount(ctx), true)
   assert.equal(response.value.user.id, '7')
   assert.equal(response.value.user.accountId, '7')
   assert.equal(response.value.user.username, 'creator')
   assert.equal(response.value.returnTo, '/create/image')
-  assert.deepEqual(sessions, [[user.id, hash(user.token),
-    { issuer: 'https://accounts.test', subject: '7', sessionHash: accountSessionHash(ctx.req) }]])
+  assert.equal(Object.hasOwn(ctx, 'createSession'), false)
+  const audit = inserts.find(item => item.sql.startsWith('INSERT INTO signin'))
+  assert.equal(JSON.parse(audit.values[3]).accountSessionHash, accountSessionHash(ctx.req))
   assert.equal(inserts.some(item => item.sql.startsWith('INSERT INTO "user"')), false)
   assert.deepEqual(snapshots, [['https://accounts.test', '7', '7', 'creator']])
   assert.doesNotMatch(JSON.stringify(response.value), /native-generation|retained-password|must-not-leak/)
@@ -274,7 +374,6 @@ test('a same-name or occupied numeric account is refused instead of adopting it 
     assert.equal(fixture.queries.at(-1), 'ROLLBACK')
     assert.deepEqual(fixture.inserts, [])
     assert.deepEqual(fixture.snapshots, [])
-    assert.deepEqual(fixture.sessions, [])
   }
 })
 
@@ -284,5 +383,4 @@ test('existing unmigrated random IDs are refused rather than retained behind the
   fixture.state.mappedUserId = 'oldInternal123'
   await assert.rejects(handleAccount(fixture.ctx), { statusCode: 409, code: 'ACCOUNT_ID_MIGRATION_REQUIRED' })
   assert.deepEqual(fixture.snapshots, [])
-  assert.deepEqual(fixture.sessions, [])
 })

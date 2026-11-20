@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { AccountSessionBinding, AppConfig } from './types.ts'
-import { NewApiError, readNativeAccount } from './native-account/index.ts'
+import { AccountRequest, getAuthenticatedSession, NewApiError, readNativeAccount } from './native-account/index.ts'
 
 const COOKIE = 'octopus_new_api_session'
 const OPAQUE = /^[A-Za-z0-9_-]{43}$/
@@ -64,12 +64,19 @@ export const readStudioAccount = readAccountSession
 
 export function accountSessionVerifier(config: AppConfig) {
   const cache = new Map<string, { until: number; account: StudioAccount }>()
-  return async (req: Pick<IncomingMessage, 'headers'>, fresh = false) => {
+  const verify = async (req: Pick<IncomingMessage, 'headers'>, fresh = false) => {
     const key = accountSessionHash(req)
     if (!key) return readAccountSession(config, req)
     const previous = cache.get(key)
-    if (!fresh && previous && previous.until > Date.now()) return previous.account
     try {
+      if (!fresh && previous && previous.until > Date.now()) {
+        const request = new AccountRequest(new Request(new URL('/api/new-api/session', config.url), {
+          headers: { Cookie: accountSessionCookie(req)! },
+        }))
+        const { session } = await getAuthenticatedSession(request)
+        if (String(session.user!.id) === previous.account.binding.subject) return previous.account
+        cache.delete(key)
+      }
       const account = await readAccountSession(config, req)
       if (cache.size >= 512) for (const [id, item] of cache) if (item.until <= Date.now()) cache.delete(id)
       if (cache.size >= 512) cache.delete(cache.keys().next().value!)
@@ -77,9 +84,17 @@ export function accountSessionVerifier(config: AppConfig) {
       return account
     } catch (error) {
       cache.delete(key)
+      if (error instanceof NewApiError)
+        return failure(error.status === 403 ? 401 : error.status, error.code, error.message)
       throw error
     }
   }
+  return Object.assign(verify, {
+    invalidate(req: Pick<IncomingMessage, 'headers'>) {
+      const key = accountSessionHash(req)
+      if (key) cache.delete(key)
+    },
+  })
 }
 
 export const studioAccountVerifier = accountSessionVerifier

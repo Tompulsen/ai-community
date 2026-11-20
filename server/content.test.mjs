@@ -249,7 +249,7 @@ test('comment attachment refresh enforces work/comment visibility and attachment
     return { rows: [] };
   } });
   await handleContent(ctx);
-  assert.deepEqual(ctx.result.payload.files, [{ id: 'file1', name: 'clip.mp4', type: 'video/mp4', size: 50, url: '/legacy-files/file1', thumbnailUrl: '/legacy-files/file1?variant=thumbnail', processing: 'processing' }]);
+  assert.deepEqual(ctx.result.payload.files, [{ id: 'file1', name: 'zhangyu-file1.mp4', type: 'video/mp4', size: 50, url: '/legacy-files/file1', thumbnailUrl: '/legacy-files/file1?variant=thumbnail', processing: 'processing' }]);
   for (const hidden of ['work', 'comment']) {
     let readFiles = false;
     const denied = context({ path: '/api/works/work1/comments/comment1/files', query: async sql => {

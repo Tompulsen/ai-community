@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { handleSecurity } from './security.ts'
 import { builtinEmoji, notifyUser, handleSocial } from './social.ts'
-import { authServices, hash } from './auth.ts'
+import { authServices } from './auth.ts'
 
 function securityFixture(path = '/api/security/status') {
   const statements = [], deletedKeys = [], headers = {}, response = {}
@@ -84,13 +84,15 @@ test('notification following preference excludes an unrelated actor', async () =
   assert.equal(written, 0)
 })
 
-test('session mint rejects credentials from a revoked generation', async () => {
-  const db = { query: async sql => {
-    if (sql.includes('FROM "user" u JOIN')) return { rows: [{ id: 'u', username: 'u', host: null, token: 'current-token' }] }
-    return { rows: [] }
-  } }
-  const auth = authServices({ db, redis: {}, config: { url: 'https://community.test' } })
-  await assert.rejects(auth.createSession('u', {}, undefined, hash('old-token')), { statusCode: 409, code: 'CREDENTIAL_CHANGED' })
+test('device listing delegates to the authoritative account center without consulting legacy session storage', async () => {
+  const { ctx, response, statements, deletedKeys } = securityFixture('/api/security/sessions')
+  ctx.req.method = 'GET'
+  await handleSecurity(ctx)
+  assert.deepEqual(response.value, { external: true, accountUrl: 'https://accounts.test', items: [] })
+  assert.deepEqual(statements, [])
+  assert.deepEqual(deletedKeys, [])
+  ctx.requireUser = () => { throw Object.assign(new Error('not logged in'), { statusCode: 401 }) }
+  await assert.rejects(handleSecurity(ctx), { statusCode: 401 })
 })
 
 test('legacy note notifications resolve the retained work and reply destination', async () => {

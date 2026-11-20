@@ -22,7 +22,11 @@ export function applicationRequest(request: FastifyRequest, reply: FastifyReply,
   request.raw.once('aborted', abort)
   reply.raw.once('close', () => { if (!reply.raw.writableEnded) abort() })
   reply.raw.once('finish', () => request.raw.removeListener('aborted', abort))
-  return accountRequestFromNode(request.raw, origin, request.body, controller.signal)
+  const adapted = accountRequestFromNode(request.raw, origin, request.body, controller.signal)
+  // Only Fastify's trusted proxy chain may determine the IP forwarded upstream.
+  adapted.headers.set('x-real-ip', request.ip)
+  adapted.headers.set('x-forwarded-for', request.ip)
+  return adapted
 }
 
 export function sendWebResponse(reply: FastifyReply, response: Response) {

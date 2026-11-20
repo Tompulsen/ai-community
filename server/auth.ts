@@ -8,7 +8,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Redis } from 'ioredis'
 import { accountCenter, accountSessionHash, accountSessionVerifier } from './account-session.ts'
 import { rememberPublicIdentity } from './public-identity.ts'
-import type { AccountSessionBinding, AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser } from './types.ts'
+import { AccountRequest, revokeAccountSession } from './native-account/index.ts'
+import { isNewApiEnabled } from './native-account/config.ts'
+import { accountRequestFromNode } from './web-request.ts'
+import type { AppConfig, Database, PublicUser, Queryable, RequestContext, SessionUser } from './types.ts'
 
 interface RoleUser {
   id: string
@@ -43,17 +46,7 @@ interface RoleRow {
   isModerator: boolean
 }
 
-export interface StoredSession {
-  userId: string
-  tokenHash: string
-  createdAt?: string
-  ip?: string | null
-  userAgent?: string
-  account?: AccountSessionBinding
-}
-
-export const sessionCookie = 'community_session'
-const ttl = 7 * 24 * 60 * 60
+const legacySessionCookie = 'community_session'
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const newId = () => Math.max(0, Date.now() - 946684800000).toString(36).padStart(8, '0') + randomBytes(8).toString('hex')
 export const httpError = (statusCode: number, message: string, code?: string) => Object.assign(new Error(message), { statusCode, code })
@@ -153,70 +146,32 @@ async function canUpdateProfileMedia(db: Queryable, user: SessionUser): Promise<
   return entries.filter(entry => priority(entry) === highest).some(entry => entry.useDefault ? fallback : entry.value === true)
 }
 
-export function authServices({ db, redis, config }: { db: Database; redis: Redis; config: AppConfig }) {
+export function authServices({ db, config }: { db: Database; redis: Redis; config: AppConfig }) {
   const secure = new URL(config.url).protocol === 'https:' ? '; Secure' : ''
   const verifyAccount = accountSessionVerifier(config)
-  function cookie(res: ServerResponse, value: string, maxAge: number): void {
-    appendCookie(res, `${sessionCookie}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`)
-  }
-  async function createSession(userId: string, res: ServerResponse, req?: IncomingMessage, expectedTokenHash?: string, account?: AccountSessionBinding, clientIp = req?.socket.remoteAddress || null): Promise<PublicUser> {
-    const user = await getUser(db, userId)
-    if (!user) throw httpError(403, '此账号当前不可用。')
-    if (expectedTokenHash && user.tokenHash !== expectedTokenHash) throw httpError(409, '账号安全设置已变化，请重新登录。', 'CREDENTIAL_CHANGED')
-    if (!account || account.issuer !== accountCenter(config) || userId !== account.subject
-      || !/^[1-9]\d*$/.test(account.subject) || !Number.isSafeInteger(Number(account.subject))) {
-      throw httpError(409, '社区账号必须与章鱼账号编号一致。', 'ACCOUNT_IDENTITY_REQUIRED')
-    }
-    const token = randomBytes(32).toString('base64url')
-    const sessionHash = hash(token)
-    const stored: StoredSession = { userId, tokenHash: user.tokenHash, createdAt: new Date().toISOString(),
-      ip: clientIp, userAgent: String(req?.headers['user-agent'] || '').slice(0, 512), ...(account ? { account } : {}) }
-    await redis.set(`community-next:session:${sessionHash}`, JSON.stringify(stored), 'EX', ttl)
-    await redis.zadd(`community-next:sessions:${userId}`, Date.now(), sessionHash)
-    await redis.expire(`community-next:sessions:${userId}`, ttl)
-    cookie(res, token, ttl)
-    return publicUser(user)
-  }
   async function authenticate(req: IncomingMessage): Promise<{ user: SessionUser | null; sessionHash: string | null }> {
     if (req.method === 'POST' && new URL(req.url || '/', config.url).pathname === '/api/session/logout') {
       return { user: null, sessionHash: null }
     }
-    const token = readCookies(req.headers.cookie)[sessionCookie]
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) return { user: null, sessionHash: null }
-    const sessionHash = hash(token)
-    const raw = await redis.get(`community-next:session:${sessionHash}`)
-    if (!raw) return { user: null, sessionHash: null }
-    let session: StoredSession
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object' || !('userId' in parsed) || typeof parsed.userId !== 'string'
-        || !('tokenHash' in parsed) || typeof parsed.tokenHash !== 'string') return { user: null, sessionHash: null }
-      session = parsed as StoredSession
-    } catch { return { user: null, sessionHash: null } }
-    if (!session.account || session.userId !== session.account.subject
-      || session.account.issuer !== accountCenter(config)
-      || session.account.sessionHash !== accountSessionHash(req)) {
-      await redis.del(`community-next:session:${sessionHash}`)
-      return { user: null, sessionHash: null }
-    }
+    const sessionHash = accountSessionHash(req)
+    if (!sessionHash) return { user: null, sessionHash: null }
     let account
-    const fresh = req.url?.startsWith('/api/session') || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/')
+    const fresh = !['GET', 'HEAD'].includes(req.method || 'GET') || req.url?.startsWith('/api/session')
+      || req.url?.startsWith('/api/security/') || req.url?.startsWith('/api/account/') || req.url?.startsWith('/api/admin/')
     try {
       account = await verifyAccount(req, fresh)
-      if (account.binding.subject !== session.account.subject || account.binding.issuer !== session.account.issuer) {
-        await redis.del(`community-next:session:${sessionHash}`)
-        return { user: null, sessionHash: null }
-      }
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode !== 401) throw error
-      await redis.del(`community-next:session:${sessionHash}`)
       return { user: null, sessionHash: null }
     }
-    const user = await getUser(db, session.userId)
+    if (account.binding.issuer !== accountCenter(config) || account.binding.sessionHash !== sessionHash
+      || !/^[1-9]\d*$/.test(account.binding.subject) || !Number.isSafeInteger(Number(account.binding.subject))) {
+      return { user: null, sessionHash: null }
+    }
+    const user = await getUser(db, account.binding.subject)
     const mapping = user && await db.query('SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3',
-      [session.account.issuer, session.account.subject, user.id])
-    if (!user || user.tokenHash !== session.tokenHash || !mapping?.rows.length) {
-      await redis.del(`community-next:session:${sessionHash}`)
+      [account.binding.issuer, account.binding.subject, user.id])
+    if (!user || user.id !== account.binding.subject || !mapping?.rows.length) {
       return { user: null, sessionHash: null }
     }
     if (fresh) await rememberPublicIdentity(db, {
@@ -227,6 +182,8 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
   async function handleAuth(ctx: RequestContext): Promise<boolean> {
     const { req, res, url, body, user } = ctx
     if (url.pathname === '/api/session' && req.method === 'GET') {
+      if (String(req.headers.cookie || '').split(';').some(value => value.trim().startsWith(`${legacySessionCookie}=`)))
+        appendCookie(res, `${legacySessionCookie}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`)
       ctx.json(200, { user: publicUser(user), authentication: 'zhangyu', accountUrl: accountCenter(config) })
       return true
     }
@@ -238,20 +195,10 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       throw httpError(410, '社区已统一使用章鱼账号，请在登录页继续。', 'ACCOUNT_LOGIN_REQUIRED')
     }
     if (url.pathname === '/api/session/logout' && req.method === 'POST') {
-      cookie(res, '', 0)
+      if (isNewApiEnabled()) await revokeAccountSession(new AccountRequest(accountRequestFromNode(req, config.url)))
+      verifyAccount.invalidate(req)
+      appendCookie(res, `${legacySessionCookie}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`)
       appendCookie(res, `octopus_new_api_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`)
-      const token = readCookies(req.headers.cookie)[sessionCookie]
-      if (/^[A-Za-z0-9_-]{43}$/.test(token || '')) {
-        const sessionHash = hash(token)
-        const raw = await redis.get(`community-next:session:${sessionHash}`)
-        await redis.del(`community-next:session:${sessionHash}`)
-        if (raw) {
-          try {
-            const stored = JSON.parse(raw) as StoredSession
-            if (typeof stored.userId === 'string') await redis.zrem(`community-next:sessions:${stored.userId}`, sessionHash)
-          } catch { /* A malformed record must not block clearing the browser session. */ }
-        }
-      }
       ctx.json(200, { user: null })
       return true
     }
@@ -292,5 +239,5 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
     }
     return false
   }
-  return { authenticate, createSession, handleAuth }
+  return { authenticate, handleAuth }
 }

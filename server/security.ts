@@ -5,7 +5,6 @@
 import { httpError } from './auth.ts'
 import { accountCenter } from './account-session.ts'
 import { legacyIdTime } from './content.ts'
-import type { StoredSession } from './auth.ts'
 import type { RequestContext } from './types.ts'
 
 export async function handleSecurity(ctx: RequestContext): Promise<boolean> {
@@ -38,17 +37,7 @@ export async function handleSecurity(ctx: RequestContext): Promise<boolean> {
     return true
   }
   if (route === '/api/security/sessions' && method === 'GET') {
-    const hashes = await ctx.redis.zrevrange(`community-next:sessions:${user.id}`, 0, 49)
-    if (ctx.sessionHash && !hashes.includes(ctx.sessionHash)) hashes.unshift(ctx.sessionHash)
-    const items = []
-    for (const key of hashes) {
-      const raw = await ctx.redis.get(`community-next:session:${key}`)
-      if (!raw) continue
-      const stored = JSON.parse(raw) as StoredSession
-      if (stored.userId !== user.id || stored.tokenHash !== user.tokenHash || !stored.account) continue
-      items.push({ id: key, current: ctx.sessionHash === key, createdAt: stored.createdAt || null, ip: stored.ip || null, userAgent: stored.userAgent || '' })
-    }
-    ctx.json(200, { items })
+    ctx.json(200, { external: true, accountUrl: accountCenter(ctx.config), items: [] })
     return true
   }
   return false

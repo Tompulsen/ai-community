@@ -12,7 +12,10 @@ import test from 'node:test'
 import Fastify from 'fastify'
 import sharp from 'sharp'
 import { crc32 } from 'node:zlib'
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { AccountRequest, AccountResponse } from './native-account/http.ts'
+import { closeNewApiRedis, getNewApiRedis } from './native-account/session.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 
 const origin = 'https://community.example'
@@ -32,6 +35,7 @@ function fakeStores() {
   const media = {
     id: 'file1', name: 'creation.mp4', type: 'video/mp4',
     accessKey: 'original-key', thumbnailAccessKey: 'thumbnail-key',
+    properties: { communityVideoPrivacy: { 'original-key': 1 } },
     webpublicAccessKey: null, webpublicType: null,
   }
   const db = {
@@ -40,7 +44,8 @@ function fakeStores() {
       assert(!sql.includes('community_lottery'), 'HTTP checks must not operate on lottery data')
       if (sql.startsWith('UPDATE drive_file SET')) {
         if (failUpdate) { failUpdate = false; throw new Error('simulated metadata write failure') }
-        media.properties = { communityImagePrivacy: { ...media.properties?.communityImagePrivacy, [parameters[1]]: 1 } }
+        const privacyKey = sql.includes('{communityVideoPrivacy}') ? 'communityVideoPrivacy' : 'communityImagePrivacy'
+        media.properties = { ...media.properties, [privacyKey]: { ...media.properties?.[privacyKey], [parameters[1]]: 1 } }
         if (sql.includes('size=$3')) Object.assign(media, { size: parameters[2], md5: parameters[3], type: parameters[4], name: parameters[5] })
         else if (media.webpublicAccessKey === parameters[1]) media.webpublicType = parameters[2]
         return { rows: [], rowCount: 1 }
@@ -138,7 +143,7 @@ test('public image downloads hide upload names and metadata on every original ro
 
 test('a metadata write failure after atomic replacement recovers without retaining an unsafe copy', async t => {
   const f = await fixture(t)
-  Object.assign(f.media, { type: 'image/png', name: 'PRIVATE.png' })
+  Object.assign(f.media, { type: 'image/png', name: 'PRIVATE.png', properties: undefined })
   const original = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } })
     .withExif({ IFD0: { Artist: 'PRIVATE-UPLOADER' } }).png().toBuffer()
   await writeFile(path.join(f.filesRoot, 'original-key'), original)
@@ -151,6 +156,31 @@ test('a metadata write failure after atomic replacement recovers without retaini
   assert.equal(retry.statusCode, 200)
   assert.equal(f.media.type, 'image/webp')
   assert.equal(f.media.properties.communityImagePrivacy['original-key'], 1)
+  assert.deepEqual((await readdir(f.filesRoot)).sort(), ['original-key', 'thumbnail-key'])
+})
+
+test('historical video downloads sanitize in place and synchronize the privacy marker and checksum', async t => {
+  if (spawnSync('ffmpeg', ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0) return t.skip('FFmpeg is unavailable')
+  const f = await fixture(t)
+  Object.assign(f.media, { name: 'PRIVATE-CUSTOMER.mp4', properties: undefined })
+  const source = path.join(f.filesRoot, 'original-key')
+  const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=red:s=16x16:r=2:d=0.5',
+    '-c:v', 'mpeg4', '-metadata', 'comment=PRIVATE-HISTORY', '-f', 'mp4', source], { windowsHide: true, encoding: 'utf8' })
+  assert.equal(generated.status, 0, generated.stderr)
+  assert((await readFile(source)).includes(Buffer.from('PRIVATE-HISTORY')))
+  const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1' })
+  assert.equal(response.statusCode, 200)
+  assert(response.headers['content-disposition'].includes('zhangyu-file1.mp4'))
+  assert(!response.rawPayload.includes(Buffer.from('PRIVATE-HISTORY')))
+  assert.deepEqual(response.rawPayload, await readFile(source))
+  assert.equal(f.media.properties.communityVideoPrivacy['original-key'], 1)
+  assert.equal(f.media.size, response.rawPayload.length)
+  assert.equal(f.media.md5, createHash('md5').update(response.rawPayload).digest('hex'))
+  assert.equal(f.media.name, 'zhangyu-file1.mp4')
+  const head = await f.app.inject({ method: 'HEAD', url: '/files/original-key' })
+  assert.equal(head.statusCode, 200)
+  assert.equal(Number(head.headers['content-length']), response.rawPayload.length)
+  assert.equal(f.queries.filter(query => query.sql.startsWith('UPDATE drive_file SET')).length, 1)
   assert.deepEqual((await readdir(f.filesRoot)).sort(), ['original-key', 'thumbnail-key'])
 })
 
@@ -238,11 +268,32 @@ test('static assets and SPA routes preserve HEAD and never expose paths outside 
 })
 
 test('pages and static assets remain available during an account-store outage without weakening API or media checks', async t => {
-  const { app, redis, queries } = await fixture(t)
+  const { app, queries } = await fixture(t)
+  const environment = {
+    NEW_API_BASE_URL: 'https://accounts.example',
+    NEW_API_SESSION_SECRET: 'http-account-outage-fixture'.repeat(3),
+    NEW_API_REDIS_URL: 'redis://127.0.0.1:6379',
+  }
+  const previousEnvironment = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]))
+  Object.assign(process.env, environment)
+  t.after(async () => {
+    await closeNewApiRedis()
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  const redis = getNewApiRedis()
+  t.mock.method(redis, 'set', async () => 'OK')
+  t.mock.method(redis, 'eval', async () => 1)
   let reads = 0
-  t.mock.method(redis, 'get', async () => { reads++; throw new Error('account store unavailable') })
+  t.mock.method(redis, 'get', async key => {
+    assert.equal(key, `octopus:new-api:${'a'.repeat(43)}`)
+    reads++
+    throw new Error('account store unavailable')
+  })
   t.mock.method(console, 'error', () => {})
-  const headers = { cookie: `community_session=${'a'.repeat(43)}` }
+  const headers = { cookie: `octopus_new_api_session=${'a'.repeat(43)}` }
   for (const url of ['/account', '/discover', '/assets/app.js']) {
     for (const method of ['GET', 'HEAD']) {
       const result = await app.inject({ method, url, headers })

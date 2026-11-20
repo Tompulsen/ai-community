@@ -9,6 +9,7 @@ export { compareStreamIds } from './notification-inbox.ts'
 import { accessibleWork, legacyIdTime, transaction } from './content.ts'
 import { getUser, httpError, roleCondition } from './auth.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
+import { publicImageName } from './image-privacy.ts'
 import type { Queryable, RequestContext, SessionUser } from './types.ts'
 
 const id = (value: unknown): string => {
@@ -121,7 +122,7 @@ function packedMessage(ctx: RequestContext, row: ChatRow, files = new Map<string
   return { id: row.id, text: row.text || '', owned: row.fromUserId === ctx.user!.id,
     read: row.reads.includes(row.toUserId), date: new Date(legacyIdTime(row.id, ctx.config.id)).toISOString(),
     sharedWorkId: sharedId(row.text, ctx.config.url), ...(file && file.userId === row.fromUserId
-      ? { file: { id: file.id, name: file.name, type: file.type, size: file.size, url: `/legacy-files/${file.id}` } } : {}) }
+      ? { file: { id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: `/legacy-files/${file.id}` } } : {}) }
 }
 function peerDto(other: ChatPeer, identity?: PublicIdentity) {
   const username = identity?.username ?? other.username

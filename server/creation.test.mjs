@@ -303,6 +303,32 @@ test('unrecorded historical task recovery is GET-only and rejects an upstream ow
   assert.equal(calls.length, 1)
 })
 
+test('unrecorded tasks without an explicit upstream owner cannot recover or register artifacts', async t => {
+  const { app, calls, values } = fixture(t, { fetch() {
+    return Response.json({ id: 'unowned_job', status: 'COMPLETED', video_url: 'https://media.example/private.mp4' })
+  } })
+  for (const protocol of ['legacy', 'plugin', 'gemini']) {
+    const id = protocol === 'gemini' ? 'models/veo/operations/unowned_job' : 'unowned_job'
+    const result = await app.inject(`/api/creation/tasks/video/${encodeURIComponent(id)}?protocol=${protocol}&tokenId=71`)
+    assert.equal(result.statusCode, 403)
+    assert.match(result.json().error.message, /归属/)
+  }
+  assert.equal(calls.length, 3)
+  assert.equal(values.size, 0)
+})
+
+test('recorded tasks remain readable when upstream omits the owner field', async t => {
+  const { app, values } = fixture(t, { fetch(_url, init) {
+    return Response.json({ id: 'tracked_job', status: init.method === 'POST' ? 'queued' : 'completed' })
+  } })
+  const created = await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Test', requestId: 'tracked-request' })
+  assert.equal(created.statusCode, 200)
+  assert([...values.keys()].some(key => key.includes(':task:')))
+  const recovered = await app.inject('/api/creation/tasks/video/tracked_job?protocol=openai')
+  assert.equal(recovered.statusCode, 200)
+  assert.equal(recovered.json().status, 'succeeded')
+})
+
 test('historical plugin and Gemini tasks recover their artifacts through the original read-only protocols', async t => {
   const { app, calls } = fixture(t, { fetch(url, init) {
     assert.equal(init.method, undefined)
@@ -310,7 +336,7 @@ test('historical plugin and Gemini tasks recover their artifacts through the ori
     if (pathname === '/v1/tasks/plugin_job') return Response.json({ status: 'COMPLETED', user_id: 17 })
     if (pathname === '/v1/tasks/plugin_job/artifacts') return Response.json({ artifacts: [{ type: 'video', key: 'result.mp4' }] })
     assert.equal(pathname, '/v1beta/models/veo/operations/job_1')
-    return Response.json({ name: 'models/veo/operations/job_1', done: true,
+    return Response.json({ name: 'models/veo/operations/job_1', done: true, user_id: 17,
       response: { generatedVideos: [{ video: { uri: 'https://media.example/v1beta/files/file_1' } }] } })
   } })
   const plugin = await app.inject({ url: '/api/creation/tasks/video/plugin_job?protocol=plugin&tokenId=71' })

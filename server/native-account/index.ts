@@ -30,6 +30,7 @@ export async function readNativeAccount(request: Request) {
 }
 
 export { AccountRequest, AccountResponse } from "./http.ts"
+export { revokeAccountSession } from "./routes.ts"
 export { accountRequest, getAuthenticatedSession, upstream, publicSession } from "./client.ts"
 export { getNewApiConfig, getNewApiAsyncBaseUrl, getNewApiImageBaseUrl, NewApiError } from "./config.ts"
 export { resolveModelGroup, resolveSystemAutoToken } from "./model-groups.ts"

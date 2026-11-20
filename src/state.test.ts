@@ -24,13 +24,14 @@ describe('real API state', () => {
     expect(session.user).toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
   })
-  it('hydrates the legacy identity using an HttpOnly-cookie request', async () => {
+  it('hydrates the native account identity without creating another community login', async () => {
     fetchMock.mockResolvedValue(response({ user, csrfToken: 'csrf-value' }))
     const { session, loadSession } = await import('./state')
     await loadSession()
     expect(session.user).toEqual(user)
     expect(session.csrfToken).toBe('csrf-value')
     expect(fetchMock).toHaveBeenCalledWith('/api/session', expect.objectContaining({ credentials: 'same-origin' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
   it('does not send duplicate session reads for simultaneous page startup', async () => {
     fetchMock.mockResolvedValue(response({ user: null }))
@@ -312,6 +313,22 @@ describe('real API state', () => {
     expect(session.error).toBe('')
     expect(accountCenterUrl('forgot-password')).toBe('https://accounts.example/forgot-password')
   })
+  it('synchronizes a newly signed-in native account after logout without requiring a page reload', async () => {
+    const switchedUser = { ...user, id: '25', accountId: '25', username: 'another-account' }
+    fetchMock.mockResolvedValueOnce(response({ user: null }))
+      .mockResolvedValueOnce(response({ user: null, authentication: 'zhangyu' }))
+      .mockResolvedValueOnce(response({ user: switchedUser }))
+      .mockResolvedValueOnce(response({ user: switchedUser, authentication: 'zhangyu' }))
+    const { loadSession, logout, session } = await import('./state')
+    session.user = user
+    await logout()
+    await loadSession(true)
+    expect(session.user).toEqual(switchedUser)
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/session/logout', '/api/session', '/api/account/session', '/api/session',
+    ])
+    expect(fetchMock.mock.calls.every(([, options]) => options.credentials === 'same-origin')).toBe(true)
+  })
   it('does not restore an old identity from an in-flight session read after logout', async () => {
     let finishRead!: (value: Response) => void
     fetchMock.mockImplementation((path: string) => path === '/api/session'
@@ -356,14 +373,24 @@ describe('real API state', () => {
     ])
     expect(session.user).toEqual(user)
   })
-  it('clears the displayed identity even when part of logout fails', async () => {
-    fetchMock.mockImplementation((path: string) => path === '/api/session/logout'
-      ? response({ message: 'Unavailable' }, 503) : response({ success: true }))
+  it('keeps the displayed identity when logout fails and clears it only after a successful retry', async () => {
+    fetchMock.mockResolvedValueOnce(response({ message: 'Unavailable' }, 503))
     const { logout, session } = await import('./state')
     session.user = user
-    await expect(logout()).rejects.toThrow('部分登录状态')
+    session.csrfToken = 'csrf-value'
+    await expect(logout()).rejects.toThrow('Unavailable')
+    expect(session.user).toEqual(user)
+    expect(session.csrfToken).toBe('csrf-value')
+    let finishLogout!: (value: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(done => { finishLogout = done }))
+    const retry = logout()
+    expect(session.user).toEqual(user)
+    finishLogout(response({ user: null }))
+    await retry
     expect(session.user).toBeNull()
+    expect(session.csrfToken).toBe('')
     expect(session.ready).toBe(true)
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/session/logout', '/api/session/logout'])
   })
 })
 

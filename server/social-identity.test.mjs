@@ -35,9 +35,12 @@ function fixture(path, options = {}) {
     if (sql.startsWith('SELECT 1 FROM blocking')) return { rows: [], rowCount: options.blocked ? 1 : 0 }
     if (sql.startsWith('SELECT 1 WHERE EXISTS (SELECT 1 FROM following')) return { rows: [], rowCount: 0 }
     if (sql.includes('WITH latest AS')) return { rows: profiles.map((person, index) => ({ ...person,
-      messageId: `0000001${index}message`, fromUserId: user.id, toUserId: person.id, text: '', reads: [], unread: index + 1 })) }
+        messageId: `0000001${index}message`, fromUserId: user.id, toUserId: person.id, text: '', reads: [], unread: index + 1,
+        fileId: options.file?.id })) }
     if (sql.startsWith('SELECT COUNT(*)::int AS "unreadCount"')) return { rows: [{ unreadCount: 6 }] }
-    if (sql.includes('FROM chat_message')) return { rows: [] }
+    if (sql.includes('FROM drive_file')) return { rows: options.file ? [options.file] : [] }
+    if (sql.includes('FROM chat_message')) return { rows: options.file ? [{ id: '00000017message', fromUserId: user.id,
+      toUserId: 'bound17', text: '', reads: [], fileId: options.file.id }] : [] }
     if (sql.includes('SELECT id,username,name,"avatarId","chatScope"')) {
       return { rows: profiles.filter(person => person.id === parameters[0]) }
     }
@@ -61,6 +64,19 @@ function fixture(path, options = {}) {
 }
 
 function identityReads(statements) { return statements.filter(item => item.sql.includes('FROM external_account')) }
+
+test('historical message attachments hide original media names in threads and conversation history', async () => {
+  for (const [type, extension] of [['image/png', 'png'], ['video/mp4', 'mp4']]) {
+    for (const path of ['/api/messages/threads', '/api/messages/bound17']) {
+      const f = fixture(path, { file: { id: 'file1', userId: 'reader', name: `PRIVATE-client-location.${extension}`, type, size: 10 } })
+      await handleSocial(f.ctx)
+      const result = f.response()
+      const message = path.endsWith('/threads') ? result.items[0].lastMessage : result.items[0]
+      assert.equal(message.file.name, `zhangyu-file1.${extension}`)
+      assert.equal(JSON.stringify(result).includes('PRIVATE'), false)
+    }
+  }
+})
 
 test('message threads batch public identities while retaining local IDs and sending restrictions', async () => {
   const { ctx, statements, response } = fixture('/api/messages/threads')

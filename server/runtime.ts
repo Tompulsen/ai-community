@@ -107,7 +107,6 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
           .header('Cache-Control', 'private, no-store')
           .header('X-Content-Type-Options', 'nosniff').send(value)
       },
-      createSession: (userId, expectedTokenHash, account) => auth.createSession(userId, reply.raw, request.raw, expectedTokenHash, account, request.ip),
       requireUser,
       requireAdmin: () => {
         const user = requireUser()

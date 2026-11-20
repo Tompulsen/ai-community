@@ -415,6 +415,28 @@ async function finishLogin(
   return res;
 }
 
+export async function revokeAccountSession(req: AccountRequest) {
+  const id = getSessionId(req);
+  if (!id) return;
+  await withSessionLock(id, async () => {
+    const session = await readSessionById(id);
+    if (session?.user) assertExpectedUser(req, session.user.id);
+    if (session?.refreshToken) {
+      try {
+        await upstream("/api/user/auth/logout", {
+          method: "POST",
+          refreshToken: session.refreshToken,
+          upstreamSessionId: session.upstreamSessionId,
+          ...upstreamRequestHints(req),
+        });
+      } catch {
+        // Local logout remains effective even when the upstream is offline.
+      }
+    }
+    await removeSessionById(id);
+  });
+}
+
 export async function handle(
   req: AccountRequest,
   path: string[],
@@ -556,26 +578,7 @@ export async function handle(
     }
 
     if (req.method === "POST" && route === "logout") {
-      const id = getSessionId(req);
-      if (id) {
-        await withSessionLock(id, async () => {
-          const session = await readSessionById(id);
-          if (session?.user) assertExpectedUser(req, session.user.id);
-          if (session?.refreshToken) {
-            try {
-              await upstream("/api/user/auth/logout", {
-                method: "POST",
-                refreshToken: session.refreshToken,
-                upstreamSessionId: session.upstreamSessionId,
-                ...upstreamRequestHints(req),
-              });
-            } catch {
-              // Local logout remains effective even when the upstream is offline.
-            }
-          }
-          await removeSessionById(id);
-        });
-      }
+      await revokeAccountSession(req);
       const res = ok();
       await deleteSession(req, res);
       return res;
