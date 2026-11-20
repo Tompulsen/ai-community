@@ -477,7 +477,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
-      <StudioBilling v-if="mode === 'text' && !entryOnly" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
+      <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></div>
       <form v-if="mode === 'text'" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
         <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
@@ -491,7 +491,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
             </StudioPopover>
           </div>
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @keys="emit('keys')" /></div>
-          <StudioBilling v-if="entryOnly" compact :model="model" @prices="emit('prices')" />
+          <StudioBilling :compact="entryOnly" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')" />
           <button v-if="waitingForMaterials" class="composer-submit" type="button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
           <button v-else-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
           <button v-else class="composer-submit send-button" :title="entryOnly ? '发送到创作台' : '发送'" :aria-label="entryOnly ? '发送到创作台' : '发送'" :disabled="!canSend"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>

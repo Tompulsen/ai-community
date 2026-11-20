@@ -3,7 +3,7 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 import { readFile } from 'node:fs/promises'
 import sharp from 'sharp'
 
-test('image, video and text conversations stay in one history across mode switches', async ({ page }) => {
+test('legacy media stays in its canonical conversation across mode switches', async ({ page }) => {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   let generations = 0
@@ -43,34 +43,40 @@ test('image, video and text conversations stay in one history across mode switch
   for (const mode of ['图片生成', '视频生成', '对话', '图片生成']) {
     await page.getByRole('button', { name: /^创作模式：/ }).click()
     await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: mode, exact: true }).click()
-    await expect(records).toHaveText(['最新的对话', '视频会话', '图片会话', '较早的对话'])
+    await expect(records.locator('> span')).toHaveText(['最新的对话', '视频会话', '较早的对话'])
     await expect(records.locator('img')).toHaveCount(0)
-    await expect(sidebar.getByRole('button', { name: '图片会话', exact: true }).locator('svg')).toHaveCount(1)
+    await expect(sidebar.getByRole('button', { name: '较早的对话', exact: true }).locator('svg')).toHaveCount(1)
     await expect(sidebar.getByRole('searchbox')).toHaveCount(0)
   }
   await sidebar.getByRole('button', { name: '视频会话', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/video/)
-  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('视频会话')
+  await expect(page.locator('.creation-request')).toContainText('视频会话')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEmpty()
   await sidebar.getByRole('button', { name: '较早的对话', exact: true }).click()
+  await expect(page).toHaveURL(/\/create\/image/)
+  await expect(page.locator('.creation-request')).toHaveCount(2)
+  await page.getByRole('button', { name: /^创作模式：/ }).click()
+  await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: '对话', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/text/)
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('较早的草稿')
   await expect(page.locator('.chat-message.user')).toContainText('较早的对话内容')
-  await sidebar.getByRole('button', { name: '图片会话', exact: true }).click()
+  await page.getByRole('button', { name: /^创作模式：/ }).click()
+  await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: '图片生成', exact: true }).click()
   await expect(page).toHaveURL(/\/create\/image/)
   await expect(page.locator('.creation-request')).toHaveCount(2)
   await expect(sidebar.locator('[aria-current="page"]')).toHaveCount(1)
-  await expect(sidebar.getByRole('button', { name: '图片会话', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(sidebar.getByRole('button', { name: '较早的对话', exact: true })).toHaveAttribute('aria-current', 'page')
   await page.screenshot({ path: '.taste-skill/studio-unified-history-20261115/desktop.png' })
   await sidebar.getByRole('button', { name: '多选对话', exact: true }).click()
   await sidebar.getByRole('checkbox', { name: '选择对话：最新的对话', exact: true }).check()
   await sidebar.getByRole('button', { name: '删除所选', exact: true }).click()
   await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
-  await expect(records).toHaveCount(3)
+  await expect(records).toHaveCount(2)
   await expect(page).toHaveURL(/\/create\/image/)
   await expect(page.locator('.creation-request')).toHaveCount(2)
   account.state.user.id = '18'; account.state.user.accountId = '18'
   await page.reload()
-  await expect(records).not.toContainText(['最新的对话', '视频会话', '图片会话', '较早的对话'])
+  await expect(records.locator('> span')).toHaveText(['新对话'])
   expect(generations).toBe(0)
 })
 
@@ -172,19 +178,22 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   await expect(page.locator('.app-header .publish-button')).toHaveCount(0)
   await expect(page.getByRole('group', { name: '生成结果操作', exact: true }).getByRole('button', { name: '发布作品', exact: true })).toBeVisible()
   await page.screenshot({ path: '.taste-skill/studio-remove-titles-20261115/desktop.png' })
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEmpty()
+  await expect(page.locator('.creation-request')).toContainText('海边的灯塔')
+  await page.getByRole('button', { name: '编辑并重新生成', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('海边的灯塔')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留这个创作草稿')
   await sidebar.getByRole('button', { name: '模型广场', exact: true }).click()
   await expect(page.locator('.studio-account-view')).toBeVisible()
-  await sidebar.getByRole('button', { name: '创作', exact: true }).click()
+  await sidebar.getByRole('button', { name: '海边的灯塔', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留这个创作草稿')
-  await sidebar.getByRole('button', { name: '新建创作', exact: true }).click()
+  await sidebar.getByRole('navigation', { name: '工作台导航', exact: true }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEmpty()
   expect(submissions).toBe(0)
   expect(errors).toEqual([])
 })
 
-test('sidebar adapts at desktop breakpoint and result/composer edges stay aligned', async ({ page }) => {
+test('sidebar adapts at desktop breakpoint and message/composer edges stay aligned', async ({ page }) => {
   await mockUnifiedAccount(page, true)
   await page.route('**/api/creation/**', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } }))
   await page.goto('/create/image')
@@ -198,7 +207,7 @@ test('sidebar adapts at desktop breakpoint and result/composer edges stay aligne
     if (width >= 1000) await expect(sidebar).toBeVisible()
     else await expect(sidebar).toBeHidden()
     const composer = await page.locator('.studio-composer').boundingBox()
-    const output = await page.locator('.creation-output').boundingBox()
+    const output = await page.getByLabel('对话消息', { exact: true }).boundingBox()
     expect(composer!.x).toBeCloseTo(output!.x, 0)
     expect(composer!.width).toBeCloseTo(output!.width, 0)
     expect(composer!.y + composer!.height).toBeLessThanOrEqual(901)
@@ -231,7 +240,7 @@ for (const width of [1440, 390, 320]) {
     const modeBounds = await trigger.boundingBox()
     const priceBounds = await page.getByRole('button', { name: '模型价格', exact: true }).boundingBox()
     const inputBounds = await page.locator('.studio-composer').boundingBox()
-    expect(modeBounds!.x).toBeGreaterThanOrEqual(priceBounds!.x + priceBounds!.width)
+    expect(priceBounds!.y).toBeGreaterThanOrEqual(inputBounds!.y)
     expect(modeBounds!.y + modeBounds!.height).toBeLessThanOrEqual(inputBounds!.y)
     expect(await page.locator('.studio-composer .studio-mode-control').count()).toBe(0)
     await page.screenshot({ path: `.taste-skill/mode-toolbar-20261114/toolbar-${width}.png` })
@@ -285,7 +294,9 @@ test('studio menu moves between the sidebar and compact header while keeping its
     await trigger.click()
     await expect(panel).toBeVisible()
     for (const name of ['模型价格', '消费记录', '密钥']) await expect(panel.getByRole('button', { name, exact: true })).toBeVisible()
-    await expect(panel.locator('.studio-command')).toHaveCount(3)
+    await expect(panel.locator('.studio-command')).toHaveText(width >= 1000
+      ? ['模型价格', '消费记录', '密钥']
+      : ['作品库', '模型价格', '消费记录', '密钥', '清除上下文', '复制对话', '删除对话'])
     await expect(panel.getByRole('link')).toHaveCount(0)
     const bounds = await panel.boundingBox()
     expect(bounds!.x).toBeGreaterThanOrEqual(0)

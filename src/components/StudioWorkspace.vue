@@ -422,7 +422,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
 
 <template>
   <section class="native-studio" aria-label="创作工作台">
-    <StudioBilling v-if="!entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" :refresh-key="selected?.settledAt" @prices="emit('prices')"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></StudioBilling>
+    <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></div>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
@@ -435,7 +435,7 @@ defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, open
           </StudioPopover>
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @update:model-value="modelChanged" @keys="emit('keys')" /></div>
-        <StudioBilling v-if="entryOnly" compact :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" @prices="emit('prices')" />
+        <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
         <button v-else-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
         <button v-else class="composer-submit generation-button" :title="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :aria-label="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>

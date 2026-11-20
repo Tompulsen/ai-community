@@ -6,7 +6,7 @@ const models = [
   { id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] },
 ]
 for (const kind of ['text', 'image', 'video']) {
-  test(`pricing opens above the ${kind} composer without moving it or submitting`, async ({ page }) => {
+  test(`pricing beside send opens without moving the ${kind} composer or submitting`, async ({ page }) => {
     await mockUnifiedAccount(page, true)
     let submissions = 0
     const errors: string[] = []
@@ -28,8 +28,12 @@ for (const kind of ['text', 'image', 'video']) {
       await page.setViewportSize({ width, height: 844 })
       const before = await page.locator('.studio-composer').boundingBox()
       const summary = await trigger.boundingBox()
-      expect(summary!.y + summary!.height).toBeLessThanOrEqual(before!.y)
-      expect(await page.locator('.studio-composer .studio-billing').count()).toBe(0)
+      const send = (await page.locator('.studio-composer .composer-submit').boundingBox())!
+      expect(summary!.y).toBeGreaterThanOrEqual(before!.y)
+      expect(summary!.x + summary!.width).toBeLessThanOrEqual(send.x)
+      expect(send.x - summary!.x - summary!.width).toBeLessThanOrEqual(8)
+      expect(Math.abs(summary!.y + summary!.height / 2 - send.y - send.height / 2)).toBeLessThanOrEqual(1)
+      expect(await page.locator('.studio-composer .studio-billing').count()).toBe(1)
       await expect(trigger).not.toContainText('272,000')
       await trigger.click()
       await expect(panel).toBeVisible()
