@@ -169,7 +169,7 @@ test('guest theme shortcut overrides automatic modes without leaving discovery',
   }
 })
 
-test('floating groups stay separate on short screens and preserve mobile navigation', async ({ page }) => {
+test('continuous rail stays below the logo without floating panels and preserves short-screen and mobile navigation', async ({ page }) => {
   await mockUnifiedAccount(page, true)
   await page.goto('/discover')
   for (const height of [900, 480, 360]) {
@@ -179,9 +179,16 @@ test('floating groups stay separate on short screens and preserve mobile navigat
     const brand = (await page.locator('.rail-heading').boundingBox())!
     const gap = height > 640 ? 24 : 12
     expect(brand.y).toBe(20)
-    expect(primary.y).toBeGreaterThanOrEqual(brand.y + brand.height + gap)
-    expect(primary.y + primary.height + gap).toBeLessThanOrEqual(utilities.y)
-    expect(utilities.y + utilities.height).toBe(height - 20)
+    expect(primary.y).toBe(brand.y + brand.height + gap)
+    expect(utilities.y).toBe(primary.y + primary.height + gap)
+    expect(utilities.y + utilities.height).toBeLessThanOrEqual(height - 20)
+    if (height === 900) expect(height - utilities.y - utilities.height).toBeGreaterThan(200)
+    for (const selector of ['.rail-primary', '.rail-utilities']) {
+      expect(await page.locator(selector).evaluate(element => {
+        const style = getComputedStyle(element)
+        return [style.backgroundColor, style.boxShadow]
+      })).toEqual(['rgba(0, 0, 0, 0)', 'none'])
+    }
     await expect(page.locator('.rail-primary .rail-brand')).toHaveCount(0)
     const publish = page.locator('.community-rail .header-submission')
     await publish.focus()

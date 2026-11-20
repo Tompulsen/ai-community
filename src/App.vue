@@ -442,12 +442,11 @@ function restoreMessageTrigger() {
   .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; align-items: center; justify-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
-  .rail-heading { display: flex; align-items: center; justify-content: center; width: 64px; min-width: 0; height: 56px; }
-  .rail-primary, .rail-utilities, .rail-brand { background: var(--surface); box-shadow: 0 4px 16px #0000000d; }
-  .rail-primary, .rail-utilities { display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px; border-radius: 32px; }
-  .rail-primary { min-height: 0; max-height: 100%; }
-  .rail-utilities { gap: 8px; }
+  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
+  .rail-heading { display: flex; align-items: center; justify-content: center; flex: none; width: 64px; min-width: 0; height: 56px; }
+  .rail-primary, .rail-utilities { display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px; }
+  .rail-primary { flex: 0 1 auto; min-height: 0; }
+  .rail-utilities { flex: none; gap: 8px; border-top: 1px solid var(--border); }
   .rail-brand { display: flex; align-items: center; justify-content: center; flex: none; width: 56px; height: 56px; min-width: 0; border-radius: 16px; }
   .rail-brand img { flex: none; width: 32px; height: 32px; border-radius: 8px; }
   .rail-brand-fallback { display: grid; place-items: center; flex: none; width: 32px; height: 32px; }
@@ -467,11 +466,11 @@ function restoreMessageTrigger() {
   .community-rail :deep(.tools-panel) { left: calc(var(--community-rail-width) + 12px); right: auto; top: 72px; max-height: calc(100dvh - 88px); }
   .rail-tooltip { position: fixed; z-index: 60; left: calc(var(--community-rail-width) - 4px); transform: translateY(-50%); padding-left: 12px; max-width: calc(100vw - var(--community-rail-width) - 12px); }
   .rail-tooltip > span { display: block; padding: 8px 12px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
-  .community-shell:not(.rail-expanded) .community-rail { grid-template-rows: var(--rail-brand-size) minmax(0, 1fr) auto; padding: 20px 16px; padding-top: calc((80px - var(--rail-brand-size)) / 2); }
+  .community-shell:not(.rail-expanded) .community-rail { padding: 20px 16px; padding-top: calc((80px - var(--rail-brand-size)) / 2); }
   .community-shell:not(.rail-expanded) .rail-heading { width: calc(var(--rail-control-size) + 16px); height: var(--rail-brand-size); }
   .community-shell:not(.rail-expanded) .rail-brand { width: var(--rail-brand-size); height: var(--rail-brand-size); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-brand-size); height: var(--rail-brand-size); border-radius: 12px; }
-  .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); }
   .community-shell:not(.rail-expanded) .rail-scroll { width: var(--rail-control-size); }
   .community-shell:not(.rail-expanded) .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle), .community-shell:not(.rail-expanded) .community-rail :deep(.tools-trigger) { width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); border-radius: 12px; }
   .community-shell:not(.rail-expanded) .community-rail :deep(.rail-icon) { width: 20px; height: 20px; }
