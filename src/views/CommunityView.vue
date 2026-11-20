@@ -255,9 +255,8 @@ async function removeFollower() {
         <div class="creator-profile">
           <component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></component>
           <div class="profile-copy">
-            <div class="profile-heading"><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><button v-if="isOwnProfile" type="button" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料" aria-haspopup="dialog" @click="editingProfile = true"><Pencil :size="16" aria-hidden="true" /></button></div><div class="profile-actions">
-              <RouterLink v-if="isOwnProfile" to="/messages?tab=activity#follow-requests" class="button btn subtle">关注申请</RouterLink>
-              <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
+            <div class="profile-heading"><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><button v-if="isOwnProfile" type="button" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料" aria-haspopup="dialog" @click="editingProfile = true"><Pencil :size="16" aria-hidden="true" /></button></div><div v-if="!isOwnProfile" class="profile-actions">
+              <FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink>
             </div></div>
             <div class="profile-stats" aria-label="创作者统计">
               <button class="profile-stat" aria-label="查看关注" aria-haspopup="dialog" @click="openPeople('following')"><span>关注</span><strong>{{ creator.followingCount ?? 0 }}</strong></button>
