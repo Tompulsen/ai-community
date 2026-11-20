@@ -3,6 +3,43 @@ import { readFile } from 'node:fs/promises'
 import sharp from 'sharp'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
+for (const width of [1440, 390]) for (const mode of ['light', 'dark']) {
+  test(`default profile cover stays visible and editable at ${width}px in ${mode} mode`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode })), mode)
+    const fixture = await mockUnifiedAccount(page, true)
+    await page.goto('/community?creator=fixtureAccountUser')
+    const cover = page.locator('.profile-cover-region')
+    await expect(page.getByRole('button', { name: '查看背景', exact: true })).toBeVisible()
+    expect(await cover.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
+    expect(await cover.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor))
+    const box = (await cover.boundingBox())!
+    if (width === 1440) {
+      expect(box.height).toBeLessThan(240)
+      expect((await page.locator('.profile-avatar').boundingBox())!.y - box.y).toBeLessThanOrEqual(48)
+    } else expect(box.height).toBeGreaterThan(200)
+    await page.screenshot({ path: test.info().outputPath(`default-cover-${width}-${mode}.png`) })
+    await page.mouse.click(box.x + box.width / 2, box.y + 24)
+    const preview = page.getByRole('dialog', { name: '当前背景', exact: true })
+    await expect(preview).toBeVisible()
+    await expect(preview.getByText('尚未设置背景', { exact: true })).toBeVisible()
+    await expect(preview.getByRole('button', { name: '下载图片', exact: true })).toHaveCount(0)
+    const chooser = page.waitForEvent('filechooser')
+    await preview.getByRole('button', { name: '更换背景', exact: true }).click()
+    await (await chooser).setFiles({ name: 'first-cover.jpg', mimeType: 'image/jpeg', buffer: await readFile('public/assets/brand/octopus-community.jpg') })
+    await expect(page.getByRole('button', { name: '确认裁切', exact: true })).toBeEnabled()
+    const selection = (await page.locator('cropper-selection').boundingBox())!
+    expect(selection.width / selection.height).toBeCloseTo(box.width / box.height, 1)
+    await page.getByRole('button', { name: '取消裁切', exact: true }).click()
+    expect(fixture.mutations.filter(item => ['/api/uploads', '/api/profile'].includes(item.path))).toEqual([])
+    await page.getByRole('button', { name: '查看头像', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '当前头像', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: '编辑资料', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '编辑个人资料', exact: true })).toBeVisible()
+  })
+}
+
 for (const width of [1440, 390]) {
   test(`profile media crop supports cancel, bounds, resize and saved pixels at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 })

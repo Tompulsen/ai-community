@@ -260,7 +260,7 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       if (Object.keys(body).some(key => !['name', 'bio', 'avatarId', 'bannerId'].includes(key))) throw httpError(400, '个人资料包含不支持修改的字段。')
       const name = typeof body.name === 'string' ? body.name.trim() : ''
       const bio = body.bio ?? ''
-      if (('name' in body && (!name || name.length > 50)) || typeof bio !== 'string' || bio.length > 1500) throw httpError(400, '名称或个人简介超出限制。')
+      if (('name' in body && (!name || name.length > 8)) || typeof bio !== 'string' || bio.length > 100) throw httpError(400, '昵称最多 8 个字符，个人简介最多 100 个字符。')
       if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(name) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(bio)) throw httpError(400, '名称或个人简介包含无效字符。')
       const profileFiles: Record<string, string | null> = {}
       for (const field of ['avatarId', 'bannerId'] as const) if (field in body) {

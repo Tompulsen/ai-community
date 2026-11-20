@@ -2,6 +2,37 @@ import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 
+for (const width of [390, 1440]) test(`profile editing opens over the homepage without navigation at ${width}px`, async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page, true)
+  await page.setViewportSize({ width, height: 740 })
+  await page.goto('/community?creator=fixtureAccountUser')
+  const edit = page.getByRole('button', { name: '编辑资料', exact: true })
+  await edit.click()
+  const editor = page.getByRole('dialog', { name: '编辑个人资料', exact: true })
+  await expect(editor).toBeVisible()
+  await expect(page).toHaveURL('/community?creator=fixtureAccountUser')
+  await expect(page.locator('.profile-cover-region')).toBeVisible()
+  await expect(page.locator('.profile-content-toolbar')).toBeVisible()
+  await expect(editor.getByLabel('社区昵称', { exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(editor).toHaveCount(0)
+  await expect(edit).toBeFocused()
+  await edit.click()
+  await page.getByLabel('社区昵称', { exact: true }).fill('浮窗修改的昵称')
+  await page.getByRole('button', { name: '关闭资料编辑', exact: true }).click()
+  const confirmation = page.getByRole('dialog', { name: '保留资料修改？', exact: true })
+  await expect(confirmation).toBeVisible()
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('浮窗修改的昵称')
+  await page.getByRole('button', { name: '保存资料', exact: true }).click()
+  await expect(editor.getByRole('status')).toContainText('资料已保存')
+  await page.getByRole('button', { name: '关闭资料编辑', exact: true }).click()
+  await expect(editor).toHaveCount(0)
+  await expect(page.locator('.profile-name h1')).toHaveText('浮窗修改的昵称')
+  await expect(page).toHaveURL('/community?creator=fixtureAccountUser')
+  expect(fixture.mutations.find(item => item.path === '/api/profile')?.body).toMatchObject({ name: '浮窗修改的昵称' })
+})
+
 test('settings and personal editing keep separate destinations including legacy links after login', async ({ page }) => {
   const fixture = await mockUnifiedAccount(page)
   await page.goto('/account?returnTo=/account?tab=profile')
@@ -9,7 +40,7 @@ test('settings and personal editing keep separate destinations including legacy 
   await expect(page).toHaveURL('/community?creator=fixtureAccountUser&edit=profile')
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue(fixture.state.user.name)
   await page.getByRole('button', { name: '取消', exact: true }).click()
-  await expect(page.getByRole('link', { name: '编辑资料', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '编辑资料', exact: true })).toBeVisible()
   await page.goto('/account')
   await expect(page.locator('.privacy-settings')).toBeVisible()
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveCount(0)
@@ -22,7 +53,7 @@ test('a foreign profile cannot open the editor by changing the query', async ({ 
   await page.goto('/community?creator=other&edit=profile')
   await expect(page.locator('.profile-copy h1')).toBeVisible()
   await expect(page.locator('.profile-editor')).toHaveCount(0)
-  await expect(page.getByRole('link', { name: '编辑资料', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑资料', exact: true })).toHaveCount(0)
 })
 
 test('a guest using the direct legacy profile URL reaches their homepage editor after login', async ({ page }) => {

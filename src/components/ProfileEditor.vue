@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { Check, ChevronDown, Save, X } from '@lucide/vue'
 import type { SessionUser } from '../data'
 import { api, errorMessage, loadSession, session } from '../state'
-const emit = defineEmits<{ saved: [user: SessionUser] }>()
-const route = useRoute(), router = useRouter()
+const emit = defineEmits<{ saved: [user: SessionUser]; close: [] }>()
+const route = useRoute()
+const editorDialog = ref<HTMLDialogElement>()
 const nameInput = ref<HTMLInputElement>()
 const leaveDialog = ref<HTMLDialogElement>()
 const name = ref(''), bio = ref('')
@@ -43,14 +44,17 @@ onBeforeRouteUpdate(to => to.query.creator === route.query.creator && to.query.e
 function beforeUnload(event: BeforeUnloadEvent) {
   if (session.user && (dirty.value || busy.value)) { event.preventDefault(); event.returnValue = '' }
 }
-function close() { void router.replace({ path: route.path, query: { ...route.query, edit: undefined } }) }
+async function close() { if (await confirmLeave()) emit('close') }
 onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnload)
   await nextTick()
+  if (!active) return
+  editorDialog.value?.showModal()
   nameInput.value?.focus({ preventScroll: true })
 })
 onBeforeUnmount(() => {
   active = false; operation++; finishLeave(false)
+  editorDialog.value?.close()
   window.removeEventListener('beforeunload', beforeUnload)
 })
 async function saveProfile() {
@@ -74,24 +78,25 @@ async function saveProfile() {
 </script>
 
 <template>
-  <section class="profile-editor" aria-labelledby="profile-editor-heading">
-    <header class="editor-heading"><h1 id="profile-editor-heading">编辑个人资料</h1><button type="button" class="icon-button" aria-label="关闭资料编辑" title="关闭资料编辑" @click="close"><X :size="20" /></button></header>
+  <dialog ref="editorDialog" class="profile-editor" aria-labelledby="profile-editor-heading" :closedby="dirty || busy ? 'none' : 'closerequest'" @cancel.prevent="close">
+    <header class="editor-heading"><h2 id="profile-editor-heading">编辑个人资料</h2><button type="button" class="icon-button" aria-label="关闭资料编辑" title="关闭资料编辑" @click="close"><X :size="20" /></button></header>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <form class="profile-form" @submit.prevent="saveProfile">
-      <label class="field"><span class="field-label"><span id="profile-name-label">社区昵称</span><span class="field-count" aria-hidden="true">{{ name.length }}/50</span></span><input ref="nameInput" v-model="name" aria-labelledby="profile-name-label" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label>
-      <label class="field"><span class="field-label"><span id="profile-bio-label">个人简介</span><span class="field-count" aria-hidden="true">{{ bio.length }}/1500</span></span><textarea v-model="bio" aria-labelledby="profile-bio-label" class="control profile-bio" rows="3" maxlength="1500" :disabled="busy" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label>
+      <label class="field"><span class="field-label"><span id="profile-name-label">社区昵称</span><span class="field-count" aria-hidden="true">{{ name.length }}/8</span></span><input ref="nameInput" v-model="name" aria-labelledby="profile-name-label" class="control" autocomplete="nickname" maxlength="8" required :disabled="busy" @input="saved = false" /></label>
+      <label class="field"><span class="field-label"><span id="profile-bio-label">个人简介</span><span class="field-count" aria-hidden="true">{{ bio.length }}/100</span></span><textarea v-model="bio" aria-labelledby="profile-bio-label" class="control profile-bio" rows="3" maxlength="100" :disabled="busy" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label>
       <dl class="profile-identity"><div><dt>登录用户名</dt><dd>{{ session.user?.username }}</dd></div><div v-if="session.user?.accountId"><dt>章鱼号</dt><dd>{{ session.user.accountId }}</dd></div></dl>
       <details class="profile-preview"><summary>预览个人资料<ChevronDown :size="16" aria-hidden="true" /></summary><div class="profile-preview-body"><strong>{{ name }}</strong><span v-if="session.user?.accountId">章鱼号：{{ session.user.accountId }}</span><p>{{ bio }}</p></div></details>
       <footer class="profile-savebar"><p class="profile-save-status" role="status"><Check v-if="saved && !dirty" :size="15" />{{ busy ? '正在保存资料…' : saved && !dirty ? '资料已保存' : dirty ? '有未保存的修改' : '' }}</p><div class="profile-save-actions"><button type="button" class="button subtle btn" @click="close">取消</button><button class="button primary btn" :disabled="busy || !name.trim()"><Save :size="16" />{{ busy ? '正在保存…' : '保存资料' }}</button></div></footer>
     </form>
     <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="profile-leave-heading" @cancel.prevent="finishLeave(false)" @close="finishLeave(false)"><div class="dialog-heading"><h2 id="profile-leave-heading">保留资料修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>资料尚未确认保存。离开后，未保存的文字修改将丢失。</p><div class="profile-leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
-  </section>
+  </dialog>
 </template>
 
 <style scoped>
-.profile-editor { container: profile-editor / inline-size; width: 100%; max-width: 760px; margin: 0 auto 24px; }
+.profile-editor { container: profile-editor / inline-size; box-sizing: border-box; width: min(640px, calc(100% - 32px)); max-width: none; max-height: calc(100dvh - 32px); margin: auto; padding: 24px; overflow: auto; border: 0; border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 20px 80px #0004; }
+.profile-editor::backdrop { background: #0006; }
 .editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.editor-heading h1 { font-size: 20px; line-height: 28px; }
+.editor-heading h2 { margin: 0; font-size: 20px; line-height: 28px; }
 .editor-heading .icon-button { width: 44px; height: 44px; flex: none; }
 .profile-form { display: grid; gap: 16px; }
 .field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }

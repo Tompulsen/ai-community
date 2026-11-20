@@ -112,6 +112,19 @@ test('invalid profile text and IDs fail before starting a transaction', async ()
   }
 })
 
+test('profile text accepts 8 nickname characters and 100 biography characters but rejects longer input', async () => {
+  const f = fixture()
+  f.ctx.body = { name: '昵称'.repeat(4), bio: '介'.repeat(100) }
+  await f.run()
+  assert.equal(f.response.value.user.name, f.ctx.body.name)
+  assert.equal(f.response.value.user.bio, f.ctx.body.bio)
+  for (const patch of [{ name: '名'.repeat(9) }, { bio: '介'.repeat(101) }]) {
+    const invalid = fixture(); Object.assign(invalid.ctx.body, patch)
+    await assert.rejects(invalid.run(), { statusCode: 400 })
+    assert.equal(invalid.calls.length, 0)
+  }
+})
+
 test('profile storage failure rolls back the entire change', async () => {
   const f = fixture({ failUpdate: true })
   await assert.rejects(f.run(), /database unavailable/)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowUpRight, Bookmark, Heart, Images, LockKeyhole, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
@@ -16,7 +16,7 @@ import ProfileImageCropper from '../components/ProfileImageCropper.vue'
 import type { SessionUser } from '../data'
 import { confirmStudioDelete } from '../studio-confirm'
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
-const route = useRoute()
+const route = useRoute(), router = useRouter()
 const creatorId = computed(() => typeof route.query.creator === 'string' ? route.query.creator : '')
 const creators = ref<Creator[]>([]), creator = ref<Creator | null>(null), works = ref<Work[]>([])
 const profileTabs = [{ value: 'works', label: '作品' }, { value: 'saved', label: '收藏' }, { value: 'liked', label: '喜欢' }] as const
@@ -29,8 +29,15 @@ const peopleDialog = ref<HTMLDialogElement>(), peopleMode = ref<'followers' | 'f
 const peopleLoading = ref(false), peopleError = ref('')
 const removeDialog = ref<HTMLDialogElement>(), removing = ref<Creator | null>(null), removeBusy = ref(false)
 const isOwnProfile = computed(() => Boolean(creator.value && creator.value.id === session.user?.id))
-const editingProfile = computed(() => isOwnProfile.value && route.query.edit === 'profile')
-const profileEditLink = computed(() => ({ path: '/community', query: { ...route.query, creator: creatorId.value, edit: 'profile' } }))
+const editingProfile = ref(false)
+watch([isOwnProfile, () => route.query.edit], ([own, edit]) => {
+  if (!own) editingProfile.value = false
+  else if (edit === 'profile') editingProfile.value = true
+}, { immediate: true })
+function closeProfileEditor() {
+  editingProfile.value = false
+  if (route.query.edit === 'profile') void router.replace({ path: route.path, query: { ...route.query, edit: undefined } })
+}
 const mediaPicker = ref<InstanceType<typeof ProfileImageCropper>>(), profileRegion = ref<HTMLElement>()
 const bannerAspect = ref(4), mediaBusy = ref(false), mediaError = ref(''), mediaProgress = ref(0)
 const mediaRetry = ref<{ file: File; field: 'avatar' | 'banner' }>()
@@ -38,7 +45,7 @@ let mediaController: AbortController | undefined, mediaOperation = 0
 function chooseProfileImage(field: 'avatar' | 'banner') {
   if (!isOwnProfile.value || mediaBusy.value) return
   const rect = profileRegion.value?.getBoundingClientRect()
-  if (rect && creator.value?.bannerUrl) bannerAspect.value = rect.width / rect.height
+  if (rect) bannerAspect.value = rect.width / rect.height
   else bannerAspect.value = mobile.value ? 1.2 : 4
   mediaPicker.value?.preview(field, field === 'avatar' ? creator.value?.avatarUrl : creator.value?.bannerUrl, bannerAspect.value)
 }
@@ -233,22 +240,22 @@ async function removeFollower() {
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load">重试</button></p><ContentSkeleton v-if="loading" layout="creators" label="正在加载社区…" />
     <template v-else-if="creatorId">
       <template v-if="creator">
-        <section v-if="mobile && !editingProfile" ref="profileRegion" class="mobile-profile profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料">
+        <section v-if="mobile" ref="profileRegion" class="mobile-profile profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料">
           <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="查看背景" title="查看背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
           <img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
-          <div class="profile-hero"><div class="profile-hero-identity"><component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></component><div><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料"><Pencil :size="16" aria-hidden="true" /></RouterLink></div><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
+          <div class="profile-hero"><div class="profile-hero-identity"><component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" alt="" /><span v-else>{{ (creator.name || creator.username).slice(0, 1) }}</span></component><div><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><button v-if="isOwnProfile" type="button" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料" aria-haspopup="dialog" @click="editingProfile = true"><Pencil :size="16" aria-hidden="true" /></button></div><p>@{{ creator.username }}</p><p v-if="creatorIdentity(creator)">{{ creatorIdentity(creator) }}</p></div></div></div>
           <div class="mobile-profile-body"><div class="mobile-profile-stats"><button type="button" aria-label="查看关注" @click="openPeople('following')"><strong>{{ creator.followingCount ?? 0 }}</strong>关注</button><button type="button" aria-label="查看粉丝" @click="openPeople('followers')"><strong>{{ creator.followersCount ?? 0 }}</strong>粉丝</button><span><strong>{{ creator.receivedLikesCount ?? 0 }}</strong>获赞</span></div>
-            <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><RouterLink v-else-if="isOwnProfile" :to="profileEditLink" class="profile-add-bio">添加个人简介<Pencil :size="13" /></RouterLink>
+            <p v-if="creator.bio" class="mobile-profile-bio">{{ creator.bio }}</p><button v-else-if="isOwnProfile" type="button" class="profile-add-bio" aria-haspopup="dialog" @click="editingProfile = true">添加个人简介<Pencil :size="13" /></button>
             <div v-if="!isOwnProfile" class="profile-actions"><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></div>
             <nav v-if="isOwnProfile" class="profile-shortcuts" aria-label="个人主页工具"><RouterLink to="/library"><LayoutGrid :size="22" />作品管理</RouterLink><button type="button" @click="profileTab = 'saved'"><Bookmark :size="22" />我的收藏</button><RouterLink to="/create/video"><WandSparkles :size="22" />创作</RouterLink><RouterLink to="/account"><Settings :size="22" />设置</RouterLink></nav>
           </div>
         </section>
-        <section v-else-if="!editingProfile" ref="profileRegion" class="profile-header profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
+        <section v-else ref="profileRegion" class="profile-header profile-cover-region" :class="{ 'has-banner': creator.bannerUrl }" aria-label="个人资料"><img v-if="creator.bannerUrl" class="profile-banner" :src="creator.bannerUrl" alt="" />
         <button v-if="isOwnProfile" type="button" class="profile-cover-edit" aria-label="查看背景" title="查看背景" :disabled="mediaBusy" @click="chooseProfileImage('banner')" />
         <div class="creator-profile">
           <component :is="isOwnProfile ? 'button' : 'span'" :type="isOwnProfile ? 'button' : undefined" class="avatar blue profile-avatar" :aria-label="isOwnProfile ? '查看头像' : undefined" :title="isOwnProfile ? '查看头像' : undefined" :disabled="isOwnProfile && mediaBusy" @click="chooseProfileImage('avatar')"><img v-if="creator.avatarUrl" :src="creator.avatarUrl" :alt="creator.name || creator.username" /><span v-else>{{ (creator.name || creator.username || '用').slice(0, 1) }}</span></component>
           <div class="profile-copy">
-            <div class="profile-heading"><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><RouterLink v-if="isOwnProfile" :to="profileEditLink" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料"><Pencil :size="16" aria-hidden="true" /></RouterLink></div><div class="profile-actions">
+            <div class="profile-heading"><div class="profile-name"><h1>{{ creator.name || creator.username }}</h1><button v-if="isOwnProfile" type="button" class="icon-button profile-edit" aria-label="编辑资料" title="编辑资料" aria-haspopup="dialog" @click="editingProfile = true"><Pencil :size="16" aria-hidden="true" /></button></div><div class="profile-actions">
               <RouterLink v-if="isOwnProfile" to="/messages?tab=activity#follow-requests" class="button btn subtle">关注申请</RouterLink>
               <template v-else><FollowButton :person="creator" @changed="updateRelationship" /><RouterLink v-if="session.user" :to="`/messages/${creator.id}`" class="button btn subtle"><MessageSquare :size="16" />私信</RouterLink></template>
             </div></div>
@@ -262,12 +269,12 @@ async function removeFollower() {
           </div>
         </div>
         </section>
-        <ProfileImageCropper v-if="isOwnProfile && !editingProfile" :key="`${session.user?.id}:${creatorId}`" ref="mediaPicker" @cropped="saveProfileImage" />
+        <ProfileImageCropper v-if="isOwnProfile" :key="`${session.user?.id}:${creatorId}`" ref="mediaPicker" @cropped="saveProfileImage" />
         <p v-if="mediaBusy" class="profile-media-status" role="status">{{ mediaProgress < 100 ? `图片上传中 ${mediaProgress}%` : '正在保存图片…' }}</p>
         <p v-if="mediaError" class="notice-inline" role="alert">{{ mediaError }} <button v-if="mediaRetry" type="button" class="text-link" @click="saveProfileImage(mediaRetry.file, mediaRetry.field)">重试保存</button></p>
-        <ProfileEditor v-if="editingProfile" @saved="profileSaved" />
-        <div v-show="!editingProfile" class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
-        <div v-show="!editingProfile" id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
+        <ProfileEditor v-if="editingProfile" @saved="profileSaved" @close="closeProfileEditor" />
+        <div class="profile-content-toolbar"><div class="tabs profile-tabs" role="tablist" aria-label="个人主页内容" @keydown="navigateProfileTabs"><button v-for="item in profileTabs" :key="item.value" class="tab" :class="{ active: profileTab === item.value }" :id="`profile-tab-${item.value}`" role="tab" :aria-selected="profileTab === item.value" aria-controls="profile-collection" :tabindex="profileTab === item.value ? 0 : -1" :disabled="deleting" @click="profileTab = item.value">{{ item.label }}</button></div><ProfileWorkControls v-if="!collectionPrivate" :filters="filters" :own="isOwnProfile" :works-tab="profileTab === 'works'" :disabled="deleting" @apply="filters = $event" @select="selecting = !selecting; selectedWorks = new Set()" /></div>
+        <div id="profile-collection" role="tabpanel" :aria-labelledby="`profile-tab-${profileTab}`" @touchstart.passive="beginSwipe" @touchend="endSwipe" @touchcancel="swipeStart = null">
         <div v-if="collectionPrivate" class="empty-state profile-private"><LockKeyhole :size="28" /><h2>{{ collectionLabel }}仅本人可见</h2></div>
         <template v-else>
           <div v-if="selecting && isOwnProfile && profileTab === 'works'" class="profile-selection" role="toolbar" aria-label="作品批量操作"><label><input type="checkbox" aria-label="全选当前作品" :checked="allSelected" :disabled="deleting || collectionLoading" @change="selectedWorks = allSelected ? new Set() : new Set(works.filter(work => work.owned).map(work => work.id))" />全选当前页</label><span role="status">已选 {{ selectedItems.length }} 件</span><button type="button" class="icon-button" title="删除所选作品" aria-label="删除所选作品" :disabled="deleting || !selectedItems.length" @click="deleteSelectedWorks"><Trash2 :size="17" /></button><button type="button" class="icon-button" title="退出批量管理" aria-label="退出批量管理" :disabled="deleting" @click="selecting = false; selectedWorks = new Set()"><X :size="18" /></button></div>
@@ -325,18 +332,18 @@ async function removeFollower() {
 .creator-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: auto; padding-top: 4px; }
 .creator-footer .button { flex: 0 0 auto; min-height: 34px; padding: 6px 10px; font-size: 12px; }
 .creators-grid > .empty-state { grid-column: 1 / -1; }
-.profile-cover-region { position: relative; isolation: isolate; }
+.profile-cover-region { position: relative; isolation: isolate; overflow: hidden; background: var(--canvas); }
 .profile-cover-region.has-banner { overflow: hidden; --ink: #f8f9fc; --muted: #d8dde7; --surface: #202226; --surface-soft: #2b2e34; --border: #414650; color: var(--ink); }
 .profile-cover-edit { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
 .profile-cover-edit:focus-visible { outline-offset: -4px; }
 .profile-cover-region .creator-profile { position: relative; z-index: 2; pointer-events: none; }
-.profile-cover-region .creator-profile > * { pointer-events: auto; }
+.profile-cover-region :is(a, button) { pointer-events: auto; }
 button.profile-avatar { padding: 0; border: 0; cursor: pointer; }
 .profile-media-status { margin-bottom: 12px; font-size: 13px; color: var(--muted); }
 .profile-banner { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
 .profile-cover-region.has-banner::after { content: ''; position: absolute; z-index: 0; inset: 0; background: linear-gradient(180deg in oklab, rgb(0 0 0 / 4%) 0%, rgb(0 0 0 / 12%) 25%, rgb(0 0 0 / 30%) 50%, rgb(0 0 0 / 50%) 75%, rgb(0 0 0 / 64%) 100%); pointer-events: none; }
-.profile-header.has-banner { padding-top: 160px; margin-bottom: 24px; border-radius: var(--radius); }
-.profile-header.has-banner > .creator-profile { margin: 0; padding: 24px; }
+.profile-header { padding-top: 24px; margin-bottom: 24px; border-radius: var(--radius); }
+.profile-header > .creator-profile { margin: 0; padding: 24px; }
 .creator-page { padding-top: 24px; }
 .creator-profile { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: start; gap: 20px; margin: 8px 0 24px; }
 .creator-profile > .profile-avatar { width: 96px; height: 96px; border-radius: 50%; font-size: 36px; }
@@ -403,8 +410,7 @@ button.profile-stat:hover strong { color: var(--blue-hover); }
   .creator-page { padding-top: 0; }
   .profile-hero { position: relative; padding: 28px 20px 38px; background: var(--blue-soft); overflow: hidden; }
   .mobile-profile > :is(.profile-hero, .mobile-profile-body) { position: relative; z-index: 2; pointer-events: none; }
-  .mobile-profile > :is(.profile-hero, .mobile-profile-body) > * { pointer-events: auto; }
-  .mobile-profile.has-banner > :is(.profile-hero, .mobile-profile-body) { background: transparent; }
+  .mobile-profile > :is(.profile-hero, .mobile-profile-body) { background: transparent; }
   .mobile-profile.has-banner::after { background: linear-gradient(180deg in oklab, rgb(0 0 0 / 38%) 0%, rgb(0 0 0 / 44%) 30%, rgb(0 0 0 / 56%) 65%, rgb(0 0 0 / 68%) 100%); }
   .profile-hero-identity { position: relative; display: flex; align-items: center; gap: 18px; }
   .profile-hero-identity > .avatar { width: 92px; height: 92px; border: 3px solid var(--surface); font-size: 34px; color: var(--blue); }
