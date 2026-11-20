@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
 
 test('settings and personal editing keep separate destinations including legacy links after login', async ({ page }) => {
@@ -51,7 +52,8 @@ test('an uploaded avatar stays in the draft after session refresh and reaches th
   await page.route('**/api/uploads', route => route.fulfill({ json: { file: { id: 'avatar123', type: 'image/png', name: 'avatar.png', size: 68, url: '/assets/brand/octopus-community.jpg' } } }))
   await page.goto('/community?creator=fixtureAccountUser&edit=profile')
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue(fixture.state.user.name)
-  await page.locator('input[type="file"]').first().setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: Buffer.from('fixture image') })
+  await page.locator('input[type="file"]').first().setInputFiles({ name: 'avatar.jpg', mimeType: 'image/jpeg', buffer: await readFile('public/assets/brand/octopus-community.jpg') })
+  await page.getByRole('button', { name: '确认裁切', exact: true }).click()
   await expect(page.getByAltText('当前头像')).toBeVisible()
   const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/session')
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -92,7 +94,8 @@ test('switching accounts while upload limits are pending never uploads into the 
   await page.route('**/api/uploads', route => { uploaded = true; return route.fulfill({ json: { file: { id: 'wrongAccountFile' } } }) })
   await page.goto('/community?creator=fixtureAccountUser&edit=profile')
   await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue(fixture.state.user.name)
-  await page.getByLabel('头像', { exact: true }).setInputFiles({ name: 'private.png', mimeType: 'image/png', buffer: Buffer.from('private image') })
+  await page.getByLabel('头像', { exact: true }).setInputFiles({ name: 'private.jpg', mimeType: 'image/jpeg', buffer: await readFile('public/assets/brand/octopus-community.jpg') })
+  await page.getByRole('button', { name: '确认裁切', exact: true }).click()
   await expect.poll(() => requested).toBe(true)
   fixture.state.user = { ...fixture.state.user, id: 'secondAccount', accountId: '18', username: 'second', name: '第二个账号' }
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))

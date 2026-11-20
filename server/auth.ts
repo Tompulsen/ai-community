@@ -260,7 +260,7 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
       if (Object.keys(body).some(key => !['name', 'bio', 'avatarId', 'bannerId'].includes(key))) throw httpError(400, '个人资料包含不支持修改的字段。')
       const name = typeof body.name === 'string' ? body.name.trim() : ''
       const bio = body.bio ?? ''
-      if (!name || name.length > 50 || typeof bio !== 'string' || bio.length > 1500) throw httpError(400, '名称或个人简介超出限制。')
+      if (('name' in body && (!name || name.length > 50)) || typeof bio !== 'string' || bio.length > 1500) throw httpError(400, '名称或个人简介超出限制。')
       if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(name) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(bio)) throw httpError(400, '名称或个人简介包含无效字符。')
       const profileFiles: Record<string, string | null> = {}
       for (const field of ['avatarId', 'bannerId'] as const) if (field in body) {
@@ -279,14 +279,15 @@ export function authServices({ db, redis, config }: { db: Database; redis: Redis
           if (!file.rows.length) throw httpError(400, '请选择自己上传的图片。')
           if (file.rows[0]!.isSensitive) throw httpError(400, '敏感图片不能用作头像或封面。')
         }
-        await client.query('UPDATE "user" SET name=$2,"updatedAt"=NOW() WHERE id=$1', [currentUser.id, name])
+        if ('name' in body) await client.query('UPDATE "user" SET name=$2,"updatedAt"=NOW() WHERE id=$1', [currentUser.id, name])
+        else await client.query('UPDATE "user" SET "updatedAt"=NOW() WHERE id=$1', [currentUser.id])
         for (const [field, fileId] of Object.entries(profileFiles)) {
           await client.query(`UPDATE "user" SET "${field}"=$2 WHERE id=$1`, [currentUser.id, fileId])
         }
-        await client.query('UPDATE user_profile SET description=$2 WHERE "userId"=$1', [currentUser.id, bio])
+        if ('bio' in body) await client.query('UPDATE user_profile SET description=$2 WHERE "userId"=$1', [currentUser.id, bio])
         await client.query('COMMIT')
       } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
-      ctx.json(200, { user: publicUser({ ...currentUser, name, bio, ...profileFiles }) })
+      ctx.json(200, { user: publicUser({ ...currentUser, ...('name' in body ? { name } : {}), ...('bio' in body ? { bio } : {}), ...profileFiles }) })
       return true
     }
     return false

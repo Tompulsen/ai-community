@@ -63,6 +63,19 @@ test('missing, foreign or non-image media cannot update any profile field', asyn
   assert.equal(f.calls.some(call => call.sql.startsWith('UPDATE')), false)
 })
 
+test('media-only changes preserve nickname, biography and the other image', async () => {
+  const f = fixture()
+  f.ctx.user.bio = '保留简介'; f.ctx.user.avatarId = 'originalAvatar'
+  f.ctx.body = { bannerId: 'picture1' }
+  await f.run()
+  assert.equal(f.response.status, 200)
+  assert.equal(f.response.value.user.name, '旧名字')
+  assert.equal(f.response.value.user.bio, '保留简介')
+  assert.equal(f.response.value.user.avatarId, 'originalAvatar')
+  assert.equal(f.response.value.user.bannerId, 'picture1')
+  assert.equal(f.calls.some(call => call.sql.includes('SET name=') || call.sql.includes('SET description=')), false)
+})
+
 test('restricted users can remove media, keep existing media and edit their text', async () => {
   for (const avatarId of [null, 'existing1']) {
     const f = fixture({ policy: false })

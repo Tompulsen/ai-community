@@ -6,10 +6,12 @@ import type { SessionUser } from '../data'
 import { api, errorMessage, loadSession, session } from '../state'
 import { useFileUploads, type UploadFile } from '../use-file-uploads'
 import FileUploadStatus from './FileUploadStatus.vue'
+import ProfileImageCropper from './ProfileImageCropper.vue'
 
+const props = withDefaults(defineProps<{ bannerAspect?: number }>(), { bannerAspect: 4 })
 const emit = defineEmits<{ saved: [user: SessionUser] }>()
 const route = useRoute(), router = useRouter()
-const avatarInput = ref<HTMLInputElement>(), bannerInput = ref<HTMLInputElement>(), nameInput = ref<HTMLInputElement>()
+const cropper = ref<InstanceType<typeof ProfileImageCropper>>(), nameInput = ref<HTMLInputElement>()
 const leaveDialog = ref<HTMLDialogElement>()
 const name = ref(''), bio = ref(''), avatarId = ref<string | null>(null), bannerId = ref<string | null>(null)
 const avatarUrl = ref(''), bannerUrl = ref(''), avatarFailed = ref(false), bannerFailed = ref(false)
@@ -89,11 +91,8 @@ async function saveProfile() {
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
   finally { if (current()) busy.value = false }
 }
-function uploadProfile(event: Event, field: 'avatar' | 'banner') {
-  const input = event.target as HTMLInputElement, file = input.files?.[0]
-  input.value = ''
-  if (!file || busy.value || !session.user) return
-  if (!file.type.startsWith('image/')) { error.value = '请选择图片。'; return }
+function uploadProfile(file: File, field: 'avatar' | 'banner') {
+  if (busy.value || !session.user) return
   const selection = field === 'avatar' ? avatarSelection : bannerSelection
   if (selection.value) uploads.remove(selection.value)
   selection.value = uploads.add([file])[0]!
@@ -118,18 +117,15 @@ function removeImage(field: 'avatar' | 'banner') {
     <form class="profile-form" @submit.prevent="saveProfile">
       <div class="profile-media">
         <div class="profile-media-item">
-          <img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" class="profile-avatar" @error="avatarFailed = true" />
-          <span v-else class="profile-avatar profile-placeholder" role="img" :aria-label="avatarFailed ? '头像暂时无法显示' : '尚未设置头像'">{{ (name || session.user?.username || '我').slice(0, 1) }}</span>
-          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="avatarInput?.click()"><Upload :size="16" />更换头像</button><button v-if="avatarId || avatarSelection" type="button" class="icon-button" aria-label="移除头像" title="移除头像" :disabled="busy" @click="removeImage('avatar')"><Trash2 :size="16" /></button><FileUploadStatus v-if="avatarSelection" :file="avatarSelection" :disabled="busy" @retry="uploads.retry(avatarSelection)" /></div>
+          <button type="button" class="profile-avatar profile-image-button" aria-label="更换头像" title="更换头像" :disabled="busy" @click="cropper?.choose('avatar')"><img v-if="avatarUrl && !avatarFailed" :src="avatarUrl" alt="当前头像" @error="avatarFailed = true" /><span v-else class="profile-placeholder">{{ (name || session.user?.username || '我').slice(0, 1) }}</span></button>
+          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="cropper?.choose('avatar')"><Upload :size="16" />更换头像</button><button v-if="avatarId || avatarSelection" type="button" class="icon-button" aria-label="移除头像" title="移除头像" :disabled="busy" @click="removeImage('avatar')"><Trash2 :size="16" /></button><FileUploadStatus v-if="avatarSelection" :file="avatarSelection" :disabled="busy" @retry="uploads.retry(avatarSelection)" /></div>
         </div>
         <div class="profile-media-item">
-          <a v-if="bannerUrl && !bannerFailed" :href="bannerUrl" target="_blank" rel="noopener noreferrer" class="profile-cover" aria-label="查看完整封面" title="查看完整封面"><img :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /></a>
-          <span v-else class="profile-cover profile-placeholder" role="img" :aria-label="bannerFailed ? '封面暂时无法显示' : '尚未设置封面'"><Image :size="24" /></span>
-          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="bannerInput?.click()"><Image :size="16" />更换封面</button><button v-if="bannerId || bannerSelection" type="button" class="icon-button" aria-label="移除封面" title="移除封面" :disabled="busy" @click="removeImage('banner')"><Trash2 :size="16" /></button><FileUploadStatus v-if="bannerSelection" :file="bannerSelection" :disabled="busy" @retry="uploads.retry(bannerSelection)" /></div>
+          <button type="button" class="profile-cover profile-image-button" aria-label="更换封面" title="更换封面" :disabled="busy" @click="cropper?.choose('banner', props.bannerAspect)"><img v-if="bannerUrl && !bannerFailed" :src="bannerUrl" alt="当前主页封面" @error="bannerFailed = true" /><Image v-else :size="24" /></button>
+          <div class="profile-media-actions"><button type="button" class="button subtle btn" :disabled="busy" @click="cropper?.choose('banner', props.bannerAspect)"><Image :size="16" />更换封面</button><button v-if="bannerId || bannerSelection" type="button" class="icon-button" aria-label="移除封面" title="移除封面" :disabled="busy" @click="removeImage('banner')"><Trash2 :size="16" /></button><FileUploadStatus v-if="bannerSelection" :file="bannerSelection" :disabled="busy" @retry="uploads.retry(bannerSelection)" /></div>
         </div>
       </div>
-      <input ref="avatarInput" hidden type="file" aria-label="头像" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'avatar')" />
-      <input ref="bannerInput" hidden type="file" aria-label="主页封面" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" :disabled="busy" @change="uploadProfile($event, 'banner')" />
+      <ProfileImageCropper :key="session.user?.id" ref="cropper" @cropped="uploadProfile" />
       <label class="field"><span class="field-label"><span id="profile-name-label">社区昵称</span><span class="field-count" aria-hidden="true">{{ name.length }}/50</span></span><input ref="nameInput" v-model="name" aria-labelledby="profile-name-label" class="control" autocomplete="nickname" maxlength="50" required :disabled="busy" @input="saved = false" /></label>
       <label class="field"><span class="field-label"><span id="profile-bio-label">个人简介</span><span class="field-count" aria-hidden="true">{{ bio.length }}/1500</span></span><textarea v-model="bio" aria-labelledby="profile-bio-label" class="control profile-bio" rows="3" maxlength="1500" :disabled="busy" placeholder="介绍一下自己，或分享你的创作方向…" @input="saved = false" /></label>
       <dl class="profile-identity"><div><dt>登录用户名</dt><dd>{{ session.user?.username }}</dd></div><div v-if="session.user?.accountId"><dt>章鱼号</dt><dd>{{ session.user.accountId }}</dd></div></dl>
@@ -149,6 +145,8 @@ function removeImage(field: 'avatar' | 'banner') {
 .profile-media { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .profile-media-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .profile-avatar { width: 64px; height: 64px; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-soft); }
+.profile-image-button { display: grid; place-items: center; padding: 0; border: 0; overflow: hidden; color: var(--muted); cursor: pointer; }
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .profile-placeholder { display: grid; place-items: center; color: var(--muted); font-size: 24px; }
 .profile-cover { width: 112px; height: 64px; flex: none; background: var(--surface-soft); border-radius: 6px; }
 .profile-cover img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }

@@ -212,7 +212,7 @@ function restoreMessageTrigger() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'account-settings-shell': accountSettings, 'studio-shell': studioPage, 'community-shell': communityShell, 'work-shell': workPage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
+  <div class="app-shell" :class="{ 'account-entry-shell': guestAccount, 'account-settings-shell': accountSettings, 'studio-shell': studioPage, 'community-shell': communityShell, 'work-shell': workPage, 'profile-shell': profilePage }" :style="studioPage ? { '--studio-visible-height': `${viewportHeight}px`, '--studio-sidebar-width': studioSidebarWidth ? `${studioSidebarWidth}px` : undefined } : undefined" @click="dismissMenus" @keydown.esc="dismissMenus">
     <a href="#main" class="skip-link">跳至内容</a>
     <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏">
       <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else>{{ site.brand.slice(0, 1) }}</span></RouterLink>
@@ -245,7 +245,7 @@ function restoreMessageTrigger() {
         <div class="mobile-header-actions"><button v-if="!accountSettings" ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>
       </div>
     </header>
-    <header v-else-if="!guestAccount" v-show="!accountSettings" class="app-header"><div class="header-inner">
+    <header v-else-if="!guestAccount" v-show="!accountSettings && !profilePage" class="app-header"><div class="header-inner">
       <RouterLink to="/discover" class="brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="brand-mark" :src="site.logoUrl" width="32" height="32" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <Teleport to="#community-rail-navigation" :disabled="!desktopCommunity" defer><nav class="desktop-nav" aria-label="主导航"><RouterLink v-for="link in links" :key="link.path" :to="link.path" class="nav-link" :class="{ active: isCurrent(link.path) }" :aria-label="link.label" :title="link.label" :aria-current="isCurrent(link.path) ? 'page' : undefined"><component v-if="communityShell" :is="link.icon" class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">{{ link.label }}</span></RouterLink></nav></Teleport>
       <div v-if="studioPage" id="studio-header-conversation" class="studio-header-conversation"><RouterLink v-if="!session.user" to="/discover" class="studio-home-link"><House :size="16" />返回社区</RouterLink></div>
@@ -390,7 +390,7 @@ function restoreMessageTrigger() {
 .community-shell .header-tools { width: 100%; min-width: 0; }
 @media (min-width: 1000px) {
   :global(:root:has(.community-shell)) { --header-height: 64px; }
-  :global(:root:has(.community-shell.account-settings-shell)) { --header-height: 0px; }
+  :global(:root:has(.community-shell:is(.account-settings-shell, .profile-shell))) { --header-height: 0px; }
   .community-shell { margin-left: 64px; }
   .community-shell > .app-header { height: 64px; }
   .community-shell .header-inner { display: flex; }
