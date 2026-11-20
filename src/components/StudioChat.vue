@@ -496,7 +496,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <button v-else-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
           <button v-else class="composer-submit send-button" :title="entryOnly ? '发送到创作台' : '发送'" :aria-label="entryOnly ? '发送到创作台' : '发送'" :disabled="!canSend"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
-        <div v-if="current.search !== 'off'" class="composer-feedback"><p class="search-cost">搜索与回答分别按章鱼账号配置计费。</p></div><p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
+        <p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
     </section>
     <section v-else class="chat-main">
@@ -531,8 +531,8 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
 .message-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; max-width: 100%; }.message-attachments img { display: block; width: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: 6px; }.attachment-image { max-width: 100%; border: 0; padding: 0; background: transparent; cursor: zoom-in; }.message-attachments video, .message-attachments audio { width: min(480px, 100%); max-width: 100%; }
 .chat-message > .reasoning, .chat-message > .tool-activity, .chat-message > .message-options, .chat-message > .message-editor { width: min(75ch, 100%); }
 .chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
-.context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }.composer-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding-inline: 8px; }.composer-feedback .search-cost { margin-inline: 0; }
-.composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.search-cost { margin: 4px 8px 0; font-size: 12px; color: var(--muted); }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
+.context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
 .message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; }.message-actions > .button:hover { color: var(--ink); background: var(--surface); }
 @media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }
 .attachment-video { position: relative; max-width: 100%; }.attachment-expand { position: absolute; top: 8px; right: 8px; background: rgb(0 0 0 / 65%); color: white; }

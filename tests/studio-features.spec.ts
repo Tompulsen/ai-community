@@ -82,6 +82,64 @@ test('search menu matches shared popovers, preserves choices and fits desktop an
   expect(errors).toEqual([])
 })
 
+for (const path of ['/discover', '/create/text']) {
+  test('search options show account points, auto ranges and unavailable prices on ' + path, async ({ page }) => {
+    await fixture(page)
+    let invalid = false, unavailable = false
+    await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto' }, { id: 'discount', name: '优惠分组' }] } } }))
+    await page.route('**/api/new-api/model-groups/select', route => route.fulfill({ json: { success: true, data: { group: route.request().postDataJSON().group, selectedTokenId: 42 } } }))
+    await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: unavailable ? { success: false, message: 'offline' } : { success: true, data: {
+      userId: invalid ? 18 : 17, currency: '积分', autoGroups: ['default', 'premium'], rows: [
+        { model: 'tavily-quick', group: 'default', requestPrice: 20 },
+        { model: 'tavily-quick', group: 'premium', requestPrice: 30 },
+        { model: 'tavily-deep', group: 'default', requestPrice: 80 },
+        { model: 'tavily-deep', group: 'premium', requestPrice: 80 },
+        { model: 'tavily-quick', group: 'discount', requestPrice: 0 },
+        { model: 'tavily-deep', group: 'discount', requestPrice: 0.125 },
+      ],
+    } } }))
+    await page.goto(path)
+    if (path === '/discover') await page.getByRole('button', { name: '文本对话', exact: true }).click()
+    for (const [width, mode] of [[1440, 'light'], [390, 'dark']] as const) {
+      await page.setViewportSize({ width, height: 950 })
+      await page.evaluate(mode => window.communityAppearance.set({ mode }), mode)
+      if (width < 640) await page.getByRole('button', { name: '对话参数', exact: true }).click()
+      await page.getByRole('button', { name: /^联网搜索：/ }).click()
+      const menu = page.getByRole('dialog', { name: '联网搜索', exact: true })
+      const quick = menu.getByRole('button', { name: '快速搜索', exact: true })
+      const deep = menu.getByRole('button', { name: '深度搜索', exact: true })
+      await expect(quick).toContainText('20–30 积分/次')
+      await expect(deep).toContainText('80 积分/次')
+      await expect(quick).toHaveAttribute('aria-description', '20–30 积分/次')
+      await expect(menu.getByRole('button', { name: '关闭联网', exact: true })).not.toContainText('积分')
+      expect(await menu.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+      await page.screenshot({ path: test.info().outputPath((path === '/discover' ? 'home' : 'studio') + '-search-price-' + width + '.png') })
+      await quick.click()
+      await expect(page.getByRole('button', { name: '联网搜索：快速搜索', exact: true })).toBeFocused()
+      if (width < 640) await page.keyboard.press('Escape')
+    }
+    await page.setViewportSize({ width: 1440, height: 950 })
+    await page.getByRole('combobox', { name: '模型', exact: true }).click()
+    const picker = page.getByRole('dialog', { name: '选择模型', exact: true })
+    await picker.getByRole('button', { name: '选择分组', exact: true }).click()
+    await picker.getByRole('button', { name: '优惠分组', exact: true }).click()
+    await picker.getByRole('button', { name: 'gpt-5', exact: true }).click()
+    await page.getByRole('button', { name: /^联网搜索：/ }).click()
+    const updated = page.getByRole('dialog', { name: '联网搜索', exact: true })
+    await expect(updated.getByRole('button', { name: '快速搜索', exact: true })).toContainText('0 积分/次')
+    await expect(updated.getByRole('button', { name: '深度搜索', exact: true })).toContainText('0.125 积分/次')
+    await page.keyboard.press('Escape')
+    for (const failure of ['account', 'network']) {
+      invalid = failure === 'account'; unavailable = failure === 'network'
+      await page.getByRole('button', { name: /^联网搜索：/ }).click()
+      const menu = page.getByRole('dialog', { name: '联网搜索', exact: true })
+      await expect(menu.getByRole('button', { name: '快速搜索', exact: true })).toContainText('暂不可用')
+      await expect(menu).not.toContainText('20–30')
+      await page.keyboard.press('Escape')
+    }
+  })
+}
+
 test('clear context sits above the composer and excludes old messages without deleting them', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/create/text')

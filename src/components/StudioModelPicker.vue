@@ -145,7 +145,7 @@ onBeforeUnmount(() => dialog.value?.close())
 <style scoped>
 .studio-model-trigger { position: relative; flex: 0 1 auto; width: max-content; max-width: min(220px, 100%); min-width: 0; }
 .model-trigger-width { visibility: hidden; pointer-events: none; min-height: 36px; padding: 8px 24px 8px 4px; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; }
-.studio-model-trigger input { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; outline: none; cursor: pointer; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
+.studio-model-trigger input { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; border-radius: inherit; outline: none; cursor: pointer; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
 .studio-model-trigger input[readonly] { caret-color: transparent; }
 .studio-select.studio-model-trigger:focus-within { outline: none; }
 .studio-model-trigger input:focus-visible { background: var(--surface-soft); color: var(--ink); }
