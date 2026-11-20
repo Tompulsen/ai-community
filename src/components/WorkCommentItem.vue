@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Download, Flag, Heart, MessageSquare, Trash2, X } from '@lucide/vue'
-import type { WorkComment } from '../data'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Download, Flag, Heart, MessageSquare, RefreshCw, Trash2, Video, X } from '@lucide/vue'
+import type { WorkComment, WorkFile } from '../data'
 import { api, errorMessage, notify, queryString, session } from '../state'
 
 const props = defineProps<{ comment: WorkComment; workId: string; depth?: number; refresh?: number }>()
@@ -13,6 +13,42 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
 const confirm = ref<HTMLDialogElement>()
+const element = ref<HTMLElement>(), mediaStalled = ref(false), mediaError = ref('')
+const processing = computed(() => props.comment.files?.some(file => file.processing === 'pending' || file.processing === 'processing'))
+let mediaTimer: ReturnType<typeof setTimeout> | undefined, mediaController: AbortController | undefined
+let observer: IntersectionObserver | undefined, visible = false, mediaAttempts = 0, mediaFailures = 0, disposed = false
+function scheduleMedia() {
+  clearTimeout(mediaTimer)
+  if (disposed || !visible || document.hidden || !processing.value || mediaController || mediaAttempts >= 12 || mediaFailures >= 3) return
+  mediaTimer = setTimeout(() => { void refreshMedia() }, 5000)
+}
+async function refreshMedia(manual = false) {
+  if (mediaController || disposed) return
+  if (manual) { mediaAttempts = 0; mediaFailures = 0 }
+  const current = props.comment, controller = new AbortController(); mediaController = controller
+  mediaAttempts++; mediaError.value = ''
+  try {
+    const result = await api<{ files: WorkFile[] }>(`/api/works/${encodeURIComponent(props.workId)}/comments/${encodeURIComponent(current.id)}/files`, { signal: controller.signal })
+    if (!disposed && props.comment === current && !controller.signal.aborted) { current.files = result.files; mediaFailures = 0 }
+  } catch (cause) { if (!controller.signal.aborted) { mediaFailures++; mediaError.value = errorMessage(cause) } }
+  finally {
+    if (mediaController === controller) mediaController = undefined
+    mediaStalled.value = Boolean(processing.value && (mediaAttempts >= 12 || mediaFailures >= 3))
+    scheduleMedia()
+  }
+}
+watch(processing, scheduleMedia)
+function mediaVisibility() { if (document.hidden) clearTimeout(mediaTimer); else scheduleMedia() }
+onMounted(() => {
+  observer = new IntersectionObserver(entries => {
+    visible = entries.some(entry => entry.isIntersecting)
+    if (!visible) { clearTimeout(mediaTimer); mediaController?.abort() }
+    else scheduleMedia()
+  })
+  if (element.value) observer.observe(element.value)
+  document.addEventListener('visibilitychange', mediaVisibility)
+})
+onBeforeUnmount(() => { disposed = true; clearTimeout(mediaTimer); mediaController?.abort(); observer?.disconnect(); document.removeEventListener('visibilitychange', mediaVisibility) })
 async function load(append = false) {
   if (loading.value) return
   loading.value = true; error.value = ''
@@ -49,10 +85,11 @@ function removed(child: WorkComment) { replies.value = replies.value.filter(item
 </script>
 
 <template>
-  <article :id="`comment-${comment.id}`" class="comment-item">
+  <article ref="element" :id="`comment-${comment.id}`" class="comment-item">
     <div class="comment-heading"><RouterLink :to="{ path: '/community', query: { creator: comment.authorId || comment.userId } }" class="comment-author"><span class="avatar blue"><img v-if="comment.authorAvatarUrl" :src="comment.authorAvatarUrl" :alt="comment.author" /><span v-else>{{ comment.author.slice(0, 1) }}</span></span><strong>{{ comment.author }}</strong></RouterLink><time v-if="comment.date" class="caption-5">{{ new Date(comment.date).toLocaleString('zh-CN') }}</time></div>
     <p class="comment-text">{{ comment.text }}</p>
-    <div v-if="comment.files?.length" class="comment-media"><a v-for="file in comment.files" :key="file.id" :href="file.url" target="_blank" rel="noopener noreferrer"><img v-if="file.type.startsWith('image/')" :src="file.thumbnailUrl || file.url" :alt="file.name" loading="lazy" /><video v-else-if="file.type.startsWith('video/')" :src="file.url" controls playsinline preload="metadata" /><span v-else>{{ file.name }}<Download :size="14" /></span></a></div>
+    <div v-if="comment.files?.length" class="comment-media"><figure v-for="file in comment.files" :key="file.id"><a :href="file.url" target="_blank" rel="noopener noreferrer"><img v-if="file.type.startsWith('image/')" :src="file.thumbnailUrl || file.url" :alt="file.name" loading="lazy" /><video v-else-if="file.type.startsWith('video/') && (!file.processing || file.processing === 'ready')" :src="file.url" controls playsinline preload="metadata" /><span v-else><Video v-if="file.type.startsWith('video/')" :size="18" />{{ file.name }}<Download :size="14" /></span></a><figcaption v-if="file.processing && file.processing !== 'ready'" role="status">{{ file.processing === 'failed' ? '素材处理失败，原文件已保留' : '素材处理中' }}</figcaption></figure></div>
+    <p v-if="mediaError && mediaStalled" class="form-error" role="alert">{{ mediaError }}</p><button v-if="mediaStalled" type="button" class="text-link media-refresh" @click="refreshMedia(true)"><RefreshCw :size="14" />刷新素材状态</button>
     <RouterLink v-if="comment.sourceWorkId" :to="`/work/${comment.sourceWorkId}`" class="text-link">查看同款作品</RouterLink>
     <div class="comment-actions"><button class="button subtle btn" :aria-pressed="!!comment.liked" :disabled="busy" :aria-label="`点赞评论，${comment.likesCount ?? comment.likes ?? 0} 赞`" @click="like"><Heart :size="15" />{{ comment.likesCount ?? comment.likes ?? 0 }}</button><button v-if="session.user" class="button subtle btn" @click="emit('reply', comment)"><MessageSquare :size="15" />回复</button><button v-if="comment.repliesCount || expanded" class="text-link" :aria-expanded="expanded" @click="showReplies">{{ expanded ? '收起回复' : `查看 ${comment.repliesCount} 条回复` }}</button><button v-if="session.user && !comment.owned" class="icon-button" aria-label="举报评论" title="举报评论" @click="emit('report', comment)"><Flag :size="15" /></button><button v-if="comment.removable" class="icon-button" aria-label="删除评论" title="删除评论" @click="confirm?.showModal()"><Trash2 :size="15" /></button></div>
     <p v-if="error" class="form-error" role="alert">{{ error }}<button class="text-link" @click="load()">重试</button></p>
@@ -68,6 +105,7 @@ function removed(child: WorkComment) { replies.value = replies.value.filter(item
 .comment-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; }
 .comment-actions { margin-top: 12px; }
 .comment-media { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.comment-media figure { margin: 0; min-width: 0; max-width: 100%; }.comment-media a { display: block; overflow-wrap: anywhere; }.comment-media figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }.media-refresh { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; }
 .comment-media img, .comment-media video { max-width: 100%; width: 200px; max-height: 240px; object-fit: contain; border-radius: 4px; }
 .comment-replies { margin-left: 16px; }
 .comment-replies-flat { margin-left: 0; }

@@ -185,7 +185,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   register(handleContent, [
     [['GET', 'HEAD'], ['/legacy-files/:id', '/files/:key']],
     ['GET', ['/api/works', '/api/community/works', '/api/library', '/api/admin/submissions', '/api/tags', '/api/creators', '/api/announcements',
-      '/api/users/:id', '/api/users/:id/followers', '/api/users/:id/following', '/api/uploads/limits', '/api/uploads/:id']],
+      '/api/users/:id', '/api/users/:id/followers', '/api/users/:id/following', '/api/uploads/limits', '/api/uploads/:id', '/api/works/:id/comments/:commentId/files']],
     ['POST', ['/api/uploads', '/api/works', '/api/admin/submissions/:id/review', '/api/works/:id/like', '/api/works/:id/save', '/api/users/:id/follow',
       '/api/works/:id/view', '/api/works/:id/repost', '/api/works/:id/report', '/api/reports', '/api/works/:id/comments/:commentId/like']],
     [['GET', 'POST'], ['/api/works/:id/comments']],

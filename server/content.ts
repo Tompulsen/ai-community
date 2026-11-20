@@ -78,6 +78,12 @@ interface CommunityRow extends CommunityRevision {
 
 interface IdRow { id: string }
 interface AttachmentRow extends IdRow { type: string }
+async function commentAttachments(db: Queryable, ids: string[], owner: string, lock = false) {
+  if (!ids.length) return [];
+  const result = await db.query<{ id: string; name: string; type: string; size: number; url: string; thumbnailAccessKey: string | null; properties: Record<string, unknown> | null }>(
+    `SELECT id,name,type,size,url,"thumbnailAccessKey",properties FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 ORDER BY id${lock ? ' FOR KEY SHARE' : ''}`, [ids, owner]);
+  return result.rows.map(fileDto);
+}
 interface DriveFileRow extends AttachmentRow {
   name: string;
   size: number;
@@ -985,7 +991,7 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
     const identities = await readPublicIdentities(ctx, result.rows.slice(0, limit).map(row => row.userId));
     for (const row of result.rows.slice(0, limit)) {
       const identity = identities.get(row.userId);
-      const files = row.fileIds?.length ? (await ctx.db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'size'>>('SELECT id,name,type,size FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 ORDER BY id', [row.fileIds, row.userId])).rows : [];
+      const files = await commentAttachments(ctx.db, row.fileIds || [], row.userId);
       const remixed = row.renoteId ? (await ctx.db.query<IdRow>(`SELECT s.id FROM community_submission s JOIN "user" u ON u.id=s."authorId"
         JOIN note n ON n.id=s."approvedNoteId" WHERE n.id=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), row.renoteId])).rows[0] : null;
       items.push({ id: row.id, text: row.text, userId: row.userId, author: row.name || identity?.username || (identity ? '章鱼用户' : row.username),
@@ -994,7 +1000,7 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
         authorId: row.userId, authorAvatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null,
         date: new Date(legacyIdTime(row.id, ctx.config?.id) || Date.now()).toISOString(),
         likes: Number(row.likes ?? 0), likesCount: Number(row.likes ?? 0), liked: Boolean(row.liked), repliesCount: Number(row.repliesCount ?? 0),
-        files: files.map(file => ({ ...file, url: `/legacy-files/${file.id}` })), ...(remixed ? { sourceWorkId: remixed.id } : {}),
+        files, ...(remixed ? { sourceWorkId: remixed.id } : {}),
         owned: row.userId === viewer(ctx), removable: row.userId === viewer(ctx) || work.authorId === viewer(ctx) || Boolean(ctx.user?.isModerator || ctx.user?.isAdmin) });
     }
     return send(ctx, 200, { items, nextCursor: result.rows.length > limit ? result.rows[limit - 1].id : null });
@@ -1014,7 +1020,7 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
       const parent = await visibleComment(ctx, db, locked, identifier(parentId), true);
       recipient = parent.userId;
     }
-    const files = fileIds.length ? (await db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'size'>>('SELECT id,name,type,size FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2 FOR KEY SHARE', [fileIds, actor.id])).rows : [];
+    const files = await commentAttachments(db, fileIds, actor.id, true);
     if (files.length !== fileIds.length) fail(400, 'An attachment is missing or belongs to another account');
     await db.query('INSERT INTO note (id,"userId",text,visibility,"localOnly","replyId","threadId","replyUserId","fileIds","attachedFileTypes") VALUES ($1,$2,$3,\'public\',true,$4,$5,$6,$7,$8)', [id, actor.id, body || null, parentId, locked.approvedNoteId, recipient, fileIds, files.map(file => file.type)]);
     await db.query('UPDATE note SET "repliesCount"=LEAST(32767,"repliesCount"+1) WHERE id=$1', [parentId]);
@@ -1025,7 +1031,7 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
   return send(ctx, 201, { comment: { id, text: body, parentId: result.parentId === work.approvedNoteId ? null : result.parentId,
     userId: actor.id, authorId: actor.id, author: actor.name || actor.username, authorUsername: actor.username,
     ...(actor.accountId ? { authorAccountId: actor.accountId } : {}), authorAvatarUrl: actor.avatarId ? `/legacy-files/${actor.avatarId}?variant=thumbnail` : null,
-    date: new Date().toISOString(), fileIds, files: result.files.map(file => ({ ...file, url: `/legacy-files/${file.id}` })), likesCount: 0, likes: 0, liked: false, repliesCount: 0,
+    date: new Date().toISOString(), fileIds, files: result.files, likesCount: 0, likes: 0, liked: false, repliesCount: 0,
     owned: true, removable: true } });
 }
 
@@ -1280,6 +1286,11 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   if ((match = /^\/api\/users\/([a-zA-Z0-9]+)\/follow$/.exec(path)) && method === 'POST') return handleFollowing(ctx);
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments$/.exec(path)) && (method === 'GET' || method === 'POST')) return comments(ctx, identifier(match[1]));
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments\/([a-zA-Z0-9]+)\/like$/.exec(path)) && method === 'POST') return commentLike(ctx, identifier(match[1]), identifier(match[2]));
+  if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments\/([a-zA-Z0-9]+)\/files$/.exec(path)) && method === 'GET') {
+    const work = await accessibleWork(ctx, identifier(match[1]));
+    const comment = await visibleComment(ctx, ctx.db, work, identifier(match[2]));
+    return send(ctx, 200, { files: await commentAttachments(ctx.db, comment.fileIds || [], comment.userId) });
+  }
   if ((match = /^\/api\/works\/([a-zA-Z0-9]+)\/comments\/([a-zA-Z0-9]+)$/.exec(path)) && method === 'DELETE') {
     const actor = user(ctx);
     const workId = identifier(match[1]), commentId = identifier(match[2]);

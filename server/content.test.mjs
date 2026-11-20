@@ -232,6 +232,59 @@ test('work authors and comments use the current local nickname while retaining v
   }
 });
 
+test('comment attachment refresh enforces work/comment visibility and attachment ownership', async () => {
+  const ctx = context({ path: '/api/works/work1/comments/comment1/files', query: async (sql, args) => {
+    if (sql.includes('FROM community_submission s')) { assert(sql.includes('blocking')); return { rows: [workRow] }; }
+    if (sql.includes('FROM note n JOIN')) {
+      assert.deepEqual(args, [null, 'comment1', 'note1']);
+      assert(sql.includes('(n."replyId"=$3 OR n."threadId"=$3)'));
+      assert(sql.includes("n.visibility='public'")); assert(sql.includes('isSuspended'));
+      return { rows: [{ id: 'comment1', userId: 'reader1', fileIds: ['file1'] }] };
+    }
+    if (sql.includes('FROM drive_file')) {
+      assert.deepEqual(args, [['file1'], 'reader1']); assert(sql.includes('"userId"=$2'));
+      return { rows: [{ id: 'file1', name: 'clip.mp4', type: 'video/mp4', size: 50, thumbnailAccessKey: 'thumb', properties: { communityMedia: { state: 'processing' } } }] };
+    }
+    return { rows: [] };
+  } });
+  await handleContent(ctx);
+  assert.deepEqual(ctx.result.payload.files, [{ id: 'file1', name: 'clip.mp4', type: 'video/mp4', size: 50, url: '/legacy-files/file1', thumbnailUrl: '/legacy-files/file1?variant=thumbnail', processing: 'processing' }]);
+  for (const hidden of ['work', 'comment']) {
+    let readFiles = false;
+    const denied = context({ path: '/api/works/work1/comments/comment1/files', query: async sql => {
+      if (sql.includes('FROM drive_file')) readFiles = true;
+      return { rows: hidden === 'comment' && sql.includes('FROM community_submission s') ? [workRow] : [] };
+    } });
+    await assert.rejects(handleContent(denied), error => error.statusCode === 404);
+    assert.equal(readFiles, false);
+  }
+});
+
+test('comments accept uploaded media before processing finishes and retain file locks and ownership checks', async () => {
+  for (const owned of [true, false]) {
+    const statements = [];
+    const ctx = context({ method: 'POST', path: '/api/works/work1/comments', user: { id: 'reader1', name: 'Reader', username: 'reader' },
+      body: { text: 'media comment', fileIds: ['file1'] }, query: async (sql, args) => {
+        statements.push(sql);
+        if (sql.includes('FROM community_submission s')) return { rows: [workRow] };
+        if (sql.includes('FROM drive_file')) {
+          assert.match(sql, /FOR KEY SHARE$/); assert.deepEqual(args, [['file1'], 'reader1']);
+          return { rows: owned ? [{ id: 'file1', name: 'clip.mp4', type: 'video/mp4', size: 50, properties: { communityMedia: { state: 'pending' } } }] : [] };
+        }
+        return { rows: [] };
+      } });
+    ctx.db.connect = async () => ({ query: ctx.db.query, release() {} }); ctx.newId = () => 'savedcomment';
+    if (owned) {
+      await handleContent(ctx);
+      assert.equal(ctx.result.status, 201); assert.equal(ctx.result.payload.comment.files[0].processing, 'pending');
+      assert(statements.includes('COMMIT')); assert(statements.some(sql => sql.startsWith('INSERT INTO note')));
+    } else {
+      await assert.rejects(handleContent(ctx), error => error.statusCode === 400);
+      assert(statements.includes('ROLLBACK')); assert(!statements.some(sql => sql.startsWith('INSERT INTO note')));
+    }
+  }
+});
+
 test('generation recipes survive normalization with public options only and reject invalid values', () => {
   const parameters = { version: 1, kind: 'video', group: '视频', size: '720x1280', aspect_ratio: '9:16', n: 1, duration: 8,
     tokenId: 99, apiKey: 'private', videoOptions: { mode: 'text-to-video', seed: '42', openaiImageUrl: 'https://private.example/image', openaiFileId: 'private',

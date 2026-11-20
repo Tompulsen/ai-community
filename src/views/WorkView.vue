@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { ArrowLeft, ChevronRight, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, Send, WandSparkles, X } from '@lucide/vue'
-import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork, uploadFile } from '../state'
+import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { ArrowLeft, ChevronRight, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, RotateCw, Send, Trash2, WandSparkles, X } from '@lucide/vue'
+import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork } from '../state'
 import { kindLabels, type Creator, type Work, type WorkComment, type WorkFile } from '../data'
 import RelatedWorks from '../components/RelatedWorks.vue'
 import FollowButton from '../components/FollowButton.vue'
 import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
+import CommentAttachments from '../components/CommentAttachments.vue'
+import { useCommentComposer } from '../use-comment-composer'
 const WorkRemixDialog = defineAsyncComponent(() => import('../components/WorkRemixDialog.vue'))
 const remixOpen = ref(false), remixButton = ref<HTMLButtonElement>()
 function openRemix() { mediaBrowser.value?.pause(); remixOpen.value = true }
@@ -25,8 +27,30 @@ const longPrompt = computed(() => (work.value?.prompt?.length || 0) > 180 || (wo
 const files = computed<WorkFile[]>(() => work.value?.files?.length ? work.value.files : work.value?.video ? [{ id: 'video', name: work.value.title, type: 'video/mp4', url: work.value.video }] : work.value?.cover ? [{ id: 'cover', name: work.value.title, type: 'image/jpeg', url: work.value.cover }] : [])
 const loading = ref(true), error = ref('')
 const comments = ref<WorkComment[]>([]), commentsCursor = ref<string | null>(null)
-const commentsLoading = ref(false), commentText = ref(''), commentFiles = ref<WorkFile[]>([]), commentError = ref(''), commentBusy = ref(false)
-const replyTo = ref<WorkComment | null>(null), commentInput = ref<HTMLTextAreaElement>(), commentsRefresh = ref(0)
+const commentsLoading = ref(false), commentError = ref('')
+const commentInput = ref<HTMLTextAreaElement>(), commentsRefresh = ref(0)
+const composer = useCommentComposer(work, (comment, parent) => {
+  if (parent) { parent.repliesCount = (parent.repliesCount || 0) + 1; commentsRefresh.value++ }
+  else comments.value.unshift(comment)
+  if (work.value) work.value.repliesCount = (work.value.repliesCount || 0) + 1
+})
+const { text: commentText, attachments: commentFiles, replyTo, pending: pendingComments, error: uploadError, canSend } = composer
+const leaveDialog = ref<HTMLDialogElement>()
+let resolveLeave: ((accepted: boolean) => void) | undefined
+function confirmLeave() {
+  if (!session.user || !composer.dirty.value) return true
+  if (resolveLeave) return false
+  leaveDialog.value?.showModal()
+  return new Promise<boolean>(resolve => { resolveLeave = resolve })
+}
+function finishLeave(accepted: boolean) {
+  if (accepted) composer.reset()
+  leaveDialog.value?.close(); resolveLeave?.(accepted); resolveLeave = undefined
+}
+onBeforeRouteLeave(confirmLeave)
+onBeforeRouteUpdate(to => to.params.id === route.params.id ? true : confirmLeave())
+function beforeUnload(event: BeforeUnloadEvent) { if (session.user && composer.dirty.value) { event.preventDefault(); event.returnValue = '' } }
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 const reposting = ref(false), reportDialog = ref<HTMLDialogElement>(), reportComment = ref<WorkComment | null>(null), reportReason = ref(''), reportError = ref(''), reporting = ref(false)
 const shareDialog = ref<HTMLDialogElement>(), recipients = ref<Creator[]>([]), recipient = ref(''), shareError = ref(''), sharing = ref(false), shareRequestId = ref(crypto.randomUUID())
 let controller: AbortController | undefined
@@ -36,7 +60,7 @@ async function load() {
   const active = new AbortController(); controller = active
   commentsDialog.value?.close(); relatedDialog.value?.close(); remixOpen.value = false
   loading.value = true; error.value = ''; work.value = null; comments.value = []; commentsCursor.value = null
-  replyTo.value = null; commentText.value = ''; commentFiles.value = []; promptExpanded.value = false
+  composer.reset(); promptExpanded.value = false
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(String(route.params.id))}`, { signal: active.signal })
     if (active.signal.aborted) return
@@ -49,7 +73,7 @@ async function load() {
   finally { if (!active.signal.aborted) loading.value = false }
 }
 watch(() => route.params.id, () => { void load() }, { immediate: true })
-onBeforeUnmount(() => controller?.abort())
+onBeforeUnmount(() => { controller?.abort(); window.removeEventListener('beforeunload', beforeUnload); finishLeave(false) })
 async function copyPrompt() {
   try { await navigator.clipboard.writeText(work.value?.prompt || ''); notify('提示词已复制。') }
   catch { notify('复制失败，请选择文字复制。') }
@@ -68,11 +92,7 @@ async function loadComments(append = false, signal?: AbortSignal) {
 }
 async function chooseCommentFiles(event: Event) {
   const input = event.target as HTMLInputElement, selected = [...(input.files || [])]; input.value = ''
-  if (commentFiles.value.length + selected.length > 16) { commentError.value = '评论最多添加 16 个文件。'; return }
-  commentBusy.value = true; commentError.value = ''
-  try { for (const file of selected) commentFiles.value.push(await uploadFile(file, controller?.signal)) }
-  catch (cause) { commentError.value = errorMessage(cause) }
-  finally { commentBusy.value = false }
+  composer.add(selected)
 }
 async function reply(comment: WorkComment) { replyTo.value = comment; await focusComments(); }
 async function focusComments() {
@@ -81,17 +101,6 @@ async function focusComments() {
   await nextTick()
   if (commentInput.value) commentInput.value.focus()
   else document.getElementById('comments-heading')?.scrollIntoView({ block: 'nearest' })
-}
-async function postComment() {
-  if (!work.value || (!commentText.value.trim() && !commentFiles.value.length) || commentBusy.value) return
-  commentBusy.value = true; commentError.value = ''
-  try {
-    const result = await api<{ comment: WorkComment }>(`/api/works/${encodeURIComponent(work.value.id)}/comments`, { method: 'POST', body: { text: commentText.value.trim(), replyToId: replyTo.value?.id, fileIds: commentFiles.value.map(file => file.id) } })
-    if (replyTo.value) { replyTo.value.repliesCount = (replyTo.value.repliesCount || 0) + 1; commentsRefresh.value++ } else comments.value.unshift(result.comment)
-    work.value.repliesCount = (work.value.repliesCount || 0) + 1
-    replyTo.value = null; commentText.value = ''; commentFiles.value = []; notify('评论已发布。')
-  } catch (cause) { commentError.value = errorMessage(cause) }
-  finally { commentBusy.value = false }
 }
 async function repost() {
   if (!work.value || reposting.value) return
@@ -163,6 +172,13 @@ async function share() {
             <section v-if="['published', 'approved'].includes(work.status)" class="work-comments" aria-labelledby="comments-heading">
               <div class="section-heading"><h2 id="comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2></div>
               <p v-if="commentsLoading && !comments.length" class="form-note" role="status">正在加载评论…</p>
+              <article v-for="entry in pendingComments" :key="entry.id" class="pending-comment" :data-send-state="entry.state" aria-label="待发送的评论">
+                <div class="pending-comment-heading"><strong>{{ session.user?.name || session.user?.username }}</strong><span role="status">{{ entry.state === 'failed' ? '发送失败' : entry.state === 'sending' ? '发送中' : '等待附件上传' }}</span></div>
+                <span v-if="entry.replyTo" class="pending-reply">回复 {{ entry.replyTo.author }}</span><p v-if="entry.text" class="pending-comment-text">{{ entry.text }}</p>
+                <CommentAttachments :items="entry.attachments" @retry="composer.retryAttachment" />
+                <p v-if="entry.error" class="form-error" role="alert">{{ entry.error }}</p>
+                <div v-if="entry.state === 'failed'" class="pending-comment-actions"><button type="button" class="button subtle btn" @click="composer.retry(entry)"><RotateCw :size="15" />重试发送</button><button type="button" class="icon-button" aria-label="放弃这条评论" title="放弃这条评论" @click="composer.discard(entry)"><Trash2 :size="15" /></button></div>
+              </article>
               <WorkCommentItem v-for="comment in comments" :key="comment.id" :comment="comment" :work-id="work.id" :refresh="commentsRefresh" @reply="reply" @report="openReport" @deleted="comments = comments.filter(item => item.id !== $event.id)" />
               <p v-if="!commentsLoading && !comments.length && !commentError" class="form-note">暂无评论</p>
               <button v-if="commentsCursor" class="button btn" :disabled="commentsLoading" @click="loadComments(true)">加载更多评论</button>
@@ -184,13 +200,14 @@ async function share() {
           <Teleport to="#mobile-work-comment-entry" :disabled="!mobile" defer>
           <div v-if="['published', 'approved'].includes(work.status)" class="detail-comment-entry">
             <p v-if="commentError" class="form-error" role="alert">{{ commentError }} <button class="text-link" @click="loadComments()">刷新评论</button></p>
-            <form v-if="session.user" class="comment-composer" @submit.prevent="postComment">
+            <form v-if="session.user" class="comment-composer" @submit.prevent="composer.send">
               <div v-if="replyTo" class="reply-banner"><span>回复 {{ replyTo.author }}</span><button type="button" class="icon-button" aria-label="取消回复" @click="replyTo = null"><X :size="16" /></button></div>
-              <div v-if="commentFiles.length" class="comment-files"><span v-for="(file, index) in commentFiles" :key="file.id" class="tag-button">{{ file.name }}<button type="button" class="icon-button" :aria-label="`移除 ${file.name}`" :disabled="commentBusy" @click="commentFiles.splice(index, 1)"><X :size="14" /></button></span></div>
+              <CommentAttachments :items="commentFiles" removable @remove="composer.remove" @retry="composer.retryAttachment" />
+              <p v-if="uploadError" class="form-error" role="alert">{{ uploadError }}</p>
               <div class="comment-input-row">
-                <textarea ref="commentInput" v-model="commentText" class="control" :aria-label="replyTo ? '回复内容' : '发表评论'" :placeholder="replyTo ? `回复 ${replyTo.author}` : '添加评论'" maxlength="3000" rows="1" :disabled="commentBusy" />
-                <label class="icon-button comment-upload" title="添加附件"><ImagePlus :size="20" /><input type="file" multiple :disabled="commentBusy" aria-label="评论附件" @change="chooseCommentFiles" /></label>
-                <button class="icon-button" aria-label="发布评论" :aria-busy="commentBusy" title="发布评论" :disabled="commentBusy || (!commentText.trim() && !commentFiles.length)"><Send :size="20" /></button>
+                <textarea ref="commentInput" v-model="commentText" class="control" :aria-label="replyTo ? '回复内容' : '发表评论'" :placeholder="replyTo ? `回复 ${replyTo.author}` : '添加评论'" maxlength="3000" rows="1" />
+                <label class="icon-button comment-upload" title="添加附件"><ImagePlus :size="20" /><input type="file" multiple aria-label="评论附件" @change="chooseCommentFiles" /></label>
+                <button class="icon-button" aria-label="发布评论" title="发布评论" :disabled="!canSend"><Send :size="20" /></button>
               </div>
             </form>
             <RouterLink v-else :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="comment-login text-link">登录后发表评论</RouterLink>
@@ -199,6 +216,7 @@ async function share() {
         </section>
       </article>
     </div>
+    <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="comment-leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="comment-leave-heading">评论尚未保存</h2><button type="button" class="icon-button" aria-label="继续编辑评论" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>仍有草稿或未发送成功的评论，离开会丢失这些内容。</p><button type="button" class="button btn" @click="finishLeave(false)">继续编辑</button><button type="button" class="button subtle btn" @click="finishLeave(true)">放弃并离开</button></div></dialog>
     <dialog ref="commentsDialog" class="mobile-comments-dialog" aria-labelledby="mobile-comments-heading" @click="($event.target === commentsDialog) && commentsDialog?.close()"><div class="dialog-heading"><h2 id="mobile-comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2><button class="icon-button" aria-label="关闭评论" @click="commentsDialog?.close()"><X :size="20" /></button></div><div id="mobile-work-comments" /><div id="mobile-work-comment-entry" /></dialog>
     <dialog ref="relatedDialog" class="mobile-related-dialog" aria-labelledby="mobile-related-heading" @click="($event.target === relatedDialog) && relatedDialog?.close()"><div class="dialog-heading"><h2 id="mobile-related-heading">同类作品</h2><button class="icon-button" aria-label="关闭更多作品" @click="relatedDialog?.close()"><X :size="20" /></button></div><div id="mobile-related-content" /></dialog>
     <dialog ref="reportDialog" class="compact-dialog" aria-labelledby="report-heading"><div class="dialog-heading"><h2 id="report-heading">{{ reportComment ? '举报评论' : '举报作品' }}</h2><button class="icon-button" aria-label="关闭举报" :disabled="reporting" @click="reportDialog?.close()"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="report"><label class="field"><span>举报原因</span><textarea v-model="reportReason" class="control" required rows="4" maxlength="2000" :disabled="reporting" /></label><p v-if="reportError" role="alert" class="form-error">{{ reportError }}</p><button class="button btn primary" :disabled="reporting || !reportReason.trim()"><Flag :size="16" />提交举报</button></form></dialog>
@@ -271,6 +289,7 @@ async function share() {
 .work-comments :deep(.comment-actions .button) { min-height: 32px; padding: 4px 8px; font-size: 12px; background: transparent; }
 .detail-comment-entry { flex: none; padding-block: 12px; }
 .comment-composer { display: flex; flex-direction: column; gap: 8px; }
+.pending-comment { padding-block: 16px; min-width: 0; }.pending-comment-heading, .pending-comment-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.pending-comment-heading { justify-content: space-between; font-size: 13px; }.pending-comment-heading span, .pending-reply { font-size: 12px; color: var(--muted); }.pending-comment-text { margin-block: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }.pending-comment-actions { margin-top: 8px; }
 .comment-input-row { display: flex; align-items: flex-end; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; }
 .comment-input-row:focus-within { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .comment-input-row textarea { flex: 1; width: 0; min-width: 0; min-height: 44px; max-height: 144px; padding: 10px 8px; border: 0; outline: 0; background: transparent; resize: vertical; font-size: 14px; line-height: 24px; }
@@ -279,9 +298,8 @@ async function share() {
 .comment-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .comment-login { display: flex; align-items: center; min-height: 44px; font-size: 14px; }
 .avatar { overflow: hidden; }.avatar img { width: 100%; height: 100%; object-fit: cover; }
-.reply-banner, .comment-files { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.reply-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .reply-banner { justify-content: space-between; color: var(--muted); font-size: 12px; }
-.comment-files .tag-button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 @media (min-width: 1000px) {
   .detail-create .view-count { display: none; }
 }

@@ -106,6 +106,19 @@ describe('real API state', () => {
     await loadSession(true)
     expect(session.user).toBeNull()
   })
+  it('cancels a pending upload-limit request without occupying the upload queue', async () => {
+    fetchMock.mockImplementation((_: string, options: RequestInit) => new Promise<Response>((_, reject) => {
+      options.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    }))
+    const { session, uploadFile } = await import('./state')
+    session.user = user
+    const controller = new AbortController()
+    const pending = uploadFile(new File(['image'], 'picture.png', { type: 'image/png' }), controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal)
+  })
   it('never uploads into another account after waiting for upload limits', async () => {
     let resolve!: (value: Response) => void
     fetchMock.mockReturnValue(new Promise<Response>(done => { resolve = done }))
@@ -144,6 +157,35 @@ describe('real API state', () => {
     const { api } = await import('./state')
     await expect(api('https://other.example/api/works')).rejects.toThrow('无效')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it.each(['DELETE', 'POST', 'PATCH'] as const)('sends an empty JSON object for a %s without an explicit body', async method => {
+    const { session, api } = await import('./state')
+    session.csrfToken = 'csrf'
+    fetchMock.mockImplementation(async (_path: string, options: RequestInit) => {
+      if (new Headers(options.headers).get('Content-Type') !== 'application/json') return response({ message: '请使用正确的请求格式提交。' }, 415)
+      if (options.body !== '{}') return response({ message: 'body must be object' }, 400)
+      return response({ deleted: true })
+    })
+    await expect(api('/api/works/oldWork1/comments/comment1', { method })).resolves.toEqual({ deleted: true })
+    expect(fetchMock).toHaveBeenCalledWith('/api/works/oldWork1/comments/comment1', expect.objectContaining({
+      method, credentials: 'same-origin', body: '{}',
+      headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf' }),
+    }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('keeps GET requests bodyless and lets the browser encode multipart boundaries', async () => {
+    const { api } = await import('./state')
+    fetchMock.mockImplementation(async () => response({ ok: true }))
+    await api('/api/works')
+    const get = fetchMock.mock.calls[0]![1] as RequestInit
+    expect(get.body).toBeUndefined()
+    expect(new Headers(get.headers).has('Content-Type')).toBe(false)
+    const body = new FormData()
+    body.append('file', new File(['image'], 'image.png', { type: 'image/png' }))
+    await api('/api/uploads', { method: 'POST', body })
+    const upload = fetchMock.mock.calls[1]![1] as RequestInit
+    expect(upload.body).toBe(body)
+    expect(new Headers(upload.headers).has('Content-Type')).toBe(false)
   })
   it('clears the current identity on an expired session and reports the backend reason', async () => {
     fetchMock.mockResolvedValue(response({ error: { message: 'Session expired' } }, 401))

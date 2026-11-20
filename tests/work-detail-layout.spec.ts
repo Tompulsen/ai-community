@@ -96,7 +96,32 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
   expect(errors).toEqual([])
 })
 
-test('desktop comments stay available and failed submission preserves the reply draft', async ({ page }) => {
+test('an owned comment can be deleted through the confirmation dialog with a valid JSON request', async ({ page }) => {
+  await fixture(page)
+  let deleted = false, attempts = 0
+  await page.route('**/api/works/detailwork/comments', route => route.fulfill({ json: { items: deleted ? [] : [{ ...comment, owned: true, removable: true }], nextCursor: null } }))
+  await page.route('**/api/works/detailwork/comments/firstcomment', route => {
+    const request = route.request()
+    attempts++
+    if (request.method() !== 'DELETE' || request.headers()['content-type'] !== 'application/json') return route.fulfill({ status: 415, json: { message: '请使用正确的请求格式提交。' } })
+    expect(request.postDataJSON()).toEqual({})
+    expect(request.headers()['x-csrf-token']).toBeTruthy()
+    deleted = true
+    return route.fulfill({ json: { deleted: true } })
+  })
+  await page.goto('/work/detailwork')
+  await page.getByRole('button', { name: '删除评论', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '删除评论确认' })
+  await dialog.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  await expect(page.locator('#comment-firstcomment')).toHaveCount(0)
+  expect(attempts).toBe(1)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: work.title, exact: true })).toBeVisible()
+  await expect(page.locator('#comment-firstcomment')).toHaveCount(0)
+})
+
+test('desktop comments preserve failed replies separately from the next draft', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/work/detailwork')
   await page.getByRole('button', { name: '跳转评论' }).click()
@@ -109,16 +134,130 @@ test('desktop comments stay available and failed submission preserves the reply 
   state.failComment = true
   await page.getByRole('button', { name: '发布评论', exact: true }).click()
   await expect(page.getByRole('alert').filter({ hasText: '评论发送失败' })).toBeVisible()
-  await expect(reply).toHaveValue('谢谢分享！')
-  await page.getByRole('button', { name: '取消回复' }).click()
+  const pending = page.locator('.pending-comment')
+  await expect(pending).toContainText('谢谢分享！')
+  await expect(pending).toContainText('回复 读者')
+  await input.fill('这是下一条草稿')
   state.failComment = false
-  await page.getByRole('button', { name: '发布评论', exact: true }).click()
-  await expect(input).toHaveValue('')
-  await expect(page.locator('#comment-newcomment')).toContainText('谢谢分享！')
+  await pending.getByRole('button', { name: '重试发送', exact: true }).click()
+  await expect(pending).toHaveCount(0)
+  await expect(input).toHaveValue('这是下一条草稿')
+  await expect(page.getByRole('status').filter({ hasText: '评论已发送' })).toBeVisible()
   expect(state.comments).toEqual([
     { text: '谢谢分享！', replyToId: comment.id, fileIds: [] },
-    { text: '谢谢分享！', fileIds: [] },
+    { text: '谢谢分享！', replyToId: comment.id, fileIds: [] },
   ])
+})
+
+const uploadPng = { name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS2kAAAAASUVORK5CYII=', 'base64') }
+async function uploadLimits(page: Page) {
+  await page.route('**/api/uploads/limits', route => route.fulfill({ json: { imagesMb: 30, videosMb: 100, filesMb: 30, maxFileSizeMb: 100 } }))
+}
+
+test('comment uploads preview immediately and save before posting while the next draft remains editable', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  const state = await fixture(page); await uploadLimits(page)
+  await page.addInitScript(() => {
+    const send = XMLHttpRequest.prototype.send
+    XMLHttpRequest.prototype.send = function(body) {
+      if (body instanceof FormData) (window as Window & { commentUpload?: XMLHttpRequest }).commentUpload = this
+      return send.call(this, body)
+    }
+  })
+  let release!: () => void
+  const hold = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/uploads', async route => {
+    expect(route.request().headers()['x-csrf-token']).toBe('unified-account-fixture')
+    await hold
+    await route.fulfill({ json: { file: { id: 'uploaded1', name: uploadPng.name, type: uploadPng.mimeType, url: portrait.url, size: 100, processing: 'pending' } } })
+  })
+  await page.goto('/work/detailwork')
+  await page.getByLabel('评论附件', { exact: true }).setInputFiles(uploadPng)
+  const attachment = page.locator('.comment-composer .comment-attachments')
+  await expect(attachment.locator('img')).toHaveAttribute('src', /^blob:/)
+  // Intercepted uploads send no bytes; feed native progress events while holding the server response.
+  await expect.poll(() => page.evaluate(() => Boolean((window as Window & { commentUpload?: XMLHttpRequest }).commentUpload))).toBe(true)
+  await page.evaluate(() => (window as Window & { commentUpload?: XMLHttpRequest }).commentUpload!.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: 50, total: 100 })))
+  await expect(attachment).toContainText('上传中 50%')
+  await expect(attachment.getByRole('progressbar')).toHaveAttribute('value', '50')
+  await page.evaluate(() => (window as Window & { commentUpload?: XMLHttpRequest }).commentUpload!.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: 100, total: 100 })))
+  await expect(attachment).toContainText('正在保存')
+  const input = page.getByRole('textbox', { name: '发表评论', exact: true })
+  await input.fill('带素材的评论')
+  await page.getByRole('button', { name: '发布评论', exact: true }).click()
+  const pending = page.locator('.pending-comment')
+  await expect(pending).toContainText('等待附件上传')
+  expect(state.comments).toHaveLength(0)
+  await input.fill('下一条内容')
+  await page.setViewportSize({ width: 390, height: 900 })
+  await page.getByRole('button', { name: '跳转评论' }).click()
+  await expect(input).toBeEnabled(); await expect(pending).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.mobile-comments-dialog').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([])
+  await page.screenshot({ path: 'test-results/comment-upload-mobile.png', fullPage: true })
+  release()
+  await expect(pending).toHaveCount(0)
+  await expect(input).toHaveValue('下一条内容')
+  expect(state.comments).toEqual([{ text: '带素材的评论', fileIds: ['uploaded1'] }])
+  await expect(page.getByRole('status').filter({ hasText: '评论已发送' })).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('failed comment uploads stay retryable and successful files are reused after send failure', async ({ page }) => {
+  const state = await fixture(page); await uploadLimits(page)
+  let uploads = 0
+  await page.route('**/api/uploads', route => {
+    uploads++
+    return uploads === 1 ? route.fulfill({ status: 503, json: { message: '素材保存失败' } })
+      : route.fulfill({ json: { file: { id: 'uploaded1', name: uploadPng.name, type: uploadPng.mimeType, url: portrait.url, size: 100 } } })
+  })
+  await page.goto('/work/detailwork')
+  await page.getByLabel('评论附件', { exact: true }).setInputFiles(uploadPng)
+  await expect(page.locator('.comment-composer')).toContainText('上传失败')
+  await page.getByRole('button', { name: '发布评论', exact: true }).click()
+  const pending = page.locator('.pending-comment')
+  await expect(pending).toHaveAttribute('data-send-state', 'failed')
+  expect(state.comments).toHaveLength(0)
+  state.failComment = true
+  await pending.getByRole('button', { name: '重试发送', exact: true }).click()
+  await expect(pending).toContainText('评论发送失败')
+  expect(uploads).toBe(2)
+  state.failComment = false
+  await pending.getByRole('button', { name: '重试发送', exact: true }).click()
+  await expect(pending).toHaveCount(0)
+  expect(uploads).toBe(2); expect(state.comments).toHaveLength(2)
+  expect(state.comments[0]).toEqual(state.comments[1])
+})
+
+test('unfinished comments warn before route changes and can be kept or discarded', async ({ page }) => {
+  await fixture(page); await page.goto('/work/detailwork')
+  const input = page.getByRole('textbox', { name: '发表评论', exact: true })
+  await input.fill('不能丢失的草稿')
+  await page.locator('.related-works [data-work-id="related0"] .work-cover').click()
+  const dialog = page.getByRole('dialog', { name: '评论尚未保存' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(page).toHaveURL('/work/detailwork'); await expect(input).toHaveValue('不能丢失的草稿')
+  await page.locator('.related-works [data-work-id="related0"] .work-cover').click()
+  await dialog.getByRole('button', { name: '放弃并离开', exact: true }).click()
+  await expect(page).toHaveURL('/work/related0'); await expect(input).toHaveValue('')
+})
+
+test('visible comment media updates processing status and stops polling when ready', async ({ page }) => {
+  await fixture(page); await page.clock.install()
+  await page.route('**/api/works/detailwork/comments', route => route.fulfill({ json: { items: [{ ...comment, files: [{ ...portrait, processing: 'processing' }] }], nextCursor: null } }))
+  let refreshes = 0
+  await page.route('**/api/works/detailwork/comments/firstcomment/files', route => {
+    refreshes++; return route.fulfill({ json: { files: [{ ...portrait, processing: 'ready' }] } })
+  })
+  await page.goto('/work/detailwork')
+  const posted = page.locator('#comment-firstcomment')
+  await posted.scrollIntoViewIfNeeded(); await expect(posted).toContainText('素材处理中')
+  await page.clock.runFor(6000)
+  await expect.poll(() => refreshes).toBe(1)
+  await expect(posted.getByText('素材处理中', { exact: true })).toHaveCount(0)
+  await page.clock.runFor(15000); expect(refreshes).toBe(1)
+  await page.screenshot({ path: 'test-results/comment-upload-desktop.png', fullPage: true })
 })
 
 test('prompt disclosure, file navigation, reference images and preview remain usable', async ({ page }) => {

@@ -34,21 +34,25 @@ export async function api<T>(path: string, options: {
   body?: unknown
   signal?: AbortSignal
   expectedAccount?: string
+  onUploadProgress?: (percent: number) => void
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
   const version = sessionVersion, owner = session.user?.id
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (options.expectedAccount) headers['X-New-Api-User'] = options.expectedAccount
-  const multipart = options.body instanceof FormData
-  if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
+  const body = options.body === undefined && options.method && options.method !== 'GET' ? {} : options.body
+  const multipart = body instanceof FormData
+  if (body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
   if (options.method && options.method !== 'GET' && session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken
   let response: Response
   try {
-    response = await fetch(path, {
+    response = multipart && options.method === 'POST' && options.onUploadProgress
+      ? await import('./upload-progress').then(({ uploadWithProgress }) => uploadWithProgress(path, body as FormData, headers, options.signal, options.onUploadProgress!))
+      : await fetch(path, {
       method: options.method || 'GET',
       credentials: 'same-origin',
       headers,
-      ...(options.body !== undefined ? { body: multipart ? options.body as FormData : JSON.stringify(options.body) } : {}),
+      ...(body !== undefined ? { body: multipart ? body as FormData : JSON.stringify(body) } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     })
   } catch (error) {
@@ -71,23 +75,23 @@ export interface UploadLimits { maxFileSizeMb: number; imagesMb: number; videosM
 let uploadLimits: UploadLimits | undefined
 let limitsLoaded = 0
 let limitsOwner: string | undefined
-export async function getUploadLimits(): Promise<UploadLimits> {
+export async function getUploadLimits(signal?: AbortSignal): Promise<UploadLimits> {
   if (uploadLimits && limitsOwner === session.user?.id && Date.now() - limitsLoaded < 300000) return uploadLimits
   const owner = session.user?.id
-  const value = await api<UploadLimits>('/api/uploads/limits')
+  const value = await api<UploadLimits>('/api/uploads/limits', { signal })
   if (owner === session.user?.id) { uploadLimits = value; limitsOwner = owner; limitsLoaded = Date.now() }
   return value
 }
-export async function uploadFile(file: File, signal?: AbortSignal): Promise<WorkFile & { size: number }> {
+export async function uploadFile(file: File, signal?: AbortSignal, onUploadProgress?: (percent: number) => void): Promise<WorkFile & { size: number }> {
   const owner = session.user?.id, version = sessionVersion
-  const limits = await getUploadLimits()
+  const limits = await getUploadLimits(signal)
   signal?.throwIfAborted()
   if (owner !== session.user?.id || version !== sessionVersion) throw new Error('账号已变化，请重新选择文件。')
   const mb = file.type.startsWith('image/') ? limits.imagesMb : file.type.startsWith('video/') ? limits.videosMb : limits.filesMb
   if (!file.size || file.size > mb * 1024 * 1024) throw new Error(`请选择非空文件，大小不超过 ${mb} MB。`)
   const body = new FormData()
   body.append('file', file, file.name)
-  const result = await api<{ file: WorkFile & { size: number } }>('/api/uploads', { method: 'POST', body, signal })
+  const result = await api<{ file: WorkFile & { size: number } }>('/api/uploads', { method: 'POST', body, signal, onUploadProgress })
   if (owner !== session.user?.id || version !== sessionVersion) throw new Error('账号已变化，请重新选择文件。')
   return result.file
 }
