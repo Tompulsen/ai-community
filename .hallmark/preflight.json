@@ -1,15 +1,15 @@
 {
-  "scanned": "2026-11-19",
+  "scanned": "2026-11-20",
   "findings": {
     "fonts": "Local Schibsted Grotesk and the existing Chinese system stack, src/style.css:1",
     "palette": "Six existing light/dark palettes, DESIGN.md:147 and public/theme-preload.js",
     "spacing": "Existing 4px scale and 44px touch targets, DESIGN.md:75",
-    "framework": "Vue 3 with Vite; existing account components",
-    "preview": "Local-only mock data at http://127.0.0.1:18775/account"
+    "framework": "Vue 3 with Vite; ActivityView.vue and ReferralBenefits.vue",
+    "preview": "Local-only mock data at http://localhost:18775/activities"
   },
-  "preserve": ["Theme identities", "Routes and handlers", "Profile/settings separation", "Draft guards", "Local-only preview"],
-  "introduce": ["720px privacy reading width", "36px fine-pointer privacy controls with 44px touch fallback", "Shared native customizable select styling"],
+  "preserve": ["Locked DESIGN.md", "Six global palettes and shared controls", "Draw request receipts", "Referral conditions and handlers", "Local-only preview"],
+  "introduce": ["Action-first lottery layout", "Aligned prize ledger", "Compact account row", "Responsive reward records"],
   "scope": "app",
   "depth": "full",
-  "baseline": { "floor": 0, "reflex": 0, "warnings": 0 }
+  "baseline": { "floor": 11, "reflex": 5, "warnings": 4 }
 }

@@ -238,7 +238,7 @@ onMounted(() => {
           <div class="fields">
             <label class="field"><span>活动标题</span><input v-model="draft.settings.wheel.title" class="control" maxlength="32" /></label>
             <label class="field"><span>轮盘按钮</span><input v-model="draft.settings.wheel.buttonText" class="control" maxlength="8" required /></label>
-            <label class="field"><span>轮盘主题</span><select v-model="draft.settings.wheel.theme" class="control"><option value="teal">青绿</option><option value="violet">紫色</option><option value="sunset">日落</option></select></label>
+            <label class="field"><span>轮盘主题</span><select v-model="draft.settings.wheel.theme" class="control"><option value="teal">蓝金</option><option value="violet">紫色</option><option value="sunset">日落</option></select></label>
             <label class="field"><span>活动简介</span><input v-model="draft.settings.wheel.subtitle" class="control" maxlength="120" /></label>
           </div>
           <label class="field"><span>活动规则</span><textarea v-model="draft.settings.wheel.rulesText" class="control" rows="3" maxlength="2000" /></label>

@@ -115,14 +115,16 @@ export function createPreviewMiddleware() {
       if (path === '/api/community/ads' && read) return reply(page([]))
       if (path === '/api/lottery/status' && read) {
         const day = lotteryDay(new Date()), rule = { enabled: false, threshold: 10, tickets: 1 }
+        const prizes = defaultDailyLotteryPrizes(5000).map(prize => ({ ...prize, dailyQuota: prize.stock }))
+        const limit = prizes.reduce((sum, prize) => sum + prize.stock, 0)
         return reply({
-          settings: { enabled: true, prizes: defaultDailyLotteryPrizes(5000), invites: rule, followers: rule,
+          settings: { enabled: true, prizes, invites: rule, followers: rule,
             likes: rule, likesMode: 'total', wheel: { theme: 'teal', title: '每日抽奖', subtitle: '每日一次',
               buttonText: '开始抽奖', rulesText: '每日可参与一次。' } },
           balance: 1, counts: { invites: 0, followers: 28, likes: 68, bestWorkLikes: 14 },
           earned: { invites: 0, followers: 0, likes: 0 }, accountLinked: true, creditReady: true, inviteUrl: '',
           daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(),
-            limit: 1, used: 0, remaining: 1, participated: false },
+            limit, used: 0, remaining: limit, participated: false },
         })
       }
       if (path === '/api/referrals/status' && read) return reply({
@@ -228,6 +230,9 @@ async function selfCheck() {
   const session = await request('GET', '/api/session')
   assert.equal(JSON.parse(session.body).user.id, userId)
   assert.equal(session.headers['X-Design-Preview'], 'mock')
+  const lottery = JSON.parse((await request('GET', '/api/lottery/status')).body)
+  assert.equal(lottery.daily.limit, 200)
+  assert.equal(lottery.settings.prizes.reduce((sum, prize) => sum + prize.dailyQuota, 0), lottery.daily.limit)
   assert.equal((await request('GET', '/account')).vite, true)
   for (const path of ['/api/unknown', '/api/new-api/wallet/pay', '/api/creation/generate', '/auth/newapi', '/studio/api/session']) {
     const response = await request(path.includes('unknown') ? 'GET' : 'POST', path, {})

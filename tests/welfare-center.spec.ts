@@ -79,7 +79,7 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
     await expect(page.locator('.clown-icon')).toHaveCount(0)
     await expect(page.getByRole('group', { name: '本次抽奖次数' })).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await expect(page.locator('.draw-section > .button')).toBeEnabled()
+    await expect(page.locator('.draw-console > .button')).toBeEnabled()
     await page.screenshot({ path: info.outputPath(`welfare-${width}-${scheme}.png`), fullPage: true })
     expect((await new AxeBuilder({ page }).include('.activity-page').analyze()).violations).toEqual([])
     expect(errors).toEqual([])
@@ -88,22 +88,61 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
 
 test('a draw consumes one chance and hides multi-draw; confirmed participation prevents another draw', async ({ page }) => {
   const fixture = await welfareFixture(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/activities')
-  await page.locator('.draw-section > .button').click()
+  await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toContainText('🤡 非常遗憾')
   await expect(page.locator('.draw-result')).toContainText('1,000 积分')
-  await expect(page.locator('.draw-section > .button')).toHaveText('今日已参与')
-  await expect(page.locator('.draw-section > .button')).toBeDisabled()
+  await expect(page.locator('.draw-console > .button')).toHaveText('今日已参与')
+  await expect(page.locator('.draw-console > .button')).toBeDisabled()
   await expect(page.getByRole('region', { name: '今日福利' })).toContainText('199')
   expect(fixture.writes.map(w => w.body.count)).toEqual([1])
+  await expect(page.locator('.wheel-disc')).toHaveCSS('transition-duration', '0s')
+  const winner = await page.locator('.is-winner textPath').evaluate((label: SVGTextPathElement) => {
+    const path = document.getElementById(label.getAttribute('href')!.slice(1)) as unknown as SVGPathElement
+    const midpoint = path.getPointAtLength(path.getTotalLength() / 2)
+    const point = new DOMPoint(midpoint.x, midpoint.y).matrixTransform(label.getCTM()!)
+    const svg = label.ownerSVGElement!
+    const scale = svg.getBoundingClientRect().width / 400
+    return { x: point.x / scale, y: point.y / scale, radius: Math.hypot(midpoint.x - 200, midpoint.y - 200) }
+  })
+  expect(winner.x).toBeCloseTo(200, 3)
+  expect(winner.y).toBeCloseTo(200 - winner.radius, 3)
+  await page.locator('.lottery-wheel').screenshot({ path: test.info().outputPath('arc-winner.png') })
+})
+
+test('arc labels rotate with the wheel throughout the draw animation', async ({ page }) => {
+  const fixture = await welfareFixture(page)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.goto('/activities')
+  await page.locator('.wheel-center').focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.draw-result')).toBeVisible()
+  await expect(page.locator('.wheel-disc')).toHaveCSS('transition-duration', '1.6s')
+  await page.waitForFunction(() => {
+    const animation = document.querySelector('.wheel-disc')!.getAnimations()[0]
+    const progress = animation?.effect?.getComputedTiming().progress
+    return progress != null && progress > 0 && progress < 1
+  })
+  const transforms = await page.locator('.wheel-disc').evaluate((disc: SVGGraphicsElement) => {
+    const values = (element: SVGGraphicsElement) => {
+      const { a, b, c, d } = element.getCTM()!
+      return [a, b, c, d]
+    }
+    return { disc: values(disc), labels: [...disc.querySelectorAll<SVGTextElement>('.wheel-label')].map(values) }
+  })
+  for (const matrix of transforms.labels) expect(matrix).toEqual(transforms.disc)
+  await page.locator('.wheel-disc').evaluate(async disc => { await Promise.all(disc.getAnimations().map(animation => animation.finished)) })
+  await expect(page.locator('.wheel-center')).toBeDisabled()
+  expect(fixture.writes).toHaveLength(1)
 })
 
 test('a lost response reuses its original request even when the user already participated', async ({ page }) => {
   const fixture = await welfareFixture(page); fixture.state.failAfterDraw = true
-  await page.goto('/activities'); await page.locator('.draw-section > .button').click()
-  await expect(page.locator('.draw-section > .button')).toContainText('核对上次抽奖')
-  await page.reload(); await expect(page.locator('.draw-section > .button')).toBeEnabled()
-  await page.locator('.draw-section > .button').click()
+  await page.goto('/activities'); await page.locator('.draw-console > .button').click()
+  await expect(page.locator('.draw-console > .button')).toContainText('核对上次抽奖')
+  await page.reload(); await expect(page.locator('.draw-console > .button')).toBeEnabled()
+  await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toContainText('非常遗憾')
   expect(fixture.writes).toHaveLength(2)
   expect(fixture.writes[0]!.body.requestId).toBe(fixture.writes[1]!.body.requestId)
@@ -113,11 +152,11 @@ test('a lost response reuses its original request even when the user already par
 test('quota exhaustion refreshes stale availability', async ({ page }) => {
   const fixture = await welfareFixture(page)
   await page.goto('/activities')
-  await expect(page.locator('.draw-section > .button')).toBeEnabled()
+  await expect(page.locator('.draw-console > .button')).toBeEnabled()
   fixture.state.remaining = 0; fixture.state.failBeforeDraw = true
-  await page.locator('.draw-section > .button').click()
-  await expect(page.locator('.draw-section > .button')).toHaveText('今日名额已领完')
-  await expect(page.locator('.draw-section > .button')).toBeDisabled()
+  await page.locator('.draw-console > .button').click()
+  await expect(page.locator('.draw-console > .button')).toHaveText('今日名额已领完')
+  await expect(page.locator('.draw-console > .button')).toBeDisabled()
 })
 
 test('a guest sees a login action and the configured daily pool', async ({ page }) => {
@@ -130,6 +169,7 @@ for (const width of [1440, 390]) test(`admin edits every reward and daily quota 
   const fixture = await welfareFixture(page)
   await page.setViewportSize({ width, height: 1000 })
   await page.goto('/admin?tab=lottery')
+  await expect(page.getByLabel('轮盘主题').locator('option[value="teal"]')).toHaveText('蓝金')
   const editors = page.locator('.prize-editor')
   await expect(editors).toHaveCount(4)
   for (const [index, points] of [6500, 4500, 2500, 1500].entries()) {

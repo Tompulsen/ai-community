@@ -33,8 +33,8 @@ onBeforeUnmount(() => { request++; controller?.abort() })
 
 <template>
   <section class="panel-section referral-benefits" aria-labelledby="referral-heading">
-    <div class="section-heading"><h2 id="referral-heading">邀请朋友，共享积分</h2><button class="icon-button" aria-label="刷新邀请福利" :disabled="busy" @click="load()"><RefreshCw :size="17" /></button></div>
-    <p v-if="error" class="form-error" role="alert">{{ error }} <button class="text-button" :disabled="busy" @click="load()">重新读取</button></p>
+    <div class="section-heading"><h2 id="referral-heading">邀请朋友，共享积分</h2><button type="button" class="icon-button" aria-label="刷新邀请福利" title="刷新邀请福利" :disabled="busy" @click="load()"><RefreshCw :size="17" aria-hidden="true" /></button></div>
+    <p v-if="error" class="form-error" role="alert">{{ error }} <button type="button" class="text-button" :disabled="busy" @click="load()">重新读取</button></p>
     <p v-if="!status && busy" class="muted" role="status">正在读取邀请福利…</p>
     <template v-if="status">
       <div class="referral-intro">
@@ -46,7 +46,7 @@ onBeforeUnmount(() => { request++; controller?.abort() })
         </div>
         <div class="referral-share">
           <template v-if="session.user && status.inviteUrl">
-            <button class="button primary btn" :disabled="!status.config.enabled" @click="copyInvite"><Copy :size="16" />复制我的邀请链接</button>
+            <button type="button" class="button primary btn" :disabled="!status.config.enabled" @click="copyInvite"><Copy :size="16" aria-hidden="true" />复制我的邀请链接</button>
             <label class="field"><span>我的邀请链接</span><input class="control" :value="status.inviteUrl" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
             <p class="caption-5 muted">链接已包含邀请码，好友注册时自动绑定。</p>
           </template>
@@ -62,37 +62,57 @@ onBeforeUnmount(() => { request++; controller?.abort() })
         <div class="section-heading"><h3>我的邀请记录</h3><span class="caption-5 muted">{{ status.invited - status.credited - status.pending }} 人待充值<span v-if="status.pending"> · {{ status.pending }} 人待发放</span></span></div>
         <p v-if="!status.items.length" class="muted">还没有绑定的新人。把邀请链接分享给朋友，完成注册后即可在这里查看进度。</p>
         <ul v-else class="referral-records"><li v-for="item in status.items" :key="item.inviteeId"><div><strong>新用户 {{ item.inviteeId }}</strong><p class="caption-5 muted">{{ date(item.boundAt) }} 绑定<span v-if="item.creditedAt"> · {{ date(item.creditedAt) }} 到账</span></p></div><div class="referral-record-result"><span :class="{ 'referral-credited': item.state === 'credited' }">{{ labels[item.state] }}</span><span class="caption-5 muted">{{ item.state === 'credited' ? '已获' : '可获' }} {{ points(item.inviterPoints) }} 积分</span></div></li></ul>
-        <button v-if="status.nextCursor" class="button subtle btn" :disabled="busy" @click="load(true)">{{ busy ? '正在读取…' : '查看更多邀请' }}</button>
+        <button v-if="status.nextCursor" type="button" class="button subtle btn" :disabled="busy" @click="load(true)">{{ busy ? '正在读取…' : '查看更多邀请' }}</button>
       </template>
     </template>
   </section>
 </template>
 
 <style scoped>
-.referral-benefits { display: grid; gap: 24px; }
-.referral-intro { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 1fr); gap: 32px; }
-.referral-award { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 24px; margin: 0 0 16px; }
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · signature: shared referral rewards and progress ledger · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4 · weakest: H, keep both rewards beside the invitation action */
+.referral-benefits { display: grid; gap: var(--space-section); padding-block: var(--space-section); border: 0; }
+.referral-benefits :is(h2, h3) { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.referral-benefits > .section-heading { margin: 0; }
+.referral-benefits h2 { font-size: 20px; line-height: 28px; }
+.referral-benefits h3 { font-size: 18px; line-height: 28px; }
+.referral-intro { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: var(--space-page); }
+.referral-intro > div { min-width: 0; }
+.referral-award { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-small) var(--space-section); margin: 0 0 var(--space-control); }
 .referral-award strong { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.referral-unit { color: var(--muted); }
-.referral-condition { line-height: 1.7; margin-bottom: 12px; }
-.referral-share { display: grid; align-content: start; gap: 12px; min-width: 0; }
-.referral-share .btn { justify-self: start; min-height: 44px; }
-.referral-own { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: var(--surface-soft); border-radius: 6px; }
-.referral-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 0; }
-.referral-totals dt { color: var(--muted); margin-bottom: 8px; }
+.referral-unit { color: var(--muted); font-size: 12px; }
+.referral-condition { line-height: 24px; margin-bottom: var(--space-control); max-inline-size: 60ch; text-wrap: pretty; }
+.referral-intro .caption-5 { line-height: 20px; max-inline-size: 72ch; text-wrap: pretty; }
+.referral-share { display: grid; align-content: start; gap: var(--space-control); min-width: 0; padding-inline-start: var(--space-page); border-inline-start: 1px solid var(--border); }
+.referral-share .field { margin: 0; }
+.referral-share .control { border-color: var(--control-border); }
+.referral-benefits .btn { justify-self: start; min-height: var(--control-height); margin-top: 0; white-space: nowrap; }
+.referral-benefits :is(button, a, input):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.referral-benefits button:not(:disabled):active { background-color: var(--surface-soft); }
+.referral-benefits button.primary:not(:disabled):active { background-color: var(--blue-hover); }
+.referral-benefits button:disabled { opacity: .55; cursor: not-allowed; }
+.referral-own { display: flex; align-items: center; justify-content: space-between; gap: var(--space-group); padding: var(--space-group); background: var(--surface-soft); border-radius: var(--radius); }
+.referral-own > div { min-width: 0; }
+.referral-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-section); margin: 0; padding-block: var(--space-group); border-block: 1px solid var(--border); }
+.referral-totals > div + div { padding-inline-start: var(--space-section); border-inline-start: 1px solid var(--border); }
+.referral-totals dt { color: var(--muted); margin-bottom: var(--space-small); font-size: 12px; }
 .referral-totals dd { margin: 0; font-size: 24px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.referral-totals dd span { font-size: 14px; color: var(--muted); }
+.referral-totals dd span { font-size: 12px; color: var(--muted); }
 .referral-records { list-style: none; margin: 0; padding: 0; }
-.referral-records li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-top: 1px solid var(--border); }
-.referral-record-result { display: grid; gap: 4px; text-align: right; flex-shrink: 0; }
+.referral-records li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-group); padding-block: var(--space-group); border-top: 1px solid var(--border); }
+.referral-records li > div { min-width: 0; overflow-wrap: anywhere; }
+.referral-record-result { display: grid; gap: var(--space-label); text-align: end; flex-shrink: 0; }
 .referral-credited { color: var(--green); }
-.text-button { min-height: 44px; padding: 8px; text-decoration: underline; }
+.text-button { min-height: var(--target-size); padding: var(--space-small); text-decoration: underline; white-space: nowrap; }
 @media (max-width: 700px) {
-  .referral-intro { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .referral-award { gap: 8px 16px; }
+  .referral-intro { grid-template-columns: minmax(0, 1fr); gap: var(--space-section); }
+  .referral-award { gap: var(--space-small) var(--space-group); }
   .referral-award strong { font-size: 24px; }
-  .referral-totals { gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .referral-totals > div:last-child { grid-column: 1 / -1; }
+  .referral-share { padding-inline-start: 0; border: 0; }
+  .referral-share .button { width: 100%; }
+  .referral-totals { gap: var(--space-group); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .referral-totals > div + div { padding-inline-start: var(--space-group); }
+  .referral-totals > div:last-child { grid-column: 1 / -1; padding: var(--space-group) 0 0; border: 0; border-block-start: 1px solid var(--border); }
   .referral-own { align-items: flex-start; flex-direction: column; }
   .referral-records li { align-items: flex-start; }
 }

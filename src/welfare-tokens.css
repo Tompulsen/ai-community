@@ -1,0 +1,29 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · modes: light+dark · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4 · weakest: H, preserve shared controls while bringing the draw into the first viewport */
+:root {
+  --lottery-violet-accent: #bdabef;
+  --lottery-sunset-accent: #edb17e;
+  --lottery-enamel-gloss: #77b9ff;
+  --lottery-enamel: #216cda;
+  --lottery-enamel-deep: #0a3c91;
+  --lottery-enamel-edge: #062653;
+  --lottery-action-light: #2466c5;
+  --lottery-action: #1551ac;
+  --lottery-action-deep: #07357d;
+  --lottery-metal-light: #fff4cc;
+  --lottery-metal: #e4b963;
+  --lottery-metal-shade: #aa762d;
+  --lottery-metal-edge: #77501f;
+  --lottery-face-light: #f0f8ff;
+  --lottery-face: #c8e3fb;
+  --lottery-face-shade: #9fc8ef;
+  --lottery-warm-light: #fff5d9;
+  --lottery-warm: #f7dfa2;
+  --lottery-warm-shade: #e9bd63;
+  --lottery-face-ink: #183858;
+  --lottery-lamp: #fffbed;
+  --lottery-shadow: #0019473d;
+}
+
+html:has(.activity-page), body:has(.activity-page) { overflow-x: clip; }
+body:has(.activity-page) .mobile-sign-out { white-space: nowrap; }

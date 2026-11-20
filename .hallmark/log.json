@@ -1,5 +1,25 @@
 [
  {
+  "date": "2026-11-20",
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "brand (locked DESIGN.md)",
+  "axes": "neutral / Schibsted Grotesk / existing theme accent",
+  "entry": "src/views/ActivityView.vue",
+  "signature": "daily wheel and aligned prize ledger",
+  "sections": ["daily availability", "draw controls and wheel", "prize ledger", "compact account status", "referral progress", "reward records"],
+  "nav": "kept community shell",
+  "footer": "kept",
+  "imagery": "actual local mock UI screenshots",
+  "photos": [],
+  "waived": [],
+  "finishReview": "subagent: ship; no blocking findings",
+  "verification": "64 related browser tests; six themes at 1280x800 and 320x740; typecheck and build; 0 FAIL and 0 REFLEX; links, fields and handlers retained",
+  "prompt": "使用 Hallmark 优化福利中心"
+ },
+ {
   "signature": "compact privacy rows and themed native picker",
   "mode": "redesign",
   "nav": "kept community shell and settings directory",

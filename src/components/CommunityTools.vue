@@ -93,7 +93,7 @@ watch(() => session.user?.id, () => {
 .tools-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .tools-heading h2 { font-size: 18px; line-height: 28px; font-weight: 600; }
 .tools-heading .icon-button { width: 44px; min-height: 44px; }
-.tools-search { width: 100%; min-height: 44px; padding-right: 0; margin-bottom: 12px; }
+.tools-search { width: 100%; min-height: 44px; padding-right: 0; margin-bottom: 12px; border-color: var(--control-border); }
 .tools-search .icon-button { width: 44px; min-width: 44px; min-height: 44px; }
 .tools-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
 .tool-item { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 92px; min-width: 0; padding: 12px 4px; border-radius: 10px; color: var(--ink); text-align: center; }

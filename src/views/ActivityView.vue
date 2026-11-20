@@ -4,8 +4,9 @@ SPDX-FileCopyrightText: 2026 Community contributors
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowUpRight, Gift, Ticket, Users, Heart, RefreshCw } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { Gift, Users, Heart, RefreshCw } from '@lucide/vue'
+import '../welfare-tokens.css'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 import ReferralBenefits from '../components/ReferralBenefits.vue'
 import { useRoute } from 'vue-router'
@@ -23,6 +24,7 @@ interface LotteryStatus {
   daily?: { date: string; timezone: string; resetsAt: string; limit: number; used: number; remaining: number; participated: boolean } | null
 }
 const route = useRoute()
+const wheelId = `lottery-${useId()}`
 const tab = ref(route.query.invite ? 'tasks' : 'draw')
 const tabs = [{ id: 'draw', label: '抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
@@ -63,9 +65,14 @@ const wheelSegments = computed(() => wheelSlots.value.map((prize, index, slots) 
   const angle = 360 / slots.length
   const point = (degree: number, radius: number) => ({ x: 200 + Math.cos(degree * Math.PI / 180) * radius, y: 200 + Math.sin(degree * Math.PI / 180) * radius })
   const center = -90 + index * angle
-  const start = point(center - angle / 2, 184), end = point(center + angle / 2, 184), label = point(center, 128)
-  const points = 'amountCents' in prize && pointDisplay.value?.pointsPerUsd ? (Number(prize.amountCents) / 100 * pointDisplay.value.pointsPerUsd).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : ''
-  return { ...prize, index, points, path: `M200 200 L${start.x} ${start.y} A184 184 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, label, rotate: center + 90 }
+  const start = point(center - angle / 2, 160), end = point(center + angle / 2, 160)
+  const labelRadius = slots.length > 4 ? 124 : 118
+  const labelStart = point(center - angle * .36, labelRadius), labelEnd = point(center + angle * .36, labelRadius)
+  const name = Array.from(prize.name), maxLength = slots.length <= 4 ? 6 : slots.length <= 8 ? 4 : 2
+  const labelName = slots.length > 12 ? index + 1 : name.length > maxLength ? `${name.slice(0, maxLength).join('')}…` : prize.name
+  const labelWidth = Math.min(100, labelRadius * angle * .72 * Math.PI / 180 * .85)
+  const textLength = typeof labelName === 'string' && Array.from(labelName).length * (slots.length > 4 ? 16 : 24) > labelWidth ? labelWidth : undefined
+  return { ...prize, index, labelName, textLength, path: `M200 200 L${start.x} ${start.y} A160 160 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, labelPath: `M${labelStart.x} ${labelStart.y} A${labelRadius} ${labelRadius} 0 0 1 ${labelEnd.x} ${labelEnd.y}` }
 }))
 function drawMessage(cause: unknown) {
   const value = errorMessage(cause)
@@ -155,135 +162,251 @@ async function draw() {
 
 <template>
   <div class="page-container activity-page">
-    <div class="page-heading"><div><h1>福利中心</h1><p class="welfare-intro">参与社区任务，赢取每日积分福利。</p></div><button class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" /></button></div>
-    <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
+    <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" aria-hidden="true" /></button></div>
+    <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" type="button" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status">
-      <section v-if="status.daily" class="daily-overview" aria-label="今日福利">
+      <section v-if="status.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
         <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
-        <p>每人每天限 1 次 · 消耗 1 次机会<br /><span>北京时间 00:00 重置</span></p>
+        <p>每人每天限 1 次，消耗 1 次机会<br /><span>北京时间 00:00 重置</span></p>
       </section>
-      <p v-if="pointDisplay?.currencySymbol === '积分'" class="form-note reward-note">奖励统一折算为社区永久积分，到账结果可在奖励记录和我的账户查看。</p>
       <div v-if="tab === 'draw'" class="activity-layout lottery-layout">
-        <section class="panel-section draw-section">
-          <div class="section-heading"><h2>{{ appearance.title || '每日幸运转盘' }}</h2><Ticket :size="20" /></div><p v-if="appearance.subtitle" class="muted">{{ appearance.subtitle }}</p>
-          <div class="lottery-wheel" :class="`theme-${appearance.theme}`" data-testid="lottery-wheel">
-            <svg viewBox="0 0 400 400" aria-hidden="true"><circle cx="200" cy="200" r="195" class="wheel-rim" /><g class="wheel-disc" :style="{ transform: `rotate(${wheelRotation}deg)` }"><g v-for="segment in wheelSegments" :key="`${segment.id}-${segment.index}`"><path :d="segment.path" :class="segment.index % 2 ? 'wheel-alternate' : 'wheel-sector'" /><text :x="segment.label.x" :y="segment.label.y" :transform="`rotate(${segment.rotate},${segment.label.x},${segment.label.y})`" text-anchor="middle" dominant-baseline="middle"><tspan :x="segment.label.x" :dy="segment.points ? -9 : 0">{{ wheelSegments.length > 12 ? segment.index + 1 : Array.from(segment.name).length > 9 ? `${Array.from(segment.name).slice(0, 8).join('')}…` : segment.name }}</tspan><tspan v-if="segment.points && wheelSegments.length <= 8" :x="segment.label.x" dy="23" class="wheel-points">{{ segment.points }} 积分</tspan></text></g></g></svg>
-            <span class="wheel-pointer" aria-hidden="true" />
-            <button v-if="session.user" class="wheel-center" :disabled="drawDisabled" :aria-label="drawing ? '确认中' : pending ? '核对上次抽奖结果' : `${appearance.buttonText || 'GO'}，抽奖 ${count} 次`" :aria-busy="drawing" @click="draw">{{ drawing ? '确认中' : pending ? '核对' : appearance.buttonText || 'GO' }}</button><RouterLink v-else to="/account" class="wheel-center">登录</RouterLink>
-          </div>
-          <p class="caption-5 wheel-caption">{{ status.daily ? '按剩余名额抽取，奖励以当前奖池为准。' : '扇区仅展示奖项，中奖概率以奖池为准。' }}</p>
-          <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div v-if="!status.daily" class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
-          <button v-if="session.user" class="button primary btn" :disabled="drawDisabled" @click="draw"><Gift :size="17" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : status.daily?.participated ? '今日已参与' : status.daily && !status.daily.remaining ? '今日名额已领完' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
+        <section class="panel-section draw-section" :class="`theme-${appearance.theme}`">
+          <div class="draw-console">
+          <div class="section-heading"><h2>{{ appearance.title || '每日幸运转盘' }}</h2></div>
+          <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div v-if="!status.daily" class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" type="button" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
+          <button v-if="session.user" type="button" class="button primary btn" :disabled="drawDisabled" :aria-busy="drawing" @click="draw"><Gift :size="17" aria-hidden="true" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : status.daily?.participated ? '今日已参与' : status.daily && !status.daily.remaining ? '今日名额已领完' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
           <p v-if="pending && !drawing" class="form-note">上次结果尚未确认，再次核对会使用同一凭证。</p><p v-if="!status.settings.enabled" class="form-note">活动暂未开放。</p><p v-else-if="!status.creditReady" class="form-note">奖励发放服务暂不可用。</p><RouterLink v-else-if="!status.accountLinked && session.user" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink><p v-else-if="status.daily?.participated && !pending" class="form-note">今天的福利已领取，明天再来。</p><p v-else-if="status.daily && !status.daily.remaining && !pending" class="form-note">今日名额已领完，明天 00:00 重置。</p><p v-else-if="status.balance < count && session.user && !pending" class="form-note">本次需要 {{ count }} 次机会，当前次数不足。</p>
-          <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents"> · {{ rewardAmount(award) }}</span></p></div><button class="text-link" @click="tab = 'records'">查看奖励记录<ArrowUpRight :size="15" /></button></div>
-          <p v-if="appearance.rulesText" class="activity-rules">{{ appearance.rulesText }}</p>
+          <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents">，{{ rewardAmount(award) }}</span></p></div><button type="button" class="text-link" @click="tab = 'records'">查看奖励记录</button></div>
+          </div>
+          <div class="lottery-wheel" :class="[`theme-${appearance.theme}`, { 'wheel-dense': wheelSegments.length > 4 }]" data-testid="lottery-wheel">
+            <svg viewBox="0 0 400 400" aria-hidden="true">
+              <defs>
+                <linearGradient :id="`${wheelId}-metal`" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" class="gold-light" /><stop offset=".22" class="gold-shade" /><stop offset=".43" class="gold-light" /><stop offset=".64" class="gold-base" /><stop offset=".82" class="gold-shade" /><stop offset="1" class="gold-light" />
+                </linearGradient>
+                <linearGradient :id="`${wheelId}-shell`" x1="0" y1="0" x2=".75" y2="1">
+                  <stop offset="0" class="enamel-gloss" /><stop offset=".35" class="enamel-base" /><stop offset=".76" class="enamel-deep" /><stop offset="1" class="enamel-base" />
+                </linearGradient>
+                <linearGradient :id="`${wheelId}-featured`" x1="0" y1="0" x2=".3" y2="1">
+                  <stop offset="0" class="action-light" /><stop offset=".55" class="action-base" /><stop offset="1" class="action-deep" />
+                </linearGradient>
+                <linearGradient :id="`${wheelId}-cool`" x1="0" y1="0" x2=".6" y2="1">
+                  <stop offset="0" class="face-light" /><stop offset=".6" class="face-base" /><stop offset="1" class="face-shade" />
+                </linearGradient>
+                <linearGradient :id="`${wheelId}-warm`" x1="0" y1="0" x2=".6" y2="1">
+                  <stop offset="0" class="warm-light" /><stop offset=".6" class="warm-base" /><stop offset="1" class="warm-shade" />
+                </linearGradient>
+                <radialGradient :id="`${wheelId}-lamp`" cx=".35" cy=".3" r=".75">
+                  <stop offset="0" class="lamp-light" /><stop offset=".65" class="gold-light" /><stop offset="1" class="gold-base" />
+                </radialGradient>
+                <path v-for="segment in wheelSegments" :id="`${wheelId}-label-${segment.index}`" :key="`label-${segment.index}`" :d="segment.labelPath" />
+              </defs>
+              <circle cx="200" cy="204" r="194" class="wheel-depth" />
+              <circle cx="200" cy="200" r="195" :fill="`url(#${wheelId}-metal)`" class="wheel-frame" />
+              <circle cx="200" cy="200" r="188" :fill="`url(#${wheelId}-shell)`" class="wheel-rim" />
+              <circle cx="200" cy="200" r="166" :fill="`url(#${wheelId}-metal)`" />
+              <g class="wheel-lights"><g v-for="bulb in 24" :key="bulb" :transform="`rotate(${bulb * 15},200,200)`"><circle cx="200" cy="19" r="6" class="lamp-socket" /><circle cx="200" cy="19" r="4.5" :fill="`url(#${wheelId}-lamp)`" /></g></g>
+              <g class="wheel-disc" :style="{ transform: `rotate(${wheelRotation}deg)` }">
+                <g v-for="segment in wheelSegments" :key="`${segment.id}-${segment.index}`" :class="{ 'is-winner': result?.prizes.at(-1)?.prizeId === segment.id, 'wheel-featured': segment.index === 0 }">
+                  <path :d="segment.path" :fill="`url(#${wheelId}-${segment.index === 0 ? 'featured' : segment.index % 2 ? 'cool' : 'warm'})`" :class="segment.index % 2 ? 'wheel-alternate' : 'wheel-sector'" />
+                  <text class="wheel-label" text-anchor="middle" dominant-baseline="middle">
+                    <textPath class="wheel-name" :href="`#${wheelId}-label-${segment.index}`" startOffset="50%" :textLength="segment.textLength" lengthAdjust="spacingAndGlyphs">{{ segment.labelName }}</textPath>
+                  </text>
+                </g>
+              </g>
+              <circle cx="200" cy="200" r="161" class="wheel-inner-rim" />
+              <circle cx="200" cy="202" r="63" class="wheel-hub-depth" />
+              <circle cx="200" cy="200" r="61" :fill="`url(#${wheelId}-metal)`" class="wheel-hub" />
+              <circle cx="200" cy="200" r="54" :fill="`url(#${wheelId}-featured)`" class="wheel-hub-ring" />
+              <g class="wheel-pointer"><path d="M200 4 C185 4 178 17 184 29 L200 54 L216 29 C222 17 215 4 200 4 Z" :fill="`url(#${wheelId}-metal)`" /><circle cx="200" cy="20" r="7" /></g>
+            </svg>
+            <button v-if="session.user" type="button" class="wheel-center" :disabled="drawDisabled" :aria-label="drawing ? '确认中' : pending ? '核对上次抽奖结果' : `${appearance.buttonText || 'GO'}，抽奖 ${count} 次`" :title="appearance.buttonText || 'GO'" :aria-busy="drawing" @click="draw"><Gift :size="20" aria-hidden="true" /><span>{{ drawing ? '确认中' : pending ? '核对' : appearance.buttonText || 'GO' }}</span></button><RouterLink v-else to="/account" class="wheel-center"><Gift :size="20" aria-hidden="true" /><span>登录</span></RouterLink>
+          </div>
         </section>
-        <section class="panel-section prize-section"><div class="section-heading"><h2>{{ status.daily ? '今日奖池' : '奖池' }}</h2></div><p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p><div class="prize-list"><div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item"><span class="prize-icon" aria-hidden="true"><Gift :size="20" /></span><div><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }}</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p><p class="caption-5">当前概率 {{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}% · {{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div></div><p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p></div></section>
-        <section class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
-        <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户<ArrowUpRight :size="15" /></RouterLink></section>
+        <section class="panel-section prize-section">
+          <div class="section-heading"><h2>{{ status.daily ? '今日奖池' : '奖池' }}</h2></div>
+          <p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p>
+          <div class="prize-list">
+            <div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item">
+              <span class="prize-icon" aria-hidden="true"><Gift :size="20" /></span>
+              <div class="prize-detail"><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }}</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p></div>
+              <div class="prize-availability"><p>当前概率 <strong>{{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}%</strong></p><p>{{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div>
+            </div>
+            <p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p>
+          </div>
+        </section>
+        <section v-if="rules.length" class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
+        <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户</RouterLink></section>
       </div>
       <div v-else-if="tab === 'tasks'" class="stack"><ReferralBenefits /><section v-if="rules.length" class="panel-section"><h2>其他活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div></section></div>
-      <section v-else class="panel-section"><div class="section-heading"><h2>奖励记录</h2><button class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" />刷新</button></div><div v-if="records.length" class="table-wrap"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td>{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td>{{ award.name }}</td><td>{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
+      <section v-else class="panel-section records-section"><div class="section-heading"><h2 id="rewards-heading">奖励记录</h2><button type="button" class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" aria-hidden="true" />刷新</button></div><div v-if="records.length" class="table-wrap" tabindex="0" role="region" aria-labelledby="rewards-heading"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td data-label="时间">{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td data-label="奖励">{{ award.name }}</td><td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td data-label="状态"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" aria-hidden="true" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" type="button" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
     </template>
   </div>
 </template>
 
 <style scoped>
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · signature: daily wheel and prize ledger · nav: kept · states: loading, empty, error, full · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4 · weakest: H, put participation before the wheel on narrow screens */
+/* Hallmark · dropped "获得抽奖机会" · hide this empty heading only when every task is disabled; enabled rules keep the section */
+/* Hallmark · finish-review: subagent · ship · no blocking findings */
 .activity-page { max-width: 1360px; }
-.welfare-intro { color: var(--muted); font-size: 14px; line-height: 22px; margin-top: 8px; }
-.daily-overview { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
-.daily-overview dl { display: flex; flex-wrap: wrap; gap: 16px 48px; margin: 0; }
-.daily-overview dt { color: var(--muted); font-size: 13px; line-height: 20px; }
-.daily-overview dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.activity-page :is(h1, h2, h3) { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.activity-page > .page-heading { margin-bottom: var(--space-group); }
+.activity-page > .tabs { margin-bottom: 0; gap: var(--space-section); }
+.activity-page .tab { min-height: var(--target-size); white-space: nowrap; }
+.daily-overview { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-group) var(--space-section); padding-block: var(--space-group); border-bottom: 1px solid var(--border); }
+.daily-overview dl { display: flex; flex-wrap: wrap; gap: var(--space-group) var(--space-page); margin: 0; }
+.daily-overview dl > div + div { padding-inline-start: var(--space-page); border-inline-start: 1px solid var(--border); }
+.daily-overview dt { color: var(--muted); font-size: 12px; line-height: 20px; }
+.daily-overview dd { margin: var(--space-label) 0 0; font-variant-numeric: tabular-nums; }
 .daily-overview strong { font-size: 28px; line-height: 36px; font-weight: 600; }
-.daily-overview dd span, .daily-overview p { color: var(--muted); font-size: 13px; line-height: 22px; }
+.daily-overview dd span, .daily-overview p { color: var(--muted); font-size: 12px; line-height: 20px; }
 .daily-overview p { margin: 0; }
-.reward-note { margin-bottom: 16px; }
-.pool-caption { color: var(--muted); font-size: 13px; line-height: 20px; margin: -4px 0 16px; }
-.prize-icon { width: 28px; flex: 0 0 28px; padding-top: 3px; color: var(--blue); }
-.prize-item .prize-amount { color: var(--ink); font-size: 15px; font-weight: 500; line-height: 24px; }
-.lottery-wheel .wheel-points { font-size: 16px; font-weight: 600; }
-.activity-page > .tabs { margin-bottom: 16px; }
-.lottery-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.lottery-layout > .panel-section { padding: 16px 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; }
-.lottery-layout > .draw-section, .lottery-layout > .prize-section { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-.lottery-layout > .panel-section > .section-heading { margin-bottom: 16px; }
-.lottery-layout > .panel-section > .section-heading h2 { font-size: 16px; line-height: 24px; }
-.draw-section { min-width: 0; min-height: 400px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(176px, 1fr); align-items: start; align-content: start; align-self: start; column-gap: 24px; row-gap: 16px; grid-column: 1; grid-row: 1; }
-.draw-section > :not(.lottery-wheel) { grid-column: 2; }
-.lottery-layout > .draw-section > .section-heading { margin: 0; }
-.lottery-layout > .draw-section > .section-heading h2 { font-size: 20px; line-height: 28px; }
-.draw-section > .button { width: fit-content; min-width: 176px; margin-top: 0; }
-.draw-section > .form-note { margin-top: 0; }
-.prize-section { grid-column: 2; grid-row: 1; }
-.chances-section { grid-column: 1; grid-row: 2; }
-.account-section { grid-column: 2; grid-row: 2; }
-.lottery-wheel { --wheel-accent: var(--blue); --wheel-light: color-mix(in srgb, var(--blue) 16%, var(--surface)); --wheel-alternate: var(--surface); --wheel-ink: var(--ink); grid-column: 1; grid-row: 1 / span 8; align-self: center; justify-self: center; width: min(100%, 340px); aspect-ratio: 1; margin: 0; position: relative; }
-.theme-violet { --wheel-accent: #bdabef; --wheel-light: color-mix(in srgb, #bdabef 20%, var(--surface)); --wheel-alternate: color-mix(in srgb, #bdabef 6%, var(--surface)); }
-.theme-sunset { --wheel-accent: #edb17e; --wheel-light: color-mix(in srgb, #edb17e 20%, var(--surface)); --wheel-alternate: color-mix(in srgb, #e8c78f 6%, var(--surface)); }
-.lottery-wheel svg { width: 100%; height: 100%; display: block; }
-.wheel-rim { fill: var(--wheel-accent); }
-.wheel-sector { fill: var(--wheel-light); stroke: var(--wheel-accent); stroke-width: 1; }
-.wheel-alternate { fill: var(--wheel-alternate); stroke: var(--wheel-accent); stroke-width: 1; }
-.wheel-disc { transform-origin: 200px 200px; transition: transform 1600ms cubic-bezier(.22, 1, .36, 1); }
-.lottery-wheel text { fill: var(--wheel-ink); font-size: 14px; font-weight: 500; }
-.wheel-pointer { position: absolute; left: calc(50% - 12px); top: -4px; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 24px solid var(--wheel-accent); }
-.wheel-center { position: absolute; inset: 37%; border-radius: 50%; background: var(--wheel-accent); color: var(--action-ink); display: flex; align-items: center; justify-content: center; padding: 8px; font-weight: 600; font-size: 16px; text-align: center; overflow-wrap: anywhere; border: 4px solid var(--canvas); }
-.wheel-center:disabled { opacity: .72; color: var(--action-ink); cursor: default; }
-.theme-violet .wheel-center, .theme-sunset .wheel-center { color: #17252a; }
-.wheel-center:not(:disabled):hover { filter: brightness(1.1); }
-.wheel-center:focus-visible { outline-color: var(--focus-ring); outline-offset: var(--focus-outline-offset); }
-.wheel-caption { text-align: left; color: var(--muted); font-size: 13px; line-height: 20px; }
-.draw-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-block: 8px; }
-.draw-controls > p { color: var(--muted); }
-.draw-controls strong { font-variant-numeric: tabular-nums; font-size: 24px; color: var(--ink); margin-inline: 4px; font-weight: 500; }
-.draw-controls .view-switch { padding: 4px; background: var(--canvas); border-color: var(--border); }
-.view-switch .button { min-height: 40px; padding: 8px 16px; border-radius: 4px; }
-.view-switch .selected { background: var(--blue-soft); color: var(--blue); }
-.draw-result { margin: 8px 0 0; display: grid; gap: 16px; padding: 0 0 0 12px; background: transparent; border: 0; border-left: 2px solid var(--blue); border-radius: 0; color: var(--ink); }
-.draw-result > div { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-.draw-result .caption-5 { font-variant-numeric: tabular-nums; }
-.activity-rules { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 14px; line-height: 24px; }
-.prize-list { display: grid; gap: 0; }
-.prize-item { display: flex; align-items: start; gap: 12px; min-width: 0; padding: 16px 0; border-bottom: 1px solid var(--border); }
-.prize-item:first-child { padding-top: 0; }
-.prize-item:last-child { border-bottom: 0; }
-.prize-item .avatar { width: 32px; height: 32px; flex-shrink: 0; border-radius: 4px; }
-.prize-item > div { min-width: 0; overflow-wrap: anywhere; }
-.prize-item p { margin-top: 4px; overflow-wrap: anywhere; font-size: 13px; line-height: 20px; }
-.activity-page .reward-item { justify-content: space-between; align-items: flex-start; gap: 16px; margin: 0; padding: 16px 0; border-bottom: 1px solid var(--border); }
-.activity-page .reward-item:last-of-type { border-bottom: 0; }
-.activity-page .reward-item > span { flex-shrink: 0; color: var(--blue); font-variant-numeric: tabular-nums; }
-.activity-page .data-table { font-variant-numeric: tabular-nums; }
-.activity-loading { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
-.activity-loading .skeleton { height: 400px; border-radius: 8px; }
-@media (max-width: 999px) {
-  .activity-page > .page-heading h1 { display: none; }
-  .welfare-intro { margin-top: 0; }
+.lottery-layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--space-section) var(--space-page); padding-top: var(--space-section); align-items: start; }
+.lottery-layout > .panel-section { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.lottery-layout > .panel-section > .section-heading { margin-bottom: var(--space-group); }
+.lottery-layout h2 { font-size: 18px; line-height: 28px; }
+.draw-section { --wheel-shell-gloss: var(--lottery-enamel-gloss); --wheel-shell: var(--lottery-enamel); --wheel-shell-deep: var(--lottery-enamel-deep); --wheel-action-light: var(--lottery-action-light); --wheel-action: var(--lottery-action); --wheel-action-deep: var(--lottery-action-deep); display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(176px, 1fr); align-items: center; gap: var(--space-section); }
+.draw-console { display: grid; grid-column: 2; grid-row: 1; justify-items: start; gap: var(--space-group); min-width: 0; }
+.draw-console > .section-heading { margin: 0; }
+.lottery-layout > .draw-section h2 { font-size: 20px; line-height: 28px; }
+.draw-console > .button { min-width: 176px; max-width: 100%; min-height: var(--control-height); margin: 0; padding: var(--space-small) var(--space-group); white-space: nowrap; }
+.draw-console > .button.primary, .draw-console > .button.primary:hover:not(:disabled) { min-height: 48px; padding-inline: var(--space-section); border: 2px solid var(--lottery-metal); border-radius: 999px; background: var(--wheel-action); background: linear-gradient(180deg in oklab, var(--wheel-action-light), var(--wheel-action) 55%, var(--wheel-action-deep)); color: var(--lottery-lamp); font-size: 16px; font-weight: 600; box-shadow: inset 0 1px 0 var(--lottery-metal-light), 0 4px 8px var(--lottery-shadow); }
+.activity-page .draw-console > .button.primary:not(:disabled):active { background-color: var(--wheel-action-deep); filter: brightness(.94); }
+.draw-console > .form-note { margin: 0; min-height: 1lh; }
+.lottery-layout > .prize-section { padding-inline-start: var(--space-page); border-inline-start: 1px solid var(--border); }
+.pool-caption { color: var(--muted); font-size: 12px; line-height: 20px; margin-bottom: var(--space-small); }
+.lottery-layout > .prize-section > .section-heading { margin-bottom: var(--space-label); }
+.lottery-wheel { position: relative; isolation: isolate; grid-column: 1; grid-row: 1; justify-self: center; inline-size: min(100%, 320px); aspect-ratio: 1; margin: 0; }
+.theme-violet { --wheel-shell-gloss: color-mix(in oklab, var(--lottery-violet-accent) 65%, var(--lottery-lamp)); --wheel-shell: var(--lottery-violet-accent); --wheel-shell-deep: color-mix(in oklab, var(--lottery-violet-accent) 40%, var(--lottery-enamel-edge)); --wheel-action-light: color-mix(in oklab, var(--lottery-violet-accent) 45%, var(--lottery-enamel-edge)); --wheel-action: color-mix(in oklab, var(--lottery-violet-accent) 30%, var(--lottery-enamel-edge)); --wheel-action-deep: color-mix(in oklab, var(--lottery-violet-accent) 20%, var(--lottery-enamel-edge)); }
+.theme-sunset { --wheel-shell-gloss: color-mix(in oklab, var(--lottery-sunset-accent) 65%, var(--lottery-lamp)); --wheel-shell: var(--lottery-sunset-accent); --wheel-shell-deep: var(--lottery-metal-edge); --wheel-action-light: color-mix(in oklab, var(--lottery-sunset-accent) 35%, var(--lottery-metal-edge)); --wheel-action: var(--lottery-metal-edge); --wheel-action-deep: color-mix(in oklab, var(--lottery-metal-edge) 75%, var(--lottery-enamel-edge)); }
+.lottery-wheel svg { display: block; inline-size: 100%; block-size: 100%; }
+.lottery-wheel > svg { filter: drop-shadow(0 8px 9px var(--lottery-shadow)); }
+.gold-light { stop-color: var(--lottery-metal-light); }
+.gold-base { stop-color: var(--lottery-metal); }
+.gold-shade { stop-color: var(--lottery-metal-shade); }
+.enamel-gloss { stop-color: var(--wheel-shell-gloss); }
+.enamel-base { stop-color: var(--wheel-shell); }
+.enamel-deep { stop-color: var(--wheel-shell-deep); }
+.action-light { stop-color: var(--wheel-action-light); }
+.action-base { stop-color: var(--wheel-action); }
+.action-deep { stop-color: var(--wheel-action-deep); }
+.face-light { stop-color: var(--lottery-face-light); }
+.face-base { stop-color: var(--lottery-face); }
+.face-shade { stop-color: var(--lottery-face-shade); }
+.warm-light { stop-color: var(--lottery-warm-light); }
+.warm-base { stop-color: var(--lottery-warm); }
+.warm-shade { stop-color: var(--lottery-warm-shade); }
+.lamp-light { stop-color: var(--lottery-lamp); }
+.wheel-depth { fill: var(--lottery-enamel-edge); }
+.wheel-frame { stroke: var(--lottery-metal-edge); stroke-width: 1; }
+.wheel-rim { stroke: var(--lottery-metal-light); stroke-width: 1.5; }
+.wheel-lights { filter: drop-shadow(0 1px 2px var(--lottery-metal-shade)); }
+.lamp-socket { fill: var(--lottery-metal); stroke: var(--lottery-metal-light); stroke-width: .75; }
+.wheel-sector, .wheel-alternate { stroke: var(--lottery-metal); stroke-width: 1.5; }
+.wheel-disc { transform-origin: 200px 200px; }
+.wheel-label { fill: var(--lottery-face-ink); font-size: 24px; font-weight: 600; }
+.wheel-featured .wheel-label { fill: var(--lottery-lamp); }
+.wheel-dense .wheel-label { font-size: 16px; }
+.wheel-inner-rim { fill: none; stroke: var(--lottery-metal-light); stroke-width: 1; }
+.wheel-hub-depth { fill: var(--lottery-metal-edge); }
+.wheel-hub { stroke: var(--lottery-metal-light); stroke-width: 1.5; }
+.wheel-hub-ring { stroke: var(--lottery-metal-shade); stroke-width: 1.5; }
+.wheel-disc .is-winner > path { stroke: var(--lottery-metal-light); stroke-width: 3; }
+.wheel-pointer { filter: drop-shadow(0 3px 2px var(--lottery-shadow)); }
+.wheel-pointer path { stroke: var(--lottery-metal-edge); stroke-width: 1; }
+.wheel-pointer circle { fill: var(--wheel-shell-deep); stroke: var(--lottery-metal-light); stroke-width: 1.5; }
+.wheel-center { position: absolute; inset-inline-start: 50%; inset-block-start: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-label); inline-size: 27%; aspect-ratio: 1; min-block-size: var(--target-size); padding: var(--space-label); border: 1px solid var(--lottery-metal-light); border-radius: 50%; background: transparent; color: var(--lottery-lamp); font-size: 12px; line-height: 16px; font-weight: 500; text-align: center; }
+.wheel-center span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-inline-size: 100%; flex-shrink: 0; overflow: hidden; overflow-wrap: anywhere; }
+.wheel-center svg { inline-size: 20px; block-size: 20px; flex-shrink: 0; color: currentColor; }
+.wheel-center:not(:disabled):active { transform: translate(-50%, -50%); background: color-mix(in oklab, var(--lottery-enamel-edge) 16%, transparent); }
+.wheel-center:disabled { opacity: .55; cursor: not-allowed; }
+.activity-page :is(button, a, .table-wrap):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.activity-page button:not(:disabled):active { background-color: var(--surface-soft); }
+.activity-page button.primary:not(:disabled):active { background-color: var(--blue-hover); }
+@media (hover: hover) {
+  .wheel-center:not(:disabled):hover { background: color-mix(in oklab, var(--lottery-lamp) 8%, transparent); }
+  .draw-console > .button.primary:not(:disabled):hover { filter: brightness(1.06); }
 }
-@media (max-width: 899px) {
+.draw-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-control); }
+.draw-controls > p { color: var(--muted); }
+.draw-controls strong { margin-inline: var(--space-label); font-size: 28px; line-height: 36px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.draw-controls .view-switch { padding: var(--space-label); }
+.view-switch .button { min-height: var(--control-height); padding: var(--space-small) var(--space-control); }
+.view-switch .selected { background: var(--surface-soft); color: var(--ink); }
+.draw-result { display: grid; gap: var(--space-small); margin: 0; padding-block: var(--space-control); border: 0; border-block-start: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--ink); }
+.draw-result > div { display: grid; gap: var(--space-label); }
+.draw-result .caption-5 { font-variant-numeric: tabular-nums; }
+.draw-result .text-link { justify-self: start; min-block-size: var(--target-size); }
+.prize-list { display: grid; }
+.prize-item { display: grid; grid-template-columns: 20px minmax(0, 1fr) max-content; align-items: start; gap: var(--space-control); padding-block: var(--space-control); border-bottom: 1px solid var(--border); }
+.prize-item:last-child { border-bottom: 0; }
+.prize-icon { color: var(--muted); }
+.prize-item > div { min-width: 0; overflow-wrap: anywhere; }
+.prize-item p { margin-top: var(--space-label); font-size: 12px; line-height: 20px; }
+.prize-item .prize-amount { color: var(--ink); font-size: 14px; font-weight: 500; line-height: 21px; }
+.prize-availability { color: var(--muted); text-align: end; font-variant-numeric: tabular-nums; }
+.prize-availability strong { color: var(--ink); font-weight: 500; }
+.lottery-layout > .chances-section { grid-column: 1 / -1; padding-block: var(--space-group); border-block-start: 1px solid var(--border); }
+.activity-page .reward-item { justify-content: space-between; align-items: start; gap: var(--space-group); margin: 0; padding-block: var(--space-control); border-bottom: 1px solid var(--border); }
+.activity-page .reward-item:last-of-type { border-bottom: 0; }
+.activity-page .reward-item > div { flex: 1; }
+.activity-page .reward-item > span { flex-shrink: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lottery-layout > .account-section { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-control) var(--space-page); padding-block: var(--space-group); border-block-start: 1px solid var(--border); }
+.lottery-layout > .account-section > .section-heading { margin: 0; }
+.account-section h2 { font-size: 14px; line-height: 21px; }
+.account-section .info-list { display: flex; flex-wrap: wrap; gap: var(--space-control) var(--space-section); margin: 0; padding: 0; }
+.account-section .info-list > div { gap: var(--space-small); }
+.account-section > .button { margin: 0 0 0 auto; min-height: var(--control-height); white-space: nowrap; }
+.activity-page > .stack { gap: var(--space-section); }
+.records-section > .section-heading { margin-bottom: var(--space-group); }
+.records-section .table-wrap { container: reward-records / inline-size; }
+.records-section .data-table { font-variant-numeric: tabular-nums; }
+.records-section .data-table th { background: transparent; border-bottom: 1px solid var(--border); }
+.activity-loading { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--space-page); padding-top: var(--space-section); }
+.activity-loading .skeleton { min-block-size: 320px; border-radius: var(--radius); }
+@container reward-records (max-width: 640px) {
+  .data-table, .data-table tbody, .data-table tr { display: block; }
+  .data-table thead { display: none; }
+  .data-table tr { padding-block: var(--space-control); border-bottom: 1px solid var(--border); }
+  .data-table td { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: var(--space-control); min-width: 0; padding: var(--space-label) 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .data-table td::before { content: attr(data-label); color: var(--muted); font-size: 12px; }
+  .data-table td .status { justify-self: start; }
+}
+@media (max-width: 1099px) {
   .lottery-layout, .activity-loading { grid-template-columns: minmax(0, 1fr); }
-  .draw-section { grid-template-columns: minmax(208px, 280px) minmax(0, 1fr); column-gap: 24px; min-height: 0; }
-  .lottery-layout > .panel-section { grid-column: auto; grid-row: auto; }
+  .draw-section { grid-template-columns: minmax(0, 320px) minmax(0, 1fr); }
+  .lottery-layout > .prize-section { padding: var(--space-section) 0 0; border: 0; border-block-start: 1px solid var(--border); }
+}
+@media (max-width: 999px) {
+  .activity-page > .page-heading { position: relative; height: 0; min-height: 0; margin: 0; }
+  .activity-page > .page-heading h1 { display: none; }
+  .activity-page > .page-heading > .icon-button { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
+  .activity-page > .tabs { padding-inline-end: calc(var(--target-size) + var(--space-small)); gap: var(--space-group); }
 }
 @media (max-width: 639px) {
-  .daily-overview { align-items: flex-start; flex-direction: column; gap: 12px; padding-top: 4px; }
-  .daily-overview dl { width: 100%; justify-content: space-between; gap: 12px; }
+  .activity-page { padding-top: var(--space-group); }
+  .daily-overview { align-items: start; gap: var(--space-control); padding-block: var(--space-control); }
+  .daily-overview dl { inline-size: 100%; gap: var(--space-group); }
+  .daily-overview dl > div { flex: 1; }
+  .daily-overview dl > div + div { padding-inline-start: var(--space-group); }
   .daily-overview strong { font-size: 24px; line-height: 32px; }
   .daily-overview p br { display: none; }
   .daily-overview p span { display: block; }
-  .draw-section { display: flex; flex-direction: column; gap: 16px; }
-  .draw-section > .section-heading { width: 100%; }
-  .lottery-wheel { width: min(100%, 280px); align-self: center; order: 1; }
-  .wheel-caption { order: 2; }
-  .draw-controls { width: 100%; order: 3; margin-block: 0; }
-  .draw-section > .button { width: 100%; order: 4; }
-  .draw-section > .form-note, .draw-section > .text-link { order: 5; }
-  .draw-result { width: 100%; order: 6; }
-  .activity-rules { order: 7; }
-  .view-switch .button { padding-inline: 12px; }
+  .lottery-layout { padding-top: var(--space-group); gap: var(--space-group); }
+  .draw-section { grid-template-columns: minmax(0, 1fr); gap: var(--space-control); }
+  .draw-console { grid-column: 1; grid-row: auto; justify-items: stretch; }
+  .draw-console > .button { inline-size: 100%; }
+  .lottery-wheel { grid-column: 1; grid-row: auto; inline-size: min(100%, 248px); }
+  .prize-item { column-gap: var(--space-small); }
+  .prize-availability p { max-inline-size: 104px; }
+  .lottery-layout > .account-section { gap: var(--space-group); }
+  .account-section .info-list { inline-size: 100%; }
+  .account-section > .button { margin: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .wheel-disc { transition: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  .wheel-disc { transition: transform 1600ms var(--ease); }
+}
 </style>

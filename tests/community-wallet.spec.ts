@@ -22,7 +22,6 @@ for (const authenticated of [true, false]) test(`lottery displays point equivale
   } }))
   await page.goto('/activities')
   await expect(page.locator('.prize-list')).toContainText('约 2,500 积分（永久积分）')
-  await expect(page.locator('.activity-page')).toContainText('统一折算为社区永久积分')
   await expect(page.locator('.activity-page')).not.toContainText('$0.50')
   if (authenticated) {
     await page.getByRole('button', { name: '奖励记录', exact: true }).click()

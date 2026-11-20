@@ -87,7 +87,7 @@ function clear() {
 .gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: inherit; }
 .gooey-clear:hover { background: var(--border); }
 .gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--ink); }
-.gooey-input.persistent { position: relative; inset: auto; width: 100%; border-radius: 8px; background: var(--surface-soft); }
+.gooey-input.persistent { position: relative; inset: auto; width: 100%; border-radius: 8px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--control-border); }
 .persistent .gooey-search-icon { left: 16px; }
 .persistent .gooey-field { left: 40px; right: 0; width: auto; border-radius: 8px; }
 .persistent .gooey-field input { border-radius: 8px; padding-left: 4px; }
