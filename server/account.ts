@@ -233,7 +233,7 @@ async function synchronizeSession(ctx: RequestContext) {
   // Keep one audit entry per account session without creating another login credential.
   await transaction(ctx.db, async client => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`account-signin:${account.binding.sessionHash}`])
-    await client.query(`INSERT INTO signin(id,"userId",ip,headers,success) SELECT $1,$2,$3,$4,true
+    await client.query(`INSERT INTO signin(id,"userId",ip,headers,success) SELECT $1,$2::varchar,$3,$4,true
       WHERE NOT EXISTS (SELECT 1 FROM signin WHERE "userId"=$2 AND headers->>'accountSessionHash'=$5)`,
       [ctx.newId(), user.id, ctx.ip || ctx.req.socket.remoteAddress || null,
         JSON.stringify({ 'user-agent': String(ctx.req.headers['user-agent'] || '').slice(0, 512), accountSessionHash: account.binding.sessionHash }),

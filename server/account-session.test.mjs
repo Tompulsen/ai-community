@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import test, { after, beforeEach } from 'node:test'
+import pg from 'pg'
 import { accountSessionHash, readAccountSession, accountSessionVerifier } from './account-session.ts'
 import { authServices, publicUser, roleCondition } from './auth.ts'
 import { handleAccount } from './account.ts'
@@ -331,6 +332,32 @@ test('existing external subject reuses its profile without minting another sessi
   assert.equal(inserts.some(item => item.sql.startsWith('INSERT INTO "user"')), false)
   assert.deepEqual(snapshots, [['https://accounts.test', '7', '7', 'creator']])
   assert.doesNotMatch(JSON.stringify(response.value), /native-generation|retained-password|must-not-leak/)
+})
+
+test('PostgreSQL login audit accepts varchar account IDs and records each session once', { skip: !process.env.FOLLOWING_TEST_DATABASE_URL }, async t => {
+  const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
+  assert.equal(new URL(connectionString).pathname, '/community_follow_test')
+  const client = new pg.Client({ connectionString })
+  t.after(() => client.end())
+  await client.connect()
+  await client.query(`CREATE TEMP TABLE signin (
+    id varchar(32) PRIMARY KEY, "userId" varchar(32) NOT NULL, ip varchar(128),
+    headers jsonb NOT NULL, success boolean NOT NULL
+  )`)
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const { ctx, inserts } = synchronizationFixture()
+  await handleAccount(ctx)
+  const audit = inserts.find(item => item.sql.startsWith('INSERT INTO signin'))
+  assert(audit)
+  assert.equal((await client.query(audit.sql, audit.values)).rowCount, 1)
+  assert.equal((await client.query(audit.sql, audit.values)).rowCount, 0)
+  assert.equal((await client.query('SELECT COUNT(*)::integer AS count FROM signin')).rows[0].count, 1)
+  const nextSession = [...audit.values]
+  nextSession[0] = 'next123'
+  nextSession[4] = accountSessionHash(request('t'.repeat(43)))
+  nextSession[3] = JSON.stringify({ ...JSON.parse(nextSession[3]), accountSessionHash: nextSession[4] })
+  assert.equal((await client.query(audit.sql, nextSession)).rowCount, 1)
+  assert.equal((await client.query('SELECT COUNT(*)::integer AS count FROM signin')).rows[0].count, 2)
 })
 
 test('a first login creates the user with the verified numeric subject and exact account username', async t => {
