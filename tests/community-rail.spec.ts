@@ -57,7 +57,7 @@ for (const mode of ['light', 'dark']) {
   test(`rail icons have hover names and consistent targets in ${mode} mode`, async ({ page }) => {
     await mockUnifiedAccount(page, true)
     await page.addInitScript(mode => {
-      localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode }))
+      if (!localStorage.getItem('ai-community-next:appearance:v1')) localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'paper', dark: 'jade' }))
     }, mode)
     await page.route('**/api/notifications', route => route.fulfill({ json: {
       items: [], unreadCounts: { announcement: 2, activity: 7, messages: 135 },
@@ -86,10 +86,20 @@ for (const mode of ['light', 'dark']) {
     expect(await rail.locator('.rail-brand').evaluate(element => {
       const box = element.getBoundingClientRect(), style = getComputedStyle(element)
       return [box.width, box.height, style.backgroundColor, style.boxShadow, style.borderWidth]
-    })).toEqual([36, 36, 'rgba(0, 0, 0, 0)', 'none', '0px'])
+    })).toEqual([40, 40, 'rgba(0, 0, 0, 0)', 'none', '0px'])
     const logo = (await rail.locator('.rail-brand img, .rail-brand-fallback').boundingBox())!
     const search = (await page.locator('.header-search-slot').boundingBox())!
-    expect([logo.width, logo.height, logo.y]).toEqual([36, 36, 14])
+    expect([logo.width, logo.height, logo.y]).toEqual([40, 40, 20])
+    const railBox = (await rail.boundingBox())!
+    const railCenter = railBox.x + railBox.width / 2
+    expect(logo.x + logo.width / 2).toBe(railCenter)
+    for (const selector of ['.rail-primary', '.rail-utilities']) {
+      const box = (await rail.locator(selector).boundingBox())!
+      expect(box.x - railBox.x).toBe(20)
+      expect(railBox.x + railBox.width - box.x - box.width).toBe(20)
+    }
+    const header = (await page.locator('.app-header').boundingBox())!
+    expect(logo.y + logo.height / 2).toBe(header.y + header.height / 2)
     expect(search.height).toBe(44)
     expect(search.y).toBeGreaterThan((await page.locator('.discovery-creation').boundingBox())!.y)
     const current = rail.getByRole('link', { name: '首页', exact: true })
@@ -113,8 +123,10 @@ for (const mode of ['light', 'dark']) {
     await expect(rail.getByRole('link', { name: '社区', exact: true })).toBeFocused()
     await expect(rail.locator('.rail-tooltip')).toHaveText('社区')
     await page.locator('main').click()
-    await rail.getByRole('link', { name: '主题外观', exact: true }).hover()
-    await expect(rail.locator('.rail-tooltip')).toHaveText('主题外观')
+    const toggleLabel = mode === 'dark' ? '切换到明亮模式' : '切换到暗色模式'
+    const theme = rail.getByRole('button', { name: toggleLabel, exact: true })
+    await theme.hover()
+    await expect(rail.locator('.rail-tooltip')).toHaveText(toggleLabel)
     await rail.locator('.rail-tooltip').hover()
     await expect(rail.locator('.rail-tooltip')).toBeVisible()
     await page.keyboard.press('Escape')
@@ -123,12 +135,39 @@ for (const mode of ['light', 'dark']) {
     await page.screenshot({ path: test.info().outputPath(`community-rail-${mode}.png`) })
     await rail.getByRole('link', { name: '账号设置', exact: true }).click()
     await expect(rail.getByRole('link', { name: '账号设置', exact: true })).toHaveAttribute('aria-current', 'page')
-    await rail.getByRole('link', { name: '主题外观', exact: true }).click()
-    await expect(page).toHaveURL('http://localhost:18775/account?tab=theme')
-    await expect(rail.getByRole('link', { name: '主题外观', exact: true })).toHaveAttribute('aria-current', 'page')
-    await expect(rail.getByRole('link', { name: '账号设置', exact: true })).not.toHaveAttribute('aria-current', 'page')
+    await theme.click()
+    const nextMode = mode === 'dark' ? 'light' : 'dark'
+    await expect(page).toHaveURL('http://localhost:18775/account')
+    await expect(page.locator('html')).toHaveAttribute('data-color-scheme', nextMode)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', nextMode === 'dark' ? 'jade' : 'paper')
+    const reverseToggle = rail.getByRole('button', { name: mode === 'dark' ? '切换到暗色模式' : '切换到明亮模式', exact: true })
+    await expect(reverseToggle).toBeFocused()
+    await page.reload()
+    await expect(page.locator('html')).toHaveAttribute('data-color-scheme', nextMode)
+    await reverseToggle.focus()
+    await page.keyboard.press('Enter')
+    await expect(page.locator('html')).toHaveAttribute('data-color-scheme', mode)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', mode === 'dark' ? 'jade' : 'paper')
+    await page.goto('/account?tab=theme')
+    await expect(rail.getByRole('link', { name: '账号设置', exact: true })).toHaveAttribute('aria-current', 'page')
   })
 }
+
+test('guest theme shortcut overrides automatic modes without leaving discovery', async ({ page }) => {
+  await mockUnifiedAccount(page)
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/discover')
+  for (const mode of ['system', 'schedule'] as const) {
+    await page.evaluate(mode => window.communityAppearance.set({ mode }), mode)
+    const current = await page.locator('html').getAttribute('data-color-scheme')
+    const next = current === 'dark' ? 'light' : 'dark'
+    await page.locator('.rail-theme').focus()
+    await page.keyboard.press('Space')
+    await expect(page.locator('html')).toHaveAttribute('data-color-scheme', next)
+    await expect(page).toHaveURL('http://localhost:18775/discover')
+    expect(await page.evaluate(() => window.communityAppearance.settings.mode)).toBe(next)
+  }
+})
 
 test('floating groups stay separate on short screens and preserve mobile navigation', async ({ page }) => {
   await mockUnifiedAccount(page, true)
@@ -139,10 +178,10 @@ test('floating groups stay separate on short screens and preserve mobile navigat
     const utilities = (await page.locator('.rail-utilities').boundingBox())!
     const brand = (await page.locator('.rail-heading').boundingBox())!
     const gap = height > 640 ? 24 : 12
-    expect(brand.y).toBe(14)
+    expect(brand.y).toBe(20)
     expect(primary.y).toBeGreaterThanOrEqual(brand.y + brand.height + gap)
     expect(primary.y + primary.height + gap).toBeLessThanOrEqual(utilities.y)
-    expect(utilities.y + utilities.height).toBe(height - (height > 640 ? 16 : 12))
+    expect(utilities.y + utilities.height).toBe(height - 20)
     await expect(page.locator('.rail-primary .rail-brand')).toHaveCount(0)
     const publish = page.locator('.community-rail .header-submission')
     await publish.focus()
@@ -178,15 +217,16 @@ for (const mode of ['light', 'dark'] as const) {
     for (const selector of ['svg', '.rail-label']) {
       expect((await settings.locator(selector).boundingBox())!.x).toBe((await home.locator(selector).boundingBox())!.x)
     }
-    const theme = rail.getByRole('link', { name: '主题外观', exact: true })
+    const toggleLabel = mode === 'dark' ? '切换到明亮模式' : '切换到暗色模式'
+    const theme = rail.getByRole('button', { name: toggleLabel, exact: true })
     await theme.hover()
-    await expect(rail.locator('.rail-tooltip')).toHaveText('主题外观')
+    await expect(rail.locator('.rail-tooltip')).toHaveText(toggleLabel)
     await rail.locator('.rail-tooltip').hover()
     await expect(rail.locator('.rail-tooltip')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(rail.locator('.rail-tooltip')).toHaveCount(0)
     await theme.focus()
-    await expect(rail.locator('.rail-tooltip')).toHaveText('主题外观')
+    await expect(rail.locator('.rail-tooltip')).toHaveText(toggleLabel)
     await home.focus()
     await expect(rail.locator('.rail-tooltip')).toHaveCount(0)
     expect(await rail.locator('.rail-scroll').evaluate(element => getComputedStyle(element).overscrollBehaviorY)).toBe('contain')
@@ -225,7 +265,7 @@ for (const mode of ['light', 'dark'] as const) {
     const expand = rail.getByRole('button', { name: '展开侧栏', exact: true })
     await expect(expand).toBeFocused()
     await expect(expand).toHaveAttribute('aria-expanded', 'false')
-    expect((await page.locator('main').boundingBox())!.x).toBe(72)
+    expect((await page.locator('main').boundingBox())!.x).toBe(92)
     await expect(rail.locator('.nav-link .rail-label').first()).toBeHidden()
   })
 }

@@ -41,11 +41,11 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       const creation = (await page.locator('.discovery-creation').boundingBox())!
       const rail = (await page.locator('.community-rail').boundingBox())!
       expect(rail.x).toBe(0)
-      expect(rail.width).toBe(72)
+      expect(rail.width).toBe(92)
       expect(rail.height).toBe(900)
-      expect(header.x).toBe(72)
-      expect(main.x).toBe(72)
-      expect(header.height).toBe(64)
+      expect(header.x).toBe(92)
+      expect(main.x).toBe(92)
+      expect(header.height).toBe(80)
       expect(search.width).toBeGreaterThanOrEqual(220)
       expect(search.width).toBeLessThanOrEqual(320)
       expect(search.x + search.width).toBeLessThanOrEqual(width)
@@ -77,7 +77,7 @@ for (const width of [320, 390, 639, 640, 768, 1000, 1280, 1440, 1920, 2560]) {
       for (const link of await nav.getByRole('link').all()) {
         const bounds = (await link.boundingBox())!
         expect(bounds.x).toBeGreaterThanOrEqual(0)
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(72)
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(92)
         await expect(link.locator('svg')).toHaveCount(1)
       }
       await expect(page.locator('.community-rail .community-actions')).toBeVisible()

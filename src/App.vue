@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, Palette, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Users, X } from '@lucide/vue'
+import { ArrowLeft, Bell, Gift, Heart, House, LogOut, MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Users, X } from '@lucide/vue'
 import WorkEditor from './components/WorkEditor.vue'
 import BackgroundStudio from './components/BackgroundStudio.vue'
 import CommunityTools from './components/CommunityTools.vue'
@@ -13,6 +13,7 @@ import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvit
 import { inbox, loadInbox, type InboxCategory } from './inbox'
 import { loadSite, site } from './site'
 import { studioSidebarWidth } from './studio-preferences'
+import { appearance, themeState } from './appearance'
 
 const route = useRoute(), router = useRouter()
 const guestAccount = computed(() => route.path === '/account' && !session.user)
@@ -25,6 +26,11 @@ const desktopCommunity = computed(() => communityShell.value && wideViewport.val
 const mobileCommunity = computed(() => communityShell.value && !wideViewport.value)
 const railExpanded = ref(false)
 const railHint = ref<{ label: string; top: number } | null>(null)
+const themeToggleLabel = computed(() => themeState.value.current === 'dark' ? '切换到明亮模式' : '切换到暗色模式')
+function toggleTheme() {
+  railHint.value = null
+  appearance.set({ mode: themeState.value.current === 'dark' ? 'light' : 'dark' })
+}
 async function toggleRail() {
   railHint.value = null
   railExpanded.value = !railExpanded.value
@@ -244,8 +250,8 @@ function restoreMessageTrigger() {
         <div class="rail-scroll"><div id="community-rail-navigation" /><div id="community-rail-actions" /></div>
       </div>
       <div class="rail-utilities">
-        <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings && route.query.tab !== 'theme' ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">账号设置</span></RouterLink>
-        <RouterLink to="/account?tab=theme" class="rail-theme icon-button" aria-label="主题外观" title="主题外观" :aria-current="accountSettings && route.query.tab === 'theme' ? 'page' : undefined"><Palette class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
+        <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">账号设置</span></RouterLink>
+        <button type="button" class="rail-theme icon-button" :aria-label="themeToggleLabel" :title="themeToggleLabel" @click="toggleTheme"><component :is="themeState.current === 'dark' ? Sun : Moon" class="rail-icon" :size="22" aria-hidden="true" /></button>
         <button v-if="!railExpanded" type="button" class="rail-toggle icon-button" aria-label="展开侧栏" title="展开侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><PanelLeftOpen class="rail-icon" :size="22" aria-hidden="true" /></button>
       </div>
       <div v-if="railHint" class="rail-tooltip" role="tooltip" aria-hidden="true" :style="{ top: railHint.top + 'px' }"><span>{{ railHint.label }}</span></div>
@@ -420,11 +426,11 @@ function restoreMessageTrigger() {
 .community-shell .header-search-slot { position: relative; width: 100%; height: 44px; min-width: 0; margin: 0; }
 .community-shell .header-tools { width: 100%; min-width: 0; }
 @media (min-width: 1000px) {
-  :global(:root:has(.community-shell)) { --header-height: 64px; }
+  :global(:root:has(.community-shell)) { --header-height: 80px; }
   :global(:root:has(.community-shell:is(.account-settings-shell, .profile-shell))) { --header-height: 0px; }
-  .community-shell { --community-rail-width: 72px; --rail-control-size: 36px; margin-left: var(--community-rail-width); }
+  .community-shell { --community-rail-width: 92px; --rail-control-size: 36px; --rail-brand-size: 40px; margin-left: var(--community-rail-width); }
   .community-shell.rail-expanded { --community-rail-width: 248px; }
-  .community-shell > .app-header { height: 64px; }
+  .community-shell > .app-header { height: 80px; }
   .community-shell .header-inner { display: flex; }
   .community-shell .header-inner > .brand { display: none; }
   .community-shell .header-tools { justify-content: flex-end; gap: 16px; }
@@ -434,7 +440,7 @@ function restoreMessageTrigger() {
   .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; align-items: center; justify-items: center; gap: 24px; width: var(--community-rail-width, 72px); padding: 16px 12px; }
+  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: grid; grid-template-rows: 56px minmax(0, 1fr) auto; align-items: center; justify-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
   .rail-heading { display: flex; align-items: center; justify-content: center; width: 64px; min-width: 0; height: 56px; }
   .rail-primary, .rail-utilities, .rail-brand { background: var(--surface); box-shadow: 0 4px 16px #0000000d; }
   .rail-primary, .rail-utilities { display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px; border-radius: 32px; }
@@ -459,10 +465,10 @@ function restoreMessageTrigger() {
   .community-rail :deep(.tools-panel) { left: calc(var(--community-rail-width) + 12px); right: auto; top: 72px; max-height: calc(100dvh - 88px); }
   .rail-tooltip { position: fixed; z-index: 60; left: calc(var(--community-rail-width) - 4px); transform: translateY(-50%); padding-left: 12px; max-width: calc(100vw - var(--community-rail-width) - 12px); }
   .rail-tooltip > span { display: block; padding: 8px 12px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
-  .community-shell:not(.rail-expanded) .community-rail { grid-template-rows: var(--rail-control-size) minmax(0, 1fr) auto; padding-inline: 6px; padding-top: calc((64px - var(--rail-control-size)) / 2); }
-  .community-shell:not(.rail-expanded) .rail-heading { width: calc(var(--rail-control-size) + 16px); height: var(--rail-control-size); }
-  .community-shell:not(.rail-expanded) .rail-brand { width: var(--rail-control-size); height: var(--rail-control-size); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-  .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-control-size); height: var(--rail-control-size); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) .community-rail { grid-template-rows: var(--rail-brand-size) minmax(0, 1fr) auto; padding: 20px 16px; padding-top: calc((80px - var(--rail-brand-size)) / 2); }
+  .community-shell:not(.rail-expanded) .rail-heading { width: calc(var(--rail-control-size) + 16px); height: var(--rail-brand-size); }
+  .community-shell:not(.rail-expanded) .rail-brand { width: var(--rail-brand-size); height: var(--rail-brand-size); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-brand-size); height: var(--rail-brand-size); border-radius: 12px; }
   .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); border-radius: 12px; }
   .community-shell:not(.rail-expanded) .rail-scroll { width: var(--rail-control-size); }
   .community-shell:not(.rail-expanded) .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle), .community-shell:not(.rail-expanded) .community-rail :deep(.tools-trigger) { width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); border-radius: 12px; }
@@ -486,7 +492,7 @@ function restoreMessageTrigger() {
   .rail-expanded .rail-theme, .rail-expanded .rail-toggle { width: 44px; height: 44px; min-height: 44px; border-radius: 12px; }
 }
 @media (min-width: 1000px) and (any-pointer: coarse) {
-  .community-shell { --rail-control-size: 44px; }
+  .community-shell { --rail-control-size: 44px; --rail-brand-size: 44px; }
 }
 @media (min-width: 1000px) and (max-height: 640px) {
   .community-rail { gap: 12px; padding-block: 12px; }
