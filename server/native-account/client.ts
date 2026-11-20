@@ -37,6 +37,7 @@ export async function upstream(
     clientIp?: string;
     userAgent?: string;
     paymentEnvelope?: boolean;
+    requireSuccess?: boolean;
     maxResponseBytes?: number;
   } = {},
 ) {
@@ -99,6 +100,10 @@ export async function upstream(
     if (!response.ok) {
       throw new NewApiError("账号服务请求失败，请稍后重试", response.status);
     }
+    throw new NewApiError("账号服务返回了无法识别的响应", 502);
+  }
+  if (options.requireSuccess && (!json || typeof json !== "object" || Array.isArray(json) ||
+    (response.ok && json.success !== true && json.success !== false))) {
     throw new NewApiError("账号服务返回了无法识别的响应", 502);
   }
   if (

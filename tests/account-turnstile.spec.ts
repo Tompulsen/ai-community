@@ -34,7 +34,7 @@ test('a slow challenge offers retry without losing credentials or accepting stal
   const logs: string[] = []
   page.on('console', message => { if (message.type() === 'warning') logs.push(message.text()) })
   await page.goto('/account')
-  const username = page.getByRole('textbox', { name: '章鱼账号', exact: true })
+  const username = page.getByRole('textbox', { name: '用户名或邮箱', exact: true })
   const password = page.getByLabel('密码', { exact: true })
   const submit = page.getByRole('button', { name: '登录', exact: true })
   await username.fill('fixture-user')
@@ -122,36 +122,44 @@ test('expiry and interaction timeout invalidate a completed challenge and offer 
   await expect(submit).toBeDisabled()
 })
 
-test('failed SDK loading can be retried without reloading the account page', async ({ page }) => {
-  let attempts = 0
-  await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', route => {
-    attempts++
-    if (attempts === 1) return route.abort('failed')
-    return route.fulfill({ contentType: 'application/javascript', body: `
-      window.turnstile = {
-        render(container) { container.textContent = '安全验证'; return 'recovered'; },
-        remove() {}
-      };
-    ` })
+test.describe('mock SDK transport', () => {
+  // The isolated preview blocks external scripts; every HTTPS request stays intercepted here.
+  test.use({ bypassCSP: true })
+  test.beforeEach(async ({ page }) => {
+    await page.route('https://**', route => route.abort())
   })
-  await page.goto('/account')
-  await expect(page.getByRole('status')).toContainText('SDK_NETWORK_ERROR')
-  await page.getByRole('textbox', { name: '章鱼账号', exact: true }).fill('fixture-user')
-  await page.getByRole('button', { name: '重新验证', exact: true }).click()
-  await expect(page.locator('.account-verification')).toContainText('安全验证')
-  await expect(page.getByRole('status')).toHaveCount(0)
-  await expect(page.getByRole('textbox', { name: '章鱼账号', exact: true })).toHaveValue('fixture-user')
-  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled()
-  expect(attempts).toBe(2)
-})
 
-test('SDK requests that never finish show a timeout and keep login blocked', async ({ page }) => {
-  await page.clock.install()
-  await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', () => {})
-  await page.goto('/account')
-  await expect(page.locator('script[data-octopus-turnstile]')).toHaveCount(1)
-  await page.clock.fastForward(15_000)
-  await expect(page.getByRole('status')).toContainText('SDK_TIMEOUT')
-  await expect(page.getByRole('button', { name: '重新验证', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled()
+  test('failed SDK loading can be retried without reloading the account page', async ({ page }) => {
+    let attempts = 0
+    await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', route => {
+      attempts++
+      if (attempts === 1) return route.abort('failed')
+      return route.fulfill({ contentType: 'application/javascript', body: `
+        window.turnstile = {
+          render(container) { container.textContent = '安全验证'; return 'recovered'; },
+          remove() {}
+        };
+      ` })
+    })
+    await page.goto('/account')
+    await expect(page.getByRole('status')).toContainText('SDK_NETWORK_ERROR')
+    await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('fixture-user')
+    await page.getByRole('button', { name: '重新验证', exact: true }).click()
+    await expect(page.locator('.account-verification')).toContainText('安全验证')
+    await expect(page.getByRole('status')).toHaveCount(0)
+    await expect(page.getByRole('textbox', { name: '用户名或邮箱', exact: true })).toHaveValue('fixture-user')
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled()
+    expect(attempts).toBe(2)
+  })
+
+  test('SDK requests that never finish show a timeout and keep login blocked', async ({ page }) => {
+    await page.clock.install()
+    await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?*', () => {})
+    await page.goto('/account')
+    await expect(page.locator('script[data-octopus-turnstile]')).toHaveCount(1)
+    await page.clock.fastForward(15_000)
+    await expect(page.getByRole('status')).toContainText('SDK_TIMEOUT')
+    await expect(page.getByRole('button', { name: '重新验证', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled()
+  })
 })

@@ -4,6 +4,7 @@ export type TurnstileApi = {
     container: HTMLElement,
     options: {
       sitekey: string;
+      action?: string;
       theme: "auto";
       size: "flexible" | "compact";
       callback?: (token: string) => void;

@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, typ
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import { site } from '../site'
-import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, session, type AccountStatus, type LoginIdentitySelection } from '../state'
+import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, rememberLotteryInvite, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import AccountTheme from '../components/AccountTheme.vue'
@@ -51,11 +51,88 @@ const requiresVerification = ref(false), verificationCode = ref('')
 const identitySelection = ref<LoginIdentitySelection | null>(null)
 const challengeToken = ref(''), challengeVersion = ref(0)
 const resetRequested = computed(() => Boolean(resetToken.value))
+const registrationRequested = computed(() => route.query.mode === 'register' && !resetRequested.value)
+const registrationAvailable = computed(() => !!status.value?.registerEnabled && !!status.value?.passwordRegisterEnabled)
+const registrationEmail = ref(''), registrationCode = ref(''), confirmation = ref(''), acceptedTerms = ref(false)
+const emailControl = ref<HTMLInputElement>(), confirmationControl = ref<HTMLInputElement>(), loginControl = ref<HTMLInputElement>()
+const notice = ref(''), confirmationError = ref(false), sendingCode = ref(false)
+const codeAvailableAt = ref(0), currentTime = ref(Date.now())
+const resendSeconds = computed(() => Math.max(0, Math.ceil((codeAvailableAt.value - currentTime.value) / 1000)))
+let resendTimer: ReturnType<typeof setInterval> | undefined, authModeVersion = 0
 const centerUrl = computed(() => accountCenterUrl())
-const registerUrl = computed(() => accountCenterUrl('register'))
 const recoveryUrl = computed(() => accountCenterUrl('forgot-password'))
+const agreementUrl = computed(() => accountCenterUrl('user-agreement'))
+const privacyUrl = computed(() => accountCenterUrl('privacy-policy'))
+const authLocation = (register: boolean) => ({ path: '/account', query: { ...route.query, mode: register ? 'register' : undefined } })
 let active = true
 const account = ref<Account | null>(null)
+watch(registrationRequested, () => {
+  authModeVersion++
+  password.value = ''; confirmation.value = ''; showPassword.value = false; isTyping.value = false
+  error.value = ''; notice.value = ''; confirmationError.value = false; acceptedTerms.value = false
+  registrationCode.value = ''; identitySelection.value = null; requiresVerification.value = false
+  challengeToken.value = ''; challengeVersion.value++
+})
+watch(registrationEmail, () => { registrationCode.value = ''; notice.value = '' })
+function startCodeCooldown(seconds = 60) {
+  clearInterval(resendTimer)
+  currentTime.value = Date.now(); codeAvailableAt.value = currentTime.value + seconds * 1000
+  resendTimer = setInterval(() => {
+    currentTime.value = Date.now()
+    if (!resendSeconds.value) clearInterval(resendTimer)
+  }, 1000)
+}
+async function sendRegistrationCode() {
+  if (busy.value || resendSeconds.value || !emailControl.value?.reportValidity()) return
+  busy.value = true; sendingCode.value = true; error.value = ''; notice.value = ''
+  const version = authModeVersion
+  try {
+    await accountApi('registration-code', { email: registrationEmail.value.trim(), ...(challengeToken.value ? { turnstile_token: challengeToken.value } : {}) })
+    if (!active || version !== authModeVersion) return
+    notice.value = '验证码已发送，请查收邮箱。'
+    startCodeCooldown()
+  } catch (cause) {
+    if (!active || version !== authModeVersion) return
+    error.value = errorMessage(cause)
+    if ((cause as { status?: number }).status === 429) startCodeCooldown((cause as { retryAfter?: number }).retryAfter || 60)
+  } finally {
+    if (active) { busy.value = false; sendingCode.value = false; challengeToken.value = ''; challengeVersion.value++ }
+  }
+}
+async function registerAccount() {
+  if (busy.value || !registrationAvailable.value) return
+  error.value = ''; notice.value = ''
+  if (password.value !== confirmation.value) {
+    confirmationError.value = true
+    error.value = '两次输入的密码不一致。'
+    await nextTick(); confirmationControl.value?.focus()
+    return
+  }
+  const version = authModeVersion, username = identifier.value.trim(), invite = rememberLotteryInvite()
+  busy.value = true
+  try {
+    await accountApi('register', {
+      username, password: password.value,
+      ...(status.value?.emailVerificationEnabled ? { email: registrationEmail.value.trim(), verification_code: registrationCode.value.trim() } : {}),
+      ...(invite && /^wf[a-zA-Z0-9]{24}$/.test(invite) ? { aff_code: invite } : {}),
+      ...(challengeToken.value ? { turnstile_token: challengeToken.value } : {}),
+    })
+    if (!active || version !== authModeVersion) return
+    await router.replace(authLocation(false))
+    if (!active) return
+    identifier.value = username
+    busy.value = false
+    notice.value = '注册成功，请登录章鱼账号。'
+    await nextTick(); loginControl.value?.focus()
+  } catch (cause) {
+    if (active && version === authModeVersion) error.value = errorMessage(cause)
+  } finally {
+    if (active) {
+      busy.value = false
+      if (version === authModeVersion) { challengeToken.value = ''; challengeVersion.value++ }
+    }
+  }
+}
 function navigateTab(value: string) {
   if (value !== tab.value || !showPanel.value) void router.push({ path: '/account', query: { tab: value } })
 }
@@ -160,7 +237,7 @@ onMounted(async () => {
     else await loadStatus()
   } catch (cause) { error.value = errorMessage(cause) }
 })
-onBeforeUnmount(() => { active = false; resolveLeave?.(false); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
+onBeforeUnmount(() => { active = false; clearInterval(resendTimer); resolveLeave?.(false); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pageshow', restoreIdentity); window.removeEventListener('focus', refreshIdentity) })
 async function signIn(selectionId?: string) {
   if (busy.value || (identitySelection.value && !selectionId)) return
   const returnTo = loginReturnPath(route.query.returnTo), legacyProfile = route.query.tab === 'profile' && !route.query.returnTo
@@ -203,7 +280,7 @@ async function restartLogin() {
 </script>
 
 <template>
-  <div :class="session.user ? 'page-container settings-page' : 'auth-page'" :data-settings-tab="session.user ? tab : undefined" :data-settings-detail="session.user ? settingsDetail : undefined">
+  <div :class="session.user ? 'page-container settings-page' : ['auth-page', { 'auth-registration': registrationRequested }]" :data-settings-tab="session.user ? tab : undefined" :data-settings-detail="session.user ? settingsDetail : undefined">
     <aside v-if="!session.user" class="auth-visual">
       <RouterLink to="/discover" class="auth-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
       <LoginCharacters :is-typing="isTyping" :show-password="showPassword" :password-length="password.length" />
@@ -211,12 +288,29 @@ async function restartLogin() {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '登录章鱼账号' }}</h1><p v-if="!session.user && !resetRequested">{{ identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
+    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : registrationRequested ? '注册章鱼账号' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '登录章鱼账号' }}</h1><p v-if="!session.user && !resetRequested">{{ registrationRequested ? '创建你的章鱼账号' : identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
+    <p v-if="notice && !session.user" class="notice-inline auth-feedback" role="status">{{ notice }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
     <ContentSkeleton v-else-if="!session.ready" layout="form" label="正在加载账号…" />
     <div v-else-if="!session.user" class="account-entry">
       <ContentSkeleton v-if="!statusReady" layout="form" label="正在连接章鱼账号…" />
+      <template v-else-if="registrationRequested && status?.enabled && status.configured">
+        <form v-if="registrationAvailable" class="auth-login-form auth-register-form" aria-label="注册章鱼账号" method="post" action="/api/new-api/register" @submit.prevent="registerAccount">
+          <label class="field" for="register-username"><span>用户名</span><input id="register-username" v-model="identifier" name="username" class="control" autocomplete="username" autocapitalize="none" autocorrect="off" :spellcheck="false" maxlength="20" placeholder="请输入用户名" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
+          <template v-if="status.emailVerificationEnabled">
+            <label class="field" for="register-email"><span>邮箱</span><input id="register-email" ref="emailControl" v-model="registrationEmail" name="email" class="control" type="email" autocomplete="email" :spellcheck="false" maxlength="50" placeholder="请输入邮箱" required :disabled="busy" /></label>
+            <div class="field"><label for="register-code">邮箱验证码</label><div class="registration-code-row"><input id="register-code" v-model="registrationCode" name="verification_code" class="control" autocomplete="one-time-code" autocapitalize="none" :spellcheck="false" maxlength="32" placeholder="验证码" required :disabled="busy" /><button type="button" class="button btn" :title="resendSeconds ? `${resendSeconds} 秒后可重新发送` : undefined" :disabled="busy || resendSeconds > 0 || (!!status.turnstileSiteKey && !challengeToken)" @click="sendRegistrationCode">{{ sendingCode ? '正在发送…' : resendSeconds > 999 ? '稍后重发' : resendSeconds ? `${resendSeconds} 秒后重发` : '发送验证码' }}</button></div></div>
+          </template>
+          <div class="field"><label for="register-password">密码</label><span class="auth-password"><input id="register-password" v-model="password" name="password" class="control" :type="showPassword ? 'text' : 'password'" autocomplete="new-password" minlength="8" maxlength="128" placeholder="请输入密码" required :disabled="busy" @input="confirmationError = false" /><button type="button" class="auth-password-toggle icon-button" :aria-label="showPassword ? '隐藏密码' : '显示密码'" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showPassword" :disabled="busy" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" :size="20" /><Eye v-else :size="20" /></button></span></div>
+          <div class="field"><label for="register-confirmation">确认密码</label><input id="register-confirmation" ref="confirmationControl" v-model="confirmation" name="password_confirmation" class="control" :type="showPassword ? 'text' : 'password'" autocomplete="new-password" minlength="8" maxlength="128" :aria-invalid="confirmationError || undefined" :aria-describedby="confirmationError ? 'registration-confirmation-error' : undefined" placeholder="请再次输入密码" required :disabled="busy" @input="confirmationError = false" /><span v-if="confirmationError" id="registration-confirmation-error" class="registration-help">两次输入的密码不一致。</span></div>
+          <div v-if="status.userAgreementEnabled || status.privacyPolicyEnabled" class="registration-terms"><input id="registration-terms" v-model="acceptedTerms" name="terms" type="checkbox" required :disabled="busy" /><label for="registration-terms">我已阅读并同意<template v-if="status.userAgreementEnabled"><a :href="agreementUrl" target="_blank" rel="noopener noreferrer">《用户协议》</a></template><template v-if="status.privacyPolicyEnabled"><a :href="privacyUrl" target="_blank" rel="noopener noreferrer">《隐私政策》</a></template></label></div>
+          <AccountTurnstile v-if="status.turnstileSiteKey" :site-key="status.turnstileSiteKey" action="registration" :reset-key="challengeVersion" :disabled="busy" @token="challengeToken = $event" />
+          <button type="submit" class="button btn auth-button" :disabled="busy || (!!status.turnstileSiteKey && !challengeToken)">{{ busy && !sendingCode ? '正在注册…' : '注册账号' }}</button>
+        </form>
+        <p v-else class="muted" role="status">当前暂未开放账号注册。</p>
+        <p class="auth-browse">已有章鱼账号？<RouterLink :to="authLocation(false)" :aria-disabled="busy || undefined" @click.capture="busy && $event.preventDefault()">立即登录</RouterLink></p>
+      </template>
       <template v-else-if="status?.enabled && status.configured && status.passwordLoginEnabled">
         <form class="auth-login-form" aria-label="登录章鱼账号" @submit.prevent="signIn()">
           <template v-if="identitySelection">
@@ -224,7 +318,7 @@ async function restartLogin() {
             <button type="button" class="text-link auth-back" :disabled="busy" @click="restartLogin"><ArrowLeft :size="16" />返回账号登录</button>
           </template>
           <template v-else-if="!requiresVerification">
-            <label class="field"><span>用户名或邮箱</span><input v-model="identifier" class="control" autocomplete="username" placeholder="请输入用户名或邮箱" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
+            <label class="field"><span>用户名或邮箱</span><input ref="loginControl" v-model="identifier" class="control" autocomplete="username" placeholder="请输入用户名或邮箱" required :disabled="busy" @focus="isTyping = true" @blur="isTyping = false" /></label>
             <div class="field"><label for="account-password">密码</label><span class="auth-password"><input id="account-password" v-model="password" class="control" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" placeholder="请输入密码" required :disabled="busy" /><button type="button" class="auth-password-toggle icon-button" :aria-label="showPassword ? '隐藏密码' : '显示密码'" :title="showPassword ? '隐藏密码' : '显示密码'" :aria-pressed="showPassword" :disabled="busy" @click="showPassword = !showPassword"><EyeOff v-if="showPassword" :size="20" /><Eye v-else :size="20" /></button></span></div>
             <div class="login-options"><a v-if="recoveryUrl" class="text-link forgot-password" :href="recoveryUrl" target="_blank" rel="noopener noreferrer">忘记密码？</a></div>
             <AccountTurnstile v-if="status.turnstileSiteKey" :site-key="status.turnstileSiteKey" :reset-key="challengeVersion" :disabled="busy" @token="challengeToken = $event" />
@@ -235,9 +329,9 @@ async function restartLogin() {
           </template>
           <button v-if="!identitySelection" type="submit" class="button btn auth-button" :disabled="busy || (!requiresVerification && !!status.turnstileSiteKey && !challengeToken)"><span class="auth-button-label">{{ busy ? '正在登录…' : requiresVerification ? '验证并登录' : '登录' }}</span></button>
         </form>
-        <p v-if="registerUrl && !requiresVerification && !identitySelection" class="auth-browse">还没有章鱼账号？<a :href="registerUrl" target="_blank" rel="noopener noreferrer">注册账号<ArrowUpRight :size="14" /></a></p>
       </template>
       <div v-else class="stack account-unavailable"><p class="muted">{{ statusReady && status ? '当前账号服务未开放密码登录。' : '暂时无法连接章鱼账号服务。' }}</p><a v-if="centerUrl" :href="centerUrl" class="button btn auth-button">前往章鱼账户中心<ArrowUpRight :size="16" /></a><button type="button" class="text-link" @click="loadStatus">重新连接</button></div>
+      <p v-if="!registrationRequested && registrationAvailable && !requiresVerification && !identitySelection" class="auth-browse">还没有章鱼账号？<RouterLink :to="authLocation(true)" :aria-disabled="busy || undefined" @click.capture="busy && $event.preventDefault()">注册账号</RouterLink></p>
       <p class="auth-browse">想先看看？<RouterLink to="/discover">浏览社区<ArrowUpRight :size="14" /></RouterLink></p>
     </div>
     <div v-else class="split-layout">
@@ -342,6 +436,15 @@ async function restartLogin() {
 .auth-divider { display: flex; align-items: center; gap: 16px; margin: 24px 0; color: var(--muted); font-size: 12px; line-height: 20px; }
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .auth-login-form { display: flex; flex-direction: column; gap: 24px; }
+.auth-register-form { gap: 16px; }
+.auth-registration .auth-heading { margin-bottom: 24px; }
+.registration-code-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 8px; align-items: center; }
+.registration-code-row .button { width: 100%; min-height: 48px; padding: 8px 12px; border-radius: 8px; font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.registration-help { color: var(--muted); font-size: 12px; line-height: 20px; }
+.registration-terms { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 20px; }
+.registration-terms input { flex: none; margin-top: 4px; accent-color: var(--blue); }
+.registration-terms label { min-height: 44px; }
+.registration-terms a { color: var(--blue); text-decoration: underline; text-underline-offset: 4px; }
 .auth-form .field { gap: 8px; font-size: 14px; color: var(--ink); }
 .auth-form .control { width: 100%; min-width: 0; height: 48px; min-height: 48px; padding: var(--auth-control-padding); border: 1px solid var(--border); border-radius: 999px; background: var(--auth-canvas); color: var(--ink); font-size: 16px; line-height: 24px; }
 .auth-form .control::placeholder { color: var(--muted); }
@@ -362,6 +465,7 @@ async function restartLogin() {
 .auth-browse a:hover { text-decoration: underline; text-underline-offset: 4px; }
 .auth-back { min-height: 44px; margin-bottom: 16px; font-size: 14px; }
 .auth-form > .notice-inline { margin: 0 0 24px; padding: 12px 16px; border: 1px solid var(--auth-notice-border); border-radius: 8px; background: var(--auth-notice-bg); color: var(--auth-notice-ink); }
+.auth-form > .auth-feedback { border-color: var(--border); background: var(--surface-soft); color: var(--ink); }
 .auth-form :deep(.password-recovery) { max-width: none; padding: 0; }
 .auth-form :deep(.password-recovery h2) { display: none; }
 .auth-form :deep(.password-recovery .control) { border-radius: 999px; background: var(--auth-canvas); font-size: 16px; }

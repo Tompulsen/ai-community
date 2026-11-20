@@ -121,10 +121,15 @@ export interface AccountStatus {
   configured: boolean
   publicUrl: string
   passwordLoginEnabled: boolean
+  registerEnabled: boolean
+  passwordRegisterEnabled: boolean
+  emailVerificationEnabled: boolean
+  userAgreementEnabled: boolean
+  privacyPolicyEnabled: boolean
   turnstileSiteKey: string
 }
 
-export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '') {
+export function accountCenterUrl(path: '' | 'register' | 'forgot-password' | 'user-agreement' | 'privacy-policy' = '') {
   try {
     const url = new URL(session.accountUrl)
     if (url.protocol !== 'https:' || url.username || url.password) return ''
@@ -135,7 +140,7 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' = '')
   } catch { return '' }
 }
 
-export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'login-2fa' | 'login-select' | 'login-cancel' | 'login-identifiers' | 'logout' | 'model-groups' | 'model-groups/select', body?: object, expectedUser?: string): Promise<T> {
+export async function accountApi<T>(route: 'status' | 'session' | 'registration-code' | 'register' | 'login' | 'login-2fa' | 'login-select' | 'login-cancel' | 'login-identifiers' | 'logout' | 'model-groups' | 'model-groups/select', body?: object, expectedUser?: string): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/new-api/${route}`, {
@@ -150,6 +155,7 @@ export async function accountApi<T>(route: 'status' | 'session' | 'login' | 'log
   if (!response.ok || result?.success !== true) {
     throw Object.assign(new Error(typeof result?.message === 'string' ? result.message : '章鱼账号服务暂时不可用，请稍后重试。'), {
       status: response.status, code: typeof result?.code === 'string' ? result.code : undefined,
+      retryAfter: /^\d{1,6}$/.test(response.headers.get('retry-after') || '') ? Number(response.headers.get('retry-after')) : undefined,
     })
   }
   return result.data as T

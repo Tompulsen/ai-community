@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RefreshCw } from '@lucide/vue'
 import { loadTurnstile, TurnstileLoadError, type TurnstileApi } from '../turnstile'
 
-const props = defineProps<{ siteKey: string; resetKey: number; disabled?: boolean }>()
+const props = defineProps<{ siteKey: string; resetKey: number; disabled?: boolean; action?: string }>()
 const emit = defineEmits<{ token: [value: string] }>()
 const container = ref<HTMLElement>()
 const failure = ref<{ code: string; message: string }>()
@@ -32,6 +32,7 @@ async function render() {
     waitTimer = window.setTimeout(() => reportFailure(current, 'challenge', 'CHALLENGE_TIMEOUT', '验证等待时间较长，请重新验证；若仍失败，请检查网络连接。'), 30_000)
     widget = api.render(container.value, {
       sitekey: props.siteKey, theme: 'auto', size: 'flexible',
+      ...(props.action ? { action: props.action } : {}),
       callback: token => {
         if (current !== generation) return
         window.clearTimeout(waitTimer)
@@ -57,7 +58,7 @@ async function render() {
   }
 }
 onMounted(render)
-watch(() => [props.siteKey, props.resetKey], render)
+watch(() => [props.siteKey, props.resetKey, props.action], render)
 onBeforeUnmount(() => { generation++; remove() })
 </script>
 

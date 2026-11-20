@@ -9,6 +9,8 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
   const state = {
     user: { ...accountUser }, authenticated, accountAuthenticated: authenticated,
     requiresVerification: false, requiresIdentitySelection: false, passwordLoginEnabled: true, turnstileSiteKey: '', syncFailure: false,
+    registerEnabled: true, passwordRegisterEnabled: true, emailVerificationEnabled: true, userAgreementEnabled: false, privacyPolicyEnabled: false,
+    registrationError: '', registrationCodeError: '',
     devices: [
       { id: currentDevice, current: true, createdAt: '2026-11-13T00:00:00Z', ip: '127.0.0.1', userAgent: 'Fixture current device' },
       { id: otherDevice, current: false, createdAt: '2026-11-12T00:00:00Z', ip: '127.0.0.2', userAgent: 'Fixture other device' },
@@ -33,7 +35,17 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
     if (path === '/api/new-api/status') return route.fulfill({ json: { success: true, data: {
       enabled: true, configured: true, publicUrl: accountUrl, passwordLoginEnabled: state.passwordLoginEnabled,
       turnstileSiteKey: state.turnstileSiteKey,
+      registerEnabled: state.registerEnabled, passwordRegisterEnabled: state.passwordRegisterEnabled,
+      emailVerificationEnabled: state.emailVerificationEnabled, userAgreementEnabled: state.userAgreementEnabled, privacyPolicyEnabled: state.privacyPolicyEnabled,
     } } })
+    if (path === '/api/new-api/registration-code') return route.fulfill({ json: state.registrationCodeError
+      ? { success: false, message: state.registrationCodeError }
+      : { success: true, data: { sent: true } },
+    })
+    if (path === '/api/new-api/register') return route.fulfill({ json: state.registrationError
+      ? { success: false, message: state.registrationError }
+      : { success: true, data: { registered: true } },
+    })
     if (path === '/api/new-api/model-groups') return route.fulfill({ json: { success: true, data: {
       selectedGroup: 'auto', selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }],
     } } })

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Copy, RefreshCw } from '@lucide/vue'
 import type { ReferralStatus } from '../../shared/referral'
-import { accountCenterUrl, api, errorMessage, notify, session } from '../state'
+import { api, errorMessage, notify, session } from '../state'
 
 const status = ref<ReferralStatus | null>(null), busy = ref(false), error = ref('')
 let request = 0, controller: AbortController | undefined
@@ -50,7 +50,7 @@ onBeforeUnmount(() => { request++; controller?.abort() })
             <label class="field"><span>我的邀请链接</span><input class="control" :value="status.inviteUrl" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
             <p class="caption-5 muted">链接已包含邀请码，好友注册时自动绑定。</p>
           </template>
-          <template v-else><a v-if="accountCenterUrl('register')" :href="accountCenterUrl('register')" class="button primary btn">注册并绑定邀请</a><RouterLink to="/account" class="button subtle btn">已有账号，去登录</RouterLink></template>
+          <template v-else><RouterLink to="/account?mode=register" class="button primary btn">注册并绑定邀请</RouterLink><RouterLink to="/account" class="button subtle btn">已有账号，去登录</RouterLink></template>
         </div>
       </div>
       <div v-if="own" class="referral-own" role="status">

@@ -333,6 +333,11 @@ async function status(localOnly = false) {
     configured: config.configured,
     publicUrl: config.enabled ? config.publicUrl : "",
     passwordLoginEnabled: false,
+    registerEnabled: false,
+    passwordRegisterEnabled: false,
+    emailVerificationEnabled: false,
+    userAgreementEnabled: false,
+    privacyPolicyEnabled: false,
     turnstileSiteKey: "",
     quotaPerUnit: quotaPerPoint ?? 500000,
     currencySymbol: quotaPerPoint ? "积分" : "额度",
@@ -349,6 +354,11 @@ async function status(localOnly = false) {
   return ok({
     ...base,
     passwordLoginEnabled: data.password_login_enabled !== false,
+    registerEnabled: data.register_enabled === true,
+    passwordRegisterEnabled: data.password_register_enabled === true,
+    emailVerificationEnabled: data.email_verification === true,
+    userAgreementEnabled: data.user_agreement_enabled === true,
+    privacyPolicyEnabled: data.privacy_policy_enabled === true,
     turnstileSiteKey: data.turnstile_check ? data.turnstile_site_key || "" : "",
     pointsPerUsd: quotaPerPoint && Number.isSafeInteger(data.quota_per_unit) && data.quota_per_unit > 0
       ? data.quota_per_unit / quotaPerPoint : undefined,
@@ -480,6 +490,69 @@ export async function handle(
     if (req.method === "POST" && route === "wallet/pay") return ok(await createWalletPayment(req, await body(req), "topup"));
     if (req.method === "POST" && route === "wallet/subscription") return ok(await createWalletPayment(req, await body(req), "subscription"));
     if (req.method === "POST" && route === "wallet/redeem") return ok(await redeemWallet(req, await body(req)));
+
+    if (req.method === "POST" && (route === "registration-code" || route === "register")) {
+      const input = await body(req);
+      const settings = (await upstream("/api/status")).data;
+      if (settings?.register_enabled !== true || settings?.password_register_enabled !== true) {
+        throw new NewApiError("当前平台未开放密码注册", 403, "NEW_API_REGISTRATION_DISABLED");
+      }
+      const turnstileToken = input.turnstile_token === undefined ? "" : input.turnstile_token;
+      if (typeof turnstileToken !== "string" || turnstileToken.length > 2048) {
+        throw new NewApiError("人机验证信息无效");
+      }
+      if (settings.turnstile_check && !turnstileToken.trim()) {
+        throw new NewApiError("请先完成人机验证");
+      }
+      const email = input.email === undefined ? "" : input.email;
+      const code = input.verification_code === undefined ? "" : input.verification_code;
+      if (typeof email !== "string" || email.length > 50 ||
+        (email && !/^[^\s@]+@[^\s@]+$/.test(email)) ||
+        typeof code !== "string" || code.length > 128 || /[\u0000-\u001f\u007f]/.test(code)) {
+        throw new NewApiError("请输入有效的邮箱和验证码");
+      }
+      const query = new URLSearchParams();
+      if (turnstileToken) query.set("turnstile", turnstileToken);
+      if (route === "registration-code") {
+        if (settings.email_verification !== true) {
+          throw new NewApiError("当前平台未启用注册邮箱验证", 403);
+        }
+        if (!email) throw new NewApiError("请输入邮箱");
+        query.set("email", email);
+        await upstream(`/api/verification?${query}`, {
+          ...upstreamRequestHints(req),
+          requireSuccess: true,
+          maxResponseBytes: 65536,
+        });
+        return ok({ sent: true });
+      }
+      const username = typeof input.username === "string" ? input.username.trim() : "";
+      const password = input.password;
+      const affCode = input.aff_code === undefined ? "" : input.aff_code;
+      if (!username || [...username].length > 20 || /[\u0000-\u001f\u007f]/.test(username) ||
+        typeof password !== "string" || [...password].length < 8 || [...password].length > 128) {
+        throw new NewApiError("用户名最多 20 个字符，密码须为 8 至 128 个字符");
+      }
+      if (typeof affCode !== "string" || (affCode && !/^[a-zA-Z0-9]{1,32}$/.test(affCode))) {
+        throw new NewApiError("邀请码无效");
+      }
+      if (settings.email_verification === true && (!email || !code)) {
+        throw new NewApiError("请输入邮箱和验证码");
+      }
+      await upstream(`/api/user/register${query.size ? `?${query}` : ""}`, {
+        method: "POST",
+        body: {
+          username, password,
+          ...(email ? { email } : {}),
+          ...(code ? { verification_code: code } : {}),
+          ...(affCode ? { aff_code: affCode } : {}),
+        },
+        ...upstreamRequestHints(req),
+        requireSuccess: true,
+        maxResponseBytes: 65536,
+      });
+      return ok({ registered: true });
+    }
 
     if (req.method === "POST" && route === "login") {
       const input = await body(req);

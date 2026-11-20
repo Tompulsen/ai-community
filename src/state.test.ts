@@ -19,6 +19,19 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('real API state', () => {
+  it.each([['90', 90], ['invalid', undefined]])('preserves registration throttling without retrying or signing in (%s)', async (header, retryAfter) => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: false, message: '请稍后重试。' }), {
+      status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': header as string },
+    }))
+    const { accountApi, session } = await import('./state')
+    const body = { email: 'creator@example.com', turnstile_token: 'mail-challenge' }
+    await expect(accountApi('registration-code', body)).rejects.toMatchObject({ status: 429, retryAfter })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('/api/new-api/registration-code', expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', body: JSON.stringify(body),
+    }))
+    expect(session.user).toBeNull()
+  })
   it('starts with no synthetic identity or local preview data', async () => {
     const { session } = await import('./state')
     expect(session.user).toBeNull()

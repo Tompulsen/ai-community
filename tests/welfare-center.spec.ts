@@ -26,7 +26,13 @@ async function welfareFixture(page: Page, authenticated = true) {
     }
     return route.fulfill({ json: referral.config })
   })
-  await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true, data: { currencySymbol: '积分', pointsPerUsd: 5000 } } }))
+  await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true, data: {
+    enabled: true, configured: true, publicUrl: 'https://accounts.example',
+    passwordLoginEnabled: account.state.passwordLoginEnabled, turnstileSiteKey: account.state.turnstileSiteKey,
+    registerEnabled: account.state.registerEnabled, passwordRegisterEnabled: account.state.passwordRegisterEnabled,
+    emailVerificationEnabled: account.state.emailVerificationEnabled, userAgreementEnabled: account.state.userAgreementEnabled,
+    privacyPolicyEnabled: account.state.privacyPolicyEnabled, currencySymbol: '积分', pointsPerUsd: 5000,
+  } } }))
   await page.route('**/api/admin/lottery/**', route => {
     const request = route.request(), path = new URL(request.url()).pathname
     if (path.endsWith('/config')) {
@@ -248,13 +254,16 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
   })
 }
 
-test('guest invitation survives navigation to the real registration URL', async ({ page }) => {
+test('guest invitation survives navigation to community registration', async ({ page }) => {
   await welfareFixture(page, false)
   const code = 'wf' + 'c'.repeat(24)
   await page.goto('/activities?invite=' + code)
-  await expect(page.getByRole('link', { name: '注册并绑定邀请' })).toHaveAttribute('href', 'https://accounts.example/register?aff=' + code)
+  await expect(page.getByRole('link', { name: '注册并绑定邀请' })).toHaveAttribute('href', '/account?mode=register')
   await page.getByRole('link', { name: '已有账号，去登录' }).click()
-  await expect(page.getByRole('link', { name: /注册/ }).first()).toHaveAttribute('href', 'https://accounts.example/register?aff=' + code)
+  await page.getByRole('link', { name: '注册账号', exact: true }).click()
+  await expect(page.getByRole('form', { name: '注册章鱼账号', exact: true })).toBeVisible()
+  expect(new URL(page.url()).searchParams.get('mode')).toBe('register')
+  expect(await page.evaluate(() => sessionStorage.getItem('ai-community-next:invite'))).toBe(code)
 })
 
 test('referral loading failure can recover and account changes remove previous private records', async ({ page }) => {

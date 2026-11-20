@@ -31,7 +31,7 @@ test('skip navigation and account controls retain visible keyboard focus', async
   const main = page.locator('main')
   await expect(main).toBeFocused()
   expect(await main.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('none')
-  const username = page.getByRole('textbox', { name: '章鱼账号', exact: true })
+  const username = page.getByRole('textbox', { name: '用户名或邮箱', exact: true })
   await username.focus()
   await expect.poll(() => username.evaluate(element => {
     const style = getComputedStyle(element)

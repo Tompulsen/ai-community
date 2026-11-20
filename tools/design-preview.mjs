@@ -94,8 +94,12 @@ export function createPreviewMiddleware() {
         csrfToken: 'local-ui-preview', authentication: 'zhangyu', accountUrl: '' })
       if (path === '/api/new-api/status' && read) return reply(success({
         enabled: true, configured: true, publicUrl: '', passwordLoginEnabled: true, turnstileSiteKey: '',
+        registerEnabled: true, passwordRegisterEnabled: true, emailVerificationEnabled: true,
+        userAgreementEnabled: false, privacyPolicyEnabled: false,
         currencySymbol: '积分', pointsPerUsd: 5000,
       }))
+      if (path === '/api/new-api/registration-code' && method === 'POST') return reply(success({ sent: true }))
+      if (path === '/api/new-api/register' && method === 'POST') return reply(success({ registered: true }))
       if (['/api/new-api/login', '/api/new-api/login-2fa', '/api/new-api/login-select'].includes(path) && method === 'POST') {
         authenticated = true
         return reply(success({ authenticated: true }))
@@ -241,9 +245,22 @@ async function selfCheck() {
   }
   await request('PATCH', '/api/profile', { name: '本地昵称', bio: '', avatarId: 'previewAvatar', bannerId: null })
   assert.equal(JSON.parse((await request('GET', '/api/session')).body).user.name, '本地昵称')
+  const status = JSON.parse((await request('GET', '/api/new-api/status')).body).data
+  assert.equal(status.registerEnabled && status.passwordRegisterEnabled && status.emailVerificationEnabled, true)
+  assert.equal(status.userAgreementEnabled || status.privacyPolicyEnabled, false)
+  await request('POST', '/api/new-api/logout', {})
+  assert.equal(JSON.parse((await request('GET', '/api/session')).body).user, null)
+  assert.equal(JSON.parse((await request('POST', '/api/new-api/registration-code', { email: 'preview@example.invalid' })).body).data.sent, true)
+  assert.equal(JSON.parse((await request('POST', '/api/new-api/register', {
+    username: 'preview-signup', password: 'preview-password', email: 'preview@example.invalid', verification_code: '123456',
+  })).body).data.registered, true)
+  assert.equal(JSON.parse((await request('GET', '/api/session')).body).user, null)
+  assert.equal((await request('POST', '/api/account/session', {})).statusCode, 401)
+  await request('POST', '/api/new-api/login', { username: 'preview-signup', password: 'preview-password' })
+  assert.equal(JSON.parse((await request('POST', '/api/account/session', {})).body).user.id, userId)
   assert.equal((await request('POST', '/api/new-api/wallet/quote', { amount: -1 })).statusCode, 400)
   assert.equal((await request('GET', '//external.invalid/api/session')).statusCode, 400)
-  console.log('Self-check passed: local session, profile drafts, API isolation and payment/generation blocking. No network requests.')
+  console.log('Self-check passed: local session, profile drafts, registration without login, API isolation and payment/generation blocking. No network requests.')
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

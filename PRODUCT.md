@@ -149,8 +149,11 @@ delivery now includes the frontend and an independent community backend.
 - Community sign-in uses the Octopus account exclusively. Reuse the original
   account login and encrypted session in the Fastify process, and map issuer plus subject to
   existing community profiles. Keep old unlinked profiles without matching by
-  username or email. Registration and password management belong to the account
-  centre. Opening creation after community login uses that same account, balance
+  username or email. Registration stays on the community page and calls the account
+  centre's public API; the centre creates the authoritative account. Success returns
+  to the in-page login with the username retained, password cleared, a fresh
+  challenge and the original returnTo preserved. Password management remains at
+  the account centre. Opening creation after community login uses that same account, balance
   and refresh lock immediately, without a second login, authorization or key setup.
   Account-owned browser history remains local; recovery only queries the original
   task and token, and never repeats an uncertain paid submission.

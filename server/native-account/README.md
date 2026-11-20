@@ -26,6 +26,32 @@ bridge. Account-centre wallet operations remain at the account centre.
 authentication layer. `resolveRelayCredentials` returns a server-only owned model
 key plus its token/user IDs; callers must never serialize that key to the browser.
 
+## Community registration
+
+The guest account page uses `/account?mode=register`. Same-origin
+`POST /api/new-api/registration-code` and `POST /api/new-api/register` forward
+only registration fields to New API's public verification and registration
+endpoints. New API remains responsible for account IDs, password hashes, verified
+email, groups, initial quota, default tokens and invitation attribution.
+Registration never creates a local password account or a login session. After
+success, users continue through the existing login and community-profile binding.
+An uncertain response must not automatically resubmit registration.
+
+Register and password-register switches are checked against New API for every
+submission. Email verification and legal links follow its status settings.
+Each verification request and registration submission uses a fresh Turnstile token
+with `action=registration`; subsequent login uses another token. The widget must
+allow the community hostname, and New API must accept that verified hostname.
+
+Before deployment, verify the real-IP chain: the community's
+`TRUSTED_PROXY_CIDRS`, `NEW_API_TRUST_PROXY=true`, and New API's `TRUSTED_PROXIES`
+must identify only the controlled proxies. Upstream IP and mailbox limits still
+apply. Edge registration rules must also cover both new POST paths above and
+their `/studio/api/new-api/` compatibility aliases. Forwarding over an internal
+connection does not execute rules attached only to the account-centre hostname.
+Exercise real email delivery and account creation only in the intended test
+environment; local mocked tests do not establish a deployed registration.
+
 ## Community points wallet
 
 `COMMUNITY_WALLET_ENABLED=true` enables the New API unified wallet. It defaults to
