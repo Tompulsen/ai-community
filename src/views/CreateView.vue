@@ -5,6 +5,7 @@ import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receip
 import { api, errorMessage, session, sessionStatus } from '../state'
 import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats } from '../native-chat'
 import { armStudioEntryStart, claimStudioEntryStart, clearStudioEntry, readStudioEntry } from '../studio-entry'
+import { modelChoices, modelsForKind } from '../model-preferences'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
 import type { Work, WorkFile } from '../data'
 import StudioWorkspace from '../components/StudioWorkspace.vue'
@@ -208,17 +209,29 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
     }
   }
 }, { flush: 'post' })
-watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () => creation.loaded, kind], async (_, __, onCleanup) => {
+let entryGroupAttempt = ''
+watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () => creation.loaded, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => creation.modelsLoading, kind], async (_, __, onCleanup) => {
   const id = route.query.entry, owner = session.user?.id
-  if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded) return
+  if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded || !creation.modelsLoaded || creation.groupsLoading || creation.groupSwitching || creation.modelsLoading) return
   let cancelled = false
   onCleanup(() => { cancelled = true })
   try {
     const entry = readStudioEntry(id)
     if (entry.owner && entry.owner !== owner) throw new Error('账号已切换，请返回首页重新提交创作。')
     if (entry.kind !== kind.value) throw new Error('创作类型已改变，请返回首页重新提交。')
+    const parameters = entry.parameters
+    if (parameters?.group && parameters.group !== creation.selectedGroup) {
+      if (!creation.groups.some(group => group.id === parameters.group)) throw new Error('首页所选模型分组当前不可用，请返回首页重新选择。')
+      if (entryGroupAttempt === id) throw new Error(creation.groupsError || '无法恢复首页所选模型分组，请返回首页重试。')
+      entryGroupAttempt = id
+      await selectCreationGroup(parameters.group)
+      return
+    }
+    if (parameters?.tokenId && parameters.tokenId !== creation.modelTokenId) throw new Error('模型密钥已改变，请返回首页确认模型后重新发送。')
+    if (parameters?.model && !modelsForKind(entry.kind).some(model => model.id === parameters.model)) throw new Error('首页所选模型当前不可用，请返回首页重新选择。')
+    if (parameters?.model) modelChoices[entry.kind] = ''
     const next = newChat(entry.kind)
-    next.mediaDrafts = { [entry.kind]: { prompt: entry.prompt, references: entry.references } }
+    next.mediaDrafts = { [entry.kind]: { ...parameters, prompt: entry.prompt, references: entry.references } }
     await saveChats(true)
     if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return
     armStudioEntryStart(next.id, owner)

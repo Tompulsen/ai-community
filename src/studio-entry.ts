@@ -1,8 +1,16 @@
 import { z } from 'zod'
+import { imageOptionsSchema, videoOptionsSchema } from '../shared/studio/options'
 
 const entrySchema = z.object({
   owner: z.string().nullable(), kind: z.enum(['image', 'video']),
   prompt: z.string().trim().min(1).max(100000),
+  parameters: z.object({
+    model: z.string().max(200), group: z.string().min(1).max(200).nullable(), tokenId: z.number().int().positive().nullable(),
+    ratio: z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/),
+    manualSize: z.union([z.literal(''), z.string().regex(/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|[124]K)$/)]),
+    count: z.number().int().min(1).max(16), duration: z.number().int().min(1).max(3600),
+    protocol: z.enum(['openai', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
+  }).optional(),
   references: z.array(z.object({ name: z.string(), url: z.string().startsWith('data:image/') })).max(16),
 })
 export type StudioEntry = z.infer<typeof entrySchema>

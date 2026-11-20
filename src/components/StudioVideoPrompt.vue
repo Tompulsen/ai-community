@@ -7,7 +7,7 @@ import { mediaSource } from '../native-studio'
 import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 
-const props = defineProps<{ modelValue: string; references: { name: string; url: string }[]; disabled?: boolean }>()
+const props = defineProps<{ modelValue: string; references: { name: string; url: string }[]; disabled?: boolean; label?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string]; submit: []; paste: [event: ClipboardEvent] }>()
 const input = ref<HTMLTextAreaElement>(), panel = ref<HTMLElement>(), cursor = ref(0), selected = ref(0), dismissed = ref(false)
 const id = `video-references-${useId()}`, ime = createImeGuard()
@@ -57,7 +57,7 @@ defineExpose({ focus: () => input.value?.focus() })
 </script>
 
 <template>
-  <textarea ref="input" :value="modelValue" :disabled="disabled" class="composer-input creation-prompt" aria-label="提示词" rows="1" maxlength="100000" placeholder="描述你想生成的视频…" required
+  <textarea ref="input" :value="modelValue" :disabled="disabled" class="composer-input creation-prompt" :aria-label="label || '提示词'" rows="1" maxlength="100000" placeholder="描述你想生成的视频…" required
     aria-autocomplete="list" aria-haspopup="listbox" :aria-controls="opened ? id : undefined" :aria-activedescendant="opened ? `${id}-${choices[selected]?.number}` : undefined"
     @input="handleInput" @click="updateCursor" @select="updateCursor" @keydown="keydown" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="emit('paste', $event)" @blur="dismissed = true" />
   <Teleport to="body">

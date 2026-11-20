@@ -10,7 +10,7 @@ async function fixture(page: Page, authenticated = true, delayed = false) {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/creation/models') {
       if (delayed) await new Promise(resolve => setTimeout(resolve, 900))
-      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] }] } })
+      return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'gpt-image-1', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }, { id: 'gpt-5', kinds: ['text'] }] } })
     }
     if (path === '/api/creation/generate') {
       calls.push(route.request().postDataJSON())
@@ -53,6 +53,123 @@ for (const kind of ['image', 'video'] as const) {
   })
 }
 
+test('homepage exposes Studio controls and carries image settings into generation', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await page.goto('/discover')
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+  const models = page.getByRole('dialog', { name: '选择模型', exact: true })
+  await expect(models.getByRole('button', { name: 'gpt-5', exact: true })).toHaveCount(0)
+  await models.getByRole('button', { name: 'gpt-image-1', exact: true }).click()
+  await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-1')
+  await composer.getByRole('button', { name: '高级参数', exact: true }).click()
+  const parameters = page.getByRole('dialog', { name: '高级参数', exact: true })
+  await parameters.getByRole('radio', { name: '16:9', exact: true }).check()
+  await parameters.getByRole('radio', { name: '2K', exact: true }).check()
+  await parameters.getByRole('radio', { name: '高', exact: true }).check()
+  await parameters.getByRole('spinbutton', { name: '图片数量', exact: true }).fill('2')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '模型价格', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '模型价格', exact: true })).toContainText('gpt-image-1')
+  await page.getByRole('button', { name: '查看全部定价', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '模型广场', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+  await models.getByRole('button', { name: '管理密钥', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '密钥', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('使用首页选定的全部生成参数')
+  await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ model: 'gpt-image-1', aspect_ratio: '16:9', n: 2, imageOptions: { resolution: '2k', quality: 'high' } })
+})
+
+test('inline video model preserves input and references and carries video parameters', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await page.goto('/discover')
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('保持同一份描述和参考图')
+  await composer.getByLabel('添加参考图', { exact: true }).setInputFiles('public/assets/brand/octopus-community.jpg')
+  await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
+  await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+  await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'sora-2', exact: true }).click()
+  await expect(page).toHaveURL('http://localhost:18775/discover')
+  await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保持同一份描述和参考图')
+  await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
+  await composer.getByRole('button', { name: '高级参数', exact: true }).click()
+  const parameters = page.getByRole('dialog', { name: '高级参数', exact: true })
+  await parameters.getByRole('radio', { name: '9:16', exact: true }).check()
+  await parameters.getByRole('radio', { name: '12 秒', exact: true }).check()
+  await parameters.getByText('自定义参数', { exact: true }).click()
+  await parameters.getByRole('textbox', { name: '尺寸', exact: true }).fill('720x1280')
+  await page.keyboard.press('Escape')
+  await composer.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ kind: 'video', model: 'sora-2', prompt: '保持同一份描述和参考图', aspect_ratio: '9:16', duration: 12, size: '720x1280', videoOptions: { mode: 'image-to-video', resolution: '720p' } })
+  expect(calls[0].referenceUrls).toHaveLength(1)
+})
+
+test('switching to video retains image references above its lower limit', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/discover')
+  const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+  await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('参考图不会因切换模式丢失')
+  await composer.getByLabel('添加参考图', { exact: true }).setInputFiles(Array(11).fill('public/assets/brand/octopus-community.jpg'))
+  await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
+  await page.getByRole('button', { name: '视频生成', exact: true }).click()
+  await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
+  await expect(composer.getByRole('alert')).toContainText('参考图数量超过当前创作类型上限')
+  await expect(composer.getByRole('button', { name: '发送到创作台', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '图片生成', exact: true }).click()
+  await expect(composer.getByRole('button', { name: /^预览参考图 / })).toHaveCount(11)
+  await expect(composer.getByRole('button', { name: '发送到创作台', exact: true })).toBeEnabled()
+})
+
+for (const succeeds of [true, false]) {
+  test('entry group restoration ' + (succeeds ? 'preserves selection' : 'fails once and retains input'), async ({ page }) => {
+    const { calls } = await fixture(page)
+    let selectedGroup = 'auto', attempts = 0
+    await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: {
+      selectedGroup, selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }, { id: 'premium', name: 'Premium', ratio: 1 }],
+    } } }))
+    await page.route('**/api/new-api/model-groups/select', route => {
+      attempts++
+      if (!succeeds) return route.fulfill({ status: 403, json: { success: false, message: '测试分组无权访问' } })
+      selectedGroup = 'premium'
+      return route.fulfill({ json: { success: true, data: { group: selectedGroup, selectedTokenId: 41 } } })
+    })
+    await page.goto('/discover')
+    await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+    const id = await page.evaluate(async () => {
+      const entryPath = '/src/studio-entry.ts', optionsPath = '/shared/studio/options.ts'
+      const { saveStudioEntry } = await import(entryPath)
+      const { imageOptionsSchema, videoOptionsSchema } = await import(optionsPath)
+      return saveStudioEntry({ owner: '17', kind: 'image', prompt: '分组恢复验证', references: [], parameters: {
+        model: 'gpt-image-1', group: 'premium', tokenId: 41, ratio: '1:1', manualSize: '', count: 1, duration: 8, protocol: 'openai',
+        imageOptions: imageOptionsSchema.parse({}), videoOptions: videoOptionsSchema.parse({ mode: 'text-to-video' }),
+      } })
+    })
+    await page.goto('/create/image?entry=' + id)
+    if (succeeds) {
+      await expect.poll(() => calls.length).toBe(1)
+      expect(calls[0]).toMatchObject({ model: 'gpt-image-1' })
+      await page.getByRole('combobox', { name: '模型', exact: true }).click()
+      await expect(page.getByRole('button', { name: '选择分组', exact: true })).toContainText('Premium')
+    } else {
+      await expect(page.getByText('测试分组无权访问', { exact: true }).first()).toBeVisible()
+      await page.getByRole('combobox', { name: '模型', exact: true }).click()
+      await page.getByRole('button', { name: '重新读取', exact: true }).click()
+      await expect(page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'gpt-image-1', exact: true })).toBeEnabled()
+      await page.keyboard.press('Escape')
+      await expect(page.getByText('无法恢复首页所选模型分组，请返回首页重试。', { exact: true })).toBeVisible()
+      expect(calls).toHaveLength(0)
+      expect(await page.evaluate(id => sessionStorage.getItem('ai-community-next:studio-entry:' + id), id)).toContain('分组恢复验证')
+    }
+    expect(attempts).toBe(1)
+  })
+}
+
 test('guest input survives login and starts in Studio', async ({ page }) => {
   const { calls } = await fixture(page, false)
   await page.goto('/discover')
@@ -89,6 +206,9 @@ test('composer and lower filters fit desktop and phones in both themes', async (
       await page.setViewportSize({ width, height: 900 })
       await expect(page.getByRole('form', { name: '快捷创作', exact: true })).toBeVisible()
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      const actions = (await page.locator('.discovery-workspace .studio-composer-actions').boundingBox())!
+      const send = (await page.getByRole('button', { name: '发送到创作台', exact: true }).boundingBox())!
+      expect(actions.x + actions.width <= send.x || actions.y + actions.height <= send.y).toBe(true)
       if (width >= 1000) {
         const creation = (await page.locator('.discovery-creation').boundingBox())!
         const search = (await page.locator('.discovery-search').boundingBox())!

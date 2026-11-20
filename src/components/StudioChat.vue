@@ -180,17 +180,17 @@ watch(() => session.user?.id, async () => {
   if (!session.user) return
   const preparingRemix = props.remixPreparing
   await initializeCreation()
-  if (!preparingRemix) { await loadCreationGroups(); await loadCreationModels() }
+  if (!preparingRemix && props.mode === 'text') { await loadCreationGroups(); await loadCreationModels() }
   await loadChats()
 }, { immediate: true })
 function chooseModel() {
-  if (props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (props.mode !== 'text' || props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const saved = current.value.textModel || current.value.model
   const next = takeModelChoice('text', models.value) || (models.value.some(item => item.id === saved) ? saved! : models.value[0]?.id || '')
   model.value = next
   if (next && current.value.textModel !== next) { current.value.textModel = next; void saveChats() }
 }
-watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing, () => props.mode], chooseModel)
 function changeFormat(event: Event) {
   if (!current.value) return
   const format = (event.target as HTMLSelectElement).value as typeof current.value.settings.format
