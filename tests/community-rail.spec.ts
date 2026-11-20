@@ -53,6 +53,28 @@ test('guest login entry returns to a complete community rail', async ({ page }) 
   await expectRail(page)
 })
 
+for (const mode of ['light', 'dark'] as const) {
+  test('guest login stays readable on hover and keyboard focus in ' + mode, async ({ page }) => {
+    await mockUnifiedAccount(page)
+    await page.goto('/discover')
+    await page.evaluate(mode => window.communityAppearance.set({ mode }), mode)
+    const login = page.locator('.header-login')
+    await expect(login).toBeVisible()
+    const resting = await login.boundingBox()
+    for (const state of ['hover', 'focus', 'rest']) {
+      if (state === 'hover') await login.hover()
+      else { await page.mouse.move(400, 80); if (state === 'focus') await login.focus(); else await login.blur() }
+      await login.evaluate(element => element.getAnimations().forEach(animation => animation.finish()))
+      await expect(login).toHaveText('登录')
+      expect(await login.boundingBox()).toEqual(resting)
+      expect((await new AxeBuilder({ page }).include('.header-login').withRules(['color-contrast']).analyze()).violations).toEqual([])
+      if (state === 'hover') await page.screenshot({ path: test.info().outputPath('login-hover-' + mode + '.png') })
+    }
+    await login.click()
+    await expect(page.getByRole('form', { name: '登录章鱼账号', exact: true })).toBeVisible()
+  })
+}
+
 for (const mode of ['light', 'dark']) {
   test(`rail icons have hover names and consistent targets in ${mode} mode`, async ({ page }) => {
     await mockUnifiedAccount(page, true)
@@ -69,7 +91,7 @@ for (const mode of ['light', 'dark']) {
     await expectRail(page)
     const rail = page.locator('.community-rail')
     const controls = rail.locator('.nav-link, .tools-trigger, .header-submission, .rail-settings, .rail-theme, .rail-toggle')
-    await expect(controls).toHaveCount(8)
+    await expect(controls).toHaveCount(7)
     for (const control of await controls.all()) {
       const title = await control.getAttribute('title')
       expect(title).toBeTruthy()
@@ -208,6 +230,19 @@ test('continuous rail stays below the logo without floating panels and preserves
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
+test.describe('touchscreen sidebar', () => {
+  test.use({ hasTouch: true })
+  test('logo expands the sidebar without hover or navigation', async ({ page }) => {
+    await mockUnifiedAccount(page, true)
+    await page.goto('/community')
+    const expand = page.getByRole('button', { name: '展开侧栏', exact: true })
+    expect((await expand.boundingBox())!.width).toBe(44)
+    await expand.tap()
+    await expect(page.getByRole('button', { name: '收起侧栏', exact: true })).toBeFocused()
+    await expect(page).toHaveURL('http://localhost:18775/community')
+  })
+})
+
 for (const mode of ['light', 'dark'] as const) {
   test('expanded sidebar preserves navigation, focus and content space in ' + mode, async ({ page }) => {
     await mockUnifiedAccount(page, true)
@@ -215,7 +250,26 @@ for (const mode of ['light', 'dark'] as const) {
     await page.goto('/discover')
     await page.evaluate(mode => window.communityAppearance.set({ mode }), mode)
     const rail = page.getByRole('complementary', { name: '社区侧栏' })
-    await rail.getByRole('button', { name: '展开侧栏', exact: true }).click()
+    const brand = rail.getByRole('button', { name: '展开侧栏', exact: true })
+    await expect(brand).toHaveClass('rail-brand rail-brand-toggle')
+    await expect(rail.locator('.rail-utilities .rail-toggle')).toHaveCount(0)
+    const brandBox = await brand.boundingBox()
+    const logo = brand.locator('img, .rail-brand-fallback')
+    const expandIcon = brand.locator('svg')
+    await expect(logo).toHaveCSS('opacity', '1')
+    await expect(expandIcon).toHaveCSS('opacity', '0')
+    await brand.hover()
+    await expect(logo).toHaveCSS('opacity', '0')
+    await expect(expandIcon).toHaveCSS('opacity', '1')
+    await expect(rail.locator('.rail-tooltip')).toHaveText('展开侧栏')
+    expect(await brand.boundingBox()).toEqual(brandBox)
+    await page.screenshot({ path: test.info().outputPath('logo-hover-' + mode + '.png') })
+    await page.mouse.move(400, 80)
+    await expect(logo).toHaveCSS('opacity', '1')
+    await brand.focus()
+    await expect(expandIcon).toHaveCSS('opacity', '1')
+    await page.keyboard.press('Enter')
+    await expect(page).toHaveURL('http://localhost:18775/discover')
     const collapse = rail.getByRole('button', { name: '收起侧栏', exact: true })
     await expect(collapse).toBeFocused()
     await expect(collapse).toHaveAttribute('aria-expanded', 'true')
@@ -274,5 +328,10 @@ for (const mode of ['light', 'dark'] as const) {
     await expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect((await page.locator('main').boundingBox())!.x).toBe(92)
     await expect(rail.locator('.nav-link .rail-label').first()).toBeHidden()
+    await expand.click()
+    await expect(collapse).toBeFocused()
+    await collapse.click()
+    await page.keyboard.press('Space')
+    await expect(collapse).toBeFocused()
   })
 }

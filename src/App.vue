@@ -36,7 +36,7 @@ async function toggleRail() {
   railExpanded.value = !railExpanded.value
   document.querySelectorAll<HTMLDetailsElement>('.community-rail .header-menu[open]').forEach(menu => { menu.open = false })
   await nextTick()
-  document.querySelector<HTMLButtonElement>('.community-rail .rail-toggle')?.focus({ preventScroll: true })
+  document.querySelector<HTMLButtonElement>('.community-rail :is(.rail-toggle, .rail-brand-toggle)')?.focus({ preventScroll: true })
 }
 function showRailHint(event: Event) {
   if (!(event.target instanceof Element) || !desktopCommunity.value) return
@@ -245,7 +245,8 @@ function restoreMessageTrigger() {
     <a href="#main" class="skip-link">跳至内容</a>
     <aside v-show="communityShell" class="community-rail" aria-label="社区侧栏" @pointerover="showRailHint" @focusin="showRailHint" @pointerleave="railHint = null" @focusout="railHint = null" @pointerdown="railHint = null" @keydown.esc="railHint = null" @scroll.capture="railHint = null">
       <div class="rail-heading">
-        <RouterLink to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else class="rail-brand-fallback">{{ site.brand.slice(0, 1) }}</span><span class="rail-brand-label">{{ site.brand }}</span></RouterLink>
+        <button v-if="!railExpanded" type="button" class="rail-brand rail-brand-toggle" aria-label="展开侧栏" title="展开侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><img v-if="site.logoUrl" :src="site.logoUrl" width="40" height="40" alt="" /><span v-else class="rail-brand-fallback" aria-hidden="true">{{ site.brand.slice(0, 1) }}</span><PanelLeftOpen class="rail-icon" :size="22" aria-hidden="true" /></button>
+        <RouterLink v-else to="/discover" class="rail-brand" :aria-label="`${site.brand}首页`" :title="site.brand"><img v-if="site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" /><span v-else class="rail-brand-fallback">{{ site.brand.slice(0, 1) }}</span><span class="rail-brand-label">{{ site.brand }}</span></RouterLink>
         <button v-if="railExpanded" type="button" class="rail-toggle icon-button" aria-label="收起侧栏" title="收起侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><PanelLeftClose class="rail-icon" :size="22" aria-hidden="true" /></button>
       </div>
       <div class="rail-primary">
@@ -254,7 +255,6 @@ function restoreMessageTrigger() {
       <div class="rail-utilities">
         <RouterLink to="/account" class="rail-settings icon-button" aria-label="账号设置" title="账号设置" :aria-current="accountSettings ? 'page' : undefined"><Settings class="rail-icon" :size="22" aria-hidden="true" /><span class="rail-label">账号设置</span></RouterLink>
         <button type="button" class="rail-theme icon-button" :aria-label="themeToggleLabel" :title="themeToggleLabel" @click="toggleTheme"><component :is="themeState.current === 'dark' ? Sun : Moon" class="rail-icon" :size="22" aria-hidden="true" /></button>
-        <button v-if="!railExpanded" type="button" class="rail-toggle icon-button" aria-label="展开侧栏" title="展开侧栏" aria-controls="community-rail-navigation community-rail-actions" :aria-expanded="railExpanded" @click="toggleRail"><PanelLeftOpen class="rail-icon" :size="22" aria-hidden="true" /></button>
       </div>
       <div v-if="railHint" class="rail-tooltip" role="tooltip" aria-hidden="true" :style="{ top: railHint.top + 'px' }"><span>{{ railHint.label }}</span></div>
     </aside>
@@ -364,7 +364,7 @@ function restoreMessageTrigger() {
 .header-actions > .button { border-radius: 24px; min-height: 44px; padding-inline: 16px; }
 .header-actions > .header-login { min-height: 36px; padding-block: 6px; border-radius: 18px; }
 .header-actions > .button.primary { background: var(--ink); color: var(--canvas); border-color: transparent; }
-.header-actions > .button.primary:hover { background: #ffffff; }
+.header-actions > .button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 88%, var(--canvas)); color: var(--canvas); }
 .header-search-slot { position: relative; width: 44px; height: 44px; min-width: 0; --gooey-expanded-width: clamp(180px, calc(100vw - 1056px), 280px); }
 .header-search-slot:empty { display: none; }
 @media (min-width: 1000px) and (max-width: 1279px) {
@@ -460,7 +460,7 @@ function restoreMessageTrigger() {
   .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"] { color: var(--canvas); background: var(--ink); }
   .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"]::after { display: none; }
   .header-welfare[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
-  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+  .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle, .rail-brand-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
   .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
   .community-rail :deep(.tools-panel) { left: calc(var(--community-rail-width) + 12px); right: auto; top: 72px; max-height: calc(100dvh - 88px); }
@@ -470,6 +470,11 @@ function restoreMessageTrigger() {
   .community-shell:not(.rail-expanded) .rail-heading { width: calc(var(--rail-control-size) + 16px); height: var(--rail-brand-size); }
   .community-shell:not(.rail-expanded) .rail-brand { width: var(--rail-brand-size); height: var(--rail-brand-size); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-brand-size); height: var(--rail-brand-size); border-radius: 12px; }
+  .community-shell:not(.rail-expanded) .rail-brand-toggle { position: relative; padding: 0; border-radius: 12px; color: var(--muted); }
+  .rail-brand-toggle > .rail-icon { position: absolute; opacity: 0; }
+  .community-shell:not(.rail-expanded) .rail-brand-toggle:is(:hover, :focus-visible) { color: var(--ink); background: var(--surface-soft); }
+  .rail-brand-toggle:is(:hover, :focus-visible) :is(img, .rail-brand-fallback) { opacity: 0; }
+  .rail-brand-toggle:is(:hover, :focus-visible) > .rail-icon { opacity: 1; }
   .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); }
   .community-shell:not(.rail-expanded) .rail-scroll { width: var(--rail-control-size); }
   .community-shell:not(.rail-expanded) .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle), .community-shell:not(.rail-expanded) .community-rail :deep(.tools-trigger) { width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); border-radius: 12px; }
