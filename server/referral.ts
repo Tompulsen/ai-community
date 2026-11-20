@@ -11,7 +11,8 @@ export async function handleReferral(ctx: RequestContext, fetcher: typeof fetch 
   if (path !== '/api/referrals/status' && path !== '/api/admin/referrals/config') return false
   const admin = path.startsWith('/api/admin/')
   if (admin) ctx.requireAdmin()
-  if ((method !== 'GET' && method !== 'PATCH') || (method === 'PATCH' && !admin)) return false
+  if (method === 'PATCH' && admin) fail('REFERRAL_CONFIG_CENTRALIZED', 405)
+  if (method !== 'GET') return false
   const config = ctx.config.newApiSso
   if (!config || typeof config.issuer !== 'string' || typeof config.lotterySecret !== 'string' || config.lotterySecret.length < 32) fail('REFERRAL_UNAVAILABLE')
   const issuer = newApiOrigin(config.issuer), origin = new URL(ctx.config.url).origin
@@ -24,12 +25,7 @@ export async function handleReferral(ctx: RequestContext, fetcher: typeof fetch 
   }
   const rawCursor = ctx.url.searchParams.get('cursor') ?? '0'
   if (!/^\d{1,15}$/.test(rawCursor) || !Number.isSafeInteger(Number(rawCursor))) fail('REFERRAL_INVALID', 400)
-  let body: Record<string, unknown> = { action: admin ? 'config' : 'status', cursor: Number(rawCursor) }
-  if (method === 'PATCH') {
-    const parsed = referralConfigSchema.omit({ updatedAt: true }).safeParse(ctx.body)
-    if (!parsed.success) fail('REFERRAL_INVALID', 400)
-    body = { ...parsed.data, action: 'configure' }
-  }
+  const body = { action: admin ? 'config' : 'status', cursor: Number(rawCursor) }
   const response = await fetcher(new URL('/api/community-sso/referrals', issuer), {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.lotterySecret}` },
@@ -53,7 +49,7 @@ export async function handleReferral(ctx: RequestContext, fetcher: typeof fetch 
   } else {
     const result = referralStatusSchema.safeParse(value)
     if (!result.success || (!accountId && result.data.code)) fail('REFERRAL_UNAVAILABLE')
-    ctx.json(200, { ...result.data, inviteUrl: result.data.code ? `${origin}/activities?invite=${result.data.code}` : '' })
+    ctx.json(200, { ...result.data, inviteUrl: result.data.code ? `${origin}/activities?aff=${result.data.code}` : '' })
   }
   return true
 }

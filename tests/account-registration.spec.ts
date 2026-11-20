@@ -29,6 +29,7 @@ test('registration stays in the community and preserves the return destination f
   await expect(page.getByRole('form', { name: '注册章鱼账号', exact: true })).toBeVisible()
   expect(new URL(page.url()).searchParams.get('mode')).toBe('register')
   expect(new URL(page.url()).searchParams.get('returnTo')).toBe('/library?tab=saved')
+  await expect(page.getByRole('textbox', { name: '邀请码（选填）', exact: true })).toHaveCount(0)
   await fillRegistration(page)
   await page.getByRole('button', { name: '注册账号', exact: true }).click()
   await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
@@ -49,6 +50,65 @@ test('registration stays in the community and preserves the return destination f
   expect(fixture.mutations.filter(item => item.path === '/api/new-api/login')).toEqual([{
     path: '/api/new-api/login', body: { username: 'new-creator', password: 'fixture-password' },
   }])
+})
+
+test('affiliate attribution survives login mode changes without QX invitation controls', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  const cached = 'wf' + 'c'.repeat(24)
+  await page.addInitScript(value => sessionStorage.setItem('ai-community-next:invite', value), cached)
+  await page.goto('/account?mode=register&qx_ref=Manual123')
+  await expect(page.locator('input[name="qx_invite_code"]')).toHaveCount(0)
+  await page.getByRole('link', { name: '立即登录', exact: true }).click()
+  await page.getByRole('link', { name: '注册账号', exact: true }).click()
+  await expect(page.locator('input[name="qx_invite_code"]')).toHaveCount(0)
+  await fillRegistration(page)
+  await page.getByRole('button', { name: '注册账号', exact: true }).click()
+  await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+  const registration = fixture.mutations.find(item => item.path === '/api/new-api/register')
+  expect(registration?.body.aff_code).toBe(cached)
+  expect(registration?.body).not.toHaveProperty('qx_invite_code')
+})
+
+for (const qxCode of ['abcd1234', 'invalid-code']) test(`registration ignores legacy QX parameter ${qxCode} and preserves affiliate attribution`, async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  const cached = 'wf' + 'd'.repeat(24), linkedInvite = 'wf' + 'e'.repeat(24)
+  await page.addInitScript(value => sessionStorage.setItem('ai-community-next:invite', value), cached)
+  await page.goto(`/account?mode=register&aff=Link123&invite=${linkedInvite}&qx_ref=${qxCode}`)
+  await expect(page.locator('input[name="qx_invite_code"]')).toHaveCount(0)
+  await fillRegistration(page)
+  await page.getByRole('button', { name: '注册账号', exact: true }).click()
+  await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+  const registrations = fixture.mutations.filter(item => item.path === '/api/new-api/register')
+  expect(registrations).toHaveLength(1)
+  expect(registrations[0]!.body.aff_code).toBe('Link123')
+  expect(registrations[0]!.body).not.toHaveProperty('qx_invite_code')
+})
+
+for (const [cached, linked, expected] of [
+  ['Ab9', '', 'Ab9'],
+  ['001234', '', '001234'],
+  ['Old3', 'New4', 'New4'],
+] as const) test(`registration prioritizes explicit affiliate codes over cached ${cached} and historical welfare links`, async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  await page.addInitScript(({ cached, legacy }) => {
+    sessionStorage.setItem('ai-community-next:referral-invite', cached)
+    sessionStorage.setItem('ai-community-next:invite', legacy)
+  }, { cached, legacy: 'wf' + 'a'.repeat(24) })
+  await page.goto('/account?mode=register' + (linked ? '&aff=' + linked : ''))
+  await fillRegistration(page)
+  await page.getByRole('button', { name: '注册账号', exact: true }).click()
+  await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+  expect(fixture.mutations.find(item => item.path === '/api/new-api/register')?.body.aff_code).toBe(expected)
+})
+
+test('legacy numeric lottery invitation IDs never become affiliate codes', async ({ page }) => {
+  const fixture = await mockUnifiedAccount(page)
+  await page.addInitScript(() => sessionStorage.setItem('ai-community-next:invite', '17'))
+  await page.goto('/account?mode=register&invite=23')
+  await fillRegistration(page)
+  await page.getByRole('button', { name: '注册账号', exact: true }).click()
+  await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+  expect(fixture.mutations.find(item => item.path === '/api/new-api/register')?.body).not.toHaveProperty('aff_code')
 })
 
 test('sending email, registering and logging in consume separate human verification challenges', async ({ page }) => {
@@ -97,7 +157,7 @@ test('sending email, registering and logging in consume separate human verificat
 test('password confirmation and upstream errors keep registration recoverable without creating a session', async ({ page }, info) => {
   const fixture = await mockUnifiedAccount(page)
   await page.setViewportSize({ width: 390, height: 900 })
-  await page.goto('/account?mode=register')
+  await page.goto('/account?mode=register&aff=Keep1234')
   await fillRegistration(page)
   await page.getByLabel('确认密码', { exact: true }).fill('different-password')
   await page.getByRole('button', { name: '注册账号', exact: true }).click()
@@ -118,6 +178,7 @@ test('password confirmation and upstream errors keep registration recoverable wi
   await page.getByLabel('确认密码', { exact: true }).fill('fixture-password')
   await page.getByRole('button', { name: '注册账号', exact: true }).click()
   await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+  expect(fixture.mutations.filter(item => item.path === '/api/new-api/register').every(item => item.body.aff_code === 'Keep1234' && !('qx_invite_code' in item.body))).toBe(true)
   await page.screenshot({ path: info.outputPath('registration-success-login-390.png'), fullPage: true })
 })
 
@@ -221,6 +282,7 @@ for (const width of [1440, 390, 320]) {
     await expect(page.getByLabel('密码', { exact: true })).toHaveAttribute('autocomplete', 'new-password')
     await expect(page.getByLabel('确认密码', { exact: true })).toHaveAttribute('autocomplete', 'new-password')
     await expect(page.getByRole('textbox', { name: '邮箱验证码', exact: true })).toHaveAttribute('autocomplete', 'one-time-code')
+    await expect(page.locator('input[name="qx_invite_code"]')).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([])
     await page.screenshot({ path: info.outputPath(`registration-${width}.png`), fullPage: true })

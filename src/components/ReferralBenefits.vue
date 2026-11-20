@@ -6,8 +6,9 @@ import { api, errorMessage, notify, session } from '../state'
 
 const status = ref<ReferralStatus | null>(null), busy = ref(false), error = ref('')
 let request = 0, controller: AbortController | undefined
-const points = (value: number) => value.toLocaleString('zh-CN')
-const labels = { waiting_topup: '待新人充值', pending: '待发放 · 自动重试', credited: '双方已到账' }
+const points = (value: number) => value.toLocaleString('zh-CN', { maximumFractionDigits: 20 })
+const topupCondition = (value: number) => value > 0 ? `实付满 ¥${value.toFixed(2)}` : '实际支付大于 0'
+const labels = { waiting_topup: '待单笔充值达标', pending: '待发放 · 自动重试', credited: '双方已到账' }
 const own = computed(() => status.value?.asInvitee)
 const date = (value: number) => new Date(value * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 async function load(append = false) {
@@ -40,8 +41,8 @@ onBeforeUnmount(() => { request++; controller?.abort() })
       <div class="referral-intro">
         <div>
           <p class="referral-award"><span>你得 <strong>{{ points(status.config.inviterPoints) }}</strong></span><span>好友得 <strong>{{ points(status.config.inviteePoints) }}</strong></span><span class="referral-unit">永久积分</span></p>
-          <p class="referral-condition">新朋友通过你的链接注册并绑定邀请码，首次成功充值后，双方自动到账。充值金额不限，实际支付须大于 0。</p>
-          <p class="caption-5 muted">仅限新注册账号，每位新人奖励一次。赠送积分、兑换码及余额支付不计入充值；已绑定邀请按绑定时的奖励额度发放。</p>
+          <p class="referral-condition">新朋友通过你的链接注册后，任意一笔充值{{ topupCondition(status.config.minTopupCny) }}，双方自动获得奖励。首笔未达标不影响后续领取。</p>
+          <p class="caption-5 muted">仅限新注册账号，每位新人奖励一次；按单笔实付判断，不累计。赠送积分、兑换码及余额支付不计入充值；已绑定邀请按绑定时的规则发放。</p>
           <p v-if="!status.config.enabled" class="notice-inline" role="status">新邀请福利已暂停。此前已绑定的邀请继续按原规则发放。</p>
         </div>
         <div class="referral-share">
@@ -54,12 +55,12 @@ onBeforeUnmount(() => { request++; controller?.abort() })
         </div>
       </div>
       <div v-if="own" class="referral-own" role="status">
-        <div><strong>{{ own.state === 'credited' ? `你的 ${points(own.inviteePoints)} 永久积分已到账` : own.state === 'pending' ? '充值已确认，奖励正在发放' : '邀请已绑定，完成首次充值即可领奖' }}</strong><p class="caption-5 muted">{{ own.state === 'waiting_topup' ? `你将获得 ${points(own.inviteePoints)} 永久积分，邀请人获得 ${points(own.inviterPoints)} 积分。` : '双方奖励自动入账，可在账户积分中查看。' }}</p></div>
+        <div><strong>{{ own.state === 'credited' ? `你的 ${points(own.inviteePoints)} 永久积分已到账` : own.state === 'pending' ? '充值已确认，奖励正在发放' : `邀请已绑定，单笔充值${topupCondition(own.minTopupCny)}即可领奖` }}</strong><p class="caption-5 muted">{{ own.state === 'waiting_topup' ? `你将获得 ${points(own.inviteePoints)} 永久积分，邀请人获得 ${points(own.inviterPoints)} 积分。` : '双方奖励自动入账，可在账户积分中查看。' }}</p></div>
         <RouterLink v-if="own.state === 'waiting_topup'" to="/account?tab=balance" class="button btn">前往充值</RouterLink>
       </div>
       <template v-if="session.user">
-        <dl class="referral-totals"><div><dt>已绑定新人</dt><dd>{{ points(status.invited) }} <span>人</span></dd></div><div><dt>双方已到账</dt><dd>{{ points(status.credited) }} <span>人</span></dd></div><div><dt>邀请累计所得</dt><dd>{{ points(status.earnedPoints) }} <span>永久积分</span></dd></div></dl>
-        <div class="section-heading"><h3>我的邀请记录</h3><span class="caption-5 muted">{{ status.invited - status.credited - status.pending }} 人待充值<span v-if="status.pending"> · {{ status.pending }} 人待发放</span></span></div>
+        <dl class="referral-totals"><div><dt>累计邀请新人</dt><dd>{{ points(status.invited) }} <span>人</span></dd></div><div><dt>双方已到账</dt><dd>{{ points(status.credited) }} <span>人</span></dd></div><div><dt>邀请累计所得</dt><dd>{{ points(status.earnedPoints) }} <span>永久积分</span></dd></div></dl>
+        <div class="section-heading"><h3>我的邀请记录</h3><span class="caption-5 muted">{{ status.waiting }} 人待达标<span v-if="status.pending"> · {{ status.pending }} 人待发放</span></span></div>
         <p v-if="!status.items.length" class="muted">还没有绑定的新人。把邀请链接分享给朋友，完成注册后即可在这里查看进度。</p>
         <ul v-else class="referral-records"><li v-for="item in status.items" :key="item.inviteeId"><div><strong>新用户 {{ item.inviteeId }}</strong><p class="caption-5 muted">{{ date(item.boundAt) }} 绑定<span v-if="item.creditedAt"> · {{ date(item.creditedAt) }} 到账</span></p></div><div class="referral-record-result"><span :class="{ 'referral-credited': item.state === 'credited' }">{{ labels[item.state] }}</span><span class="caption-5 muted">{{ item.state === 'credited' ? '已获' : '可获' }} {{ points(item.inviterPoints) }} 积分</span></div></li></ul>
         <button v-if="status.nextCursor" type="button" class="button subtle btn" :disabled="busy" @click="load(true)">{{ busy ? '正在读取…' : '查看更多邀请' }}</button>

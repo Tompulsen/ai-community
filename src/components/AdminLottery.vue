@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import AdminReferral from './AdminReferral.vue'
 import { computed, onBeforeUnmount, onMounted, ref, toRaw } from 'vue'
 import { ChevronDown, ChevronUp, Plus, RefreshCw, Save, Search, Trash2 } from '@lucide/vue'
 import type { LotteryCreditReceipt, LotterySettings, LotteryPrize } from '../../server/business/lottery'
@@ -48,8 +47,7 @@ function setPoints(prize: LotteryPrize, event: Event) {
 const baseline = ref('')
 const reloadPrompt = ref(false)
 const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value })
-const referralEditor = ref<InstanceType<typeof AdminReferral> | null>(null)
-const hasUnsavedChanges = computed(() => Boolean(referralEditor.value?.hasUnsavedChanges) || !!baseline.value && configSnapshot() !== baseline.value)
+const hasUnsavedChanges = computed(() => !!baseline.value && configSnapshot() !== baseline.value)
 defineExpose({ hasUnsavedChanges })
 const ruleNames = { followers: '获得关注', likes: '作品获赞' }
 const probabilityTotal = computed(() => draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((total, prize) => total + Number(percentages.value[prize.id] || 0), 0) || 0)
@@ -225,7 +223,6 @@ onMounted(() => {
 
 <template>
   <div class="admin-lottery">
-    <AdminReferral ref="referralEditor" />
     <section class="panel-section lottery-config">
       <div class="section-heading"><h2>奖池与活动规则</h2><div class="table-actions"><RouterLink to="/activities" class="button subtle btn">预览活动</RouterLink><button class="icon-button" title="重新读取抽奖配置" aria-label="重新读取抽奖配置" :disabled="loading || saving" @click="refreshConfig"><RefreshCw :size="17" /></button></div></div>
       <div v-if="reloadPrompt" class="notice-inline" role="status"><p>重新读取会放弃当前未保存的抽奖配置。</p><div class="table-actions"><button class="button btn" :disabled="loading || saving" @click="loadConfig">放弃修改并刷新</button><button class="button subtle btn" @click="reloadPrompt = false">继续编辑</button></div></div>

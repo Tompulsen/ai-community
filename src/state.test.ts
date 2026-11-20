@@ -277,6 +277,28 @@ describe('real API state', () => {
     expect(rememberLotteryInvite('../invalid')).toBe('oldUser1')
     expect(values.get('studio-draft')).toBe('keep')
   })
+  it.each(['Ab9', '001234'])('keeps explicit affiliate code %s separate from legacy lottery IDs', async code => {
+    const values = new Map<string, string>([['ai-community-next:invite', '17'], ['studio-draft', 'keep']])
+    vi.stubGlobal('sessionStorage', { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => values.set(key, value) })
+    const { rememberReferralInvite, rememberLotteryInvite, accountCenterUrl, session } = await import('./state')
+    session.accountUrl = 'https://accounts.example'
+    expect(accountCenterUrl('register')).toBe('https://accounts.example/register')
+    expect(rememberReferralInvite(code)).toBe(code)
+    expect(rememberReferralInvite('../invalid')).toBe(code)
+    expect(rememberReferralInvite()).toBe(code)
+    expect(accountCenterUrl('register')).toBe(`https://accounts.example/register?aff=${code}`)
+    expect(values.get('ai-community-next:invite')).toBe('17')
+    expect(values.get('studio-draft')).toBe('keep')
+    rememberLotteryInvite('wf' + 'a'.repeat(24))
+    expect(accountCenterUrl('register')).toBe(`https://accounts.example/register?aff=${code}`)
+  })
+  it('keeps historical welfare links available for account-center registration', async () => {
+    const code = 'wf' + 'a'.repeat(24), values = new Map<string, string>([['ai-community-next:invite', code]])
+    vi.stubGlobal('sessionStorage', { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => values.set(key, value) })
+    const { accountCenterUrl, session } = await import('./state')
+    session.accountUrl = 'https://accounts.example'
+    expect(accountCenterUrl('register')).toBe(`https://accounts.example/register?aff=${code}`)
+  })
   it('logs into the account service once and only accepts a confirmed community session', async () => {
     fetchMock.mockImplementation((path: string) => {
       if (path === '/api/new-api/login') return response({ success: true, data: { authenticated: true } })

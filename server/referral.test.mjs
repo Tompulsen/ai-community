@@ -4,9 +4,9 @@ import { handleReferral } from './referral.ts'
 import { createLotteryService } from './lottery.ts'
 import { defaultLotterySettings } from './business/lottery.ts'
 
-const config = { version: 1, enabled: true, inviterPoints: 5000, inviteePoints: 5000, updatedAt: 1 }
-const code = 'wf' + 'a'.repeat(24)
-const overview = { config, code, invited: 0, credited: 0, pending: 0, earnedPoints: 0, asInvitee: null, items: [], nextCursor: 0 }
+const config = { version: 1, enabled: true, inviterPoints: 5000, inviteePoints: 5000, inviterQuota: 500000, inviteeQuota: 500000, minTopupCny: 10, updatedAt: 0 }
+const code = 'aB12'
+const overview = { config, code, invited: 0, credited: 0, pending: 0, waiting: 0, earnedPoints: 0, earnedQuota: 0, legacyInvited: 0, asInvitee: null, items: [], nextCursor: 0 }
 function fixture(path = '/api/referrals/status', user = { id: 'community-17', isAdmin: false }) {
   const reads = [], replies = []
   return { reads, replies, req: { method: 'GET' }, url: new URL(path, 'https://community.test'), user,
@@ -28,7 +28,7 @@ test('referrals use only the authenticated external account and filter upstream 
     return response({ ...overview, secret: 'must-not-leak', config: { ...config, updatedBy: 25 } })
   })
   assert.deepEqual(ctx.reads[0].values, ['https://accounts.test', 'community-17'])
-  assert.equal(ctx.replies[0].body.inviteUrl, 'https://community.test/activities?invite=' + code)
+  assert.equal(ctx.replies[0].body.inviteUrl, 'https://community.test/activities?aff=' + code)
   assert.doesNotMatch(JSON.stringify(ctx.replies), /must-not-leak|updatedBy|test-secret/)
 })
 
@@ -46,22 +46,41 @@ test('guests get public rules; admin reads and writes require an administrator',
   }
 })
 
-test('admin values are bounded, independent, versioned and never trust client account IDs', async () => {
+test('admin configuration is read from the account center and legacy writes are rejected', async () => {
   const ctx = fixture('/api/admin/referrals/config', { id: 'community-25', isAdmin: true })
-  ctx.req.method = 'PATCH'; ctx.body = { ...config, inviterPoints: 6000, inviteePoints: 7000, enabled: false, user_id: 999 }
+  ctx.body = { ...config, inviterPoints: 6000, inviteePoints: 7000, enabled: false, user_id: 999 }
   await handleReferral(ctx, async (_, options) => {
     const body = JSON.parse(options.body)
-    assert.equal(body.user_id, 17); assert.equal(body.inviterPoints, 6000); assert.equal(body.inviteePoints, 7000)
-    assert.equal(body.enabled, false); assert.equal(body.version, 1); assert.equal(body.updatedAt, undefined)
-    return response({ ...config, version: 2, inviterPoints: 6000, inviteePoints: 7000, enabled: false })
+    assert.deepEqual(body, { action: 'config', cursor: 0, client_id: 'https://community.test', user_id: 17 })
+    return response(config)
   })
-  assert.equal(ctx.replies[0].body.version, 2)
-  for (const value of [0, -1, 0.5, 100000001, '5000']) {
-    ctx.body.inviteePoints = value
-    await assert.rejects(handleReferral(ctx, () => assert.fail('invalid values must not be sent')), { code: 'REFERRAL_INVALID' })
+  assert.deepEqual(ctx.replies[0].body, config)
+  ctx.req.method = 'PATCH'
+  await assert.rejects(handleReferral(ctx, () => assert.fail('centralized settings must not be written')), { code: 'REFERRAL_CONFIG_CENTRALIZED', statusCode: 405 })
+})
+
+test('sites share canonical codes and records while keeping their own invitation URL', async () => {
+  const record = { inviteeId: 20, inviterId: 17, configVersion: 0, inviterPoints: 0.25, inviteePoints: 0, minTopupCny: 9.99, boundAt: 10, state: 'waiting_topup', creditedAt: 0 }
+  for (const inviteCode of ['aB12', '001234', 'wf' + 'a'.repeat(24)]) {
+    for (const origin of ['https://community.test', 'https://other-community.test']) {
+      const ctx = fixture(); ctx.config.url = origin
+      await handleReferral(ctx, async (_, options) => {
+        const body = JSON.parse(options.body)
+        assert.equal(body.user_id, 17)
+        assert.equal(body.client_id, origin)
+        return response({
+          ...overview, code: inviteCode, config: { ...config, inviterPoints: 0, inviteePoints: 0.25, inviterQuota: 0, inviteeQuota: 25 },
+          invited: 8, waiting: 1, legacyInvited: 7, earnedPoints: 0.25, earnedQuota: 25, asInvitee: record, items: [record],
+        })
+      })
+      const result = ctx.replies[0].body
+      assert.equal(result.inviteUrl, `${origin}/activities?aff=${inviteCode}`)
+      assert.equal(result.waiting, 1)
+      assert.equal(result.legacyInvited, 7)
+      assert.equal(result.config.inviterPoints, 0)
+      assert.deepEqual(result.items, [record])
+    }
   }
-  ctx.body.inviteePoints = 7000
-  await assert.rejects(handleReferral(ctx, () => new Response('{}', { status: 409 })), { code: 'REFERRAL_CONFLICT', statusCode: 409 })
 })
 
 test('invalid account mappings and malformed or oversized service responses fail closed', async () => {
@@ -71,7 +90,11 @@ test('invalid account mappings and malformed or oversized service responses fail
     await assert.rejects(handleReferral(ctx, () => assert.fail('must not call upstream')), { code: 'REFERRAL_ACCOUNT_REQUIRED' })
   }
   ctx.db.query = async () => ({ rows: [{ subject: '17' }] })
-  for (const body of ['broken JSON', 'x'.repeat(65537), JSON.stringify({ ...overview, code: '../escape' })]) {
+  for (const body of [
+    'broken JSON', 'x'.repeat(65537), JSON.stringify({ ...overview, code: '../escape' }),
+    JSON.stringify({ ...overview, config: { ...config, minTopupCny: -1 } }),
+    JSON.stringify({ ...overview, config: { ...config, inviterQuota: 0.5 } }),
+  ]) {
     await assert.rejects(handleReferral(ctx, () => new Response(body)), { code: 'REFERRAL_UNAVAILABLE' })
   }
   ctx.url.searchParams.set('cursor', '-1')

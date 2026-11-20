@@ -25,7 +25,7 @@ interface LotteryStatus {
 }
 const route = useRoute()
 const wheelId = `lottery-${useId()}`
-const tab = ref(route.query.invite ? 'tasks' : 'draw')
+const tab = ref(route.query.invite || route.query.aff ? 'tasks' : 'draw')
 const tabs = [{ id: 'draw', label: '抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
 const loading = ref(true), drawing = ref(false), recordsLoading = ref(false), error = ref('')

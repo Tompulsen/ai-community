@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, typ
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ChevronRight, Eye, EyeOff, LogOut, Palette, Search, Wallet, ArrowUpRight, ShieldCheck, LockKeyhole, X } from '@lucide/vue'
 import { site } from '../site'
-import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, rememberLotteryInvite, session, type AccountStatus, type LoginIdentitySelection } from '../state'
+import { accountApi, accountCenterUrl, api, errorMessage, loadSession, login, logout, rememberLotteryInvite, rememberReferralInvite, session, type AccountStatus, type LoginIdentitySelection } from '../state'
 import AccountSecurity from '../components/AccountSecurity.vue'
 import AccountPrivacy from '../components/AccountPrivacy.vue'
 import AccountTheme from '../components/AccountTheme.vue'
@@ -108,13 +108,15 @@ async function registerAccount() {
     await nextTick(); confirmationControl.value?.focus()
     return
   }
-  const version = authModeVersion, username = identifier.value.trim(), invite = rememberLotteryInvite()
+  const version = authModeVersion, username = identifier.value.trim()
+  const stored = rememberLotteryInvite()
+  const aff = typeof route.query.aff === 'string' ? route.query.aff : rememberReferralInvite() || (stored && /^wf[a-zA-Z0-9]{24}$/.test(stored) ? stored : '')
   busy.value = true
   try {
     await accountApi('register', {
       username, password: password.value,
       ...(status.value?.emailVerificationEnabled ? { email: registrationEmail.value.trim(), verification_code: registrationCode.value.trim() } : {}),
-      ...(invite && /^wf[a-zA-Z0-9]{24}$/.test(invite) ? { aff_code: invite } : {}),
+      ...(aff ? { aff_code: aff } : {}),
       ...(challengeToken.value ? { turnstile_token: challengeToken.value } : {}),
     })
     if (!active || version !== authModeVersion) return

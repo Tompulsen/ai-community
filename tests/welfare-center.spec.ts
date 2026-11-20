@@ -12,20 +12,12 @@ async function welfareFixture(page: Page, authenticated = true) {
   const state = { participated: false, remaining: 200, balance: 3, failAfterDraw: false, failBeforeDraw: false }
   const writes: { path: string; body: any }[] = [], draws = new Map<string, object>()
   const referral = {
-    config: { version: 1, enabled: true, inviterPoints: 5000, inviteePoints: 5000, updatedAt: 1 },
-    code: authenticated ? 'wf' + 'a'.repeat(24) : '', inviteUrl: authenticated ? 'https://community.test/activities?invite=wf' + 'a'.repeat(24) : '',
-    invited: 0, credited: 0, pending: 0, earnedPoints: 0, asInvitee: null as any, items: [] as any[], nextCursor: 0,
-    fail: false, conflict: false,
+    config: { version: 1, enabled: true, inviterPoints: 5000, inviteePoints: 5000, inviterQuota: 500000, inviteeQuota: 500000, minTopupCny: 10, updatedAt: 0 },
+    code: authenticated ? 'aB12' : '', inviteUrl: authenticated ? 'https://community.test/activities?aff=aB12' : '',
+    invited: 0, credited: 0, pending: 0, waiting: 0, earnedPoints: 0, earnedQuota: 0, legacyInvited: 0,
+    asInvitee: null as any, items: [] as any[], nextCursor: 0, fail: false,
   }
   await page.route('**/api/referrals/status*', route => referral.fail ? route.fulfill({ status: 503, json: { error: 'REFERRAL_UNAVAILABLE' } }) : route.fulfill({ json: referral }))
-  await page.route('**/api/admin/referrals/config', route => {
-    if (route.request().method() === 'PATCH') {
-      if (referral.conflict) return route.fulfill({ status: 409, json: { error: 'REFERRAL_CONFLICT' } })
-      writes.push({ path: '/api/admin/referrals/config', body: route.request().postDataJSON() })
-      referral.config = { ...route.request().postDataJSON(), version: referral.config.version + 1 }
-    }
-    return route.fulfill({ json: referral.config })
-  })
   await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true, data: {
     enabled: true, configured: true, publicUrl: 'https://accounts.example',
     passwordLoginEnabled: account.state.passwordLoginEnabled, turnstileSiteKey: account.state.turnstileSiteKey,
@@ -226,8 +218,8 @@ test('admin rejects unrepresentable point amounts and default preset stays edita
 for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']] as const) {
   test(`referral benefits and progress at ${width}px ${scheme}`, async ({ page, context }, info) => {
     const fixture = await welfareFixture(page)
-    const record = { inviteeId: 20, inviterId: 17, configVersion: 1, inviterPoints: 5000, inviteePoints: 5000, boundAt: 1795000000, creditedAt: 0, state: 'waiting_topup' }
-    Object.assign(fixture.referral, { invited: 3, credited: 1, pending: 1, earnedPoints: 5000,
+    const record = { inviteeId: 20, inviterId: 17, configVersion: 0, inviterPoints: 5000, inviteePoints: 5000, minTopupCny: 9.99, boundAt: 1795000000, creditedAt: 0, state: 'waiting_topup' }
+    Object.assign(fixture.referral, { invited: 10, credited: 1, pending: 1, waiting: 1, legacyInvited: 7, earnedPoints: 5000, earnedQuota: 500000,
       asInvitee: { ...record, inviteeId: 17, inviterId: 10 },
       items: [record, { ...record, inviteeId: 19, state: 'pending' }, { ...record, inviteeId: 18, state: 'credited', creditedAt: 1795000500 }], nextCursor: 18 })
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
@@ -236,8 +228,12 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
     await page.goto('/activities?invite=wf' + 'b'.repeat(24))
     const panel = page.getByRole('region', { name: '邀请朋友，共享积分' })
-    await expect(panel).toContainText('充值金额不限，实际支付须大于 0')
-    await expect(panel.getByText('待新人充值', { exact: true })).toBeVisible()
+    await expect(panel).toContainText('¥10.00')
+    await expect(panel).toContainText('首笔未达标不影响后续领取')
+    await expect(panel).toContainText('1 人待达标')
+    await expect(panel).not.toContainText('8 人待达标')
+    await expect(panel.getByText('待单笔充值达标', { exact: true })).toBeVisible()
+    await expect(panel.locator('.referral-own')).toContainText('¥9.99')
     await expect(panel.getByText('待发放 · 自动重试', { exact: true })).toBeVisible()
     await expect(panel.getByRole('link', { name: '前往充值' })).toHaveAttribute('href', '/account?tab=balance')
     await panel.getByRole('button', { name: '复制我的邀请链接' }).click()
@@ -254,16 +250,47 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
   })
 }
 
-test('guest invitation survives navigation to community registration', async ({ page }) => {
-  await welfareFixture(page, false)
-  const code = 'wf' + 'c'.repeat(24)
-  await page.goto('/activities?invite=' + code)
-  await expect(page.getByRole('link', { name: '注册并绑定邀请' })).toHaveAttribute('href', '/account?mode=register')
-  await page.getByRole('link', { name: '已有账号，去登录' }).click()
-  await page.getByRole('link', { name: '注册账号', exact: true }).click()
-  await expect(page.getByRole('form', { name: '注册章鱼账号', exact: true })).toBeVisible()
-  expect(new URL(page.url()).searchParams.get('mode')).toBe('register')
-  expect(await page.evaluate(() => sessionStorage.getItem('ai-community-next:invite'))).toBe(code)
+for (const [query, code, storage] of [
+  ['aff=aB12', 'aB12', 'ai-community-next:referral-invite'],
+  ['aff=001234', '001234', 'ai-community-next:referral-invite'],
+  ['invite=wf' + 'c'.repeat(24), 'wf' + 'c'.repeat(24), 'ai-community-next:invite'],
+] as const) for (const entry of ['direct', 'spa'] as const) {
+  test(`guest invitation ${query} survives ${entry} navigation and reaches registration`, async ({ page }) => {
+    const fixture = await welfareFixture(page, false)
+    const target = '/activities?' + query
+    if (entry === 'direct') await page.goto(target)
+    else {
+      await page.goto('/discover')
+      await page.waitForFunction(() => Boolean((document.querySelector('#app') as any)?.__vue_app__))
+      await page.evaluate(target => (document.querySelector('#app') as any).__vue_app__.config.globalProperties.$router.push(target), target)
+    }
+    await expect(page.getByRole('link', { name: '注册并绑定邀请' })).toHaveAttribute('href', '/account?mode=register')
+    await page.getByRole('link', { name: '注册并绑定邀请' }).click()
+    await expect(page.getByRole('form', { name: '注册章鱼账号', exact: true })).toBeVisible()
+    expect(new URL(page.url()).searchParams.get('mode')).toBe('register')
+    await page.getByRole('textbox', { name: '用户名', exact: true }).fill('invited-creator')
+    await page.getByRole('textbox', { name: '邮箱', exact: true }).fill('invited@example.com')
+    await page.getByRole('textbox', { name: '邮箱验证码', exact: true }).fill('a1b2c3')
+    await page.getByLabel('密码', { exact: true }).fill('fixture-password')
+    await page.getByLabel('确认密码', { exact: true }).fill('fixture-password')
+    await page.getByRole('button', { name: '注册账号', exact: true }).click()
+    await expect(page.getByText('注册成功，请登录章鱼账号。', { exact: true })).toBeVisible()
+    const registration = fixture.account.mutations.find(item => item.path === '/api/new-api/register')
+    expect(registration?.body.aff_code).toBe(code)
+    expect(registration?.body).not.toHaveProperty('qx_invite_code')
+    expect(await page.evaluate(key => sessionStorage.getItem(key), storage)).toBe(code)
+  })
+}
+
+test('zero and fractional referral rewards retain the account-center values', async ({ page }) => {
+  const fixture = await welfareFixture(page)
+  Object.assign(fixture.referral.config, { inviterPoints: 0, inviteePoints: 0.25, inviterQuota: 0, inviteeQuota: 25, minTopupCny: 0 })
+  await page.goto('/activities?invite=wf' + 'a'.repeat(24))
+  const panel = page.getByRole('region', { name: '邀请朋友，共享积分' })
+  await expect(panel.locator('.referral-award')).toContainText('你得 0')
+  await expect(panel.locator('.referral-award')).toContainText('好友得 0.25')
+  await expect(panel).toContainText('实际支付大于 0')
+  await expect(panel).toContainText('首笔未达标不影响后续领取')
 })
 
 test('referral loading failure can recover and account changes remove previous private records', async ({ page }) => {
@@ -281,28 +308,19 @@ test('referral loading failure can recover and account changes remove previous p
   await expect(panel.getByText('我的邀请记录', { exact: true })).toHaveCount(0)
 })
 
-for (const width of [1440, 390, 320]) test(`admin edits both referral rewards and handles stale configuration at ${width}px`, async ({ page }, info) => {
-  const fixture = await welfareFixture(page)
+for (const width of [1440, 390, 320]) test(`admin has no independent referral reward editor at ${width}px`, async ({ page }, info) => {
+  const fixture = await welfareFixture(page), requests: string[] = []
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/admin/referrals/config') requests.push(request.method()) })
   await page.setViewportSize({ width, height: 1000 })
   await page.goto('/admin?tab=lottery')
-  const editor = page.getByRole('region', { name: '邀请充值福利' })
-  await editor.getByLabel('邀请人奖励（永久积分）').fill('6000')
-  await editor.getByLabel('新人奖励（永久积分）').fill('7000')
-  await editor.getByLabel('开放新邀请福利').uncheck()
-  fixture.referral.conflict = true
-  await editor.getByRole('button', { name: '保存邀请福利' }).click()
-  await expect(editor.getByRole('alert')).toContainText('当前填写内容已保留')
-  await expect(editor.getByLabel('新人奖励（永久积分）')).toHaveValue('7000')
+  await expect(page.getByRole('heading', { name: '奖池与活动规则', exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: '邀请充值福利' })).toHaveCount(0)
+  await expect(page.getByLabel('邀请人奖励（永久积分）')).toHaveCount(0)
+  await expect(page.getByLabel('新人奖励（永久积分）')).toHaveCount(0)
+  await expect(page.getByLabel('开放新邀请福利')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '保存邀请福利' })).toHaveCount(0)
+  expect(requests).toEqual([])
   expect(fixture.writes).toHaveLength(0)
-  fixture.referral.conflict = false
-  await editor.getByRole('button', { name: '保存邀请福利' }).click()
-  await expect(editor.getByRole('status')).toHaveText('已保存')
-  expect(fixture.referral.config).toMatchObject({ enabled: false, inviterPoints: 6000, inviteePoints: 7000, version: 2 })
-  await page.reload()
-  await expect(editor.getByLabel('邀请人奖励（永久积分）')).toHaveValue('6000')
-  await expect(editor.getByLabel('新人奖励（永久积分）')).toHaveValue('7000')
-  await editor.scrollIntoViewIfNeeded()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  await editor.screenshot({ path: info.outputPath(`admin-referrals-${width}.png`) })
-  expect((await new AxeBuilder({ page }).include('.admin-referral').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`admin-referrals-removed-${width}.png`), fullPage: true })
 })

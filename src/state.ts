@@ -116,6 +116,15 @@ export function rememberLotteryInvite(value?: unknown): string | undefined {
   } catch { return valid(value) ? value : undefined }
 }
 
+export function rememberReferralInvite(value?: unknown): string | undefined {
+  const valid = (input: unknown): input is string => typeof input === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(input)
+  try {
+    if (valid(value)) sessionStorage.setItem('ai-community-next:referral-invite', value)
+    const stored = sessionStorage.getItem('ai-community-next:referral-invite')
+    return valid(stored) ? stored : undefined
+  } catch { return valid(value) ? value : undefined }
+}
+
 export interface AccountStatus {
   enabled: boolean
   configured: boolean
@@ -134,8 +143,9 @@ export function accountCenterUrl(path: '' | 'register' | 'forgot-password' | 'us
     const url = new URL(session.accountUrl)
     if (url.protocol !== 'https:' || url.username || url.password) return ''
     const target = new URL(`/${path}`, url.origin)
-    const invite = rememberLotteryInvite()
-    if (path === 'register' && invite && /^wf[a-zA-Z0-9]{24}$/.test(invite)) target.searchParams.set('aff', invite)
+    const stored = rememberLotteryInvite()
+    const invite = rememberReferralInvite() || (stored && /^wf[a-zA-Z0-9]{24}$/.test(stored) ? stored : undefined)
+    if (path === 'register' && invite) target.searchParams.set('aff', invite)
     return target.href
   } catch { return '' }
 }

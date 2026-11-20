@@ -11,7 +11,8 @@ const settings = {
 }
 const registration = {
   username: "creator", password: "fixture-password", email: "creator@example.com",
-  verification_code: "123456", aff_code: "wf" + "a".repeat(24), turnstile_token: "fresh-challenge",
+  verification_code: "123456", aff_code: "wf" + "a".repeat(24),
+  turnstile_token: "fresh-challenge",
 }
 
 function configure(t) {
@@ -84,6 +85,7 @@ test("registration forwards only supported account fields and never logs in or r
   for (const prefix of ["/api/new-api", "/studio/api/new-api"]) {
     const response = await handleAccountRequest(request(prefix + "/register", {
       ...registration, username: " creator ", role: 100, group: "vip", quota: 999, id: 1, inviter_id: 1,
+      qx_invite_code: "INVITE1234567", qx_ref: "INVITE1234567",
     }, { "x-real-ip": "203.0.113.24", "x-forwarded-for": "attacker-input" }))
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { success: true, data: { registered: true } })
@@ -91,6 +93,71 @@ test("registration forwards only supported account fields and never logs in or r
     assert.match(response.headers.get("cache-control"), /no-store/)
   }
   assert.deepEqual(calls, ["/api/status", "/api/user/register", "/api/status", "/api/user/register"])
+})
+
+test("registration ignores legacy QX invitations and preserves case-sensitive affiliate codes", async t => {
+  configure(t)
+  const forwarded = []
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).pathname === "/api/status") return envelope(settings)
+    assert.equal(new URL(url).pathname, "/api/user/register")
+    forwarded.push(JSON.parse(options.body))
+    return envelope()
+  })
+  const affCodes = ["wf" + "aB".repeat(12), "aB12", "001234"]
+  for (const prefix of ["/api/new-api", "/studio/api/new-api"]) for (const affCode of affCodes) {
+    const response = await handleAccountRequest(request(prefix + "/register", {
+      ...registration, aff_code: affCode, qx_invite_code: "  invite1234567  ", qx_ref: "INVITE1234567",
+    }))
+    assert.equal(response.status, 200)
+  }
+  assert.equal(forwarded.length, affCodes.length * 2)
+  for (const [index, input] of forwarded.entries()) {
+    assert.equal(Object.hasOwn(input, "qx_invite_code"), false)
+    assert.equal(Object.hasOwn(input, "qx_ref"), false)
+    assert.equal(input.aff_code, affCodes[index % affCodes.length])
+  }
+})
+
+test("malformed legacy QX parameters are ignored without blocking registration", async t => {
+  configure(t)
+  let writes = 0
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).pathname === "/api/status") return envelope(settings)
+    const input = JSON.parse(options.body)
+    assert.equal(Object.hasOwn(input, "qx_invite_code"), false)
+    assert.equal(Object.hasOwn(input, "qx_ref"), false)
+    assert.equal(input.aff_code, registration.aff_code)
+    writes++
+    return envelope()
+  })
+  const values = [null, {}, [], 12345678, true, "SHORT12", "A".repeat(33), "INVALID-CODE", "INVALID CODE"]
+  for (const prefix of ["/api/new-api", "/studio/api/new-api"]) for (const value of values) {
+    const response = await handleAccountRequest(request(prefix + "/register", { ...registration, qx_invite_code: value, qx_ref: value }))
+    assert.equal(response.status, 200, JSON.stringify(value))
+  }
+  assert.equal(writes, values.length * 2)
+})
+
+test("legacy QX parameters do not add email verification requirements", async t => {
+  configure(t)
+  let writes = 0
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).pathname === "/api/status") return envelope({ ...settings, email_verification: false })
+    assert.deepEqual(JSON.parse(options.body), {
+      username: registration.username, password: registration.password, aff_code: registration.aff_code,
+    })
+    writes++
+    return envelope()
+  })
+  for (const prefix of ["/api/new-api", "/studio/api/new-api"]) {
+    const response = await handleAccountRequest(request(prefix + "/register", {
+      username: registration.username, password: registration.password, aff_code: registration.aff_code,
+      turnstile_token: registration.turnstile_token, qx_invite_code: "INVITE1234567",
+    }))
+    assert.equal(response.status, 200)
+  }
+  assert.equal(writes, 2)
 })
 
 test("registration code requires a same-origin POST and uses the existing verification endpoint", async t => {

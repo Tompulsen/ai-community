@@ -9,7 +9,7 @@ import AccountBalance from './components/AccountBalance.vue'
 import MessageCenterDialog from './components/MessageCenterDialog.vue'
 import GooeyInput from './components/GooeyInput.vue'
 import type { Work } from './data'
-import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, session, sessionStatus } from './state'
+import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, rememberReferralInvite, session, sessionStatus } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
 import { loadSite, site } from './site'
 import { studioSidebarWidth } from './studio-preferences'
@@ -131,8 +131,10 @@ let hoverCloseTimer: ReturnType<typeof setTimeout> | undefined
 function refreshActiveIdentity() {
   if (session.user && document.visibilityState !== 'hidden') void loadSession(true)
 }
+watch(() => route.query.invite, value => { rememberLotteryInvite(value) }, { immediate: true })
+watch(() => route.query.aff, value => { rememberReferralInvite(value) }, { immediate: true })
 onMounted(() => {
-  rememberLotteryInvite(route.query.invite); void loadSession()
+  void loadSession()
   void loadSite()
   window.addEventListener('focus', refreshActiveIdentity)
   window.addEventListener('pageshow', refreshActiveIdentity)
