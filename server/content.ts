@@ -15,6 +15,7 @@ import { notifyUser } from './social.ts';
 import { handleFollowing } from './following.ts';
 import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './media.ts';
 import { getUser } from './auth.ts';
+import { imageExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
@@ -93,6 +94,7 @@ interface DriveFileRow extends AttachmentRow {
 }
 interface MediaRow extends AttachmentRow {
   name: string;
+  properties?: Record<string, unknown> | null;
   accessKey: string | null;
   thumbnailAccessKey: string | null;
   webpublicAccessKey: string | null;
@@ -510,8 +512,8 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
       ...(content.generation.sourceWorkId ? { sourceWorkId: content.generation.sourceWorkId } : {}),
       ...(publicParameters ? { parameters: publicParameters } : {}),
     } : null,
-    referenceFiles: referenceIds.flatMap(id => references.filter(file => file.id === id && file.storedInternal && file.type.startsWith('image/')).map(file => ({ id: file.id, name: file.name, type: file.type, url: new URL(`/legacy-files/${file.id}`, ctx.config.url).href }))),
-    fileIds: ids, files: ordered.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
+    referenceFiles: referenceIds.flatMap(id => references.filter(file => file.id === id && file.storedInternal && file.type.startsWith('image/')).map(file => ({ id: file.id, name: publicImageName(file), type: file.type, url: new URL(`/legacy-files/${file.id}`, ctx.config.url).href }))),
+    fileIds: ids, files: ordered.map(file => ({ id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
     likes: Number(row.likes ?? 0), liked: Boolean(row.liked), saved: Boolean(row.saved),
     renoted: Boolean(row.renoted), renotes: Number(row.renoteCount ?? 0), views: Number(row.viewsCount ?? 0),
     viewsCount: Number(row.viewsCount ?? 0), repliesCount: Number(row.repliesCount ?? 0), renotesCount: Number(row.renotesCount ?? row.renoteCount ?? 0),
@@ -886,7 +888,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
   const keyWhere = byKey ? '(f."accessKey"=$2 OR f."thumbnailAccessKey"=$2 OR f."webpublicAccessKey"=$2)' : 'f.id=$2';
   const result = await ctx.db.query<MediaRow>(`
-    SELECT f.id,f.name,f.type,f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType"
+    SELECT f.id,f.name,f.type,f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType",f.properties
     FROM drive_file f WHERE ${keyWhere} AND f."storedInternal" AND NOT f."isLink"
     AND (f."userId"=$1 OR $3::boolean
       OR (NOT f."isSensitive" AND f.type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif')
@@ -947,13 +949,30 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
       type = sniffType(header.subarray(0, bytesRead), 'application/octet-stream');
     } finally { await descriptor.close(); }
   }
+  const storageKey = role === 'thumbnail' ? file.thumbnailAccessKey : role === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
+  const privacy = file.properties?.communityImagePrivacy;
+  if (type && imageExtensions[type] && storageKey && (!isRecord(privacy) || privacy[storageKey] !== 1)) {
+    try {
+      const sanitized = await privateMetadataFreeImage(path);
+      metadata = await stat(path);
+      type = sanitized.type;
+      const marker = `jsonb_set(COALESCE(properties,'{}'::jsonb),'{communityImagePrivacy}', COALESCE(properties->'communityImagePrivacy','{}'::jsonb)||jsonb_build_object($2::text,1))`;
+      const updated = role === 'original'
+        ? await ctx.db.query(`UPDATE drive_file SET size=$3,md5=$4,type=$5,name=$6,properties=${marker} WHERE id=$1 AND "accessKey"=$2`, [file.id, storageKey, sanitized.size, sanitized.md5, type, publicImageName({ ...file, type })])
+        : await ctx.db.query(`UPDATE drive_file SET "webpublicType"=CASE WHEN "webpublicAccessKey"=$2 THEN $3::varchar ELSE "webpublicType" END,properties=${marker} WHERE id=$1 AND ("thumbnailAccessKey"=$2 OR "webpublicAccessKey"=$2)`, [file.id, storageKey, type]);
+      if (updated.rowCount === 0) fail(503, '图片状态已变化，请稍后重试。');
+    } catch (error) {
+      if (isRecord(error) && error.statusCode === 503) throw error;
+      fail(503, '图片暂时无法安全提供，请稍后重试。');
+    }
+  }
   const mime = type && inlineTypes.has(type) ? type : 'application/octet-stream';
   ctx.reply.header('Content-Type', mime);
   ctx.reply.header('X-Content-Type-Options', 'nosniff');
   ctx.reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
   ctx.reply.header('Cache-Control', 'private, no-store');
   ctx.reply.header('Accept-Ranges', 'bytes');
-  ctx.reply.header('Content-Disposition', `${type && inlineTypes.has(type) ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16)}`)}`);
+  ctx.reply.header('Content-Disposition', `${type && inlineTypes.has(type) ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(publicImageName({ ...file, type: type || file.type })).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16)}`)}`);
   const range = byteRange(ctx.req.headers.range, metadata.size);
   if (range === false) {
     ctx.reply.code(416).header('Content-Range', `bytes */${metadata.size}`).send();

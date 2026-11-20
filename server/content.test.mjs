@@ -5,7 +5,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import sharp from 'sharp';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { byteRange, handleContent, hiddenByTime, legacyIdTime, normalizeRevision, publicVisibilitySql, readWorkCursor } from './content.ts';
@@ -559,10 +560,10 @@ test('media type detection trusts file signatures and legacy files do not enter 
   assert.equal(mediaState({ communityMedia: { state: 'failed', attempts: 3 } }), 'failed');
 });
 
-test('missing legacy derivatives fall back to the already authorized original with its MIME and size', async () => {
+test('missing legacy derivatives sanitize the authorized original in place', async () => {
   const root = await mkdtemp(join(tmpdir(), 'community-media-fallback-'));
   const original = join(root, 'original-key');
-  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
   await writeFile(original, png);
   try {
     for (const variant of ['', '?variant=web', '?variant=webpublic', '?variant=thumbnail']) {
@@ -579,8 +580,9 @@ test('missing legacy derivatives fall back to the already authorized original wi
       };
       await handleContent(ctx);
       assert.equal(ctx.result.status, 200);
-      assert.equal(headers['Content-Type'], 'image/png');
-      assert.equal(headers['Content-Length'], png.length);
+      assert.equal(headers['Content-Type'], 'image/webp');
+      assert(headers['Content-Length'] > 0);
+      assert(headers['Content-Disposition'].includes('zhangyu-file1.webp'));
     }
-  } finally { await unlink(original); await rmdir(root); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -5,7 +5,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readdir, rmdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rmdir, unlink } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -20,8 +21,9 @@ async function uploadFixture(t, mode = 'success') {
   const state = { committed: false, released: false, discarded: undefined, statements: [], logs: [] };
   t.mock.method(console, 'error', value => state.logs.push(value));
   const connectionError = Object.assign(new Error('commit acknowledgement lost'), { code: 'ECONNRESET' });
-  const query = async (sql) => {
+  const query = async (sql, parameters = []) => {
     state.statements.push(sql);
+    if (sql.startsWith('INSERT INTO drive_file')) state.inserted = parameters;
     if (sql.startsWith('SELECT policies')) return { rows: [{ policies: {}, clientOptions: {} }] };
     if (sql.startsWith('SELECT id,target') || sql.startsWith('SELECT "roleId"')) return { rows: [] };
     if (sql.startsWith('SELECT id,host')) return { rows: [{ id: '17', host: null }] };
@@ -41,8 +43,30 @@ async function uploadFixture(t, mode = 'success') {
     body: { name: 'notes.txt', type: 'text/plain', data: Buffer.from('uploaded content').toString('base64') },
     db: { query, connect: async () => ({ query, release(discard) { state.released = true; state.discarded = discard; } }) },
   };
-  return { ctx, state, files: () => readdir(root) };
+  return { ctx, state, root, files: () => readdir(root) };
 }
+
+test('image upload stores only sanitized bytes and records their actual size, type and checksum', async t => {
+  const f = await uploadFixture(t);
+  const original = await sharp({ create: { width: 12, height: 6, channels: 3, background: 'red' } })
+    .withExif({ IFD0: { Artist: 'PRIVATE-UPLOADER' } }).png().toBuffer();
+  f.ctx.body = { name: 'PRIVATE-WORKFLOW.png', type: 'image/png', data: original.toString('base64') };
+  const dto = await uploadMedia(f.ctx);
+  const files = await f.files();
+  assert.equal(files.length, 1);
+  const bytes = await readFile(join(f.root, files[0]));
+  const metadata = await sharp(bytes).metadata();
+  assert.equal(metadata.exif, undefined);
+  assert.equal(metadata.width, 12);
+  assert.equal(metadata.format, 'webp');
+  const [, , md5, name, type, size, , key, properties] = f.state.inserted;
+  assert.equal(md5, createHash('md5').update(bytes).digest('hex'));
+  assert.equal(size, bytes.length);
+  assert.equal(type, 'image/webp');
+  assert.equal(name, 'zhangyu-upload1.webp');
+  assert.equal(dto.name, name);
+  assert.equal(properties.communityImagePrivacy[key], 1);
+});
 
 test('an upload never deletes its original after a lost commit acknowledgement', async t => {
   for (const mode of ['committed-error', 'unknown']) await t.test(mode, async t => {

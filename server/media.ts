@@ -11,6 +11,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
+import { imageExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { httpError, roleCondition } from './auth.ts';
 import type { Database, RequestContext } from './types.ts';
 
@@ -49,7 +50,7 @@ export function mediaState(properties: Values | null | undefined): Processing {
 
 export function fileDto(file: MediaFile) {
   return {
-    id: file.id, name: file.name, type: file.type, size: file.size, url: `/legacy-files/${file.id}`,
+    id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: `/legacy-files/${file.id}`,
     thumbnailUrl: file.thumbnailAccessKey ? `/legacy-files/${file.id}?variant=thumbnail` : '',
     processing: mediaState(file.properties),
   };
@@ -207,14 +208,27 @@ export async function uploadMedia(ctx: RequestContext) {
       await consume(Readable.from([data]));
     }
     if (!wrote || !size || !name || name.length > 256 || /[\0-\x1f]/.test(name)) throw httpError(400, '请上传有效文件。');
-    const { type, ambiguous } = await classify(target, size, requested);
+    let { type, ambiguous } = await classify(target, size, requested);
     const limit = Math.min(policy.maximum, ambiguous ? Math.min(policy.limits.image, policy.limits.document, policy.limits.other) * MiB : policy.limits[uploadKind(type)] * MiB);
     if (size > limit) throw httpError(413, `文件超过当前分类限额（${limit / MiB} MiB）。`);
     if (!policy.mimeTypes.some(pattern => pattern === '*/*' || pattern === type || pattern.endsWith('/*') && type.startsWith(pattern.slice(0, -1)))) throw httpError(400, '当前角色不允许上传此文件类型。');
     const id = ctx.newId(), url = new URL(`/legacy-files/${id}`, ctx.config.url).href;
     fileId = id;
+    let md5 = checksum.digest('hex');
+    const image = Boolean(imageExtensions[type]);
+    if (image) {
+      let sanitized;
+      try { sanitized = await privateMetadataFreeImage(target); } catch (error) {
+        if (error instanceof Error && 'statusCode' in error && error.statusCode === 503) throw error;
+        throw httpError(400, '图片无法安全处理，请重新导出后上传。');
+      }
+      size = sanitized.size; type = sanitized.type; md5 = sanitized.md5;
+      name = publicImageName({ id, name, type });
+      if (size > limit) throw httpError(413, '处理后的图片超过当前上传限额。');
+    }
     const processing = type.startsWith('image/') || type.startsWith('video/') || type === 'application/ogg';
     const properties: Values = processing ? { communityMedia: { version: 1, state: 'pending', attempts: 0, updatedAt: Date.now() } } : {};
+    if (image) properties.communityImagePrivacy = { [accessKey]: 1 };
     const client = await ctx.db.connect();
     let discardClient = false;
     try {
@@ -224,7 +238,7 @@ export async function uploadMedia(ctx: RequestContext) {
       const used = (await client.query<{ size: string }>('SELECT COALESCE(SUM(size),0)::text AS size FROM drive_file WHERE "userId"=$1 AND "storedInternal" AND NOT "isLink"', [actor.id])).rows[0];
       if (Number(used?.size ?? 0) + size > policy.capacity) throw httpError(413, '文件空间已不足。');
       await client.query(`INSERT INTO drive_file (id,"userId",md5,name,type,size,"storedInternal",url,"accessKey",properties)
-        VALUES ($1,$2,$3,$4,$5,$6,true,$7,$8,$9)`, [id, actor.id, checksum.digest('hex'), name, type, size, url, accessKey, properties]);
+        VALUES ($1,$2,$3,$4,$5,$6,true,$7,$8,$9)`, [id, actor.id, md5, name, type, size, url, accessKey, properties]);
       commitAttempted = true;
       await client.query('COMMIT');
     } catch (error) {

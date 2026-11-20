@@ -4,12 +4,14 @@
  */
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import Fastify from 'fastify'
+import sharp from 'sharp'
+import { crc32 } from 'node:zlib'
 import { AccountRequest, AccountResponse } from './native-account/http.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 
@@ -25,6 +27,7 @@ function deferred() {
 
 function fakeStores() {
   let allowMedia = true
+  let failUpdate = false
   const queries = []
   const media = {
     id: 'file1', name: 'creation.mp4', type: 'video/mp4',
@@ -35,6 +38,13 @@ function fakeStores() {
     async query(sql, parameters = []) {
       queries.push({ sql, parameters })
       assert(!sql.includes('community_lottery'), 'HTTP checks must not operate on lottery data')
+      if (sql.startsWith('UPDATE drive_file SET')) {
+        if (failUpdate) { failUpdate = false; throw new Error('simulated metadata write failure') }
+        media.properties = { communityImagePrivacy: { ...media.properties?.communityImagePrivacy, [parameters[1]]: 1 } }
+        if (sql.includes('size=$3')) Object.assign(media, { size: parameters[2], md5: parameters[3], type: parameters[4], name: parameters[5] })
+        else if (media.webpublicAccessKey === parameters[1]) media.webpublicType = parameters[2]
+        return { rows: [], rowCount: 1 }
+      }
       if (sql.includes('FROM drive_file f WHERE')) {
         return { rows: allowMedia && ['file1', 'original-key', 'thumbnail-key'].includes(parameters[1]) ? [media] : [], rowCount: 0 }
       }
@@ -53,7 +63,7 @@ function fakeStores() {
     async eval() { return 1 },
     async xrevrange() { return [] },
   }
-  return { db, redis, queries, denyMedia() { allowMedia = false } }
+  return { db, redis, queries, media, denyMedia() { allowMedia = false }, failMediaUpdate() { failUpdate = true } }
 }
 
 async function fixture(t) {
@@ -68,7 +78,7 @@ async function fixture(t) {
     writeFile(path.join(distRoot, 'assets', 'app.js'), 'export const app = true;'),
     writeFile(path.join(root, 'outside.txt'), 'outside-must-not-be-served'),
     writeFile(path.join(filesRoot, 'original-key'), '0123456789abcdefghij'),
-    writeFile(path.join(filesRoot, 'thumbnail-key'), Buffer.from([255, 216, 255, 224, 0, 4, 74, 70, 73, 70])),
+    sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).jpeg().toFile(path.join(filesRoot, 'thumbnail-key')),
   ])
   const stores = fakeStores()
   const app = createApplication({
@@ -80,8 +90,69 @@ async function fixture(t) {
     await app.close()
     await rm(root, { recursive: true, force: true })
   })
-  return { app, ...stores }
+  return { app, filesRoot, ...stores }
 }
+
+test('public image downloads hide upload names and metadata on every original route', async t => {
+  const { app, media, filesRoot, denyMedia, queries } = await fixture(t)
+  Object.assign(media, { name: 'ComfyUI-private-customer-prompt.png', type: 'image/png', thumbnailAccessKey: null })
+  let original = await sharp({ create: { width: 3001, height: 2, channels: 3, background: '#ff0000' } })
+    .withExif({ IFD0: { Artist: 'PRIVATE-CUSTOMER', ImageDescription: 'PRIVATE-PROMPT' } }).png().toBuffer()
+  for (const key of ['prompt', 'workflow']) {
+    const data = Buffer.from(key + '\0PRIVATE-COMFYUI-WORKFLOW')
+    const chunk = Buffer.alloc(data.length + 12)
+    chunk.writeUInt32BE(data.length)
+    chunk.write('tEXt', 4)
+    data.copy(chunk, 8)
+    chunk.writeUInt32BE(crc32(chunk.subarray(4, -4)), chunk.length - 4)
+    original = Buffer.concat([original.subarray(0, -12), chunk, original.subarray(-12)])
+  }
+  await writeFile(path.join(filesRoot, 'original-key'), original)
+  let sanitized
+  for (const url of ['/legacy-files/file1', '/legacy-files/file1?variant=original', '/files/original-key', '/legacy-files/file1?variant=web']) {
+    const response = await app.inject({ method: 'GET', url })
+    assert.equal(response.statusCode, 200)
+    assert(!response.headers['content-disposition'].includes('ComfyUI'))
+    assert(response.headers['content-disposition'].includes('zhangyu-file1.webp'))
+    const metadata = await sharp(response.rawPayload).metadata()
+    assert.equal(metadata.width, 3001)
+    assert.equal(metadata.height, 2)
+    for (const key of ['exif', 'xmp', 'iptc', 'comments']) assert.equal(metadata[key], undefined)
+    assert(!response.rawPayload.includes(Buffer.from('PRIVATE-')))
+    sanitized = response.rawPayload
+  }
+  const partial = await app.inject({ method: 'GET', url: '/files/original-key', headers: { range: 'bytes=2-5' } })
+  assert.equal(partial.statusCode, 206)
+  assert.deepEqual(partial.rawPayload, sanitized.subarray(2, 6))
+  const head = await app.inject({ method: 'HEAD', url: '/legacy-files/file1' })
+  assert.equal(Number(head.headers['content-length']), sanitized.length)
+  assert.equal(queries.filter(entry => entry.sql.startsWith('UPDATE drive_file SET')).length, 1)
+  assert.equal(media.size, sanitized.length)
+  assert.deepEqual((await readdir(filesRoot)).sort(), ['original-key', 'thumbnail-key'])
+  denyMedia()
+  assertJsonError(await app.inject({ method: 'GET', url: '/files/original-key' }), 404)
+  const other = await fixture(t)
+  Object.assign(other.media, { type: 'image/png', name: 'PRIVATE.png' })
+  assertJsonError(await other.app.inject({ method: 'GET', url: '/legacy-files/file1' }), 503)
+})
+
+test('a metadata write failure after atomic replacement recovers without retaining an unsafe copy', async t => {
+  const f = await fixture(t)
+  Object.assign(f.media, { type: 'image/png', name: 'PRIVATE.png' })
+  const original = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } })
+    .withExif({ IFD0: { Artist: 'PRIVATE-UPLOADER' } }).png().toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  f.failMediaUpdate()
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1' }), 503)
+  const replaced = await readFile(path.join(f.filesRoot, 'original-key'))
+  assert.equal((await sharp(replaced).metadata()).exif, undefined)
+  assert.equal(f.media.properties, undefined)
+  const retry = await f.app.inject({ method: 'GET', url: '/legacy-files/file1' })
+  assert.equal(retry.statusCode, 200)
+  assert.equal(f.media.type, 'image/webp')
+  assert.equal(f.media.properties.communityImagePrivacy['original-key'], 1)
+  assert.deepEqual((await readdir(f.filesRoot)).sort(), ['original-key', 'thumbnail-key'])
+})
 
 function assertJsonError(response, statusCode) {
   assert.equal(response.statusCode, statusCode)
@@ -234,9 +305,8 @@ test('temporary media keeps original, HEAD, range and thumbnail permission seman
   assert.equal(invalid.headers['content-range'], 'bytes */20')
   const thumbnail = await app.inject({ method: 'GET', url: '/legacy-files/file1?variant=thumbnail' })
   assert.equal(thumbnail.statusCode, 200)
-  assert.equal(thumbnail.headers['content-type'], 'image/jpeg')
-  assert.equal(thumbnail.rawPayload.length, 10)
-  assert.equal(thumbnail.rawPayload[0], 255)
+  assert.equal(thumbnail.headers['content-type'], 'image/webp')
+  assert.equal((await sharp(thumbnail.rawPayload).metadata()).width, 2)
   const byKey = await app.inject({ method: 'GET', url: '/files/thumbnail-key' })
   assert.equal(byKey.statusCode, 200)
   assert.deepEqual(byKey.rawPayload, thumbnail.rawPayload)
