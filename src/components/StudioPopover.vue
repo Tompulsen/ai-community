@@ -8,6 +8,10 @@ const id = `studio-${useId()}`
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), opened = ref(false)
 const portalTarget = ref<string | HTMLElement>('body')
 const resizeObserver = new ResizeObserver(() => position())
+function beforeToggle(event: Event) {
+  // Measure the open panel before allowing its first visible frame.
+  if ((event as ToggleEvent).newState === 'open' && panel.value) panel.value.style.visibility = 'hidden'
+}
 function position() {
   if (!panel.value || !trigger.value || !opened.value) return
   const anchor = trigger.value.getBoundingClientRect()
@@ -40,6 +44,7 @@ async function toggle(event: Event) {
   if (opened.value) {
     await nextTick(); position()
     if (panel.value) {
+      panel.value.style.removeProperty('visibility')
       resizeObserver.observe(panel.value)
       const content = panel.value.querySelector('.studio-popover-content')
       if (content) resizeObserver.observe(content)
@@ -64,7 +69,7 @@ defineExpose({ close, open: () => panel.value?.showPopover() })
 
 <template>
   <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="triggerLabel || label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
-  <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" :class="panelClass" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @toggle="toggle">
+  <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" :class="panelClass" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @beforetoggle="beforeToggle" @toggle="toggle">
     <header class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></header>
     <div class="studio-popover-content"><slot /></div>
   </div></Teleport>

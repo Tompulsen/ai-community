@@ -247,6 +247,7 @@ watch([() => route.query.reuse, workspace, chat, () => creation.loaded, () => ch
 
 <style scoped>
 .create-page { display: flex; flex-direction: column; flex: 1; min-height: 0; max-width: none; padding: 8px 24px 16px; }
+.create-page > .native-studio { margin-block-start: auto; }
 .studio-page-toolbar { display: flex; align-items: center; gap: 24px; flex: none; min-height: 48px; margin-bottom: 8px; }
 .studio-page-toolbar h1 { flex: none; margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; white-space: nowrap; }
 .studio-page-toolbar > .studio-tool { margin-left: auto; }

@@ -224,7 +224,7 @@ for (const width of [1440, 390, 320]) {
     await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留图片草稿')
     if (width >= 1000) {
       const sidebar = page.locator('.studio-sidebar')
-      await expect(sidebar.getByRole('button', { name: '创作', exact: true })).toBeVisible()
+      await expect(sidebar.getByRole('navigation', { name: '工作台导航', exact: true }).getByRole('button', { name: '新对话', exact: true })).toBeVisible()
       await expect(sidebar.getByRole('button', { name: '图片', exact: true })).toHaveCount(0)
     }
     const trigger = page.getByRole('button', { name: /^创作模式：/ })

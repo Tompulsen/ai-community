@@ -10,8 +10,14 @@ function syncCards() {
   for (const element of observed) {
     if (!children.has(element)) { observer?.unobserve(element); observed.delete(element) }
   }
-  for (const element of children) {
-    if (!observed.has(element)) { observer?.observe(element); observed.add(element) }
+  // Size new cards before their first paint; the observer handles later changes.
+  const gap = grid.value ? Number.parseFloat(getComputedStyle(grid.value).getPropertyValue('--card-row-gap')) || 0 : 0
+  const added = Array.from(children).filter(element => !observed.has(element)).map(element => ({
+    element, rows: Math.ceil(element.getBoundingClientRect().height + gap),
+  }))
+  for (const { element, rows } of added) {
+    (element as HTMLElement).style.gridRowEnd = `span ${rows}`
+    observer?.observe(element); observed.add(element)
   }
 }
 

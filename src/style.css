@@ -613,7 +613,6 @@ dialog::backdrop { background: #0000009c; }
 
 /* Mobile community follows the local community-studio-ui reference. */
 @media (max-width: 999px) {
-  html { scrollbar-gutter: auto; }
   .mobile-nav { padding-inline: 6px; background: var(--surface); }
   .mobile-nav > a, .mobile-nav > button { color: var(--ink); }
   .mobile-nav > a > span { position: relative; }
