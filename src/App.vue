@@ -430,7 +430,7 @@ function restoreMessageTrigger() {
 @media (min-width: 1000px) {
   :global(:root:has(.community-shell)) { --header-height: 80px; }
   :global(:root:has(.community-shell:is(.account-settings-shell, .profile-shell))) { --header-height: 0px; }
-  .community-shell { --community-rail-width: 92px; --rail-control-size: 36px; --rail-brand-size: 40px; margin-left: var(--community-rail-width); }
+  .community-shell { --community-rail-width: 92px; --rail-control-size: 44px; --rail-brand-size: 44px; margin-left: var(--community-rail-width); }
   .community-shell.rail-expanded { --community-rail-width: 248px; }
   .community-shell > .app-header { height: 80px; }
   .community-shell .header-inner { display: flex; }
@@ -442,18 +442,18 @@ function restoreMessageTrigger() {
   .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-  .community-rail { position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
-  .rail-heading { display: flex; align-items: center; justify-content: center; flex: none; width: 64px; min-width: 0; height: 56px; }
+  .community-rail { --icon-size-nav: 20px; position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
+  .rail-heading { display: flex; align-items: center; justify-content: center; flex: none; width: 64px; min-width: 0; height: var(--rail-brand-size); }
   .rail-primary, .rail-utilities { display: flex; flex-direction: column; align-items: center; width: 64px; padding: 8px; }
   .rail-primary { flex: 0 1 auto; min-height: 0; }
   .rail-utilities { flex: none; gap: 8px; border-top: 1px solid var(--border); }
-  .rail-brand { display: flex; align-items: center; justify-content: center; flex: none; width: 56px; height: 56px; min-width: 0; border-radius: 16px; }
-  .rail-brand img { flex: none; width: 32px; height: 32px; border-radius: 8px; }
-  .rail-brand-fallback { display: grid; place-items: center; flex: none; width: 32px; height: 32px; }
+  .rail-brand { display: flex; align-items: center; justify-content: center; flex: none; width: var(--rail-brand-size); height: var(--rail-brand-size); min-width: 0; border-radius: 12px; }
+  .rail-brand img { flex: none; width: var(--rail-brand-size); height: var(--rail-brand-size); border-radius: 12px; }
+  .rail-brand-fallback { display: grid; place-items: center; flex: none; width: var(--rail-brand-size); height: var(--rail-brand-size); }
   .rail-brand-label { display: none; }
   .rail-scroll { flex: 0 1 auto; width: 48px; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: none; }
   .community-rail .desktop-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-  .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .rail-theme, .rail-toggle, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; margin: 0; border-radius: 16px; color: var(--muted); }
+  .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .rail-theme, .rail-toggle, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); padding: 0; margin: 0; border-radius: 12px; color: var(--muted); }
   .community-rail :deep(.rail-icon) { flex: none; width: var(--icon-size-nav); height: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-rail .rail-label { display: none; }
   .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .rail-theme:hover, .rail-toggle:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
@@ -478,34 +478,30 @@ function restoreMessageTrigger() {
   .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); }
   .community-shell:not(.rail-expanded) .rail-scroll { width: var(--rail-control-size); }
   .community-shell:not(.rail-expanded) .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle), .community-shell:not(.rail-expanded) .community-rail :deep(.tools-trigger) { width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); border-radius: 12px; }
-  .community-shell:not(.rail-expanded) .community-rail :deep(.rail-icon) { width: 20px; height: 20px; }
-  .rail-expanded .community-rail { align-items: stretch; gap: 16px; padding: 20px; }
+  .rail-expanded .community-rail { align-items: stretch; padding: calc((80px - var(--rail-brand-size)) / 2) 20px 20px; }
   .rail-expanded .community-rail::before { content: ''; position: absolute; z-index: -1; inset: 12px; border-radius: 24px; background: var(--surface); box-shadow: 0 4px 16px #0000000d; }
   .rail-expanded .rail-heading { justify-content: space-between; width: 100%; }
-  .rail-expanded .rail-brand { justify-content: flex-start; flex: 1; gap: 10px; width: auto; background: transparent; box-shadow: none; }
+  .rail-expanded .rail-brand { justify-content: flex-start; flex: 1; gap: 10px; width: auto; padding-inline-start: 4px; background: transparent; box-shadow: none; }
   .rail-expanded .rail-brand-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; }
   .rail-expanded .rail-primary, .rail-expanded .rail-utilities { width: 100%; padding: 0; border-radius: 0; background: transparent; box-shadow: none; }
-  .rail-expanded .rail-primary { align-self: stretch; }
+  .rail-expanded .rail-primary { align-self: stretch; padding-block: 8px; }
   .rail-expanded .rail-scroll { width: 100%; height: 100%; }
-  .rail-expanded .community-rail .desktop-nav { justify-self: stretch; gap: 4px; width: 100%; }
-  .rail-expanded .community-rail :is(.nav-link, .header-submission) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 12px; border-radius: 12px; }
+  .rail-expanded .community-rail .desktop-nav { justify-self: stretch; gap: 8px; width: 100%; }
+  .rail-expanded .community-rail :is(.nav-link, .header-submission) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 16px; border-radius: 12px; }
   .rail-expanded .community-rail .rail-label { display: inline; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
   .rail-expanded .community-rail .community-actions { align-items: stretch; }
-  .rail-expanded .community-rail :deep(.tools-trigger) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 12px; border-radius: 12px; }
+  .rail-expanded .community-rail :deep(.tools-trigger) { justify-content: flex-start; gap: 12px; width: 100%; padding-inline: 16px; border: 0; border-radius: 12px; }
   .rail-expanded .community-rail :deep(.tools-trigger)::after { content: '社区工具'; font-size: 14px; font-weight: 500; }
-  .rail-expanded .rail-utilities { flex-direction: row; align-items: center; gap: 4px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .rail-expanded .rail-settings { justify-content: flex-start; flex: 1; gap: 12px; width: auto; padding-inline: 12px; border: 0; border-radius: 12px; }
+  .rail-expanded .rail-utilities { flex-direction: row; align-items: center; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .rail-expanded .rail-settings { justify-content: flex-start; flex: 1; gap: 12px; width: auto; padding-inline: 16px; border: 0; border-radius: 12px; }
   .rail-expanded .rail-theme, .rail-expanded .rail-toggle { width: 44px; height: 44px; min-height: 44px; border-radius: 12px; }
-}
-@media (min-width: 1000px) and (any-pointer: coarse) {
-  .community-shell { --rail-control-size: 44px; --rail-brand-size: 44px; }
 }
 @media (min-width: 1000px) and (max-height: 640px) {
   .community-rail { gap: 12px; padding-block: 12px; }
   .rail-utilities { gap: 4px; }
-  .community-rail .desktop-nav, .community-rail .community-actions { gap: 4px; }
+  .community-rail .desktop-nav, .rail-expanded .community-rail .desktop-nav, .community-rail .community-actions { gap: 4px; }
   .community-rail .community-actions { margin-top: 8px; padding-top: 8px; }
-  .rail-expanded .community-rail { gap: 12px; padding-block: 16px; }
+  .rail-expanded .community-rail { gap: 12px; }
 }
 @media (max-width: 999px) {
   :global(:root:has(.community-shell)) { --header-height: calc(52px + env(safe-area-inset-top)); }

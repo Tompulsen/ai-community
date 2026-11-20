@@ -98,8 +98,8 @@ for (const mode of ['light', 'dark']) {
       expect(await control.getAttribute('aria-label')).toContain(title)
       await expect(control.locator('.rail-label')).toBeHidden()
       const box = (await control.boundingBox())!
-      expect(box.width).toBe(36)
-      expect(box.height).toBe(36)
+      expect(box.width).toBe(44)
+      expect(box.height).toBe(44)
       expect(await control.locator('svg').evaluate(element => {
         const box = element.getBoundingClientRect()
         return [box.width, box.height, getComputedStyle(element).strokeWidth, element.getAttribute('aria-hidden')]
@@ -108,17 +108,17 @@ for (const mode of ['light', 'dark']) {
     expect(await rail.locator('.rail-brand').evaluate(element => {
       const box = element.getBoundingClientRect(), style = getComputedStyle(element)
       return [box.width, box.height, style.backgroundColor, style.boxShadow, style.borderWidth]
-    })).toEqual([40, 40, 'rgba(0, 0, 0, 0)', 'none', '0px'])
+    })).toEqual([44, 44, 'rgba(0, 0, 0, 0)', 'none', '0px'])
     const logo = (await rail.locator('.rail-brand img, .rail-brand-fallback').boundingBox())!
     const search = (await page.locator('.header-search-slot').boundingBox())!
-    expect([logo.width, logo.height, logo.y]).toEqual([40, 40, 20])
+    expect([logo.width, logo.height, logo.y]).toEqual([44, 44, 18])
     const railBox = (await rail.boundingBox())!
     const railCenter = railBox.x + railBox.width / 2
     expect(logo.x + logo.width / 2).toBe(railCenter)
     for (const selector of ['.rail-primary', '.rail-utilities']) {
       const box = (await rail.locator(selector).boundingBox())!
-      expect(box.x - railBox.x).toBe(20)
-      expect(railBox.x + railBox.width - box.x - box.width).toBe(20)
+      expect(box.x - railBox.x).toBe(16)
+      expect(railBox.x + railBox.width - box.x - box.width).toBe(16)
     }
     const header = (await page.locator('.app-header').boundingBox())!
     expect(logo.y + logo.height / 2).toBe(header.y + header.height / 2)
@@ -200,7 +200,7 @@ test('continuous rail stays below the logo without floating panels and preserves
     const utilities = (await page.locator('.rail-utilities').boundingBox())!
     const brand = (await page.locator('.rail-heading').boundingBox())!
     const gap = height > 640 ? 24 : 12
-    expect(brand.y).toBe(20)
+    expect(brand.y).toBe(18)
     expect(primary.y).toBe(brand.y + brand.height + gap)
     expect(utilities.y).toBe(primary.y + primary.height + gap)
     expect(utilities.y + utilities.height).toBeLessThanOrEqual(height - 20)
@@ -228,6 +228,34 @@ test('continuous rail stays below the logo without floating panels and preserves
   await expect(page.locator('.rail-tooltip')).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: '手机导航', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('rail keeps logo and navigation icons stationary while expanding and collapsing', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.goto('/discover')
+  const rail = page.locator('.community-rail')
+  const controls = rail.locator('.nav-link, .tools-trigger, .header-submission')
+  const geometry = () => controls.evaluateAll(elements => elements.map(element => {
+    const icon = element.querySelector('svg')!.getBoundingClientRect()
+    return { x: icon.x, y: icon.y, width: icon.width, height: icon.height, rowHeight: element.getBoundingClientRect().height }
+  }))
+  for (const height of [900, 360]) {
+    await page.setViewportSize({ width: 1440, height })
+    await rail.locator('.rail-scroll').evaluate(element => { element.scrollTop = 0 })
+    const collapsed = await geometry()
+    const logo = await rail.locator('.rail-brand img, .rail-brand-fallback').boundingBox()
+    for (const row of collapsed) expect([row.width, row.height, row.rowHeight]).toEqual([20, 20, 44])
+    for (const control of await controls.all()) expect((await control.boundingBox())!.width).toBe(44)
+    await rail.getByRole('button', { name: '展开侧栏', exact: true }).click()
+    await rail.locator('.rail-scroll').evaluate(element => { element.scrollTop = 0 })
+    expect(await geometry()).toEqual(collapsed)
+    expect(await rail.locator('.rail-brand img, .rail-brand-fallback').boundingBox()).toEqual(logo)
+    for (const control of await controls.all()) expect((await control.boundingBox())!.width).toBe(208)
+    await page.screenshot({ path: test.info().outputPath('stable-expanded-' + height + '.png') })
+    await rail.getByRole('button', { name: '收起侧栏', exact: true }).click()
+    await rail.locator('.rail-scroll').evaluate(element => { element.scrollTop = 0 })
+    expect(await geometry()).toEqual(collapsed)
+  }
 })
 
 test.describe('touchscreen sidebar', () => {
