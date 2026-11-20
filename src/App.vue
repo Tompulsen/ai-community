@@ -270,7 +270,7 @@ function restoreMessageTrigger() {
       </template><RouterLink v-else-if="sessionStatus === 'guest'" to="/account" class="button primary btn header-login">登录</RouterLink><span v-else-if="sessionStatus === 'loading' && !studioPage" class="header-session-status" role="status">账号加载中…</span><button v-else-if="sessionStatus === 'error'" type="button" class="icon-button" aria-label="重新加载账号" title="重新加载账号" @click="loadSession(true)"><RefreshCw :size="18" /></button></div></div>
     </div></header>
     <div v-show="mobileCommunity && mobileSearchOpen" id="mobile-community-search" class="mobile-search-panel" @keydown.esc.stop.prevent="toggleMobileSearch">
-      <form v-if="mobileCommunity && mobileSearchOpen" ref="mobileSearchForm" class="mobile-community-search" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /><button type="submit" class="button btn">搜索</button></form>
+      <form v-if="mobileCommunity && mobileSearchOpen" ref="mobileSearchForm" class="mobile-community-search" role="search" aria-label="作品搜索" @submit.prevent="searchWorks"><GooeyInput v-model="searchQuery" persistent placeholder="搜索作品、提示词或创作者" /></form>
       <div id="mobile-discovery-filters" />
     </div>
     <p v-if="session.error && (!studioPage || !session.user)" class="notice-inline" role="alert">{{ session.error }} <button class="text-link" @click="loadSession(true)">重试</button></p>
@@ -433,7 +433,6 @@ function restoreMessageTrigger() {
   .mobile-search-toggle { width: 44px; height: 44px; color: var(--ink); }
   .mobile-community-search { display: flex; gap: 8px; min-width: 0; height: 44px; }
   .mobile-community-search :deep(.gooey-input) { flex: 1; min-width: 0; }
-  .mobile-community-search > .button { flex: none; min-height: 44px; }
   .mobile-community-search :deep(input) { font-size: 16px; }
   .mobile-account-tools { display: grid; gap: 4px; margin-bottom: 16px; padding: 12px; border-radius: 10px; background: var(--canvas); }
   .mobile-account-identity { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 44px; font-weight: 600; }

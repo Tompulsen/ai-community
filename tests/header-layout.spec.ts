@@ -177,7 +177,7 @@ test('search is available on community pages and submits to discovery', async ({
   const input = page.getByRole('searchbox', { name: '搜索作品', exact: true })
   await input.fill('从社区搜索')
   await expect(page).toHaveURL('/community')
-  await input.press('Enter')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
   await expect(page).toHaveURL(/\/discover\?q=/)
   await expect(page.locator('.active-conditions')).toContainText('搜索：从社区搜索')
   await page.goBack()
@@ -359,3 +359,46 @@ test('mobile search submits from other pages and empty tag lists leave no unused
   await expect(input).toHaveValue('社区搜索')
   await expect(page.locator('.mobile-community-header')).toHaveCount(0)
 })
+
+for (const theme of [{ mode: 'light', id: 'cloud' }, { mode: 'dark', id: 'sage' }]) {
+  test(`search hover keeps its label steady and legible in ${theme.mode} mode`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await page.addInitScript(theme => localStorage.setItem('ai-community-next:appearance:v1',
+      JSON.stringify({ mode: theme.mode, [theme.mode]: theme.id })), theme)
+    await page.goto('/discover')
+    await page.evaluate(async () => { await document.fonts.ready })
+    const button = page.locator('#header-search .gooey-submit')
+    const sample = () => button.evaluate(element => {
+      const root = element.closest('.gooey-input')!
+      const animations = element.getAnimations()
+      animations.forEach(animation => animation.pause())
+      const rgb = (color: string) => color.match(/[\d.]+/g)!.map(Number)
+      const luminance = (channels: number[]) => channels.slice(0, 3).reduce((sum, value, index) => {
+        const channel = value / 255
+        return sum + (channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4) * [.2126, .7152, .0722][index]!
+      }, 0)
+      const frames = [0, 16, 33, 50, 67, 100, 200].map(time => {
+        animations.forEach(animation => { animation.currentTime = time })
+        const style = getComputedStyle(element), background = rgb(style.backgroundColor)
+        const parent = rgb(getComputedStyle(root).backgroundColor), alpha = background[3] ?? 1
+        const painted = background.slice(0, 3).map((value, index) => value * alpha + parent[index]! * (1 - alpha))
+        const foregroundLight = luminance(rgb(style.color)), backgroundLight = luminance(painted)
+        const boxes = [element, element.querySelector('svg')!, element.querySelector('span')!].map(node => {
+          const box = node.getBoundingClientRect()
+          return [box.x, box.y, box.width, box.height]
+        })
+        return { boxes, contrast: (Math.max(foregroundLight, backgroundLight) + .05) / (Math.min(foregroundLight, backgroundLight) + .05) }
+      })
+      animations.forEach(animation => animation.finish())
+      return frames
+    })
+    const resting = (await sample())[0]!
+    for (const hovering of [true, false]) {
+      if (hovering) await button.hover()
+      else await page.mouse.move(0, 700)
+      const frames = await sample()
+      for (const frame of frames) expect(frame.boxes).toEqual(resting.boxes)
+      expect(Math.min(...frames.map(frame => frame.contrast)), hovering ? 'hover contrast' : 'leave contrast').toBeGreaterThanOrEqual(4.5)
+    }
+  })
+}

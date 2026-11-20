@@ -54,11 +54,12 @@ function clear() {
       <div class="gooey-field-surface" />
       <div class="gooey-bubble" />
     </div>
-    <Search class="gooey-search-icon" :size="16" aria-hidden="true" />
+    <Search v-if="!persistent" class="gooey-search-icon" :size="16" aria-hidden="true" />
     <button v-show="!expanded" ref="trigger" type="button" class="gooey-trigger" aria-label="展开搜索作品" title="展开搜索作品" :aria-controls="inputId" :aria-expanded="expanded" @click="expand" />
     <div class="gooey-field">
-      <input :id="inputId" ref="input" v-model="model" type="search" aria-label="搜索作品" :placeholder="placeholder" :disabled="!expanded" enterkeyhint="search" autocomplete="off" />
+      <input :id="inputId" ref="input" v-model="model" type="search" name="q" aria-label="搜索作品" :placeholder="placeholder" :disabled="!expanded" enterkeyhint="search" autocomplete="off" />
       <button v-if="model" type="button" class="gooey-clear" aria-label="清除搜索" title="清除搜索" @click="clear"><X :size="16" /></button>
+      <button v-if="persistent" type="submit" class="gooey-submit"><Search :size="16" aria-hidden="true" /><span>搜索</span></button>
     </div>
   </div>
 </template>
@@ -87,11 +88,24 @@ function clear() {
 .gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: inherit; }
 .gooey-clear:hover { background: var(--border); }
 .gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--ink); }
-.gooey-input.persistent { position: relative; inset: auto; width: 100%; border-radius: 8px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--control-border); }
-.persistent .gooey-search-icon { left: 16px; }
-.persistent .gooey-field { left: 40px; right: 0; width: auto; border-radius: 8px; }
-.persistent .gooey-field input { border-radius: 8px; padding-left: 4px; }
-.persistent:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.gooey-input.persistent { --search-action-bg: transparent; --search-action-ink: var(--ink); --search-divider: var(--control-border); position: relative; inset: auto; width: 100%; border-radius: 12px; background: var(--surface-soft); box-shadow: none; }
+.persistent .gooey-field { position: static; width: 100%; min-width: 0; border-radius: inherit; }
+.persistent .gooey-field input { border-radius: 12px 0 0 12px; padding-inline: var(--space-group) var(--space-small); font-size: var(--font-size-input); }
+.gooey-submit { position: relative; display: flex; align-items: center; justify-content: center; gap: var(--space-small); flex: none; inline-size: 88px; block-size: var(--control-height); padding: 0 var(--space-control); border-radius: 0 12px 12px 0; background: var(--search-action-bg); color: var(--search-action-ink); font-size: var(--font-size-field); font-weight: 500; transition: opacity 200ms var(--ease); }
+.gooey-submit::before { position: absolute; inset-inline-start: 0; inset-block-start: 14px; inline-size: 1px; block-size: 16px; background: var(--search-divider); content: ""; }
+.gooey-submit:not(:disabled):active { transform: none; opacity: .8; }
+.gooey-submit:focus-visible { outline-color: var(--search-action-ink); outline-offset: -4px; }
+.gooey-input.persistent:focus-within { --search-action-bg: var(--ink); --search-action-ink: var(--canvas); --search-divider: transparent; background: var(--canvas); box-shadow: inset 0 0 0 2px var(--ink); }
+.persistent:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+@media (hover: hover) and (pointer: fine) {
+  .gooey-input.persistent:hover { --search-action-bg: var(--ink); --search-action-ink: var(--canvas); --search-divider: transparent; background: var(--canvas); box-shadow: inset 0 0 0 2px var(--ink); }
+}
+@media (forced-colors: active) {
+  .gooey-input.persistent { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .gooey-input.persistent:has(:focus-visible) { outline: 2px solid Highlight; outline-offset: -2px; }
+  .gooey-submit { border-inline-start: 1px solid ButtonText; }
+  .gooey-submit::before { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .gooey-surfaces { filter: none !important; }
   .gooey-field-surface, .gooey-bubble, .gooey-search-icon, .gooey-field { transition: none; }
