@@ -235,6 +235,15 @@ test('audit listing redacts historical settings and private text and batches pub
   assert(response.typeOptions.some(item => item.value === 'updateCommunityRoles'))
 })
 
+test('publication reward audit includes only the frozen rule and receipt times', async () => {
+  const info = { submissionId: 'work1', threshold: 3, tickets: 2, rewardedAt: '2026-11-22T05:30:00.000Z', resetsAt: '2026-11-23T05:30:00.000Z' }
+  const f = fixture({ state: { audits: [{ id: 'audit1', userId: '17', type: 'communityPublicationReward', info: { ...info, secret: 'hidden' } }] } })
+  const result = await f.request('/api/admin/audit')
+  assert.equal(result.items[0].label, '发作品奖励自动到账')
+  assert.deepEqual(result.items[0].details, info)
+  assert(!JSON.stringify(result).includes('hidden'))
+})
+
 test('audit filters and next cursors do not load an unbounded log or search private payloads', async () => {
   const audits = Array.from({ length: 33 }, (_, index) => ({
     id: `audit${String(index).padStart(3, '0')}`, userId: '17', type: 'suspend', info: { userId: '18', reason: 'private-only-search' },

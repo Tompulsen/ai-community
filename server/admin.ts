@@ -520,7 +520,7 @@ const auditLabels: Record<string, string> = {
   communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
   createCommunityTag: '创建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
-  updateCommunityWelfareTasks: '编辑福利任务展示', adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
+  updateCommunityWelfareTasks: '编辑福利任务', communityPublicationReward: '发作品奖励自动到账', adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
 }
 function safeAuditDetails(type: string, input: unknown): Body {
   if (!record(input)) return {}
@@ -535,6 +535,9 @@ function safeAuditDetails(type: string, input: unknown): Body {
     copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive'])
   } else if (type === 'communityReview') {
     copyId('submissionId'); copyEnum('action', ['approve', 'reject', 'remove']); copyNumber('version')
+  } else if (type === 'communityPublicationReward') {
+    copyId('submissionId'); copyNumber('threshold'); copyNumber('tickets')
+    for (const key of ['rewardedAt', 'resetsAt']) if (typeof input[key] === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input[key])) result[key] = input[key]
   } else if (['suspend', 'unsuspend', 'updateUserModerationNote', 'clearUserProfileMedia'].includes(type)) { copyId('userId'); copyEnum('field', ['avatar', 'banner']) }
   else if (type === 'resolveAbuseReport') {
     copyId('reportId'); copyEnum('resolvedAs', ['accept', 'reject'])

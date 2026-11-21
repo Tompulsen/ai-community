@@ -15,6 +15,7 @@ const logLabels: Record<string, string> = {
   createCommunityTag: '新建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '删除公告',
   updateCommunityRoles: '调整管理授权', adjustLotteryChances: '调整抽奖次数',
+  communityPublicationReward: '发作品奖励自动到账',
 }
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9]{1,32}$/.test(value)
 function object(value: unknown): Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
@@ -26,6 +27,13 @@ function logSummary(type: string, value: unknown) {
     add('结果', { approve: '通过', reject: '驳回', remove: '撤下' }[String(info.action)])
     add('说明', info.reason)
     if (validId(info.submissionId)) target = { label: '查看作品', to: `/work/${info.submissionId}` }
+  } else if (type === 'communityPublicationReward') {
+    if (validId(info.submissionId)) { add('作品编号', info.submissionId); target = { label: '查看作品', to: `/work/${info.submissionId}` } }
+    if (typeof info.tickets === 'number' && Number.isSafeInteger(info.tickets)) add('抽奖次数', String(info.tickets))
+    for (const [key, label] of [['rewardedAt', '到账时间'], ['resetsAt', '下一轮时间']] as const) {
+      const value = info[key]
+      if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) add(label, value)
+    }
   } else if (type === 'suspend' || type === 'unsuspend') {
     add('说明', info.reason)
     if (validId(info.userId)) target = { label: '查看用户', to: `/community?creator=${info.userId}` }

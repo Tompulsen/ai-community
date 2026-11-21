@@ -39,6 +39,18 @@ test('overview aggregates the full dataset and pending revisions, with a bounded
   await assert.rejects(f.request('/api/admin/overview?days=365'), { statusCode: 400 })
 })
 
+test('publication reward logs expose the work and frozen reward without arbitrary stored data', async () => {
+  const f = fixture()
+  f.logs.push({ id: 'log1', type: 'communityPublicationReward', userId: 'operator', info: {
+    submissionId: 'work1', tickets: 2, rewardedAt: '2026-11-22T05:30:00.000Z', resetsAt: '2026-11-23T05:30:00.000Z', secret: 'hidden',
+  } })
+  const result = await f.request('/api/admin/logs')
+  assert.equal(result.items[0].label, '发作品奖励自动到账')
+  assert.deepEqual(result.items[0].target, { label: '查看作品', to: '/work/work1' })
+  assert(result.items[0].details.some(item => item.label === '抽奖次数' && item.value === '2'))
+  assert(!JSON.stringify(result).includes('hidden'))
+})
+
 test('moderators can read workload counts but not user statistics or logs; ordinary and anonymous users cannot read either endpoint', async () => {
   const moderator = fixture({ id: 'mod', isModerator: true })
   const result = await moderator.request('/api/admin/overview')
