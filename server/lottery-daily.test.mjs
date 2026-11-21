@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import pg from 'pg'
 import { defaultDailyLotteryPrizes, lotteryDay, lotteryPointsToCents } from '../shared/lottery-daily.ts'
 import { defaultLotterySettings, chooseLotteryPrize } from './business/lottery.ts'
-import { createLotteryService, validateLotterySettings } from './lottery.ts'
+import { createLotteryService, validateLotterySettings, readPublicLotterySummary, invalidatePublicLotterySummary } from './lottery.ts'
 
 const dailySettings = () => ({ ...defaultLotterySettings(), enabled: true, dailyLimit: 200, prizes: defaultDailyLotteryPrizes(5000) })
 
@@ -61,7 +61,7 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
   const pool = new pg.Pool({ connectionString, options: '-c search_path=lottery_daily_test', max: 12 })
   t.after(async () => { await pool.end(); await control.query('DROP SCHEMA lottery_daily_test CASCADE'); await control.end() })
   await pool.query(`
-    CREATE TABLE "user" (id text PRIMARY KEY,host text,"isDeleted" boolean DEFAULT false,"isSuspended" boolean DEFAULT false,"movedToUri" text);
+    CREATE TABLE "user" (id text PRIMARY KEY,host text,name text,username text,"isDeleted" boolean DEFAULT false,"isSuspended" boolean DEFAULT false,"movedToUri" text);
     CREATE TABLE community_lottery_config (id text PRIMARY KEY,version integer NOT NULL,settings jsonb NOT NULL);
     CREATE TABLE community_lottery_account ("userId" text PRIMARY KEY,balance integer NOT NULL,progress jsonb NOT NULL);
     CREATE TABLE community_lottery_draw (id text PRIMARY KEY,"userId" text,"requestId" text,prizes jsonb,"createdAt" timestamptz,
@@ -92,6 +92,7 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
       return lookup(url)
     } })
   async function reset(settings = dailySettings()) {
+    invalidatePublicLotterySummary(db)
     clock = new Date('2026-11-18T03:00:00Z')
     lookup = async url => consumptionResponse(url)
     await pool.query('TRUNCATE community_lottery_config,community_lottery_account,community_lottery_draw,external_account,"user"')
@@ -121,7 +122,10 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
   })
   await t.test('new rewards freeze the configured duration while old forms and request retries retain the original snapshots', async () => {
     await reset({ ...dailySettings(), rewardValidityHours: 24 })
+    assert.deepEqual(await readPublicLotterySummary(db), { items: [] })
     const key = randomUUID(), first = await draw(1, key)
+    const summary = await readPublicLotterySummary(db)
+    assert.equal(summary.items.length, 1); assert.equal(summary.items[0].drawCount, '1'); assert.equal(summary.items[0].pendingCount, '1')
     assert.equal(first.prizes[0].rewardKind, 'charity')
     assert.equal(first.prizes[0].validityHours, 24)
     assert.equal(first.prizes[0].points, null)
