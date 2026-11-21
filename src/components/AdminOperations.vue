@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Check, ClipboardList, Pause, Pencil, Play, Plus, RefreshCw, Save, Search, ShieldCheck, X } from '@lucide/vue'
 import { api, errorMessage, notify, queryString, session } from '../state'
 
@@ -13,7 +14,8 @@ const props = defineProps<{ view: View }>()
 const title = computed(() => ({ announcements: '公告管理', audit: '操作审计', roles: '管理授权' })[props.view])
 const allowed = computed(() => Boolean(session.user?.isAdmin))
 const announcements = ref<Announcement[]>([]), audit = ref<Audit[]>([]), users = ref<RoleUser[]>([]), roles = ref<Role[]>([])
-const query = ref(''), status = ref('all'), auditType = ref(''), typeOptions = ref<{ value: string; label: string }[]>([])
+const route = useRoute()
+const query = ref(props.view === 'roles' && typeof route.query.query === 'string' ? route.query.query.slice(0, 120) : ''), status = ref('all'), auditType = ref(''), typeOptions = ref<{ value: string; label: string }[]>([])
 const nextCursor = ref<string | null>(null), loading = ref(false), busy = ref(false), error = ref('')
 const canAssign = ref(false), assignmentMessage = ref('')
 const editor = ref<HTMLDialogElement>(), editTarget = ref<Announcement | null>(null), editTitle = ref(''), editText = ref(''), editActive = ref(true), editError = ref(''), editConflict = ref(false)

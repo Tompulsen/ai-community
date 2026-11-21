@@ -13,6 +13,7 @@ async function adminFixture(page: Page) {
     config: { communityPublicationMode: 'before', communityAutoBanEnabled: true, communityViolationThreshold: 3,
       communityModelTypes: [] as { id: string; kind: string }[],
       communityFeedMode: 'shuffle', communityFeedPoolSize: 200, communityPullToRefresh: true,
+      communityFeedWeights: { interest: 60, fresh: 25, explore: 15 },
       uploadLimits: { image: 20, video: 100, audio: 20, document: 20, other: 10 } },
     ads: Array.from({ length: 4 }, (_, i) => ({ id: `communityAd${i + 1}`, enabled: false, title: i === 1 ? '保留在第二槽' : '', imageUrl: '', linkUrl: '' })),
     revision: 1, conflict: false, failRead: '',
@@ -54,6 +55,7 @@ test('site branding and an uploaded logo save only their own fields and survive 
   await page.getByLabel('上传 Logo', { exact: true }).setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: png })
   await expect(page.getByLabel('Logo 图片地址', { exact: true })).toHaveValue('/legacy-files/logo1')
   await page.getByRole('button', { name: '保存站点设置', exact: true }).click()
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click()
   await expect(page.getByRole('link', { name: '新的创作社区首页', exact: true })).toBeVisible()
   await expect(page).toHaveTitle('管理 · 新的创作社区')
   expect(fixture.writes[0]!.body).toEqual({ settings: { brand: '新的创作社区', logoUrl: '/legacy-files/logo1' }, version: 'version-1' })
@@ -181,8 +183,8 @@ test('long configured names fit both the site header and guest login branding', 
     if (width >= 1000) {
       const brand = page.locator('.rail-brand')
       await expect(brand).toBeVisible()
-      await expect(brand).toHaveAccessibleName(`${fixture.state.settings.brand}首页`)
-      await expect(brand.locator('span')).toHaveText(fixture.state.settings.brand.slice(0, 1))
+      await expect(brand).toHaveAccessibleName('展开侧栏')
+      await expect(brand.locator('.rail-brand-fallback')).toHaveText(fixture.state.settings.brand.slice(0, 1))
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   }
@@ -215,10 +217,10 @@ test('a save response from a closed settings tab cannot overwrite a newer saved 
   await openTab(page, '站点设置')
   await page.getByLabel('站点名称', { exact: true }).fill('第二次保存')
   await page.getByRole('button', { name: '保存站点设置', exact: true }).click()
-  await expect(page.locator('.brand')).toHaveText('第二次保存')
+  await expect(page.locator('.app-footer > span')).toHaveText('第二次保存')
   const completed = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith('/api/admin/settings'))
   release(); await completed; await page.waitForTimeout(100)
-  await expect(page.locator('.brand')).toHaveText('第二次保存')
+  await expect(page.locator('.app-footer > span')).toHaveText('第二次保存')
   await expect(page).toHaveTitle('管理 · 第二次保存')
 })
 
@@ -295,7 +297,7 @@ test('review requests server filters, loads the next page and keeps revision rev
   await expect.poll(() => requests.at(-1)!.searchParams.get('status')).toBe('published')
   expect(requests.at(-1)!.searchParams.has('cursor')).toBe(false)
   await page.getByLabel('搜索作品或作者', { exact: true }).fill('更早')
-  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await page.locator('.review-search').getByRole('button', { name: '搜索', exact: true }).click()
   await expect(page.getByRole('link', { name: '更早的匹配作品', exact: true })).toBeVisible()
   expect(requests.at(-1)!.searchParams.get('query')).toBe('更早')
   await expect(page.getByRole('link', { name: '第二页作品', exact: true })).toHaveCount(0)
@@ -336,4 +338,178 @@ test('a moderator deep link to site settings does not issue privileged reads', a
   await expect(page.getByRole('heading', { name: '管理概览', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '站点设置', exact: true })).toHaveCount(0)
   expect(privileged).toEqual([])
+})
+
+test('review settings save publishing, suspension and refresh options without overwriting unrelated configuration', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'keep-model', kind: 'video' }]
+  await page.goto('/admin?tab=review')
+  const settings = page.getByRole('region', { name: '审核设置', exact: true })
+  await expect(settings.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
+  await settings.getByRole('radio', { name: /^先发后审/ }).check()
+  await settings.getByLabel('违规次数阈值', { exact: true }).fill('5')
+  await settings.getByRole('switch', { name: '达到阈值自动封禁' }).uncheck()
+  await settings.getByRole('combobox', { name: '首页推荐排序', exact: true }).selectOption('latest')
+  await settings.getByLabel('旧版随机接口候选池', { exact: true }).fill('300')
+  await settings.getByRole('switch', { name: '手机下拉刷新' }).uncheck()
+  await settings.getByRole('button', { name: '保存审核设置', exact: true }).click()
+  await expect(settings.getByRole('status')).toContainText('修改已保存')
+  expect(fixture.writes[0]!.body).toEqual({ version: 'version-1', communityPublicationMode: 'after', communityAutoBanEnabled: false,
+    communityViolationThreshold: 5, communityFeedMode: 'latest', communityFeedPoolSize: 300, communityPullToRefresh: false,
+    communityFeedWeights: { interest: 60, fresh: 25, explore: 15 } })
+  expect(fixture.state.config.communityModelTypes).toEqual([{ id: 'keep-model', kind: 'video' }])
+  expect(fixture.state.config.uploadLimits.image).toBe(20)
+  await page.reload()
+  await expect(settings.getByRole('radio', { name: /^先发后审/ })).toBeChecked()
+  await expect(settings.getByLabel('违规次数阈值', { exact: true })).toHaveValue('5')
+  await expect(settings.getByRole('switch', { name: '达到阈值自动封禁' })).not.toBeChecked()
+  await settings.getByRole('radio', { name: /^先审后发/ }).check()
+  await settings.getByRole('switch', { name: '达到阈值自动封禁' }).check()
+  await settings.getByRole('button', { name: '保存审核设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(2)
+  expect(fixture.writes[1]!.body).toMatchObject({ version: 'version-2', communityPublicationMode: 'before', communityAutoBanEnabled: true })
+  await openTab(page, '社区设置')
+  await expect(page.getByRole('combobox', { name: '内容发布方式', exact: true })).toHaveValue('before')
+  await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('5')
+})
+
+test('delayed review settings saves cannot update a switched or demoted account', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  let release!: () => void, started = false
+  const wait = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/admin/community/config', async route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    started = true; await wait
+    await route.fulfill({ json: { config: { ...fixture.state.config, communityViolationThreshold: 8 }, version: 'late' } }).catch(() => {})
+  })
+  await page.goto('/admin?tab=review')
+  await page.getByLabel('违规次数阈值', { exact: true }).fill('8')
+  await page.getByRole('button', { name: '保存审核设置', exact: true }).click()
+  await expect.poll(() => started).toBe(true)
+  fixture.account.state.user.id = 'newModerator'; fixture.account.state.user.isAdmin = false; fixture.account.state.user.isModerator = true
+  await page.evaluate(async () => { const state = await import('/src/state.ts'); await state.loadSession(true) })
+  await expect(page.getByRole('region', { name: '审核设置', exact: true })).toHaveCount(0)
+  release(); await page.waitForTimeout(150)
+  await expect(page.getByRole('region', { name: '审核设置', exact: true })).toHaveCount(0)
+  await expect(page.getByText('审核设置已保存。', { exact: true })).toHaveCount(0)
+})
+
+test('review settings validate ranges and preserve edits on conflicts and navigation', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  await page.goto('/admin?tab=review')
+  const settings = page.getByRole('region', { name: '审核设置', exact: true })
+  const threshold = settings.getByLabel('违规次数阈值', { exact: true }), save = settings.getByRole('button', { name: '保存审核设置', exact: true })
+  for (const value of ['0', '1001', '1.5', '']) {
+    await threshold.fill(value)
+    await expect(threshold).toHaveAttribute('aria-invalid', 'true')
+    await expect(save).toBeDisabled()
+  }
+  await threshold.fill('5')
+  await settings.getByLabel('旧版随机接口候选池', { exact: true }).fill('19')
+  await expect(save).toBeDisabled()
+  await settings.getByLabel('旧版随机接口候选池', { exact: true }).fill('200')
+  await settings.getByLabel('兴趣权重', { exact: true }).fill('90')
+  await expect(settings.getByRole('alert')).toContainText('三项合计为 100')
+  await expect(save).toBeDisabled()
+  await settings.getByLabel('兴趣权重', { exact: true }).fill('60')
+  expect(fixture.writes).toHaveLength(0)
+  await openTab(page, '管理概览')
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(threshold).toHaveValue('5')
+  fixture.state.config.communityViolationThreshold = 8; fixture.state.revision++
+  await save.click()
+  await expect(settings.getByRole('alert')).toContainText('你的输入仍保留')
+  await expect(threshold).toHaveValue('5')
+  await settings.getByRole('button', { name: '刷新审核设置', exact: true }).click()
+  await settings.getByRole('button', { name: '放弃修改并刷新', exact: true }).click()
+  await expect(threshold).toHaveValue('8')
+  await expect(save).toBeDisabled()
+})
+
+test('failed review settings can reload and moderators can review without reading administrator configuration', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.failRead = '/config'
+  await page.goto('/admin?tab=review')
+  await expect(page.getByRole('region', { name: '审核设置' }).getByRole('alert')).toContainText('配置加载失败')
+  await expect(page.getByRole('radio')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '保存审核设置', exact: true })).toHaveCount(0)
+  fixture.state.failRead = ''
+  await page.getByRole('button', { name: '刷新审核设置', exact: true }).click()
+  await expect(page.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
+  fixture.account.state.user.isAdmin = false; fixture.account.state.user.isModerator = true
+  const privileged: string[] = []
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/admin/community/config') privileged.push(request.url()) })
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '作品审核', exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: '审核设置', exact: true })).toHaveCount(0)
+  expect(privileged).toEqual([])
+})
+
+test('published unreviewed work can be approved once and ordinary rejections only count explicit violations', async ({ page }) => {
+  await adminFixture(page)
+  const items = [
+    { ...pendingWork, id: 'public1', title: '先发后审作品', status: 'published', originalStatus: 'published' },
+    { ...pendingWork, id: 'approved1', title: '已通过作品', status: 'published', originalStatus: 'approved' },
+    { ...pendingWork, id: 'pending1', title: '未公开投稿', originalStatus: 'pending' },
+  ]
+  const decisions: { id: string; body: Record<string, any> }[] = []
+  await page.route('**/api/admin/submissions?**', route => route.fulfill({ json: { items, pendingCount: 2, nextCursor: null } }))
+  await page.route('**/api/admin/submissions/*/review', async route => {
+    const body = route.request().postDataJSON(), id = new URL(route.request().url()).pathname.split('/').at(-2)!
+    decisions.push({ id, body })
+    const work = items.find(item => item.id === id)!
+    work.originalStatus = body.action === 'approve' ? 'approved' : body.action === 'remove' ? 'removed' : 'rejected'
+    work.version++
+    await route.fulfill({ json: { work } })
+  })
+  await page.goto('/admin?tab=review')
+  await expect(page.getByText('已公开 · 待审核', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '驳回：先发后审作品', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '通过：已通过作品', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '通过：先发后审作品', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click()
+  await expect(page.getByRole('button', { name: '通过：先发后审作品', exact: true })).toHaveCount(0)
+  expect(decisions[0]).toMatchObject({ id: 'public1', body: { action: 'approve', version: 1, recordViolation: false } })
+  await page.getByRole('button', { name: '驳回：未公开投稿', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked()
+  await dialog.getByLabel('审核说明').fill('内容信息不完整')
+  await dialog.getByRole('button', { name: '确认', exact: true }).click()
+  await expect.poll(() => decisions.length).toBe(2)
+  expect(decisions[1]!.body).toMatchObject({ action: 'reject', recordViolation: false, reason: '内容信息不完整' })
+  await page.getByRole('button', { name: '撤下：已通过作品', exact: true }).click()
+  await dialog.getByLabel('审核说明').fill('确认违规')
+  await dialog.getByRole('button', { name: '确认', exact: true }).click()
+  await expect.poll(() => decisions.length).toBe(3)
+  expect(decisions[2]!.body).toMatchObject({ action: 'remove', reason: '确认违规' })
+})
+
+for (const colorScheme of ['light', 'dark'] as const) test(`review policy layout works on desktop and phones in ${colorScheme}`, async ({ page }, testInfo) => {
+  test.setTimeout(60_000)
+  await adminFixture(page)
+  await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+  await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'cloud', dark: 'sage' })), colorScheme)
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await page.goto('/admin?tab=review')
+    const policy = page.getByRole('region', { name: '审核设置', exact: true })
+    await expect(policy.getByRole('radio', { name: /^先审后发/ })).toBeChecked()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await policy.getByRole('radio', { name: /^先审后发/ }).focus()
+    await page.keyboard.press('ArrowRight')
+    await expect(policy.getByRole('radio', { name: /^先发后审/ })).toBeChecked()
+    await policy.getByRole('button', { name: '保存审核设置', exact: true }).click()
+    await expect(policy.getByRole('status')).toContainText('修改已保存')
+    await policy.getByRole('radio', { name: /^先审后发/ }).check()
+    await policy.getByRole('button', { name: '保存审核设置', exact: true }).click()
+    await expect(policy.getByRole('status')).toContainText('修改已保存')
+    if (width !== 390) {
+      const audit = await new AxeBuilder({ page }).include('.admin-page').analyze()
+      expect(audit.violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.target) }))).toEqual([])
+    }
+    await page.screenshot({ path: testInfo.outputPath(`review-${colorScheme}-${width}.png`), fullPage: true })
+  }
+  expect(errors).toEqual([])
 })

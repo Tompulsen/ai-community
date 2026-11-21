@@ -41,7 +41,7 @@ jobs:
         run: npm ci
 
       - name: Run PostgreSQL integration tests
-        run: node --test server/following.test.mjs server/lottery-daily.test.mjs server/account-session.test.mjs server/discovery.test.mjs
+        run: node --test server/following.test.mjs server/lottery-daily.test.mjs server/account-session.test.mjs server/discovery.test.mjs server/admin-users.test.mjs
 
   container:
     needs: following-postgres

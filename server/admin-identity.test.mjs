@@ -28,7 +28,7 @@ function fixture(path, method = 'GET', body = {}) {
     targetUsername: 'na_internal17', reporterUsername: 'na_internal18' }
   const query = async (sql, parameters = []) => {
     statements.push({ sql, parameters })
-    if (sql.includes('FROM external_account')) {
+    if (sql.startsWith('SELECT subject,username,"userId" FROM external_account')) {
       assert.equal(parameters[0], issuer)
       return { rows: mappings.filter(row => parameters[1].includes(row.userId)) }
     }
@@ -52,7 +52,7 @@ function fixture(path, method = 'GET', body = {}) {
   return { ctx, statements, response: () => response }
 }
 
-function identityReads(statements) { return statements.filter(item => item.sql.includes('FROM external_account')) }
+function identityReads(statements) { return statements.filter(item => item.sql.startsWith('SELECT subject,username,"userId" FROM external_account')) }
 
 test('admin user DTOs batch public names without changing local root protection or merging a same-name external account', async () => {
   const { ctx, statements, response } = fixture('/api/admin/users')
@@ -65,8 +65,10 @@ test('admin user DTOs batch public names without changing local root protection 
   assert.deepEqual(items.map(item => item.isProtected), [false, false, true])
   assert.equal(identityReads(statements).length, 1)
   assert(!JSON.stringify(response()).includes('na_internal'))
-  const originalFilter = statements.find(item => item.sql.includes('ORDER BY u.id DESC'))
-  assert(originalFilter.sql.includes('host IS NULL AND NOT "isDeleted"'))
+  const originalFilter = statements.find(item => item.sql.includes('ORDER BY u."createdAt" DESC'))
+  assert(originalFilter.sql.includes("$4='local' AND u.host IS NULL"))
+  assert.equal(originalFilter.parameters[3], 'local')
+  assert(originalFilter.sql.includes('e.username ILIKE $2 OR e.subject=$1'))
   assert(originalFilter.sql.includes('u.username ILIKE $2'))
 })
 

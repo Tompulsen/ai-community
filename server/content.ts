@@ -407,7 +407,9 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     if (dateFrom != null) conditions.push(`s."submittedAt">=to_timestamp(${add(dateFrom)}/1000.0)`);
     if (dateTo != null) conditions.push(`s."submittedAt"<to_timestamp(${add(dateTo)}/1000.0)`);
     if ((scope === 'mine' || scope === 'admin') && status && status !== 'all') {
-      if (status === 'pending') conditions.push(`(s.status = 'pending' OR s."pendingRevision" IS NOT NULL)`);
+      if (status === 'pending') conditions.push(scope === 'admin'
+        ? `(s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL)`
+        : `(s.status = 'pending' OR s."pendingRevision" IS NOT NULL)`);
       else if (scope === 'admin' && status === 'published') conditions.push(`(s.status = 'published' OR (s.status = 'approved' AND s."approvedNoteId" IS NOT NULL))`);
       else if (scope === 'admin' && status === 'rejected') conditions.push(`s.status IN ('rejected', 'removed')`);
       else if (['draft', 'published', 'approved', 'rejected', 'removed'].includes(status)) conditions.push(`s.status = ${add(status)}`);
@@ -1352,7 +1354,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
     const { rows, nextCursor } = await contentPage(ctx, { scope: 'admin', limit: 30 });
     const pending = await ctx.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count
       FROM community_submission s JOIN "user" u ON u.id=s."authorId"
-      WHERE s.status='pending' OR s."pendingRevision" IS NOT NULL`);
+      WHERE s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL`);
     return send(ctx, 200, { items: await packWorks(ctx, rows, () => true),
       nextCursor, pendingCount: Number(pending.rows[0]?.count ?? 0) });
   }

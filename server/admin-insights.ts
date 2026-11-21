@@ -9,6 +9,7 @@ import { readPublicIdentities } from './public-identity.ts'
 import type { RequestContext } from './types.ts'
 
 const logLabels: Record<string, string> = {
+  updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解封账号', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '社区设置', communitySettings: '站点设置', updateCommunityAds: '广告位设置',
   createCommunityTag: '新建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
@@ -28,6 +29,9 @@ function logSummary(type: string, value: unknown) {
   } else if (type === 'suspend' || type === 'unsuspend') {
     add('说明', info.reason)
     if (validId(info.userId)) target = { label: '查看用户', to: `/community?creator=${info.userId}` }
+  } else if (type === 'updateUserModerationNote' || type === 'clearUserProfileMedia') {
+    if (validId(info.userId)) target = { label: '管理用户', to: `/admin?tab=users&user=${info.userId}` }
+    if (type === 'clearUserProfileMedia') add('图片', info.field === 'avatar' ? '头像' : info.field === 'banner' ? '横幅' : '')
   } else if (type === 'resolveAbuseReport') {
     add('结果', info.resolvedAs === 'accept' ? '举报成立' : info.resolvedAs === 'reject' ? '举报不成立' : '')
     add('说明', info.moderationNote)
@@ -71,7 +75,7 @@ async function overview(ctx: RequestContext) {
   const to = new Date(), from = new Date(to.getTime() - Number(days) * 86400000)
   const [works, reports, users] = await Promise.all([
     ctx.db.query<{ pending: number; published: number; rejected: number; newWorks: number }>(`SELECT
-      (COUNT(*) FILTER (WHERE s.status='pending' OR s."pendingRevision" IS NOT NULL))::int AS pending,
+      (COUNT(*) FILTER (WHERE s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL))::int AS pending,
       (COUNT(*) FILTER (WHERE s.status='published' OR (s.status='approved' AND s."approvedNoteId" IS NOT NULL)))::int AS published,
       (COUNT(*) FILTER (WHERE s.status IN ('rejected','removed')))::int AS rejected,
       (COUNT(*) FILTER (WHERE s."submittedAt">=$1 AND s."submittedAt"<$2))::int AS "newWorks"

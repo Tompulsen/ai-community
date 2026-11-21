@@ -4,9 +4,10 @@ import { Check, Image, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/
 import { api, errorMessage, notify, uploadFile } from '../state'
 import { updateSite, type SiteBranding } from '../site'
 import { modelTypesSchema, type ModelTypeSetting } from '../../shared/studio/model-types'
-import { readFeedWeights } from '../../shared/recommendation'
+import { feedWeightsSchema, readFeedWeights } from '../../shared/recommendation'
 
-const props = defineProps<{ view: 'site' | 'settings' | 'tags' | 'ads' }>()
+const props = defineProps<{ view: 'site' | 'settings' | 'review' | 'tags' | 'ads' }>()
+const isConfigView = computed(() => props.view === 'settings' || props.view === 'review')
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
@@ -23,17 +24,21 @@ const uploading = ref(false), logoFailed = ref(false), reloadPrompt = ref(false)
 const saved = ref(false), failedAdImages = ref<Record<string, string>>({})
 let active = true
 let logoUpload: AbortController | undefined
-const snapshot = () => JSON.stringify(props.view === 'site' ? branding.value : props.view === 'settings' ? config.value : ads.value)
+const snapshot = () => JSON.stringify(props.view === 'site' ? branding.value : isConfigView.value ? config.value : ads.value)
 const dirty = computed(() => loaded.value && props.view !== 'tags' && snapshot() !== baseline.value)
 const previewLogo = computed(() => /^(?:https:\/\/|\/(?:assets|files|legacy-files)\/)/i.test(branding.value?.logoUrl || '') ? branding.value!.logoUrl : '')
 const category = ref<Tag['category']>('image'), newName = ref(''), editing = ref(''), editName = ref(''), deleting = ref('')
 const categoryNames = { image: '图片', video: '视频', resource: '资源' }
 const uploadNames = { image: '图片', video: '视频', audio: '音频', document: '文档', other: '其他文件' }
 const filteredTags = computed(() => tags.value.filter(tag => tag.category === category.value))
-const title = computed(() => ({ site: '站点设置', settings: '社区设置', tags: '内容标签', ads: '广告位' })[props.view])
-const description = computed(() => ({ site: '设置社区名称与标识，保存后应用于导航、登录页和页面标题。', settings: '设置发布规则、首页推荐、违规处理与文件上传限制。', tags: '按内容类型管理标签，帮助创作者分类与用户发现作品。', ads: '按固定位置配置广告。修改后统一保存，空广告位会保留原位置。' })[props.view])
+const title = computed(() => ({ site: '站点设置', settings: '社区设置', review: '审核设置', tags: '内容标签', ads: '广告位' })[props.view])
+const description = computed(() => ({ site: '设置社区名称与标识，保存后应用于导航、登录页和页面标题。', settings: '设置发布规则、首页推荐、违规处理与文件上传限制。', review: '设置作品的公开时机、账号封禁规则和刷新方式，保存后生效。', tags: '按内容类型管理标签，帮助创作者分类与用户发现作品。', ads: '按固定位置配置广告。修改后统一保存，空广告位会保留原位置。' })[props.view])
 const hasUnsavedChanges = computed(() => uploading.value || dirty.value || !!editing.value || !!newName.value.trim())
-defineExpose({ hasUnsavedChanges })
+const validThreshold = computed(() => !!config.value && Number.isInteger(config.value.communityViolationThreshold) && config.value.communityViolationThreshold >= 1 && config.value.communityViolationThreshold <= 1000)
+const validFeedPool = computed(() => !!config.value && Number.isInteger(config.value.communityFeedPoolSize) && config.value.communityFeedPoolSize >= 20 && config.value.communityFeedPoolSize <= 1000)
+const validFeedWeights = computed(() => feedWeightsSchema.safeParse(config.value?.communityFeedWeights).success)
+const validConfig = computed(() => validThreshold.value && validFeedPool.value && validFeedWeights.value)
+defineExpose({ hasUnsavedChanges, busy: computed(() => props.view === 'review' && busy.value) })
 function readVersion(value: { version: string }) {
   if (!value.version) throw new Error('未能读取配置版本，请刷新后重试。')
   version.value = value.version
@@ -47,7 +52,7 @@ async function load() {
       readVersion(result)
       branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
       updateSite(branding.value)
-    } else if (props.view === 'settings') {
+    } else if (isConfigView.value) {
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
       if (!active) return
       readVersion(result); config.value = { ...result.config, communityModelTypes: result.config.communityModelTypes || [], communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
@@ -77,11 +82,18 @@ async function save() {
       if (!active) return
       updateSite(result.settings)
       readVersion(result); branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
-    } else if (props.view === 'settings' && config.value) {
-      const parsed = modelTypesSchema.safeParse(config.value.communityModelTypes.map(item => ({ ...item, id: item.id.trim() })))
-      if (!parsed.success) throw new Error('请填写完整且不重复的模型 ID（最多 200 字符），并选择模型类型；最多可设置 500 个模型。')
-      config.value.communityModelTypes = parsed.data
-      const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...config.value, version: version.value } })
+    } else if (isConfigView.value && config.value) {
+      if (!validConfig.value) throw new Error('请检查违规阈值、候选池范围及推荐权重。')
+      if (props.view === 'settings') {
+        const parsed = modelTypesSchema.safeParse(config.value.communityModelTypes.map(item => ({ ...item, id: item.id.trim() })))
+        if (!parsed.success) throw new Error('请填写完整且不重复的模型 ID（最多 200 字符），并选择模型类型；最多可设置 500 个模型。')
+        config.value.communityModelTypes = parsed.data
+      }
+      const { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights } = config.value
+      const patch = props.view === 'review'
+        ? { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights }
+        : config.value
+      const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...patch, version: version.value } })
       if (!active) return
       readVersion(result); config.value = result.config
     } else if (props.view === 'ads') {
@@ -134,7 +146,7 @@ watch(dirty, value => { if (value) saved.value = false })
 </script>
 
 <template>
-  <section class="panel-section admin-community">
+  <section class="panel-section admin-community" :class="{ 'review-settings': view === 'review' }" :aria-label="title" :aria-busy="loading || busy">
     <div class="section-heading editor-heading"><div><h2>{{ title }}</h2><p class="form-note">{{ description }}</p></div><button class="button subtle btn" :aria-label="'刷新' + title" :disabled="loading || busy" @click="refresh"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
     <div v-if="loading" class="admin-loading" role="status" :aria-label="'正在加载' + title"><div v-for="n in 3" :key="n" class="skeleton" /></div>
     <p v-if="error" class="form-error editor-error" role="alert">{{ error }}</p>
@@ -149,9 +161,9 @@ watch(dirty, value => { if (value) saved.value = false })
         </div></section>
       </fieldset>
     </form>
-    <form v-if="view === 'settings' && config && !loading" id="admin-settings-form" @submit.prevent="save">
+    <form v-if="isConfigView && config && !loading" :id="'admin-' + view + '-form'" @submit.prevent="save">
       <fieldset class="fieldset" :disabled="busy">
-        <section class="editor-section"><div class="editor-section-title"><h3>模型类型</h3><p>手动指定无法自动识别的模型。</p></div><div class="editor-fields">
+        <section v-if="view === 'settings'" class="editor-section"><div class="editor-section-title"><h3>模型类型</h3><p>手动指定无法自动识别的模型。</p></div><div class="editor-fields">
           <p id="model-type-help" class="form-note">填写完整模型 ID，所有分组共用。未配置的模型沿用原有识别方式。</p>
           <div v-for="(item, index) in config.communityModelTypes" :key="index" class="model-type-row">
             <label class="field"><span>模型 ID {{ index + 1 }}</span><input v-model="item.id" class="control" maxlength="200" required aria-describedby="model-type-help" placeholder="如 custom/model-name" /></label>
@@ -160,10 +172,35 @@ watch(dirty, value => { if (value) saved.value = false })
           </div>
           <button type="button" class="button subtle btn model-type-add" :disabled="config.communityModelTypes.length >= 500" @click="config.communityModelTypes.push({ id: '', kind: 'image' })"><Plus :size="16" aria-hidden="true" />添加模型类型</button>
         </div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>内容发布</h3><p>决定投稿何时出现在社区。</p></div><div class="editor-fields"><label class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label><p id="publication-help" class="form-note">{{ config.communityPublicationMode === 'before' ? '新投稿通过管理员或审核员审核后公开展示。' : '新投稿直接公开，管理员可在审核列表中处理。' }}</p></div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>首页推荐</h3><p>控制推荐排序，刷新优先换入上一批没有的作品。</p></div><div class="editor-fields"><div class="fields"><label class="field"><span>首页推荐排序</span><select v-model="config.communityFeedMode" class="control"><option value="shuffle">兴趣与探索</option><option value="latest">新作优先</option></select></label><label class="field"><span>旧版随机接口候选池</span><input v-model.number="config.communityFeedPoolSize" type="number" min="20" max="1000" step="1" required class="control" aria-describedby="feed-pool-help" /></label></div><p id="feed-pool-help" class="form-note">首页换批覆盖全部符合筛选条件的作品；候选池仅用于兼容旧版随机浏览。</p><div class="fields"><label class="field"><span>兴趣权重</span><input v-model.number="config.communityFeedWeights.interest" type="number" min="0" max="100" step="1" required class="control" /></label><label class="field"><span>新作权重</span><input v-model.number="config.communityFeedWeights.fresh" type="number" min="0" max="100" step="1" required class="control" /></label><label class="field"><span>探索权重</span><input v-model.number="config.communityFeedWeights.explore" type="number" min="0" max="100" step="1" required class="control" /></label></div><p class="form-note">三项合计 100，影响排序分数，不代表固定展示比例。偏好仅存当前浏览器：最多 20 个标签，7 天无互动失效；近期作品最多 120 条，24 小时失效。不新增服务器搜索或浏览历史。</p><label class="switch-row"><span><strong>手机下拉刷新</strong><small>允许用户下拉刷新社区作品。</small></span><input v-model="config.communityPullToRefresh" type="checkbox" role="switch" aria-label="手机下拉刷新" /></label></div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>违规处理</h3><p>设置累计违规的处理规则。</p></div><div class="editor-fields"><label class="switch-row"><span><strong>达到阈值自动封禁</strong><small>根据已记录的内容违规执行。</small></span><input v-model="config.communityAutoBanEnabled" type="checkbox" role="switch" aria-label="达到阈值自动封禁" /></label><label class="field"><span>违规次数阈值</span><input v-model.number="config.communityViolationThreshold" type="number" min="1" max="1000" step="1" required class="control" aria-describedby="violation-help" /></label><p id="violation-help" class="form-note">可设置 1–1000 次。关闭自动封禁后保留阈值设置。</p></div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>上传限制</h3><p>按文件类型设置单个文件的大小上限。</p></div><div class="editor-fields"><div class="upload-fields"><label v-for="(label, kind) in uploadNames" :key="kind" class="field"><span>{{ label }}（MB）</span><input v-model.number="config.uploadLimits[kind]" class="control" type="number" min="1" max="10240" step="1" required aria-describedby="upload-limit-help" /></label></div><p id="upload-limit-help" class="form-note">每类可设置 1–10240 MB，实际上传同时受账号权限约束。</p></div></section>
+        <section class="editor-section"><div class="editor-section-title"><h3>发布与审核</h3><p>新作品按所选模式发布，违规内容可在审核列表中下架。</p></div><div class="editor-fields">
+          <fieldset v-if="view === 'review'" class="publication-modes" aria-describedby="publication-help"><legend>内容发布方式</legend>
+            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="before" /><span><strong>先审后发</strong><small>新作品进入待审核，通过后才在社区公开。</small></span></label>
+            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="after" /><span><strong>先发后审</strong><small>新作品立即公开，并进入审核队列；违规作品可下架。</small></span></label>
+          </fieldset>
+          <label v-else class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label>
+          <p v-if="view === 'settings'" class="form-note">{{ config.communityPublicationMode === 'after' ? '新投稿直接公开，管理员可在审核列表中处理。' : '新投稿先进入审核队列，通过后公开。' }}</p>
+          <p id="publication-help" class="form-note">保存后仅影响新投稿。已有待审作品仍需逐件处理。</p>
+        </div></section>
+        <section class="editor-section"><div class="editor-section-title"><h3>账号封禁规则</h3><p>作品与评论的已确认违规合并累计。</p></div><div class="editor-fields">
+          <label class="switch-row"><span><strong>违规达到阈值时自动封禁</strong><small>关闭后继续保留违规记录及阈值设置。</small></span><input v-model="config.communityAutoBanEnabled" type="checkbox" role="switch" aria-label="达到阈值自动封禁" /></label>
+          <label class="field threshold-field"><span>违规次数阈值</span><input v-model.number="config.communityViolationThreshold" type="number" min="1" max="1000" step="1" inputmode="numeric" required class="control" :aria-invalid="!validThreshold" :aria-describedby="validThreshold ? 'violation-help' : 'violation-help violation-error'" /></label>
+          <p id="violation-help" class="form-note">仅经审核确认的违规计数，同一作品或评论最多计入一次。默认 3 次，可设置 1–1000 次。</p>
+          <p v-if="!validThreshold" id="violation-error" class="form-error" role="alert">请输入 1 到 1000 之间的整数。</p>
+          <p class="form-note">规则从下一次确认新的违规时生效，不追溯封禁。解封保留历史记录，并从零累计新的违规。</p>
+        </div></section>
+        <section class="editor-section"><div class="editor-section-title"><h3>作品刷新与推荐</h3><p>沿用当前首页推荐，刷新优先换入未展示过的作品。</p></div><div class="editor-fields">
+          <div class="fields"><label class="field"><span>首页推荐排序</span><select v-model="config.communityFeedMode" class="control"><option value="shuffle">兴趣与探索 · 刷新换一批</option><option value="latest">新作优先</option></select></label>
+            <label class="field"><span>旧版随机接口候选池</span><input v-model.number="config.communityFeedPoolSize" type="number" min="20" max="1000" step="1" inputmode="numeric" required class="control" :aria-invalid="!validFeedPool" aria-describedby="feed-pool-help" /></label></div>
+          <p id="feed-pool-help" class="form-note">首页换批覆盖全部符合筛选条件的作品；候选池仅用于兼容旧版随机浏览，可设 20–1000，默认 200。</p>
+          <p v-if="!validFeedPool" class="form-error" role="alert">候选池请输入 20 到 1000 之间的整数。</p>
+          <div class="fields"><label class="field"><span>兴趣权重</span><input v-model.number="config.communityFeedWeights.interest" type="number" min="0" max="100" step="1" required class="control" :aria-invalid="!validFeedWeights" aria-describedby="feed-weight-help" /></label><label class="field"><span>新作权重</span><input v-model.number="config.communityFeedWeights.fresh" type="number" min="0" max="100" step="1" required class="control" :aria-invalid="!validFeedWeights" aria-describedby="feed-weight-help" /></label><label class="field"><span>探索权重</span><input v-model.number="config.communityFeedWeights.explore" type="number" min="0" max="100" step="1" required class="control" :aria-invalid="!validFeedWeights" aria-describedby="feed-weight-help" /></label></div>
+          <p id="feed-weight-help" class="form-note">三项合计 100，影响排序分数，不代表固定展示比例。新作优先模式保留权重设置，切回兴趣与探索后生效。</p>
+          <p v-if="!validFeedWeights" class="form-error" role="alert">推荐权重须为 0–100 的整数，三项合计为 100。</p>
+          <label class="switch-row"><span><strong>开启手机顶部下拉刷新</strong><small>刷新作品时保留搜索与标签条件。</small></span><input v-model="config.communityPullToRefresh" type="checkbox" role="switch" aria-label="手机下拉刷新" /></label>
+          <p class="form-note">保存后刷新社区生效；个人主页、作品管理和审核列表保持原有顺序。</p>
+          <p v-if="view === 'settings'" class="form-note">偏好仅存当前浏览器：最多 20 个标签，7 天无互动失效；近期作品最多 120 条，24 小时失效。不新增服务器搜索或浏览历史。</p>
+        </div></section>
+        <section v-if="view === 'settings'" class="editor-section"><div class="editor-section-title"><h3>上传限制</h3><p>按文件类型设置单个文件的大小上限。</p></div><div class="editor-fields"><div class="upload-fields"><label v-for="(label, kind) in uploadNames" :key="kind" class="field"><span>{{ label }}（MB）</span><input v-model.number="config.uploadLimits[kind]" class="control" type="number" min="1" max="10240" step="1" required aria-describedby="upload-limit-help" /></label></div><p id="upload-limit-help" class="form-note">每类可设置 1–10240 MB，实际上传同时受账号权限约束。</p></div></section>
       </fieldset>
     </form>
     <template v-if="view === 'tags' && loaded && !loading">
@@ -183,12 +220,27 @@ watch(dirty, value => { if (value) saved.value = false })
         </article>
       </fieldset>
     </form>
-    <footer v-if="view !== 'tags' && loaded && !loading" class="editor-savebar"><p role="status"><span class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传 Logo…' : busy ? '正在保存修改…' : dirty ? '有未保存的修改' : saved ? '修改已保存' : '所有设置已同步' }}</p><button class="button primary btn" :form="'admin-' + view + '-form'" type="submit" :disabled="busy"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存' + title }}</button></footer>
+    <footer v-if="view !== 'tags' && loaded && !loading" class="editor-savebar"><p role="status"><span class="save-dot" :class="{ dirty }" aria-hidden="true" />{{ uploading ? '正在上传 Logo…' : busy ? '正在保存修改…' : dirty ? '有未保存的修改' : saved ? '修改已保存' : '所有设置已同步' }}</p><button class="button primary btn" :form="'admin-' + view + '-form'" type="submit" :disabled="busy || isConfigView && !validConfig || view === 'review' && !dirty"><Save :size="16" aria-hidden="true" />{{ uploading ? '正在上传…' : busy ? '正在保存…' : '保存' + title }}</button></footer>
   </section>
 </template>
 
 <style scoped>
 .admin-community { padding-top: 0; border-bottom: 0; }
+.review-settings { margin-block: 24px 32px; padding-bottom: 28px; border-bottom: 1px solid var(--border); }
+.review-settings .editor-section { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.review-settings .editor-section-title p { max-width: none; }
+.review-settings .editor-savebar { position: static; }
+.threshold-field { max-width: 220px; }
+.publication-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; border: 0; padding: 0; margin: 0; }
+.publication-modes legend { margin-bottom: 12px; padding: 0; font-size: 14px; }
+.publication-modes label { display: flex; align-items: start; gap: 12px; min-width: 0; padding: 20px; border: 1px solid var(--control-border); border-radius: 8px; cursor: pointer; }
+.publication-modes label:has(input:checked) { background: var(--state-selected); border-color: var(--blue); }
+.publication-modes label:focus-within { outline: 2px solid var(--blue); outline-offset: 3px; }
+.publication-modes input { width: 20px; height: 20px; flex: 0 0 20px; margin: 2px 0 0; accent-color: var(--blue); }
+.publication-modes span { display: grid; gap: 8px; min-width: 0; }
+.publication-modes strong { font-size: 16px; font-weight: 500; }
+.publication-modes small { font-size: 14px; line-height: 1.7; color: var(--muted); }
+.publication-modes label:has(input:checked) small { color: var(--ink); }
 .editor-heading { align-items: start; gap: 16px; }
 .editor-heading > div { flex: 1; min-width: 0; }
 .editor-heading .form-note { margin-top: 8px; font-size: 14px; max-width: 65ch; }
@@ -256,6 +308,8 @@ watch(dirty, value => { if (value) saved.value = false })
 .admin-loading .skeleton { height: 44px; max-width: 640px; }
 @media (max-width: 1100px) { .editor-section { grid-template-columns: 1fr; gap: 16px; } .editor-section-title p { max-width: none; } }
 @media (max-width: 639px) {
+  .publication-modes { grid-template-columns: minmax(0, 1fr); }
+  .publication-modes label { padding: 16px; }
   .model-type-row { grid-template-columns: minmax(0, 1fr) 44px; }
   .model-type-row .field:first-child { grid-column: 1 / -1; }
   .editor-heading .form-note { font-size: 12px; }

@@ -32,7 +32,7 @@ test('overview aggregates the full dataset and pending revisions, with a bounded
   assert.equal(Date.parse(result.period.to) - Date.parse(result.period.from), 30 * 86400000)
   const works = f.statements[0]
   assert(!works.sql.includes('LIMIT'))
-  assert(works.sql.includes("s.status='pending' OR s.\"pendingRevision\" IS NOT NULL"))
+  assert(works.sql.includes("s.status IN ('pending', 'published') OR s.\"pendingRevision\" IS NOT NULL"))
   assert(works.sql.includes("s.status IN ('rejected','removed')"))
   assert.equal(f.statements[2].values[0], Date.parse(result.period.from))
   assert(f.statements[2].sql.includes('u.host IS NULL AND NOT u."isDeleted"'))

@@ -46,6 +46,7 @@ export interface Work {
   liked: boolean
   saved: boolean
   status: WorkStatus
+  originalStatus?: WorkStatus | 'removed' | 'withdrawn'
   body?: string
   duration?: string
   video?: string

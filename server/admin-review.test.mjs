@@ -37,7 +37,7 @@ test('review status and search filter before pagination while pending total rema
   const { ctx, statements, payload } = fixture('/api/admin/submissions?status=pending&query=older%25&cursor=work0200&limit=30')
   await handleContent(ctx)
   const page = statements.find(item => item.sql.includes('ORDER BY'))
-  assert(page.sql.includes(`s.status = 'pending' OR s."pendingRevision" IS NOT NULL`))
+  assert(page.sql.includes(`s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL`))
   assert(page.sql.includes('s.id<'))
   assert(page.sql.includes('ILIKE'))
   assert(page.parameters.includes('%older\\%%'))
@@ -47,8 +47,17 @@ test('review status and search filter before pagination while pending total rema
   assert.equal(payload().nextCursor, 'work0171')
   assert.equal(payload().pendingCount, 101)
   const total = statements.find(item => item.sql.includes('COUNT(*)::int AS count'))
+  assert(total.sql.includes(`s.status IN ('pending', 'published') OR s."pendingRevision" IS NOT NULL`))
   assert(!total.sql.includes('ILIKE'))
   assert(!total.sql.includes('s.id<'))
+})
+
+test('the author pending filter stays private while the moderator queue includes public unreviewed work', async () => {
+  const mine = fixture('/api/library?status=pending', { id: '42' })
+  await handleContent(mine.ctx)
+  const page = mine.statements.find(item => item.sql.includes('ORDER BY'))
+  assert(page.sql.includes(`s.status = 'pending' OR s."pendingRevision" IS NOT NULL`))
+  assert(!page.sql.includes(`s.status IN ('pending', 'published')`))
 })
 
 test('review default is bounded and ordinary users cannot read global pending totals', async () => {

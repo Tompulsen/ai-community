@@ -162,6 +162,26 @@ test('model types persist through settings saves and support versioned removal w
   assert.notEqual(saved.version, before.version)
 })
 
+test('review settings save their own fields atomically without changing uploads, models or existing submissions', async () => {
+  const f = fixture({ clientOptions: { communityModelTypes: [{ id: 'keep-model', kind: 'video' }], communityFeedWeights: { interest: 50, fresh: 30, explore: 20 } } })
+  const path = '/api/admin/community/config', before = await f.request(path)
+  const patch = { communityPublicationMode: 'before', communityAutoBanEnabled: true, communityViolationThreshold: 5,
+    communityFeedMode: 'latest', communityFeedPoolSize: 300, communityPullToRefresh: false,
+    communityFeedWeights: before.config.communityFeedWeights, version: before.version }
+  const saved = await f.request(path, 'PATCH', patch)
+  assert.equal(saved.config.communityPublicationMode, 'before')
+  assert.equal(saved.config.communityViolationThreshold, 5)
+  assert.deepEqual(saved.config.communityModelTypes, before.config.communityModelTypes)
+  assert.deepEqual(saved.config.uploadLimits, before.config.uploadLimits)
+  assert.deepEqual(saved.config.communityFeedWeights, before.config.communityFeedWeights)
+  assert(!f.statements.some(item => /^(UPDATE|DELETE|INSERT INTO) (community_submission|"user"|community_violation)/.test(item.sql)))
+  await assert.rejects(f.request(path, 'PATCH', { ...patch, communityPublicationMode: 'after' }), { statusCode: 409 })
+  for (const threshold of [0, 1001, 1.5, '3', null]) {
+    await assert.rejects(f.request(path, 'PATCH', { communityViolationThreshold: threshold, version: saved.version }), { statusCode: 400 })
+  }
+  assert.equal((await f.request(path)).config.communityViolationThreshold, 5)
+})
+
 test('model type settings reject duplicates, invalid types, control characters and oversized input before writing', async () => {
   for (const communityModelTypes of [
     null, {}, [{ id: '', kind: 'image' }], [{ id: ' alias ', kind: 'image' }],

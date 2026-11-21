@@ -145,7 +145,7 @@ test('overview shows complete totals, period switches and a directly queried pen
   const f = await operationsFixture(page)
   await page.goto('/admin')
   await expect(page.locator('.overview-metric').filter({ hasText: '待审核' })).toContainText('135')
-  await expect(page.locator('.overview-metric').filter({ hasText: '已公开' })).toContainText('3,240')
+  await expect(page.getByRole('button', { name: /^已公开/ })).toContainText('3,240')
   await expect(page.locator('.overview-queue')).toContainText('更早提交的待审作品')
   const queue = f.requests.find(url => url.pathname.endsWith('/submissions'))!
   expect(queue.searchParams.get('status')).toBe('pending'); expect(queue.searchParams.get('limit')).toBe('5')

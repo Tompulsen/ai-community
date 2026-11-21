@@ -6,6 +6,7 @@ import AdminOverview from '../components/AdminOverview.vue'
 import AdminLottery from '../components/AdminLottery.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminPeople from '../components/AdminPeople.vue'
+import AdminUsers from '../components/AdminUsers.vue'
 import AdminLogs from '../components/AdminLogs.vue'
 import AdminOperations from '../components/AdminOperations.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
@@ -49,7 +50,14 @@ let identityGeneration = 0
 let controller: AbortController | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const filters: { value: WorkStatus | 'all'; label: string }[] = [{ value: 'pending', label: '待审核' }, { value: 'published', label: '已公开' }, { value: 'rejected', label: '未通过' }, { value: 'all', label: '全部内容' }]
-const needsReview = (work: Work) => work.status === 'pending' || work.revisionPending === true
+const needsReview = (work: Work) => work.status === 'pending' || work.originalStatus === 'published' || work.revisionPending === true
+function reviewStatus(work: Work) {
+  if (work.revisionPending) return '修改待审核'
+  if (work.originalStatus === 'published') return '已公开 · 待审核'
+  if (work.originalStatus === 'approved' && work.status === 'published') return '已公开 · 已通过'
+  if (work.originalStatus === 'removed') return '违规 · 已下架'
+  return work.status === 'pending' ? '未公开 · 待审核' : statusLabels[work.status]
+}
 function navigate(id: Tab) { void router.push({ path: '/admin', query: { ...route.query, tab: id } }) }
 function openQueue(value: WorkStatus | 'all' = 'pending') { status.value = value; query.value = ''; search.value = ''; navigate('review') }
 function submitSearch() { clearTimeout(searchTimer); if (search.value === query.value.trim()) void load(); else search.value = query.value.trim() }
@@ -115,7 +123,7 @@ function confirmLeave() {
   return new Promise<boolean>(resolve => { resolveLeave = resolve })
 }
 function finishLeave(discard: boolean) { leaveDialog.value?.close(); resolveLeave?.(discard); resolveLeave = undefined }
-onBeforeRouteUpdate((to, from) => to.query.tab === from.query.tab ? true : confirmLeave())
+onBeforeRouteUpdate((to, from) => to.query.tab === from.query.tab && to.query.user === from.query.user ? true : confirmLeave())
 onBeforeRouteLeave(confirmLeave)
 function beforeUnload(event: BeforeUnloadEvent) { if (editor.value?.hasUnsavedChanges || editor.value?.busy) { event.preventDefault(); event.returnValue = '' } }
 onMounted(async () => {
@@ -160,24 +168,27 @@ async function review() {
         <AdminLogs v-else-if="tab === 'logs' && session.user?.isAdmin" :key="session.user.id" />
         <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
         <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" ref="editor" :view="tab" />
-        <AdminPeople v-else-if="tab === 'reports' || (tab === 'users' && session.user?.isAdmin)" :key="`${tab}:${session.user?.id}`" ref="editor" :view="tab" :confirm-leave="confirmLeave" />
+        <AdminUsers v-else-if="tab === 'users' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
+        <AdminPeople v-else-if="tab === 'reports'" :key="`reports:${session.user?.id}`" ref="editor" :confirm-leave="confirmLeave" />
         <AdminOperations v-else-if="(tab === 'announcements' || tab === 'audit' || tab === 'roles') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" :view="tab" />
         <section v-else class="panel-section review-section" :aria-busy="loading">
           <div class="section-heading"><div class="review-title"><h2>作品审核</h2><span v-if="pendingCount !== null" class="caption-5" role="status">{{ pendingCount }} 件待审核</span><p class="form-note">审核新投稿与作品修改，管理公开内容。</p></div><button class="button subtle btn" :disabled="loading || loadingMore || busy" @click="submitSearch"><RefreshCw :size="16" aria-hidden="true" />刷新</button></div>
+          <AdminCommunity v-if="session.user?.isAdmin" :key="`${session.user.id}:review`" ref="editor" view="review" />
+          <div class="review-queue-heading"><h3>审核队列</h3><p class="form-note">待审核包含未公开的新投稿、已公开待审作品和作品修改。普通驳回不计违规；违规下架自动计入一次。</p></div>
           <div class="review-toolbar">
             <div class="tabs" aria-label="作品状态"><button v-for="filter in filters" :key="filter.value" class="tab" :class="{ active: status === filter.value }" :aria-pressed="status === filter.value" @click="status = filter.value">{{ filter.label }}</button></div>
             <form class="review-search" role="search" @submit.prevent="submitSearch"><label class="search-control"><Search :size="16" aria-hidden="true" /><input v-model="query" type="search" maxlength="200" placeholder="搜索作品或作者" aria-label="搜索作品或作者" /></label><button class="button btn" :disabled="busy">搜索</button></form>
           </div>
           <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" :disabled="loading || loadingMore || busy" @click="load(!!works.length)">重试</button></p>
           <ContentSkeleton v-if="loading" layout="rows" label="正在加载审核队列…" />
-          <div v-else-if="works.length" class="table-wrap" role="region" aria-label="作品审核列表，可横向滚动" tabindex="0"><table class="data-table review-table"><thead><tr><th scope="col">作品</th><th scope="col">类型</th><th scope="col">作者</th><th scope="col">更新时间</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="work in works" :key="work.id"><td><RouterLink :to="'/work/' + work.id">{{ work.title }}</RouterLink></td><td>{{ kindLabels[work.kind] }}</td><td>{{ work.author }}</td><td>{{ new Date(work.date).toLocaleString('zh-CN') }}</td><td><span class="status" :class="needsReview(work) ? 'pending' : work.status">{{ work.revisionPending ? '修改待审核' : statusLabels[work.status] }}</span></td><td><div class="table-actions"><template v-if="needsReview(work)"><button class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'通过：' + work.title" title="通过审核" @click="openReview(work, 'approve')"><Check :size="17" /></button><button class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'驳回：' + work.title" title="驳回作品" @click="openReview(work, 'reject')"><X :size="17" /></button></template><button v-if="work.status === 'published'" class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'撤下：' + work.title" title="撤下作品并记录违规" @click="openReview(work, 'remove')"><Trash2 :size="17" /></button><RouterLink :to="'/work/' + work.id" class="icon-button" :aria-label="'查看作品：' + work.title" title="查看作品"><ArrowUpRight :size="17" /></RouterLink></div></td></tr></tbody></table></div>
+          <div v-else-if="works.length" class="table-wrap" role="region" aria-label="作品审核列表，可横向滚动" tabindex="0"><table class="data-table review-table"><thead><tr><th scope="col">作品</th><th scope="col">类型</th><th scope="col">作者</th><th scope="col">更新时间</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody><tr v-for="work in works" :key="work.id"><td><RouterLink :to="'/work/' + work.id">{{ work.title }}</RouterLink></td><td>{{ kindLabels[work.kind] }}</td><td>{{ work.author }}</td><td>{{ new Date(work.date).toLocaleString('zh-CN') }}</td><td><span class="status" :class="needsReview(work) ? 'pending' : work.status">{{ reviewStatus(work) }}</span></td><td><div class="table-actions"><template v-if="needsReview(work)"><button class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'通过：' + work.title" title="通过审核" @click="openReview(work, 'approve')"><Check :size="17" /></button><button v-if="work.status === 'pending' || work.revisionPending" class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'驳回：' + work.title" title="驳回作品" @click="openReview(work, 'reject')"><X :size="17" /></button></template><button v-if="work.status === 'published'" class="icon-button" :disabled="busy || loading || loadingMore" :aria-label="'撤下：' + work.title" title="撤下作品并记录违规" @click="openReview(work, 'remove')"><Trash2 :size="17" /></button><RouterLink :to="'/work/' + work.id" class="icon-button" :aria-label="'查看作品：' + work.title" title="查看作品"><ArrowUpRight :size="17" /></RouterLink></div></td></tr></tbody></table></div>
           <div v-else-if="!error" class="empty-state"><ShieldCheck :size="28" aria-hidden="true" /><h3>{{ search ? '没有找到匹配的作品' : '当前状态下暂无作品' }}</h3><button v-if="search" class="button btn" @click="query = ''; search = ''">清除搜索</button></div>
           <div v-if="works.length && !loading" class="review-pagination"><span>已载入 {{ works.length }} 条{{ nextCursor ? '' : ' · 已全部载入' }}</span><button v-if="nextCursor" class="button btn" :disabled="loadingMore || busy" @click="load(true)">{{ loadingMore ? '正在加载…' : '加载更多作品' }}</button></div>
         </section>
       </div>
     </div>
     <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="leave-heading" @cancel.prevent="finishLeave(false)"><div class="dialog-heading"><h2 id="leave-heading">保留这次修改？</h2><button class="icon-button" aria-label="关闭离开提示" @click="finishLeave(false)"><X :size="20" /></button></div><div class="dialog-body stack"><p>当前页面的修改尚未确认保存。离开后，未保存的输入将丢失。</p><div class="table-actions leave-actions"><button class="button subtle btn" @click="finishLeave(true)">放弃修改并离开</button><button class="button primary btn" autofocus @click="finishLeave(false)">继续编辑</button></div></div></dialog>
-    <dialog ref="reviewDialog" class="compact-dialog" aria-labelledby="review-heading" @cancel="busy && $event.preventDefault()"><div class="dialog-heading"><h2 id="review-heading">{{ action === 'approve' ? '通过审核' : action === 'remove' ? '撤下作品' : '驳回作品' }}</h2><button class="icon-button" aria-label="关闭审核窗口" :disabled="busy" @click="reviewDialog?.close()"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="review"><p>{{ selected?.title }}</p><p v-if="action === 'remove'" class="form-note">撤下后停止公开展示，并记录此内容的违规。</p><label class="field"><span>审核说明</span><textarea v-model="reason" class="control" rows="3" maxlength="1000" :required="action !== 'approve'" :disabled="busy" /></label><label v-if="action === 'reject'" class="review-violation"><input v-model="recordViolation" type="checkbox" :disabled="busy" />记录内容违规</label><p v-if="reviewError" class="form-error" role="alert">{{ reviewError }}</p><button class="button primary btn" :disabled="busy">{{ busy ? '正在提交…' : '确认' }}</button></form></dialog>
+    <dialog ref="reviewDialog" class="compact-dialog" aria-labelledby="review-heading" @cancel="busy && $event.preventDefault()"><div class="dialog-heading"><h2 id="review-heading">{{ action === 'approve' ? '通过审核' : action === 'remove' ? '撤下作品' : '驳回作品' }}</h2><button class="icon-button" aria-label="关闭审核窗口" :disabled="busy" @click="reviewDialog?.close()"><X :size="20" /></button></div><form class="dialog-body stack" @submit.prevent="review"><p>{{ selected?.title }}</p><p v-if="action === 'remove'" class="form-note">撤下后停止公开展示，并记录此内容的一次违规；同一作品不重复计数。</p><label class="field"><span>审核说明</span><textarea v-model="reason" class="control" rows="3" maxlength="1000" :required="action !== 'approve'" :disabled="busy" /></label><label v-if="action === 'reject'" class="review-violation"><input v-model="recordViolation" type="checkbox" :disabled="busy" />确认此作品违规，驳回时计入违规次数</label><p v-if="reviewError" class="form-error" role="alert">{{ reviewError }}</p><button class="button primary btn" :disabled="busy">{{ busy ? '正在提交…' : '确认' }}</button></form></dialog>
   </div>
 </template>
 
@@ -202,6 +213,8 @@ async function review() {
 .admin-nav-item svg { flex-shrink: 0; }
 .admin-content { min-width: 0; }
 .review-section { padding-top: 0; }
+.review-queue-heading { display: grid; gap: 8px; margin-bottom: 16px; }
+.review-queue-heading h3 { font-size: 18px; font-weight: 500; }
 .review-title { display: grid; gap: 8px; }
 .review-toolbar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-bottom: 24px; padding-block: 8px 16px; border-bottom: 1px solid var(--border); }
 .review-toolbar .tabs { margin: 0; border: 0; gap: 20px; }

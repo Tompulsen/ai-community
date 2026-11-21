@@ -13,6 +13,10 @@ test('new admin routes are registered and deny anonymous access before database 
   for (const [method, url, payload] of [
     ['GET', '/api/admin/audit'],
     ['GET', '/api/admin/roles'],
+    ['GET', '/api/admin/users/42'],
+    ['GET', '/api/admin/users/42/logins'],
+    ['PATCH', '/api/admin/users/42/note', { moderationNote: 'note', version: 'old' }],
+    ['PATCH', '/api/admin/users/42/media', { clear: 'avatar', version: 'old' }],
     ['PATCH', '/api/admin/announcements/news1', { title: 'Title', text: 'Body', isActive: true, version: 'old' }],
     ['PATCH', '/api/admin/users/42/roles', { roleIds: [], version: 'old' }],
   ]) {

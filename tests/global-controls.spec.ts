@@ -124,7 +124,7 @@ test('shared selection and danger states remain distinct on hover in every palet
 
 test('saved work icons keep a readable selected state on hover in every palette', async ({ page }) => {
   await mockUnifiedAccount(page, true)
-  await page.route('**/api/works?*', route => route.fulfill({ json: { items: [{
+  await page.route('**/api/works/feed', route => route.fulfill({ json: { items: [{
     id: 'saved-state', authorId: 'fixtureAccountUser', title: '收藏状态检查', author: '测试创作者',
     kind: 'image', cover: '/assets/brand/octopus-community.jpg', tags: [], likes: 0,
     liked: false, saved: true, status: 'published', date: '2026-11-21T00:00:00Z',

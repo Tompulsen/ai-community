@@ -22,6 +22,7 @@ interface TagRow { id: string; category: string; name: string }
 interface ManagedUser {
   id: string; username: string; name: string | null; host: string | null
   createdAt: Date | string | null
+  lastActiveDate?: Date | string | null; avatarId?: string | null; bannerId?: string | null; sortTime?: string | null
   isSuspended: boolean; isDeleted: boolean; isLocked: boolean; isBot: boolean
   isCat: boolean; isExplorable: boolean; followersCount: number; followingCount: number
   notesCount: number; communityViolationCount: number; communityViolationBaseline: number
@@ -39,7 +40,7 @@ interface ReportRow {
 }
 const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits', 'communityModelTypes'] as const
 const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
-const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
+const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."lastActiveDate",u."avatarId",u."bannerId",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 function checkVersion(body: Body, current: unknown, required = false) {
@@ -220,21 +221,51 @@ async function userProtection(db: Queryable, userIds: string[]) {
 function packUser(row: ManagedUser, protectedAccount: boolean, identity?: PublicIdentity) {
   const username = identity?.username ?? row.username
   return { id: row.id, username, ...(identity ? { accountId: identity.accountId } : {}),
-    name: row.name || username || '章鱼用户', isSuspended: row.isSuspended,
+    name: row.name || username || '章鱼用户', isSuspended: row.isSuspended, host: row.host,
+    createdAt: row.createdAt ?? null, lastActiveDate: row.lastActiveDate ?? null,
+    avatarUrl: row.avatarId ? `/legacy-files/${encodeURIComponent(row.avatarId)}?variant=thumbnail` : null,
+    bannerUrl: row.bannerId ? `/legacy-files/${encodeURIComponent(row.bannerId)}?variant=web` : null,
+    statusVersion: fingerprint({ id: row.id, isSuspended: row.isSuspended, baseline: row.communityViolationBaseline }),
+    mediaVersion: fingerprint({ id: row.id, avatarId: row.avatarId ?? null, bannerId: row.bannerId ?? null }),
     violationCount: row.communityViolationCount, violationBaseline: row.communityViolationBaseline, isProtected: protectedAccount }
 }
 async function users(ctx: RequestContext, userId?: string) {
   if (ctx.req.method === 'GET') {
     const status = enumValue(ctx.url.searchParams.get('status') || 'all', ['all', 'active', 'suspended'])
-    const rows = (await ctx.db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u
-      WHERE host IS NULL AND NOT "isDeleted" AND ($1='' OR u.username ILIKE $2 OR u.name ILIKE $2 OR u.id=$1)
-      AND ($3::varchar IS NULL OR u.id<$3) AND ($4='all' OR u."isSuspended"=($4='suspended'))
-      ORDER BY u.id DESC LIMIT 31`, [query(ctx), search(query(ctx)), cursor(ctx), status])).rows
-    const page = paginate(rows), protectedAccount = await userProtection(ctx.db, page.items.map(row => row.id))
+    const origin = enumValue(ctx.url.searchParams.get('origin') || 'local', ['local', 'remote', 'all'])
+    const sort = enumValue(ctx.url.searchParams.get('sort') || 'created-desc', ['created-desc', 'created-asc', 'active-desc', 'active-asc'])
+    const host = text(ctx.url.searchParams.get('host') || '', 255), needle = query(ctx)
+    const filters = fingerprint({ status, origin, sort, host, needle })
+    const value = ctx.url.searchParams.get('cursor')
+    let after: { id: string; time: string | null } | null = null
+    if (value) {
+      try {
+        if (value.length > 600 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error()
+        const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+        if (!record(parsed) || parsed.filters !== filters || typeof parsed.id !== 'string' || !/^[a-zA-Z0-9]{1,32}$/.test(parsed.id)
+          || !(parsed.time === null || (typeof parsed.time === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(parsed.time) && Number.isFinite(Date.parse(parsed.time))))) throw new Error()
+        after = { id: parsed.id, time: parsed.time as string | null }
+      } catch { fail('分页条件已变化，请刷新用户列表。') }
+    }
+    const time = sort.startsWith('created') ? 'u."createdAt"' : 'u."lastActiveDate"'
+    const direction = sort.endsWith('asc') ? 'ASC' : 'DESC', compare = direction === 'ASC' ? '>' : '<'
+    const rows = (await ctx.db.query<ManagedUser>(`SELECT ${userColumns},${time}::text AS "sortTime" FROM "user" u
+      WHERE NOT u."isDeleted" AND ($1='' OR u.username ILIKE $2 OR u.name ILIKE $2 OR u.id=$1
+        OR EXISTS (SELECT 1 FROM external_account e WHERE e."userId"=u.id AND e.issuer=$6 AND (e.username ILIKE $2 OR e.subject=$1)))
+      AND ($3='all' OR u."isSuspended"=($3='suspended'))
+      AND ($4='all' OR ($4='local' AND u.host IS NULL) OR ($4='remote' AND u.host IS NOT NULL))
+      AND ($5='' OR u.host ILIKE $5)
+      AND (NOT $7::boolean OR ($8::timestamptz IS NOT NULL AND (${time} ${compare} $8 OR (${time}=$8 AND u.id ${compare} $9) OR ${time} IS NULL))
+        OR ($8::timestamptz IS NULL AND ${time} IS NULL AND u.id ${compare} $9))
+      ORDER BY ${time} ${direction} NULLS LAST,u.id ${direction} LIMIT 31`,
+      [needle, search(needle), status, origin, host ? search(host) : '', accountCenter(ctx.config), !!after, after?.time ?? null, after?.id ?? null])).rows
+    const items = rows.slice(0, 30), last = items.at(-1)
+    const page = { items, nextCursor: rows.length > 30 && last ? Buffer.from(JSON.stringify({ id: last.id, time: last.sortTime ?? null, filters })).toString('base64url') : null }
+    const protectedAccount = await userProtection(ctx.db, page.items.map(row => row.id))
     const identities = await readPublicIdentities(ctx, page.items.map(row => row.id))
-    return { ...page, items: page.items.map(row => packUser(row, protectedAccount(row), identities.get(row.id))) }
+    return { ...page, items: page.items.map(row => packUser(row, row.id === ctx.requireUser().id || protectedAccount(row), identities.get(row.id))) }
   }
-  keys(ctx.body, ['isSuspended', 'reason'])
+  keys(ctx.body, ['isSuspended', 'reason', 'version'])
   const suspended = boolean(ctx.body.isSuspended), reason = text(ctx.body.reason ?? '', 1000), id = identifier(userId)
   if (suspended && !reason) fail('封禁账号时请填写原因。')
   const identity = (await readPublicIdentities(ctx, [id])).get(id)
@@ -243,6 +274,7 @@ async function users(ctx: RequestContext, userId?: string) {
     if (!row) fail('账号不存在。', 404)
     const protectedAccount = await userProtection(db, [id])
     if (id === ctx.requireUser().id || protectedAccount(row) || protectedAccount({ ...row, isSuspended: suspended })) fail('不能修改自己或受保护管理账号的封禁状态。', 403)
+    if (Object.hasOwn(ctx.body, 'version') && ctx.body.version !== packUser(row, false).statusVersion) fail('账号状态已变化，请刷新详情后重新核对。', 409)
     if (row.isSuspended !== suspended) {
       await db.query(`UPDATE "user" SET "isSuspended"=$2,"communityViolationBaseline"=CASE WHEN $2 THEN "communityViolationBaseline" ELSE "communityViolationCount" END WHERE id=$1`, [id, suspended])
       await audit(ctx, db, suspended ? 'suspend' : 'unsuspend', { userId: id, reason })
@@ -250,6 +282,58 @@ async function users(ctx: RequestContext, userId?: string) {
       if (!suspended) row.communityViolationBaseline = row.communityViolationCount
     }
     return { user: packUser(row, protectedAccount(row), identity) }
+  })
+}
+async function managedUser(ctx: RequestContext, userId: string, section?: string) {
+  const id = identifier(userId)
+  if (ctx.req.method === 'GET') {
+    const row = (await ctx.db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u WHERE u.id=$1 AND NOT u."isDeleted"`, [id])).rows[0]
+    if (!row) fail('账号不存在。', 404)
+    if (section === 'logins') {
+      const rows = (await ctx.db.query<{ id: string; ip: string | null; userAgent: string | null; success: boolean }>(`SELECT id,ip,headers->>'user-agent' AS "userAgent",success
+        FROM signin WHERE "userId"=$1 AND ($2::varchar IS NULL OR id<$2) ORDER BY id DESC LIMIT 31`, [id, cursor(ctx)])).rows
+      const page = paginate(rows)
+      return { ...page, items: page.items.map(item => {
+        const time = legacyIdTime(item.id, ctx.config.id)
+        return { ...item, userAgent: (item.userAgent || '').slice(0, 512), date: Number.isFinite(time) && Math.abs(time) <= 8640000000000000 ? new Date(time).toISOString() : null }
+      }) }
+    }
+    const [protectedAccount, identities, profile] = await Promise.all([
+      userProtection(ctx.db, [id]), readPublicIdentities(ctx, [id]),
+      ctx.db.query<{ moderationNote: string }>('SELECT "moderationNote" FROM user_profile WHERE "userId"=$1', [id]),
+    ])
+    const moderationNote = profile.rows[0]?.moderationNote ?? ''
+    return { user: { ...packUser(row, id === ctx.requireUser().id || protectedAccount(row), identities.get(id)),
+      moderationNote, noteVersion: fingerprint(moderationNote), canEditNote: !row.host && !!profile.rows.length } }
+  }
+  keys(ctx.body, section === 'note' ? ['moderationNote', 'version'] : ['clear', 'version'])
+  if (typeof ctx.body.version !== 'string' || !/^[a-f0-9]{64}$/.test(ctx.body.version)) fail('缺少有效版本，请刷新用户详情后重试。')
+  const note = section === 'note' ? text(ctx.body.moderationNote, 8192) : ''
+  const field = section === 'media' ? enumValue(ctx.body.clear, ['avatar', 'banner']) : ''
+  const identity = section === 'media' ? (await readPublicIdentities(ctx, [id])).get(id) : undefined
+  return transaction(ctx.db, async db => {
+    const row = (await db.query<ManagedUser>(`SELECT ${userColumns} FROM "user" u WHERE u.id=$1 AND u.host IS NULL AND NOT u."isDeleted" FOR UPDATE`, [id])).rows[0]
+    if (!row) fail('本地账号不存在。', 404)
+    if (section === 'note') {
+      const profile = (await db.query<{ moderationNote: string }>('SELECT "moderationNote" FROM user_profile WHERE "userId"=$1 FOR UPDATE', [id])).rows[0]
+      if (!profile) fail('用户资料暂不可用。', 409)
+      checkVersion(ctx.body, profile.moderationNote ?? '', true)
+      if (note !== (profile.moderationNote ?? '')) {
+        await db.query('UPDATE user_profile SET "moderationNote"=$2 WHERE "userId"=$1', [id, note])
+        await audit(ctx, db, 'updateUserModerationNote', { userId: id })
+      }
+      return { moderationNote: note, noteVersion: fingerprint(note) }
+    }
+    const protectedAccount = await userProtection(db, [id])
+    if (id === ctx.requireUser().id || protectedAccount(row)) fail('不能清除自己或受保护管理账号的资料图片。', 403)
+    if (ctx.body.version !== packUser(row, false).mediaVersion) fail('资料图片已变化，请刷新详情后重新核对。', 409)
+    const column = field === 'avatar' ? 'avatarId' : 'bannerId'
+    if (row[column]) {
+      await db.query(`UPDATE "user" SET "${column}"=NULL,"updatedAt"=NOW() WHERE id=$1`, [id])
+      await audit(ctx, db, 'clearUserProfileMedia', { userId: id, field })
+      row[column] = null
+    }
+    return { user: packUser(row, false, identity) }
   })
 }
 async function recordReportViolation(ctx: RequestContext, db: Queryable, report: ReportRow) {
@@ -409,6 +493,7 @@ function packAnnouncement(row: AnnouncementRow) {
 }
 
 const auditLabels: Record<string, string> = {
+  updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
   communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
@@ -428,7 +513,7 @@ function safeAuditDetails(type: string, input: unknown): Body {
     copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive'])
   } else if (type === 'communityReview') {
     copyId('submissionId'); copyEnum('action', ['approve', 'reject', 'remove']); copyNumber('version')
-  } else if (type === 'suspend' || type === 'unsuspend') copyId('userId')
+  } else if (['suspend', 'unsuspend', 'updateUserModerationNote', 'clearUserProfileMedia'].includes(type)) { copyId('userId'); copyEnum('field', ['avatar', 'banner']) }
   else if (type === 'resolveAbuseReport') {
     copyId('reportId'); copyEnum('resolvedAs', ['accept', 'reject'])
   } else if (type === 'adjustLotteryChances') {
@@ -551,7 +636,8 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
-  const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles
+  const userSection = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/(note|media|logins)$/.exec(path)
+  const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
@@ -560,6 +646,8 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   else if (path === '/api/admin/community/ads' && ['GET', 'PATCH'].includes(method ?? '')) result = await ads(ctx)
   else if ((path === '/api/admin/tags' && ['GET', 'POST'].includes(method ?? '')) || (tag && ['PATCH', 'DELETE'].includes(method ?? ''))) result = await tags(ctx, tag?.[1])
   else if ((path === '/api/admin/users' && method === 'GET') || (person && method === 'PATCH')) result = await users(ctx, person?.[1])
+  else if (person && method === 'GET') result = await managedUser(ctx, person[1]!)
+  else if (userSection && ((userSection[2] === 'logins' && method === 'GET') || (userSection[2] !== 'logins' && method === 'PATCH'))) result = await managedUser(ctx, userSection[1]!, userSection[2])
   else if ((path === '/api/admin/reports' && method === 'GET') || (report && method === 'PATCH')) result = await reports(ctx, report?.[1])
   else if (path === '/api/admin/settings' && ['GET', 'PATCH'].includes(method ?? '')) result = await legacySettings(ctx)
   else if ((path === '/api/admin/announcements' && ['GET', 'POST'].includes(method ?? '')) || (announcement && ['PATCH', 'DELETE'].includes(method ?? ''))) result = await announcements(ctx, announcement?.[1])

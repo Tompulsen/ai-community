@@ -212,6 +212,18 @@ test('source comments and approval of legacy untagged works remain available', a
   assert(review.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
 });
 
+test('approving a public unreviewed work updates its existing note without publishing a duplicate', async () => {
+  const row = { ...workRow, status: 'published', approvedNoteId: 'note1' };
+  const review = publicationContext({ version: 2, action: 'approve' }, { row, path: '/api/admin/submissions/work1/review', admin: true });
+  await handleContent(review.ctx);
+  assert.equal(review.ctx.result.status, 200);
+  assert(review.statements.some(({ sql }) => sql.startsWith('UPDATE note')));
+  assert(!review.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
+  assert(review.statements.some(({ sql, parameters }) => sql.startsWith('UPDATE community_submission') && parameters.includes('approved')));
+  const reject = publicationContext({ version: 2, action: 'reject', reason: 'Reason' }, { row, path: '/api/admin/submissions/work1/review', admin: true });
+  await assert.rejects(handleContent(reject.ctx), error => error.statusCode === 409);
+});
+
 test('a full work page batches attachments, reference images and tags into four queries', async () => {
   const rows = Array.from({ length: 24 }, (_, index) => ({ ...workRow, id: `work${index}`, category: 'image',
     fileIds: [`file${index}`], tagIds: ['tag1'], generation: { prompt: 'Image', model: '', referenceFileIds: [`ref${index}`] } }));

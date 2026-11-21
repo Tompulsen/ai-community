@@ -31,6 +31,16 @@ delivery now includes the frontend and an independent community backend.
 
 ## Capabilities and Constraints
 
+- Administrators manage publication policy beside the review queue. Published but unreviewed
+  submissions remain reviewable; ordinary rejections only count violations when explicitly selected.
+  Policy saves affect future submissions and violations without retroactive suspension.
+- User management provides source/status/search filters, stable creation/activity-record sorting,
+  responsive cards and addressable details. Administrator notes use optimistic versions;
+  community suspension retains lifetime violations and resets the current baseline on release.
+  Profile-media removal clears references only. Community login IP records omit session secrets.
+  Passwords, MFA, email and account deletion remain owned by the unified account center.
+  Historical activity timestamps are labeled as historical, because the current runtime does not update them.
+
 - Public navigation groups home (首页), community and the creation desk in that
   order. Community pages use a 64px icon rail on desktop
   and bottom navigation on smaller screens. Logo, navigation, existing tools,
