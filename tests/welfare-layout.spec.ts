@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { defaultLotterySettings } from '../server/business/lottery'
 import { defaultDailyLotteryPrizes, lotteryDay } from '../shared/lottery-daily'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import { defaultWelfareTasks } from '../shared/welfare-tasks'
 
 test.use({ serviceWorkers: 'block', reducedMotion: 'reduce' })
 
@@ -15,6 +16,7 @@ const drawButton = (page: Page) => page.locator('.draw-console > .button')
 
 async function welfareFixture(page: Page) {
   await mockUnifiedAccount(page, true)
+  await page.route('**/api/welfare/tasks', route => route.fulfill({ json: { items: defaultWelfareTasks() } }))
   const day = lotteryDay(new Date())
   const settings = {
     ...defaultLotterySettings(), enabled: true, dailyLimit: 200,
@@ -80,7 +82,7 @@ for (const theme of themes) for (const viewport of viewports) {
       expect(lastTab.x + lastTab.width).toBeLessThanOrEqual(refresh.x)
     }
     await expect(page.locator('.prize-item')).toHaveCount(4)
-    await expect(page.locator('.wheel-label')).toHaveText(['一等奖', '二等奖', '三等奖', '🤡 非常遗憾'])
+    await expect(page.locator('.wheel-label')).toHaveText(['一等奖', '二等奖', '三等奖', '🤡'])
     await expect(page.locator('.wheel-label textPath')).toHaveCount(4)
     const arcs = await page.locator('.wheel-label textPath').evaluateAll(labels => labels.map(label => {
       const path = document.getElementById(label.getAttribute('href')!.slice(1))
@@ -160,13 +162,14 @@ for (const viewport of viewports) {
     await page.goto('/activities')
     await expect(page.getByRole('region', { name: '今日福利', exact: true })).toBeVisible()
     await page.getByRole('button', { name: '任务与邀请', exact: true }).click()
+    await page.getByRole('button', { name: '查看邀请福利', exact: true }).click()
     await expect(page.getByRole('region', { name: '邀请朋友，共享积分', exact: true })).toBeVisible()
     await expect(page.locator('.daily-overview')).toHaveCount(0)
     await page.getByRole('button', { name: '奖励记录', exact: true }).click()
     await expect(page.locator('.daily-overview')).toHaveCount(0)
     const rows = page.locator('.records-section tbody tr')
     await expect(rows).toHaveCount(3)
-    const amounts = ['6,000 积分（永久积分）', '4,000 积分（永久积分）', '--']
+    const amounts = ['6,000 积分', '4,000 积分', '--']
     const statuses = ['待发放', '已到账', '未中奖']
     for (let index = 0; index < amounts.length; index++) {
       await expect(rows.nth(index).locator('td[data-label="折合积分"]')).toHaveText(amounts[index]!)

@@ -4,11 +4,13 @@ SPDX-FileCopyrightText: 2026 Community contributors
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { Gift, Users, Heart, RefreshCw } from '@lucide/vue'
 import '../welfare-tokens.css'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
-import ReferralBenefits from '../components/ReferralBenefits.vue'
+import WelfareTasks from '../components/WelfareTasks.vue'
+import LotteryPublicResults from '../components/LotteryPublicResults.vue'
+import { isClownPrize } from '../../shared/lottery-public'
 import { useRoute } from 'vue-router'
 import { formatPoints } from '../../shared/studio/community-wallet'
 
@@ -26,10 +28,13 @@ interface LotteryStatus {
 }
 const route = useRoute()
 const wheelId = `lottery-${useId()}`
-const tab = ref(route.query.invite || route.query.aff ? 'tasks' : 'draw')
+const tab = ref(route.query.invite || route.query.aff || route.query.tab === 'tasks' ? 'tasks' : 'draw')
+const tasks = ref<InstanceType<typeof WelfareTasks>>()
+const publicResults = ref<InstanceType<typeof LotteryPublicResults>>()
 const tabs = [{ id: 'draw', label: '活动抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
 const loading = ref(true), drawing = ref(false), recordsLoading = ref(false), error = ref('')
+const statusFailed = ref(false)
 const pointDisplay = ref<{ currencySymbol?: string; pointsPerUsd?: number }>()
 function rewardAmount(value: Prize | Award) {
   const charity = !('status' in value) || value.rewardKind === 'charity'
@@ -58,7 +63,6 @@ const allDrawCounts = [1, 3, 5] as const
 const drawCounts = computed(() => status.value?.daily ? [1] as const : allDrawCounts)
 const dailyPoints = computed(() => pointDisplay.value?.pointsPerUsd && status.value?.daily
   ? status.value.settings.prizes.reduce((sum, prize) => sum + (prize.dailyQuota ?? 0) * prize.amountCents / 100 * pointDisplay.value!.pointsPerUsd!, 0) : null)
-const prizeLabel = (name: string) => name.replace(/^🤡\s*/, '')
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
 const rules = computed(() => status.value ? [
   { key: 'followers' as const, label: '收获关注', icon: Users, rule: status.value.settings.followers, count: status.value.counts.followers },
@@ -105,11 +109,12 @@ const wheelSegments = computed(() => wheelSlots.value.map((prize, index, slots) 
   const start = point(center - angle / 2, 160), end = point(center + angle / 2, 160)
   const labelRadius = slots.length > 4 ? 124 : 118
   const labelStart = point(center - angle * .36, labelRadius), labelEnd = point(center + angle * .36, labelRadius)
+  const clown = isClownPrize(prize.name)
   const name = Array.from(prize.name), maxLength = slots.length <= 4 ? 6 : slots.length <= 8 ? 4 : 2
-  const labelName = slots.length > 12 ? index + 1 : name.length > maxLength ? `${name.slice(0, maxLength).join('')}…` : prize.name
+  const labelName = clown ? '🤡' : slots.length > 12 ? index + 1 : name.length > maxLength ? `${name.slice(0, maxLength).join('')}…` : prize.name
   const labelWidth = Math.min(100, labelRadius * angle * .72 * Math.PI / 180 * .85)
   const textLength = typeof labelName === 'string' && Array.from(labelName).length * (slots.length > 4 ? 16 : 24) > labelWidth ? labelWidth : undefined
-  return { ...prize, index, labelName, textLength, path: `M200 200 L${start.x} ${start.y} A160 160 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, labelPath: `M${labelStart.x} ${labelStart.y} A${labelRadius} ${labelRadius} 0 0 1 ${labelEnd.x} ${labelEnd.y}` }
+  return { ...prize, index, labelName, textLength, clown, path: `M200 200 L${start.x} ${start.y} A160 160 0 ${angle > 180 ? 1 : 0} 1 ${end.x} ${end.y} Z`, labelPath: `M${labelStart.x} ${labelStart.y} A${labelRadius} ${labelRadius} 0 0 1 ${labelEnd.x} ${labelEnd.y}` }
 }))
 function drawMessage(cause: unknown) {
   const value = errorMessage(cause)
@@ -117,15 +122,18 @@ function drawMessage(cause: unknown) {
 }
 async function loadRecords(append = false) {
   if (!session.user || recordsLoading.value) return
+  const owner = session.user.id, request = ++recordsRequest
+  const current = () => active && request === recordsRequest && session.user?.id === owner
   recordsLoading.value = true
   try {
     const data = await api<{ items: Draw[]; nextCursor: string | null }>(`/api/lottery/records${queryString({ cursor: append ? nextCursor.value || undefined : undefined })}`)
+    if (!current()) return
     records.value = append ? [...records.value, ...data.items] : data.items
     const updated = result.value && data.items.find(item => item.id === result.value!.id)
     if (updated) result.value = updated
     nextCursor.value = data.nextCursor
     scheduleReset()
-  } finally { recordsLoading.value = false }
+  } finally { if (current()) recordsLoading.value = false }
 }
 function restorePending() {
   if (!session.user) return
@@ -138,23 +146,29 @@ function restorePending() {
 }
 async function load() {
   if (!active) return
+  const request = ++statusRequest
   loading.value = true; error.value = ''; pointDisplay.value = undefined
   await loadSession()
-  if (!active) return
+  if (!active || request !== statusRequest) return
+  const owner = session.user?.id
+  const current = () => active && request === statusRequest && owner === session.user?.id
   try {
     const [lottery] = await Promise.all([
       api<LotteryStatus>('/api/lottery/status'),
       api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
-        .then(value => { if (value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data }).catch(() => {}),
+        .then(value => { if (current() && value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data }).catch(() => {}),
     ])
-    if (!active) return
-    status.value = lottery; if (lottery.daily) count.value = 1
-    restorePending(); scheduleReset(); await loadRecords()
+    if (!current()) return
+    status.value = lottery; statusFailed.value = false; if (lottery.daily) count.value = 1
+    restorePending(); scheduleReset()
+    await loadRecords().catch(cause => { if (current()) error.value = `奖励记录读取失败：${drawMessage(cause)}` })
   }
-  catch (cause) { error.value = drawMessage(cause) }
-  finally { loading.value = false }
+  catch (cause) { if (current()) { statusFailed.value = true; error.value = drawMessage(cause) } }
+  finally { if (current()) loading.value = false }
 }
-let active = true, lastResetAttempt = 0
+function refresh() { void load(); void tasks.value?.refresh(); void publicResults.value?.refresh() }
+let active = true, lastResetAttempt = 0, statusRequest = 0, recordsRequest = 0
+watch(() => session.user?.id, () => { status.value = null; records.value = []; recordsRequest++; recordsLoading.value = false; nextCursor.value = null; result.value = null; pending.value = null; void load() })
 let resetTimer: ReturnType<typeof setInterval> | undefined
 function updateResetCountdown() {
   if (!active || document.visibilityState === 'hidden') return
@@ -201,7 +215,7 @@ async function draw() {
       try { sessionStorage.removeItem(storageKey) } catch { /* Keep the same safe request if local cleanup is unavailable. */ }
     }
     if (code.startsWith('LOTTERY_DAILY_') || code === 'LOTTERY_CONSUMPTION_REQUIRED') {
-      try { status.value = await api<LotteryStatus>('/api/lottery/status'); if (status.value.daily) count.value = 1; scheduleReset() } catch { /* Keep the authoritative draw error visible. */ }
+      try { status.value = await api<LotteryStatus>('/api/lottery/status'); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset() } catch { /* Keep the authoritative draw error visible. */ }
     }
     error.value = drawMessage(cause); drawing.value = false; return
   }
@@ -214,7 +228,8 @@ async function draw() {
     wheelRotation.value += 1440 + (target - wheelRotation.value % 360 + 360) % 360
   }
   notify('抽奖结果已记录。')
-  try { status.value = await api<LotteryStatus>('/api/lottery/status'); if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
+  void publicResults.value?.refresh()
+  try { status.value = await api<LotteryStatus>('/api/lottery/status'); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
   catch (cause) { error.value = `抽奖已完成，账户信息刷新失败：${drawMessage(cause)}` }
   finally { drawing.value = false }
 }
@@ -223,10 +238,11 @@ async function draw() {
 
 <template>
   <div class="page-container activity-page">
-    <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="load"><RefreshCw :size="18" aria-hidden="true" /></button></div>
+    <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="refresh"><RefreshCw :size="18" aria-hidden="true" /></button></div>
     <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" type="button" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
-    <div v-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
+    <WelfareTasks v-if="tab === 'tasks'" :key="session.user?.id ?? 'guest'" ref="tasks" :lottery="loading || statusFailed ? null : status" :rules-loading="loading" />
+    <div v-else-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status">
       <section v-if="status.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
         <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
@@ -282,7 +298,7 @@ async function draw() {
               <g class="wheel-disc" :style="{ transform: `rotate(${wheelRotation}deg)` }">
                 <g v-for="segment in wheelSegments" :key="`${segment.id}-${segment.index}`" :class="{ 'is-winner': result?.prizes.at(-1)?.prizeId === segment.id, 'wheel-featured': segment.index === 0 }">
                   <path :d="segment.path" :fill="`url(#${wheelId}-${segment.index === 0 ? 'featured' : segment.index % 2 ? 'cool' : 'warm'})`" :class="segment.index % 2 ? 'wheel-alternate' : 'wheel-sector'" />
-                  <text class="wheel-label" text-anchor="middle" dominant-baseline="middle">
+                  <text class="wheel-label" :class="{ 'clown-label': segment.clown }" text-anchor="middle" dominant-baseline="middle">
                     <textPath class="wheel-name" :href="`#${wheelId}-label-${segment.index}`" startOffset="50%" :textLength="segment.textLength" lengthAdjust="spacingAndGlyphs">{{ segment.labelName }}</textPath>
                   </text>
                 </g>
@@ -301,8 +317,8 @@ async function draw() {
           <p v-if="status.daily" class="pool-caption">每档名额独立，概率随剩余名额实时变化。</p>
           <div class="prize-list">
             <div v-for="prize in status.settings.prizes" :key="prize.id" class="prize-item">
-              <span class="prize-icon" aria-hidden="true"><Gift :size="20" /></span>
-              <div class="prize-detail"><strong>{{ prizeLabel(prize.name) }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }} · {{ validityLabel(status.settings.rewardValidityHours ?? 168) }}有效</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p></div>
+              <span class="prize-icon" aria-hidden="true"><Gift v-if="!isClownPrize(prize.name)" :size="20" /></span>
+              <div class="prize-detail"><span v-if="isClownPrize(prize.name)" class="prize-clown" role="img" aria-label="小丑奖">🤡</span><strong v-else>{{ prize.name }}</strong><p v-if="prize.amountCents" class="prize-amount">{{ rewardAmount(prize) }} · {{ validityLabel(status.settings.rewardValidityHours ?? 168) }}有效</p><p v-if="prize.description" class="caption-5">{{ prize.description }}</p></div>
               <div class="prize-availability"><p>当前概率 <strong>{{ prize.stock !== 0 && totalWeight && (!status.daily || status.daily.remaining > 0) ? (prize.weight / totalWeight * 100).toFixed(2) : '0.00' }}%</strong></p><p>{{ status.daily ? `剩余 ${prize.stock} / ${prize.dailyQuota} 名` : prize.stock === -1 ? '库存不限' : prize.stock === 0 ? '已抽完' : `剩余 ${prize.stock} 份` }}</p></div>
             </div>
             <p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p>
@@ -311,9 +327,9 @@ async function draw() {
         <section v-if="rules.length" class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
         <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户</RouterLink></section>
       </div>
-      <div v-else-if="tab === 'tasks'" class="stack"><ReferralBenefits /><section v-if="rules.length" class="panel-section"><h2>其他活动任务</h2><div v-for="item in rules" :key="item.key" class="reward-item"><component :is="item.icon" :size="18" /><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次</p></div><span>{{ item.count }} 个</span></div></section></div>
       <section v-else class="panel-section records-section"><div class="section-heading"><h2 id="rewards-heading">奖励记录</h2><button type="button" class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" aria-hidden="true" />刷新</button></div><div v-if="records.length" class="table-wrap" tabindex="0" role="region" aria-labelledby="rewards-heading"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td data-label="时间">{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td data-label="奖励">{{ award.name }}</td><td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td data-label="状态"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.rewardKind === 'charity'" class="reward-expiry"><time v-if="award.expiresAt" :datetime="new Date(award.expiresAt * 1000).toISOString()" role="timer" aria-label="奖励到期倒计时" aria-live="off">{{ rewardExpiry(award) }}</time><span v-else>{{ rewardExpiry(award) }}</span></p></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" aria-hidden="true" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" type="button" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
     </template>
+    <LotteryPublicResults v-if="tab === 'draw'" ref="publicResults" />
   </div>
 </template>
 
@@ -391,6 +407,9 @@ async function draw() {
 .wheel-label { fill: var(--lottery-face-ink); font-size: 24px; font-weight: 600; }
 .wheel-featured .wheel-label { fill: var(--lottery-lamp); }
 .wheel-dense .wheel-label { font-size: 16px; }
+.wheel-label.clown-label { font-size: 36px; }
+.wheel-dense .wheel-label.clown-label { font-size: 24px; }
+.prize-clown { display: inline-block; font-size: 26px; line-height: 28px; }
 .wheel-inner-rim { fill: none; stroke: var(--lottery-metal-light); stroke-width: 1; }
 .wheel-hub-depth { fill: var(--lottery-metal-edge); }
 .wheel-hub { stroke: var(--lottery-metal-light); stroke-width: 1.5; }

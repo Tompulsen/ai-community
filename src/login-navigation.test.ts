@@ -17,6 +17,7 @@ describe('login return destinations agree with the OAuth backend', () => {
       '/account?tab=privacy', '/account?tab=following', '/account?tab=theme',
       '/messages?tab=activity', '/messages?tab=announcement', '/messages?tab=messages',
       '/activities?invite=inviter123', '/discover?q=' + 'q'.repeat(500),
+      '/activities?tab=tasks&publish=1', '/activities?aff=001234&tab=tasks&publish=1',
       '/discover?tag=' + 't'.repeat(100), '/work/' + 'a'.repeat(32),
     ]
     for (const value of accepted) {
@@ -41,6 +42,7 @@ describe('login return destinations agree with the OAuth backend', () => {
       '/create/image?entry=invalid', '/create/image?entry=5e22f8ac-82ea-4362-8b2f-595261334793&entry=5e22f8ac-82ea-4362-8b2f-595261334793',
       '/messages?tab=unknown', '/messages?tab=activity&tab=announcement',
       '/activities?publish=0', '/discover?q=%', '/discover?q=%FF', '/discover?q=%5C',
+      '/activities?tab=unknown', '/activities?aff=bad%2Fcode', '/activities?tab=tasks&tab=tasks',
       '/discover?q=%00', '/activities?invite=inviter123%0A', '/discover?constructor=value',
       '/discover?q=' + 'q'.repeat(501), '/discover?tag=' + 't'.repeat(101),
       '/discover?tag=', '/work/' + 'a'.repeat(33), '/discover?q=' + 'q'.repeat(2048),

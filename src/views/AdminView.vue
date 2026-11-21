@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { ArrowUpRight, Check, ClipboardList, Flag, Gift, Globe, LayoutDashboard, Megaphone, RefreshCw, Search, Settings2, ShieldCheck, Tags, Ticket, Trash2, Users, X } from '@lucide/vue'
 import AdminOverview from '../components/AdminOverview.vue'
 import AdminLottery from '../components/AdminLottery.vue'
+import AdminWelfareTasks from '../components/AdminWelfareTasks.vue'
 import AdminLotteryChances from '../components/AdminLotteryChances.vue'
 import AdminCommunity from '../components/AdminCommunity.vue'
 import AdminPeople from '../components/AdminPeople.vue'
@@ -15,7 +16,7 @@ import { kindLabels, statusLabels, type AdminOverviewData, type Work, type WorkS
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
+type Tab = 'overview' | 'review' | 'lottery' | 'lottery-chances' | 'welfare' | 'site' | 'settings' | 'tags' | 'ads' | 'users' | 'reports' | 'logs' | 'announcements' | 'audit' | 'roles'
 const overview = ref<AdminOverviewData | null>(null), days = ref<7 | 30>(7)
 const status = ref<WorkStatus | 'all'>('pending'), query = ref(''), search = ref('')
 const works = ref<Work[]>([]), nextCursor = ref<string | null>(null), updatedAt = ref('')
@@ -38,6 +39,7 @@ const adminTabs = computed(() => [
     { id: 'ads' as const, label: '广告位', icon: Megaphone, group: '运营设置' },
     { id: 'announcements' as const, label: '公告管理', icon: Megaphone, group: '运营设置' },
     { id: 'lottery' as const, label: '活动抽奖', icon: Gift, group: '运营设置' },
+    { id: 'welfare' as const, label: '福利任务', icon: ClipboardList, group: '运营设置' },
     { id: 'lottery-chances' as const, label: '抽奖次数', icon: Ticket, group: '运营设置' },
   ] : []),
 ])
@@ -170,6 +172,7 @@ async function review() {
         <AdminLogs v-else-if="tab === 'logs' && session.user?.isAdmin" :key="session.user.id" />
         <AdminLotteryChances v-else-if="tab === 'lottery-chances' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminLottery v-else-if="tab === 'lottery' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
+        <AdminWelfareTasks v-else-if="tab === 'welfare' && session.user?.isAdmin" :key="session.user.id" ref="editor" />
         <AdminCommunity v-else-if="(tab === 'site' || tab === 'settings' || tab === 'tags' || tab === 'ads') && session.user?.isAdmin" :key="`${session.user.id}:${tab}`" ref="editor" :view="tab" />
         <AdminUsers v-else-if="tab === 'users' && session.user?.isAdmin" :key="session.user.id" ref="editor" :confirm-leave="confirmLeave" />
         <AdminPeople v-else-if="tab === 'reports'" :key="`reports:${session.user?.id}`" ref="editor" :confirm-leave="confirmLeave" />

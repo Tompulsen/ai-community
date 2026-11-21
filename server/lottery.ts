@@ -14,6 +14,7 @@ import type {
 import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
 import { communityQuotaPerPoint } from './native-account/community-wallet.ts'
 import { lotteryDay } from '../shared/lottery-daily.ts'
+import type { PublicLotteryDraw, PublicLotteryPage } from '../shared/lottery-public.ts'
 
 interface LotteryConfigRow {
   id: string
@@ -168,6 +169,38 @@ export function packLotteryDraw(row: PublicDrawSource, username = '') {
       return quotaPerPoint ? { ...prize, legacyPoints: receipt ? (receipt.quotaAdded / quotaPerPoint).toFixed(6) : null } : prize
     }),
   }
+}
+
+export async function readPublicLotteryRecords(db: Queryable, query: URLSearchParams): Promise<PublicLotteryPage> {
+  const cursor = query.get('cursor'), requestedSnapshot = query.get('snapshot')
+  if ([...query.keys()].some(key => !['cursor', 'snapshot'].includes(key) || query.getAll(key).length !== 1)
+    || [cursor, requestedSnapshot].some(value => value !== null && !/^[a-zA-Z0-9]{1,32}$/.test(value))
+    || cursor && (!requestedSnapshot || cursor > requestedSnapshot)) fail('LOTTERY_INVALID')
+  const snapshot = requestedSnapshot ?? (await db.query<{ id: string }>('SELECT id FROM community_lottery_draw ORDER BY id DESC LIMIT 1')).rows[0]?.id ?? null
+  if (!snapshot) return { items: [], nextCursor: null, snapshot: null }
+  // Reuse the draw and user indexes; only page participants need cumulative counts.
+  const { rows } = await db.query<LotteryDrawRow & { displayName: string | null; redacted: boolean | null; totalDrawCount: string | null }>(`
+    WITH page AS MATERIALIZED (
+      SELECT d.* FROM community_lottery_draw d WHERE d.id <= $1 AND ($2::varchar IS NULL OR d.id < $2) ORDER BY d.id DESC LIMIT 21
+    ), counts AS (
+      SELECT d."userId",sum(jsonb_array_length(d.prizes))::text AS total FROM community_lottery_draw d
+      WHERE d.id <= $1 AND d."userId" IN (SELECT "userId" FROM page) GROUP BY d."userId"
+    )
+    SELECT p.*,COALESCE(u.name,u.username) AS "displayName",(u."isDeleted" OR u."isSuspended") AS redacted,counts.total AS "totalDrawCount"
+    FROM page p LEFT JOIN "user" u ON u.id=p."userId" LEFT JOIN counts ON counts."userId"=p."userId" ORDER BY p.id DESC`, [snapshot, cursor])
+  const items: PublicLotteryDraw[] = rows.slice(0, 20).map(row => {
+    const packed = packLotteryDraw(row)
+    const first = Array.from(row.displayName?.trim() ?? '')[0]
+    return {
+      id: row.id, participant: first && !row.redacted ? `${first}***` : '匿名用户', createdAt: packed.createdAt,
+      drawCount: row.prizes.length, totalDrawCount: row.totalDrawCount,
+      prizes: packed.prizes.map(prize => ({ name: prize.name, status: prize.status,
+        rewardKind: prize.rewardKind === 'charity' ? 'charity' : 'balance',
+        points: prize.status === 'fulfilled' ? ('points' in prize ? prize.points : 'legacyPoints' in prize ? prize.legacyPoints : null) ?? null : null,
+      })),
+    }
+  })
+  return { items, nextCursor: rows.length > 20 ? rows[19]!.id : null, snapshot }
 }
 
 export function packAdminLotteryDraw(row: LotteryDrawRow) {
@@ -606,6 +639,9 @@ export function startPendingWorker(options: ServiceContext) {
 export async function handleLottery(ctx: RequestContext): Promise<boolean> {
   const path = ctx.url.pathname
   if (!path.startsWith('/api/lottery/') && !path.startsWith('/api/admin/lottery/')) return false
+  if (path === '/api/lottery/public-records' && ctx.req.method === 'GET') {
+    ctx.json(200, await readPublicLotteryRecords(ctx.db, ctx.url.searchParams)); return true
+  }
   const api = service(ctx)
   const method = ctx.req.method
   const admin = path.startsWith('/api/admin/')

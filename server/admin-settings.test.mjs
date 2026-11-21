@@ -7,8 +7,82 @@ import test from 'node:test'
 import { handleAdmin } from './admin.ts'
 import { httpError } from './auth.ts'
 import { readSiteSettings, validateSiteBranding } from './settings.ts'
+import { defaultWelfareTasks } from '../shared/welfare-tasks.ts'
 
 const siteUrl = 'https://community.example'
+const welfarePath = '/api/admin/welfare/tasks'
+
+test('public welfare catalog defaults to three tasks and only exposes enabled display fields', async () => {
+  const f = fixture({ user: null })
+  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: defaultWelfareTasks() })
+  const items = defaultWelfareTasks(); items[1].enabled = false
+  f.state.row.clientOptions.communityWelfareTasks = items
+  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: [items[0], items[2]] })
+  assert(!JSON.stringify(await f.request('/api/welfare/tasks')).includes('preserved'))
+  f.state.row.clientOptions.communityWelfareTasks = { broken: true }
+  assert.deepEqual((await f.request('/api/welfare/tasks')).items, defaultWelfareTasks())
+})
+
+test('welfare catalog requires admin privileges for both configuration reads and writes', async () => {
+  for (const user of [null, { id: 'member' }, { id: 'moderator', isModerator: true }]) {
+    const f = fixture({ user })
+    for (const method of ['GET', 'PATCH']) await assert.rejects(f.request(welfarePath, method), { statusCode: user ? 403 : 401 })
+    assert.equal(f.statements.length, 0)
+  }
+})
+
+test('task edits preserve unrelated settings and reward rules, with ordering, audit and versioning', async () => {
+  const f = fixture(), previous = structuredClone(f.state.row.clientOptions)
+  const initial = await f.request(welfarePath)
+  const items = initial.items.reverse()
+  items[0].enabled = false; items[1].title = ' 创作分享 '; items[1].description = '参加社区创作'; items[1].buttonText = '去投稿'
+  const result = await f.request(welfarePath, 'PATCH', { items, version: initial.version })
+  assert.equal(result.items[1].title, '创作分享')
+  assert.notEqual(result.version, initial.version)
+  assert.deepEqual(await f.request(welfarePath), result)
+  assert.deepEqual(f.state.row.clientOptions, { ...previous, communityWelfareTasks: result.items })
+  assert.deepEqual((await f.request('/api/welfare/tasks')).items.map(item => item.id), ['publish', 'invite'])
+  assert.equal(f.statements.find(item => item.sql.startsWith('INSERT INTO moderation_log')).parameters[2], 'updateCommunityWelfareTasks')
+})
+
+test('welfare edits require current version and check it inside the row lock', async () => {
+  const f = fixture(), initial = await f.request(welfarePath)
+  for (const version of [undefined, '', 'obsolete']) await assert.rejects(f.request(welfarePath, 'PATCH', { items: initial.items, version }), { statusCode: 409 })
+  const race = fixture({ beforeLock(row) { const items = defaultWelfareTasks(); items[0].title = '其他管理员修改'; row.clientOptions.communityWelfareTasks = items } })
+  const read = await race.request(welfarePath)
+  await assert.rejects(race.request(welfarePath, 'PATCH', read), { statusCode: 409 })
+  assert(!race.statements.some(item => item.sql.startsWith('UPDATE meta')))
+})
+
+test('task schema rejects unknown rewards, links, duplicate ids and out-of-bounds fields', async () => {
+  const f = fixture(), initial = await f.request(welfarePath)
+  const invalid = [[], initial.items.slice(0, 2), [...initial.items, initial.items[0]],
+    [initial.items[0], initial.items[0], initial.items[2]],
+    ...[{ title: '' }, { title: '  ' }, { title: '长'.repeat(41) }, { description: '长'.repeat(241) },
+      { buttonText: '长'.repeat(25) }, { title: 'bad\0name' }, { enabled: 'true' }, { id: 'custom' },
+      { points: 5000 }, { url: 'javascript:alert(1)' }].map(patch => [{ ...initial.items[0], ...patch }, ...initial.items.slice(1)]),
+  ]
+  for (const items of invalid) await assert.rejects(f.request(welfarePath, 'PATCH', { items, version: initial.version }), { statusCode: 400 })
+  await assert.rejects(f.request(welfarePath, 'PATCH', { ...initial, reward: 5000 }), { statusCode: 400 })
+  assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+})
+
+test('welfare writes reject stale or missing account identity before touching storage', async () => {
+  for (const headers of [{}, { 'x-new-api-user': 'differentAdmin' }]) {
+    const f = fixture({ headers }), body = await f.request(welfarePath)
+    f.statements.length = 0
+    await assert.rejects(f.request(welfarePath, 'PATCH', body), { statusCode: 409 })
+    assert.equal(f.statements.length, 0)
+  }
+})
+
+test('an audit failure rolls back task changes', async () => {
+  const f = fixture({ failAudit: true }), previous = structuredClone(f.state.row)
+  const initial = await f.request(welfarePath); initial.items[0].title = '邀请好友'
+  await assert.rejects(f.request(welfarePath, 'PATCH', initial), /Audit storage unavailable/)
+  assert.deepEqual(f.state.row, previous)
+  assert(f.statements.some(item => item.sql === 'ROLLBACK'))
+})
 const emptyAd = { enabled: false, title: '', imageUrl: '', linkUrl: '' }
 const secondAd = { enabled: true, title: '第二广告位', imageUrl: 'https://images.example/ad.png', linkUrl: 'https://example.com/' }
 const logoFile = { id: 'logo1', userId: 'root', storedInternal: true, isLink: false, isSensitive: false,
@@ -52,7 +126,7 @@ function fixture(options = {}) {
   }
   const db = { query, async connect() { return { query, release() {} } } }
   const ctx = {
-    db, config: { url: siteUrl }, body: {}, req: { method: 'GET' }, user, newId: () => 'audit1',
+    db, config: { url: siteUrl }, body: {}, req: { method: 'GET', headers: options.headers ?? { 'x-new-api-user': user?.id } }, user, newId: () => 'audit1',
     requireUser() { if (!user) throw httpError(401, '请先登录。'); return user },
     requireAdmin() { const actor = this.requireUser(); if (!actor.isAdmin) throw httpError(403, '需要管理员权限。'); return actor },
     json(status, value) { assert.equal(status, 200); response = value },

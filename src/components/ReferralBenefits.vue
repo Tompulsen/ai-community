@@ -4,6 +4,7 @@ import { Copy, RefreshCw } from '@lucide/vue'
 import type { ReferralStatus } from '../../shared/referral'
 import { api, errorMessage, notify, session } from '../state'
 
+const emit = defineEmits<{ status: [value: ReferralStatus | null] }>()
 const status = ref<ReferralStatus | null>(null), busy = ref(false), error = ref('')
 let request = 0, controller: AbortController | undefined
 const points = (value: number) => value.toLocaleString('zh-CN', { maximumFractionDigits: 20 })
@@ -19,8 +20,12 @@ async function load(append = false) {
     const data = await api<ReferralStatus>(`/api/referrals/status${append && status.value?.nextCursor ? `?cursor=${status.value.nextCursor}` : ''}`, { signal: controller.signal })
     if (version !== request) return
     status.value = { ...data, items: append ? [...(status.value?.items || []), ...data.items] : data.items }
+    emit('status', status.value)
   } catch (cause) {
-    if (version === request) error.value = errorMessage(cause) === 'REFERRAL_ACCOUNT_REQUIRED' ? '请先连接章鱼账号，再查看邀请福利。' : '邀请福利暂时无法读取，请稍后重试。'
+    if (version === request) {
+      emit('status', null)
+      error.value = errorMessage(cause) === 'REFERRAL_ACCOUNT_REQUIRED' ? '请先连接章鱼账号，再查看邀请福利。' : '邀请福利暂时无法读取，请稍后重试。'
+    }
   } finally { if (version === request) busy.value = false }
 }
 async function copyInvite() {
@@ -28,7 +33,7 @@ async function copyInvite() {
   try { await navigator.clipboard.writeText(status.value.inviteUrl); notify('邀请链接已复制。') }
   catch { error.value = '复制未成功，请选中下方链接后手动复制。' }
 }
-watch(() => [session.user?.id, session.user?.accountId], () => { status.value = null; void load() }, { immediate: true })
+watch(() => [session.user?.id, session.user?.accountId], () => { status.value = null; emit('status', null); void load() }, { immediate: true })
 onBeforeUnmount(() => { request++; controller?.abort() })
 </script>
 
@@ -40,8 +45,8 @@ onBeforeUnmount(() => { request++; controller?.abort() })
     <template v-if="status">
       <div class="referral-intro">
         <div>
-          <p class="referral-award"><span>你得 <strong>{{ points(status.config.inviterPoints) }}</strong></span><span>好友得 <strong>{{ points(status.config.inviteePoints) }}</strong></span><span class="referral-unit">永久积分</span></p>
-          <p class="referral-condition">新朋友通过你的链接注册后，任意一笔充值{{ topupCondition(status.config.minTopupCny) }}，双方自动获得奖励。首笔未达标不影响后续领取。</p>
+          <p v-if="status.config.enabled" class="referral-award"><span>你得 <strong>{{ points(status.config.inviterPoints) }}</strong></span><span>好友得 <strong>{{ points(status.config.inviteePoints) }}</strong></span><span class="referral-unit">永久积分</span></p>
+          <p v-if="status.config.enabled" class="referral-condition">新朋友通过你的链接注册后，任意一笔充值{{ topupCondition(status.config.minTopupCny) }}，双方自动获得奖励。首笔未达标不影响后续领取。</p>
           <p class="caption-5 muted">仅限新注册账号，每位新人奖励一次；按单笔实付判断，不累计。赠送积分、兑换码及余额支付不计入充值；已绑定邀请按绑定时的规则发放。</p>
           <p v-if="!status.config.enabled" class="notice-inline" role="status">新邀请福利已暂停。此前已绑定的邀请继续按原规则发放。</p>
         </div>

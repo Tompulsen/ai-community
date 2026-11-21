@@ -13,6 +13,7 @@ import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
 import { feedWeightsSchema, readFeedWeights } from '../shared/recommendation.ts'
+import { readWelfareTasks, welfareTasksSchema } from '../shared/welfare-tasks.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 type Body = Record<string, unknown>
@@ -130,6 +131,24 @@ export function validateCommunityConfig(input: Body): Body {
   }
   return next
 }
+async function welfareTasks(ctx: RequestContext) {
+  const current = (row: MetaRow) => readWelfareTasks(row.clientOptions?.communityWelfareTasks)
+  if (ctx.req.method === 'GET') {
+    const items = current(await meta(ctx.db)); return { items, version: fingerprint(items) }
+  }
+  if (ctx.req.headers?.['x-new-api-user'] !== ctx.requireAdmin().id) fail('登录账号已变化，请刷新后重新核对。', 409)
+  keys(ctx.body, ['items', 'version'])
+  const parsed = welfareTasksSchema.safeParse(ctx.body.items)
+  if (!parsed.success) fail('请保留三种任务，填写任务名称（最多 40 字）、按钮文字（最多 24 字）和说明（最多 240 字），任务类型不得重复。')
+  return transaction(ctx.db, async db => {
+    const row = await meta(db, true)
+    checkVersion(ctx.body, current(row), true)
+    await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb WHERE id=$1`, [row.id, JSON.stringify({ communityWelfareTasks: parsed.data })])
+    await audit(ctx, db, 'updateCommunityWelfareTasks', { items: parsed.data })
+    return { items: parsed.data, version: fingerprint(parsed.data) }
+  })
+}
+
 async function config(ctx: RequestContext) {
   if (ctx.req.method === 'GET') { const config = publicConfig((await meta(ctx.db)).clientOptions); return { config, version: fingerprint(config) } }
   const { version: _version, ...input } = ctx.body
@@ -498,7 +517,7 @@ const auditLabels: Record<string, string> = {
   communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
   createCommunityTag: '创建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
-  adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
+  updateCommunityWelfareTasks: '编辑福利任务展示', adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
 }
 function safeAuditDetails(type: string, input: unknown): Body {
   if (!record(input)) return {}
@@ -632,17 +651,19 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   if (await handleAdminInsights(ctx)) return true
   const path = ctx.url.pathname, method = ctx.req.method
   if (path === '/api/community/ads' && method === 'GET') { ctx.json(200, await readAds(ctx, true)); return true }
+  if (path === '/api/welfare/tasks' && method === 'GET') { const items = readWelfareTasks((await meta(ctx.db)).clientOptions?.communityWelfareTasks); ctx.json(200, { items: items.filter(item => item.enabled) }); return true }
   if (path === '/api/site' && method === 'GET') { const { brand, logoUrl } = await readSiteSettings(ctx.db, ctx.config.url); ctx.json(200, { brand, logoUrl }); return true }
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
   const userSection = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/(note|media|logins)$/.exec(path)
-  const recognized = ['/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
+  const recognized = ['/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
   let result: unknown
-  if (path === '/api/admin/community/config' && ['GET', 'PATCH'].includes(method ?? '')) result = await config(ctx)
+  if (path === '/api/admin/welfare/tasks' && ['GET', 'PATCH'].includes(method ?? '')) result = await welfareTasks(ctx)
+  else if (path === '/api/admin/community/config' && ['GET', 'PATCH'].includes(method ?? '')) result = await config(ctx)
   else if (path === '/api/admin/community/ads' && ['GET', 'PATCH'].includes(method ?? '')) result = await ads(ctx)
   else if ((path === '/api/admin/tags' && ['GET', 'POST'].includes(method ?? '')) || (tag && ['PATCH', 'DELETE'].includes(method ?? ''))) result = await tags(ctx, tag?.[1])
   else if ((path === '/api/admin/users' && method === 'GET') || (person && method === 'PATCH')) result = await users(ctx, person?.[1])

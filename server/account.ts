@@ -104,6 +104,7 @@ export function newApiReturnPath(value: unknown): string {
       break
     case 'create': Object.assign(allowed, { from: id, remix: id, prepare: /^1$/, entry: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i }); break
     case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
+    case 'activities': Object.assign(allowed, { tab: /^tasks$/, aff: id }); break
     case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/, edit: /^profile$/ }); break
     case 'account': allowed.tab = /^(profile|balance|security|privacy|following|theme)$/; break
     case 'messages': Object.assign(allowed, { peer: id, tab: /^(messages|announcement|activity)$/ }); break

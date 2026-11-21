@@ -3,9 +3,11 @@ import { expect, test, type Page } from '@playwright/test'
 import { defaultLotterySettings } from '../server/business/lottery'
 import { defaultDailyLotteryPrizes, lotteryDay } from '../shared/lottery-daily'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import { defaultWelfareTasks } from '../shared/welfare-tasks'
 
 async function welfareFixture(page: Page, authenticated = true) {
   const account = await mockUnifiedAccount(page, authenticated)
+  await page.route('**/api/welfare/tasks', route => route.fulfill({ json: { items: defaultWelfareTasks() } }))
   account.state.user.isAdmin = true
   const config = { version: 1, settings: { ...defaultLotterySettings(), enabled: true, dailyLimit: 200, prizes: defaultDailyLotteryPrizes(5000) } }
   const day = lotteryDay(new Date())
@@ -40,6 +42,7 @@ async function welfareFixture(page: Page, authenticated = true) {
   })
   await page.route('**/api/lottery/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
+    if (path.endsWith('/public-records')) return route.fulfill({ json: { items: [], nextCursor: null, snapshot: null } })
     if (path.endsWith('/status')) {
       state.statusReads++
       await state.statusDelay
@@ -301,7 +304,9 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
     await expect(page.getByRole('region', { name: '今日福利' })).toContainText('600,000')
     await expect(page.locator('.prize-list')).toContainText('6,000 福利积分')
     await expect(page.locator('.prize-list')).toContainText('1,000 福利积分')
-    await expect(page.locator('.prize-icon svg')).toHaveCount(4)
+    await expect(page.locator('.prize-icon svg')).toHaveCount(3)
+    await expect(page.locator('.prize-list').getByRole('img', { name: '小丑奖' })).toBeVisible()
+    await expect(page.locator('.prize-list')).not.toContainText('非常遗憾')
     await expect(page.locator('.clown-icon')).toHaveCount(0)
     await expect(page.getByRole('group', { name: '本次抽奖次数' })).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -437,6 +442,7 @@ test('cumulative consumption and tickets remain separate participation requireme
   await expect(page.locator('.draw-console')).toContainText('完成任务获取抽奖次数')
   await page.getByRole('button', { name: '前往任务与邀请', exact: true }).click()
   await expect(page.getByRole('button', { name: '任务与邀请', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '查看邀请福利', exact: true }).click()
   await expect(page.getByRole('region', { name: '邀请朋友，共享积分', exact: true })).toBeVisible()
   expect(fixture.writes).toHaveLength(0)
 })
