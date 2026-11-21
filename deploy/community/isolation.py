@@ -79,6 +79,15 @@ def execute(args):
     return result.stdout
 
 
+def upstream_compose(container):
+    files = container['Config']['Labels']['com.docker.compose.project.config_files'].split(',')
+    # Inactive profiles still own live containers and must keep their isolation settings.
+    command = ['docker', 'compose', '--profile', '*']
+    for file in files:
+        command.extend(['-f', file])
+    return json.loads(execute(command + ['config', '--format', 'json']))
+
+
 def verify():
     items = json.loads(execute(['docker', 'inspect', WEB, 'ZY-mysql', *UPSTREAMS]))
     inventory = {x['Name'].lstrip('/'): x for x in items}
@@ -89,11 +98,7 @@ def verify():
     for name, (service, aliases) in UPSTREAMS.items():
         container = inventory[name]
         assert set(aliases) <= set(container['NetworkSettings']['Networks'][NETWORK]['Aliases'] or [])
-        files = container['Config']['Labels']['com.docker.compose.project.config_files'].split(',')
-        command = ['docker', 'compose']
-        for file in files:
-            command.extend(['-f', file])
-        definition = json.loads(execute(command + ['config', '--format', 'json']))
+        definition = upstream_compose(container)
         assert definition['services'][service]['networks']['community_accounts']['aliases'] == aliases
         assert definition['services'][service]['networks']['community_accounts']['gw_priority'] == -1
         assert definition['networks']['community_accounts']['name'] == NETWORK

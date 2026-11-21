@@ -1,7 +1,9 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
@@ -13,6 +15,17 @@ policy, release = load('isolation'), load('release')
 
 
 class IsolationTests(unittest.TestCase):
+    def test_validation_includes_live_services_under_inactive_compose_profiles(self):
+        container = {'Config': {'Labels': {'com.docker.compose.project.config_files': '/private/redis.json'}}}
+        definition = {'services': {'redis': {'profiles': ['manual'], 'networks': {'community_accounts': {}}}}}
+        def compose(args):
+            self.assertEqual(args[:2], ['docker', 'compose'])
+            self.assertEqual(args[-3:], ['config', '--format', 'json'])
+            self.assertIn('/private/redis.json', args)
+            return json.dumps(definition if '--profile' in args and args[args.index('--profile') + 1] == '*' else {'services': {}}).encode()
+        with patch.object(policy, 'execute', side_effect=compose):
+            self.assertEqual(policy.upstream_compose(container)['services']['redis'], definition['services']['redis'])
+
     def community(self):
         return {'services': {'web': {'image': 'old', 'environment': {'SESSION_SECRET': 'preserved'},
                  'networks': {'accounts': None, 'database': None, 'outbound': None},
