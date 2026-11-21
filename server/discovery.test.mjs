@@ -85,6 +85,17 @@ test('discovery PostgreSQL replacement, ranking, stable pages and permissions', 
     assert.equal((await call({ sort: 'latest' })).items[0].id, 'w0001')
     assert.equal((await call({ sort: 'featured' })).items[0].id, 'w0035')
   })
+  await t.test('cross-category labels remain searchable and contribute to image interests', async () => {
+    await reset(35)
+    await db.query("UPDATE community_tag SET category='video' WHERE id='tag1'")
+    try {
+      for (const filters of [{ tag: 'tag1' }, { query: '海报' }, { interests: [{ kind: 'image', name: '海报', score: 100 }] }]) {
+        const result = await call({ kind: 'image', ...filters })
+        assert.equal(result.items.length, 12)
+        assert(result.items.every(item => item.kind === 'image' && item.tags.includes('海报') && item.tagIds.includes('tag1')))
+      }
+    } finally { await db.query("UPDATE community_tag SET category='image' WHERE id='tag1'") }
+  })
   await t.test('all modes retain pages after heat changes and deletion of the cursor item; context changes reject', async () => {
     for (const sort of ['recommended', 'latest', 'featured', 'following']) {
       await reset(35)

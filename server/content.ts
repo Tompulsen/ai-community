@@ -378,7 +378,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
       const prompt = privateScope ? `CASE WHEN s."pendingRevision" ? 'generation' THEN s."pendingRevision"->'generation'->>'prompt' ELSE s.generation->>'prompt' END` : `s.generation->>'prompt'`;
       conditions.push(`(${title} ILIKE ${parameter} OR ${body} ILIKE ${parameter} OR (${prompt}) ILIKE ${parameter} OR u.name ILIKE ${parameter} OR u.username ILIKE ${parameter}
         OR EXISTS (SELECT 1 FROM external_account identity WHERE identity."userId"=u.id AND identity.issuer=${issuer} AND identity.username ILIKE ${parameter})
-        OR EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND t.name ILIKE ${parameter}))`);
+        OR EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND NOT t."isDeleted" AND t.name ILIKE ${parameter}))`);
     }
     const tags = ctx.url.searchParams.getAll('tag').filter(Boolean);
     if (tags.length > 3) fail(400, 'Choose at most three tags');
@@ -387,7 +387,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
         const parameter = add(text(tag, 100));
         return `(t.id = ${parameter} OR t.name = ${parameter})`;
       });
-      conditions.push(`EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND t.category=${category} AND NOT t."isDeleted" AND (${matches.join(' OR ')}))`);
+      conditions.push(`EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND NOT t."isDeleted" AND (${matches.join(' OR ')}))`);
     }
     const status = ctx.url.searchParams.get('status');
     const visibility = ctx.url.searchParams.get('visibility');
@@ -446,7 +446,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
           const interests = add(JSON.stringify(feed.interests)), maximum = add(Math.max(1, ...feed.interests.map(item => item.score)));
           const affinity = `COALESCE((SELECT MAX((p->>'score')::numeric) FROM jsonb_array_elements(${interests}::jsonb) p
             WHERE p->>'kind'=s.category AND EXISTS (SELECT 1 FROM community_tag t WHERE t.id=ANY(s."tagIds")
-              AND NOT t."isDeleted" AND t.category=s.category AND t.name=p->>'name')),0)/${maximum}`;
+              AND NOT t."isDeleted" AND t.name=p->>'name')),0)/${maximum}`;
           const fresh = `exp(-GREATEST(0,${add(anchor)}/1000.0-extract(epoch FROM s."submittedAt"))/604800.0)`;
           const exploration = `(('x'||substr(${hash},1,8))::bit(32)::bigint/4294967295.0)`;
           const score = `LEAST(100000,GREATEST(0,FLOOR(1000*(${add(weights.interest)}*(${affinity})+${add(weights.fresh)}*${fresh}+${add(weights.explore)}*${exploration}))))::int`;
@@ -527,12 +527,12 @@ async function packWorks(ctx: RequestContext, rows: CommunityRow[], includeRevis
   const [files, tags] = await Promise.all([
     pairs.length ? ctx.db.query<DriveFileRow & { userId: string }>(`SELECT id,name,type,size,"userId","thumbnailAccessKey","storedInternal",properties FROM drive_file
       WHERE (id,"userId") IN (SELECT * FROM unnest($1::varchar[],$2::varchar[]))`, [pairs.map(pair => pair[0]), pairs.map(pair => pair[1])]).then(result => result.rows) : [],
-    tagIds.length ? ctx.db.query<TagRow>('SELECT id,name,category FROM community_tag WHERE id=ANY($1::varchar[]) AND NOT "isDeleted" AND category=ANY($2::varchar[]) ORDER BY id',
-      [tagIds, [...new Set(contents.map(content => content.category))]]).then(result => result.rows) : [],
+    tagIds.length ? ctx.db.query<TagRow>('SELECT id,name,category FROM community_tag WHERE id=ANY($1::varchar[]) AND NOT "isDeleted" ORDER BY id',
+      [tagIds]).then(result => result.rows) : [],
   ]);
   return Promise.all(rows.map((row, index) => packWork(ctx, row, includeRevision(row), {
     files: files.filter(file => file.userId === row.authorId),
-    tags: tags.filter(tag => tag.category === contents[index]!.category && contents[index]!.tagIds?.includes(tag.id)),
+    tags: tags.filter(tag => contents[index]!.tagIds?.includes(tag.id)),
   })));
 }
 
@@ -548,7 +548,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   const video = ordered.find(file => file.type.startsWith('video/'));
   const coverAspectRatio = (image || video)?.properties?.previewAspectRatio;
   const tagIds = content.tagIds ?? [];
-  const tags = assets ? assets.tags : tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" AND category = $2 ORDER BY id', [tagIds, content.category])).rows : [];
+  const tags = assets ? assets.tags : tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" ORDER BY id', [tagIds])).rows : [];
   const publicStatus = ['published', 'approved'].includes(row.status) && row.approvedNoteId;
   const publicParameters = readRemixParameters(content.generation?.parameters);
   return {
@@ -667,7 +667,7 @@ async function validateRevision(db: Queryable, actorId: string, revision: Commun
   tagIds ??= revision.tagIds ?? [];
   if (!Array.isArray(tagIds) || tagIds.length > 3 || new Set(tagIds).size !== tagIds.length) fail(400, 'Choose at most three tags');
   const selectedTagIds = tagIds.map(identifier);
-  const tags = selectedTagIds.length ? (await db.query<IdRow>('SELECT id FROM community_tag WHERE id = ANY($1::varchar[]) AND category = $2 AND NOT "isDeleted" ORDER BY id FOR KEY SHARE', [selectedTagIds, revision.category])).rows : [];
+  const tags = selectedTagIds.length ? (await db.query<IdRow>('SELECT id FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" ORDER BY id FOR KEY SHARE', [selectedTagIds])).rows : [];
   if (tags.length !== selectedTagIds.length) fail(400, 'A selected tag is unavailable');
   revision.tagIds = [...selectedTagIds].sort();
   return attachments;

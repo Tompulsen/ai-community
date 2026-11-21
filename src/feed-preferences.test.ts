@@ -65,14 +65,22 @@ describe('bounded browser-only discovery preferences', () => {
   })
   it('learns only existing search tags, deduplicates short repeats and does not retain the original query', () => {
     const tags = [{ id: 'tag1', name: '海报', category: 'image' as const }]
-    rememberSearchTags('25', '海报私人搜索原词', '', tags, 'all', now)
-    rememberSearchTags('25', '海报私人搜索原词', '', tags, 'all', now + 1)
+    rememberSearchTags('25', '海报私人搜索原词', '', tags, 'all', now, [work])
+    rememberSearchTags('25', '海报私人搜索原词', '', tags, 'all', now + 1, [work])
     const value = readPreferences('25', now + 1)
     expect(value.interests[0]!.score).toBe(3)
     expect(storage.get(feedStorageKey)).not.toContain('私人搜索原词')
     expect(value.recent).toEqual([])
-    rememberSearchTags('25', '海报', '', tags, 'all', now + 1800001)
+    rememberSearchTags('25', '海报', '', tags, 'all', now + 1800001, [work])
     expect(readPreferences('25', now + 1800001).interests[0]!.score).toBeGreaterThan(5)
+  })
+  it('learns cross-category tag searches using the actual work type and deduplicates same-name admin tags', () => {
+    const tags = [{ id: 'videoTag', name: '跨类', category: 'video' as const }, { id: 'textTag', name: '跨类', category: 'resource' as const }]
+    rememberSearchTags('25', '跨类', '', tags, 'image', now)
+    expect(readPreferences('25', now).interests).toMatchObject([{ kind: 'image', name: '跨类', score: 3 }])
+    clearFeedPreferences('25')
+    rememberSearchTags('25', '跨类', '', tags, 'all', now, [{ kind: 'image', tags: ['跨类'] }])
+    expect(readPreferences('25', now).interests).toMatchObject([{ kind: 'image', name: '跨类', score: 3 }])
   })
   it('evicts stale high raw scores by decayed value so new interests can enter a full profile', () => {
     for (let index = 0; index < 20; index++) rememberInterest('25', { ...work, id: `old${index}`, tags: [`旧${index}`] }, 'saved', now)

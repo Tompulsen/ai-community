@@ -3,17 +3,16 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronDown, Send, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
-import type { Work } from '../data'
+import type { Work, WorkTag } from '../data'
+import PublicationTagPicker from './PublicationTagPicker.vue'
 import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
 import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
-interface Tag { id: string; category: string; name: string }
-const tags = ref<Tag[]>([]), tagIds = ref<string[]>([]), tagQuery = ref(''), tagsLoading = ref(false), tagsError = ref('')
+const tags = ref<WorkTag[]>([]), tagIds = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const prompt = ref(''), sourceUrl = ref(''), license = ref(''), rights = ref(false), referenceIndices = ref<number[]>([])
 const category = computed(() => task.value?.kind === 'text' ? 'resource' : task.value?.kind || 'image')
-const visibleTags = computed(() => tags.value.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
 const direct = computed(() => destination.value === 'source-comment')
 const locked = computed(() => Boolean(task.value?.publications?.[destination.value]))
 const heading = computed(() => direct.value ? '发送到源作品评论区' : '发布作品')
@@ -25,25 +24,19 @@ let revision = 0
 onBeforeUnmount(() => revision++)
 watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; error.value = ''; busy.value = false })
 async function loadTags() {
-  const current = revision, kind = category.value
+  const current = revision
   tagsLoading.value = true; tagsError.value = ''
   try {
-    const response = await api<{ items: Tag[] }>(`/api/tags?kind=${kind}`)
+    const response = await api<{ items: WorkTag[] }>('/api/tags')
     if (current !== revision) return
     if (!Array.isArray(response.items)) throw new Error('标签数据暂时不可用。')
-    tags.value = response.items.filter(tag => tag.category === kind)
+    tags.value = response.items
     if (!locked.value) {
       const valid = tagIds.value.filter(id => tags.value.some(tag => tag.id === id))
       if (valid.length !== tagIds.value.length) { tagIds.value = valid; error.value = '部分标签已失效，请重新选择。' }
     }
   } catch (cause) { if (current === revision) tagsError.value = errorMessage(cause) }
   finally { if (current === revision) tagsLoading.value = false }
-}
-function toggleTag(id: string) {
-  if (busy.value || locked.value) return
-  tagValidation.value = ''
-  if (tagIds.value.includes(id)) tagIds.value = tagIds.value.filter(value => value !== id)
-  else if (tagIds.value.length < 3) tagIds.value.push(id)
 }
 function revealInvalid(event: Event) {
   const details = (event.target as HTMLInputElement).closest('details')
@@ -59,7 +52,7 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
   prompt.value = previous?.details?.prompt ?? value.prompt
   sourceUrl.value = previous?.details?.sourceUrl ?? ''; license.value = previous?.details?.license ?? ''
   referenceIndices.value = [...(previous?.details?.referenceIndices ?? value.references.map((_, index) => index))]
-  tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagQuery.value = ''; tagsError.value = ''; tagValidation.value = ''; rights.value = Boolean(previous)
+  tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagsError.value = ''; tagValidation.value = ''; rights.value = Boolean(previous)
   if (target === 'community' && !previous?.work) void loadTags()
   await nextTick(); if (current !== revision) return
   if (extra.value) extra.value.open = false
@@ -78,7 +71,7 @@ async function submit() {
     tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
       : tagsError.value ? '请重新加载标签并选择后再发布。'
         : !tagIds.value.length ? '请至少选择 1 个作品标签后再发布。'
-          : tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id)) ? '请选择 1–3 个当前分类的有效标签。' : ''
+          : tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id)) ? '请选择 1–3 个有效标签。' : ''
     if (tagValidation.value) {
       await nextTick()
       const target = tagField.value?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)') ?? tagField.value
@@ -115,12 +108,8 @@ defineExpose({ open })
             <p id="publish-tags-hint" class="form-note">选择 1–3 个标签，方便搜索和发现同类作品。</p>
             <p v-if="tagsLoading" role="status" class="form-note">正在加载标签…</p>
             <div v-else-if="tagsError" class="stack"><p class="form-error" role="alert">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
-            <template v-else-if="tags.length">
-              <label v-if="tags.length > 8" class="field"><span class="studio-sr-only">搜索作品标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
-              <div class="publish-tag-options publication-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag publication-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
-              <p v-if="!visibleTags.length" class="form-note">没有匹配的标签，试试其他关键词。</p>
-            </template>
-            <template v-else><p class="form-note">当前分类暂无可用标签，请联系管理员添加后再发布。</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></template>
+            <PublicationTagPicker v-else-if="tags.length" :key="task.id" v-model="tagIds" :tags="tags" :kind="category" @update:model-value="tagValidation = ''" />
+            <template v-else><p class="form-note">暂无可用标签，请联系管理员添加后再发布。</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></template>
             <p v-if="tagValidation" id="publish-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
           <details ref="extra" class="publish-details publish-extras publication-extras"><summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary><div class="stack">
@@ -151,7 +140,6 @@ defineExpose({ open })
 .publish-tags, .publish-references { border: 0; padding: 0; margin: 0; min-width: 0; }
 .publish-tags legend, .publish-references legend { padding: 0; margin-bottom: 8px; }
 .publish-tags legend span { color: var(--muted); margin-left: 8px; font-size: 12px; }
-.publish-tag-options { margin-top: 12px; }
 .publish-reference-options { display: grid; gap: 8px; margin-top: 12px; }
 .publish-reference-options label { display: flex; gap: 12px; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
 .publish-reference-options img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }

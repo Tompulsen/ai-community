@@ -54,7 +54,7 @@ test('related works match any requested tag while keeping category and public vi
   assert(values.includes('image'));
   assert(values.includes('摄影'));
   assert(values.includes('光影'));
-  assert.match(statement, /t\.id=ANY\(s\."tagIds"\) AND t\.category=s\.category AND NOT t\."isDeleted"/);
+  assert.match(statement, /t\.id=ANY\(s\."tagIds"\) AND NOT t\."isDeleted"/);
   assert.match(statement, /\(t\.id = \$\d+ OR t\.name = \$\d+\) OR \(t\.id = \$\d+ OR t\.name = \$\d+\)/);
   assert(statement.includes(publicVisibilitySql));
   const tooMany = context({ path: '/api/works?sort=latest&tag=a&tag=b&tag=c&tag=d' });
@@ -172,8 +172,8 @@ test('publication accepts one to three existing category tags by id or name', as
   }
 });
 
-test('required tags still reject excessive, duplicate, unavailable and wrong-category choices', async () => {
-  for (const selection of [{ tagIds: ['tag1', 'tag2', 'tag3', 'tag4'] }, { tagIds: ['tag1', 'tag1'] }, { tagIds: ['deleted'] }, { tags: ['不存在'] }, { kind: 'image', status: 'draft', tagIds: ['tag1'] }]) {
+test('required tags still reject excessive, duplicate, unavailable and ambiguous legacy choices', async () => {
+  for (const selection of [{ tagIds: ['tag1', 'tag2', 'tag3', 'tag4'] }, { tagIds: ['tag1', 'tag1'] }, { tagIds: ['deleted'] }, { tags: ['不存在'] }, { kind: 'image', status: 'draft', tags: ['标签1'] }]) {
     const { ctx, statements } = publicationContext(selection);
     await assert.rejects(handleContent(ctx), error => error.statusCode === 400);
     assert(!statements.some(({ sql }) => sql.startsWith('INSERT')));
@@ -278,7 +278,7 @@ test('a full work page batches attachments, reference images and tags into four 
   }
 });
 
-test('batched work media preserves owner isolation, reference rules and tag categories', async () => {
+test('batched work media preserves owner isolation and references while retaining cross-category tags', async () => {
   const rows = [{ ...workRow, category: 'image', fileIds: ['image1', 'foreign2'], tagIds: ['imageTag', 'videoTag'],
     generation: { prompt: '', model: '', referenceFileIds: ['ref1', 'foreign2', 'refLink', 'video1'] } },
   { ...workRow, id: 'work2', authorId: 'owner2', category: 'video', fileIds: ['foreign2'], tagIds: ['imageTag', 'videoTag'] }];
@@ -302,9 +302,9 @@ test('batched work media preserves owner isolation, reference rules and tag cate
   const [first, second] = ctx.result.payload.items;
   assert.deepEqual(first.files.map(file => file.id), ['image1']);
   assert.deepEqual(first.referenceFiles.map(file => file.id), ['ref1']);
-  assert.deepEqual(first.tags, ['Image']);
+  assert.deepEqual(first.tags, ['Image', 'Video']);
   assert.deepEqual(second.files.map(file => file.id), ['foreign2']);
-  assert.deepEqual(second.tags, ['Video']);
+  assert.deepEqual(second.tags, ['Image', 'Video']);
 });
 
 test('admin work batches select pending revision media and category without mixing published assets', async () => {
@@ -316,7 +316,7 @@ test('admin work batches select pending revision media and category without mixi
       return { rows: [{ id: 'pending1', userId: 'owner1', type: 'video/mp4', storedInternal: true }] };
     }
     if (sql.includes('FROM community_tag')) {
-      assert.deepEqual(args, [['pendingTag'], ['video']]);
+      assert.deepEqual(args, [['pendingTag']]);
       return { rows: [{ id: 'pendingTag', name: 'Video', category: 'video' }] };
     }
     return { rows: [] };
@@ -705,4 +705,35 @@ test('missing legacy derivatives sanitize the authorized original in place', asy
       assert(headers['Content-Disposition'].includes('zhangyu-file1.webp'));
     }
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('cross-category tag ids survive creating, editing and reading a work without changing its kind', async () => {
+  const row = { ...workRow, category: 'image', status: 'draft', approvedNoteId: null, tagIds: ['tag1'] };
+  for (const options of [
+    { row },
+    { row, path: '/api/works/work1', method: 'PATCH' },
+    { row, path: '/api/works/work1', method: 'GET' },
+  ]) {
+    const { ctx, statements } = publicationContext({ kind: 'image', status: 'draft', version: 2, tagIds: ['tag1'] }, options);
+    await handleContent(ctx);
+    assert.equal(ctx.result.payload.work.kind, 'image');
+    assert.deepEqual(ctx.result.payload.work.tagIds, ['tag1']);
+    assert.deepEqual(ctx.result.payload.work.tags, ['标签1']);
+    for (const { sql } of statements.filter(({ sql }) => sql.includes('FROM community_tag'))) {
+      assert.match(sql, /NOT "isDeleted"/);
+      assert.doesNotMatch(sql, /AND category/);
+    }
+  }
+});
+
+test('work search and tag filters retain work kind and visibility while matching tags from any admin category', async () => {
+  let statement;
+  const ctx = context({ path: '/api/works?kind=image&query=Tag&tag=videoTag', query: async sql => { statement = sql; return { rows: [] }; } });
+  await handleContent(ctx);
+  assert.match(statement, /s.category =/);
+  assert.match(statement, /t.name ILIKE/);
+  assert.match(statement, /t.id =/);
+  assert.doesNotMatch(statement, /t.category=/);
+  assert(statement.includes(publicVisibilitySql));
 });

@@ -1,5 +1,6 @@
 import type { RemixParameters } from '../shared/studio/remix-parameters'
 export type WorkKind = 'image' | 'video' | 'resource'
+export interface WorkTag { id: string; category: WorkKind; name: string }
 export type WorkStatus = 'draft' | 'pending' | 'approved' | 'published' | 'rejected'
 
 export interface AdminOverviewData {
@@ -34,6 +35,7 @@ export interface Work {
   cover: string
   coverAspectRatio?: number
   tags: string[]
+  tagIds?: string[]
   prompt: string
   model: string
   likes: number

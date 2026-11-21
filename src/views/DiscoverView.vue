@@ -75,7 +75,7 @@ async function load(append = false, learnSearch = false) {
       batch = request
       rememberBatch(expectedOwner, added.map(work => work.id))
       if (learnSearch && added.length && (request.query || request.tag)) void tagsRequest.then(items => {
-        if (!active.signal.aborted && expectedOwner === owner() && expectedConditions === conditionsKey()) rememberSearchTags(expectedOwner, request.query, request.tag, items, request.kind)
+        if (!active.signal.aborted && expectedOwner === owner() && expectedConditions === conditionsKey()) rememberSearchTags(expectedOwner, request.query, request.tag, items, request.kind, Date.now(), added)
       })
       feedStatus.value = result.replaced === false
         ? '当前条件下暂无更多可替换的作品，可以尝试其他标签。' : result.replaced ? '已为你换入其他作品。' : ''

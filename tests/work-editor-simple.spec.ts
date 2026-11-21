@@ -10,9 +10,7 @@ async function fixture(page: Page, type = 'image/jpeg') {
   const writes: Record<string, any>[] = []
   let uploads = 0
   await page.route('**/simple-preview.jpg', route => route.fulfill({ body: image, contentType: 'image/jpeg' }))
-  await page.route('**/api/tags**', route => route.fulfill({ json: { items: ['摄影', '插画', '角色', '海报'].map((name, index) => ({
-    id: `tag${index}`, name, category: new URL(route.request().url()).searchParams.get('kind'),
-  })) } }))
+  await page.route('**/api/tags**', route => route.fulfill({ json: { items: ['image', 'video', 'resource'].flatMap(category => ['摄影', '插画', '角色', '海报'].map((name, index) => ({ id: `${category}tag${index}`, name, category }))) } }))
   await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 100, imagesMb: 20, videosMb: 100, filesMb: 20 } }))
   await page.route('**/api/uploads', route => {
     const payload = route.request().postDataBuffer()?.toString() || ''
@@ -175,12 +173,12 @@ test('a saved empty draft reloads tag choices and accepts a video or text conten
   await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).toBeVisible()
   await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: '填写内容', exact: true }).click()
-  await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).not.toBeChecked()
+  await expect(form.getByRole('button', { name: '移除标签 摄影（图片）', exact: true })).toBeVisible()
   await form.getByLabel('资源内容').fill('保留的文字')
   await form.getByRole('button', { name: '使用文件投稿', exact: true }).click()
   await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'result.mp4', mimeType: 'video/mp4', buffer: Buffer.from('fixture') })
   await expect(form.getByText('视频 · 1/16', { exact: true })).toBeVisible()
-  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+  await expect(form.getByRole('button', { name: '移除标签 摄影（图片）', exact: true })).toBeVisible()
   await form.getByRole('button', { name: '保存修改', exact: true }).click()
   expect(state.writes[0]).toMatchObject({ kind: 'video', body: '保留的文字', version: 4, status: 'pending', fileIds: ['file1'] })
 })
@@ -230,4 +228,32 @@ test('adding a document to an existing image preserves its type and collapsed me
   expect(state.writes[0]).toMatchObject({ kind: 'image', body: '原简介', prompt: '原提示词', model: '原模型', tags: ['摄影'],
     sourceUrl: 'https://example.com/source', license: 'CC0', version: 4, fileIds: ['original', 'file1'], referenceFileIds: ['reference'] })
   expect(state.writes[0]).not.toHaveProperty('generation')
+})
+
+
+test('editing duplicate tag names preserves their exact ids and allows other admin categories', async ({ page }) => {
+  const state = await fixture(page)
+  const catalog = [{ id: 'image-photo', name: '摄影', category: 'image' }, { id: 'video-photo', name: '摄影', category: 'video' }, { id: 'resource-guide', name: '新增教程', category: 'resource' }]
+  const work = { id: 'alltagswork', title: '保留同名标签', authorId: state.state.user.id, author: '作者', avatar: '作', version: 3,
+    kind: 'resource', status: 'draft', files: [], fileIds: [], tags: ['摄影', '摄影'], tagIds: ['image-photo', 'video-photo'], body: '资源正文', prompt: '', model: '', owned: true, likes: 0, date: '2026-11-22', cover: '' }
+  await page.route('**/api/tags**', route => route.fulfill({ json: { items: catalog } }))
+  await page.route('**/api/library**', route => route.fulfill({ json: { items: [work], nextCursor: null } }))
+  await page.route('**/api/works/alltagswork', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { work } })
+    const body = route.request().postDataJSON(); state.writes.push(body)
+    return route.fulfill({ json: { work: { ...work, ...body } } })
+  })
+  await page.goto('/library?tab=draft')
+  const open = page.getByRole('button', { name: '编辑作品：保留同名标签', exact: true })
+  await open.click()
+  const form = page.getByRole('dialog', { name: '编辑作品', exact: true })
+  await expect(form.getByRole('button', { name: '移除标签 摄影（图片）', exact: true })).toBeVisible()
+  await expect(form.getByRole('button', { name: '移除标签 摄影（视频）', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(form).toBeHidden()
+  await open.click()
+  await form.getByRole('button', { name: '移除标签 摄影（视频）', exact: true }).click()
+  await form.getByRole('checkbox', { name: '新增教程', exact: true }).check()
+  await form.getByRole('button', { name: '保存修改', exact: true }).click()
+  expect(state.writes[0]).toMatchObject({ kind: 'resource', tagIds: ['image-photo', 'resource-guide'], tags: ['摄影', '新增教程'], version: 3 })
 })

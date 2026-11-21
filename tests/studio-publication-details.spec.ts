@@ -3,14 +3,14 @@ import { readFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', legacy = false) {
+async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', legacy = false, catalog?: { id: string; name: string; category: string }[]) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
   const submissions: any[] = [], uploads: string[] = []
   let reject = 0, rejectCode = '', failTags = false, removedTag = ''
   const category = kind === 'text' ? 'resource' : kind
-  await page.route('**/api/tags**', route => failTags ? route.fulfill({ status: 503, json: { message: '标签暂时不可用' } }) : route.fulfill({ json: { items: ['动物', '摄影', '插画', '风景'].map((name, i) => ({ id: `tag${i}`, name, category })).filter(tag => tag.id !== removedTag) } }))
+  await page.route('**/api/tags**', route => failTags ? route.fulfill({ status: 503, json: { message: '标签暂时不可用' } }) : route.fulfill({ json: { items: (catalog ?? ['动物', '摄影', '插画', '风景'].map((name, i) => ({ id: `tag${i}`, name, category }))).filter(tag => tag.id !== removedTag && (!new URL(route.request().url()).searchParams.get('kind') || tag.category === new URL(route.request().url()).searchParams.get('kind'))) } }))
   await page.route('**/api/creation/**', route => {
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/models')) return route.fulfill({ json: { tokenId: 41, items: [{ id: 'fixture-model', kinds: [kind] }] } })
@@ -229,7 +229,7 @@ test('an empty studio tag list blocks publication and supports reloading availab
   await page.route('**/api/tags**', empty)
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
   const form = dialog(page)
-  await expect(form.getByText('当前分类暂无可用标签，请联系管理员添加后再发布。')).toBeVisible()
+  await expect(form.getByText('暂无可用标签，请联系管理员添加后再发布。')).toBeVisible()
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(form.locator('#publish-tags-error')).toContainText('至少选择 1 个作品标签')
   expect(state.submissions).toHaveLength(0); expect(state.uploads).toHaveLength(0)
@@ -238,4 +238,66 @@ test('an empty studio tag list blocks publication and supports reloading availab
   await choose(page)
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+})
+
+
+test('more publication tags searches every admin category and submits the exact selected ids', async ({ page }) => {
+  const catalog = [
+    ...Array.from({ length: 12 }, (_, i) => ({ id: `image${i}`, name: i === 0 ? '摄影' : `图片标签${i}`, category: 'image' })),
+    { id: 'video-photo', name: '摄影', category: 'video' },
+    { id: 'video-edit', name: '镜头剪辑', category: 'video' },
+    { id: 'resource-last', name: '管理员新增教程', category: 'resource' },
+  ]
+  const state = await fixture(page, 'image', false, catalog)
+  const form = dialog(page)
+  await expect(form.getByRole('button', { name: '更多标签（15）', exact: true })).toBeVisible()
+  await expect(form.getByRole('button', { name: '# 图片标签11', exact: true })).toBeHidden()
+  await form.getByRole('button', { name: '更多标签（15）', exact: true }).click()
+  await form.getByRole('group', { name: '视频标签', exact: true }).getByRole('button', { name: '# 摄影', exact: true }).click()
+  await form.getByRole('searchbox', { name: '搜索全部标签', exact: true }).fill('管理员新增')
+  await form.getByRole('button', { name: '# 管理员新增教程', exact: true }).click()
+  await expect(form.getByRole('button', { name: '移除标签 摄影（视频）', exact: true })).toBeVisible()
+  await form.getByRole('searchbox', { name: '搜索全部标签', exact: true }).fill('不存在')
+  await expect(form.getByText('没有匹配的标签，试试其他关键词。', { exact: true })).toBeVisible()
+  await form.getByRole('button', { name: '收起标签', exact: true }).click()
+  await expect(form.getByRole('button', { name: '移除标签 管理员新增教程（文本 · 代码 · Skill）', exact: true })).toBeVisible()
+  await form.getByRole('button', { name: '# 摄影', exact: true }).click()
+  await expect(form.getByRole('button', { name: '# 图片标签1', exact: true })).toBeDisabled()
+  await form.getByRole('checkbox', { name: '我确认拥有作品发布权，并已核实所填写的来源与授权说明。', exact: true }).check()
+  await form.getByRole('button', { name: '更多标签（15）', exact: true }).click()
+  await form.getByRole('searchbox', { name: '搜索全部标签', exact: true }).fill('摄影')
+  await form.getByRole('searchbox', { name: '搜索全部标签', exact: true }).press('Enter')
+  await expect(form.getByRole('searchbox', { name: '搜索全部标签', exact: true })).toBeFocused()
+  expect(state.submissions).toHaveLength(0)
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  expect(state.submissions[0].tagIds).toEqual(['video-photo', 'resource-last', 'image0'])
+})
+
+
+test('expanded all-category tags remain accessible and scroll within the publication dialog', async ({ page }) => {
+  const catalog = ['image', 'video', 'resource'].flatMap(category => Array.from({ length: 16 }, (_, index) => ({ id: `${category}${index}`, category, name: `${category === 'image' ? '图片' : category === 'video' ? '视频' : '资源'}标签${index}` })))
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await fixture(page, 'image', false, catalog)
+  const form = dialog(page), more = form.getByRole('button', { name: '更多标签（48）', exact: true })
+  await more.focus(); await page.keyboard.press('Enter')
+  await expect(form.getByRole('button', { name: '收起标签', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  for (const [width, theme] of [[320, 'light'], [390, 'dark'], [1440, 'light']] as const) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), theme)
+    await form.getByRole('searchbox', { name: '搜索全部标签', exact: true }).fill('标签15')
+    const last = form.getByRole('button', { name: '# 资源标签15', exact: true })
+    await last.scrollIntoViewIfNeeded()
+    await expect(last).toBeVisible()
+    await last.click()
+    await form.getByRole('button', { name: '移除标签 资源标签15（文本 · 代码 · Skill）', exact: true }).click()
+    expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    expect((await new AxeBuilder({ page }).include('.studio-publish-dialog[open]').analyze()).violations).toEqual([])
+    await page.screenshot({ path: test.info().outputPath(`all-tags-${width}-${theme}.png`) })
+  }
+  await form.getByRole('button', { name: '# 资源标签15', exact: true }).focus()
+  await page.keyboard.press('Space')
+  await expect(form.getByRole('button', { name: '移除标签 资源标签15（文本 · 代码 · Skill）', exact: true })).toBeVisible()
+  expect(errors).toEqual([])
 })

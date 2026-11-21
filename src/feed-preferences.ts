@@ -82,17 +82,22 @@ export function rememberInterest(owner: string, work: Pick<Work, 'id' | 'kind' |
 }
 export function clearFeedPreferences(owner: string) { write(empty(owner)) }
 
-export function rememberSearchTags(owner: string, query: string, selected: string, tags: { id: string; name: string; category: Work['kind'] }[], kind: string, now = Date.now()) {
+export function rememberSearchTags(owner: string, query: string, selected: string, tags: { id: string; name: string; category: Work['kind'] }[], kind: string, now = Date.now(), works: Pick<Work, 'kind' | 'tags'>[] = []) {
   const value = readPreferences(owner, now), needle = query.trim().normalize('NFKC').toLocaleLowerCase()
-  const matched = tags.filter(tag => ['image', 'video', 'resource'].includes(tag.category) && (kind === 'all' || kind === tag.category)
+  const matched = tags.filter(tag => ['image', 'video', 'resource'].includes(tag.category)
     && tag.name.length <= 100 && (selected === tag.name || selected === tag.id || needle.includes(tag.name.normalize('NFKC').toLocaleLowerCase())))
     .filter(tag => tag.name.trim()).sort((a, b) => b.name.length - a.name.length).slice(0, 3)
+  const interests = new Map<string, { kind: Work['kind']; name: string }>()
   for (const tag of matched) {
-    const old = value.interests.find(item => item.kind === tag.category && item.name === tag.name)
+    const kinds = kind === 'all' ? works.filter(work => work.tags.includes(tag.name)).map(work => work.kind) : [kind]
+    for (const target of kinds) if (['image', 'video', 'resource'].includes(target)) interests.set(`${target}:${tag.name}`, { kind: target as Work['kind'], name: tag.name })
+  }
+  for (const tag of interests.values()) {
+    const old = value.interests.find(item => item.kind === tag.kind && item.name === tag.name)
     if (old?.searchAt && now - old.searchAt < 1800000) continue
-    const score = (old ? old.score * 2 ** (-(now - old.at) / (3 * 86400000)) : 0) + 3 / matched.length
+    const score = (old ? old.score * 2 ** (-(now - old.at) / (3 * 86400000)) : 0) + 3 / interests.size
     value.interests = value.interests.filter(item => item !== old)
-    value.interests.push({ kind: tag.category, name: tag.name, score: Math.min(1000, score), at: now, searchAt: now })
+    value.interests.push({ kind: tag.kind, name: tag.name, score: Math.min(1000, score), at: now, searchAt: now })
   }
   value.interests = value.interests.sort((a, b) => decayed(b, now) - decayed(a, now)).slice(0, feedLimits.tags)
   write(value)

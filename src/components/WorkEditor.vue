@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRouter } from 'vue-router'
 import { ChevronDown, ImagePlus, PenLine, Plus, Save, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import WorkAttachments from './WorkAttachments.vue'
-import { kindLabels, type Work, type WorkKind } from '../data'
+import PublicationTagPicker from './PublicationTagPicker.vue'
+import { kindLabels, type Work, type WorkKind, type WorkTag } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session } from '../state'
 import { useFileUploads, type UploadFile } from '../use-file-uploads'
 import '../publication-controls.css'
@@ -13,12 +14,22 @@ const emit = defineEmits<{ close: []; saved: [work: Work] }>()
 const dialog = ref<HTMLDialogElement>()
 const leaveDialog = ref<HTMLDialogElement>()
 const router = useRouter()
-const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: [] as string[], model: '', sourceUrl: '', license: '' })
+const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: [] as string[], tagIds: undefined as string[] | undefined, model: '', sourceUrl: '', license: '' })
 const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), referenceInput = ref<HTMLInputElement>()
-const writing = ref(false), autoKind = ref(true), tagQuery = ref(''), tagOptions = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
+const writing = ref(false), autoKind = ref(true), tagOptions = ref<WorkTag[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const sourceComment = ref(false)
-const visibleTags = computed(() => [...new Set([...draft.tags, ...tagOptions.value])].filter(name => name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
+const selectedTagIds = computed({
+  get: () => draft.tagIds ?? draft.tags.flatMap(name => {
+    const tag = tagOptions.value.find(option => option.category === draft.kind && option.name === name)
+    return tag ? [tag.id] : []
+  }),
+  set: (ids: string[]) => {
+    draft.tagIds = ids
+    draft.tags = ids.flatMap(id => { const tag = tagOptions.value.find(option => option.id === id); return tag ? [tag.name] : [] })
+    tagValidation.value = ''
+  },
+})
 let tagLoadId = 0
 const files = ref<UploadFile[]>([])
 const references = ref<UploadFile[]>([])
@@ -38,10 +49,10 @@ const dirty = computed(() => props.open && snapshot() !== baseline.value)
 function fill(work?: Work | null) {
   uploads.reset()
   sourceComment.value = work?.destination === 'source-comment'
-  Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
+  Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], tagIds: work?.tagIds ? [...work.tagIds] : undefined, model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
   writing.value = work?.kind === 'resource'
   autoKind.value = !work || work.status === 'draft' && work.kind !== 'resource' && !work.generation?.parameters && !(work.files || []).some(file => file.type.startsWith(`${work.kind}/`))
-  tagQuery.value = ''; tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
+  tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
   if (extra.value) extra.value.open = false
   files.value = [...(work?.files || [])]
   references.value = [...(work?.referenceFiles || [])]
@@ -64,27 +75,22 @@ watch(() => [props.open, props.work?.id] as const, async ([open]) => {
 }, { immediate: true })
 
 async function loadTags() {
-  const current = ++tagLoadId, kind = draft.kind
+  const current = ++tagLoadId
   tagsLoading.value = true; tagsError.value = ''
   try {
-    const result = await api<{ items: { name: string; category: WorkKind }[] }>(`/api/tags?kind=${kind}`)
+    const result = await api<{ items: WorkTag[] }>('/api/tags')
     if (current !== tagLoadId) return
     if (!Array.isArray(result.items)) throw new Error('标签暂时不可用。')
-    tagOptions.value = result.items.filter(tag => tag.category === kind).map(tag => tag.name)
+    tagOptions.value = result.items
   } catch (cause) { if (current === tagLoadId) tagsError.value = errorMessage(cause) }
   finally { if (current === tagLoadId) tagsLoading.value = false }
 }
 watch([() => props.open, () => draft.kind], ([open]) => { if (open && !sourceComment.value) void loadTags() }, { immediate: true })
-function toggleTag(name: string) {
-  tagValidation.value = ''
-  if (draft.tags.includes(name)) draft.tags = draft.tags.filter(value => value !== name)
-  else if (draft.tags.length < 3) draft.tags.push(name)
-}
 function inferKind() {
   if (!autoKind.value) return
   const kind: WorkKind = writing.value || files.value.some(file => !/^(image|video)\//.test(file.type)) ? 'resource'
     : files.value.some(file => file.type.startsWith('video/')) ? 'video' : 'image'
-  if (draft.kind !== kind) { draft.kind = kind; draft.tags = []; tagQuery.value = ''; tagValidation.value = '' }
+  if (draft.kind !== kind) { draft.kind = kind; tagValidation.value = '' }
 }
 watch(() => files.value.map(file => file.type), inferKind)
 function writeContent() { writing.value = true; inferKind() }
@@ -162,8 +168,8 @@ async function save(status: 'draft' | 'pending') {
   if (status !== 'draft' && !sourceComment.value) {
     tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
       : tagsError.value ? '请重新加载标签并选择后再发布。'
-        : !draft.tags.length ? '请至少选择 1 个作品标签后再发布。'
-          : draft.tags.length > 3 || draft.tags.some(name => !tagOptions.value.includes(name)) ? '请选择 1–3 个当前分类的有效标签。' : ''
+        : !selectedTagIds.value.length ? '请至少选择 1 个作品标签后再发布。'
+          : selectedTagIds.value.length > 3 || selectedTagIds.value.some(id => !tagOptions.value.some(tag => tag.id === id)) || !draft.tagIds && draft.tags.length !== selectedTagIds.value.length ? '请选择 1–3 个有效标签。' : ''
     if (tagValidation.value) {
       error.value = ''; await nextTick()
       const target = tagField.value?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)') ?? tagField.value
@@ -178,6 +184,7 @@ async function save(status: 'draft' | 'pending') {
     if (current !== loadId || session.user?.id !== owner) return
     const body = {
       ...draft, title: draft.title.trim(), tags: [...draft.tags],
+      tagIds: draft.tagIds ?? (!tagsLoading.value && !tagsError.value && draft.tags.length === selectedTagIds.value.length ? [...selectedTagIds.value] : undefined),
       fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
     }
@@ -199,7 +206,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
   <dialog ref="dialog" class="editor-dialog" aria-labelledby="work-editor-heading" @close="props.open && emit('close')" @cancel.prevent="close">
     <div class="dialog-heading"><h2 id="work-editor-heading">{{ work ? '编辑作品' : '发布作品' }}</h2><button class="icon-button" aria-label="关闭作品编辑" :disabled="saving || uploading" @click="close"><X :size="20" /></button></div>
     <form class="editor-form" @submit.prevent="save('pending')" @invalid.capture="invalidField">
-      <div class="editor-scroll">
+      <div class="editor-scroll" tabindex="0" role="region" aria-label="作品信息">
         <p v-if="loading" role="status">正在加载作品…</p>
         <fieldset :disabled="loading || saving" class="editor-fields editor-layout">
           <legend class="editor-sr-only">作品信息</legend>
@@ -214,14 +221,12 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
           <div class="editor-content">
           <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
           <fieldset v-if="!sourceComment" ref="tagField" class="editor-tags" tabindex="-1" :aria-invalid="Boolean(tagValidation)" :aria-describedby="tagValidation ? 'editor-tags-hint editor-tags-error' : 'editor-tags-hint'">
-            <legend>作品标签（必选）<span>{{ draft.tags.length }}/3</span></legend>
+            <legend>作品标签（必选）<span>{{ selectedTagIds.length }}/3</span></legend>
             <p id="editor-tags-hint" class="form-note">选择 1–3 个标签，方便搜索和发现同类作品。</p>
             <p v-if="tagsLoading" class="form-note" role="status">正在加载标签…</p>
             <div v-else-if="tagsError" class="tag-error"><p class="form-note">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
-            <label v-if="tagOptions.length > 8" class="field"><span class="editor-sr-only">搜索标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
-            <div class="editor-tag-options publication-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag publication-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="tagsLoading || Boolean(tagsError) || !draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
-            <p v-if="!tagsLoading && !tagsError && !visibleTags.length" class="form-note">{{ tagQuery ? '没有匹配的标签，试试其他关键词。' : '当前分类暂无可用标签，请联系管理员添加；也可以先存为草稿。' }}</p>
-            <button v-if="!tagsLoading && !tagsError && !tagOptions.length" type="button" class="button subtle btn" @click="loadTags">重新加载标签</button>
+            <PublicationTagPicker v-else-if="tagOptions.length" v-model="selectedTagIds" :tags="tagOptions" :kind="draft.kind" checkboxes />
+            <template v-else-if="!tagsLoading && !tagsError"><p class="form-note">暂无可用标签，请联系管理员添加；也可以先存为草稿。</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></template>
             <p v-if="tagValidation" id="editor-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
           <details ref="extra" class="editor-extras publication-extras">
