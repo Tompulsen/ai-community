@@ -178,7 +178,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['PATCH', ['/api/admin/referrals/config']],
   ])
   register(handleLottery, [
-    ['GET', ['/api/lottery/status', '/api/lottery/public-records', '/api/lottery/records', '/api/admin/lottery/config', '/api/admin/lottery/account', '/api/admin/lottery/records']],
+    ['GET', ['/api/lottery/status', '/api/lottery/public-records', '/api/lottery/public-summary', '/api/lottery/records', '/api/admin/lottery/config', '/api/admin/lottery/account', '/api/admin/lottery/records']],
     ['POST', ['/api/lottery/draw', '/api/admin/lottery/chances', '/api/admin/lottery/retry']],
     ['PATCH', ['/api/admin/lottery/config']],
   ])

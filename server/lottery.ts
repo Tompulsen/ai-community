@@ -15,6 +15,7 @@ import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
 import { communityQuotaPerPoint } from './native-account/community-wallet.ts'
 import { lotteryDay } from '../shared/lottery-daily.ts'
 import type { PublicLotteryDraw, PublicLotteryPage } from '../shared/lottery-public.ts'
+import { lotteryPointUnits, lotteryPointsFromUnits, type PublicLotteryParticipant, type PublicLotterySummary } from '../shared/lottery-public.ts'
 
 interface LotteryConfigRow {
   id: string
@@ -166,7 +167,15 @@ export function packLotteryDraw(row: PublicDrawSource, username = '') {
       }
       if (prize.rewardKind === 'charity') return { ...prize, points: receipt?.points ?? null, expiresAt: receipt?.expiresAt ?? null }
       const quotaPerPoint = communityQuotaPerPoint()
-      return quotaPerPoint ? { ...prize, legacyPoints: receipt ? (receipt.quotaAdded / quotaPerPoint).toFixed(6) : null } : prize
+      if (!quotaPerPoint) return prize
+      let legacyPoints: string | null = null
+      if (receipt) {
+        // The wallet validator above checks this integer; convert quota before any floating-point division.
+        const quotaPerCny = BigInt(Number(process.env.COMMUNITY_WALLET_QUOTA_PER_CNY))
+        const units = (BigInt(receipt.quotaAdded) * 5_000n * 1_000_000n + quotaPerCny / 2n) / quotaPerCny
+        legacyPoints = `${units / 1_000_000n}.${(units % 1_000_000n).toString().padStart(6, '0')}`
+      }
+      return { ...prize, legacyPoints }
     }),
   }
 }
@@ -201,6 +210,70 @@ export async function readPublicLotteryRecords(db: Queryable, query: URLSearchPa
     }
   })
   return { items, nextCursor: rows.length > 20 ? rows[19]!.id : null, snapshot }
+}
+
+async function buildPublicLotterySummary(db: Database): Promise<PublicLotterySummary> {
+  type SummaryDraw = PublicDrawSource & { displayName: string | null; redacted: boolean | null }
+  const client = await db.connect()
+  const participants = new Map<string, { item: PublicLotteryParticipant; charity: bigint; permanent: bigint }>()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    let cursor: string | null = null
+    for (;;) {
+      const { rows }: { rows: SummaryDraw[] } = await client.query<SummaryDraw>(`
+        SELECT d.id,d."userId",d.prizes,d."createdAt",d."creditAttempts",d."creditSubject",
+          COALESCE(u.name,u.username) AS "displayName",(u."isDeleted" OR u."isSuspended") AS redacted
+        FROM community_lottery_draw d LEFT JOIN "user" u ON u.id=d."userId"
+        WHERE ($1::varchar IS NULL OR d.id > $1) ORDER BY d.id ASC LIMIT 500`, [cursor])
+      for (const row of rows) {
+        const key = row.userId ?? ''
+        let participant = participants.get(key)
+        if (!participant) {
+          const first = Array.from(row.displayName?.trim() ?? '')[0]
+          participant = { charity: 0n, permanent: 0n, item: {
+            id: row.id, participant: row.userId === null ? '已注销用户（合计）' : first && !row.redacted ? `${first}***` : '匿名用户',
+            drawCount: '0', totalPoints: '0', charityPoints: '0', permanentPoints: '0',
+            fulfilledCount: '0', pendingCount: '0', unverifiedCount: '0', emptyCount: '0',
+          } }
+          participants.set(key, participant)
+        }
+        const item = participant.item
+        item.drawCount = (BigInt(item.drawCount) + BigInt(row.prizes.length)).toString()
+        for (const prize of packLotteryDraw(row).prizes) {
+          const points = 'points' in prize ? prize.points : 'legacyPoints' in prize ? prize.legacyPoints : null
+          const status = prize.status === 'pending' ? 'pendingCount' : prize.status === 'empty' ? 'emptyCount'
+            : points == null ? 'unverifiedCount' : 'fulfilledCount'
+          item[status] = (BigInt(item[status]) + 1n).toString()
+          if (status === 'fulfilledCount' && points != null) {
+            participant[prize.rewardKind === 'charity' ? 'charity' : 'permanent'] += lotteryPointUnits(points)
+          }
+        }
+      }
+      if (rows.length < 500) break
+      cursor = rows[rows.length - 1]!.id
+    }
+    await client.query('COMMIT')
+    return { items: Array.from(participants.values(), ({ item, charity, permanent }) => ({ ...item,
+      charityPoints: lotteryPointsFromUnits(charity), permanentPoints: lotteryPointsFromUnits(permanent),
+      totalPoints: lotteryPointsFromUnits(charity + permanent),
+    })) }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally { client.release() }
+}
+
+// Cache only one short-lived aggregate per database; concurrent readers share its scan.
+const publicSummaries = new WeakMap<Database, Promise<PublicLotterySummary>>()
+export function invalidatePublicLotterySummary(db: Database) { publicSummaries.delete(db) }
+export function readPublicLotterySummary(db: Database): Promise<PublicLotterySummary> {
+  const existing = publicSummaries.get(db)
+  if (existing) return existing
+  const pending = buildPublicLotterySummary(db)
+  publicSummaries.set(db, pending)
+  const discard = () => { if (publicSummaries.get(db) === pending) publicSummaries.delete(db) }
+  void pending.then(() => { setTimeout(discard, 30_000).unref() }, discard)
+  return pending
 }
 
 export function packAdminLotteryDraw(row: LotteryDrawRow) {
@@ -337,7 +410,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
   }
 
   async function deliver(drawId: string) {
-    return transaction(db, async client => {
+    const receipt = await transaction(db, async client => {
       const { rows } = await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE id=$1 FOR UPDATE', [drawId])
       const row = rows[0]
       if (!row) fail('LOTTERY_NOT_FOUND', 404)
@@ -376,6 +449,8 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         [row.id, JSON.stringify(row.prizes), row.creditPending, row.creditAttempts, row.creditRetryAt])
       return packLotteryDraw(row)
     })
+    invalidatePublicLotterySummary(db)
+    return receipt
   }
 
   async function processPending() {
@@ -505,6 +580,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,0,NULL)`, [row.id, userId, requestId, JSON.stringify(prizes), row.createdAt, credit.issuer, subject, prizes.some(prize => prize.status === 'pending')])
       return packLotteryDraw(row)
     })
+    invalidatePublicLotterySummary(db)
     void processPending()
     return receipt
   }
@@ -641,6 +717,10 @@ export async function handleLottery(ctx: RequestContext): Promise<boolean> {
   if (!path.startsWith('/api/lottery/') && !path.startsWith('/api/admin/lottery/')) return false
   if (path === '/api/lottery/public-records' && ctx.req.method === 'GET') {
     ctx.json(200, await readPublicLotteryRecords(ctx.db, ctx.url.searchParams)); return true
+  }
+  if (path === '/api/lottery/public-summary' && ctx.req.method === 'GET') {
+    if (ctx.url.searchParams.size) fail('LOTTERY_INVALID')
+    ctx.json(200, await readPublicLotterySummary(ctx.db)); return true
   }
   const api = service(ctx)
   const method = ctx.req.method
