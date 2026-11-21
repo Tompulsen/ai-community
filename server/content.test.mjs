@@ -132,7 +132,7 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
-function publicationContext(body, { row = { ...workRow, status: 'pending', approvedNoteId: null }, existing, path = '/api/works', method = 'POST', admin = false } = {}) {
+function publicationContext(body, { row = { ...workRow, status: 'pending', approvedNoteId: null }, existing, path = '/api/works', method = 'POST', admin = false, mode = 'before', authorActive = true } = {}) {
   const statements = [];
   const tagOptions = [1, 2, 3].map(i => ({ id: `tag${i}`, name: `标签${i}`, category: 'resource' }));
   const ctx = context({ path, method, body: { kind: 'resource', title: row.title, body: row.text, idempotencyKey: 'once', ...body },
@@ -143,6 +143,8 @@ function publicationContext(body, { row = { ...workRow, status: 'pending', appro
       if (sql.includes('FROM community_tag')) return { rows: tagOptions.filter(tag => parameters[0].includes(sql.includes('WHERE name') ? tag.name : tag.id) && (!parameters[1] || parameters[1] === tag.category)) };
       if (sql.startsWith('INSERT INTO community_submission')) return { rows: [{ id: row.id }] };
       if (sql.startsWith('SELECT id FROM "user"')) return { rows: [{ id: 'owner1' }] };
+      if (sql.startsWith('UPDATE "user" SET "notesCount" =')) return { rows: authorActive ? [{ id: 'owner1' }] : [] };
+      if (sql.includes('FROM meta')) return { rows: [{ clientOptions: { communityPublicationMode: mode } }] };
       if (sql.startsWith('SELECT id FROM note')) return { rows: [{ id: 'note1' }] };
       return { rows: [], rowCount: 1 };
     } });
@@ -219,9 +221,35 @@ test('approving a public unreviewed work updates its existing note without publi
   assert.equal(review.ctx.result.status, 200);
   assert(review.statements.some(({ sql }) => sql.startsWith('UPDATE note')));
   assert(!review.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
+  assert(!review.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
   assert(review.statements.some(({ sql, parameters }) => sql.startsWith('UPDATE community_submission') && parameters.includes('approved')));
   const reject = publicationContext({ version: 2, action: 'reject', reason: 'Reason' }, { row, path: '/api/admin/submissions/work1/review', admin: true });
   await assert.rejects(handleContent(reject.ctx), error => error.statusCode === 409);
+});
+
+test('publication reward hook runs for first public works, not pending, drafts, retries or source comments', async () => {
+  for (const mode of ['before', 'after']) for (const status of ['draft', 'pending']) {
+    const f = publicationContext({ status, tagIds: ['tag1'] }, { mode });
+    await handleContent(f.ctx);
+    assert.equal(f.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')), mode === 'after' && status !== 'draft');
+  }
+  const approval = publicationContext({ version: 2, action: 'approve' }, { path: '/api/admin/submissions/work1/review', admin: true });
+  await handleContent(approval.ctx);
+  assert(approval.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
+  const retry = publicationContext({}, { mode: 'after', existing: { ...workRow, status: 'pending' } });
+  await handleContent(retry.ctx);
+  assert(!retry.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
+  const comment = publicationContext({ destination: 'source-comment', resultId: 'result1', model: 'model1', generation: { model: 'model1', prompt: 'Text', sourceWorkId: 'work1' } }, { mode: 'after' });
+  await handleContent(comment.ctx);
+  assert(!comment.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
+});
+
+test('author suspension while publication waits for the author lock rolls back before awarding', async () => {
+  const f = publicationContext({ tagIds: ['tag1'] }, { mode: 'after', authorActive: false });
+  await assert.rejects(handleContent(f.ctx), error => error.statusCode === 409);
+  assert(f.statements.some(({ sql }) => sql === 'ROLLBACK'));
+  assert(!f.statements.some(({ sql }) => sql.includes('SET "firstPublishedAt"')));
+  assert.match(f.statements.find(({ sql }) => sql.startsWith('UPDATE "user" SET "notesCount" =')).sql, /NOT "isSuspended".*RETURNING id/);
 });
 
 test('a full work page batches attachments, reference images and tags into four queries', async () => {

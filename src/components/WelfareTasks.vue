@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Gift, ImagePlus, Users } from '@lucide/vue'
-import { welfareTaskSchema, type WelfareTask } from '../../shared/welfare-tasks'
+import { welfareTaskSchema, type WelfareTask, type PublicationStatus } from '../../shared/welfare-tasks'
 import type { ReferralStatus } from '../../shared/referral'
 import { api, errorMessage, session } from '../state'
 import ReferralBenefits from './ReferralBenefits.vue'
@@ -15,6 +15,11 @@ const props = defineProps<{ lottery: {
 const route = useRoute(), router = useRouter()
 const items = ref<WelfareTask[]>([]), loading = ref(true), error = ref('')
 const invitation = ref<ReferralStatus | null>(null)
+const publication = ref<PublicationStatus | null>(null), currentTime = ref(Date.now())
+let clockOffset = 0, lastRefresh = 0, timer: ReturnType<typeof setInterval> | undefined
+const cooldown = computed(() => publication.value?.resetsAt ? Math.max(0, Math.ceil((Date.parse(publication.value.resetsAt) - currentTime.value) / 1000)) : 0)
+const cooldownText = computed(() => [Math.floor(cooldown.value / 3600), Math.floor(cooldown.value % 3600 / 60), cooldown.value % 60].map(value => String(value).padStart(2, '0')).join(':'))
+const resetLabel = computed(() => publication.value?.resetsAt ? new Date(publication.value.resetsAt).toLocaleString('zh-CN', { hour12: false }) : '')
 const inviteExpanded = ref(Boolean(route.query.aff || route.query.invite))
 const icons = { invite: Users, publish: ImagePlus, upcoming: Gift }
 const hasInvite = computed(() => items.value.some(item => item.id === 'invite'))
@@ -30,31 +35,44 @@ const publishRules = computed(() => {
   ].filter(item => item.rule.enabled)
 })
 let requestId = 0, controller: AbortController | undefined
-async function load() {
-  const id = ++requestId
+async function load(background = false) {
+  const id = ++requestId, owner = session.user?.id
+  const current = () => id === requestId && session.user?.id === owner
   controller?.abort(); controller = new AbortController()
-  loading.value = true; error.value = ''; items.value = []; invitation.value = null
+  lastRefresh = Date.now()
+  if (!background) { loading.value = true; error.value = ''; items.value = []; invitation.value = null; publication.value = null }
   try {
-    const data = await api<{ items: unknown }>('/api/welfare/tasks', { signal: controller.signal })
+    const data = await api<{ items: unknown; publication?: PublicationStatus | null }>('/api/welfare/tasks', { signal: controller.signal })
     const parsed = welfareTaskSchema.array().max(3).safeParse(data.items)
     if (!parsed.success || new Set(parsed.data.map(item => item.id)).size !== parsed.data.length) throw new Error('福利任务数据无效，请重试。')
-    if (id === requestId) items.value = parsed.data.filter(item => item.enabled)
-  } catch (cause) { if (id === requestId) error.value = errorMessage(cause) }
-  finally { if (id === requestId) loading.value = false }
+    if (current()) {
+      items.value = parsed.data.filter(item => item.enabled); publication.value = owner ? data.publication ?? null : null
+      clockOffset = publication.value ? Date.parse(publication.value.serverTime) - Date.now() : 0
+      currentTime.value = Date.now() + clockOffset; error.value = ''
+    }
+  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  finally { if (current()) loading.value = false }
 }
 function publish() {
   const target = { path: '/activities', query: { ...route.query, tab: 'tasks', publish: '1' } }
   void router.push(session.user ? target : { path: '/account', query: { returnTo: router.resolve(target).fullPath } })
 }
-onMounted(load)
-onBeforeUnmount(() => { requestId++; controller?.abort() })
+function tick() {
+  if (document.visibilityState === 'hidden') return
+  currentTime.value = Date.now() + clockOffset
+  if (Date.now() - lastRefresh >= 30000) void load(true)
+}
+function resume() { if (document.visibilityState !== 'hidden') void load(true) }
+watch(() => session.user?.id, () => { void load() }, { flush: 'sync' })
+onMounted(() => { void load(); timer = setInterval(tick, 1000); window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume) })
+onBeforeUnmount(() => { requestId++; controller?.abort(); clearInterval(timer); window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', resume) })
 defineExpose({ refresh: load })
 </script>
 
 <template>
   <div class="welfare-tasks">
     <p v-if="loading" class="task-feedback" role="status">正在读取福利任务…</p>
-    <div v-else-if="error" class="task-feedback" role="alert"><p>{{ error }}</p><button type="button" class="button btn" @click="load">重新读取任务</button></div>
+    <div v-else-if="error" class="task-feedback" role="alert"><p>{{ error }}</p><button type="button" class="button btn" @click="load()">重新读取任务</button></div>
     <p v-else-if="!items.length" class="task-feedback" role="status">暂无开放的福利任务，请稍后再来。</p>
     <template v-else>
       <ul class="welfare-task-list" aria-label="社区福利任务">
@@ -73,6 +91,23 @@ defineExpose({ refresh: load })
               <p v-else class="task-condition">展开查看当前邀请奖励、充值条件及邀请记录。</p>
             </template>
             <template v-else-if="item.id === 'publish'">
+              <div v-if="item.publicationReward" class="publication-task">
+                <template v-if="item.publicationReward.enabled">
+                  <p class="task-award">发布 <strong>{{ item.publicationReward.threshold }}</strong> 个作品，获得 <strong>{{ item.publicationReward.tickets }}</strong> 次抽奖机会</p>
+                  <p class="task-condition">达标自动到账，每轮限领一次；到账后满 24 小时重置，冷却期间发布不计入下一轮。</p>
+                  <template v-if="session.user && publication">
+                    <template v-if="cooldown > 0">
+                      <p class="publication-progress">本轮已到账 {{ publication.rewardTickets }} 次抽奖机会</p>
+                      <p class="task-condition">距离下一轮 {{ cooldownText }} · {{ resetLabel }} 可重新参与（本地时间）</p>
+                    </template>
+                    <p v-else class="publication-progress">本轮进度：{{ publication.resetsAt ? 0 : publication.count }} / {{ item.publicationReward.threshold }} 个作品</p>
+                  </template>
+                  <p v-else-if="!session.user" class="task-condition">登录后查看你的任务进度。</p>
+                  <p v-else class="task-condition">任务进度暂时无法读取，请刷新后重试。</p>
+                  <p class="task-condition">仅计首次公开的社区作品；待审核作品通过后计入。编辑、重新上架和历史作品不重复计数。抽奖仍需满足活动参与条件。</p>
+                </template>
+                <p v-else class="task-condition">发作品送抽奖次数已暂停，已到账的次数与冷却记录保留。</p>
+              </div>
               <p v-if="rulesLoading" class="task-condition" role="status">正在读取作品福利规则…</p>
               <p v-else-if="!lottery" class="task-condition">作品福利规则暂时无法读取，可刷新后重试。你仍可以发布作品。</p>
               <template v-else-if="publishRules.length">
@@ -82,7 +117,7 @@ defineExpose({ refresh: load })
                 </div>
                 <p class="task-condition">公开作品的有效互动按活动规则统计；发布本身不直接赠送积分。参与抽奖仍需满足活动页的条件。</p>
               </template>
-              <p v-else class="task-condition">作品获赞与关注福利暂未开放。你仍可以发布作品，分享创作。</p>
+              <p v-else-if="!item.publicationReward?.enabled" class="task-condition">作品获赞与关注福利暂未开放。你仍可以发布作品，分享创作。</p>
             </template>
             <p v-if="item.description" class="task-description">{{ item.description }}</p>
           </div>
@@ -107,6 +142,8 @@ defineExpose({ refresh: load })
 .task-content p + p, .task-rule + .task-rule, .task-rule + p { margin-top: var(--space-small); }
 .task-state { color: var(--muted); font-size: 12px; font-weight: 400; }
 .task-award strong { font-variant-numeric: tabular-nums; color: var(--blue); }
+.publication-task { margin-bottom: var(--space-control); }
+.publication-progress { font-weight: 600; font-variant-numeric: tabular-nums; }
 .task-condition, .task-description { color: var(--muted); }
 .task-action { min-height: var(--target-size); max-width: 240px; white-space: normal; overflow-wrap: anywhere; }
 .task-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }

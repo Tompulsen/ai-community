@@ -14,10 +14,10 @@ const welfarePath = '/api/admin/welfare/tasks'
 
 test('public welfare catalog defaults to three tasks and only exposes enabled display fields', async () => {
   const f = fixture({ user: null })
-  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: defaultWelfareTasks() })
+  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: defaultWelfareTasks(), publication: null })
   const items = defaultWelfareTasks(); items[1].enabled = false
   f.state.row.clientOptions.communityWelfareTasks = items
-  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: [items[0], items[2]] })
+  assert.deepEqual(await f.request('/api/welfare/tasks'), { items: [items[0], items[2]], publication: null })
   assert(!JSON.stringify(await f.request('/api/welfare/tasks')).includes('preserved'))
   f.state.row.clientOptions.communityWelfareTasks = { broken: true }
   assert.deepEqual((await f.request('/api/welfare/tasks')).items, defaultWelfareTasks())
@@ -76,6 +76,20 @@ test('welfare writes reject stale or missing account identity before touching st
   }
 })
 
+test('publication reward edits are versioned and old clients cannot erase a configured rule', async () => {
+  const f = fixture(), initial = await f.request(welfarePath)
+  initial.items[1].publicationReward = { enabled: true, threshold: 3, tickets: 5 }
+  const updated = await f.request(welfarePath, 'PATCH', initial)
+  assert.deepEqual(updated.items[1].publicationReward, { enabled: true, threshold: 3, tickets: 5 })
+  await assert.rejects(f.request(welfarePath, 'PATCH', initial), { statusCode: 409 })
+  delete updated.items[1].publicationReward
+  updated.items[1].title = '新标题'
+  const compatible = await f.request(welfarePath, 'PATCH', updated)
+  assert.deepEqual(compatible.items[1].publicationReward, { enabled: true, threshold: 3, tickets: 5 })
+  const invalid = structuredClone(compatible); invalid.items[1].publicationReward.tickets = 0
+  await assert.rejects(f.request(welfarePath, 'PATCH', invalid), { statusCode: 400 })
+})
+
 test('an audit failure rolls back task changes', async () => {
   const f = fixture({ failAudit: true }), previous = structuredClone(f.state.row)
   const initial = await f.request(welfarePath); initial.items[0].title = '邀请好友'
@@ -107,7 +121,8 @@ function fixture(options = {}) {
     else if (sql.includes('FROM meta')) {
       if (sql.includes('FOR UPDATE')) options.beforeLock?.(state.row)
       return { rows: [structuredClone(state.row)] }
-    } else if (sql.includes('FROM drive_file')) {
+    } else if (sql.includes('FROM community_lottery_account')) return { rows: [] }
+    else if (sql.includes('FROM drive_file')) {
       assert(sql.includes('AND "userId"=$2 AND "storedInternal" AND NOT "isLink" AND NOT "isSensitive"'))
       assert(sql.includes("AND type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif') FOR SHARE"))
       return { rows: files.filter(file => (sql.includes('WHERE id=$1') ? file.id === parameters[0]

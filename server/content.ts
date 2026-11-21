@@ -24,6 +24,8 @@ import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
+import { rewardPublication } from './publication-reward.ts';
+
 type SubmissionStatus = 'draft' | 'pending' | 'published' | 'approved' | 'rejected' | 'removed';
 type ReviewAction = 'approve' | 'reject' | 'remove';
 type ContentScope = 'public' | 'mine' | 'saved' | 'liked' | 'admin';
@@ -693,7 +695,8 @@ async function publish(ctx: RequestContext, db: Queryable, row: PublicationRow, 
   const authorContext: RequestContext = { ...ctx, user: { ...user(ctx), id: row.authorId } };
   const source = row.destination === 'source-comment' ? await sourceWork(authorContext, db, revision.generation?.sourceWorkId) : null;
   await db.query('INSERT INTO note (id, "userId", text, visibility, "localOnly", "fileIds", "attachedFileTypes","replyId","threadId","replyUserId") VALUES ($1,$2,$3,\'public\',true,$4,$5,$6,$6,$7)', [id, row.authorId, noteText(revision), revision.fileIds, attachments.map(file => file.type), source?.approvedNoteId ?? null, source?.authorId ?? null]);
-  await db.query('UPDATE "user" SET "notesCount" = "notesCount" + 1 WHERE id = $1', [row.authorId]);
+  const activeAuthor = await db.query('UPDATE "user" SET "notesCount" = "notesCount" + 1 WHERE id = $1 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL RETURNING id', [row.authorId]);
+  if (!activeAuthor.rows.length) fail(409, 'The author is unavailable');
   if (source) {
     await db.query('UPDATE note SET "repliesCount"="repliesCount"+1 WHERE id=$1', [source.approvedNoteId]);
     await db.query('UPDATE community_submission SET "sourceCommentId"=$2 WHERE id=$1', [row.id, id]);
@@ -712,6 +715,7 @@ async function publish(ctx: RequestContext, db: Queryable, row: PublicationRow, 
       notifications.push({ recipientId: original.authorId, type: 'comment', actorId: row.authorId, workId: original.id, commentId });
     }
   }
+  if (row.destination === 'community') await rewardPublication(db, row.id, row.authorId, () => newId(ctx));
   return id;
 }
 

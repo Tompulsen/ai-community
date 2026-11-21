@@ -14,6 +14,7 @@ import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
 import { feedWeightsSchema, readFeedWeights } from '../shared/recommendation.ts'
 import { readWelfareTasks, welfareTasksSchema } from '../shared/welfare-tasks.ts'
+import { readPublicationStatus } from './publication-reward.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 type Body = Record<string, unknown>
@@ -143,6 +144,8 @@ async function welfareTasks(ctx: RequestContext) {
   return transaction(ctx.db, async db => {
     const row = await meta(db, true)
     checkVersion(ctx.body, current(row), true)
+    // Older admin pages can still change presentation without resetting the reward rule.
+    for (const item of parsed.data) if (item.id === 'publish' && !item.publicationReward) item.publicationReward = current(row).find(task => task.id === 'publish')!.publicationReward
     await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb WHERE id=$1`, [row.id, JSON.stringify({ communityWelfareTasks: parsed.data })])
     await audit(ctx, db, 'updateCommunityWelfareTasks', { items: parsed.data })
     return { items: parsed.data, version: fingerprint(parsed.data) }
@@ -651,7 +654,10 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   if (await handleAdminInsights(ctx)) return true
   const path = ctx.url.pathname, method = ctx.req.method
   if (path === '/api/community/ads' && method === 'GET') { ctx.json(200, await readAds(ctx, true)); return true }
-  if (path === '/api/welfare/tasks' && method === 'GET') { const items = readWelfareTasks((await meta(ctx.db)).clientOptions?.communityWelfareTasks); ctx.json(200, { items: items.filter(item => item.enabled) }); return true }
+  if (path === '/api/welfare/tasks' && method === 'GET') {
+    const items = readWelfareTasks((await meta(ctx.db)).clientOptions?.communityWelfareTasks)
+    ctx.json(200, { items: items.filter(item => item.enabled), publication: await readPublicationStatus(ctx.db, ctx.user?.id) }); return true
+  }
   if (path === '/api/site' && method === 'GET') { const { brand, logoUrl } = await readSiteSettings(ctx.db, ctx.config.url); ctx.json(200, { brand, logoUrl }); return true }
   const tag = /^\/api\/admin\/tags\/([a-zA-Z0-9]{1,32})$/.exec(path), person = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
