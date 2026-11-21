@@ -19,6 +19,7 @@ export interface WorkFile {
 }
 
 export interface Work {
+  destination?: 'community' | 'source-comment'
   id: string
   authorId: string
   noteId?: string | null

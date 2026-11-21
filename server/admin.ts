@@ -12,6 +12,7 @@ import { legacyIdTime } from './content.ts'
 import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './settings.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
+import { feedWeightsSchema, readFeedWeights } from '../shared/recommendation.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 type Body = Record<string, unknown>
@@ -36,7 +37,7 @@ interface ReportRow {
   contentKey: string | null; contentSnapshot: string | null; moderationNote: string
   targetUsername?: string; reporterUsername?: string
 }
-const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityPullToRefresh', 'uploadLimits', 'communityModelTypes'] as const
+const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits', 'communityModelTypes'] as const
 const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
 const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
@@ -97,6 +98,7 @@ function publicConfig(options: Body) {
     communityViolationThreshold: Number.isInteger(options.communityViolationThreshold) && Number(options.communityViolationThreshold) >= 1 && Number(options.communityViolationThreshold) <= 1000 ? Number(options.communityViolationThreshold) : 3,
     communityFeedMode: options.communityFeedMode === 'latest' ? 'latest' : 'shuffle',
     communityFeedPoolSize: Number.isInteger(options.communityFeedPoolSize) && Number(options.communityFeedPoolSize) >= 20 && Number(options.communityFeedPoolSize) <= 1000 ? Number(options.communityFeedPoolSize) : 200,
+    communityFeedWeights: readFeedWeights(options.communityFeedWeights),
     communityPullToRefresh: options.communityPullToRefresh !== false, uploadLimits,
     communityModelTypes: readModelTypes(options.communityModelTypes),
   }
@@ -109,6 +111,11 @@ export function validateCommunityConfig(input: Body): Body {
     else if (key === 'communityFeedMode') next[key] = enumValue(value, ['shuffle', 'latest'])
     else if (key === 'communityViolationThreshold') next[key] = integer(value, 1, 1000)
     else if (key === 'communityFeedPoolSize') next[key] = integer(value, 20, 1000)
+    else if (key === 'communityFeedWeights') {
+      const parsed = feedWeightsSchema.safeParse(value)
+      if (!parsed.success) fail('推荐权重须为 0–100 的整数，三项合计为 100。')
+      next[key] = parsed.data
+    }
     else if (key === 'communityModelTypes') {
       const parsed = modelTypesSchema.safeParse(value)
       if (!parsed.success) fail('模型类型设置无效：最多 500 个模型，ID 为 1–200 字符且不能重复，类型请选择对话、生图或视频。')

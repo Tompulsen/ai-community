@@ -1,5 +1,7 @@
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { SessionUser, Work, WorkFile } from './data'
+import { readPreferences, rememberInterest } from './feed-preferences'
+import { saveDiscoveryCache } from './discovery-cache'
 
 export const session = reactive({
   user: null as SessionUser | null,
@@ -9,6 +11,9 @@ export const session = reactive({
   csrfToken: '',
   accountUrl: '',
 })
+watch(() => session.ready ? session.user?.id || 'guest' : null, owner => {
+  if (owner) { readPreferences(owner); saveDiscoveryCache(undefined) }
+}, { flush: 'sync' })
 export const sessionStatus = computed(() => session.user ? 'authenticated'
   : !session.ready || session.loading ? 'loading'
     : session.error ? 'error' : 'guest')
@@ -279,11 +284,14 @@ export async function toggleWork(work: Work, field: 'liked' | 'saved') {
   const key = `${field}:${work.id}`
   if (pendingActions.has(key)) return false
   pendingActions.add(key)
+  const owner = session.user.id
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(work.id)}/${field === 'liked' ? 'like' : 'save'}`, {
       method: 'POST', body: { active: !work[field] },
     })
+    if (owner !== session.user?.id) return false
     Object.assign(work, result.work)
+    if (work[field]) rememberInterest(owner, work, field)
     return true
   } catch (error) {
     notify(errorMessage(error))

@@ -10,9 +10,10 @@ import WorkMedia from '../components/WorkMedia.vue'
 import WorkCommentItem from '../components/WorkCommentItem.vue'
 import CommentAttachments from '../components/CommentAttachments.vue'
 import { useCommentComposer } from '../use-comment-composer'
+import { rememberInterest } from '../feed-preferences'
 const WorkRemixDialog = defineAsyncComponent(() => import('../components/WorkRemixDialog.vue'))
 const remixOpen = ref(false), remixButton = ref<HTMLButtonElement>()
-function openRemix() { mediaBrowser.value?.pause(); remixOpen.value = true }
+function openRemix() { if (work.value) rememberInterest(session.user?.id || 'guest', work.value, 'remix'); mediaBrowser.value?.pause(); remixOpen.value = true }
 async function closeRemix() { remixOpen.value = false; await nextTick(); remixButton.value?.focus() }
 
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
@@ -54,18 +55,30 @@ onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 const reposting = ref(false), reportDialog = ref<HTMLDialogElement>(), reportComment = ref<WorkComment | null>(null), reportReason = ref(''), reportError = ref(''), reporting = ref(false)
 const shareDialog = ref<HTMLDialogElement>(), recipients = ref<Creator[]>([]), recipient = ref(''), shareError = ref(''), sharing = ref(false), shareRequestId = ref(crypto.randomUUID())
 let controller: AbortController | undefined
+let interestTimer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
   controller?.abort()
+  clearInterval(interestTimer)
+  const owner = session.user?.id || 'guest'
   const active = new AbortController(); controller = active
   commentsDialog.value?.close(); relatedDialog.value?.close(); remixOpen.value = false
   loading.value = true; error.value = ''; work.value = null; comments.value = []; commentsCursor.value = null
   composer.reset(); promptExpanded.value = false
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(String(route.params.id))}`, { signal: active.signal })
-    if (active.signal.aborted) return
+    if (active.signal.aborted || owner !== (session.user?.id || 'guest')) return
     work.value = result.work
     if (['published', 'approved'].includes(result.work.status)) {
+      let foregroundSeconds = 0
+      const trackOpen = () => rememberInterest(owner, result.work, 'open')
+      if (document.visibilityState === 'visible') trackOpen()
+      interestTimer = setInterval(() => {
+        if (active.signal.aborted || owner !== (session.user?.id || 'guest')) { clearInterval(interestTimer); return }
+        if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+        trackOpen()
+        if (++foregroundSeconds >= 8) { rememberInterest(owner, result.work, 'dwell'); clearInterval(interestTimer) }
+      }, 1000)
       void loadComments(false, active.signal)
       void api<{ viewsCount?: number }>(`/api/works/${encodeURIComponent(result.work.id)}/view`, { method: 'POST', body: {}, signal: active.signal }).then(value => { if (work.value?.id === result.work.id && value.viewsCount !== undefined) work.value.viewsCount = value.viewsCount }).catch(() => {})
     }
@@ -73,7 +86,7 @@ async function load() {
   finally { if (!active.signal.aborted) loading.value = false }
 }
 watch(() => route.params.id, () => { void load() }, { immediate: true })
-onBeforeUnmount(() => { controller?.abort(); window.removeEventListener('beforeunload', beforeUnload); finishLeave(false) })
+onBeforeUnmount(() => { controller?.abort(); clearInterval(interestTimer); window.removeEventListener('beforeunload', beforeUnload); finishLeave(false) })
 async function copyPrompt() {
   try { await navigator.clipboard.writeText(work.value?.prompt || ''); notify('提示词已复制。') }
   catch { notify('复制失败，请选择文字复制。') }

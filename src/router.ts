@@ -3,6 +3,7 @@ import DiscoverView from './views/DiscoverView.vue'
 import MessagesView from './views/MessagesView.vue'
 import { session } from './state'
 import { loginReturnPath } from './login-navigation'
+import { saveDiscoveryCache } from './discovery-cache'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -28,6 +29,7 @@ export const router = createRouter({
 })
 
 router.beforeEach((to, from) => {
+  if (to.path !== '/discover' && !to.path.startsWith('/work/')) saveDiscoveryCache(undefined)
   if (to.path === '/account' && to.query.tab === 'following') {
     return { path: '/messages', query: { tab: 'activity' }, hash: '#follow-requests' }
   }

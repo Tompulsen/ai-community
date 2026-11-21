@@ -132,6 +132,86 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
+function publicationContext(body, { row = { ...workRow, status: 'pending', approvedNoteId: null }, existing, path = '/api/works', method = 'POST', admin = false } = {}) {
+  const statements = [];
+  const tagOptions = [1, 2, 3].map(i => ({ id: `tag${i}`, name: `标签${i}`, category: 'resource' }));
+  const ctx = context({ path, method, body: { kind: 'resource', title: row.title, body: row.text, idempotencyKey: 'once', ...body },
+    user: { id: 'owner1', isAdmin: admin }, query: async (sql, parameters = []) => {
+      statements.push({ sql, parameters });
+      if (sql.startsWith('SELECT * FROM community_submission')) return { rows: existing ? [existing] : [] };
+      if (sql.includes('FROM community_submission s')) return { rows: [row] };
+      if (sql.includes('FROM community_tag')) return { rows: tagOptions.filter(tag => parameters[0].includes(sql.includes('WHERE name') ? tag.name : tag.id) && (!parameters[1] || parameters[1] === tag.category)) };
+      if (sql.startsWith('INSERT INTO community_submission')) return { rows: [{ id: row.id }] };
+      if (sql.startsWith('SELECT id FROM "user"')) return { rows: [{ id: 'owner1' }] };
+      if (sql.startsWith('SELECT id FROM note')) return { rows: [{ id: 'note1' }] };
+      return { rows: [], rowCount: 1 };
+    } });
+  ctx.db.connect = async () => ({ query: ctx.db.query, release() {} });
+  ctx.newId = () => 'generated1';
+  return { ctx, statements };
+}
+
+test('new community publications require tags before any insert, including legacy API aliases', async () => {
+  for (const path of ['/api/works', '/api/community/submissions/create']) for (const selection of [{}, { tags: [] }, { tagIds: [] }]) {
+    const { ctx, statements } = publicationContext(selection, { path });
+    await assert.rejects(handleContent(ctx), error => error.statusCode === 400 && error.code === 'WORK_TAGS_REQUIRED');
+    assert(!statements.some(({ sql }) => sql.startsWith('INSERT')));
+    assert(statements.some(({ sql }) => sql === 'ROLLBACK'));
+  }
+});
+
+test('publication accepts one to three existing category tags by id or name', async () => {
+  for (const selection of [{ tagIds: ['tag1'] }, { tagIds: ['tag3', 'tag1', 'tag2'] }, { tags: ['标签1'] }]) {
+    const { ctx, statements } = publicationContext(selection);
+    await handleContent(ctx);
+    assert.equal(ctx.result.status, 201);
+    const saved = statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission'));
+    assert.deepEqual(saved.parameters[11], selection.tagIds?.toSorted() ?? ['tag1']);
+  }
+});
+
+test('required tags still reject excessive, duplicate, unavailable and wrong-category choices', async () => {
+  for (const selection of [{ tagIds: ['tag1', 'tag2', 'tag3', 'tag4'] }, { tagIds: ['tag1', 'tag1'] }, { tagIds: ['deleted'] }, { tags: ['不存在'] }, { kind: 'image', status: 'draft', tagIds: ['tag1'] }]) {
+    const { ctx, statements } = publicationContext(selection);
+    await assert.rejects(handleContent(ctx), error => error.statusCode === 400);
+    assert(!statements.some(({ sql }) => sql.startsWith('INSERT')));
+  }
+});
+
+test('empty-tag drafts can be saved but submission and removal of published tags are rejected', async () => {
+  const draft = publicationContext({ status: 'draft', body: '' });
+  await handleContent(draft.ctx);
+  assert.equal(draft.ctx.result.status, 201);
+  for (const status of ['draft', 'approved']) {
+    const { ctx, statements } = publicationContext({ version: 2, status: 'pending', tagIds: [] }, { method: 'PATCH', path: '/api/works/work1', row: { ...workRow, status, tagIds: ['tag1'] } });
+    await assert.rejects(handleContent(ctx), error => error.code === 'WORK_TAGS_REQUIRED');
+    assert(!statements.some(({ sql }) => sql.startsWith('UPDATE')));
+  }
+  const edit = publicationContext({ version: 2, status: 'draft', tagIds: [] }, { method: 'PATCH', path: '/api/works/work1', row: { ...workRow, status: 'draft', approvedNoteId: null } });
+  await handleContent(edit.ctx);
+  assert.equal(edit.ctx.result.status, 200);
+});
+
+test('legacy no-tag retries return the original submission and keep payload conflict protection', async () => {
+  const existing = { ...workRow, status: 'pending' };
+  const retry = publicationContext({}, { existing });
+  await handleContent(retry.ctx);
+  assert.equal(retry.ctx.result.status, 201);
+  assert(!retry.statements.some(({ sql }) => sql.startsWith('INSERT')));
+  const conflict = publicationContext({ title: 'Changed' }, { existing });
+  await assert.rejects(handleContent(conflict.ctx), error => error.statusCode === 409);
+});
+
+test('source comments and approval of legacy untagged works remain available', async () => {
+  const comment = publicationContext({ destination: 'source-comment', resultId: 'result1', model: 'model1', generation: { model: 'model1', prompt: 'Text', sourceWorkId: 'work1' } });
+  await handleContent(comment.ctx);
+  assert.equal(comment.ctx.result.status, 201);
+  const review = publicationContext({ version: 2, action: 'approve' }, { path: '/api/admin/submissions/work1/review', admin: true });
+  await handleContent(review.ctx);
+  assert.equal(review.ctx.result.status, 200);
+  assert(review.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
+});
+
 test('a full work page batches attachments, reference images and tags into four queries', async () => {
   const rows = Array.from({ length: 24 }, (_, index) => ({ ...workRow, id: `work${index}`, category: 'image',
     fileIds: [`file${index}`], tagIds: ['tag1'], generation: { prompt: 'Image', model: '', referenceFileIds: [`ref${index}`] } }));

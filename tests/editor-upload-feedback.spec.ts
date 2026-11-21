@@ -2,10 +2,12 @@ import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
+import { mockPublicationTags } from './helpers/publication-fixture'
 
 for (const width of [390, 1440]) for (const target of ['work'] as const) {
   test(`${target} previews a slow upload immediately and queues one save at ${width}px`, async ({ page }) => {
     const account = await mockUnifiedAccount(page, true)
+    await mockPublicationTags(page)
     const image = await readFile('public/assets/brand/octopus-community.jpg')
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -38,6 +40,7 @@ for (const width of [390, 1440]) for (const target of ['work'] as const) {
       await expect(preview).toHaveAttribute('src', /^blob:/)
       await expect(scope.getByRole('progressbar')).toBeVisible()
       await scope.getByLabel(target === 'work' ? '作品标题' : '社区昵称', { exact: true }).fill('上传时继续编辑')
+      await scope.getByRole('checkbox', { name: '创作', exact: true }).check()
       const save = scope.getByRole('button', { name: target === 'work' ? '提交审核' : '保存资料', exact: true })
       await expect(save).toBeEnabled()
       await save.click()
@@ -57,6 +60,7 @@ for (const width of [390, 1440]) for (const target of ['work'] as const) {
 for (const target of ['work'] as const) {
   test(`${target} keeps a failed upload preview and retries before saving`, async ({ page }) => {
     await mockUnifiedAccount(page, true)
+    await mockPublicationTags(page)
     const image = await readFile('public/assets/brand/octopus-community.jpg')
     let attempts = 0, writes = 0
     await page.route('**/api/uploads/limits', route => route.fulfill({ json: { imagesMb: 20, videosMb: 100, filesMb: 20 } }))
@@ -74,6 +78,7 @@ for (const target of ['work'] as const) {
     if (target === 'profile') await page.getByRole('button', { name: '确认裁切', exact: true }).click()
     await expect(scope.getByText('上传服务暂不可用', { exact: true })).toBeVisible()
     await scope.getByLabel(target === 'work' ? '作品标题' : '社区昵称', { exact: true }).fill('失败后保留')
+    await scope.getByRole('checkbox', { name: '创作', exact: true }).check()
     const save = scope.getByRole('button', { name: target === 'work' ? '提交审核' : '保存资料', exact: true })
     await save.click()
     await expect(scope.getByRole('alert')).toContainText('上传服务暂不可用')

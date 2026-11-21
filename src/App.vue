@@ -71,12 +71,12 @@ const mobileSearchOpen = ref(!!searchQuery.value)
 const mobileSearchButton = ref<HTMLButtonElement>()
 const mobileSearchForm = ref<HTMLFormElement>()
 const discoveryLinks = [
-  { kind: 'all', label: '发现' }, { kind: 'video', label: '视频' },
-  { kind: 'image', label: '图片' }, { kind: 'resource', label: 'skill', description: 'Skill 与资源' },
+  { sort: 'recommended', label: '发现' }, { sort: 'latest', label: '最新' },
+  { sort: 'featured', label: '热门' }, { sort: 'following', label: '关注' },
 ]
-function discoveryDestination(kind: string) {
+function discoveryDestination(sort: string) {
   const query = route.path === '/discover' ? route.query : {}
-  return { path: '/discover', query: { ...query, q: searchQuery.value.trim() || undefined, kind: kind === 'all' ? undefined : kind, tag: kind === 'all' ? undefined : query.tag } }
+  return { path: '/discover', query: { ...query, sort: sort === 'recommended' ? undefined : sort } }
 }
 async function toggleMobileSearch() {
   mobileSearchOpen.value = !mobileSearchOpen.value
@@ -277,8 +277,8 @@ function restoreMessageTrigger() {
             </div>
           </div>
         </CommunityTools>
-        <nav v-if="feedPage" class="mobile-discovery-nav" aria-label="作品分类">
-          <RouterLink v-for="link in discoveryLinks" :key="link.kind" :to="discoveryDestination(link.kind)" :aria-label="link.description || link.label" :title="link.description" :aria-current="route.path === '/discover' && (route.query.kind || 'all') === link.kind ? 'page' : undefined">{{ link.label }}</RouterLink>
+        <nav v-if="feedPage" class="mobile-discovery-nav" aria-label="作品浏览">
+          <RouterLink v-for="link in discoveryLinks" :key="link.sort" :to="discoveryDestination(link.sort)" :aria-current="(route.query.sort || 'recommended') === link.sort ? 'page' : undefined">{{ link.label }}</RouterLink>
         </nav>
         <component v-else :is="profilePage || workPage ? 'strong' : 'h1'" class="mobile-page-title">{{ mobilePageTitle }}</component>
         <div class="mobile-header-actions"><button v-if="!accountSettings" ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>

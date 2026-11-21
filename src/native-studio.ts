@@ -866,6 +866,7 @@ async function preparePublication(task: CreationTask, title: string, destination
   if (destination === 'source-comment' && (task.kind === 'video' || !task.sourceWorkId || !task.model)) throw new Error('图片或文本同款作品才能发送到源作品评论区。')
   const previous = task.publications?.[destination]
   if (previous?.work) return { work: previous.work }
+  if (!previous && destination === 'community' && !details?.tagIds.length) throw new Error('请至少选择 1 个作品标签后再发布。')
   if (!previous && details && destination === 'community') {
     if (details.tagIds.length > 3 || new Set(details.tagIds).size !== details.tagIds.length) throw new Error('最多选择 3 个作品标签。')
     if (details.prompt.length > 100000 || details.license.length > 200 || details.sourceUrl.length > 2000) throw new Error('作品信息超过字数上限。')
@@ -927,8 +928,9 @@ async function preparePublication(task: CreationTask, title: string, destination
   } })
   } catch (cause) {
     checkOwner()
-    // A first-attempt validation rejection has no saved work; uncertain retries keep their original payload.
-    if (!previous && publication.details && (cause as { status?: number }).status === 400) {
+    // Missing-tag rejection confirms no saved work, including retries from an older client.
+    const failure = cause as { status?: number; code?: string }
+    if (failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
       delete task.publications[destination]
       task.publicationReferences = []
       await persist()

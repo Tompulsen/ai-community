@@ -45,11 +45,14 @@ for (const width of [320, 390, 800, 1440]) {
     expect(preview!.width).toBeGreaterThan(150)
     expect(preview!.height).toBeGreaterThan(150)
     await form.getByLabel('作品标题', { exact: true }).fill('简单投稿')
-    await form.getByText('补充信息（选填）', { exact: true }).click()
+    await expect(form.locator('.editor-extras')).not.toHaveAttribute('open')
+    await form.getByRole('button', { name: '提交审核', exact: true }).click()
+    await expect(form.getByRole('alert')).toHaveText('请至少选择 1 个作品标签后再发布。')
+    expect(state.writes).toHaveLength(0)
+    await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).toBeFocused()
     for (const name of ['摄影', '插画', '角色']) await form.getByRole('checkbox', { name, exact: true }).check()
     await expect(form.getByRole('checkbox', { name: '海报', exact: true })).toBeDisabled()
     await expect(form.getByRole('button', { name: '提交审核', exact: true })).toBeInViewport()
-    await form.getByText('补充信息（选填）', { exact: true }).click()
     expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
     expect((await new AxeBuilder({ page }).include('.editor-dialog[open]').analyze()).violations).toEqual([])
     await page.screenshot({ path: test.info().outputPath(`simple-editor-${width}.png`) })
@@ -74,6 +77,7 @@ test('media layout retains file ordering and public reference selection on mobil
   await expect(form.locator('.editor-extras')).toHaveAttribute('open')
   await expect(form.getByRole('region', { name: '参考图', exact: true }).getByRole('button', { name: '移至作品文件' })).toBeVisible()
   await form.getByLabel('作品标题', { exact: true }).fill('保留作品与参考图')
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: '提交审核', exact: true }).click()
   expect(state.writes[0]).toMatchObject({ fileIds: ['file2'], referenceFileIds: ['file1'] })
 })
@@ -86,23 +90,28 @@ for (const [type, kind, name] of [['video/mp4', 'video', 'video.mp4'], ['applica
     await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name, mimeType: type, buffer: Buffer.from('fixture') })
     await expect(form.getByText(`${kind === 'video' ? '视频' : '资源'} · 1/16`, { exact: true })).toBeVisible()
     await form.getByLabel('作品标题', { exact: true }).fill('自动识别作品')
+    await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
     await form.getByRole('button', { name: '提交审核', exact: true }).click()
-    expect(state.writes[0]).toMatchObject({ kind, tags: [], status: 'pending' })
+    expect(state.writes[0]).toMatchObject({ kind, tags: ['摄影'], status: 'pending' })
   })
 }
 
-test('text content submits without files or tags and title-only drafts stay available', async ({ page }) => {
+test('text publication requires a tag while title-only drafts remain available', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/discover?publish=1')
   await editor(page).getByLabel('作品标题', { exact: true }).fill('待补充的草稿')
   await editor(page).getByRole('button', { name: '存为草稿', exact: true }).click()
-  expect(state.writes[0]).toMatchObject({ status: 'draft', fileIds: [] })
+  expect(state.writes[0]).toMatchObject({ status: 'draft', fileIds: [], tags: [] })
   await page.goto('/discover?publish=1')
   await editor(page).getByRole('button', { name: '填写内容', exact: true }).click()
   await editor(page).getByLabel('资源内容', { exact: true }).fill('可以独立发布的资源正文')
   await editor(page).getByLabel('作品标题', { exact: true }).fill('纯文字资源')
   await editor(page).getByRole('button', { name: '提交审核', exact: true }).click()
-  expect(state.writes[1]).toMatchObject({ kind: 'resource', body: '可以独立发布的资源正文', tags: [], fileIds: [], status: 'pending' })
+  await expect(editor(page).getByRole('alert')).toContainText('至少选择 1 个作品标签')
+  expect(state.writes).toHaveLength(1)
+  await editor(page).getByRole('checkbox', { name: '摄影', exact: true }).check()
+  await editor(page).getByRole('button', { name: '提交审核', exact: true }).click()
+  expect(state.writes[1]).toMatchObject({ kind: 'resource', body: '可以独立发布的资源正文', tags: ['摄影'], fileIds: [], status: 'pending' })
 })
 
 test('invalid optional URL reopens its section and preserves entered information', async ({ page }) => {
@@ -117,6 +126,35 @@ test('invalid optional URL reopens its section and preserves entered information
   await expect(form.getByLabel('来源链接')).toBeVisible()
   await expect(form.getByLabel('来源链接')).toBeFocused()
   await expect(form.getByLabel('作品标题')).toHaveValue('保留标题')
+})
+
+for (const unavailable of ['empty', 'error', 'loading']) test(`editor blocks ${unavailable} tags, retains a draft and recovers on reload`, async ({ page }) => {
+  const state = await fixture(page)
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/tags**', async route => {
+    if (unavailable === 'loading') await gate
+    await route.fulfill(unavailable === 'error' ? { status: 503, json: { message: '暂不可用' } } : { json: { items: [] } })
+  })
+  await page.goto('/discover?publish=1')
+  const form = editor(page)
+  await form.getByRole('button', { name: '填写内容', exact: true }).click()
+  await form.getByLabel('作品标题', { exact: true }).fill('待选标签')
+  await form.getByLabel('资源内容', { exact: true }).fill('保留正文')
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.locator('#editor-tags-error')).toBeVisible()
+  expect(state.writes).toHaveLength(0)
+  await form.getByRole('button', { name: '存为草稿', exact: true }).click()
+  expect(state.writes[0]).toMatchObject({ status: 'draft', title: '待选标签', body: '保留正文', tags: [] })
+  release()
+  await page.route('**/api/tags**', route => route.fulfill({ json: { items: [{ id: 'fixed', name: '教程', category: 'resource' }] } }))
+  await page.goto('/discover?publish=1')
+  await form.getByRole('button', { name: '填写内容', exact: true }).click()
+  await form.getByLabel('作品标题', { exact: true }).fill('选择标签后发布')
+  await form.getByLabel('资源内容', { exact: true }).fill('正文')
+  await form.getByRole('checkbox', { name: '教程', exact: true }).check()
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  expect(state.writes[1]).toMatchObject({ status: 'pending', tags: ['教程'] })
 })
 
 test('a saved empty draft reloads tag choices and accepts a video or text content', async ({ page }) => {
@@ -135,13 +173,37 @@ test('a saved empty draft reloads tag choices and accepts a video or text conten
   await expect(form.getByLabel('作品标题')).toBeEnabled()
   await form.getByText('补充信息（选填）', { exact: true }).click()
   await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).toBeVisible()
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: '填写内容', exact: true }).click()
+  await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).not.toBeChecked()
   await form.getByLabel('资源内容').fill('保留的文字')
   await form.getByRole('button', { name: '使用文件投稿', exact: true }).click()
   await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'result.mp4', mimeType: 'video/mp4', buffer: Buffer.from('fixture') })
   await expect(form.getByText('视频 · 1/16', { exact: true })).toBeVisible()
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: '保存修改', exact: true }).click()
   expect(state.writes[0]).toMatchObject({ kind: 'video', body: '保留的文字', version: 4, status: 'pending', fileIds: ['file1'] })
+})
+
+test('pending source comments can be edited without choosing community tags', async ({ page }) => {
+  const state = await fixture(page)
+  const work = { id: 'pendingcomment', destination: 'source-comment', title: '同款评论', authorId: state.state.user.id,
+    author: '测试创作者', avatar: '测', version: 1, kind: 'resource', status: 'pending', files: [], fileIds: [], tags: [],
+    body: '我的同款文字', prompt: '原提示词', model: '原模型', owned: true, likes: 0, date: '2026-11-21', cover: '' }
+  await page.route('**/api/library**', route => route.fulfill({ json: { items: [work], nextCursor: null } }))
+  await page.route('**/api/works/pendingcomment', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { work } })
+    const body = route.request().postDataJSON(); state.writes.push(body)
+    return route.fulfill({ json: { work: { ...work, ...body } } })
+  })
+  await page.goto('/library')
+  await page.getByRole('button', { name: '编辑作品：同款评论', exact: true }).click()
+  const form = page.getByRole('dialog', { name: '编辑作品', exact: true })
+  await expect(form.getByLabel('作品标题')).toBeEnabled()
+  await expect(form.locator('.editor-tags')).toHaveCount(0)
+  await form.getByLabel('资源内容').fill('修改后的同款文字')
+  await form.getByRole('button', { name: '保存修改', exact: true }).click()
+  expect(state.writes[0]).toMatchObject({ body: '修改后的同款文字', tags: [], version: 1 })
 })
 
 test('adding a document to an existing image preserves its type and collapsed metadata', async ({ page }) => {

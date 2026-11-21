@@ -36,15 +36,21 @@ delivery now includes the frontend and an independent community backend.
   and bottom navigation on smaller screens. Logo, navigation, existing tools,
   and submission occupy the rail; settings stay at its bottom.
   Personal works and saved works remain reachable through existing tools.
-- Home begins with segmented recommendations, latest and following modes, a
+- Home begins with discovery, latest, popular and following modes, plus a
   horizontal type/tag rail. Desktop community pages have a persistent full-width top search,
   with messages, welfare, account balance and the account menu at the right.
   Welfare is adjacent to points; announcements remain inside the message center.
   Below 1000px a compact
-  header contains the menu, discovery/video/image/Skill links and expandable search.
-  Skill retains the incumbent resource category (text, code and Skills). Mobile
-  category links live in the 52px header; browse modes and content tags move into
-  the search/filter overlay without shifting the feed. Mobile bottom navigation is
+  header contains the menu, 发现 / 最新 / 热门 / 关注 links and expandable search.
+  The same four browse modes are available on desktop. Types (including the resource
+  category for text, code and Skills) and content tags remain in the mobile filter
+  overlay without shifting the feed. Discovery learns matching tag preferences in
+  a bounded browser profile; latest favors new works, popular uses existing interaction
+  heat, and following retains its author relationship filter. Refresh replaces some
+  first-page works whenever eligible alternatives exist, with stable pagination
+  within each batch and preserved list/scroll when returning from work details.
+  Only tag aggregates and limited recent IDs are retained locally, with expiry and
+  a clear action; no server-side recommendation history is created. Mobile bottom navigation is
   首页 / 创作 / ＋ / 消息 / 我, with a 58px bar plus the device safe area.
   The mobile menu contains identity, full point balance, submission, logout and
   existing tools; unread counts and the in-place message center remain available.

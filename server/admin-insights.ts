@@ -39,7 +39,7 @@ function logSummary(type: string, value: unknown) {
     const labels: Record<string, string> = { brand: '社区名称', logoUrl: '品牌标识', registrationOpen: '注册规则',
       communityPublicationMode: '审核规则', publicationMode: '审核规则', communityAutoBanEnabled: '自动封禁', autoBan: '自动封禁',
       communityViolationThreshold: '违规阈值', violationThreshold: '违规阈值', communityFeedMode: '推荐方式', communityFeedPoolSize: '推荐范围',
-      communityPullToRefresh: '下拉刷新', uploadLimits: '上传限制', defaultModels: '默认模型', ads: '广告位' }
+      communityFeedWeights: '推荐权重', communityPullToRefresh: '下拉刷新', uploadLimits: '上传限制', defaultModels: '默认模型', ads: '广告位' }
     add('变更项', [...new Set(Object.keys(object(info.config ?? info.settings)).flatMap(key => labels[key] ? [labels[key]] : []))].join('、'))
   } else if (type === 'updateCommunityAds') target = { label: '广告位设置', to: '/admin?tab=ads' }
   else if (type === 'createAnnouncement' || type === 'deleteAnnouncement') target = { label: '公告管理', to: '/admin?tab=announcements' }

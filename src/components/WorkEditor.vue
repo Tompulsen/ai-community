@@ -16,6 +16,8 @@ const router = useRouter()
 const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: [] as string[], model: '', sourceUrl: '', license: '' })
 const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), referenceInput = ref<HTMLInputElement>()
 const writing = ref(false), autoKind = ref(true), tagQuery = ref(''), tagOptions = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
+const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
+const sourceComment = ref(false)
 const visibleTags = computed(() => [...new Set([...draft.tags, ...tagOptions.value])].filter(name => name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
 let tagLoadId = 0
 const files = ref<UploadFile[]>([])
@@ -35,10 +37,11 @@ const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
 function fill(work?: Work | null) {
   uploads.reset()
+  sourceComment.value = work?.destination === 'source-comment'
   Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
   writing.value = work?.kind === 'resource'
   autoKind.value = !work || work.status === 'draft' && work.kind !== 'resource' && !work.generation?.parameters && !(work.files || []).some(file => file.type.startsWith(`${work.kind}/`))
-  tagQuery.value = ''; tagsError.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
+  tagQuery.value = ''; tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
   if (extra.value) extra.value.open = false
   files.value = [...(work?.files || [])]
   references.value = [...(work?.referenceFiles || [])]
@@ -55,7 +58,7 @@ watch(() => [props.open, props.work?.id] as const, async ([open]) => {
   loading.value = true
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.work.id)}`)
-    if (current === loadId) { fill(result.work); void loadTags() }
+    if (current === loadId) { fill(result.work); if (!sourceComment.value) void loadTags() }
   } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
   finally { if (current === loadId) loading.value = false }
 }, { immediate: true })
@@ -71,8 +74,9 @@ async function loadTags() {
   } catch (cause) { if (current === tagLoadId) tagsError.value = errorMessage(cause) }
   finally { if (current === tagLoadId) tagsLoading.value = false }
 }
-watch([() => props.open, () => draft.kind], ([open]) => { if (open) void loadTags() }, { immediate: true })
+watch([() => props.open, () => draft.kind], ([open]) => { if (open && !sourceComment.value) void loadTags() }, { immediate: true })
 function toggleTag(name: string) {
+  tagValidation.value = ''
   if (draft.tags.includes(name)) draft.tags = draft.tags.filter(value => value !== name)
   else if (draft.tags.length < 3) draft.tags.push(name)
 }
@@ -80,7 +84,7 @@ function inferKind() {
   if (!autoKind.value) return
   const kind: WorkKind = writing.value || files.value.some(file => !/^(image|video)\//.test(file.type)) ? 'resource'
     : files.value.some(file => file.type.startsWith('video/')) ? 'video' : 'image'
-  if (draft.kind !== kind) { draft.kind = kind; draft.tags = [] }
+  if (draft.kind !== kind) { draft.kind = kind; draft.tags = []; tagQuery.value = ''; tagValidation.value = '' }
 }
 watch(() => files.value.map(file => file.type), inferKind)
 function writeContent() { writing.value = true; inferKind() }
@@ -154,6 +158,19 @@ async function save(status: 'draft' | 'pending') {
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
   if (status !== 'draft' && draft.kind === 'resource' && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
+  tagValidation.value = ''
+  if (status !== 'draft' && !sourceComment.value) {
+    tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
+      : tagsError.value ? '请重新加载标签并选择后再发布。'
+        : !draft.tags.length ? '请至少选择 1 个作品标签后再发布。'
+          : draft.tags.length > 3 || draft.tags.some(name => !tagOptions.value.includes(name)) ? '请选择 1–3 个当前分类的有效标签。' : ''
+    if (tagValidation.value) {
+      error.value = ''; await nextTick()
+      const target = tagField.value?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)') ?? tagField.value
+      target?.focus()
+      return
+    }
+  }
   saving.value = true; error.value = ''
   const current = loadId, owner = session.user?.id
   try {
@@ -196,17 +213,21 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
           </section>
           <div class="editor-content">
           <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
+          <fieldset v-if="!sourceComment" ref="tagField" class="editor-tags" tabindex="-1" :aria-invalid="Boolean(tagValidation)" :aria-describedby="tagValidation ? 'editor-tags-hint editor-tags-error' : 'editor-tags-hint'">
+            <legend>作品标签（必选）<span>{{ draft.tags.length }}/3</span></legend>
+            <p id="editor-tags-hint" class="form-note">选择 1–3 个标签，方便搜索和发现同类作品。</p>
+            <p v-if="tagsLoading" class="form-note" role="status">正在加载标签…</p>
+            <div v-else-if="tagsError" class="tag-error"><p class="form-note">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
+            <label v-if="tagOptions.length > 8" class="field"><span class="editor-sr-only">搜索标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
+            <div class="editor-tag-options publication-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag publication-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="tagsLoading || Boolean(tagsError) || !draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
+            <p v-if="!tagsLoading && !tagsError && !visibleTags.length" class="form-note">{{ tagQuery ? '没有匹配的标签，试试其他关键词。' : '当前分类暂无可用标签，请联系管理员添加；也可以先存为草稿。' }}</p>
+            <button v-if="!tagsLoading && !tagsError && !tagOptions.length" type="button" class="button subtle btn" @click="loadTags">重新加载标签</button>
+            <p v-if="tagValidation" id="editor-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
+          </fieldset>
           <details ref="extra" class="editor-extras publication-extras">
             <summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="draft.prompt.trim() || references.length">{{ draft.prompt.trim() ? '含提示词' : '' }}{{ draft.prompt.trim() && references.length ? ' · ' : '' }}{{ references.length ? `${references.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary>
             <div class="editor-fields">
               <label v-if="draft.kind !== 'resource'" class="field"><span>作品简介</span><textarea v-model="draft.body" class="control" rows="2" maxlength="20000" /></label>
-              <fieldset class="editor-tags"><legend>标签 <span>{{ draft.tags.length }}/3</span></legend>
-                <p v-if="tagsLoading" class="form-note" role="status">正在加载标签…</p>
-                <div v-else-if="tagsError" class="tag-error"><p class="form-note">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
-                <label v-if="tagOptions.length > 8" class="field"><span class="editor-sr-only">搜索标签</span><input v-model="tagQuery" class="control" type="search" placeholder="搜索标签" /></label>
-                <div class="editor-tag-options publication-tag-options"><label v-for="name in visibleTags" :key="name" class="editor-tag publication-tag" :class="{ selected: draft.tags.includes(name) }"><input type="checkbox" :checked="draft.tags.includes(name)" :disabled="!draft.tags.includes(name) && draft.tags.length >= 3" @change="toggleTag(name)" /><span>{{ name }}</span></label></div>
-                <p v-if="!tagsLoading && !tagsError && !visibleTags.length" class="form-note">{{ tagQuery ? '没有匹配的标签' : '暂无可用标签' }}</p>
-              </fieldset>
               <label class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="3" maxlength="100000" /></label>
               <div class="editor-columns"><label class="field"><span>模型</span><input v-model="draft.model" class="control" maxlength="100" /></label><label class="field"><span>来源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" /></label></div>
               <label class="field"><span>授权许可</span><input v-model="draft.license" class="control" maxlength="200" /></label>
@@ -256,6 +277,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
 .editor-tags legend { margin-bottom: 8px; font-size: 14px; }
 .editor-tags legend span { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.editor-tag-options { margin-top: 12px; }
 .tag-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .editor-feedback:has(> p) { padding: 8px 24px; }
 .editor-dialog .dialog-footer { flex: none; }

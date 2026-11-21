@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { X, SearchX, RefreshCw, LayoutGrid, SlidersHorizontal, ChevronLeft, ChevronRight } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
 import BentoGrid from '../components/BentoGrid.vue'
@@ -8,8 +8,11 @@ import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import DiscoveryComposer from '../components/DiscoveryComposer.vue'
 import GooeyInput from '../components/GooeyInput.vue'
-import { api, errorMessage, loadSession, queryString, session } from '../state'
+import { api, errorMessage, loadSession, notify, session } from '../state'
 import { kindLabels, type Work } from '../data'
+import { clearFeedPreferences, feedSnapshot, readPreferences, rememberBatch, rememberExposure, rememberSearchTags } from '../feed-preferences'
+import { discoveryCache, saveDiscoveryCache } from '../discovery-cache'
+import type { FeedRequest } from '../../shared/recommendation'
 
 const mobile = inject<Ref<boolean>>('mobile-community', ref(false))
 const filtersOpen = ref(false)
@@ -18,54 +21,100 @@ const router = useRouter()
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const kind = ref(typeof route.query.kind === 'string' ? route.query.kind : 'all')
 const tag = ref(typeof route.query.tag === 'string' ? route.query.tag : '')
-const order = ref(typeof route.query.sort === 'string' ? route.query.sort : 'featured')
-const hasConditions = computed(() => !!query.value || !!tag.value || kind.value !== 'all' || order.value !== 'featured')
-const browseModes = [{ value: 'featured', label: '推荐' }, { value: 'latest', label: '最新' }, { value: 'following', label: '关注' }]
+const readOrder = (value: unknown): FeedRequest['sort'] => value === 'latest' || value === 'following' || value === 'featured' ? value : 'recommended'
+const order = ref(readOrder(route.query.sort))
+const hasConditions = computed(() => !!query.value || !!tag.value || kind.value !== 'all' || order.value !== 'recommended')
+const browseModes = [{ value: 'recommended', label: '发现' }, { value: 'latest', label: '最新' }, { value: 'featured', label: '热门' }, { value: 'following', label: '关注' }] as const
 const tagRail = ref<HTMLElement>()
 const canScrollBack = ref(false), canScrollForward = ref(false)
 let railObserver: ResizeObserver | undefined
 const works = ref<Work[]>([])
-const tags = ref<{ id: string; name: string }[]>([])
+const tags = ref<{ id: string; name: string; category: Work['kind'] }[]>([])
 const loading = ref(false)
 const error = ref('')
 const nextCursor = ref<string | null>(null)
+const feedStatus = ref(''), preferenceDialog = ref<HTMLDialogElement>()
+const grid = ref<InstanceType<typeof BentoGrid>>()
+let exposureObserver: IntersectionObserver | undefined
+let batch: FeedRequest | undefined
+const owner = () => session.user?.id || 'guest'
+const cached = discoveryCache
+const restored = cached && cached.owner === owner() && cached.path === route.fullPath && cached.position === window.history.state?.position && Date.now() - cached.at < 30 * 60000
+if (restored) { works.value = cached.works; nextCursor.value = cached.cursor; batch = cached.batch }
+saveDiscoveryCache(undefined)
 let controller: AbortController | undefined
 let searchTimer: ReturnType<typeof setTimeout>
 
-async function load(append = false) {
+async function load(append = false, learnSearch = false) {
   controller?.abort()
   const active = new AbortController()
   controller = active
   loading.value = true
   error.value = ''
+  const expectedOwner = owner()
+  const expectedConditions = conditionsKey()
   try {
+    await loadSession()
+    if (active.signal.aborted || expectedOwner !== owner()) return
     if (order.value === 'following') {
-      await loadSession()
-      if (active.signal.aborted) return
       if (!session.user) { works.value = []; nextCursor.value = null; return }
     }
-    const result = await api<{ items: Work[]; nextCursor: string | null }>(`/api/works${queryString({
-      kind: kind.value === 'all' ? undefined : kind.value, query: query.value.trim(), tag: tag.value, sort: order.value,
-      cursor: append ? nextCursor.value || undefined : undefined,
-    })}`, { signal: active.signal })
-    works.value = append ? [...works.value, ...result.items] : result.items
+    const request: FeedRequest = append && batch ? { ...batch, cursor: nextCursor.value || undefined } : {
+      kind: kind.value as FeedRequest['kind'], query: query.value.trim(), tag: tag.value, sort: order.value,
+      seed: crypto.randomUUID(), ...feedSnapshot(expectedOwner),
+    }
+    const result = await api<{ items: Work[]; nextCursor: string | null; replaced?: boolean | null }>('/api/works/feed', {
+      method: 'POST', body: request, signal: active.signal,
+    })
+    if (active.signal.aborted || expectedOwner !== owner() || controller !== active || expectedConditions !== conditionsKey()) return
+    const existing = new Set(append ? works.value.map(work => work.id) : [])
+    const added = result.items.filter(work => !existing.has(work.id) && !!existing.add(work.id))
+    works.value = append ? [...works.value, ...added] : added
     nextCursor.value = result.nextCursor
+    if (!append) {
+      batch = request
+      rememberBatch(expectedOwner, added.map(work => work.id))
+      if (learnSearch && added.length && (request.query || request.tag)) void tagsRequest.then(items => {
+        if (!active.signal.aborted && expectedOwner === owner() && expectedConditions === conditionsKey()) rememberSearchTags(expectedOwner, request.query, request.tag, items, request.kind)
+      })
+      feedStatus.value = result.replaced === false
+        ? '当前条件下暂无更多可替换的作品，可以尝试其他标签。' : result.replaced ? '已为你换入其他作品。' : ''
+    }
+    await nextTick(); observeCards()
   } catch (cause) {
     if (!active.signal.aborted) error.value = errorMessage(cause)
   } finally { if (!active.signal.aborted) loading.value = false }
 }
+function conditionsKey() { return JSON.stringify([query.value.trim(), kind.value, tag.value, order.value]) }
+let lastConditions = conditionsKey()
 watch([query, kind, tag, order], () => {
   clearTimeout(searchTimer)
+  if (conditionsKey() !== lastConditions) controller?.abort()
   searchTimer = setTimeout(() => {
-    void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined, sort: order.value === 'featured' ? undefined : order.value } })
-    void load()
+    const key = conditionsKey()
+    if (key === lastConditions && !controller?.signal.aborted) return
+    lastConditions = key
+    void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined, sort: order.value === 'recommended' ? undefined : order.value } })
+    void load(false, true)
   }, 180)
 })
 watch(() => route.query, value => {
   query.value = typeof value.q === 'string' ? value.q : ''
   kind.value = typeof value.kind === 'string' ? value.kind : 'all'
   tag.value = typeof value.tag === 'string' ? value.tag : ''
-  order.value = typeof value.sort === 'string' ? value.sort : 'featured'
+  order.value = readOrder(value.sort)
+})
+function observeCards() {
+  exposureObserver?.disconnect()
+  for (const card of grid.value?.$el?.querySelectorAll('[data-work-id]') ?? []) exposureObserver?.observe(card)
+}
+function clearPreferences() {
+  clearFeedPreferences(owner()); preferenceDialog.value?.close(); notify('已清除当前浏览器的推荐偏好。')
+  void load()
+}
+onBeforeRouteLeave(to => {
+  if (batch && !loading.value && batch.kind === kind.value && batch.query === query.value.trim() && batch.tag === tag.value && batch.sort === order.value && to.path.startsWith('/work/')) saveDiscoveryCache({ owner: owner(), path: route.fullPath,
+    position: window.history.state?.position, works: works.value, cursor: nextCursor.value, batch, scroll: window.scrollY, at: Date.now() })
 })
 function updateRail() {
   const rail = tagRail.value
@@ -81,13 +130,21 @@ onMounted(() => {
   railObserver = new ResizeObserver(updateRail)
   if (tagRail.value) railObserver.observe(tagRail.value)
   updateRail()
+  exposureObserver = new IntersectionObserver(entries => {
+    if (document.visibilityState !== 'visible') return
+    const ids = entries.filter(entry => entry.isIntersecting && entry.intersectionRatio >= .5).map(entry => (entry.target as HTMLElement).dataset.workId!).filter(Boolean)
+    if (ids.length) rememberExposure(owner(), ids)
+  }, { threshold: .5 })
+  observeCards()
+  if (restored) void nextTick(() => window.scrollTo({ top: cached.scroll }))
 })
+const cleanupTimer = setInterval(() => readPreferences(owner()), 60000)
 watch(tags, async () => { await nextTick(); updateRail() })
-onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort(); railObserver?.disconnect() })
-void load()
-void api<{ items: typeof tags.value }>('/api/tags').then(result => { tags.value = result.items }).catch(() => {})
+onBeforeUnmount(() => { clearTimeout(searchTimer); clearInterval(cleanupTimer); controller?.abort(); railObserver?.disconnect(); exposureObserver?.disconnect() })
+const tagsRequest = api<{ items: typeof tags.value }>('/api/tags').then(result => { tags.value = result.items; return result.items }).catch(() => [])
+if (!restored) void load(false, Boolean(query.value || tag.value))
 function clearConditions() { query.value = ''; tag.value = '' }
-function reset() { clearConditions(); kind.value = 'all'; order.value = 'featured' }
+function reset() { clearConditions(); kind.value = 'all'; order.value = 'recommended' }
 </script>
 
 <template>
@@ -98,7 +155,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
     <div v-if="mobile" class="mobile-filter-actions"><button type="button" class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" />刷新</button><button type="button" class="button btn subtle" :aria-expanded="filtersOpen" aria-controls="discovery-filters" @click="filtersOpen = !filtersOpen"><SlidersHorizontal :size="16" />筛选<span v-if="hasConditions" class="filter-dot" /></button><button type="button" class="text-link" :disabled="!hasConditions" @click="reset">清除条件</button></div>
     <div v-show="!mobile || filtersOpen" id="discovery-filters" class="discovery-toolbar">
       <form v-if="!mobile" class="discovery-search header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="load()"><GooeyInput v-model="query" persistent placeholder="搜索作品、提示词或创作者" /></form>
-      <div class="browse-modes" role="group" aria-label="浏览方式">
+      <div v-if="!mobile" class="browse-modes" role="group" aria-label="浏览方式">
         <button v-for="mode in browseModes" :key="mode.value" class="browse-mode" :class="{ active: order === mode.value }" :aria-pressed="order === mode.value" @click="order = mode.value">{{ mode.label }}</button>
       </div>
       <div class="tag-navigation">
@@ -119,19 +176,27 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'feature
       </div>
     </div>
     </Teleport>
+    <div class="feed-actions"><p class="form-note" role="status" aria-live="polite">{{ feedStatus }}</p><button class="text-link" @click="preferenceDialog?.showModal()">推荐偏好</button><button class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" aria-hidden="true" />{{ loading ? '加载中…' : order === 'recommended' ? '换一批' : '刷新' }}</button></div>
     <div v-if="query || tag || (!mobile && kind !== 'all')" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <ContentSkeleton v-if="loading && !works.length" layout="works" label="正在加载作品…" />
-    <BentoGrid v-else-if="works.length" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
+    <BentoGrid v-else-if="works.length" ref="grid" class="discover-grid"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :eager="index < 3" /></BentoGrid>
     <div v-else-if="!error && order === 'following' && session.ready && !session.user" class="empty-state"><SearchX :size="32" /><h2>登录后查看关注的作品</h2><RouterLink to="/account" class="button primary btn">登录</RouterLink></div>
     <div v-else-if="!error" class="empty-state discovery-empty"><SearchX v-if="hasConditions" :size="32" /><LayoutGrid v-else :size="32" aria-hidden="true" /><h2>{{ order === 'following' ? '还没有关注的作品' : hasConditions ? '没有找到相关作品' : '这里还没有作品' }}</h2><p>{{ hasConditions ? '试试其他关键词，或恢复默认浏览。' : '第一份已公开的作品会出现在这里。' }}</p><button v-if="hasConditions" class="button btn subtle" @click="reset">恢复默认</button></div>
     <div v-if="nextCursor" class="feed-end"><button class="button btn" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多' }}</button></div>
+    <p v-else-if="works.length && !loading" class="feed-end form-note">本轮作品已看完，可刷新换一批。</p>
     <CommunityAds :slots="['communityAd1', 'communityAd2', 'communityAd3', 'communityAd4']" />
+    <dialog ref="preferenceDialog" class="dialog feed-preferences-dialog" aria-labelledby="feed-preferences-title"><h2 id="feed-preferences-title">推荐偏好</h2><p>根据近期浏览作品的标签推荐内容。偏好仅保留在当前浏览器，不同步到其他设备。</p><p>最多保留 20 个标签偏好，7 天无新互动后失效；近期作品记录最多 120 条，24 小时后失效。搜索词不加入推荐记录。</p><div class="dialog-actions"><button class="button btn subtle" @click="preferenceDialog?.close()">关闭</button><button class="button btn primary" @click="clearPreferences">清除推荐偏好</button></div></dialog>
   </div>
 </template>
 
 <style scoped>
 .discover-heading-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.feed-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+.feed-actions > p { flex: 1; min-width: 0; margin: 0; }
+.feed-actions > button { min-height: 44px; }
+.feed-preferences-dialog { width: min(440px, calc(100vw - 32px)); padding: 24px; }
+.feed-preferences-dialog p { color: var(--muted); line-height: 1.7; }
 .discover-page { max-width: none; padding-top: 16px; }
 .discovery-toolbar { display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(220px, 320px); align-items: center; gap: 24px; padding-bottom: 0; margin-bottom: 24px; }
 .discovery-search { grid-column: 3; grid-row: 1; position: relative; width: 100%; height: 44px; min-width: 0; }

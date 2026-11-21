@@ -134,6 +134,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     for (const [methods, urls] of groups) for (const method of Array.isArray(methods) ? methods : [methods]) for (const url of urls) {
       app.route({
         method, url, preHandler: authenticateRequest,
+        ...(url === '/api/works/feed' ? { bodyLimit: 24576 } : {}),
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
           const ctx = contexts.get(request)
@@ -185,7 +186,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     [['GET', 'HEAD'], ['/legacy-files/:id', '/files/:key']],
     ['GET', ['/api/works', '/api/community/works', '/api/library', '/api/admin/submissions', '/api/tags', '/api/creators', '/api/announcements',
       '/api/users/:id', '/api/users/:id/followers', '/api/users/:id/following', '/api/uploads/limits', '/api/uploads/:id', '/api/works/:id/comments/:commentId/files']],
-    ['POST', ['/api/uploads', '/api/works', '/api/admin/submissions/:id/review', '/api/works/:id/like', '/api/works/:id/save', '/api/users/:id/follow',
+    ['POST', ['/api/uploads', '/api/works', '/api/works/feed', '/api/admin/submissions/:id/review', '/api/works/:id/like', '/api/works/:id/save', '/api/users/:id/follow',
       '/api/works/:id/view', '/api/works/:id/repost', '/api/works/:id/report', '/api/reports', '/api/works/:id/comments/:commentId/like']],
     [['GET', 'POST'], ['/api/works/:id/comments']],
     ['DELETE', ['/api/works/:id/comments/:commentId']],

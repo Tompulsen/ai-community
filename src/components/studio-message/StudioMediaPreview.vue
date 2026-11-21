@@ -178,7 +178,7 @@ async function run(kind: 'download' | 'copy') {
 </template>
 
 <style scoped>
-.media-lightbox { position: fixed; inset: 0; box-sizing: border-box; width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; overflow: hidden; background: rgb(0 0 0 / 94%); color: #fff; overscroll-behavior: contain; color-scheme: dark; }
+.media-lightbox { position: fixed; inset: 0; box-sizing: border-box; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; overflow: hidden; background: rgb(0 0 0 / 94%); color: #fff; overscroll-behavior: contain; color-scheme: dark; }
 .media-lightbox::backdrop { background: rgb(0 0 0 / 30%); }
 .lightbox-stage { position: absolute; inset: 64px 16px 84px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .lightbox-content { position: relative; display: flex; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }

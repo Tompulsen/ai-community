@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { readFile, mkdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
@@ -8,7 +8,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
   const submissions: any[] = [], uploads: string[] = []
-  let reject = 0, failTags = false, removedTag = ''
+  let reject = 0, rejectCode = '', failTags = false, removedTag = ''
   const category = kind === 'text' ? 'resource' : kind
   await page.route('**/api/tags**', route => failTags ? route.fulfill({ status: 503, json: { message: '标签暂时不可用' } }) : route.fulfill({ json: { items: ['动物', '摄影', '插画', '风景'].map((name, i) => ({ id: `tag${i}`, name, category })).filter(tag => tag.id !== removedTag) } }))
   await page.route('**/api/creation/**', route => {
@@ -24,7 +24,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
   })
   await page.route('**/api/works', route => {
     const body = route.request().postDataJSON(); submissions.push(body)
-    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { message: status === 400 ? '所选标签已失效' : '连接中断，请重试' } }) }
+    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { code: rejectCode, message: status === 400 ? '所选标签已失效' : '连接中断，请重试' } }) }
     return route.fulfill({ json: { work: { id: 'published1', title: body.title, status: 'pending' } } })
   })
   await page.addInitScript(({ kind, legacy }) => {
@@ -51,7 +51,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
       await component.value.open((await readTaskSnapshot('17')).find(task => task.id === 'publication-case'))
     })
   }
-  return { submissions, uploads, rejectNext: (status: number) => { reject = status }, failTags: (value: boolean) => { failTags = value }, removeTag: (id: string) => { removedTag = id } }
+  return { submissions, uploads, rejectNext: (status: number, code = '') => { reject = status; rejectCode = code }, failTags: (value: boolean) => { failTags = value }, removeTag: (id: string) => { removedTag = id } }
 }
 const dialog = (page: Page) => page.getByRole('dialog', { name: '发布作品', exact: true })
 async function choose(page: Page) {
@@ -67,7 +67,8 @@ for (const width of [320, 390, 1440]) test(`publication fields submit selected t
   const form = dialog(page)
   await expect(form.getByRole('textbox', { name: '作品简介', exact: true })).toBeHidden()
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
-  await expect(form.getByRole('alert')).toContainText('请先确认作品发布权')
+  await expect(form.getByRole('alert')).toContainText('至少选择 1 个作品标签')
+  await expect(form.getByRole('button', { name: '# 动物', exact: true })).toBeFocused()
   expect(state.uploads).toHaveLength(0)
   await choose(page)
   await expect(form.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue('')
@@ -81,9 +82,8 @@ for (const width of [320, 390, 1440]) test(`publication fields submit selected t
   await form.getByRole('checkbox', { name: '第一张参考图', exact: true }).uncheck()
   await form.getByRole('textbox', { name: '来源链接', exact: true }).fill('https://example.com/source')
   await form.getByRole('textbox', { name: '授权说明', exact: true }).fill('署名分享')
-  await mkdir('../publish-form-20261118', { recursive: true })
   await form.evaluate(el => { el.scrollTop = 0 })
-  await page.screenshot({ path: `../publish-form-20261118/form-${width}.png` })
+  await page.screenshot({ path: test.info().outputPath(`form-${width}.png`) })
   expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
   expect((await new AxeBuilder({ page }).include('.studio-publish-dialog[open]').analyze()).violations).toEqual([])
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
@@ -172,13 +172,70 @@ test('tag loading failure preserves input and supports a retry before publicatio
   await expect(dialog(page).getByRole('status')).toHaveText('作品已提交审核。')
 })
 
-test('publication can omit tags while disclosing included generation information', async ({ page }) => {
+for (const width of [320, 390, 1440]) test(`publication requires a visible tag before uploading at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
   const state = await fixture(page)
   const form = dialog(page)
   await expect(form.locator('.publish-extras')).not.toHaveAttribute('open')
+  expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.studio-publish-dialog[open]').analyze()).violations).toEqual([])
+  await form.evaluate(element => { element.scrollTop = 0 })
+  await page.screenshot({ path: test.info().outputPath(`required-tags-studio-${width}.png`) })
   await expect(form.locator('.publish-extras summary')).toContainText('含提示词 · 2 张公开参考图')
   await form.getByRole('checkbox', { name: '我确认拥有作品发布权，并已核实所填写的来源与授权说明。', exact: true }).check()
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('至少选择 1 个作品标签')
+  expect(state.submissions).toHaveLength(0)
+  expect(state.uploads).toHaveLength(0)
+  await form.getByRole('button', { name: '# 动物', exact: true }).click()
+  await expect(form.getByRole('alert')).toHaveCount(0)
+  await expect(form.locator('.publish-extras')).not.toHaveAttribute('open')
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
-  expect(state.submissions[0]).toMatchObject({ tagIds: [], prompt: '原始小猫提示词', generation: { referenceFileIds: ['upload2', 'upload3'] } })
+  expect(state.submissions[0]).toMatchObject({ tagIds: ['tag0'], prompt: '原始小猫提示词', generation: { referenceFileIds: ['upload2', 'upload3'] } })
+})
+
+test('a legacy unaccepted publication unlocks only after confirmed missing-tag rejection', async ({ page }) => {
+  const state = await fixture(page, 'image', true)
+  const form = dialog(page)
+  state.rejectNext(400, 'WORK_TAGS_REQUIRED')
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toBeEnabled()
+  await expect(form.getByRole('button', { name: '# 动物', exact: true })).toBeEnabled()
+  await choose(page)
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  expect(state.submissions[1].tagIds).toEqual(['tag0'])
+  expect(state.submissions[1].idempotencyKey).toBe(state.submissions[0].idempotencyKey)
+  expect(state.submissions[1].fileIds).toEqual(state.submissions[0].fileIds)
+})
+
+test('an ordinary validation error on a legacy retry keeps its content frozen', async ({ page }) => {
+  const state = await fixture(page, 'image', true)
+  const form = dialog(page)
+  state.rejectNext(400)
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('已失效')
+  await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toBeDisabled()
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  expect(state.submissions[1]).toEqual(state.submissions[0])
+})
+
+test('an empty studio tag list blocks publication and supports reloading available tags', async ({ page }) => {
+  const state = await fixture(page)
+  await page.getByRole('button', { name: '关闭发布作品', exact: true }).click()
+  const empty = (route: any) => route.fulfill({ json: { items: [] } })
+  await page.route('**/api/tags**', empty)
+  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  const form = dialog(page)
+  await expect(form.getByText('当前分类暂无可用标签，请联系管理员添加后再发布。')).toBeVisible()
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.locator('#publish-tags-error')).toContainText('至少选择 1 个作品标签')
+  expect(state.submissions).toHaveLength(0); expect(state.uploads).toHaveLength(0)
+  await page.unroute('**/api/tags**', empty)
+  await form.getByRole('button', { name: '重新加载标签', exact: true }).click()
+  await choose(page)
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
 })

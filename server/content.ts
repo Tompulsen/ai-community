@@ -20,6 +20,7 @@ import { privateMetadataFreeVideo } from './video-privacy.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
+import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -120,6 +121,7 @@ interface CommunityOptions {
   communityAutoBanEnabled?: unknown;
   communityFeedMode?: unknown;
   communityFeedPoolSize?: unknown;
+  communityFeedWeights?: unknown;
 }
 interface CommentRow extends IdRow {
   userId: string;
@@ -234,8 +236,8 @@ async function inform(ctx: RequestContext, input: Parameters<typeof notifyUser>[
   try { await notifyUser(ctx, input); } catch { /* The committed interaction remains valid when notification delivery fails. */ }
 }
 
-function fail(status: number, message: string): never {
-  throw Object.assign(new Error(message), { status, statusCode: status });
+function fail(status: number, message: string, code?: string): never {
+  throw Object.assign(new Error(message), { status, statusCode: status, code });
 }
 
 function identifier(value: unknown): string {
@@ -306,19 +308,27 @@ interface WorkCursor {
   seed?: string;
   boundary?: string;
   anchor?: number;
+  rank?: string;
+  context?: string;
+  remaining?: string[];
 }
 
 export function readWorkCursor(value: string | null): WorkCursor | null {
   if (!value) return null;
   if (idPattern.test(value)) return { v: 1, id: value, order: 'latest' };
-  if (value.length > 1600 || !/^[A-Za-z0-9_-]+$/.test(value)) fail(400, 'Invalid page cursor');
+  if (value.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(value)) fail(400, 'Invalid page cursor');
   let parsed: unknown;
   try { parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); } catch { fail(400, 'Invalid page cursor'); }
   if (!isRecord(parsed) || parsed.v !== 1 || typeof parsed.id !== 'string' || !idPattern.test(parsed.id) ||
-    !['latest', 'featured', 'popular', 'random'].includes(String(parsed.order))) fail(400, 'Invalid page cursor');
+    !['latest', 'featured', 'popular', 'random', 'discovery', 'hot'].includes(String(parsed.order))) fail(400, 'Invalid page cursor');
   if (parsed.heat !== undefined && (typeof parsed.heat !== 'number' || !Number.isSafeInteger(parsed.heat) || parsed.heat < 0)) fail(400, 'Invalid page cursor');
   if (parsed.order === 'random' && (typeof parsed.seed !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(parsed.seed) ||
     typeof parsed.boundary !== 'string' || !idPattern.test(parsed.boundary) || typeof parsed.anchor !== 'number' ||
+    !Number.isSafeInteger(parsed.anchor) || parsed.anchor <= 0 || parsed.anchor > Date.now() + 60000)) fail(400, 'Invalid page cursor');
+  if (parsed.order === 'hot' && (!Array.isArray(parsed.remaining) || parsed.remaining.length > 120 || parsed.remaining.some(id => typeof id !== 'string' || !idPattern.test(id)))) fail(400, 'Invalid page cursor');
+  if (parsed.order === 'discovery' && (typeof parsed.rank !== 'string' || !/^[01]{2}(?:[0-9]{6}|[0-9]{16})[a-f0-9]{32}$/.test(parsed.rank))) fail(400, 'Invalid page cursor');
+  if (['discovery', 'hot'].includes(String(parsed.order)) && (
+    typeof parsed.context !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.context) || typeof parsed.anchor !== 'number' ||
     !Number.isSafeInteger(parsed.anchor) || parsed.anchor <= 0 || parsed.anchor > Date.now() + 60000)) fail(400, 'Invalid page cursor');
   return parsed as unknown as WorkCursor;
 }
@@ -327,7 +337,7 @@ function writeWorkCursor(cursor: WorkCursor): string {
   return cursor.order === 'latest' ? cursor.id : Buffer.from(JSON.stringify(cursor)).toString('base64url');
 }
 
-async function contentPage(ctx: RequestContext, { scope = 'public', workId, authorId, limit = 100 }: { scope?: ContentScope; workId?: string; authorId?: string; limit?: number } = {}): Promise<{ rows: CommunityRow[]; nextCursor: string | null }> {
+async function contentPage(ctx: RequestContext, { scope = 'public', workId, authorId, limit = 100, feed }: { scope?: ContentScope; workId?: string; authorId?: string; limit?: number; feed?: FeedRequest } = {}): Promise<{ rows: CommunityRow[]; nextCursor: string | null }> {
   const params: (string | number | null)[] = [viewer(ctx)];
   const conditions = [scope === 'mine' ? 's."authorId" = $1' : scope === 'admin' ? 'TRUE' : `(${visibilitySql(ctx)})`];
   const add = (value: string | number | null) => { params.push(value); return `$${params.length}`; };
@@ -337,7 +347,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   if (!['latest', 'recommended', 'featured', 'popular', 'following'].includes(requestedOrder)) fail(400, 'Invalid work order');
   const options = requestedOrder === 'recommended' && !authorId ? await settings(ctx.db) : {};
   const cursor = workId ? null : readWorkCursor(ctx.url.searchParams.get('cursor'));
-  const order = requestedOrder === 'recommended' && !authorId && (cursor?.order === 'random' || !cursor && options.communityFeedMode !== 'latest')
+  const order = feed ? requestedOrder === 'featured' ? 'hot' : 'discovery' : requestedOrder === 'recommended' && !authorId && (cursor?.order === 'random' || !cursor && options.communityFeedMode !== 'latest')
     ? 'random' : ['popular', 'featured'].includes(requestedOrder) ? requestedOrder : 'latest';
   if (cursor && cursor.order !== order) fail(400, 'Page cursor does not match this work order');
   const likesFor = (note: string) => `(SELECT COUNT(*) FROM note_reaction cr WHERE cr."noteId"=${note} AND cr.reaction IN ('${heart}','${heart}\ufe0f'))`;
@@ -408,7 +418,43 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   const from = `FROM community_submission s JOIN "user" u ON u.id=s."authorId" LEFT JOIN note n ON n.id=s."approvedNoteId"`;
   let rank = "''";
   let seed: string | undefined, boundary: string | undefined, anchor: number | undefined;
-  if (order === 'random') {
+  let contextHash: string | undefined;
+  if ((order === 'discovery' || order === 'hot') && feed) {
+    anchor = cursor?.anchor ?? Date.now();
+    const weights = options.communityFeedMode === 'latest' ? { interest: 0, fresh: 100, explore: 0 } : readFeedWeights(options.communityFeedWeights);
+    contextHash = createHash('sha256').update(JSON.stringify({ ...feed, cursor: undefined, viewer: viewer(ctx), weights })).digest('hex');
+    if (cursor && cursor.context !== contextHash) fail(409, '推荐条件已更新，请刷新作品后继续。', 'FEED_CHANGED');
+    conditions.push(`s."submittedAt"<=to_timestamp(${add(anchor)}/1000.0)`);
+    // Prior-batch exclusion precedes ranking across ALL eligible works, including the older tail.
+    if (order === 'hot' && cursor) {
+      const ids = add(cursor.remaining!.join(','));
+      rank = `array_position(string_to_array(${ids},','),s.id::text)`;
+      conditions.push(`s.id=ANY(string_to_array(${ids},','))`);
+    } else {
+      const previous = add(JSON.stringify(feed.previous)), seen = add(JSON.stringify(feed.seen));
+      const prefix = `(CASE WHEN ${previous}::jsonb ? s.id THEN '1' ELSE '0' END)||(CASE WHEN ${seen}::jsonb ? s.id THEN '1' ELSE '0' END)`;
+      if (order === 'hot') rank = prefix;
+      else {
+        const hash = `md5(s.id||${add(feed.seed)})`;
+        if (feed.sort === 'latest' || feed.sort === 'following' || options.communityFeedMode === 'latest') {
+          rank = `((${prefix})||lpad((9999999999999999-extract(epoch FROM s."submittedAt")*1000)::bigint::text,16,'0')||${hash}) COLLATE "C"`;
+        } else {
+          const interests = add(JSON.stringify(feed.interests)), maximum = add(Math.max(1, ...feed.interests.map(item => item.score)));
+          const affinity = `COALESCE((SELECT MAX((p->>'score')::numeric) FROM jsonb_array_elements(${interests}::jsonb) p
+            WHERE p->>'kind'=s.category AND EXISTS (SELECT 1 FROM community_tag t WHERE t.id=ANY(s."tagIds")
+              AND NOT t."isDeleted" AND t.category=s.category AND t.name=p->>'name')),0)/${maximum}`;
+          const fresh = `exp(-GREATEST(0,${add(anchor)}/1000.0-extract(epoch FROM s."submittedAt"))/604800.0)`;
+          const exploration = `(('x'||substr(${hash},1,8))::bit(32)::bigint/4294967295.0)`;
+          const score = `LEAST(100000,GREATEST(0,FLOOR(1000*(${add(weights.interest)}*(${affinity})+${add(weights.fresh)}*${fresh}+${add(weights.explore)}*${exploration}))))::int`;
+          rank = `((${prefix})||lpad((100000-(${score}))::text,6,'0')||${hash}) COLLATE "C"`;
+        }
+      }
+    }
+    if (order === 'discovery' && cursor) {
+      const rankParam = add(cursor.rank!), idParam = add(cursor.id);
+      conditions.push(`((${rank})>${rankParam} OR ((${rank})=${rankParam} AND s.id<${idParam}))`);
+    }
+  } else if (order === 'random') {
     seed = cursor?.seed ?? ctx.url.searchParams.get('feedSeed') ?? randomBytes(16).toString('hex');
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(seed)) fail(400, 'Invalid feed seed');
     anchor = cursor?.anchor ?? Date.now();
@@ -433,7 +479,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
       conditions.push(`(${heat},s.id)<(${add(cursor.heat)},${add(cursor.id)})`);
     } else conditions.push(`s.id<${add(cursor.id)}`);
   }
-  params.push(pageLimit + 1);
+  params.push(order === 'hot' && !cursor ? 120 : pageLimit + 1);
   const result = await ctx.db.query<CommunityRow>(`
     SELECT s.*, u.name AS "authorName", u.username AS "authorUsername", u."avatarId" AS "authorAvatarId",
       n.visibility AS "noteVisibility", n."repliesCount", n."renoteCount" AS "renotesCount",${heat} AS heat,${rank} AS rank,
@@ -444,12 +490,14 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
       EXISTS (SELECT 1 FROM note r WHERE r."renoteId"=n.id AND r."userId"=$1 AND r.text IS NULL AND r."replyId" IS NULL AND cardinality(r."fileIds")=0) AS renoted
     ${from}
     WHERE ${conditions.join(' AND ')}
-    ORDER BY ${order === 'random' ? 'rank ASC,' : order === 'featured' || order === 'popular' ? 'heat DESC,' : ''} s.id DESC LIMIT $${params.length}`, params);
+    ORDER BY ${order === 'hot' ? `rank ASC,${cursor ? '' : 'heat DESC,'}` : order === 'random' || order === 'discovery' ? 'rank ASC,' : order === 'featured' || order === 'popular' ? 'heat DESC,' : ''} s.id DESC LIMIT $${params.length}`, params);
   const rows = result.rows.slice(0, pageLimit);
   const last = rows.at(-1);
   const nextCursor = result.rows.length > pageLimit && last ? writeWorkCursor({
     v: 1, id: last.id, order, ...(order === 'featured' || order === 'popular' ? { heat: Number(last.heat ?? 0) } : {}),
     ...(order === 'random' ? { seed, boundary, anchor } : {}),
+    ...(order === 'discovery' ? { rank: String(last.rank), anchor, context: contextHash } : {}),
+    ...(order === 'hot' ? { remaining: cursor ? cursor.remaining!.slice(cursor.remaining!.indexOf(last.id) + 1) : result.rows.slice(pageLimit).map(row => row.id), anchor, context: contextHash } : {}),
   }) : null;
   const identities = await readPublicIdentities(ctx, rows.map(row => row.authorId));
   return { rows: rows.map(row => {
@@ -717,6 +765,7 @@ async function createWork(ctx: RequestContext): Promise<true> {
       if (existing.destination !== destination || (destination === 'source-comment' ? existing.generation?.sourceWorkId !== revision.generation?.sourceWorkId : existing.payloadHash !== payloadHash && !samePayload(existing, revision) || (existing.status === 'draft') !== draft)) fail(409, 'This request key was used for different content');
       return existing.id;
     }
+    if (!draft && destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     const mode = (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     const workId = newId(ctx);
     const inserted = await db.query<IdRow>(`INSERT INTO community_submission
@@ -755,6 +804,7 @@ async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
     const isPublished = ['approved', 'published'].includes(row.status) && row.approvedNoteId;
     const draft = !isPublished && body.status === 'draft';
     const attachments = await validateRevision(db, actor.id, revision, body, draft, row.approvedNoteId);
+    if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     const mode = (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     if (isPublished && (row.pendingRevision || mode !== 'after')) {
       await db.query('UPDATE community_submission SET "pendingRevision"=$2,version=version+1,"rejectionReason"=NULL WHERE id=$1', [row.id, revision]);
@@ -1280,6 +1330,15 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   if ((path === '/api/works' || path === '/api/community/works') && method === 'GET') {
     const { rows, nextCursor } = await contentPage(ctx, { authorId: ctx.url.searchParams.get('authorId') || undefined });
     return send(ctx, 200, { items: await packWorks(ctx, rows), nextCursor });
+  }
+  if (path === '/api/works/feed' && method === 'POST') {
+    const parsed = feedRequestSchema.safeParse(ctx.body);
+    if (!parsed.success) fail(400, '推荐参数无效，请刷新后重试。');
+    const feed = parsed.data, url = new URL('/api/works', ctx.url);
+    for (const key of ['sort', 'kind', 'query', 'tag', 'cursor'] as const) if (feed[key]) url.searchParams.set(key, feed[key]!);
+    const { rows, nextCursor } = await contentPage({ ...ctx, url }, { feed, limit: feedLimits.page });
+    return send(ctx, 200, { items: await packWorks(ctx, rows), nextCursor,
+      replaced: !feed.cursor && feed.previous.length > 0 ? rows.some(row => !feed.previous.includes(row.id)) : null });
   }
   if (path === '/api/works' && method === 'POST') return createWork(ctx);
   if (path === '/api/library' && method === 'GET') {

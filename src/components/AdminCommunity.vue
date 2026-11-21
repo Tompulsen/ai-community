@@ -4,11 +4,13 @@ import { Check, Image, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/
 import { api, errorMessage, notify, uploadFile } from '../state'
 import { updateSite, type SiteBranding } from '../site'
 import { modelTypesSchema, type ModelTypeSetting } from '../../shared/studio/model-types'
+import { readFeedWeights } from '../../shared/recommendation'
 
 const props = defineProps<{ view: 'site' | 'settings' | 'tags' | 'ads' }>()
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
+  communityFeedWeights: { interest: number; fresh: number; explore: number }
   uploadLimits: Record<'image' | 'video' | 'audio' | 'document' | 'other', number>
   communityModelTypes: ModelTypeSetting[]
 }
@@ -48,7 +50,7 @@ async function load() {
     } else if (props.view === 'settings') {
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
       if (!active) return
-      readVersion(result); config.value = { ...result.config, communityModelTypes: result.config.communityModelTypes || [] }
+      readVersion(result); config.value = { ...result.config, communityModelTypes: result.config.communityModelTypes || [], communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
     } else if (props.view === 'tags') {
       const result = await api<{ items: Tag[] }>('/api/admin/tags')
       if (!active) return
@@ -159,7 +161,7 @@ watch(dirty, value => { if (value) saved.value = false })
           <button type="button" class="button subtle btn model-type-add" :disabled="config.communityModelTypes.length >= 500" @click="config.communityModelTypes.push({ id: '', kind: 'image' })"><Plus :size="16" aria-hidden="true" />添加模型类型</button>
         </div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>内容发布</h3><p>决定投稿何时出现在社区。</p></div><div class="editor-fields"><label class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label><p id="publication-help" class="form-note">{{ config.communityPublicationMode === 'before' ? '新投稿通过管理员或审核员审核后公开展示。' : '新投稿直接公开，管理员可在审核列表中处理。' }}</p></div></section>
-        <section class="editor-section"><div class="editor-section-title"><h3>首页推荐</h3><p>控制作品排序与浏览体验。</p></div><div class="editor-fields"><div class="fields"><label class="field"><span>首页推荐排序</span><select v-model="config.communityFeedMode" class="control"><option value="shuffle">随机推荐</option><option value="latest">最新发布</option></select></label><label class="field"><span>推荐候选池</span><input v-model.number="config.communityFeedPoolSize" type="number" min="20" max="1000" step="1" required class="control" aria-describedby="feed-pool-help" /></label></div><p id="feed-pool-help" class="form-note">随机推荐从最近 20–1000 条候选作品中选取；最新发布按时间排序。</p><label class="switch-row"><span><strong>手机下拉刷新</strong><small>允许用户下拉刷新社区作品。</small></span><input v-model="config.communityPullToRefresh" type="checkbox" role="switch" aria-label="手机下拉刷新" /></label></div></section>
+        <section class="editor-section"><div class="editor-section-title"><h3>首页推荐</h3><p>控制推荐排序，刷新优先换入上一批没有的作品。</p></div><div class="editor-fields"><div class="fields"><label class="field"><span>首页推荐排序</span><select v-model="config.communityFeedMode" class="control"><option value="shuffle">兴趣与探索</option><option value="latest">新作优先</option></select></label><label class="field"><span>旧版随机接口候选池</span><input v-model.number="config.communityFeedPoolSize" type="number" min="20" max="1000" step="1" required class="control" aria-describedby="feed-pool-help" /></label></div><p id="feed-pool-help" class="form-note">首页换批覆盖全部符合筛选条件的作品；候选池仅用于兼容旧版随机浏览。</p><div class="fields"><label class="field"><span>兴趣权重</span><input v-model.number="config.communityFeedWeights.interest" type="number" min="0" max="100" step="1" required class="control" /></label><label class="field"><span>新作权重</span><input v-model.number="config.communityFeedWeights.fresh" type="number" min="0" max="100" step="1" required class="control" /></label><label class="field"><span>探索权重</span><input v-model.number="config.communityFeedWeights.explore" type="number" min="0" max="100" step="1" required class="control" /></label></div><p class="form-note">三项合计 100，影响排序分数，不代表固定展示比例。偏好仅存当前浏览器：最多 20 个标签，7 天无互动失效；近期作品最多 120 条，24 小时失效。不新增服务器搜索或浏览历史。</p><label class="switch-row"><span><strong>手机下拉刷新</strong><small>允许用户下拉刷新社区作品。</small></span><input v-model="config.communityPullToRefresh" type="checkbox" role="switch" aria-label="手机下拉刷新" /></label></div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>违规处理</h3><p>设置累计违规的处理规则。</p></div><div class="editor-fields"><label class="switch-row"><span><strong>达到阈值自动封禁</strong><small>根据已记录的内容违规执行。</small></span><input v-model="config.communityAutoBanEnabled" type="checkbox" role="switch" aria-label="达到阈值自动封禁" /></label><label class="field"><span>违规次数阈值</span><input v-model.number="config.communityViolationThreshold" type="number" min="1" max="1000" step="1" required class="control" aria-describedby="violation-help" /></label><p id="violation-help" class="form-note">可设置 1–1000 次。关闭自动封禁后保留阈值设置。</p></div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>上传限制</h3><p>按文件类型设置单个文件的大小上限。</p></div><div class="editor-fields"><div class="upload-fields"><label v-for="(label, kind) in uploadNames" :key="kind" class="field"><span>{{ label }}（MB）</span><input v-model.number="config.uploadLimits[kind]" class="control" type="number" min="1" max="10240" step="1" required aria-describedby="upload-limit-help" /></label></div><p id="upload-limit-help" class="form-note">每类可设置 1–10240 MB，实际上传同时受账号权限约束。</p></div></section>
       </fieldset>

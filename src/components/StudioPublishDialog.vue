@@ -10,6 +10,7 @@ const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
 interface Tag { id: string; category: string; name: string }
 const tags = ref<Tag[]>([]), tagIds = ref<string[]>([]), tagQuery = ref(''), tagsLoading = ref(false), tagsError = ref('')
+const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const prompt = ref(''), sourceUrl = ref(''), license = ref(''), rights = ref(false), referenceIndices = ref<number[]>([])
 const category = computed(() => task.value?.kind === 'text' ? 'resource' : task.value?.kind || 'image')
 const visibleTags = computed(() => tags.value.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.value.trim().toLocaleLowerCase())))
@@ -40,6 +41,7 @@ async function loadTags() {
 }
 function toggleTag(id: string) {
   if (busy.value || locked.value) return
+  tagValidation.value = ''
   if (tagIds.value.includes(id)) tagIds.value = tagIds.value.filter(value => value !== id)
   else if (tagIds.value.length < 3) tagIds.value.push(id)
 }
@@ -57,7 +59,7 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
   prompt.value = previous?.details?.prompt ?? value.prompt
   sourceUrl.value = previous?.details?.sourceUrl ?? ''; license.value = previous?.details?.license ?? ''
   referenceIndices.value = [...(previous?.details?.referenceIndices ?? value.references.map((_, index) => index))]
-  tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagQuery.value = ''; tagsError.value = ''; rights.value = Boolean(previous)
+  tagIds.value = [...(previous?.details?.tagIds ?? [])]; tags.value = []; tagQuery.value = ''; tagsError.value = ''; tagValidation.value = ''; rights.value = Boolean(previous)
   if (target === 'community' && !previous?.work) void loadTags()
   await nextTick(); if (current !== revision) return
   if (extra.value) extra.value.open = false
@@ -71,10 +73,18 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
 }
 async function submit() {
   if (!task.value || busy.value || result.value) return
-  error.value = ''
+  error.value = ''; tagValidation.value = ''
   if (!direct.value && !locked.value) {
-    if (tagIds.value.length && (tagsLoading.value || tagsError.value)) { if (extra.value) extra.value.open = true; error.value = '请先加载所选作品标签后再提交。'; return }
-    if (tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id))) { if (extra.value) extra.value.open = true; error.value = '请最多选择 3 个当前分类的作品标签。'; return }
+    tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
+      : tagsError.value ? '请重新加载标签并选择后再发布。'
+        : !tagIds.value.length ? '请至少选择 1 个作品标签后再发布。'
+          : tagIds.value.length > 3 || tagIds.value.some(id => !tags.value.some(tag => tag.id === id)) ? '请选择 1–3 个当前分类的有效标签。' : ''
+    if (tagValidation.value) {
+      await nextTick()
+      const target = tagField.value?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)') ?? tagField.value
+      target?.focus()
+      return
+    }
     if (!rights.value) { error.value = '请先确认作品发布权。'; return }
   }
   const details: PublicationDetails | undefined = direct.value ? undefined : { tagIds: [...tagIds.value], prompt: prompt.value, sourceUrl: sourceUrl.value.trim(), license: license.value.trim(), referenceIndices: [...referenceIndices.value].sort((a, b) => a - b) }
@@ -100,11 +110,9 @@ defineExpose({ open })
         <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
         <label v-if="direct || category === 'resource'" class="field"><span>{{ direct ? '评论内容' : '资源内容' }}</span><textarea v-model="text" class="control" rows="3" maxlength="2500" :disabled="busy || locked" /></label>
         <template v-if="!direct">
-          <details ref="extra" class="publish-details publish-extras publication-extras"><summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary><div class="stack">
-          <label v-if="category !== 'resource'" class="field"><span>作品简介</span><textarea v-model="text" class="control" rows="2" maxlength="2500" :disabled="busy || locked" /></label>
-          <fieldset class="publish-tags" :disabled="busy || locked" aria-describedby="publish-tags-hint">
-            <legend>作品标签 <span>{{ tagIds.length }} / 3</span></legend>
-            <p id="publish-tags-hint" class="form-note">最多选择 3 个标签。</p>
+          <fieldset ref="tagField" class="publish-tags" :disabled="busy || locked" tabindex="-1" :aria-invalid="Boolean(tagValidation)" :aria-describedby="tagValidation ? 'publish-tags-hint publish-tags-error' : 'publish-tags-hint'">
+            <legend>作品标签（必选）<span>{{ tagIds.length }} / 3</span></legend>
+            <p id="publish-tags-hint" class="form-note">选择 1–3 个标签，方便搜索和发现同类作品。</p>
             <p v-if="tagsLoading" role="status" class="form-note">正在加载标签…</p>
             <div v-else-if="tagsError" class="stack"><p class="form-error" role="alert">标签加载失败：{{ tagsError }}</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></div>
             <template v-else-if="tags.length">
@@ -112,8 +120,11 @@ defineExpose({ open })
               <div class="publish-tag-options publication-tag-options" role="group" aria-label="选择作品标签"><button v-for="tag in visibleTags" :key="tag.id" type="button" class="publish-tag publication-tag" :aria-pressed="tagIds.includes(tag.id)" :disabled="!tagIds.includes(tag.id) && tagIds.length >= 3" @click="toggleTag(tag.id)"># {{ tag.name }}</button></div>
               <p v-if="!visibleTags.length" class="form-note">没有匹配的标签，试试其他关键词。</p>
             </template>
-            <p v-else class="form-note">暂无可用标签。</p>
+            <template v-else><p class="form-note">当前分类暂无可用标签，请联系管理员添加后再发布。</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></template>
+            <p v-if="tagValidation" id="publish-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
+          <details ref="extra" class="publish-details publish-extras publication-extras"><summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="prompt.trim() || referenceIndices.length">{{ prompt.trim() ? '含提示词' : '' }}{{ prompt.trim() && referenceIndices.length ? ' · ' : '' }}{{ referenceIndices.length ? `${referenceIndices.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary><div class="stack">
+          <label v-if="category !== 'resource'" class="field"><span>作品简介</span><textarea v-model="text" class="control" rows="2" maxlength="2500" :disabled="busy || locked" /></label>
           <label class="field"><span>生成提示词（选填）</span><textarea v-model="prompt" class="control" rows="4" maxlength="100000" :disabled="busy || locked" aria-describedby="publish-prompt-hint" /></label>
           <p class="publish-context">{{ task.model }}</p>
           <p id="publish-prompt-hint" class="form-note">制作同款会使用这里的提示词和选中的参考图，作品简介不会作为提示词导入。</p>
