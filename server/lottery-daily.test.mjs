@@ -68,12 +68,25 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     CREATE TABLE note_reaction (id text,"noteId" text,"userId" text,reaction text);
   `)
   let clock = new Date('2026-11-18T03:00:00Z')
+  const paidResponse = (url, patch = {}) => new Response(JSON.stringify({
+    ready: true, client_id: 'https://community.test', user_id: Number(new URL(url).searchParams.get('user_id')),
+    has_support: true, support_cny_fen: 100, ...patch,
+  }))
+  let lookup = async url => paidResponse(url)
   // Delivery has separate receipt tests; prevent test draws from starting the real delivery worker.
   const db = { connect: () => pool.connect(), query: (sql, args) => sql.startsWith('SELECT id FROM community_lottery_draw') ? Promise.resolve({ rows: [] }) : pool.query(sql, args) }
   const service = createLotteryService({ db, config: { url: 'https://community.test', newApiSso: { issuer: 'https://accounts.test', lotterySecret: 's'.repeat(32) } },
-    now: () => new Date(clock), fetcher: async () => new Response(JSON.stringify({ ready: true, client_id: 'https://community.test' })) })
+    now: () => new Date(clock), fetcher: async (url, options) => {
+      assert.equal(options.method, 'GET')
+      assert.equal(options.redirect, 'error')
+      assert.equal(options.headers.Authorization, `Bearer ${'s'.repeat(32)}`)
+      if (!new URL(url).search) return new Response(JSON.stringify({ ready: true, client_id: 'https://community.test' }))
+      assert.equal(new URL(url).searchParams.get('client_id'), 'https://community.test')
+      return lookup(url)
+    } })
   async function reset(settings = dailySettings()) {
     clock = new Date('2026-11-18T03:00:00Z')
+    lookup = async url => paidResponse(url)
     await pool.query('TRUNCATE community_lottery_config,community_lottery_account,community_lottery_draw,external_account,"user"')
     await pool.query('INSERT INTO community_lottery_config VALUES (\'default\',0,$1)', [settings])
     await pool.query(`INSERT INTO "user" (id) SELECT i::text FROM generate_series(1,205) i;
@@ -81,6 +94,103 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
       INSERT INTO community_lottery_account SELECT id,5,'{"invites":0,"followers":0,"likes":0,"works":{}}'::jsonb FROM "user";`)
   }
   const draw = (id, request = randomUUID(), count = 1) => service.draw(String(id), request, count)
+  await t.test('legacy configuration saves retain the current support threshold', async () => {
+    await reset({ ...dailySettings(), minSupportCnyFen: 129 })
+    const config = await service.getConfig()
+    delete config.settings.minSupportCnyFen
+    const updated = await service.updateConfig(config.version, config.settings)
+    assert.equal(updated.settings.minSupportCnyFen, 129)
+    assert.equal((await service.getConfig()).settings.minSupportCnyFen, 129)
+  })
+  await t.test('support zero still needs payment; cumulative thresholds compare exact fen and retain ticket consumption', async () => {
+    for (const [minimum, hasSupport, fen, eligible] of [[0, false, 0, false], [0, true, 0, true], [0, true, 1, true], [129, true, 128, false], [129, true, 129, true]]) {
+      await reset({ ...dailySettings(), minSupportCnyFen: minimum })
+      lookup = async url => paidResponse(url, { has_support: hasSupport, support_cny_fen: fen })
+      const status = await service.status('1')
+      assert.deepEqual(status.support, { checked: true, eligible, amountCnyFen: fen })
+      assert.equal('subject' in status, false)
+      if (eligible) await draw(1)
+      else await assert.rejects(draw(1), /LOTTERY_SUPPORT_REQUIRED/)
+      assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, eligible ? 4 : 5)
+      assert.equal((await service.status()).daily.used, eligible ? 1 : 0)
+    }
+    await reset()
+    await pool.query('UPDATE community_lottery_account SET balance=0 WHERE "userId"=\'1\'')
+    await assert.rejects(draw(1), /LOTTERY_INSUFFICIENT/)
+    assert.equal((await service.status()).daily.used, 0)
+  })
+  await t.test('failed or untrusted support checks never consume a chance or daily place', async () => {
+    for (const response of [
+      async () => { throw new DOMException('Timed out', 'TimeoutError') },
+      async () => new Response('{}', { status: 503 }),
+      async () => new Response('invalid JSON'),
+      async url => paidResponse(url, { user_id: 2 }),
+      async url => paidResponse(url, { client_id: 'https://other.test' }),
+      async url => paidResponse(url, { has_support: false, support_cny_fen: 1 }),
+      ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '100'].map(support_cny_fen => async url => paidResponse(url, { support_cny_fen })),
+    ]) {
+      await reset(); lookup = response
+      assert.deepEqual((await service.status('1')).support, { checked: false, eligible: false, amountCnyFen: null })
+      await assert.rejects(draw(1), /LOTTERY_SUPPORT_UNAVAILABLE/)
+      assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
+      assert.equal((await service.status()).daily.used, 0)
+    }
+  })
+  await t.test('support lookup releases all pool locks and uses the current threshold and identity', async () => {
+    for (const change of ['threshold', 'identity']) {
+      await reset()
+      let started, resume
+      const checking = new Promise(resolve => { started = resolve })
+      const waiting = new Promise(resolve => { resume = resolve })
+      lookup = async url => { started(); await waiting; return paidResponse(url) }
+      const drawing = draw(1)
+      await checking
+      const editor = await pool.connect()
+      try {
+        await editor.query('BEGIN')
+        await editor.query('SET LOCAL lock_timeout = \'2s\'')
+        if (change === 'threshold') await editor.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minSupportCnyFen}\',\'101\')')
+        else await editor.query('UPDATE external_account SET subject=\'2\' WHERE "userId"=\'1\'')
+        await editor.query('COMMIT')
+      } finally {
+        await editor.query('ROLLBACK'); editor.release(); resume()
+      }
+      await assert.rejects(drawing, change === 'threshold' ? /LOTTERY_SUPPORT_REQUIRED/ : /LOTTERY_ACCOUNT_REQUIRED/)
+      assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
+      assert.equal((await service.status()).daily.used, 0)
+    }
+  })
+  await t.test('expired support verification cannot consume a chance after waiting for the pool', async t => {
+    await reset()
+    let checks = 0
+    t.mock.method(Date, 'now', () => checks++ === 0 ? 1000 : 61001)
+    await assert.rejects(draw(1), /LOTTERY_SUPPORT_UNAVAILABLE/)
+    assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
+    assert.equal((await service.status()).daily.used, 0)
+  })
+  await t.test('committed and concurrent receipts survive refunds, threshold changes and support outages', async () => {
+    await reset()
+    let started, resume, lookups = 0
+    const checking = new Promise(resolve => { started = resolve })
+    const waiting = new Promise(resolve => { resume = resolve })
+    lookup = async url => {
+      lookups++
+      if (lookups === 1) { started(); await waiting; throw new Error('Center unavailable') }
+      return paidResponse(url)
+    }
+    const key = randomUUID(), pending = draw(1, key)
+    await checking
+    let completed
+    try { completed = await draw(1, key) } finally { resume() }
+    assert.equal((await pending).id, completed.id)
+    await pool.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minSupportCnyFen}\',\'1000\')')
+    lookup = async () => { throw new Error('Refunded or center unavailable') }
+    assert.equal((await draw(1, key)).id, completed.id)
+    assert.equal(lookups, 2)
+    assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 4)
+    assert.equal((await service.status()).daily.used, 1)
+    await assert.rejects(draw(2), /LOTTERY_SUPPORT_UNAVAILABLE/)
+  })
   await t.test('same user competing requests consume one place and one ticket; retries return the receipt', async () => {
     await reset()
     const key = randomUUID()

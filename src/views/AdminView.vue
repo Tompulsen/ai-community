@@ -35,7 +35,7 @@ const adminTabs = computed(() => [
     { id: 'settings' as const, label: '社区设置', icon: Settings2, group: '运营设置' },
     { id: 'ads' as const, label: '广告位', icon: Megaphone, group: '运营设置' },
     { id: 'announcements' as const, label: '公告管理', icon: Megaphone, group: '运营设置' },
-    { id: 'lottery' as const, label: '抽奖管理', icon: Gift, group: '运营设置' },
+    { id: 'lottery' as const, label: '活动抽奖', icon: Gift, group: '运营设置' },
   ] : []),
 ])
 const tab = computed(() => adminTabs.value.find(item => item.id === route.query.tab)?.id ?? 'overview')

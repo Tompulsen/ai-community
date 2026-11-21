@@ -28,6 +28,7 @@ async function welfareFixture(page: Page) {
     await state.delay
     return state.fail ? route.fulfill({ status: 503, json: { error: 'LOTTERY_UNAVAILABLE' } }) : route.fulfill({ json: {
       settings, balance: 3, accountLinked: true, creditReady: true, inviteUrl: '',
+      support: { checked: true, eligible: true, amountCnyFen: 1000 },
       daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(), limit: 200, remaining: 200, used: 0, participated: false },
       counts: { invites: 0, followers: 0, likes: 0, bestWorkLikes: 0 },
       earned: { invites: 0, followers: 0, likes: 0 },
@@ -189,7 +190,7 @@ for (const viewport of viewports) {
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: info.outputPath(`records-${viewport.width}.png`), fullPage: true })
-    await page.getByRole('button', { name: '抽奖', exact: true }).click()
+    await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
     await expect(page.getByRole('region', { name: '今日福利', exact: true })).toBeVisible()
     await expect(drawButton(page)).toBeEnabled()
   })

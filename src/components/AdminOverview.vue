@@ -20,7 +20,7 @@ const shortcuts = computed(() => [
     { id: 'tags' as const, label: '内容标签', description: '图片、视频与资源分类', icon: Tags },
     { id: 'users' as const, label: '用户管理', description: '账号状态与违规记录', icon: Users },
     { id: 'ads' as const, label: '广告位', description: '广告内容与图片预览', icon: Megaphone },
-    { id: 'lottery' as const, label: '抽奖管理', description: '奖项、次数与发放记录', icon: Gift },
+    { id: 'lottery' as const, label: '活动抽奖', description: '奖项、次数与发放记录', icon: Gift },
   ] : []),
 ])
 </script>

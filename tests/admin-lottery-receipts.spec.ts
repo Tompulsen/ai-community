@@ -42,7 +42,7 @@ async function fixture(page: Page) {
     }
     if (url.pathname.endsWith('/config')) return route.fulfill({ json: {
       version: 1, settings: {
-        enabled: false, invites: { enabled: true, threshold: 1, tickets: 1 },
+        enabled: false, minSupportCnyFen: 0, invites: { enabled: true, threshold: 1, tickets: 1 },
         likes: { enabled: true, threshold: 100, tickets: 1 }, followers: { enabled: true, threshold: 100, tickets: 1 },
         likesMode: 'work', prizes: [], wheel: { theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' },
       },

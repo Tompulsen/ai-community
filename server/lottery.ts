@@ -109,6 +109,8 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
   }
   const daily = input.dailyLimit !== undefined
   if (daily && (typeof input.dailyLimit !== 'number' || !Number.isInteger(input.dailyLimit) || input.dailyLimit < 1 || input.dailyLimit > 1000000)) fail('LOTTERY_INVALID')
+  if (input.minSupportCnyFen !== undefined && (typeof input.minSupportCnyFen !== 'number' || !Number.isSafeInteger(input.minSupportCnyFen)
+    || input.minSupportCnyFen < 0 || input.minSupportCnyFen > 100000000)) fail('LOTTERY_INVALID')
   const ids = new Set<string>()
   const prizes: unknown[] = input.prizes
   for (const prize of prizes) {
@@ -202,10 +204,15 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     catch { return null }
   }
 
-  async function creditRequest(issuer: string | null, body?: Record<string, unknown>, signal = AbortSignal.timeout(8000)): Promise<Record<string, unknown>> {
+  async function creditRequest(issuer: string | null, body?: Record<string, unknown>, signal = AbortSignal.timeout(8000), supportSubject?: string): Promise<Record<string, unknown>> {
     const settings = creditConfig()
     if (!settings || settings.issuer !== issuer) throw Object.assign(new Error('LOTTERY_CREDIT_CONFIG'), { permanent: true })
-    const response = await fetcher(new URL('/api/community-sso/lottery', settings.issuer), {
+    const url = new URL('/api/community-sso/lottery', settings.issuer)
+    if (supportSubject !== undefined) {
+      url.searchParams.set('client_id', new URL(config.url).origin)
+      url.searchParams.set('user_id', supportSubject)
+    }
+    const response = await fetcher(url, {
       method: body ? 'POST' : 'GET', redirect: 'error', signal,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.secret}` },
       body: body ? JSON.stringify(body) : undefined,
@@ -227,6 +234,15 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       return result
     }
     catch { throw Object.assign(new Error('LOTTERY_CREDIT_RESPONSE'), { permanent: true }) }
+  }
+
+  async function readSupport(issuer: string, subject: string) {
+    const response = await creditRequest(issuer, undefined, AbortSignal.timeout(8000), subject)
+    if (response.ready !== true || response.client_id !== new URL(config.url).origin || response.user_id !== Number(subject)
+      || typeof response.has_support !== 'boolean' || typeof response.support_cny_fen !== 'number'
+      || !Number.isSafeInteger(response.support_cny_fen) || response.support_cny_fen < 0
+      || (!response.has_support && response.support_cny_fen > 0)) throw new Error('LOTTERY_SUPPORT_RESPONSE')
+    return { hasSupport: response.has_support, amountCnyFen: response.support_cny_fen, checkedAt: Date.now() }
   }
 
   async function configuration(client: Queryable, lock = false) {
@@ -321,15 +337,16 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
 
   async function status(userId?: string) {
     const credit = creditConfig()
-    return transaction(db, async client => {
+    const { subject, ...result } = await transaction(db, async client => {
       if (userId) await actor(client, userId)
       const { settings } = await configuration(client, Boolean(userId))
       const daily = settings.dailyLimit ? await dailyPool(client, settings, userId, now()) : null
       const result = userId ? await sync(client, userId, settings) : null
       const progress = result?.account.progress ?? emptyLotteryProgress()
-      const { rows } = userId && credit ? await client.query<{ '?column?': number }>('SELECT 1 FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
+      const { rows } = userId && credit ? await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
       return {
         creditReady: Boolean(credit), accountLinked: rows.length > 0,
+        subject: rows[0]?.subject,
         settings: { ...settings, prizes: (daily?.prizes ?? settings.prizes).filter(prize => prize.enabled) },
         daily: daily?.summary ?? null,
         balance: result?.account.balance ?? 0,
@@ -342,6 +359,14 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         inviteUrl: '',
       }
     })
+    let support = { checked: false, eligible: false, amountCnyFen: null as number | null }
+    if (credit && typeof subject === 'string' && /^[1-9]\d{0,14}$/.test(subject)) {
+      try {
+        const paid = await readSupport(credit.issuer, subject)
+        support = { checked: true, eligible: paid.hasSupport && paid.amountCnyFen >= result.settings.minSupportCnyFen, amountCnyFen: paid.amountCnyFen }
+      } catch { /* Task opportunities remain available when support verification is temporarily unavailable. */ }
+    }
+    return { ...result, support }
   }
 
   async function dailyPool(client: Queryable, settings: LotterySettings, userId: string | undefined, time: Date) {
@@ -362,6 +387,25 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
 
   async function draw(userId: string, requestId: unknown, count: unknown) {
     if (typeof count !== 'number' || ![1, 3, 5].includes(count) || typeof requestId !== 'string' || !requestPattern.test(requestId)) fail('LOTTERY_INVALID')
+    const preflight = await transaction(db, async client => {
+      await actor(client, userId)
+      const { rows: existing } = await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "userId"=$1 AND "requestId"=$2', [userId, requestId])
+      if (existing[0]) {
+        if (existing[0].prizes.length !== count) fail('LOTTERY_CONFLICT', 409)
+        return { kind: 'receipt' as const, receipt: packLotteryDraw(existing[0]) }
+      }
+      const credit = creditConfig()
+      const { rows } = credit ? await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
+      const subject = rows[0]?.subject
+      if (!credit || typeof subject !== 'string' || !/^[1-9]\d{0,14}$/.test(subject)) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
+      return { kind: 'new' as const, issuer: credit.issuer, subject }
+    })
+    if (preflight.kind === 'receipt') {
+      void processPending()
+      return preflight.receipt
+    }
+    // Verify without holding the global pool lock; restore concurrent receipts even if verification failed.
+    const support = await readSupport(preflight.issuer, preflight.subject).catch(() => null)
     const receipt = await transaction(db, async client => {
       await actor(client, userId)
       const pool = await configuration(client, true)
@@ -385,6 +429,9 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       const { rows } = credit ? await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
       const subject = rows[0]?.subject
       if (!credit || typeof subject !== 'string' || !/^[1-9]\d{0,14}$/.test(subject) || !Number.isSafeInteger(Number(subject))) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
+      if (credit.issuer !== preflight.issuer || subject !== preflight.subject) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
+      if (!support || Date.now() - support.checkedAt > 60000) fail('LOTTERY_SUPPORT_UNAVAILABLE', 503)
+      if (!support.hasSupport || support.amountCnyFen < pool.settings.minSupportCnyFen) fail('LOTTERY_SUPPORT_REQUIRED', 409)
       const { account } = await sync(client, userId, pool.settings)
       if (account.balance < count) fail('LOTTERY_INSUFFICIENT', 409)
       const prizes: LotteryAward[] = []
@@ -454,7 +501,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     return transaction(db, async client => {
       const current = await configuration(client, true)
       if (version !== current.version) fail('LOTTERY_CONFLICT', 409)
-      const settings = normalizeLotterySettings({ ...normalized, wheel: normalized.wheel ?? current.settings.wheel })
+      const settings = normalizeLotterySettings({ ...normalized, minSupportCnyFen: normalized.minSupportCnyFen ?? current.settings.minSupportCnyFen, wheel: normalized.wheel ?? current.settings.wheel })
       settings.invites.enabled = false
       for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) settings.wheel[key] = settings.wheel[key].trim()
       settings.wheel.buttonText ||= 'GO'

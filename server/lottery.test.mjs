@@ -17,6 +17,12 @@ test('settings reject invalid money, overflowing weight and duplicate prize ids'
     assert.throws(() => validateLotterySettings({ ...settings, prizes: [{ ...settings.prizes[0], ...patch }] }), /LOTTERY_INVALID/)
   }
   assert.throws(() => validateLotterySettings({ ...settings, prizes: [settings.prizes[0], settings.prizes[0]] }), /LOTTERY_INVALID/)
+  for (const minSupportCnyFen of [-1, 0.1, '100', null, NaN, Infinity, 100000001]) {
+    assert.throws(() => validateLotterySettings({ ...settings, minSupportCnyFen }), /LOTTERY_INVALID/)
+  }
+  for (const minSupportCnyFen of [undefined, 0, 129, 100000000]) {
+    assert.doesNotThrow(() => validateLotterySettings({ ...settings, minSupportCnyFen }))
+  }
 })
 
 test('public record never exposes delivery receipts, admin identity or blocked details', () => {
@@ -176,7 +182,7 @@ test('same draw request returns original receipt without consuming chances or st
   assert.equal(receipt.id, old.id)
   assert.equal(calls.some(sql => sql.startsWith('UPDATE community_lottery_account')), false)
   assert.equal(calls.some(sql => sql.startsWith('INSERT INTO community_lottery_draw')), false)
-  assert(calls.findIndex(sql => sql.includes('FOR UPDATE')) < calls.findIndex(sql => sql.startsWith('SELECT * FROM community_lottery_draw')))
+  assert.equal(calls.some(sql => sql.includes('FOR UPDATE')), false)
   await assert.rejects(api.draw('owner', 'same-request-1234', 3), /LOTTERY_CONFLICT/)
   assert.equal(calls.at(-1), 'ROLLBACK')
 })

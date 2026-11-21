@@ -230,7 +230,7 @@ test('new administrator sections use their real contracts and preserve a refused
   })
   await page.goto('/admin')
   const tabs = page.getByRole('navigation', { name: '管理分类', exact: true })
-  for (const label of ['作品审核', '抽奖管理', '社区设置', '内容标签', '广告位', '用户管理', '举报处理']) await expect(tabs.getByRole('button', { name: label, exact: true })).toBeVisible()
+  for (const label of ['作品审核', '活动抽奖', '社区设置', '内容标签', '广告位', '用户管理', '举报处理']) await expect(tabs.getByRole('button', { name: label, exact: true })).toBeVisible()
   await tabs.getByRole('button', { name: '社区设置', exact: true }).click()
   await page.getByLabel('违规次数阈值', { exact: true }).fill('4')
   await page.getByRole('button', { name: '保存社区设置', exact: true }).click()

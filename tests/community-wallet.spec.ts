@@ -9,10 +9,11 @@ for (const authenticated of [true, false]) test(`lottery displays point equivale
   const prize = { id: 'credit', name: '活动额度', description: '历史 API 奖励', amountCents: 50, kind: 'balance', weight: 1, stock: -1, enabled: true }
   const rule = { enabled: false, threshold: 1, tickets: 1 }
   await page.route('**/api/lottery/status', route => route.fulfill({ json: {
-    settings: { enabled: true, prizes: [prize], invites: rule, likes: rule, followers: rule, likesMode: 'work',
+    settings: { enabled: true, minSupportCnyFen: 0, prizes: [prize], invites: rule, likes: rule, followers: rule, likesMode: 'work',
       wheel: { theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' } },
     balance: 1, counts: { invites: 0, likes: 0, followers: 0, bestWorkLikes: 0 },
     earned: { invites: 0, likes: 0, followers: 0 }, accountLinked: true, creditReady: true, inviteUrl: '',
+    support: { checked: authenticated, eligible: authenticated, amountCnyFen: authenticated ? 1000 : null },
   } }))
   await page.route('**/api/lottery/records', route => route.fulfill({ json: {
     items: [{ id: 'receipt', createdAt: '2026-11-16T00:00:00Z', prizes: [

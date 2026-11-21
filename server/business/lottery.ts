@@ -10,6 +10,7 @@ export type LotteryWheel = { theme: 'teal' | 'violet' | 'sunset'; title: string;
 export type LotteryPrize = { id: string; name: string; description: string; weight: number; stock: number; enabled: boolean; amountCents: number; kind: 'balance' | 'empty' };
 export type LotterySettings = {
 	enabled: boolean;
+	minSupportCnyFen: number;
 	dailyLimit?: number;
 	invites: LotteryRule;
 	likes: LotteryRule;
@@ -18,7 +19,7 @@ export type LotterySettings = {
 	prizes: LotteryPrize[];
 	wheel: LotteryWheel;
 };
-export type LotterySettingsInput = Omit<LotterySettings, 'wheel'> & { wheel?: LotteryWheel };
+export type LotterySettingsInput = Omit<LotterySettings, 'wheel' | 'minSupportCnyFen'> & { wheel?: LotteryWheel; minSupportCnyFen?: number };
 export type LotteryCreditReceipt = { id: number; quotaAdded: number; quotaPerUsd: string };
 export type LotteryAward = { amountCents: number; prizeId: string; name: string; description: string; status: 'pending' | 'fulfilled' | 'empty'; fulfilledAt: string | null; fulfilledBy: string | null; note: string; creditReceipt?: LotteryCreditReceipt; creditBlocked?: boolean };
 export type LotteryProgress = { invites: number; likes: number; followers: number; works: Record<string, number> };
@@ -26,12 +27,13 @@ export type LotteryProgress = { invites: number; likes: number; followers: numbe
 export const defaultLotteryWheel = (): LotteryWheel => ({ theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' });
 
 export function normalizeLotterySettings(settings: LotterySettingsInput): LotterySettings {
-	return { ...settings, wheel: { ...defaultLotteryWheel(), ...settings.wheel } };
+	return { ...settings, minSupportCnyFen: settings.minSupportCnyFen ?? 0, wheel: { ...defaultLotteryWheel(), ...settings.wheel } };
 }
 
 export function defaultLotterySettings(): LotterySettings {
 	return {
 		enabled: false,
+		minSupportCnyFen: 0,
 		invites: { enabled: true, threshold: 1, tickets: 1 },
 		likes: { enabled: true, threshold: 100, tickets: 1 },
 		followers: { enabled: true, threshold: 100, tickets: 1 },
