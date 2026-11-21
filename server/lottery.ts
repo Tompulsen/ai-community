@@ -609,7 +609,11 @@ export async function handleLottery(ctx: RequestContext): Promise<boolean> {
   const api = service(ctx)
   const method = ctx.req.method
   const admin = path.startsWith('/api/admin/')
-  if (admin) ctx.requireAdmin()
+  if (admin) {
+    const actor = ctx.requireAdmin()
+    const expected = ctx.req.headers?.['x-new-api-user']
+    if ((path === '/api/admin/lottery/account' || path === '/api/admin/lottery/chances') && expected !== undefined && expected !== actor.id) fail('LOTTERY_ACCOUNT_CHANGED', 409)
+  }
   else if (path !== '/api/lottery/status') ctx.requireUser()
   let result: unknown
   if (method === 'GET' && path === '/api/lottery/status') result = await api.status(ctx.user?.id)

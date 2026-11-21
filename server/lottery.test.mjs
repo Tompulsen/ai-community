@@ -428,3 +428,22 @@ test('delivery still stops after three consecutive failures without progress', a
   assert.equal(row.creditPending, true)
   assert(row.prizes.every(prize => prize.status === 'pending'))
 })
+
+
+test('chance reads and writes reject a changed administrator before any database access', async () => {
+  for (const [method, path] of [['GET', '/api/admin/lottery/account?userId=target'], ['POST', '/api/admin/lottery/chances']]) {
+    let connections = 0
+    const db = { async connect() { connections++; throw new Error('DATABASE_REACHED') }, async query() { connections++; throw new Error('DATABASE_REACHED') } }
+    const ctx = { req: { method, headers: { 'x-new-api-user': 'previousAdmin' } }, url: new URL(path, 'https://community.test'), db,
+      config: { url: 'https://community.test' }, body: { userId: 'target', mode: 'add', amount: 1, expectedBalance: 0, requestId: 'stable-request-id' },
+      requireAdmin: () => ({ id: 'currentAdmin' }), json() { assert.fail('Changed account cannot succeed') } }
+    await assert.rejects(handleLottery(ctx), error => error.statusCode === 409 && error.message === 'LOTTERY_ACCOUNT_CHANGED')
+    assert.equal(connections, 0)
+    ctx.req.headers['x-new-api-user'] = 'currentAdmin'
+    await assert.rejects(handleLottery(ctx), /DATABASE_REACHED/)
+    assert.equal(connections, 1)
+    delete ctx.req.headers['x-new-api-user']
+    await assert.rejects(handleLottery(ctx), /DATABASE_REACHED/)
+    assert.equal(connections, 2)
+  }
+})
