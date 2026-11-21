@@ -109,7 +109,8 @@ onBeforeUnmount(() => { clearTimeout(copyTimer); preObserver?.disconnect(); rend
 .code-header > span:first-child { margin-right: auto; }
 button { display: inline-flex; align-items: center; justify-content: center; border: 0; color: inherit; background: transparent; border-radius: 4px; cursor: pointer; }
 .code-header button { width: 28px; height: 28px; }
-button:hover { background: var(--surface); color: var(--ink); }
+.code-header button:hover:not(:disabled), .code-fold:hover:not(:disabled) { background: var(--state-hover); color: var(--ink); }
+.code-header button:active:not(:disabled), .code-fold:active:not(:disabled) { background: var(--state-pressed); color: var(--ink); }
 pre { margin: 0 !important; padding: 12px !important; overflow: auto; background: transparent !important; font: 13px/22px ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
 pre.collapsed { max-height: 332px; }
 pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }

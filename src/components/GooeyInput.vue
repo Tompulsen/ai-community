@@ -86,7 +86,7 @@ function clear() {
 .gooey-field input::placeholder { color: var(--muted); opacity: 1; }
 .gooey-field input::-webkit-search-cancel-button { appearance: none; }
 .gooey-clear { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; color: inherit; }
-.gooey-clear:hover { background: var(--border); }
+.gooey-clear:hover { background: var(--state-hover); }
 .gooey-clear:focus-visible { outline-offset: -4px; outline-color: var(--ink); }
 .gooey-input.persistent { --search-action-bg: transparent; --search-action-ink: var(--ink); --search-divider: var(--control-border); position: relative; inset: auto; width: 100%; border-radius: 12px; background: var(--surface-soft); box-shadow: none; }
 .persistent .gooey-field { position: static; width: 100%; min-width: 0; border-radius: inherit; }

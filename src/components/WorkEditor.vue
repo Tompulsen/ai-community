@@ -248,12 +248,11 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .attachment-section { min-width: 0; }
 .upload-area { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; width: 100%; min-height: 280px; border: 1px dashed var(--control-border); border-radius: 8px; color: var(--muted); background: var(--surface); }
 .upload-area > span { font-size: 16px; line-height: 24px; font-weight: 500; color: var(--ink); }
-.upload-area:hover:not(:disabled) { color: var(--ink); background: var(--surface-soft); border-color: var(--focus-ring); }
+.upload-area:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
 .upload-area:active:not(:disabled) { transform: translateY(1px); }
 .write-content { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; width: 100%; margin-top: 8px; color: var(--muted); font-size: 14px; border-radius: 6px; }
 .write-content:hover { color: var(--ink); }
 .resource-content { margin-block-start: 16px; }
-.resource-content .control { background: var(--surface); }
 .editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
 .editor-tags legend { margin-bottom: 8px; font-size: 14px; }
 .editor-tags legend span { margin-left: 8px; color: var(--muted); font-size: 12px; }
@@ -264,7 +263,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .editor-dialog .dialog-footer .button { min-height: 44px; }
 .editor-dialog .dialog-footer .primary { min-width: 144px; }
 .editor-dialog .dialog-footer .subtle { background: transparent; color: var(--muted); }
-.editor-dialog .dialog-footer .subtle:hover { background: var(--surface-soft); color: var(--ink); }
+.editor-dialog .dialog-footer .subtle:hover { background: var(--state-hover); color: var(--ink); }
 @media (max-width: 699px) {
   .editor-dialog { width: calc(100dvw - 24px); max-width: none; }
   .editor-dialog[open] { max-height: calc(100dvh - 24px); }

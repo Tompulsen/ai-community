@@ -12,7 +12,8 @@
   cursor: pointer;
 }
 .publication-extras > summary::-webkit-details-marker { display: none; }
-.publication-extras > summary:hover { background: var(--surface-soft); }
+.publication-extras > summary:hover { background: var(--state-hover); }
+.publication-extras > summary:hover :is(small, svg) { color: var(--ink); }
 .publication-extras > summary > svg { flex: none; color: var(--muted); }
 .publication-extras > summary > svg:last-child { margin-inline-start: auto; }
 .publication-extras > summary > span { min-width: 0; }
@@ -35,7 +36,8 @@
   cursor: pointer;
   overflow-wrap: anywhere;
 }
-.publication-tag:hover:not(:disabled):not(:has(input:disabled)), .publication-tag:has(input:focus-visible) { background: var(--surface-soft); }
-.publication-tag.selected, .publication-tag[aria-pressed="true"] { background: var(--surface-soft); border-color: var(--focus-ring); }
+.publication-tag:hover:not(:disabled):not(:has(input:disabled)), .publication-tag:has(input:focus-visible) { background: var(--state-hover); }
+.publication-tag.selected, .publication-tag[aria-pressed="true"] { color: var(--ink); background: var(--state-selected); border-color: var(--state-selected-border); }
+.publication-tag:is(.selected, [aria-pressed="true"]):hover:not(:disabled):not(:has(input:disabled)) { background: var(--state-pressed); }
 .publication-tag:disabled, .publication-tag:has(input:disabled) { opacity: .5; cursor: default; }
 .publication-tag:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

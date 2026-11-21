@@ -79,8 +79,8 @@ defineExpose({ pause })
 .material-group h3 { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; }
 .material-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
 .material-thumbnail { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); overflow: hidden; padding: 0; cursor: pointer; transition: border-color 180ms var(--ease); }
-.material-thumbnail:hover { border-color: var(--muted); }
-.material-thumbnail.selected { border-color: var(--focus-ring); outline: 1px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.material-thumbnail:hover { border-color: var(--state-selected-border); }
+.material-thumbnail.selected { color: var(--ink); border-color: var(--state-selected-border); outline: 1px solid var(--state-selected-border); outline-offset: var(--focus-outline-offset); }
 .material-thumbnail img, .material-thumbnail video { width: 100%; height: 100%; object-fit: contain; }
 .resource-article { padding: 0 0 24px; background: transparent; color: var(--ink); }
 .resource-label { display: flex; align-items: center; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }

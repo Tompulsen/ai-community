@@ -1,15 +1,15 @@
 {
-  "scanned": "2026-11-20",
+  "scanned": "2026-11-21",
   "findings": {
     "fonts": "Local Schibsted Grotesk and the existing Chinese system stack, src/style.css:1",
-    "palette": "Six existing light/dark palettes, DESIGN.md:147 and public/theme-preload.js",
-    "spacing": "Existing 4px scale and 44px touch targets, DESIGN.md:75",
-    "framework": "Vue 3 with Vite; ActivityView.vue and ReferralBenefits.vue",
-    "preview": "Local-only mock data at http://localhost:18775/activities"
+    "palette": "Six existing light/dark palettes, DESIGN.md:149 and public/theme-preload.js",
+    "spacing": "Shared control and spacing tokens, src/controls.css:3 and src/settings-tokens.css:5",
+    "framework": "Vue 3 with Vite; src/views/AccountView.vue:339 and AccountPrivacy/Theme/Security.vue",
+    "preview": "Local-only mock data at http://localhost:18776/account?tab=privacy"
   },
-  "preserve": ["Locked DESIGN.md", "Six global palettes and shared controls", "Draw request receipts", "Referral conditions and handlers", "Local-only preview"],
-  "introduce": ["Action-first lottery layout", "Aligned prize ledger", "Compact account row", "Responsive reward records"],
+  "preserve": ["Locked global DESIGN.md system", "Six global palettes and shared controls", "All account fields and handlers", "Explicit save and protected privacy drafts", "Mobile directory and detail routes", "Local-only preview"],
+  "introduce": ["Desktop horizontal settings navigation", "Header search and account tools", "Centered compact forms", "Stable active and draft indicators"],
   "scope": "app",
   "depth": "full",
-  "baseline": { "floor": 11, "reflex": 5, "warnings": 4 }
+  "baseline": { "floor": 0, "reflex": 2, "warnings": 0 }
 }

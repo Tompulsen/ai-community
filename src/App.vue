@@ -407,13 +407,14 @@ function restoreMessageTrigger() {
 .profile-disclosure { position: static; }
 .profile-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .account-popover::before { content: ''; position: absolute; inset: auto 0 100%; block-size: 12px; }
-.account-popover > a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); }
+.account-popover > a[aria-current="page"] { color: var(--ink); background: var(--state-selected); }
+.account-popover > a[aria-current="page"]:hover { background: var(--state-pressed); }
 .message-trigger { position: relative; }
 .message-count { position: absolute; right: 0; top: 0; min-width: 16px; height: 18px; display: grid; place-items: center; border: 2px solid var(--canvas); border-radius: 9px; background: var(--blue); color: var(--action-ink); font-size: 10px; line-height: 14px; padding: 0 3px; font-variant-numeric: tabular-nums; }
 .message-popover { min-width: 192px; padding: 8px; }
 .message-popover::before { content: ''; position: absolute; bottom: 100%; left: 0; right: 0; height: 12px; }
 .message-popover > .message-menu-link { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 8px 12px; gap: 10px; border-radius: 4px; font-size: 14px; text-align: left; }
-.message-menu-link:hover, .message-menu-link:focus-visible { background: var(--surface-soft); }
+.message-menu-link:hover, .message-menu-link:focus-visible { color: var(--ink); background: var(--state-hover); }
 .message-menu-link > span:first-of-type { flex: 1; }
 .message-category-count { display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 10px; padding: 0 5px; background: var(--blue); color: var(--action-ink); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .message-login { min-width: 224px; display: grid; justify-items: center; gap: 16px; padding: 20px 12px; }
@@ -440,7 +441,9 @@ function restoreMessageTrigger() {
   .community-shell .header-actions { flex: none; }
   .community-shell .header-actions :is(.message-trigger, .header-welfare) { position: relative; flex: none; inline-size: 44px; block-size: 44px; min-block-size: 44px; padding: 0; border-radius: var(--radius); color: var(--muted); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare) > .rail-icon { inline-size: var(--icon-size-nav); block-size: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
-  .community-shell .header-actions :is(.message-trigger, .header-welfare):hover, .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--surface-soft); }
+  .community-shell .header-actions :is(.message-trigger, .header-welfare):hover { color: var(--ink); background: var(--state-hover); }
+  .community-shell .messages-menu[open] > .message-trigger, .community-shell .header-actions .header-welfare[aria-current="page"] { color: var(--ink); background: var(--state-selected); }
+  .community-shell .messages-menu[open] > .message-trigger:hover, .community-shell .header-actions .header-welfare[aria-current="page"]:hover { background: var(--state-pressed); }
   .community-shell .header-actions :is(.message-trigger, .header-welfare):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail { --icon-size-nav: 20px; position: fixed; z-index: 25; inset: 0 auto 0 0; display: flex; flex-direction: column; align-items: center; gap: 24px; width: var(--community-rail-width, 92px); padding: 16px 12px; }
   .rail-heading { display: flex; align-items: center; justify-content: center; flex: none; width: 64px; min-width: 0; height: var(--rail-brand-size); }
@@ -456,13 +459,14 @@ function restoreMessageTrigger() {
   .community-rail .nav-link, .community-rail .header-submission, .rail-settings, .rail-theme, .rail-toggle, .community-rail :deep(.tools-trigger) { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: var(--rail-control-size); height: var(--rail-control-size); min-height: var(--rail-control-size); padding: 0; margin: 0; border-radius: 12px; color: var(--muted); }
   .community-rail :deep(.rail-icon) { flex: none; width: var(--icon-size-nav); height: var(--icon-size-nav); stroke-width: var(--icon-stroke-width); }
   .community-rail .rail-label { display: none; }
-  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .rail-theme:hover, .rail-toggle:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail .nav-link:hover, .community-rail .header-submission:hover, .rail-settings:hover, .rail-theme:hover, .rail-toggle:hover, .community-rail :deep(.tools-trigger:hover) { color: var(--ink); background: var(--state-hover); }
   .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"] { color: var(--canvas); background: var(--ink); }
   .community-rail :is(.nav-link, .rail-settings, .rail-theme)[aria-current="page"]::after { display: none; }
   .header-welfare[aria-current="page"]::after { content: ''; display: block; position: absolute; bottom: 4px; left: calc(50% - 6px); width: 12px; height: 2px; border-radius: 1px; background: currentColor; }
   .community-rail :deep(.tools-trigger:focus-visible), .community-rail :is(.nav-link, .header-submission, .rail-settings, .rail-theme, .rail-toggle, .rail-brand-toggle):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
   .community-rail .community-actions { flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
-  .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--surface-soft); }
+  .community-rail :deep(.community-tools[open] > .tools-trigger) { color: var(--ink); background: var(--state-selected); }
+  .community-rail :deep(.community-tools[open] > .tools-trigger:hover) { background: var(--state-pressed); }
   .community-rail :deep(.tools-panel) { left: calc(var(--community-rail-width) + 12px); right: auto; top: 72px; max-height: calc(100dvh - 88px); }
   .rail-tooltip { position: fixed; z-index: 60; left: calc(var(--community-rail-width) - 4px); transform: translateY(-50%); padding-left: 12px; max-width: calc(100vw - var(--community-rail-width) - 12px); }
   .rail-tooltip > span { display: block; padding: 8px 12px; border-radius: 6px; background: var(--ink); color: var(--canvas); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
@@ -472,7 +476,7 @@ function restoreMessageTrigger() {
   .community-shell:not(.rail-expanded) .rail-brand :is(img, .rail-brand-fallback) { width: var(--rail-brand-size); height: var(--rail-brand-size); border-radius: 12px; }
   .community-shell:not(.rail-expanded) .rail-brand-toggle { position: relative; padding: 0; border-radius: 12px; color: var(--muted); }
   .rail-brand-toggle > .rail-icon { position: absolute; opacity: 0; }
-  .community-shell:not(.rail-expanded) .rail-brand-toggle:is(:hover, :focus-visible) { color: var(--ink); background: var(--surface-soft); }
+  .community-shell:not(.rail-expanded) .rail-brand-toggle:is(:hover, :focus-visible) { color: var(--ink); background: var(--state-hover); }
   .rail-brand-toggle:is(:hover, :focus-visible) :is(img, .rail-brand-fallback) { opacity: 0; }
   .rail-brand-toggle:is(:hover, :focus-visible) > .rail-icon { opacity: 1; }
   .community-shell:not(.rail-expanded) :is(.rail-primary, .rail-utilities) { width: calc(var(--rail-control-size) + 16px); }
@@ -509,9 +513,9 @@ function restoreMessageTrigger() {
   .mobile-header-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 2px; height: 51px; max-width: 640px; margin-inline: auto; }
   .mobile-discovery-nav { display: flex; align-items: stretch; justify-content: space-evenly; min-width: 0; height: 100%; }
   .mobile-discovery-nav > a { position: relative; display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0 6px; font-size: 16px; font-weight: 600; color: var(--muted); }
-  .mobile-discovery-nav > a:hover, .mobile-discovery-nav > a[aria-current] { color: var(--blue); }
+  .mobile-discovery-nav > a:hover, .mobile-discovery-nav > a[aria-current] { color: var(--ink); }
   .mobile-discovery-nav > a[aria-current] { font-weight: 750; }
-  .mobile-discovery-nav > a[aria-current]::after { content: ''; position: absolute; bottom: 2px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: var(--blue); }
+  .mobile-discovery-nav > a[aria-current]::after { content: ''; position: absolute; bottom: 2px; left: calc(50% - 10px); width: 20px; height: 3px; border-radius: 2px; background: currentColor; }
   .mobile-discovery-nav > a:focus-visible { outline-offset: -4px; }
   .mobile-search-toggle { width: 44px; height: 44px; color: var(--ink); }
   .mobile-community-search { display: flex; gap: 8px; min-width: 0; height: 44px; }

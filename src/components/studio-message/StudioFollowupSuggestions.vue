@@ -16,7 +16,8 @@ const items = computed(() => [...new Set(props.suggestions.map(text => text.trim
 button { display: flex; align-items: center; gap: 12px; min-height: 36px; max-width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; text-align: start; cursor: pointer; }
 button span { overflow-wrap: anywhere; }
 svg { flex: none; }
-button:hover:not(:disabled) { color: var(--ink); background: var(--surface-soft); }
+button:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+button:active:not(:disabled) { color: var(--ink); background: var(--state-pressed); }
 button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 button:disabled { opacity: .6; cursor: default; }
 @media (pointer: coarse), (max-width: 639px) { button { min-height: 44px; } }

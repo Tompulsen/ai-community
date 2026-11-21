@@ -76,8 +76,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .price-fallback { padding-top: 8px; font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-line; }
 .price-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-top: auto; padding-top: 4px; color: var(--muted); font-size: 12px; }
 .price-single-group { min-width: 0; overflow-wrap: anywhere; }
-.price-group { width: auto; min-width: 0; max-width: calc(100% - 72px); min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 0; border-radius: 6px; background: var(--surface-soft); font-family: inherit; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); color: var(--ink); text-overflow: ellipsis; }
-.price-group option { background: var(--surface); color: var(--ink); }
+.price-group { width: auto; min-width: 0; max-width: calc(100% - 72px); min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 0; border-radius: 6px; font-family: inherit; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); color: var(--ink); text-overflow: ellipsis; }
 .model-price-dialog { width: min(480px, calc(100vw - 24px)); }
 .price-details { font-size: 13px; line-height: 1.5; }
 .price-details h3 { font-size: 15px; font-weight: 500; line-height: 22px; overflow-wrap: anywhere; }

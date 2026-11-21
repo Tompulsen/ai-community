@@ -11,7 +11,8 @@
   --settings-width: 1280px;
   --settings-control-width: 208px;
   --settings-control-height: var(--control-height);
-  --settings-form-width: 720px;
+  --settings-form-width: 912px;
+  --settings-group-label-width: 160px;
   --settings-compact-control-width: 192px;
   --auth-canvas: #fff;
   --auth-ink: #101828;

@@ -220,8 +220,8 @@ watch(dirty, value => { if (value) saved.value = false })
 .switch-row > span { display: grid; gap: 4px; }
 .switch-row strong { font-size: 14px; font-weight: 500; }
 .switch-row small { color: var(--muted); font-size: 12px; }
-.switch-row input { appearance: none; position: relative; width: 40px; height: 24px; flex: 0 0 40px; margin: 0; border: 1px solid var(--muted); border-radius: 20px; background: var(--surface-soft); cursor: pointer; }
-.switch-row input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform 160ms ease; }
+.switch-row input { appearance: none; position: relative; width: 40px; height: 24px; flex: 0 0 40px; margin: 0; border: 1px solid var(--control-border); border-radius: 20px; background: var(--surface-soft); cursor: pointer; }
+.switch-row input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ink); transition: transform 160ms ease; }
 .switch-row input:checked { background: var(--blue); border-color: var(--blue); }
 .switch-row input:checked::before { background: var(--action-ink); transform: translateX(16px); }
 .switch-row input:disabled { cursor: wait; opacity: .5; }

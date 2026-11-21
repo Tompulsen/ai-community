@@ -124,7 +124,8 @@ defineExpose({ open, close, visible })
 .studio-sidebar-links { display: grid; gap: 4px; }
 .studio-sidebar-links :is(a, button), .studio-sidebar-bottom > :is(button, a) { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 12px; font-size: 14px; text-align: left; color: var(--muted); border: 0; border-radius: 8px; }
 .studio-sidebar-links :is(a, button) > svg, .studio-sidebar-bottom > :is(button, a) > svg, #studio-sidebar-menu :deep(> .studio-tool > svg) { flex: none; width: 20px; height: 20px; }
-.studio-sidebar-links :is(a, button):hover, .studio-sidebar-bottom > :is(button, a):hover { background: var(--surface-soft); color: var(--ink); }
+.studio-sidebar-links :is(a, button):hover:not(:disabled), .studio-sidebar-bottom > :is(button, a):hover:not(:disabled) { background: var(--state-hover); color: var(--ink); }
+.studio-sidebar-links :is(a, button):active:not(:disabled), .studio-sidebar-bottom > :is(button, a):active:not(:disabled) { background: var(--state-pressed); color: var(--ink); }
 .studio-sidebar-create.active { color: var(--ink); }
 .studio-sidebar-history { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 32px; }
 .studio-sidebar-history :deep(.conversation-record) { padding-inline: 12px; gap: 12px; }
@@ -148,7 +149,8 @@ defineExpose({ open, close, visible })
   .studio-sidebar-history :deep(.conversation-search input) { font-size: 16px; }
   .studio-sidebar-footer { display: flex; align-items: center; gap: 4px; flex: none; padding-top: 12px; min-width: 0; }
   .studio-sidebar-account { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 44px; padding: 6px 12px; border-radius: 8px; }
-  .studio-sidebar-account:hover { background: var(--surface-soft); }
+  .studio-sidebar-account:hover { color: var(--ink); background: var(--state-hover); }
+  .studio-sidebar-account:active { color: var(--ink); background: var(--state-pressed); }
   .studio-sidebar-account > .avatar { flex: none; object-fit: cover; }
   .studio-sidebar-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 }

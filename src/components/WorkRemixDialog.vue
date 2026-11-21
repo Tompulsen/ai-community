@@ -105,7 +105,8 @@ header .icon-button { width: 44px; height: 44px; }
 #remix-choice-description { margin: 8px 0 20px; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .remix-choices { display: grid; gap: 12px; }
 .remix-choice { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 88px; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); }
-.remix-choice:not(:disabled):hover { border-color: var(--blue); }
+.remix-choice:not(:disabled):hover { background: var(--state-hover); }
+.remix-choice:not(:disabled):hover small { color: var(--ink); }
 .remix-choice > svg { flex: none; }
 .remix-choice > span { flex: 1; min-width: 0; display: grid; gap: 6px; }
 .remix-choice strong { font-size: 15px; font-weight: 600; }

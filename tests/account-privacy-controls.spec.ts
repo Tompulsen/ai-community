@@ -21,10 +21,15 @@ for (const theme of themes) {
     const pickerStyle = await picker.evaluate(element => ({
       background: getComputedStyle(element, '::picker(select)').backgroundColor,
       trigger: getComputedStyle(element).backgroundColor,
+      border: getComputedStyle(element, '::picker(select)').borderTopWidth,
+      font: getComputedStyle(element, '::picker(select)').fontFamily,
+      triggerFont: getComputedStyle(element).fontFamily,
     }))
     expect(pickerStyle.background).toBe(pickerStyle.trigger)
+    expect(pickerStyle.border).toBe('0px')
+    expect(pickerStyle.font).toBe(pickerStyle.triggerFont)
     expect((await picker.boundingBox())!.height).toBeLessThanOrEqual(36)
-    expect((await page.locator('.privacy-settings').boundingBox())!.width).toBeLessThanOrEqual(720)
+    expect((await page.locator('.privacy-fields').first().boundingBox())!.width).toBeLessThanOrEqual(720)
     await expect(page.getByRole('button', { name: '保存隐私设置', exact: true })).toBeInViewport()
     await picker.focus()
     await page.keyboard.press('Space')
@@ -53,6 +58,37 @@ for (const theme of themes) {
     await page.screenshot({ path: test.info().outputPath(`privacy-compact-${theme.id}.png`) })
   })
 }
+
+test('privacy menus prefer the space below and remain reachable in a short viewport', async ({ page }) => {
+  await mockUnifiedAccount(page, true)
+  await page.addInitScript(() => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode: 'light' })))
+  await page.setViewportSize({ width: 1440, height: 740 })
+  await page.goto('/account?tab=privacy')
+  for (const id of ['privacy-newcomers', 'privacy-following', 'privacy-followers']) {
+    const control = page.locator('#' + id)
+    const previousValue = await control.inputValue()
+    await control.click()
+    await expect.poll(() => control.evaluate(element => element.matches(':open'))).toBe(true)
+    const trigger = (await control.boundingBox())!
+    const first = (await control.locator('option').first().boundingBox())!
+    const last = (await control.locator('option').last().boundingBox())!
+    expect(first.y).toBeGreaterThanOrEqual(trigger.y + trigger.height)
+    expect(last.y + last.height).toBeLessThanOrEqual(740)
+    await page.screenshot({ path: test.info().outputPath(`${id}-open.png`) })
+    await page.keyboard.press('Escape')
+    await expect(control).toHaveValue(previousValue)
+  }
+  await page.setViewportSize({ width: 1440, height: 580 })
+  const followers = page.locator('#privacy-followers')
+  await followers.click()
+  const first = (await followers.locator('option').first().boundingBox())!
+  const last = (await followers.locator('option').last().boundingBox())!
+  expect(first.y).toBeGreaterThanOrEqual(0)
+  expect(last.y + last.height).toBeLessThanOrEqual(580)
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  await expect(followers).toHaveValue('private')
+})
 
 test.describe('privacy picker on touch screens', () => {
   test.use({ isMobile: true, hasTouch: true })

@@ -32,7 +32,7 @@ const safeSources = computed(() => props.sources.flatMap((source, index) => {
 <style scoped>
 .message-sources { min-width: 0; margin-top: 16px; color: var(--ink); font-size: 13px; line-height: 20px; }
 summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 4px 8px; border-radius: 6px; color: var(--muted); cursor: pointer; list-style: none; }
-summary::-webkit-details-marker { display: none; }summary:hover { background: var(--surface-soft); }summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+summary::-webkit-details-marker { display: none; }summary:hover { color: var(--ink); background: var(--state-hover); }summary:active { color: var(--ink); background: var(--state-pressed); }summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 details[open] summary > svg { transform: rotate(180deg); }
 ol { display: grid; gap: 16px; margin: 8px 0 0; padding: 0 8px; list-style: none; }
 li { display: grid; grid-template-columns: 22px minmax(0, 1fr) 14px; align-items: start; gap: 8px; }

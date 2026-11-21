@@ -181,11 +181,13 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
 .messages-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 480px; height: max(480px, calc(100svh - var(--header-height) - var(--mobile-nav-height) - 160px)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--canvas); }
 .thread-pane { padding: 12px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 0; overflow-y: auto; }
 .thread-row { display: flex; align-items: center; flex-shrink: 0; gap: 12px; padding: 12px; min-height: 72px; border: 1px solid transparent; border-radius: 4px; }
-.thread-row:hover { background: var(--surface-soft); }
-.thread-row.active { background: var(--surface-soft); border-color: var(--focus-ring); }
+.thread-row:hover { background: var(--state-hover); }
+.thread-row.active { background: var(--state-selected); border-color: var(--state-selected-border); }
+.thread-row.active:hover { background: var(--state-pressed); }
 .thread-row > div { min-width: 0; flex: 1; }
 .thread-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 20px; font-weight: 500; }
 .thread-row p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 20px; color: var(--muted); margin-top: 4px; }
+.thread-row:is(:hover, .active) p { color: var(--ink); }
 .thread-pane > .text-link { margin-top: auto; padding: 16px 12px 4px; font-size: 12px; }
 .thread-pane > .form-note { padding: 12px; }
 .unread-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; min-height: 20px; background: var(--blue); color: var(--action-ink); border-radius: 6px; padding: 0 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -254,7 +256,7 @@ function openShare() { shareDialog.value?.showModal(); void loadShareWorks() }
   .inbox-actions .button { min-height: 44px; font-size: 12px; padding-inline: 10px; }
   .inbox-categories { position: sticky; top: var(--header-height); z-index: 4; display: flex; gap: 0; margin: 0; padding: 0 8px; background: var(--canvas); }
   .inbox-categories .tab { flex: 1; justify-content: center; min-height: 50px; padding: 10px 4px; font-size: 13px; white-space: nowrap; }
-  .inbox-categories .tab.active { color: var(--blue); }
+  .inbox-categories .tab.active { color: var(--ink); }
   .inbox-panel { min-height: calc(100svh - var(--header-height) - var(--mobile-nav-height) - 110px); border-top: 0; }
   .inbox-notification { padding: 18px 14px; }
   .messages-layout { grid-template-columns: minmax(0, 1fr); min-height: 360px; height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 104px); border: 0; border-radius: 0; }

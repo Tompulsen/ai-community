@@ -23,7 +23,7 @@ const label = computed(() => props.quote.role === 'assistant' ? 'AI 回复' : pr
 .quote-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 4px; }
 .quote-heading > span { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }.quote-heading svg { flex: none; }
 .quote-heading button { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; color: var(--ink); background: transparent; cursor: pointer; }
-.quote-heading button:hover { background: var(--surface); }.quote-heading button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.quote-heading button:hover { color: var(--ink); background: var(--state-hover); }.quote-heading button:active { color: var(--ink); background: var(--state-pressed); }.quote-heading button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .quote-excerpt { max-height: 80px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 600px) { .quote-heading button { width: 44px; height: 44px; } }
 </style>

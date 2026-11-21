@@ -71,11 +71,16 @@ const icon = (chat: NativeChat) => ({ text: MessageSquare, image: ImageIcon, vid
 .conversation-record > svg, .conversation-record > input { flex: none; }
 .conversation-record > time { flex: none; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .conversation-record > input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
-.conversation-record.active, .conversation-record.selected, .conversation-row:hover > .conversation-record { color: var(--ink); background: var(--surface-soft); }
+.conversation-row:hover > .conversation-record:not(:disabled):not(:has(:disabled)) { color: var(--ink); background: var(--state-hover); }
+.conversation-record.active, .conversation-record.selected { color: var(--ink); background: var(--state-selected); }
+.conversation-row:hover > .conversation-record:is(.active, .selected):not(:disabled):not(:has(:disabled)), .conversation-record:active:not(:disabled):not(:has(:disabled)) { color: var(--ink); background: var(--state-pressed); }
+.conversation-row:hover > .conversation-record:not(:disabled):not(:has(:disabled)) > time, .conversation-record:is(.active, .selected) > time { color: var(--ink); }
 .row-tool { position: absolute; z-index: 1; inset-block: 0; margin-block: auto; display: grid; place-items: center; width: var(--conversation-tool-size); height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
 .conversation-more { inset-inline-end: calc(var(--conversation-tool-size) + 6px); }
 .conversation-drag-handle { inset-inline-end: 6px; }
-.row-tool:hover { color: var(--ink); background: var(--surface-soft); }
+.row-tool:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+.row-tool[aria-expanded="true"] { color: var(--ink); background: var(--state-selected); }
+.row-tool[aria-expanded="true"]:hover:not(:disabled), .row-tool:active:not(:disabled) { color: var(--ink); background: var(--state-pressed); }
 .conversation-drag-handle { cursor: grab; touch-action: none; }
 .conversation-drag-handle:active { cursor: grabbing; }
 .row-tool:disabled, .conversation-record:disabled { cursor: default; opacity: .55; }

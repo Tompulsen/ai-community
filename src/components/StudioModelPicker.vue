@@ -148,7 +148,7 @@ onBeforeUnmount(() => dialog.value?.close())
 .studio-model-trigger input { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 8px 24px 8px 4px; background: transparent; border: 0; border-radius: inherit; outline: none; cursor: pointer; font-size: 14px; line-height: 20px; text-overflow: ellipsis; }
 .studio-model-trigger input[readonly] { caret-color: transparent; }
 .studio-select.studio-model-trigger:focus-within { outline: none; }
-.studio-model-trigger input:focus-visible { background: var(--surface-soft); color: var(--ink); }
+.studio-model-trigger input:focus-visible { background: var(--state-hover); color: var(--ink); }
 .studio-model-trigger > svg { position: absolute; right: 4px; pointer-events: none; }
 .studio-model-dialog { width: min(1000px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); display: none; flex-direction: column; border-radius: 12px; background: var(--surface); }
 .studio-model-dialog[open] { display: flex; }
@@ -159,47 +159,60 @@ onBeforeUnmount(() => dialog.value?.close())
 .model-source { display: flex; flex: none; align-items: center; gap: 12px; padding: 0 24px 16px; min-width: 0; }
 .source-selector { position: relative; flex: 1; min-width: 0; }
 .source-trigger { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 12px; text-align: left; border-radius: 8px; }
-.source-trigger:hover:not(:disabled), .source-trigger[aria-expanded="true"] { background: var(--surface-soft); }
+.source-trigger:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+.source-trigger[aria-expanded="true"] { color: var(--ink); background: var(--state-selected); }
+.source-trigger[aria-expanded="true"]:hover:not(:disabled) { background: var(--state-pressed); }
 .source-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-trigger > svg:last-child { margin-left: auto; }
-.source-options { position: absolute; z-index: 2; top: calc(100% + 8px); left: 0; right: 0; max-height: min(440px, calc(100dvh - 240px)); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); }
+.source-options { position: absolute; z-index: 2; top: calc(100% + 8px); left: 0; right: 0; max-height: min(440px, calc(100dvh - 240px)); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border-radius: 8px; background: var(--popover-surface); border: 1px solid var(--border); box-shadow: var(--popover-shadow); }
 .source-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 6px; text-align: left; }
 .source-option > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .source-option > svg { margin-left: auto; }
-.source-option:hover:not(:disabled), .source-option[aria-pressed="true"] { background: var(--surface-soft); }
-.source-trigger:focus-visible, .source-option:focus-visible { outline: 1px solid var(--muted); outline-offset: -2px; }
+.source-option:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+.source-option[aria-pressed="true"] { color: var(--ink); background: var(--state-selected); }
+.source-option[aria-pressed="true"]:hover:not(:disabled) { background: var(--state-pressed); }
+.source-trigger:focus-visible, .source-option:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .source-type { color: var(--muted); font-size: 12px; }
+.source-trigger:is(:hover:not(:disabled), [aria-expanded="true"]) .source-type, .source-option:is(:hover:not(:disabled), [aria-pressed="true"]) .source-type { color: var(--ink); }
 .model-source > .text-link { margin-left: auto; white-space: nowrap; }
 .model-picker-error { margin: 0 24px 12px; font-size: 13px; color: var(--danger); }
 .model-dialog-body { display: grid; grid-template-columns: 180px minmax(0, 1fr); flex: 1; min-height: 0; gap: 20px; padding: 0 24px 24px; }
 .model-categories { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
 .model-categories > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; min-height: 44px; padding: 10px 12px; border-radius: 6px; text-align: left; color: var(--muted); }
-.model-categories > button[aria-pressed="true"] { color: var(--ink); background: var(--surface-soft); }
+.model-categories > button:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+.model-categories > button[aria-pressed="true"] { color: var(--ink); background: var(--state-selected); }
+.model-categories > button[aria-pressed="true"]:hover:not(:disabled) { background: var(--state-pressed); }
 .model-results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .model-search-row { display: flex; flex: none; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .model-search { display: flex; flex: 1; align-items: center; min-width: 0; gap: 8px; padding-inline: 12px; min-height: 44px; background: var(--surface); border-radius: 6px; }
-.model-search:focus-within { outline: 1px solid var(--muted); }
+.model-search:focus-within { outline: none; }
+.model-search:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .model-search input { width: 100%; min-width: 0; background: transparent; border: 0; outline: none; padding-block: 10px; font-size: 16px; }
 .model-search-row > span { flex: none; }
 .model-search .icon-button { border: 0; background: transparent; }
 .model-list { overflow-y: auto; min-height: 0; flex: 1; }
 .model-empty { padding: 32px 12px; text-align: center; color: var(--muted); }
 .model-item { border-radius: 6px; }
-.model-item.selected { background: var(--surface-soft); color: var(--ink); }
+.model-item.selected { background: var(--state-selected); color: var(--ink); }
 .model-row { display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; align-items: center; gap: 4px; padding-right: 4px; }
 .model-option { display: flex; align-items: center; gap: 16px; min-width: 0; min-height: 76px; padding: 12px; text-align: left; }
-.model-option:hover { background: var(--surface-soft); border-radius: 6px; }
+.model-option:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); border-radius: 6px; }
+.model-item.selected .model-option:hover:not(:disabled) { background: var(--state-pressed); }
 .model-option > img { flex: none; padding: 3px; border-radius: 6px; background: white; object-fit: contain; }
 .model-info { display: grid; min-width: 0; gap: 6px; overflow-wrap: anywhere; }
 .model-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
 .model-heading strong { font-size: 15px; font-weight: 500; }
-.model-kind { font-size: 12px; color: var(--amber); }
+.model-kind { font-size: 12px; color: var(--muted); }
 .model-description, .model-manual { font-size: 12px; color: var(--muted); }
+.model-option:hover:not(:disabled) :is(.model-kind, .model-description, .model-manual), .model-item.selected :is(.model-kind, .model-description, .model-manual) { color: var(--ink); }
 .model-row > .icon-button { background: transparent; border: 0; }
+.model-row > .icon-button:is([aria-pressed="true"], [aria-expanded="true"]) { background: var(--state-selected); }
+:is(.model-dialog-header, .model-search, .model-row) > .icon-button:hover:not(:disabled) { background: var(--state-hover); }
+.model-row > .icon-button:is([aria-pressed="true"], [aria-expanded="true"]):hover:not(:disabled) { background: var(--state-pressed); }
 .model-row > .icon-button[aria-pressed="true"] { color: var(--amber); }
 .model-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; background: var(--surface); border-radius: 6px; }
 .model-settings label { display: grid; gap: 6px; font-size: 13px; }
-.model-settings select { width: 100%; min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 1px solid var(--border); border-radius: 6px; background: var(--canvas); font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); }
+.model-settings select { width: 100%; min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border-radius: 6px; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); }
 @media (max-width: 639px) {
   .studio-model-trigger input { min-height: 44px; max-width: none; font-size: 13px; }
   .model-trigger-width { min-height: 44px; font-size: 13px; }

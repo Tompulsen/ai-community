@@ -290,7 +290,7 @@ async function restartLogin() {
     </aside>
     <div :class="{ 'auth-panel': !session.user }"><div :class="{ 'auth-form': !session.user }">
     <RouterLink v-if="!session.user" to="/discover" class="auth-brand auth-mobile-brand" :aria-label="`${site.brand}首页`"><img v-if="site.logoUrl" class="auth-brand-mark" :src="site.logoUrl" width="36" height="36" alt="" /><span>{{ site.brand }}</span></RouterLink>
-    <div class="page-heading" :class="{ 'auth-heading': !session.user }"><div><h1>{{ session.user ? '账户设置' : resetRequested ? '找回章鱼账号密码' : registrationRequested ? '注册章鱼账号' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '登录章鱼账号' }}</h1><p v-if="!session.user && !resetRequested">{{ registrationRequested ? '创建你的章鱼账号' : identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
+    <div v-if="!session.user" class="page-heading auth-heading"><div><h1>{{ resetRequested ? '找回章鱼账号密码' : registrationRequested ? '注册章鱼账号' : identitySelection ? '确认登录账号' : requiresVerification ? '验证章鱼账号' : '登录章鱼账号' }}</h1><p v-if="!resetRequested">{{ registrationRequested ? '创建你的章鱼账号' : identitySelection ? '该登录名关联多个账号，请确认本次要使用的账号。' : requiresVerification ? '请输入章鱼账号要求的验证码' : '使用用户名或邮箱登录' }}</p></div></div>
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
     <p v-if="notice && !session.user" class="notice-inline auth-feedback" role="status">{{ notice }}</p>
     <PasswordRecovery v-if="resetToken" :reset-token="resetToken" @done="resetToken = undefined" />
@@ -337,16 +337,19 @@ async function restartLogin() {
       <p class="auth-browse">想先看看？<RouterLink to="/discover">浏览社区<ArrowUpRight :size="14" /></RouterLink></p>
     </div>
     <div v-else class="split-layout">
-      <aside v-show="!mobileSettings || !settingsDetail" class="settings-sidebar">
-        <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
+      <header v-show="!mobileSettings || !settingsDetail" class="settings-sidebar">
+        <div class="settings-header">
+          <div class="page-heading"><h1>账户设置</h1></div>
+          <label class="search-control settings-search"><Search :size="17" aria-hidden="true" /><input v-model="settingsQuery" type="search" placeholder="搜索设置" aria-label="搜索设置" /></label>
+          <div class="settings-sidebar-footer"><a v-if="centerUrl" :href="centerUrl" class="settings-nav-item" aria-label="章鱼账户中心" title="章鱼账户中心" target="_blank" rel="noopener noreferrer"><ArrowUpRight :size="18" aria-hidden="true" /><span>章鱼账户中心</span></a><button type="button" class="settings-nav-item signout" aria-label="退出登录" title="退出登录" :disabled="busy" @click="signOutFromSettings"><LogOut :size="18" aria-hidden="true" /><span>退出登录</span></button></div>
+        </div>
         <nav ref="settingsNav" class="account-tabs" aria-label="账户设置">
           <div v-for="group in settingsGroups" :key="group.label" class="settings-nav-group"><h2>{{ group.label }}</h2><template v-for="item in group.items" :key="item.id">
             <button v-wallet-prefetch="item.id === 'balance'" class="settings-nav-item" :data-setting="item.id" :class="{ active: showPanel && tab === item.id }" :aria-current="showPanel && tab === item.id ? 'page' : undefined" :aria-pressed="showPanel && tab === item.id" @click="navigateTab(item.id)"><component :is="item.icon" :size="18" aria-hidden="true" /><span>{{ item.label }}</span><span v-if="item.id === 'privacy' && privacyDirty" class="draft-dot" title="有未保存的修改" aria-hidden="true" /><ChevronRight class="settings-nav-chevron" :size="16" aria-hidden="true" /></button>
           </template></div>
           <div v-if="!settingsGroups.length" class="settings-no-results" role="status"><p>没有找到相关设置</p><button type="button" class="text-link" @click="settingsQuery = ''">清除搜索</button></div>
         </nav>
-        <div class="settings-sidebar-footer"><a v-if="centerUrl" :href="centerUrl" class="settings-nav-item" target="_blank" rel="noopener noreferrer"><ArrowUpRight :size="18" aria-hidden="true" /><span>章鱼账户中心</span></a><button type="button" class="settings-nav-item signout" :disabled="busy" @click="signOutFromSettings"><LogOut :size="18" aria-hidden="true" /><span>退出登录</span></button></div>
-      </aside>
+      </header>
       <div v-show="showPanel" ref="settingsMain" class="settings-main" tabindex="-1">
         <AccountPrivacy v-if="tab === 'privacy'" ref="privacyPanel" @dirty="privacyDirty = $event" />
         <AccountTheme v-else-if="tab === 'theme'" />
@@ -366,42 +369,63 @@ async function restartLogin() {
 </template>
 
 <style scoped>
-/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · nav: kept · signature: compact settings rows · states: loading empty error full · modes: light+dark · v2.0.0 */
-/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V3 · weakest: S, preserve the community account model and existing navigation */
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · nav: horizontal settings navigation · signature: focused account preferences · states: loading empty error full · modes: light+dark · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S3 R5 V4 · weakest: S, retain the community follow rules and account boundaries */
+/* Hallmark · finish-review: subagent · ship · no blocking visual findings; fields, handlers and protected drafts retained */
 /* Hallmark · waive 24b · existing balance action uses 6px by 10px padding · DESIGN.md preserves the compact account-center action while this redesign focuses on settings */
 /* Hallmark · dismissed 49 · identity-choice contains a username and account_label on separate lines; the existing identity picker preserves both while auth-button actions stay on one line */
 .identity-choice { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; overflow-wrap: anywhere; white-space: normal; gap: 4px; padding: 12px 16px; }
 .settings-page { max-width: var(--settings-width); padding-top: var(--settings-space-section); }
-.settings-page .page-heading { min-height: 32px; margin-bottom: var(--settings-space-section); }
+.settings-page .page-heading { flex: 1; min-width: 0; margin: 0; }
 .settings-page .page-heading h1 { font-size: 24px; line-height: 32px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
-.settings-page .split-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: var(--settings-space-layout); align-items: start; }
-.settings-sidebar { position: sticky; top: 24px; min-width: 0; }
-.settings-search { width: 100%; min-height: var(--settings-control-height); margin-bottom: var(--settings-space-section); background: var(--surface); border-color: var(--control-border); }
-.account-tabs { display: grid; gap: 24px; min-width: 0; }
+.settings-page .split-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--settings-space-section); align-items: start; }
+.settings-sidebar { min-width: 0; }
+.settings-header { display: flex; align-items: center; gap: var(--settings-space-group); min-width: 0; }
+.settings-search { width: var(--settings-control-width); min-width: 0; min-height: var(--settings-control-height); background: var(--surface-soft); border-color: var(--control-border); }
+.account-tabs { display: grid; gap: var(--settings-space-section); min-width: 0; margin-block-start: var(--settings-space-group); }
 .settings-nav-group { display: grid; gap: 4px; }
 .settings-nav-group h2 { margin: 0 12px 8px; color: var(--muted); font-size: 12px; line-height: 20px; font-weight: 400; }
-.settings-nav-item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 12px; border-radius: 6px; text-align: left; color: var(--muted); }
+.settings-nav-item { position: relative; display: flex; align-items: center; gap: var(--settings-space-related); min-height: var(--settings-control-height); padding: var(--settings-space-related) var(--settings-space-row); border-radius: var(--radius); text-align: left; color: var(--muted); }
 .settings-nav-item > span:first-of-type { flex: 1; }
 .settings-nav-item > svg { flex-shrink: 0; }
-.settings-nav-item:hover { background: var(--surface); color: var(--ink); }
+.settings-nav-item:hover { background: var(--state-hover); color: var(--ink); }
+.settings-nav-item:active { background: var(--state-pressed); }
+.settings-nav-item:disabled { opacity: .55; cursor: not-allowed; }
 .settings-nav-item { white-space: nowrap; }
 .settings-nav-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
-.settings-nav-item.active { background: var(--surface-soft); color: var(--ink); }
-.settings-nav-item.active::after { content: ''; width: 12px; height: 2px; flex: none; border-radius: 1px; background: currentColor; }
+.settings-nav-item.active { background: var(--state-selected); color: var(--ink); }
+.settings-nav-item.active:hover { background: var(--state-pressed); }
+.settings-nav-item.active::after { content: ''; width: 12px; height: 2px; flex: none; background: currentColor; }
 .settings-nav-chevron { display: none; }
-.draft-dot { width: 12px; height: 2px; border-radius: 1px; background: var(--amber); flex-shrink: 0; }
-.settings-sidebar-footer { display: grid; gap: 4px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.draft-dot { position: absolute; inset-block-start: var(--settings-space-related); inset-inline-end: var(--settings-space-label); width: 12px; height: 2px; background: var(--amber); }
+.settings-sidebar-footer { display: flex; align-items: center; gap: var(--settings-space-label); flex: none; }
+.settings-sidebar-footer .settings-nav-item { justify-content: center; width: var(--settings-control-height); padding: 0; }
+.settings-sidebar-footer .settings-nav-item > span { position: absolute; inline-size: 1px; block-size: 1px; overflow: clip; clip-path: inset(50%); white-space: nowrap; }
 .settings-sidebar-footer .signout { color: var(--danger); }
 .settings-no-results { display: grid; gap: 12px; padding: 16px 12px; color: var(--muted); }
 .settings-no-results .text-link { justify-self: start; min-height: 44px; }
 .settings-main { min-width: 0; }
+.settings-main :deep(.settings-preference-group) { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--settings-space-related); min-width: 0; padding-block-start: var(--settings-space-related); border-block-start: 1px solid var(--border); }
+.settings-main :deep(.settings-preference-title) { display: flex; align-items: center; gap: var(--settings-space-related); min-width: 0; margin: 0; font-size: var(--font-size-field); line-height: var(--line-height-field); font-weight: 600; }
+.settings-main :deep(.settings-preference-title svg) { flex: none; }
+.settings-main :deep(.settings-group-legend) { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; overflow: clip; clip-path: inset(50%); white-space: nowrap; }
+@container settings-preferences (min-width: 760px) {
+  .settings-main :deep(.settings-preference-group) { grid-template-columns: var(--settings-group-label-width) minmax(0, 1fr); column-gap: var(--settings-space-layout); }
+  .settings-main :deep(.settings-preference-title) { align-self: start; padding-block-start: var(--settings-space-related); }
+  .settings-main :deep(.settings-preference-footer) { margin-inline-start: calc(var(--settings-group-label-width) + var(--settings-space-layout)); }
+}
+@container settings-preferences (max-width: 560px) {
+  .settings-main :deep(.settings-preference-group) { row-gap: var(--settings-space-label); }
+}
+.settings-page[data-settings-tab="security"] .settings-main { container: settings-content / inline-size; }
 .settings-main:focus { outline: none; }
 .settings-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.panel-section) { border-top: 0; padding-top: 0; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading) { align-items: flex-start; margin-bottom: var(--settings-space-group); }
+.settings-page:not([data-settings-tab="balance"]) .settings-main > :deep(.panel-section),
+.settings-page .settings-main :deep(.security-identity) { border-top: 0; padding-top: 0; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main > :deep(.panel-section > .section-heading) { align-items: flex-start; margin-bottom: var(--settings-space-group); }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading h2) { font-size: 20px; line-height: 28px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.section-heading .form-note) { margin-top: 8px; font-size: 14px; line-height: 20px; }
-.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: var(--control-size, var(--settings-control-height)); font-size: var(--control-font-size, var(--font-size-input)); background: var(--surface); border-radius: 6px; }
+.settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.control) { min-height: var(--control-size, var(--settings-control-height)); font-size: var(--control-font-size, var(--font-size-input)); border-radius: 6px; }
 .settings-page:not([data-settings-tab="balance"]) .settings-main :deep(.button) { min-height: var(--control-size, var(--control-height)); }
 .settings-leave-actions { justify-content: end; flex-wrap: wrap; }
 .balance-settings { display: grid; gap: 16px; }
@@ -410,6 +434,14 @@ async function restartLogin() {
 .balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary h2 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }.balance-summary .form-note { margin-top: 4px; }
 .account-balance { font-size: 20px; line-height: 28px; margin: 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+@media (min-width: 1000px) {
+  .account-tabs { display: flex; align-items: center; gap: var(--settings-space-related); border-bottom: 1px solid var(--border); }
+  .settings-nav-group { display: contents; }
+  .settings-nav-group h2 { position: absolute; inline-size: 1px; block-size: 1px; overflow: clip; clip-path: inset(50%); white-space: nowrap; }
+  .account-tabs .settings-nav-item { flex: none; min-height: 48px; padding-inline: var(--settings-space-group); border-radius: 0; }
+  .account-tabs .settings-nav-item.active { background: transparent; }
+  .account-tabs .settings-nav-item.active::after { position: absolute; inset-inline: var(--settings-space-group); inset-block-end: -1px; width: auto; }
+}
 @media (max-width: 639px) {
   .balance-settings .balance-panel { padding-bottom: 16px; }.balance-actions .button, .balance-actions .icon-button { min-height: 44px; }
 }
@@ -485,17 +517,17 @@ async function restartLogin() {
 }
 
 @media (max-width: 999px) {
-  .settings-page { padding-top: 24px; }
+  .settings-page { padding-top: var(--settings-space-group); }
   .settings-page .page-heading { display: none; }
-  .settings-page .split-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .settings-sidebar { position: static; max-width: 760px; margin-inline: auto; width: 100%; }
-  .settings-search { margin-bottom: 24px; min-height: 48px; }
+  .settings-page .split-layout { gap: 0; }
+  .settings-sidebar { max-width: 760px; margin-inline: auto; width: 100%; }
+  .settings-header { gap: var(--settings-space-related); }
+  .settings-search { flex: 1; width: auto; min-height: 48px; }
   .account-tabs { display: grid; gap: 24px; }
   .settings-nav-group { gap: 0; }
   .settings-nav-group h2 { margin-inline: 0; }
   .settings-nav-item { min-height: 56px; border-radius: 0; padding-inline: 0; font-size: 14px; border-bottom: 1px solid var(--border); }
   .settings-nav-chevron { display: block; color: var(--muted); }
-  .settings-sidebar-footer { margin-top: 32px; border-top: 0; padding-top: 0; }
   .settings-sidebar-footer .settings-nav-item { min-height: 48px; border-bottom: 0; }
   .settings-main { width: 100%; margin-inline: auto; }
   .balance-settings { gap: 8px; }

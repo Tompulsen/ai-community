@@ -98,6 +98,6 @@ function quoteSelection() {
 </template>
 
 <style scoped>
-.quote-selection { position: fixed; z-index: 210; display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 88px; height: 44px; padding: 8px 12px; border: 0; border-radius: 6px; background: var(--surface); box-shadow: 0 4px 20px rgb(0 0 0 / 18%); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; touch-action: manipulation; user-select: none; }
-.quote-selection:hover { background: var(--surface-soft); }.quote-selection:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
+.quote-selection { position: fixed; z-index: 210; display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 88px; height: 44px; padding: 8px 12px; border: 0; border-radius: 6px; background: var(--popover-surface); box-shadow: var(--popover-shadow); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; touch-action: manipulation; user-select: none; }
+.quote-selection:hover:not(:disabled) { background: var(--state-hover); }.quote-selection:active:not(:disabled) { background: var(--state-pressed); }.quote-selection:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 </style>

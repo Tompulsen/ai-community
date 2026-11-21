@@ -317,7 +317,9 @@ onBeforeUnmount(() => {
 .conversation-section-toggle { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; text-align: start; cursor: pointer; }
 .conversation-section-toggle .collapsed { transform: rotate(-90deg); }
 .conversation-section-heading > .studio-tool, .project-create-action { display: grid; place-items: center; flex: none; width: 28px; height: 28px; min-height: 28px; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
-.conversation-section-toggle:hover, .conversation-section-heading > .studio-tool:hover, .project-create-action:hover { background: var(--surface-soft); color: var(--ink); }
+.conversation-section-toggle:hover:not(:disabled), .conversation-section-heading > .studio-tool:hover:not(:disabled), .project-create-action:hover:not(:disabled) { background: var(--state-hover); color: var(--ink); }
+.conversation-section-heading > .studio-tool:is([aria-expanded="true"], [aria-pressed="true"]) { background: var(--state-selected); color: var(--ink); }
+.conversation-section-toggle:active:not(:disabled), .conversation-section-heading > .studio-tool:active:not(:disabled), .project-create-action:active:not(:disabled), .conversation-section-heading > .studio-tool:is([aria-expanded="true"], [aria-pressed="true"]):hover:not(:disabled) { background: var(--state-pressed); color: var(--ink); }
 .conversation-list-heading { margin-top: 12px; }
 .project-create-form { display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; align-items: center; gap: 4px; margin: 4px 0; padding-inline: 8px 4px; }
 .project-create-form input { width: 100%; min-width: 0; min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--ink); font-size: 13px; line-height: 20px; }
@@ -329,8 +331,11 @@ onBeforeUnmount(() => {
 .project-toggle { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 40px; padding: 4px 6px; border: 0; border-radius: 6px; text-align: start; color: var(--muted); background: transparent; font-size: 12px; cursor: pointer; }
 .project-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.project-toggle svg { flex: none; }.project-toggle .collapsed { transform: rotate(-90deg); }
 .project-tool { display: grid; place-items: center; flex: none; width: 26px; height: 36px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
-.project-toggle:hover, .project-tool:hover { color: var(--ink); background: var(--surface-soft); }.project-tool:disabled, .project-toggle:disabled { cursor: default; opacity: .55; }
+.project-toggle:hover:not(:disabled), .project-tool:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }.project-tool:disabled, .project-toggle:disabled { cursor: default; opacity: .55; }
+.project-tool[aria-expanded="true"] { color: var(--ink); background: var(--state-selected); }
+.project-toggle:active:not(:disabled), .project-tool:active:not(:disabled), .project-tool[aria-expanded="true"]:hover:not(:disabled) { color: var(--ink); background: var(--state-pressed); }
 .project-toggle > .project-count { flex: none; color: var(--muted); min-width: 2ch; font-size: 11px; font-variant-numeric: tabular-nums; text-align: end; }
+.project-toggle:is(:hover, :active):not(:disabled) > .project-count { color: var(--ink); }
 .conversation-section[data-project-id]:not([data-project-id=""]) :deep(.conversation-group) { padding-inline-start: 12px; }
 .project-destinations { display: grid; gap: 4px; max-height: 45dvh; overflow-y: auto; }.project-destinations .studio-command > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }.project-destinations button:disabled { opacity: .5; }
 .project-toggle:focus-visible, .project-tool:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

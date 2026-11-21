@@ -54,7 +54,7 @@ textarea { box-sizing: border-box; width: 100%; min-height: 120px; padding: 12px
 textarea:focus-visible, button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .editor-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--surface-soft); }button svg { flex: none; }button:disabled, textarea:disabled { cursor: default; opacity: .55; }
+button:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }button:active:not(:disabled) { color: var(--ink); background: var(--state-pressed); }button svg { flex: none; }button:disabled, textarea:disabled { cursor: default; opacity: .55; }
 .editor-error { margin: 8px 0 0; color: var(--danger); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 600px) { button { min-height: 44px; } }
 </style>

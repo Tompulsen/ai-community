@@ -62,7 +62,7 @@ async function moreLogins() {
 <template>
   <div class="security-settings">
     <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
-    <div v-if="loading" class="empty-state" role="status">正在加载安全设置…</div>
+    <p v-if="loading" class="muted" role="status">正在加载安全设置…</p>
     <template v-else-if="security">
       <section class="panel-section security-identity stack">
         <div class="section-heading"><h2>章鱼账号安全</h2><ShieldCheck :size="18" /></div>
@@ -99,12 +99,13 @@ async function moreLogins() {
 .login-identifiers dt { color: var(--muted); }
 .login-identifiers dd { margin: 0; display: grid; gap: var(--settings-space-label); }
 .security-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--settings-space-section); align-items: start; }
-.security-settings > .notice-inline, .security-settings > .empty-state, .security-identity, .security-sessions, .security-history { grid-column: 1 / -1; }
-.security-settings .panel-section { padding-bottom: var(--settings-space-group); }
+.security-settings > .notice-inline, .security-settings > [role="status"], .security-identity, .security-sessions, .security-history { grid-column: 1 / -1; }
+.security-settings .panel-section { padding-block: 0; border-bottom: 0; }
 .security-settings .panel-section + .panel-section { border-top: 1px solid var(--border); padding-top: var(--settings-space-section); }
 .security-settings .stack { gap: var(--settings-space-row); }
 .security-settings h2 { font-size: 16px; line-height: 24px; min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
 .security-identity > .section-heading { margin: 0; }
+.security-settings .panel-section > .button { margin-block-start: var(--settings-space-label); }
 .security-identity > .button { align-self: flex-start; }
 .security-actions { display: flex; flex-wrap: wrap; gap: var(--settings-space-related); align-items: center; }
 .security-actions .button { flex: 0 1 auto; }
@@ -121,11 +122,11 @@ async function moreLogins() {
 .security-settings .button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .security-settings .button:active { background: var(--surface-soft); }
 .security-settings .button:disabled { opacity: .55; cursor: not-allowed; }
-@media (min-width: 1280px) {
+@container settings-content (min-width: 760px) {
   .security-settings { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--settings-space-layout); }
   .security-settings .security-identity { grid-column: 1; grid-row: span 2; padding-inline-end: var(--settings-space-layout); border-inline-end: 1px solid var(--border); }
   .security-settings .security-sessions, .security-settings .security-history { grid-column: 2; }
-  .security-settings .security-sessions { border-top: 0; }
+  .security-settings .panel-section.security-sessions { border-top: 0; padding-top: 0; }
 }
 @media (max-width: 639px) { .security-actions .button { flex: 1 1 auto; } }
 @media (max-width: 399px) { .login-identifiers { grid-template-columns: 80px minmax(0, 1fr); gap: var(--settings-space-row) var(--settings-space-group); } }

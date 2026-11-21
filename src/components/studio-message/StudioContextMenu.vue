@@ -57,9 +57,10 @@ defineExpose({ open, close, visible })
   </div></Teleport>
 </template>
 <style scoped>
-.message-context-menu { position: fixed; inset: auto; margin: 0; min-width: 168px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 4px; border: 0; border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 6px 24px rgb(0 0 0 / 20%); overflow-y: auto; }
+.message-context-menu { position: fixed; inset: auto; margin: 0; min-width: 168px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 4px; border: 0; border-radius: 8px; background: var(--popover-surface); color: var(--ink); box-shadow: var(--popover-shadow); overflow-y: auto; }
 button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: start; cursor: pointer; }
-button:hover:not(:disabled), button:focus-visible { background: var(--surface-soft); }
+button:hover:not(:disabled), button:focus-visible { background: var(--state-hover); }
+button:active:not(:disabled) { background: var(--state-pressed); }
 button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 button.danger { color: var(--danger); }
 button:disabled { opacity: .5; cursor: default; }

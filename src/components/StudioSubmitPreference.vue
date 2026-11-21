@@ -16,7 +16,6 @@ function change(event: Event) {
 .submit-preference { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px; font-size: 14px; }
 svg { flex: none; color: var(--muted); }
 span { white-space: nowrap; }
-select { margin-left: auto; width: auto; min-width: 0; min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 0; border-radius: 6px; color: var(--ink); background: var(--surface-soft); font-family: inherit; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); }
+select { margin-left: auto; width: auto; min-width: 0; min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 0; border-radius: 6px; color: var(--ink); font-family: inherit; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); }
 select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
-option { background: var(--surface); }
 </style>

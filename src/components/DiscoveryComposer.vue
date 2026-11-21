@@ -67,7 +67,9 @@ async function send(value: StudioEntry) {
 h2 { margin: 0 0 20px; text-align: center; font-size: 28px; line-height: 40px; font-weight: 600; letter-spacing: 0; }
 .creation-modes { display: flex; width: fit-content; max-width: 100%; margin: 0 auto 24px; padding: 4px; border-radius: 16px; background: var(--surface-soft); }
 .creation-modes button { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 144px; min-height: 44px; padding: 8px 16px; border: 0; border-radius: 12px; color: var(--muted); background: transparent; font-size: 14px; }
-.creation-modes button[aria-pressed="true"] { color: var(--ink); background: var(--surface); }
+.creation-modes button:hover { color: var(--ink); background: var(--state-hover); }
+.creation-modes button[aria-pressed="true"] { color: var(--ink); background: var(--state-selected); }
+.creation-modes button[aria-pressed="true"]:hover { background: var(--state-pressed); }
 .discovery-workspace :deep(.studio-composer) { margin: 0; padding: 16px; border-radius: 24px; background: color-mix(in srgb, var(--surface) 88%, var(--canvas)); }
 .discovery-workspace :deep(.prompt-field) { margin: 0; min-width: 0; }
 .discovery-workspace :deep(.composer-input) { min-height: 96px; }

@@ -38,6 +38,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .account-balance { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; min-height: 44px; max-width: 160px; padding: 8px; border-radius: 6px; color: var(--ink); }
 .account-balance > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.account-balance:hover { background: var(--surface); }.account-balance.unavailable { color: var(--muted); }
+.account-balance:hover { background: var(--state-hover); color: var(--ink); }.account-balance.unavailable { color: var(--muted); }
+.account-balance.unavailable:hover { color: var(--ink); }
 @media (max-width: 639px) { .account-balance { flex: 0 1 auto; min-width: 44px; max-width: 108px; padding-inline: 4px; } }
 </style>

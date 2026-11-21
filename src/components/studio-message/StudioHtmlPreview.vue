@@ -53,7 +53,8 @@ onBeforeUnmount(() => window.removeEventListener('message', receiveSize))
 header { display: flex; align-items: center; gap: 4px; padding: 6px 8px; color: var(--muted); font-size: 12px; }
 header span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
-button:hover { color: var(--ink); background: var(--surface); }
+button:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+button:active:not(:disabled) { color: var(--ink); background: var(--state-pressed); }
 iframe { display: block; border: 0; width: 100%; background: white; }
 .expanded { position: fixed; z-index: 220; inset: 24px; width: calc(100% - 48px); max-width: none; height: calc(100% - 48px); max-height: none; margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; }
 .expanded::backdrop { background: #0009; }

@@ -76,17 +76,18 @@ small { color: var(--muted); font-size: 12px; line-height: 20px; }
 .queue-work { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .queue-work > span:nth-child(2) { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .queue-work strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
-.queue-work:hover strong { color: var(--blue-hover); }
+.queue-work:hover { background: var(--state-hover); }
 .queue-work .revision-label { color: var(--amber); }
 .queue-work > svg { flex-shrink: 0; color: var(--muted); }
 .queue-cover { width: 48px; height: 60px; flex: 0 0 48px; display: grid; place-items: center; overflow: hidden; background: var(--surface-soft); color: var(--muted); border-radius: 4px; }
 .queue-cover img { width: 100%; height: 100%; object-fit: cover; }
 .overview-shortcuts > h3 { margin: 12px 0; }
 .shortcut { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px; text-align: left; border-radius: 6px; }
-.shortcut:hover { background: var(--surface); }
+.shortcut:hover { background: var(--state-hover); }
 .shortcut > svg { color: var(--muted); flex-shrink: 0; }
 .shortcut > span { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .shortcut strong { font-size: 14px; font-weight: 500; }
+.queue-work:hover small:not(.revision-label), .queue-work:hover > svg, .shortcut:hover small, .shortcut:hover > svg { color: var(--ink); }
 .overview-empty { min-height: 250px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; text-align: center; }
 .overview-empty > svg { color: var(--green); }
 .overview-empty p { color: var(--muted); font-size: 12px; }

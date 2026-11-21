@@ -115,7 +115,7 @@ onBeforeUnmount(() => { active = false })
 .report-snapshot { margin-block: 16px; }
 .report-snapshot summary { cursor: pointer; color: var(--blue); padding-block: 8px; }
 .report-snapshot pre { max-height: 320px; overflow: auto; font-family: inherit; font-size: 14px; margin-top: 8px; padding: 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--muted); }
-.report-resolution { max-width: 640px; padding-left: 20px; border-left: 2px solid var(--blue); }
+.report-resolution { max-width: 640px; padding-left: 20px; border-left: 1px solid var(--border); }
 .report-resolution .stack { gap: 16px; }
 .report-resolution .table-actions { flex-wrap: wrap; gap: 8px; }
 .data-table { min-width: 560px; }

@@ -1,5 +1,33 @@
 [
  {
+  "date": "2026-11-21",
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "brand (locked DESIGN.md)",
+  "axes": "neutral / Schibsted Grotesk / existing theme accent",
+  "entry": "src/views/AccountView.vue",
+  "signature": "horizontal settings navigation with centered compact preferences",
+  "sections": [
+   "settings title and account tools",
+   "four destination navigation",
+   "follow approval",
+   "list visibility",
+   "explicit save"
+  ],
+  "nav": "existing community shell and horizontal settings destinations",
+  "footer": "kept",
+  "imagery": "actual local mock UI before and after screenshots",
+  "photos": [],
+  "waived": [
+   "24b: existing compact balance action padding retained"
+  ],
+  "finishReview": "subagent: ship; no blocking visual findings",
+  "verification": "51 related browser regressions and 3 classic-scrollbar navigation tests; six palettes, touch and keyboard; production build; 0 FAIL, 0 REFLEX; 22 links, 24 fields, 31 handlers and 9 headings retained",
+  "prompt": "使用 Hallmark 优化账户设置排版，保留全局配色与业务行为"
+ },
+ {
   "date": "2026-11-20",
   "mode": "redesign",
   "depth": "full",
@@ -9,7 +37,14 @@
   "axes": "neutral / Schibsted Grotesk / existing theme accent",
   "entry": "src/views/ActivityView.vue",
   "signature": "daily wheel and aligned prize ledger",
-  "sections": ["daily availability", "draw controls and wheel", "prize ledger", "compact account status", "referral progress", "reward records"],
+  "sections": [
+   "daily availability",
+   "draw controls and wheel",
+   "prize ledger",
+   "compact account status",
+   "referral progress",
+   "reward records"
+  ],
   "nav": "kept community shell",
   "footer": "kept",
   "imagery": "actual local mock UI screenshots",

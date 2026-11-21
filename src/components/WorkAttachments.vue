@@ -39,7 +39,7 @@ video { width: min(100%, 280px); max-height: 180px; border-radius: 4px; }
 .featured .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .featured .file-name img { width: 48px; height: 48px; }
 .featured .icon-button { border: 0; background: transparent; color: var(--muted); }
-.featured .icon-button:hover:not(:disabled) { background: var(--surface-soft); color: var(--ink); }
+.featured .icon-button:hover:not(:disabled) { background: var(--state-hover); color: var(--ink); }
 .attachment-preview { display: block; width: 100%; border-radius: 8px; background: var(--surface-soft); }
 .attachment-preview img { display: block; width: 100%; height: 260px; object-fit: contain; border-radius: inherit; }
 .featured video { width: 100%; height: 260px; max-height: none; background: var(--surface-soft); }

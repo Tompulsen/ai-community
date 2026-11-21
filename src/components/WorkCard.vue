@@ -75,7 +75,8 @@ function measureCover(event: Event) {
 .like-button:hover, .like-button:focus-visible { color: var(--ink); }
 .like-button.selected { color: var(--danger); }
 .save-work { top: 8px; right: 8px; z-index: 2; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; }
-.save-work.selected { background: var(--blue); color: var(--action-ink); border-color: var(--blue); }
+.save-work.selected { background: var(--state-selected); color: var(--ink); border-color: var(--state-selected-border); }
+.save-work.selected:hover:not(:disabled) { background: var(--state-pressed); }
 .resource-cover { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 16px 16px 48px; border: 0; }
 .resource-top { flex: 0 0 auto; color: var(--blue); }
 .resource-heading { flex: 0 1 auto; min-height: 0; color: var(--ink); font-size: 18px; line-height: 24px; margin-top: 12px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }

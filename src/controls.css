@@ -16,6 +16,12 @@
   --icon-size-action: 16px;
   --icon-size-tool: 20px;
   --icon-size-nav: 22px;
+  --state-hover: color-mix(in srgb, var(--ink) 4%, var(--surface-soft));
+  --state-selected: color-mix(in srgb, var(--ink) 8%, var(--surface-soft));
+  --state-pressed: color-mix(in srgb, var(--ink) 12%, var(--surface-soft));
+  --state-selected-border: color-mix(in srgb, var(--ink) 65%, var(--canvas));
+  --popover-surface: var(--surface-soft);
+  --popover-shadow: 0 2px 8px #00000014;
 }
 
 select:is(.control, .select-control) {
@@ -24,7 +30,10 @@ select:is(.control, .select-control) {
   min-height: var(--control-size, var(--control-height));
   font-size: var(--control-font-size, var(--font-size-input));
   line-height: var(--control-line-height, var(--line-height-input));
+  border-color: transparent;
+  background: var(--surface-soft);
 }
+select:is(.control, .select-control):focus { border-color: transparent; }
 
 @supports (appearance: base-select) {
   select:is(.control, .select-control),
@@ -46,13 +55,13 @@ select:is(.control, .select-control) {
     max-block-size: min(320px, 60dvh);
     margin-block: var(--space-label);
     padding: var(--space-label);
-    border: 1px solid var(--control-border);
+    border: 0;
     border-radius: var(--radius-popover);
-    background: var(--surface);
+    background: var(--popover-surface);
     color: var(--ink);
-    font-family: var(--font-text);
-    font-size: var(--control-font-size, var(--font-size-input));
-    line-height: var(--control-line-height, var(--line-height-input));
+    font: inherit;
+    box-shadow: var(--popover-shadow);
+    position-try-order: normal;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
@@ -70,7 +79,7 @@ select:is(.control, .select-control) {
     min-block-size: var(--control-size, var(--target-size));
     padding: var(--space-label) var(--space-control);
     border-radius: var(--radius);
-    background: var(--surface);
+    background: transparent;
     color: var(--ink);
     white-space: normal;
     overflow-wrap: break-word;
@@ -78,27 +87,39 @@ select:is(.control, .select-control) {
   }
 
   select:is(.control, .select-control) option:checked {
-    background: var(--surface-soft);
+    background: var(--state-selected);
     font-weight: 500;
   }
 
   select:is(.control, .select-control) option::checkmark {
     order: 1;
     margin-inline-start: auto;
-    color: var(--ink);
+    color: currentColor;
   }
 
   @media (hover: hover) {
-    select:is(.control, .select-control):enabled:hover { background: var(--surface-soft); }
-    select:is(.control, .select-control) option:hover { background: var(--surface-soft); }
+    select:is(.control, .select-control):enabled:hover { background: var(--state-hover); }
+    select:is(.control, .select-control) option:hover:not(:checked) { background: var(--state-hover); }
+    select:is(.control, .select-control) option:checked:hover { background: var(--state-pressed); }
   }
 
+  select:is(.control, .select-control):enabled:open { background: var(--state-selected); }
+  select:is(.control, .select-control):enabled:open:hover { background: var(--state-pressed); }
   select:is(.control, .select-control):focus-visible,
   select:is(.control, .select-control) option:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: var(--focus-outline-offset);
   }
 
-  select:is(.control, .select-control):active { background: var(--surface-soft); }
+  select:is(.control, .select-control):active { background: var(--state-pressed); }
   select:is(.control, .select-control):disabled { opacity: .55; cursor: not-allowed; }
+  @media (forced-colors: active) {
+    select:is(.control, .select-control)::picker(select) { border: 1px solid CanvasText; background: Canvas; color: CanvasText; box-shadow: none; }
+    select:is(.control, .select-control) option:checked { background: Highlight; color: HighlightText; }
+  }
+}
+
+@media (forced-colors: active) {
+  select:is(.control, .select-control),
+  select:is(.control, .select-control):focus { border-color: CanvasText; }
 }

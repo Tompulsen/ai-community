@@ -61,7 +61,10 @@ async function keydown(event: KeyboardEvent) {
 .conversation-title-trigger, .conversation-title-input { box-sizing: border-box; min-width: 0; min-height: 40px; max-width: 100%; padding: 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; font-weight: 500; text-align: start; }
 .conversation-title-trigger { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; overflow: hidden; }
 .conversation-title-trigger span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.conversation-title-trigger svg { flex: none; color: var(--muted); }
-.conversation-title-trigger:hover, .conversation-title-input { background: var(--surface-soft); }
+.conversation-title-input { background: var(--surface-soft); }
+.conversation-title-trigger:hover { color: var(--ink); background: var(--state-hover); }
+.conversation-title-trigger:active { color: var(--ink); background: var(--state-pressed); }
+.conversation-title-trigger:is(:hover, :active) svg { color: var(--ink); }
 .conversation-title-trigger:focus-visible, .conversation-title-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .conversation-title-input { flex: 1; width: 100%; caret-color: var(--ink); }.conversation-title-input:disabled { opacity: .6; }
 .conversation-message-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }

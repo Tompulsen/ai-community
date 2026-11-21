@@ -138,12 +138,15 @@ onBeforeUnmount(() => clearTimeout(sourceTimer))
 .studio-markdown-body :deep(.studio-markdown-image) { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; max-width: 100%; }
 .studio-markdown-body :deep(img) { display: block; max-width: 100%; height: auto; border-radius: 6px; }
 .studio-markdown-body :deep(.studio-source-citation) { display: inline-flex; min-width: 20px; height: 20px; padding: 0 5px; margin-inline: 3px; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 11px; cursor: pointer; vertical-align: baseline; }
-.studio-markdown-body :deep(.studio-source-citation:hover) { color: var(--ink); background: var(--border); }
+.studio-markdown-body :deep(.studio-source-citation:hover) { color: var(--ink); background: var(--state-hover); }
+.studio-markdown-body :deep(.studio-source-citation:active) { color: var(--ink); background: var(--state-pressed); }
 .studio-markdown-body :deep(.katex-display) { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-block: 4px; }
 .source-hover { position: relative; margin-top: 10px; padding: 10px 34px 10px 12px; border-radius: 6px; background: var(--canvas); font-size: 12px; line-height: 1.6; }
 .source-hover a, .source-dialog a { display: inline-flex; align-items: center; gap: 6px; }
 .source-hover p { margin: 4px 0 0; color: var(--muted); }
 .source-hover button { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.source-hover button:hover, .source-dialog .dialog-close:hover { color: var(--ink); background: var(--state-hover); }
+.source-hover button:active, .source-dialog .dialog-close:active { color: var(--ink); background: var(--state-pressed); }
 .source-dialog { border: 0; padding: 40px 20px 20px; border-radius: 8px; color: var(--ink); background: var(--canvas); }
 .source-dialog::backdrop { background: #000b; }
 .dialog-close { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--surface); color: var(--ink); cursor: pointer; }

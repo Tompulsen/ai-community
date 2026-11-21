@@ -268,7 +268,9 @@ onBeforeUnmount(() => {
 .account-wallet > .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .wallet-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .wallet-tabs button { min-height: 44px; padding: 8px 12px; color: var(--muted); border-radius: 6px; }
-.wallet-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--surface-soft); }
+.wallet-tabs button:hover { color: var(--ink); background: var(--state-hover); }
+.wallet-tabs button[aria-pressed="true"] { color: var(--ink); background: var(--state-selected); }
+.wallet-tabs button[aria-pressed="true"]:hover { background: var(--state-pressed); }
 .wallet-section { padding-top: 16px; min-width: 0; }
 .wallet-topup-form { display: grid; grid-template-columns: minmax(0, 1fr) var(--wallet-summary-width); align-items: start; gap: var(--wallet-column-gap); }
 .wallet-topup-fields { display: grid; gap: 12px; min-width: 0; }.wallet-topup-fields > .field { font-size: var(--font-size-field); }.wallet-topup-fields .control { min-width: 0; width: 100%; min-height: 44px; font-size: var(--font-size-input); }
@@ -276,12 +278,17 @@ onBeforeUnmount(() => {
 .wallet-amounts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .wallet-amounts button { display: grid; grid-template-rows: 20px 16px; align-content: center; justify-items: center; gap: 0; min-width: 0; min-height: 56px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
 .wallet-amounts button > span { font-size: var(--font-size-field); line-height: 24px; }
-.wallet-amounts button[aria-pressed="true"] { border-color: var(--focus-ring); background: var(--surface-soft); }
+.wallet-amounts button:hover:not(:disabled) { background: var(--state-hover); }
+.wallet-amounts button[aria-pressed="true"] { border-color: var(--state-selected-border); background: var(--state-selected); }
+.wallet-amounts button[aria-pressed="true"]:hover:not(:disabled) { background: var(--state-pressed); }
 .wallet-amounts small { font-size: var(--font-size-help); line-height: 16px; white-space: nowrap; color: var(--muted); }
+.wallet-amounts button:is(:hover, [aria-pressed="true"]) small { color: var(--ink); }
 .wallet-methods { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
 .wallet-methods legend { padding: 0; margin-bottom: 8px; font-size: var(--font-size-field); font-weight: 500; }
 .wallet-methods label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: var(--font-size-field); cursor: pointer; }
-.wallet-methods label:has(:checked) { border-color: var(--focus-ring); background: var(--surface-soft); }
+.wallet-methods label:hover { background: var(--state-hover); }
+.wallet-methods label:has(:checked) { border-color: var(--state-selected-border); background: var(--state-selected); }
+.wallet-methods label:has(:checked):hover { background: var(--state-pressed); }
 .wallet-methods input { margin: 0; accent-color: var(--ink); }
 .wallet-quote { position: sticky; top: 24px; display: grid; gap: 16px; min-width: 0; padding: 0 0 0 24px; border-left: 1px solid var(--border); }
 .wallet-quote > div { display: grid; gap: 6px; }

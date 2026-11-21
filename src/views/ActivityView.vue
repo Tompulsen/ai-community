@@ -324,7 +324,7 @@ async function draw() {
 .wheel-center:not(:disabled):active { transform: translate(-50%, -50%); background: color-mix(in oklab, var(--lottery-enamel-edge) 16%, transparent); }
 .wheel-center:disabled { opacity: .55; cursor: not-allowed; }
 .activity-page :is(button, a, .table-wrap):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
-.activity-page button:not(:disabled):active { background-color: var(--surface-soft); }
+.activity-page button:not(:disabled):active { background-color: var(--state-pressed); }
 .activity-page button.primary:not(:disabled):active { background-color: var(--blue-hover); }
 @media (hover: hover) {
   .wheel-center:not(:disabled):hover { background: color-mix(in oklab, var(--lottery-lamp) 8%, transparent); }
@@ -335,7 +335,8 @@ async function draw() {
 .draw-controls strong { margin-inline: var(--space-label); font-size: 28px; line-height: 36px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .draw-controls .view-switch { padding: var(--space-label); }
 .view-switch .button { min-height: var(--control-height); padding: var(--space-small) var(--space-control); }
-.view-switch .selected { background: var(--surface-soft); color: var(--ink); }
+.view-switch .selected { background: var(--state-selected); color: var(--ink); }
+.view-switch .selected:hover:not(:disabled) { background: var(--state-pressed); }
 .draw-result { display: grid; gap: var(--space-small); margin: 0; padding-block: var(--space-control); border: 0; border-block-start: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--ink); }
 .draw-result > div { display: grid; gap: var(--space-label); }
 .draw-result .caption-5 { font-variant-numeric: tabular-nums; }

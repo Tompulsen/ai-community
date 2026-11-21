@@ -69,10 +69,13 @@ defineExpose({ focus: () => input.value?.focus() })
 </template>
 
 <style scoped>
-.video-reference-menu { position: fixed; z-index: 1200; overflow-y: auto; padding: 6px; border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 8px 28px rgb(0 0 0 / 16%); }
+.video-reference-menu { position: fixed; z-index: 1200; overflow-y: auto; padding: 6px; border-radius: 8px; background: var(--popover-surface); color: var(--ink); box-shadow: var(--popover-shadow); }
 .video-reference-menu button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 6px; padding: 6px 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
-.video-reference-menu button[aria-selected="true"] { background: var(--surface-soft); }
+.video-reference-menu button:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
+.video-reference-menu button[aria-selected="true"] { color: var(--ink); background: var(--state-selected); }
+.video-reference-menu button[aria-selected="true"]:hover:not(:disabled) { background: var(--state-pressed); }
 .video-reference-menu img { flex: 0 0 32px; width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
 .video-reference-menu small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.video-reference-menu button:is(:hover:not(:disabled), [aria-selected="true"]) small { color: var(--ink); }
 .video-reference-menu span { flex-shrink: 0; }
 </style>

@@ -76,12 +76,14 @@ async function select(value: NativeChat['search']) {
 
 <style scoped>
 .studio-search-control { flex: none; width: max-content; max-width: 100%; }
-.studio-search-control.enabled :deep(> .studio-tool) { color: var(--ink); background: var(--surface-soft); }
+.studio-search-control.enabled :deep(> .studio-tool) { color: var(--ink); background: var(--state-selected); }
+.studio-search-control.enabled :deep(> .studio-tool:hover:not(:disabled)), .studio-search-control.enabled :deep(> .studio-tool:active:not(:disabled)) { background: var(--state-pressed); }
 .studio-search-control :deep(> .studio-tool) { gap: 6px; }
 .studio-search-options { display: grid; gap: 4px; }
 .studio-search-options .studio-command { min-height: 48px; padding: 12px; border-radius: 8px; }
 .search-mode-label { flex: 1; min-width: 0; }
 .search-mode-price { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; max-width: 55%; }
+.studio-search-options .studio-command:is(:hover:not(:disabled), [aria-pressed="true"]) .search-mode-price { color: var(--ink); }
 .search-mode-check { display: grid; place-items: center; flex: none; width: 19px; height: 19px; }
 :global(.studio-popover:has(.studio-search-options) .studio-popover-content) { padding: 8px; }
 </style>

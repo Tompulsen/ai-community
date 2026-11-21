@@ -88,8 +88,9 @@ watch(() => session.user?.id, () => {
 .compact .tools-panel { left: 12px; right: 12px; width: auto; max-width: 480px; }
 .compact .tools-heading h2 { display: flex; align-items: center; gap: 10px; }
 .compact .tools-heading img { border-radius: 7px; }
-.community-tools[open] > .tools-trigger { background: var(--blue-soft); color: var(--blue-hover); }
-.tools-panel { position: fixed; top: calc(var(--header-height) + 8px); right: max(24px, calc((100vw - 1512px) / 2 + 40px)); width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 16px 48px #0005; }
+.community-tools[open] > .tools-trigger { background: var(--state-selected); color: var(--ink); border-color: var(--state-selected-border); }
+.community-tools[open] > .tools-trigger:hover { background: var(--state-pressed); }
+.tools-panel { position: fixed; top: calc(var(--header-height) + 8px); right: max(24px, calc((100vw - 1512px) / 2 + 40px)); width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; background: var(--popover-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--popover-shadow); }
 .tools-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .tools-heading h2 { font-size: 18px; line-height: 28px; font-weight: 600; }
 .tools-heading .icon-button { width: 44px; min-height: 44px; }
@@ -98,7 +99,8 @@ watch(() => session.user?.id, () => {
 .tools-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
 .tool-item { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 92px; min-width: 0; padding: 12px 4px; border-radius: 10px; color: var(--ink); text-align: center; }
 .tool-label { font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-.tool-item:hover, .tool-item:focus-visible { background: var(--blue-soft); color: var(--blue-hover); }
+.tool-item:hover, .tool-item:focus-visible { background: var(--state-hover); color: var(--ink); }
+.tool-item:active { background: var(--state-pressed); }
 .tool-item:focus-visible { outline-offset: -3px; }
 .tool-count { position: absolute; top: 12px; left: calc(50% + 6px); display: grid; place-items: center; min-width: 20px; height: 20px; padding-inline: 5px; border-radius: 10px; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; background: var(--blue); color: var(--action-ink); }
 .tool-lock { position: absolute; top: 12px; right: 12px; color: var(--muted); }
@@ -107,7 +109,8 @@ watch(() => session.user?.id, () => {
 .tools-footer svg { flex-shrink: 0; }
 .tools-admin { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border-radius: 6px; }
 .tools-admin > svg:last-child { margin-left: auto; }
-.tools-admin:hover { background: var(--blue-soft); color: var(--blue-hover); }
+.tools-admin:hover, .tools-admin:focus-visible { background: var(--state-hover); color: var(--ink); }
+.tools-admin:active { background: var(--state-pressed); }
 @media (max-width: 639px) { .tools-panel { right: 16px; } }
 @media (max-width: 479px) {
   .tools-grid { gap: 8px; }
@@ -119,10 +122,10 @@ watch(() => session.user?.id, () => {
 }
 
 @media (max-width: 999px) {
-  .compact .tools-panel { left: 10px; right: 10px; top: calc(var(--header-height) + 6px); border-radius: 16px; background: var(--surface); }
+  .compact .tools-panel { left: 10px; right: 10px; top: calc(var(--header-height) + 6px); border-radius: 16px; background: var(--popover-surface); }
   .compact .tools-heading h2 { font-size: 17px; }
   .compact .tool-item { border-radius: 12px; min-height: 80px; gap: 8px; }
-  .compact .tool-item > svg:first-child { color: var(--blue); }
+  .compact .tool-item > svg:first-child { color: inherit; }
   .compact .tools-search { border-radius: 10px; }
   .compact .tools-search input { font-size: 16px; }
 }

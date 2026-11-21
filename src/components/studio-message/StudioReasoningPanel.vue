@@ -31,7 +31,9 @@ const trigger = ref<HTMLButtonElement>()
 <style scoped>
 .reasoning { min-width: 0; margin-bottom: 12px; color: var(--ink); }
 .reasoning-trigger { display: flex; align-items: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: start; cursor: pointer; }
-.reasoning-trigger:hover { background: var(--surface-soft); }
+.reasoning-trigger:hover { color: var(--ink); background: var(--state-hover); }
+.reasoning-trigger:active { color: var(--ink); background: var(--state-pressed); }
+.reasoning-trigger:is(:hover, :active) .reasoning-state { color: var(--ink); }
 .reasoning-trigger:focus-visible, .reasoning-content:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--focus-outline-offset); }
 .reasoning-trigger svg { flex: none; }
 .reasoning-state { color: var(--muted); white-space: nowrap; }

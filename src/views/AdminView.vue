@@ -196,8 +196,9 @@ async function review() {
 .admin-nav-group { display: grid; gap: 4px; }
 .admin-nav-group > p { margin: 0 12px 4px; font-size: 12px; color: var(--muted); }
 .admin-nav-item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; border-radius: 6px; text-align: left; color: var(--muted); }
-.admin-nav-item:hover { color: var(--ink); background: var(--surface); }
-.admin-nav-item.active { color: var(--blue-hover); background: var(--blue-soft); }
+.admin-nav-item:hover { color: var(--ink); background: var(--state-hover); }
+.admin-nav-item.active { color: var(--ink); background: var(--state-selected); }
+.admin-nav-item.active:hover { background: var(--state-pressed); }
 .admin-nav-item svg { flex-shrink: 0; }
 .admin-content { min-width: 0; }
 .review-section { padding-top: 0; }

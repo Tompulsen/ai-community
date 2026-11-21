@@ -533,7 +533,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
 .chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
 .context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
-.message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: 12px; }.message-actions > .button:hover { color: var(--ink); background: var(--surface); }
+.message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--ink); font-size: 12px; }.message-actions > .button:hover:not(:disabled) { background: var(--state-hover); }.message-actions > .button:active:not(:disabled) { background: var(--state-pressed); }
 @media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }
 .attachment-video { position: relative; max-width: 100%; }.attachment-expand { position: absolute; top: 8px; right: 8px; background: rgb(0 0 0 / 65%); color: white; }
 @media (max-width: 999px) { .chat-toolbar { display: none; }.chat-messages { padding: 16px 4px; }.message-usage { flex-basis: 100%; } }
