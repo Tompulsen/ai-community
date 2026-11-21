@@ -68,11 +68,11 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     CREATE TABLE note_reaction (id text,"noteId" text,"userId" text,reaction text);
   `)
   let clock = new Date('2026-11-18T03:00:00Z')
-  const paidResponse = (url, patch = {}) => new Response(JSON.stringify({
+  const consumptionResponse = (url, patch = {}) => new Response(JSON.stringify({
     ready: true, client_id: 'https://community.test', user_id: Number(new URL(url).searchParams.get('user_id')),
-    has_support: true, support_cny_fen: 100, ...patch,
+    basis: 'consumption', has_consumption: true, consumption_cny_fen: 100, ...patch,
   }))
-  let lookup = async url => paidResponse(url)
+  let lookup = async url => consumptionResponse(url)
   // Delivery has separate receipt tests; prevent test draws from starting the real delivery worker.
   const db = { connect: () => pool.connect(), query: (sql, args) => sql.startsWith('SELECT id FROM community_lottery_draw') ? Promise.resolve({ rows: [] }) : pool.query(sql, args) }
   const service = createLotteryService({ db, config: { url: 'https://community.test', newApiSso: { issuer: 'https://accounts.test', lotterySecret: 's'.repeat(32) } },
@@ -86,7 +86,7 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     } })
   async function reset(settings = dailySettings()) {
     clock = new Date('2026-11-18T03:00:00Z')
-    lookup = async url => paidResponse(url)
+    lookup = async url => consumptionResponse(url)
     await pool.query('TRUNCATE community_lottery_config,community_lottery_account,community_lottery_draw,external_account,"user"')
     await pool.query('INSERT INTO community_lottery_config VALUES (\'default\',0,$1)', [settings])
     await pool.query(`INSERT INTO "user" (id) SELECT i::text FROM generate_series(1,205) i;
@@ -94,81 +94,101 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
       INSERT INTO community_lottery_account SELECT id,5,'{"invites":0,"followers":0,"likes":0,"works":{}}'::jsonb FROM "user";`)
   }
   const draw = (id, request = randomUUID(), count = 1) => service.draw(String(id), request, count)
-  await t.test('legacy configuration saves retain the current support threshold', async () => {
-    await reset({ ...dailySettings(), minSupportCnyFen: 129 })
+  await t.test('legacy stored configuration migrates its threshold and old form saves retain the current value', async () => {
+    const legacy = { ...dailySettings(), minSupportCnyFen: 129 }
+    delete legacy.minConsumptionCnyFen
+    await reset(legacy)
     const config = await service.getConfig()
-    delete config.settings.minSupportCnyFen
+    assert.equal(config.settings.minConsumptionCnyFen, 129)
+    assert.equal('minSupportCnyFen' in config.settings, false)
+    delete config.settings.minConsumptionCnyFen
+    config.settings.minSupportCnyFen = 1
     const updated = await service.updateConfig(config.version, config.settings)
-    assert.equal(updated.settings.minSupportCnyFen, 129)
-    assert.equal((await service.getConfig()).settings.minSupportCnyFen, 129)
+    assert.equal(updated.settings.minConsumptionCnyFen, 129)
+    assert.equal((await service.getConfig()).settings.minConsumptionCnyFen, 129)
+    const stored = (await pool.query('SELECT settings FROM community_lottery_config')).rows[0].settings
+    assert.equal(stored.minConsumptionCnyFen, 129)
+    assert.equal('minSupportCnyFen' in stored, false)
   })
-  await t.test('support zero still needs payment; cumulative thresholds compare exact fen and retain ticket consumption', async () => {
-    for (const [minimum, hasSupport, fen, eligible] of [[0, false, 0, false], [0, true, 0, true], [0, true, 1, true], [129, true, 128, false], [129, true, 129, true]]) {
-      await reset({ ...dailySettings(), minSupportCnyFen: minimum })
-      lookup = async url => paidResponse(url, { has_support: hasSupport, support_cny_fen: fen })
+  await t.test('zero needs actual consumption; exact cumulative thresholds and ticket consumption stay independent', async () => {
+    for (const [minimum, hasConsumption, fen, eligible] of [[0, false, 0, false], [0, true, 0, true], [0, true, 1, true], [1, true, 0, false], [129, true, 128, false], [129, true, 129, true], [129, true, 130, true]]) {
+      await reset({ ...dailySettings(), minConsumptionCnyFen: minimum })
+      lookup = async url => consumptionResponse(url, { has_consumption: hasConsumption, consumption_cny_fen: fen })
       const status = await service.status('1')
-      assert.deepEqual(status.support, { checked: true, eligible, amountCnyFen: fen })
+      assert.deepEqual(status.consumption, { checked: true, eligible, amountCnyFen: fen })
+      assert.equal('support' in status, false)
       assert.equal('subject' in status, false)
       if (eligible) await draw(1)
-      else await assert.rejects(draw(1), /LOTTERY_SUPPORT_REQUIRED/)
+      else await assert.rejects(draw(1), /LOTTERY_CONSUMPTION_REQUIRED/)
       assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, eligible ? 4 : 5)
       assert.equal((await service.status()).daily.used, eligible ? 1 : 0)
     }
     await reset()
     await pool.query('UPDATE community_lottery_account SET balance=0 WHERE "userId"=\'1\'')
+    const eligible = await service.status('1')
+    assert.equal(eligible.consumption.eligible, true)
+    assert.equal(eligible.balance, 0)
     await assert.rejects(draw(1), /LOTTERY_INSUFFICIENT/)
+    assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 0)
+    assert.equal((await pool.query('SELECT COUNT(*)::integer AS count FROM community_lottery_draw')).rows[0].count, 0)
     assert.equal((await service.status()).daily.used, 0)
   })
-  await t.test('failed or untrusted support checks never consume a chance or daily place', async () => {
+  await t.test('old payment responses and untrusted consumption checks never consume a chance or daily place', async () => {
     for (const response of [
       async () => { throw new DOMException('Timed out', 'TimeoutError') },
       async () => new Response('{}', { status: 503 }),
       async () => new Response('invalid JSON'),
-      async url => paidResponse(url, { user_id: 2 }),
-      async url => paidResponse(url, { client_id: 'https://other.test' }),
-      async url => paidResponse(url, { has_support: false, support_cny_fen: 1 }),
-      ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '100'].map(support_cny_fen => async url => paidResponse(url, { support_cny_fen })),
+      async () => new Response(JSON.stringify({ ready: true, client_id: 'https://community.test', user_id: 1, has_support: true, support_cny_fen: 100 })),
+      async url => consumptionResponse(url, { ready: false }),
+      async url => consumptionResponse(url, { user_id: 2 }),
+      async url => consumptionResponse(url, { user_id: '1' }),
+      async url => consumptionResponse(url, { client_id: 'https://other.test' }),
+      async url => consumptionResponse(url, { basis: 'support' }),
+      async url => consumptionResponse(url, { basis: undefined }),
+      async url => consumptionResponse(url, { has_consumption: 'true' }),
+      async url => consumptionResponse(url, { has_consumption: false, consumption_cny_fen: 1 }),
+      ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '100', null].map(consumption_cny_fen => async url => consumptionResponse(url, { consumption_cny_fen })),
     ]) {
       await reset(); lookup = response
-      assert.deepEqual((await service.status('1')).support, { checked: false, eligible: false, amountCnyFen: null })
-      await assert.rejects(draw(1), /LOTTERY_SUPPORT_UNAVAILABLE/)
+      assert.deepEqual((await service.status('1')).consumption, { checked: false, eligible: false, amountCnyFen: null })
+      await assert.rejects(draw(1), /LOTTERY_CONSUMPTION_UNAVAILABLE/)
       assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
       assert.equal((await service.status()).daily.used, 0)
     }
   })
-  await t.test('support lookup releases all pool locks and uses the current threshold and identity', async () => {
+  await t.test('consumption lookup releases all pool locks and uses the current threshold and identity', async () => {
     for (const change of ['threshold', 'identity']) {
       await reset()
       let started, resume
       const checking = new Promise(resolve => { started = resolve })
       const waiting = new Promise(resolve => { resume = resolve })
-      lookup = async url => { started(); await waiting; return paidResponse(url) }
+      lookup = async url => { started(); await waiting; return consumptionResponse(url) }
       const drawing = draw(1)
       await checking
       const editor = await pool.connect()
       try {
         await editor.query('BEGIN')
         await editor.query('SET LOCAL lock_timeout = \'2s\'')
-        if (change === 'threshold') await editor.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minSupportCnyFen}\',\'101\')')
+        if (change === 'threshold') await editor.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minConsumptionCnyFen}\',\'101\')')
         else await editor.query('UPDATE external_account SET subject=\'2\' WHERE "userId"=\'1\'')
         await editor.query('COMMIT')
       } finally {
         await editor.query('ROLLBACK'); editor.release(); resume()
       }
-      await assert.rejects(drawing, change === 'threshold' ? /LOTTERY_SUPPORT_REQUIRED/ : /LOTTERY_ACCOUNT_REQUIRED/)
+      await assert.rejects(drawing, change === 'threshold' ? /LOTTERY_CONSUMPTION_REQUIRED/ : /LOTTERY_ACCOUNT_REQUIRED/)
       assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
       assert.equal((await service.status()).daily.used, 0)
     }
   })
-  await t.test('expired support verification cannot consume a chance after waiting for the pool', async t => {
+  await t.test('expired consumption verification cannot consume a chance after waiting for the pool', async t => {
     await reset()
     let checks = 0
     t.mock.method(Date, 'now', () => checks++ === 0 ? 1000 : 61001)
-    await assert.rejects(draw(1), /LOTTERY_SUPPORT_UNAVAILABLE/)
+    await assert.rejects(draw(1), /LOTTERY_CONSUMPTION_UNAVAILABLE/)
     assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
     assert.equal((await service.status()).daily.used, 0)
   })
-  await t.test('committed and concurrent receipts survive refunds, threshold changes and support outages', async () => {
+  await t.test('committed and concurrent receipts survive refunds, threshold changes and consumption outages', async () => {
     await reset()
     let started, resume, lookups = 0
     const checking = new Promise(resolve => { started = resolve })
@@ -176,20 +196,20 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     lookup = async url => {
       lookups++
       if (lookups === 1) { started(); await waiting; throw new Error('Center unavailable') }
-      return paidResponse(url)
+      return consumptionResponse(url)
     }
     const key = randomUUID(), pending = draw(1, key)
     await checking
     let completed
     try { completed = await draw(1, key) } finally { resume() }
     assert.equal((await pending).id, completed.id)
-    await pool.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minSupportCnyFen}\',\'1000\')')
+    await pool.query('UPDATE community_lottery_config SET settings=jsonb_set(settings,\'{minConsumptionCnyFen}\',\'1000\')')
     lookup = async () => { throw new Error('Refunded or center unavailable') }
     assert.equal((await draw(1, key)).id, completed.id)
     assert.equal(lookups, 2)
     assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 4)
     assert.equal((await service.status()).daily.used, 1)
-    await assert.rejects(draw(2), /LOTTERY_SUPPORT_UNAVAILABLE/)
+    await assert.rejects(draw(2), /LOTTERY_CONSUMPTION_UNAVAILABLE/)
   })
   await t.test('same user competing requests consume one place and one ticket; retries return the receipt', async () => {
     await reset()

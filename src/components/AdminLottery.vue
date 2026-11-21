@@ -24,8 +24,8 @@ const loading = ref(true), saving = ref(false), error = ref(''), saved = ref(fal
 const percentages = ref<Record<string, number>>({})
 const probabilitiesEdited = ref(false)
 const pointsPerUsd = ref<number | null>(null)
-const minSupportCny = ref<number | string>(0)
-const supportInput = ref<HTMLInputElement | null>(null), supportInvalid = ref(false)
+const minConsumptionCny = ref<number | string>(0)
+const consumptionInput = ref<HTMLInputElement | null>(null), consumptionInvalid = ref(false)
 const prizeEditorVersion = ref(0)
 const dailyMode = computed(() => draft.value?.settings.dailyLimit !== undefined)
 const dailyQuota = computed(() => draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((sum, prize) => sum + Math.max(0, Number(prize.stock) || 0), 0) ?? 0)
@@ -48,7 +48,7 @@ function setPoints(prize: LotteryPrize, event: Event) {
 }
 const baseline = ref('')
 const reloadPrompt = ref(false)
-const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minSupportCny: minSupportCny.value })
+const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minConsumptionCny: minConsumptionCny.value })
 const hasUnsavedChanges = computed(() => !!baseline.value && configSnapshot() !== baseline.value)
 defineExpose({ hasUnsavedChanges })
 const ruleNames = { followers: '获得关注', likes: '作品获赞' }
@@ -74,9 +74,9 @@ function message(cause: unknown) {
 }
 function setDraft(value: Config) {
   draft.value = value
-  minSupportCny.value = (value.settings.minSupportCnyFen ?? 0) / 100
-  supportInvalid.value = false
-  supportInput.value?.setCustomValidity('')
+  minConsumptionCny.value = (value.settings.minConsumptionCnyFen ?? 0) / 100
+  consumptionInvalid.value = false
+  consumptionInput.value?.setCustomValidity('')
   prizeEditorVersion.value++
   const enabled = value.settings.prizes.filter(prize => prize.enabled)
   const total = enabled.reduce((sum, prize) => sum + prize.weight, 0)
@@ -121,17 +121,17 @@ function probability(prize: LotteryPrize) {
 async function saveConfig() {
   if (!draft.value || saving.value) return
   error.value = ''; saved.value = false
-  const minimum = minSupportCny.value
+  const minimum = minConsumptionCny.value
   if (typeof minimum !== 'number' || !Number.isFinite(minimum) || minimum < 0 || minimum > 1000000
     || Math.abs(minimum * 100 - Math.round(minimum * 100)) > 0.000001) {
     error.value = '请输入 0 至 1,000,000 元，最多两位小数。'
-    supportInvalid.value = true
-    supportInput.value?.setCustomValidity(error.value)
-    supportInput.value?.reportValidity()
+    consumptionInvalid.value = true
+    consumptionInput.value?.setCustomValidity(error.value)
+    consumptionInput.value?.reportValidity()
     return
   }
   const value = structuredClone(toRaw(draft.value))
-  value.settings.minSupportCnyFen = Math.round(minimum * 100)
+  value.settings.minConsumptionCnyFen = Math.round(minimum * 100)
   if (dailyMode.value) {
     if (dailyQuota.value !== value.settings.dailyLimit) { error.value = '启用奖项的每日名额合计必须等于每日总人数上限。'; return }
     for (const prize of value.settings.prizes) prize.weight = Math.max(1, prize.stock)
@@ -254,7 +254,7 @@ onMounted(() => {
             <label class="field"><span>活动简介</span><input v-model="draft.settings.wheel.subtitle" class="control" maxlength="120" /></label>
           </div>
           <label class="field"><span>活动规则</span><textarea v-model="draft.settings.wheel.rulesText" class="control" rows="3" maxlength="2000" /></label>
-          <div class="field"><label for="lottery-min-support">累计支持（元）</label><input id="lottery-min-support" ref="supportInput" v-model.number="minSupportCny" name="minSupportCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-support-help" :aria-invalid="supportInvalid || undefined" @invalid="supportInvalid = true" @input="supportInvalid = false; supportInput?.setCustomValidity(''); saved = false" /><p id="lottery-support-help" class="form-note">0 仍需有效实付大于 0；账户余额和奖励不计入累计支持。</p></div>
+          <div class="field"><label for="lottery-min-consumption">累计消费（元）</label><input id="lottery-min-consumption" ref="consumptionInput" v-model.number="minConsumptionCny" name="minConsumptionCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-consumption-help" :aria-invalid="consumptionInvalid || undefined" @invalid="consumptionInvalid = true" @input="consumptionInvalid = false; consumptionInput?.setCustomValidity(''); saved = false" /><p id="lottery-consumption-help" class="form-note">参与抽奖所需的累计消费金额。设为 0 时仍需累计消费大于 ¥0.00；满足条件后仍需抽奖次数。</p></div>
           <h3 class="config-title">任务奖励</h3>
           <div class="rule-grid"><div v-for="(label, key) in ruleNames" :key="key" class="stack"><label class="check-label"><input v-model="draft.settings[key].enabled" type="checkbox" />{{ label }}</label><div class="fields"><label class="field"><span>达成数量</span><input v-model.number="draft.settings[key].threshold" class="control" type="number" min="1" max="1000000" step="1" required /></label><label class="field"><span>奖励次数</span><input v-model.number="draft.settings[key].tickets" class="control" type="number" min="1" max="1000" step="1" required /></label></div></div></div>
           <label class="field"><span>获赞统计</span><select v-model="draft.settings.likesMode" class="control"><option value="work">单件作品累计</option><option value="total">所有作品累计</option></select></label>

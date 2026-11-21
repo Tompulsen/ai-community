@@ -18,11 +18,16 @@ describe('community lottery', () => {
 		}
 	});
 
-	test('old settings receive default support and a separate wheel without altering rewards', () => {
-		const { wheel: _, minSupportCnyFen: _support, ...old } = defaultLotterySettings();
+	test('old settings retain their numeric threshold under consumption and a separate wheel without altering rewards', () => {
+		const { wheel: _, minConsumptionCnyFen: _consumption, ...old } = defaultLotterySettings();
 		const first = normalizeLotterySettings(old);
-		expect(first.minSupportCnyFen).toBe(0);
-		expect(normalizeLotterySettings({ ...old, minSupportCnyFen: 129 }).minSupportCnyFen).toBe(129);
+		expect(first.minConsumptionCnyFen).toBe(0);
+		const legacy = { ...old, minSupportCnyFen: 129 };
+		const migrated = normalizeLotterySettings(legacy);
+		expect(migrated.minConsumptionCnyFen).toBe(129);
+		expect(migrated).not.toHaveProperty('minSupportCnyFen');
+		expect(legacy.minSupportCnyFen).toBe(129);
+		expect(normalizeLotterySettings({ ...legacy, minConsumptionCnyFen: 0 }).minConsumptionCnyFen).toBe(0);
 		expect(first.wheel.theme).toBe('teal');
 		expect(first.prizes).toEqual(old.prizes);
 		first.wheel.title = 'Changed';

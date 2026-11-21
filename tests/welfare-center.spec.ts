@@ -10,7 +10,7 @@ async function welfareFixture(page: Page, authenticated = true) {
   const config = { version: 1, settings: { ...defaultLotterySettings(), enabled: true, dailyLimit: 200, prizes: defaultDailyLotteryPrizes(5000) } }
   const day = lotteryDay(new Date())
   const state = { participated: false, remaining: 200, balance: 3, failAfterDraw: false, failBeforeDraw: false,
-    support: { checked: true, eligible: true, amountCnyFen: 1000 as number | null }, drawSupportError: '' }
+    consumption: { checked: authenticated, eligible: authenticated, amountCnyFen: authenticated ? 1000 : null as number | null }, drawConsumptionError: '' }
   const writes: { path: string; body: any }[] = [], draws = new Map<string, object>()
   const referral = {
     config: { version: 1, enabled: true, inviterPoints: 5000, inviteePoints: 5000, inviterQuota: 500000, inviteeQuota: 500000, minTopupCny: 10, updatedAt: 0 },
@@ -43,14 +43,14 @@ async function welfareFixture(page: Page, authenticated = true) {
       settings: { ...config.settings, prizes: config.settings.prizes.filter(p => p.enabled).map((p, i) => ({ ...p, dailyQuota: p.stock, stock: p.stock - (state.participated && i === 3 ? 1 : 0), weight: p.stock - (state.participated && i === 3 ? 1 : 0) })) },
       daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(), limit: config.settings.dailyLimit, remaining: state.remaining, used: 200 - state.remaining, participated: state.participated },
       balance: state.balance, creditReady: true, accountLinked: authenticated, inviteUrl: 'http://localhost/activities?invite=17',
-      support: state.support,
+      consumption: state.consumption,
       counts: { invites: 0, followers: 0, likes: 0, bestWorkLikes: 0 }, earned: { invites: 0, followers: 0, likes: 0 },
     } })
     if (path.endsWith('/draw')) {
       const body = request.postDataJSON(); writes.push({ path, body })
       if (state.failBeforeDraw) return route.fulfill({ status: 409, json: { error: 'LOTTERY_DAILY_EXHAUSTED' } })
-      if (!draws.has(body.requestId) && state.drawSupportError) return route.fulfill({
-        status: state.drawSupportError === 'LOTTERY_SUPPORT_REQUIRED' ? 409 : 503, json: { error: state.drawSupportError },
+      if (!draws.has(body.requestId) && state.drawConsumptionError) return route.fulfill({
+        status: state.drawConsumptionError === 'LOTTERY_CONSUMPTION_REQUIRED' ? 409 : 503, json: { error: state.drawConsumptionError },
       })
       if (!draws.has(body.requestId)) {
         state.participated = true; state.remaining--; state.balance--
@@ -101,6 +101,7 @@ test('a draw consumes one chance and hides multi-draw; confirmed participation p
   await expect(page.locator('.draw-console > .button')).toBeDisabled()
   await expect(page.getByRole('region', { name: '今日福利' })).toContainText('199')
   expect(fixture.writes.map(w => w.body.count)).toEqual([1])
+  expect(fixture.state.balance).toBe(2)
   await expect(page.locator('.wheel-disc')).toHaveCSS('transition-duration', '0s')
   const winner = await page.locator('.is-winner textPath').evaluate((label: SVGTextPathElement) => {
     const path = document.getElementById(label.getAttribute('href')!.slice(1)) as unknown as SVGPathElement
@@ -145,13 +146,14 @@ test('a lost response reuses its original request even when the user already par
   const fixture = await welfareFixture(page); fixture.state.failAfterDraw = true
   await page.goto('/activities'); await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-console > .button')).toContainText('核对上次抽奖')
-  fixture.state.support = { checked: false, eligible: false, amountCnyFen: null }
+  fixture.state.consumption = { checked: false, eligible: false, amountCnyFen: null }
   await page.reload(); await expect(page.locator('.draw-console > .button')).toBeEnabled()
   await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toContainText('非常遗憾')
   expect(fixture.writes).toHaveLength(2)
   expect(fixture.writes[0]!.body.requestId).toBe(fixture.writes[1]!.body.requestId)
   expect(fixture.state.remaining).toBe(199)
+  expect(fixture.state.balance).toBe(2)
 })
 
 test('quota exhaustion refreshes stale availability', async ({ page }) => {
@@ -168,85 +170,104 @@ test('a guest sees a login action and the configured daily pool', async ({ page 
   await welfareFixture(page, false)
   await page.goto('/activities')
   await expect(page.getByRole('link', { name: '登录后参与', exact: true })).toBeVisible()
+  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  await expect(conditions).toContainText('累计消费 > ¥0.00')
+  await expect(conditions).toContainText('登录后查看累计消费及资格')
+  await expect(conditions).not.toContainText('当前累计消费')
 })
 
-test('cumulative support gates new draws while the original ticket requirement remains', async ({ page }, info) => {
+test('cumulative consumption and tickets remain separate participation requirements', async ({ page }, info) => {
   const fixture = await welfareFixture(page)
-  fixture.state.support = { checked: true, eligible: false, amountCnyFen: 0 }
+  fixture.state.consumption = { checked: true, eligible: false, amountCnyFen: 0 }
   fixture.config.settings.wheel.title = '每日幸运转盘'
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/activities')
   const draw = page.locator('.draw-console > .button')
+  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
   await expect(page.getByRole('heading', { name: '活动抽奖', exact: true })).toBeVisible()
   await expect(draw).toBeDisabled()
-  await expect(page.locator('.draw-console')).toContainText('累计支持需有有效实付大于 0')
+  await expect(conditions).toContainText('累计消费 > ¥0.00')
+  await expect(conditions).toContainText('当前累计消费 ¥0.00')
+  await expect(conditions).toContainText('未满足')
+  await expect(page.locator('.draw-controls')).toContainText('可用 3 次')
   expect(fixture.writes).toHaveLength(0)
-  await page.screenshot({ path: info.outputPath('support-required-320.png'), fullPage: true })
-  fixture.config.settings.minSupportCnyFen = 1001
+  await page.screenshot({ path: info.outputPath('consumption-required-320.png'), fullPage: true })
+  fixture.config.settings.minConsumptionCnyFen = 1001
   fixture.config.settings.wheel.title = '创作者周末活动'
-  fixture.state.support.amountCnyFen = 1000
+  fixture.state.consumption.amountCnyFen = 1000
   await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(page.getByRole('heading', { name: '创作者周末活动', exact: true })).toBeVisible()
-  await expect(page.locator('.draw-console')).toContainText('累计支持 ¥10.00 / ¥10.01，尚未达标')
+  await expect(conditions).toContainText('累计消费 ≥ ¥10.01')
+  await expect(conditions).toContainText('当前累计消费 ¥10.00')
+  await expect(conditions).toContainText('未满足')
   await expect(draw).toBeDisabled()
-  fixture.state.support = { checked: true, eligible: true, amountCnyFen: 1001 }
+  fixture.state.consumption = { checked: true, eligible: true, amountCnyFen: 1001 }
   await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(draw).toBeEnabled()
-  await expect(page.locator('.draw-console')).toContainText('已满足参与条件')
+  await expect(conditions).toContainText('已满足')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.screenshot({ path: info.outputPath('consumption-eligible-1440.png'), fullPage: true })
   fixture.state.balance = 0
   await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(draw).toBeDisabled()
-  await expect(page.locator('.draw-console')).toContainText('当前次数不足')
+  await expect(conditions).toContainText('已满足')
+  await expect(page.locator('.draw-console')).toContainText('完成任务获取抽奖次数')
+  await page.getByRole('button', { name: '前往任务与邀请', exact: true }).click()
+  await expect(page.getByRole('button', { name: '任务与邀请', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('region', { name: '邀请朋友，共享积分', exact: true })).toBeVisible()
   expect(fixture.writes).toHaveLength(0)
 })
 
-test('zero threshold accepts verified non-CNY support without presenting it as a zero payment', async ({ page }) => {
+test('zero threshold shows verified positive sub-fen consumption without rounding it to zero', async ({ page }) => {
   const fixture = await welfareFixture(page)
-  fixture.state.support.amountCnyFen = 0
+  fixture.state.consumption.amountCnyFen = 0
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
-  await expect(page.locator('.draw-console')).toContainText('累计支持已满足参与条件')
-  await expect(page.locator('.draw-console')).not.toContainText('¥0.00')
+  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  await expect(conditions).toContainText('累计消费 > ¥0.00')
+  await expect(conditions).toContainText('当前累计消费 小于 ¥0.01')
+  await expect(conditions).toContainText('已满足')
+  await expect(conditions.locator('.consumption-status')).not.toContainText('¥0.00')
 })
 
-test('a support verification failure blocks new draws and can be retried', async ({ page }, info) => {
+test('a consumption verification failure blocks new draws and can be retried', async ({ page }, info) => {
   const fixture = await welfareFixture(page)
-  fixture.state.support = { checked: false, eligible: false, amountCnyFen: null }
+  fixture.state.consumption = { checked: false, eligible: false, amountCnyFen: null }
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeDisabled()
-  await expect(page.locator('.draw-console')).toContainText('累计支持暂时无法核验')
-  await page.screenshot({ path: info.outputPath('support-unavailable.png'), fullPage: true })
-  fixture.state.support = { checked: true, eligible: true, amountCnyFen: 1000 }
+  await expect(page.getByRole('region', { name: '参与条件', exact: true })).toContainText('暂无法核验')
+  await page.screenshot({ path: info.outputPath('consumption-unavailable.png'), fullPage: true })
+  fixture.state.consumption = { checked: true, eligible: true, amountCnyFen: 1000 }
   await page.getByRole('button', { name: '重新核验', exact: true }).click()
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
   expect(fixture.writes).toHaveLength(0)
 })
 
-test('a support rejection clears only an unexecuted request and refreshes eligibility', async ({ page }) => {
+test('a consumption rejection clears only an unexecuted request and refreshes eligibility', async ({ page }) => {
   const fixture = await welfareFixture(page)
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
-  fixture.state.support.eligible = false; fixture.state.support.amountCnyFen = 0
-  fixture.state.drawSupportError = 'LOTTERY_SUPPORT_REQUIRED'
+  fixture.state.consumption.eligible = false; fixture.state.consumption.amountCnyFen = 0
+  fixture.state.drawConsumptionError = 'LOTTERY_CONSUMPTION_REQUIRED'
   await page.locator('.draw-console > .button').click()
-  await expect(page.getByRole('alert')).toContainText('累计支持未满足参与条件')
+  await expect(page.getByRole('alert')).toContainText('累计消费未满足参与条件')
   await expect(page.locator('.draw-console > .button')).toBeDisabled()
   expect(await page.evaluate(() => sessionStorage.getItem('ai-community-next:lottery-draw:fixtureAccountUser'))).toBeNull()
   expect(fixture.state.balance).toBe(3)
   expect(fixture.state.remaining).toBe(200)
 })
 
-test('a temporary support error retains the same request across reload and retry', async ({ page }) => {
+test('a temporary consumption error retains the same request across reload and retry', async ({ page }) => {
   const fixture = await welfareFixture(page)
-  fixture.state.drawSupportError = 'LOTTERY_SUPPORT_UNAVAILABLE'
+  fixture.state.drawConsumptionError = 'LOTTERY_CONSUMPTION_UNAVAILABLE'
   await page.goto('/activities')
   await page.locator('.draw-console > .button').click()
   await expect(page.getByRole('alert')).toContainText('使用原凭证重新核对')
   await expect(page.locator('.draw-console > .button')).toContainText('核对上次抽奖')
-  fixture.state.support = { checked: false, eligible: false, amountCnyFen: null }
+  fixture.state.consumption = { checked: false, eligible: false, amountCnyFen: null }
   await page.reload()
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
-  fixture.state.drawSupportError = ''
+  fixture.state.drawConsumptionError = ''
   await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toBeVisible()
   expect(fixture.writes).toHaveLength(2)
@@ -255,37 +276,37 @@ test('a temporary support error retains the same request across reload and retry
   expect(fixture.state.remaining).toBe(199)
 })
 
-test('admin saves exact support cents and rejects empty, negative, excessive or fractional-cent input', async ({ page }, info) => {
+test('admin saves exact consumption cents and rejects empty, negative, excessive or fractional-cent input', async ({ page }, info) => {
   const fixture = await welfareFixture(page)
   await page.goto('/admin?tab=lottery')
-  const support = page.getByLabel('累计支持（元）', { exact: true })
-  await expect(support).toHaveValue('0')
-  await expect(support).toHaveAttribute('aria-describedby', 'lottery-support-help')
-  await expect(page.locator('#lottery-support-help')).toContainText('0 仍需有效实付大于 0')
+  const consumption = page.getByLabel('累计消费（元）', { exact: true })
+  await expect(consumption).toHaveValue('0')
+  await expect(consumption).toHaveAttribute('aria-describedby', 'lottery-consumption-help')
+  await expect(page.locator('#lottery-consumption-help')).toContainText('设为 0 时仍需累计消费大于 ¥0.00')
   for (const invalid of ['', '-0.01', '1000000.01', '0.001']) {
-    await support.fill(invalid)
+    await consumption.fill(invalid)
     await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
-    expect(await support.evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false)
+    expect(await consumption.evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false)
     expect(fixture.writes).toHaveLength(0)
   }
-  await support.fill('0.29')
+  await consumption.fill('0.29')
   await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
   await expect(page.locator('.config-actions')).toContainText('已保存')
-  expect(fixture.writes[0]!.body.settings.minSupportCnyFen).toBe(29)
+  expect(fixture.writes[0]!.body.settings.minConsumptionCnyFen).toBe(29)
   await page.reload()
-  await expect(support).toHaveValue('0.29')
+  await expect(consumption).toHaveValue('0.29')
   await page.setViewportSize({ width: 390, height: 844 })
-  await support.scrollIntoViewIfNeeded()
-  await page.screenshot({ path: info.outputPath('admin-support-390.png'), fullPage: true })
+  await consumption.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: info.outputPath('admin-consumption-390.png'), fullPage: true })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  await support.fill('1000000')
+  await consumption.fill('1000000')
   await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
   await expect(page.locator('.config-actions')).toContainText('已保存')
-  expect(fixture.writes[1]!.body.settings.minSupportCnyFen).toBe(100000000)
-  await support.fill('0')
+  expect(fixture.writes[1]!.body.settings.minConsumptionCnyFen).toBe(100000000)
+  await consumption.fill('0')
   await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
   await expect(page.locator('.config-actions')).toContainText('已保存')
-  expect(fixture.writes[2]!.body.settings.minSupportCnyFen).toBe(0)
+  expect(fixture.writes[2]!.body.settings.minConsumptionCnyFen).toBe(0)
 })
 
 for (const width of [1440, 390]) test(`admin edits every reward and daily quota independently at ${width}px`, async ({ page }, info) => {
