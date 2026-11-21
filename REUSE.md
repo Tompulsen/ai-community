@@ -53,8 +53,8 @@
 `src/turnstile.ts` 复用 `studio/app/utils/turnstile.ts` 的账号验证码脚本加载逻辑，
 避免社区开发页面跨 `/studio` 源码路径加载，并保留原有超时、重试和单次加载规则。
 当前构建只发布社区镜像，旧 `/studio` 页面跳转 `/create`，
-旧 iframe 启动、交换与上下文接口返回 410。`studio/` 保留为源码及来源参考，
-不进入社区镜像，也不再单独构建；数据库、Redis、文档及 New API 服务继续独立。
+旧 iframe 启动、交换与上下文接口返回 410。旧根目录 `studio/` 应用已移除，
+原源码可从 Git 历史查阅；数据库、Redis、文档及 New API 服务继续独立。
 
 ## 第一批代码来源
 
@@ -73,6 +73,8 @@
 
 ## 原生创作代码来源
 
+下列及本文其他 `studio/...` 来源路径指移除前的 Git 历史，不是当前运行依赖。
+
 | 当前代码 | 原 Studio 来源 | 适配内容 |
 | --- | --- | --- |
 | `server/native-account/{config,client,session,model-groups,model-pricing,relay}.ts` | `studio/app/lib/new-api/` 同名模块 | 标准 Request/Response、同进程鉴权，保留加密、锁、分组及额度规则 |
@@ -83,7 +85,7 @@
 | `src/native-studio.ts` | 原 Studio 的账号命名空间、图库和视频结果数据契约 | Vue 任务状态、精确账号历史读取与本地持久化 |
 
 移植模块沿用 Studio 的 MIT/NextChat 来源。完整 NextChat MIT 通知也写入
-会随社区镜像分发的 `THIRD_PARTY_NOTICES.md`，不依赖镜像外的 `studio/LICENSE`。
+会随社区镜像分发的 `THIRD_PARTY_NOTICES.md`，旧目录移除后继续保留。
 `iron-session@8.0.4`（MIT）保留旧会话密封格式，不引入 Next.js 或 React 运行时。
 历史导入仅限已验证 `accountId` 的 `octopus:user-<accountId>:` 及
 `octopus-gallery-user-<accountId>`，不清空或合并其他账号、访客和旧聊天存储。
@@ -115,7 +117,7 @@
 
 `shared/studio/` 的图片参数、视频能力表与序列化、聊天格式/usage、
 思考流解析、附件/视频采帧、上下文预算、对话分支和附件分离持久化，
-从现有 `studio/app/` 对应模块迁入；保留已在社区中更新的视频能力表，
+从原 `studio/app/` 对应模块迁入；保留已在社区中更新的视频能力表，
 替换框架/store 类型依赖及显式 `.ts` 导入，不重新实现这些算法。
 `shared/studio/chat-completions.ts` 摘取原 `client/platforms/openai.ts` 的
 o1/o3/o4-mini/GPT-5 参数兼容分支。
@@ -172,8 +174,9 @@ localStorage / storage 事件 / matchMedia，不引入新依赖或任意主题�
 纯算法仍在 `server/business/`；`auth.ts`、`content.ts`、`account.ts`、
 `lottery.ts` 和 `runtime.ts` 提供 TypeScript + Fastify 后端及原表适配。
 `types.ts` 统一请求上下文，构建时执行严格类型检查；事务、锁顺序与业务规则沿用。
-`studio/` 与 `services/documents/` 源码保留在项目中，
-其中 Studio 不参与当前运行镜像，文档服务继续独立复用。
+旧根目录 `studio/` 已退役，现用 `shared/studio/` 与 `services/documents/` 继续保留。
+文档数据契约及技能分别迁至 `shared/studio/document-workspace.ts` 和
+`server/skills/document-workspace/`，文档服务继续独立复用。
 前端使用真实 API，移除演示数据与伪造成功状态。统一登录与原生创作只需发布社区镜像。
 上传限制 20 MB，时间限制隐私
 暂时保守隐藏。当前文档描述源码实现；是否已部署以实际发布记录为准。

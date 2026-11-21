@@ -39,8 +39,8 @@ Runtime packages and their upstream declared licenses:
 
 The adapted authentication, content, account and lottery services retain AGPL
 notices. The repository LICENSE is retained from the reused community source.
-`studio/` retains its MIT/NextChat notices as reference source, and is excluded
-from the community image. Its account bridge was ported to
+The retired root `studio/` reference directory is available in Git history.
+Its MIT/NextChat notices remain here. Its account bridge was ported to
 `server/native-account/`; request parsing, pricing, public-media fetching,
 proxy lifecycle and generation/task protocol rules were also adapted from
 Studio utilities and routes. Exact source paths are listed in `REUSE.md`.
@@ -50,7 +50,7 @@ community service does not remove the original notice below.
 service declarations and QXChat MIT / GenOffice Apache-2.0 provenance.
 
 MIT notice for the reused Studio sources, retained here so it is distributed
-with the community image even though `studio/` is not:
+with the community image after the root `studio/` directory was retired:
 
 ```text
 MIT License

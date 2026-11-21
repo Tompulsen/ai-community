@@ -1,4 +1,4 @@
-// Adapted from QXChat / NextChat; MIT license, see studio/LICENSE and UPSTREAM.md.
+// Adapted from QXChat / NextChat; MIT license, see THIRD_PARTY_NOTICES.md and UPSTREAM.md.
 import type { RequestMessage } from "./types.ts";
 
 export type WebSearchSource = "duckduckgo" | "bing" | "webpage";

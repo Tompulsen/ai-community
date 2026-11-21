@@ -6,8 +6,9 @@
 PostgreSQL 表、Redis 命名空间和附件，保留原账号、作品及抽奖记录 ID。
 
 社区页面与创作台统一使用 Vue，由同一个 Fastify 进程提供接口和构建后的前端，
-只发布一个社区镜像。旧 `studio/` Next.js/React 源码保留为业务和来源参考，
-不参与当前构建，也不复制进社区镜像。文档服务、PostgreSQL、Redis 和
+只发布一个社区镜像。旧根目录 `studio/` Next.js/React 应用已移除，源码可从 Git 历史查阅；
+仍在使用的文档数据契约及技能分别保留在 `shared/studio/document-workspace.ts` 和
+`server/skills/document-workspace/`。文档服务、PostgreSQL、Redis 和
 New API 账户与模型网关继续独立保留。业务及数据契约见 [MIGRATION.md](MIGRATION.md)。
 
 社区入口为 `https://www.zhangyuapi.com`，创作台位于 `/create`，

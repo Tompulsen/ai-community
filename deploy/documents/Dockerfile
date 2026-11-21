@@ -12,7 +12,7 @@ RUN curl --fail --location --retry 2 --output /tmp/genoffice.deb https://github.
 COPY services/documents/test.mjs ./test.mjs
 RUN XLSX_SIDECAR_PATH=/native/xlsx-sidecar node test.mjs
 COPY services/documents/server.ts /source/services/documents/server.ts
-COPY studio/app/utils/document-workspace.ts /source/studio/app/utils/document-workspace.ts
+COPY shared/studio/document-workspace.ts /source/shared/studio/document-workspace.ts
 RUN ln -s /engine/node_modules /source/node_modules && ./node_modules/.bin/esbuild /source/services/documents/server.ts --bundle --platform=node --target=node24 --format=esm --outfile=/engine/dist/server.mjs
 COPY services/documents/QXChat-LICENSE /engine/dist/licenses/QXChat-LICENSE
 

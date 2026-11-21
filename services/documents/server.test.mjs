@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const root = await mkdtemp(path.join(os.tmpdir(), 'community-document-test-'));
 const service = path.join(root, 'server.mjs'), secret = randomBytes(32).toString('hex');
-require('../../studio/node_modules/esbuild').buildSync({entryPoints:[fileURLToPath(new URL('./server.ts',import.meta.url))],bundle:true,platform:'node',target:'node24',format:'esm',outfile:service});
+require('esbuild').buildSync({entryPoints:[fileURLToPath(new URL('./server.ts',import.meta.url))],bundle:true,platform:'node',target:'node24',format:'esm',outfile:service});
 const base = 'http://127.0.0.1:13314';
 const child = spawn(process.execPath,[service],{windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,PORT:'13314',DOCUMENT_HOST:'127.0.0.1',DOCUMENT_STORAGE_ROOT:root,DOCUMENT_ENGINE_ENTRY:path.resolve('services/documents/dist/engine.cjs'),DOCUMENT_SERVICE_SECRET:secret}});
 let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);

@@ -10,7 +10,7 @@ export const documentSkill: SkillDefinition = {
   version: "1.0.0",
   sha256: "18ef2497a882fb5ec84c2fe41b6eed2dc831baa45a17abdad570911e2575de7b",
   documentUrl:
-    "https://raw.githubusercontent.com/Tompulsen/ai-community/main/studio/skills/document-workspace/SKILL.md",
+    "https://raw.githubusercontent.com/Tompulsen/ai-community/main/server/skills/document-workspace/SKILL.md",
   sourceUrl: "https://github.com/genspark-ai/genoffice",
   license: "MIT / Apache-2.0（引擎）",
 };

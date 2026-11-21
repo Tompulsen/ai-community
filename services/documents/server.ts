@@ -17,7 +17,7 @@ import {
 	documentPlan,
 	documentJobRequest,
 	documentName,
-} from "../../studio/app/utils/document-workspace";
+} from "../../shared/studio/document-workspace.ts";
 
 const root = path.resolve(process.env.DOCUMENT_STORAGE_ROOT || "./data");
 const engine = process.env.DOCUMENT_ENGINE_ENTRY;

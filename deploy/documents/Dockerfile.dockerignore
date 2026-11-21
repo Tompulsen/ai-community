@@ -9,7 +9,6 @@
 !services/documents/test.mjs
 !services/documents/server.ts
 !services/documents/QXChat-LICENSE
-!studio/
-!studio/app/
-!studio/app/utils/
-!studio/app/utils/document-workspace.ts
+!shared/
+!shared/studio/
+!shared/studio/document-workspace.ts

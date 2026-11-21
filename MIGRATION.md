@@ -12,8 +12,9 @@ TypeScript + Fastify 后端已接入身份、作品、审核、互动、附件�
 管理，统一账号、API、访问入口和发布流程。社区和创作页面使用 Vue 3，
 由一个 Fastify 进程托管前端及本地 `/api/creation/*`、`/api/new-api/*`。
 构建工作流只发布社区镜像，不引入额外前端或后端框架。
-`studio/` Next.js/React 源码保留作兼容规则与第三方来源参考，
-被 `.dockerignore` 排除，也不由当前 Dockerfile 构建或复制进运行镜像。
+旧根目录 `studio/` Next.js/React 应用已在迁出剩余依赖后移除，原源码保留于
+Git 历史，第三方声明继续保留。当前 `shared/studio/` 仍承载创作及文档数据契约，
+文档技能位于 `server/skills/document-workspace/`。
 
 保留 PostgreSQL、Redis、附件存储等基础设施。章鱼账号继续使用现有账户与模型
 网关服务，其余额是权威账本；社区不另建一份可独立修改的余额。
@@ -130,7 +131,8 @@ localStorage。原生工作台只读取当前已验证数字账号 ID 对应的�
 - `server/native-account/`、`server/creation.ts`、`server/creation-contract.ts`
 - `src/native-studio.ts`、`src/components/StudioWorkspace.vue`
 - `server/business/{lottery,ads}.ts`
-- `studio/docs/new-api-account.md`、`studio/docs/local-data.md`
+- `server/native-account/README.md`
+- `shared/studio/document-workspace.ts`、`services/documents/`
 
 独立实现和业务兼容不消除第三方依赖、素材或后续复用代码的授权要求。
 
