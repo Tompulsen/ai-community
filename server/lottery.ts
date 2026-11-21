@@ -111,6 +111,8 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
   if (daily && (typeof input.dailyLimit !== 'number' || !Number.isInteger(input.dailyLimit) || input.dailyLimit < 1 || input.dailyLimit > 1000000)) fail('LOTTERY_INVALID')
   if (input.minConsumptionCnyFen !== undefined && (typeof input.minConsumptionCnyFen !== 'number' || !Number.isSafeInteger(input.minConsumptionCnyFen)
     || input.minConsumptionCnyFen < 0 || input.minConsumptionCnyFen > 100000000)) fail('LOTTERY_INVALID')
+  if (input.rewardValidityHours !== undefined && (typeof input.rewardValidityHours !== 'number' || !Number.isInteger(input.rewardValidityHours)
+    || input.rewardValidityHours < 1 || input.rewardValidityHours > 8760)) fail('LOTTERY_INVALID')
   const ids = new Set<string>()
   const prizes: unknown[] = input.prizes
   for (const prize of prizes) {
@@ -138,24 +140,32 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
   return settings
 }
 
+function storedCreditReceipt(row: PublicDrawSource, index: number): LotteryCreditReceipt {
+  const prize = row.prizes[index]!, receipt = prize.creditReceipt
+  const subject = row.creditSubject
+  if (typeof subject !== 'string' || !/^[1-9]\d{0,15}$/.test(subject) || !Number.isSafeInteger(Number(subject))
+    || !Number.isSafeInteger(prize.amountCents) || prize.amountCents <= 0 || !isRecord(receipt)) throw new Error('LOTTERY_CREDIT_RESPONSE')
+  const reference = `community_lottery_${row.id}_${index}`, userId = Number(subject)
+  return lotteryCreditReceipt({ credited: true, reference, user_id: userId, amount_cents: prize.amountCents, receipt: {
+    id: receipt.id, quota_added: receipt.quotaAdded, quota_per_usd: receipt.quotaPerUsd,
+    reward_kind: receipt.rewardKind, validity_hours: receipt.validityHours, expires_at: receipt.expiresAt,
+    points: receipt.points, lot_id: receipt.lotId, credited_at: receipt.creditedAt, quota_per_point: receipt.quotaPerPoint,
+  } }, reference, userId, prize.amountCents, prize)
+}
+
 export function packLotteryDraw(row: PublicDrawSource, username = '') {
-  const quotaPerPoint = communityQuotaPerPoint()
   return {
     id: row.id, userId: row.userId ?? '', username,
     createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)).toISOString(), creditAttempts: row.creditAttempts,
     prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt, creditBlocked: _blocked, ...prize }, index) => {
-      if (!quotaPerPoint) return prize
-      let legacyPoints: string | null = null
-      if (prize.status === 'fulfilled' && creditReceipt && /^[1-9]\d{0,15}$/.test(row.creditSubject || '')) {
-        const userId = Number(row.creditSubject), reference = `community_lottery_${row.id}_${index}`
-        try {
-          const receipt = lotteryCreditReceipt({ credited: true, reference, user_id: userId, amount_cents: prize.amountCents,
-            receipt: { id: creditReceipt.id, quota_added: creditReceipt.quotaAdded, quota_per_usd: creditReceipt.quotaPerUsd } },
-          reference, userId, prize.amountCents)
-          legacyPoints = (receipt.quotaAdded / quotaPerPoint).toFixed(6)
-        } catch { /* Historical records without valid delivery evidence remain unclassified. */ }
+      let receipt: LotteryCreditReceipt | null = null
+      if (prize.status === 'fulfilled' && creditReceipt) {
+        try { receipt = storedCreditReceipt(row, index) }
+        catch { /* Historical records without valid delivery evidence remain unclassified. */ }
       }
-      return { ...prize, legacyPoints }
+      if (prize.rewardKind === 'charity') return { ...prize, points: receipt?.points ?? null, expiresAt: receipt?.expiresAt ?? null }
+      const quotaPerPoint = communityQuotaPerPoint()
+      return quotaPerPoint ? { ...prize, legacyPoints: receipt ? (receipt.quotaAdded / quotaPerPoint).toFixed(6) : null } : prize
     }),
   }
 }
@@ -178,11 +188,7 @@ export function packAdminLotteryDraw(row: LotteryDrawRow) {
       if (source.status !== 'empty' && source.creditReceipt != null) {
         receiptStatus = 'invalid'
         try {
-          if (!Number.isSafeInteger(accountId) || !Number.isSafeInteger(source.amountCents) || source.amountCents <= 0 || !isRecord(source.creditReceipt)) throw new Error('LOTTERY_CREDIT_RESPONSE')
-          receipt = lotteryCreditReceipt({
-            credited: true, reference, user_id: accountId, amount_cents: source.amountCents,
-            receipt: { id: source.creditReceipt.id, quota_added: source.creditReceipt.quotaAdded, quota_per_usd: source.creditReceipt.quotaPerUsd },
-          }, reference, accountId, source.amountCents)
+          receipt = storedCreditReceipt(row, index)
           receiptStatus = 'verified'
         } catch { /* A stored receipt is evidence only after the original quota validation passes. */ }
       }
@@ -204,10 +210,19 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     catch { return null }
   }
 
+  function charityQuotaPerPoint(response: Record<string, unknown>): number | null {
+    try {
+      const quota = communityQuotaPerPoint()
+      return response.ready === true && response.client_id === new URL(config.url).origin
+        && Array.isArray(response.reward_kinds) && response.reward_kinds.includes('charity')
+        && typeof quota === 'number' && Number.isSafeInteger(quota) && quota > 0 && response.quota_per_point === quota ? quota : null
+    } catch { return null }
+  }
+
   async function creditRequest(issuer: string | null, body?: Record<string, unknown>, signal = AbortSignal.timeout(8000), accountSubject?: string): Promise<Record<string, unknown>> {
     const settings = creditConfig()
     if (!settings || settings.issuer !== issuer) throw Object.assign(new Error('LOTTERY_CREDIT_CONFIG'), { permanent: true })
-    const url = new URL('/api/community-sso/lottery', settings.issuer)
+    const url = new URL(body?.reward_kind === 'charity' ? '/api/community-sso/lottery/charity' : '/api/community-sso/lottery', settings.issuer)
     if (accountSubject !== undefined) {
       url.searchParams.set('client_id', new URL(config.url).origin)
       url.searchParams.set('user_id', accountSubject)
@@ -242,7 +257,8 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       || response.basis !== 'consumption' || typeof response.has_consumption !== 'boolean' || typeof response.consumption_cny_fen !== 'number'
       || !Number.isSafeInteger(response.consumption_cny_fen) || response.consumption_cny_fen < 0
       || (!response.has_consumption && response.consumption_cny_fen > 0)) throw new Error('LOTTERY_CONSUMPTION_RESPONSE')
-    return { hasConsumption: response.has_consumption, amountCnyFen: response.consumption_cny_fen, checkedAt: Date.now() }
+    return { hasConsumption: response.has_consumption, amountCnyFen: response.consumption_cny_fen,
+      charityReady: charityQuotaPerPoint(response) !== null, checkedAt: Date.now() }
   }
 
   async function configuration(client: Queryable, lock = false) {
@@ -299,11 +315,15 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         if (prize.status !== 'pending' || prize.creditBlocked) continue
         const reference = `community_lottery_${row.id}_${index}`
         try {
+          if (prize.rewardKind === 'charity') {
+            if (!Number.isInteger(prize.validityHours) || prize.validityHours! < 1 || prize.validityHours! > 8760) throw Object.assign(new Error('LOTTERY_CREDIT_RESPONSE'), { permanent: true })
+          }
           const response = await creditRequest(row.creditIssuer, {
             client_id: new URL(config.url).origin, user_id: Number(row.creditSubject),
             reference, amount_cents: prize.amountCents,
+            ...(prize.rewardKind === 'charity' ? { reward_kind: 'charity', validity_hours: prize.validityHours } : {}),
           }, signal)
-          try { prize.creditReceipt = lotteryCreditReceipt(response, reference, Number(row.creditSubject), prize.amountCents) }
+          try { prize.creditReceipt = lotteryCreditReceipt(response, reference, Number(row.creditSubject), prize.amountCents, prize) }
           catch { throw Object.assign(new Error('LOTTERY_CREDIT_RESPONSE'), { permanent: true }) }
           prize.status = 'fulfilled'
           row.creditAttempts = 0
@@ -363,6 +383,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     if (credit && typeof subject === 'string' && /^[1-9]\d{0,14}$/.test(subject)) {
       try {
         const used = await readConsumption(credit.issuer, subject)
+        result.creditReady = used.charityReady
         consumption = { checked: true, eligible: used.hasConsumption && used.amountCnyFen >= result.settings.minConsumptionCnyFen, amountCnyFen: used.amountCnyFen }
       } catch { /* Task opportunities remain available when consumption verification is temporarily unavailable. */ }
     }
@@ -431,6 +452,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       if (!credit || typeof subject !== 'string' || !/^[1-9]\d{0,14}$/.test(subject) || !Number.isSafeInteger(Number(subject))) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
       if (credit.issuer !== preflight.issuer || subject !== preflight.subject) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
       if (!consumption || Date.now() - consumption.checkedAt > 60000) fail('LOTTERY_CONSUMPTION_UNAVAILABLE', 503)
+      if (!consumption.charityReady) fail('LOTTERY_UNAVAILABLE', 409)
       if (!consumption.hasConsumption || consumption.amountCnyFen < pool.settings.minConsumptionCnyFen) fail('LOTTERY_CONSUMPTION_REQUIRED', 409)
       const { account } = await sync(client, userId, pool.settings)
       if (account.balance < count) fail('LOTTERY_INSUFFICIENT', 409)
@@ -440,7 +462,8 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         if (!prize) fail('LOTTERY_UNAVAILABLE', 409)
         if (prize.stock > 0) prize.stock--
         prizes.push({ amountCents: prize.amountCents, prizeId: prize.id, name: prize.name, description: prize.description,
-          status: prize.kind === 'empty' ? 'empty' : 'pending', fulfilledAt: null, fulfilledBy: null, note: '' })
+          status: prize.kind === 'empty' ? 'empty' : 'pending', fulfilledAt: null, fulfilledBy: null, note: '',
+          ...(prize.kind === 'balance' ? { rewardKind: 'charity', validityHours: pool.settings.rewardValidityHours } : {}) })
       }
       await client.query('UPDATE community_lottery_account SET balance=balance-$2 WHERE "userId"=$1', [userId, count])
       if (!daily) await client.query('UPDATE community_lottery_config SET version=version+1,settings=$2::jsonb WHERE id=$1', ['default', JSON.stringify(pool.settings)])
@@ -495,13 +518,14 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       try {
         if (!credit) throw new Error()
         const health = await creditRequest(credit.issuer)
-        if (health.ready !== true || health.client_id !== new URL(config.url).origin) throw new Error()
+        if (charityQuotaPerPoint(health) === null) throw new Error()
       } catch { fail('LOTTERY_UNAVAILABLE', 409) }
     }
     return transaction(db, async client => {
       const current = await configuration(client, true)
       if (version !== current.version) fail('LOTTERY_CONFLICT', 409)
-      const settings = normalizeLotterySettings({ ...normalized, minConsumptionCnyFen: normalized.minConsumptionCnyFen ?? current.settings.minConsumptionCnyFen, wheel: normalized.wheel ?? current.settings.wheel })
+      const settings = normalizeLotterySettings({ ...normalized, minConsumptionCnyFen: normalized.minConsumptionCnyFen ?? current.settings.minConsumptionCnyFen,
+        rewardValidityHours: normalized.rewardValidityHours ?? current.settings.rewardValidityHours, wheel: normalized.wheel ?? current.settings.wheel })
       settings.invites.enabled = false
       for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) settings.wheel[key] = settings.wheel[key].trim()
       settings.wheel.buttonText ||= 'GO'

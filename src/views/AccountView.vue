@@ -46,6 +46,7 @@ const password = ref('')
 const showPassword = ref(false), isTyping = ref(false)
 const error = ref('')
 const busy = ref(false)
+const walletReading = ref(false)
 const status = ref<AccountStatus | null>(null), statusReady = ref(false)
 const requiresVerification = ref(false), verificationCode = ref('')
 const identitySelection = ref<LoginIdentitySelection | null>(null)
@@ -205,6 +206,14 @@ async function loadAccount() {
   if (result.walletEnabled) { try { points = parseCommunityWallet(result.points) } catch {} }
   account.value = { ...result, points, currency: result.currencySymbol || result.currency || 'USD' }
 }
+async function refreshWallet() {
+  if (walletReading.value) return
+  const owner = session.user?.id
+  walletReading.value = true
+  try { await loadAccount(); if (active && owner === session.user?.id) error.value = '' }
+  catch (cause) { if (active && owner === session.user?.id) error.value = errorMessage(cause) }
+  finally { if (active && owner === session.user?.id) walletReading.value = false }
+}
 async function loadStatus() {
   try {
     const result = await accountApi<AccountStatus>('status')
@@ -356,10 +365,10 @@ async function restartLogin() {
         <AccountSecurity v-else-if="tab === 'security'" />
         <div v-else class="balance-settings">
           <section class="panel-section balance-panel">
-            <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。</p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>
+            <div class="balance-summary"><div class="section-heading"><Wallet :size="16" aria-hidden="true" /><h2>{{ account?.walletEnabled ? '社区积分' : '账户余额' }}</h2></div><CommunityWalletSummary v-if="account?.points" :wallet="account.points" @refresh="refreshWallet" /><p v-else-if="account?.walletEnabled" class="form-note" role="status">积分余额暂不可用，请稍后刷新或前往账户中心查看。<button type="button" class="text-link" :disabled="walletReading" @click="refreshWallet">{{ walletReading ? '正在读取…' : '重新读取' }}</button></p><template v-else><p class="account-balance">{{ account?.balance != null ? account.balance.toFixed(2) + ' ' + (account.currency || 'USD') : '--' }}</p><p v-if="account?.balance == null" class="form-note">请在章鱼账户中心查看实时余额。</p><p v-else class="form-note">以章鱼账户中心实时余额为准。</p></template></div>
             <div class="balance-actions"><a v-if="centerUrl" :href="centerUrl" class="button subtle btn" aria-label="前往账户中心" title="前往账户中心" target="_blank" rel="noopener noreferrer"><span>前往账户中心</span><ArrowUpRight :size="16" /></a></div>
           </section>
-          <AccountWallet :wallet-enabled="account?.walletEnabled" @refresh="loadAccount().catch(cause => error = errorMessage(cause))" />
+          <AccountWallet :wallet-enabled="account?.walletEnabled" @refresh="refreshWallet" />
         </div>
       </div>
     </div>
@@ -433,7 +442,7 @@ async function restartLogin() {
 .balance-settings .balance-panel { display: flex; justify-content: space-between; align-items: center; gap: 12px 24px; padding: 0 0 12px; background: transparent; border-radius: 0; }
 .balance-summary { flex: 1; min-width: 0; }.balance-summary .section-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }.balance-summary h2 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }.balance-summary .form-note { margin-top: 4px; }
 .account-balance { font-size: 20px; line-height: 28px; margin: 0; padding: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.balance-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.balance-actions { display: flex; flex-wrap: wrap; align-items: center; align-self: flex-start; gap: 8px; margin: 0; }.balance-actions .button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 @media (min-width: 1000px) {
   .account-tabs { display: flex; align-items: center; gap: var(--settings-space-related); border-bottom: 1px solid var(--border); }
   .settings-nav-group { display: contents; }

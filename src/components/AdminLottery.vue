@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Plus, RefreshCw, Save, Search, Trash2 } from '@
 import type { LotteryCreditReceipt, LotterySettings, LotteryPrize } from '../../server/business/lottery'
 import { api, errorMessage, notify, queryString, session } from '../state'
 import { defaultDailyLotteryPrizes, lotteryPointsToCents } from '../../shared/lottery-daily'
+import { formatPoints } from '../../shared/studio/community-wallet'
 
 interface Config { version: number; settings: LotterySettings }
 interface User { id: string; name: string; username: string }
@@ -11,6 +12,7 @@ interface Account { userId: string; balance: number }
 type DeliveryStatus = 'pending' | 'fulfilled' | 'empty' | 'blocked'
 interface Award {
   name: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note: string
+  rewardKind?: 'charity'; validityHours?: number
   reference: string; deliveryStatus: DeliveryStatus; blockedReason: 'UPSTREAM_REJECTED_OR_INVALID_RECEIPT' | 'RETRY_LIMIT' | null
   receiptStatus: 'verified' | 'missing' | 'invalid' | 'not-required'; creditReceipt: LotteryCreditReceipt | null; amountMatches: true | null
 }
@@ -26,6 +28,8 @@ const probabilitiesEdited = ref(false)
 const pointsPerUsd = ref<number | null>(null)
 const minConsumptionCny = ref<number | string>(0)
 const consumptionInput = ref<HTMLInputElement | null>(null), consumptionInvalid = ref(false)
+const rewardValidity = ref<number | string>(7), rewardValidityUnit = ref<'days' | 'hours'>('days')
+const validityInput = ref<HTMLInputElement | null>(null), validityInvalid = ref(false)
 const prizeEditorVersion = ref(0)
 const dailyMode = computed(() => draft.value?.settings.dailyLimit !== undefined)
 const dailyQuota = computed(() => draft.value?.settings.prizes.filter(prize => prize.enabled).reduce((sum, prize) => sum + Math.max(0, Number(prize.stock) || 0), 0) ?? 0)
@@ -48,7 +52,7 @@ function setPoints(prize: LotteryPrize, event: Event) {
 }
 const baseline = ref('')
 const reloadPrompt = ref(false)
-const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minConsumptionCny: minConsumptionCny.value })
+const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minConsumptionCny: minConsumptionCny.value, rewardValidity: rewardValidity.value, rewardValidityUnit: rewardValidityUnit.value })
 const hasUnsavedChanges = computed(() => !!baseline.value && configSnapshot() !== baseline.value)
 defineExpose({ hasUnsavedChanges })
 const ruleNames = { followers: '获得关注', likes: '作品获赞' }
@@ -75,6 +79,11 @@ function message(cause: unknown) {
 function setDraft(value: Config) {
   draft.value = value
   minConsumptionCny.value = (value.settings.minConsumptionCnyFen ?? 0) / 100
+  const hours = value.settings.rewardValidityHours ?? 168
+  rewardValidityUnit.value = hours % 24 === 0 ? 'days' : 'hours'
+  rewardValidity.value = hours / (rewardValidityUnit.value === 'days' ? 24 : 1)
+  validityInvalid.value = false
+  validityInput.value?.setCustomValidity('')
   consumptionInvalid.value = false
   consumptionInput.value?.setCustomValidity('')
   prizeEditorVersion.value++
@@ -124,7 +133,7 @@ async function saveConfig() {
   const minimum = minConsumptionCny.value
   if (typeof minimum !== 'number' || !Number.isFinite(minimum) || minimum < 0 || minimum > 1000000
     || Math.abs(minimum * 100 - Math.round(minimum * 100)) > 0.000001) {
-    error.value = '请输入 0 至 1,000,000 元，最多两位小数。'
+    error.value = '请输入 ✦0 至 ✦1,000,000，最多两位小数。'
     consumptionInvalid.value = true
     consumptionInput.value?.setCustomValidity(error.value)
     consumptionInput.value?.reportValidity()
@@ -132,6 +141,17 @@ async function saveConfig() {
   }
   const value = structuredClone(toRaw(draft.value))
   value.settings.minConsumptionCnyFen = Math.round(minimum * 100)
+  const hours = Number(rewardValidity.value) * (rewardValidityUnit.value === 'days' ? 24 : 1)
+  if (typeof rewardValidity.value !== 'number' || !Number.isInteger(rewardValidity.value)
+    || !Number.isSafeInteger(hours) || hours < 1 || hours > 8760) {
+    error.value = '请输入 1 至 365 天，或 1 至 8,760 小时的整数有效期。'
+    validityInvalid.value = true
+    validityInput.value?.setCustomValidity(error.value)
+    validityInput.value?.reportValidity()
+    validityInput.value?.focus()
+    return
+  }
+  value.settings.rewardValidityHours = hours
   if (dailyMode.value) {
     if (dailyQuota.value !== value.settings.dailyLimit) { error.value = '启用奖项的每日名额合计必须等于每日总人数上限。'; return }
     for (const prize of value.settings.prizes) prize.weight = Math.max(1, prize.stock)
@@ -254,7 +274,15 @@ onMounted(() => {
             <label class="field"><span>活动简介</span><input v-model="draft.settings.wheel.subtitle" class="control" maxlength="120" /></label>
           </div>
           <label class="field"><span>活动规则</span><textarea v-model="draft.settings.wheel.rulesText" class="control" rows="3" maxlength="2000" /></label>
-          <div class="field"><label for="lottery-min-consumption">累计消费（元）</label><input id="lottery-min-consumption" ref="consumptionInput" v-model.number="minConsumptionCny" name="minConsumptionCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-consumption-help" :aria-invalid="consumptionInvalid || undefined" @invalid="consumptionInvalid = true" @input="consumptionInvalid = false; consumptionInput?.setCustomValidity(''); saved = false" /><p id="lottery-consumption-help" class="form-note">参与抽奖所需的累计消费金额。设为 0 时仍需累计消费大于 ¥0.00；满足条件后仍需抽奖次数。</p></div>
+          <div class="field"><label for="lottery-min-consumption">累计消费（✦）</label><input id="lottery-min-consumption" ref="consumptionInput" v-model.number="minConsumptionCny" name="minConsumptionCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-consumption-help" :aria-invalid="consumptionInvalid || undefined" @invalid="consumptionInvalid = true" @input="consumptionInvalid = false; consumptionInput?.setCustomValidity(''); saved = false" /><p id="lottery-consumption-help" class="form-note">参与抽奖所需的累计消费金额。设为 0 时仍需累计消费大于 ✦0.00；满足条件后仍需抽奖次数。</p></div>
+          <div class="field">
+            <label for="lottery-reward-validity">福利积分有效期</label>
+            <div class="reward-validity-fields">
+              <input id="lottery-reward-validity" ref="validityInput" v-model.number="rewardValidity" name="rewardValidity" class="control" type="number" inputmode="numeric" min="1" :max="rewardValidityUnit === 'days' ? 365 : 8760" step="1" required aria-describedby="lottery-validity-help" :aria-invalid="validityInvalid || undefined" @invalid="validityInvalid = true" @input="validityInvalid = false; validityInput?.setCustomValidity(''); saved = false" />
+              <select v-model="rewardValidityUnit" name="rewardValidityUnit" class="control" aria-label="有效期单位" @change="validityInvalid = false; validityInput?.setCustomValidity(''); saved = false"><option value="days">天</option><option value="hours">小时</option></select>
+            </div>
+            <p id="lottery-validity-help" class="form-note">抽奖发放限时福利积分，从首次到账起计时。修改有效期仅影响新中奖奖励。</p>
+          </div>
           <h3 class="config-title">任务奖励</h3>
           <div class="rule-grid"><div v-for="(label, key) in ruleNames" :key="key" class="stack"><label class="check-label"><input v-model="draft.settings[key].enabled" type="checkbox" />{{ label }}</label><div class="fields"><label class="field"><span>达成数量</span><input v-model.number="draft.settings[key].threshold" class="control" type="number" min="1" max="1000000" step="1" required /></label><label class="field"><span>奖励次数</span><input v-model.number="draft.settings[key].tickets" class="control" type="number" min="1" max="1000" step="1" required /></label></div></div></div>
           <label class="field"><span>获赞统计</span><select v-model="draft.settings.likesMode" class="control"><option value="work">单件作品累计</option><option value="total">所有作品累计</option></select></label>
@@ -272,7 +300,7 @@ onMounted(() => {
             <div class="section-heading"><label class="check-label"><input v-model="prize.enabled" type="checkbox" @change="probabilitiesEdited = true" />启用奖项</label><button type="button" class="icon-button" :title="`移除奖项 ${index + 1}`" :aria-label="`移除奖项 ${index + 1}`" @click="removePrize(index)"><Trash2 :size="16" /></button></div>
             <div class="prize-fields">
               <label class="field"><span>名称</span><input v-model="prize.name" class="control" maxlength="80" required /></label>
-              <label class="field"><span>类型</span><select v-model="prize.kind" class="control" @change="prize.amountCents = prize.kind === 'empty' ? 0 : 50"><option value="balance">积分奖励</option><option value="empty">未中奖（无积分）</option></select></label>
+              <label class="field"><span>类型</span><select v-model="prize.kind" class="control" @change="prize.amountCents = prize.kind === 'empty' ? 0 : 50"><option value="balance">限时福利积分</option><option value="empty">未中奖（无积分）</option></select></label>
               <label v-if="prize.kind === 'balance' && pointsPerUsd" class="field"><span>单次奖励（积分）</span><input :value="prize.amountCents / 100 * pointsPerUsd" class="control" type="number" :min="pointsPerUsd / 100" :max="pointsPerUsd * 10000" :step="pointsPerUsd / 100" required @input="setPoints(prize, $event)" /></label>
               <label v-else-if="prize.kind === 'balance'" class="field"><span>金额（美元）</span><input :value="(prize.amountCents / 100).toFixed(2)" class="control" type="number" min="0.01" max="10000" step="0.01" required @change="prize.amountCents = Math.round(Number(($event.target as HTMLInputElement).value) * 100)" /></label>
               <label v-if="!dailyMode" class="field"><span>设定概率（%）</span><input v-model.number="percentages[prize.id]" class="control" type="number" min="0.01" max="100" step="0.01" :disabled="!prize.enabled" required @input="probabilitiesEdited = true" /></label>
@@ -332,6 +360,12 @@ onMounted(() => {
                     <div><dt>到账凭证编号</dt><dd>{{ award.creditReceipt.id }}</dd></div>
                     <div><dt>实际添加额度</dt><dd>{{ award.creditReceipt.quotaAdded.toLocaleString('en-US') }} quota</dd></div>
                     <div class="receipt-ratio"><dt>发放时兑换比例</dt><dd>{{ award.creditReceipt.quotaPerUsd }} quota / USD</dd></div>
+                    <template v-if="award.creditReceipt.rewardKind === 'charity'">
+                      <div><dt>积分类型</dt><dd>限时福利积分</dd></div>
+                      <div><dt>到账福利积分</dt><dd>{{ formatPoints(award.creditReceipt.points ?? '') }} 积分</dd></div>
+                      <div><dt>首次到账</dt><dd>{{ award.creditReceipt.creditedAt ? dateTime(new Date(award.creditReceipt.creditedAt * 1000).toISOString()) : '未确认' }}</dd></div>
+                      <div><dt>到期时间</dt><dd>{{ award.creditReceipt.expiresAt ? dateTime(new Date(award.creditReceipt.expiresAt * 1000).toISOString()) : '未确认' }}</dd></div>
+                    </template>
                   </template>
                   <div><dt>金额核对</dt><dd>{{ award.amountMatches === true ? '金额与凭证兑换比例一致' : award.receiptStatus === 'not-required' ? '无需核对' : '无法确认实际到账金额' }}</dd></div>
                 </dl>
@@ -349,6 +383,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.reward-validity-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(96px, 120px); gap: var(--space-small); }
+.reward-validity-fields > .control { width: 100%; min-width: 0; }
 .admin-lottery { min-width: 0; }
 .lottery-config { padding-top: 0; }
 .fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }

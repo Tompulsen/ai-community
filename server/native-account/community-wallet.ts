@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type { AccountRequest } from './http.ts'
 import { accountRequest, getAuthenticatedSession } from './client.ts'
 import { getNewApiConfig, getNewApiImageBaseUrl, getNewApiAsyncBaseUrl, NewApiError } from './config.ts'
-import { parseCommunityWallet, type CommunityWallet } from '../../shared/studio/community-wallet.ts'
+import { parseCommunityWallet, parseCommunityWalletLots, type CommunityWallet, type CommunityWalletLots } from '../../shared/studio/community-wallet.ts'
 
 export function communityWalletEnabled() {
   return process.env.COMMUNITY_WALLET_ENABLED === 'true'
@@ -28,10 +28,34 @@ export async function readCommunityWallet(req: AccountRequest): Promise<{ userId
       charityPoints: data?.charity_points, permanentPoints: data?.permanent_points,
       legacyApiQuota: data?.legacy_api_quota, paidApiQuota: data?.paid_api_quota,
       totalApiQuota: data?.total_api_quota, charityExpiringAt: data?.charity_expiring_at,
+      charityExpiringPoints: data?.charity_expiring_points, charityDetailsAvailable: data?.charity_details_available,
     })
     return { userId: session.user.id, points }
   } catch {
     throw new NewApiError('积分余额暂不可用，请稍后刷新', 503, 'COMMUNITY_WALLET_UNAVAILABLE')
+  }
+}
+
+export async function readCommunityWalletLots(req: AccountRequest): Promise<{ userId: number } & CommunityWalletLots> {
+  if (!communityWalletEnabled()) throw new NewApiError('积分钱包尚未启用', 404, 'COMMUNITY_WALLET_DISABLED')
+  const cursor = req.nextUrl.searchParams.get('cursor')
+  if (cursor !== null && (!/^[1-9]\d{0,15}$/.test(cursor) || !Number.isSafeInteger(Number(cursor)))) {
+    throw new NewApiError('福利明细分页参数无效', 400)
+  }
+  const { session } = await getAuthenticatedSession(req, true)
+  if (!session.user) throw new NewApiError('请先登录账号', 401)
+  const { data } = await accountRequest(req, `/api/user/self/wallet/lots${cursor ? `?before=${cursor}` : ''}`, { reuseRequestSession: true, maxResponseBytes: 32768 })
+  try {
+    if (!Array.isArray(data?.items)) throw new Error()
+    const details = parseCommunityWalletLots({
+      items: data.items.map((lot: Record<string, unknown>) => ({
+        id: lot.id, source: lot.source, points: lot.points, expiresAt: lot.expires_at, createdAt: lot.created_at,
+      })),
+      nextCursor: data.next_cursor, sharedPoints: data.shared_points,
+    })
+    return { userId: session.user.id, ...details }
+  } catch {
+    throw new NewApiError('福利明细暂不可用，请稍后刷新', 503, 'COMMUNITY_WALLET_UNAVAILABLE')
   }
 }
 

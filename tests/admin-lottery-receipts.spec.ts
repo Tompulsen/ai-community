@@ -84,6 +84,27 @@ async function expand(page: Page, id: string) {
   return page.getByRole('region', { name: `发放对账：${id}`, exact: true })
 }
 
+test('welfare receipts expose actual points and the original expiry', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/admin/lottery/records*', route => route.fulfill({ json: {
+    items: [{ id: 'welfare', userId: '17', username: 'root', createdAt: '2026-11-21T10:00:00Z',
+      creditAttempts: 0, creditPending: false, creditAccountId: 17, creditRetryAt: null,
+      prizes: [{ ...baseAward, name: '限时福利奖励', rewardKind: 'charity', validityHours: 24,
+        reference: 'community_lottery_welfare_0', receiptStatus: 'verified', amountMatches: true,
+        creditReceipt: { id: 91, quotaAdded: 250000, quotaPerUsd: '500000', rewardKind: 'charity',
+          validityHours: 24, quotaPerPoint: 100, points: '2500', lotId: 12,
+          creditedAt: 1795255200, expiresAt: 1795341600 } }],
+    }], nextCursor: null,
+  } }))
+  await page.goto('/admin?tab=lottery')
+  const evidence = await expand(page, 'welfare')
+  await expect(evidence).toContainText('限时福利积分')
+  await expect(evidence).toContainText('2,500 积分')
+  await expect(evidence).toContainText('首次到账')
+  await expect(evidence).toContainText('到期时间')
+  await expect(evidence).toContainText(new Date(1795341600 * 1000).toLocaleString('zh-CN'))
+})
+
 for (const width of [1440, 390]) {
   test(`saved credit evidence distinguishes valid, missing and invalid receipts at ${width}px`, async ({ page }) => {
     const state = await fixture(page)

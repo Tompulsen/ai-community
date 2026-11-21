@@ -10,6 +10,7 @@ async function welfareFixture(page: Page, authenticated = true) {
   const config = { version: 1, settings: { ...defaultLotterySettings(), enabled: true, dailyLimit: 200, prizes: defaultDailyLotteryPrizes(5000) } }
   const day = lotteryDay(new Date())
   const state = { participated: false, remaining: 200, balance: 3, failAfterDraw: false, failBeforeDraw: false,
+    date: day.date, resetsAt: day.end.toISOString(), statusReads: 0, failStatus: false, statusDelay: Promise.resolve(),
     consumption: { checked: authenticated, eligible: authenticated, amountCnyFen: authenticated ? 1000 : null as number | null }, drawConsumptionError: '' }
   const writes: { path: string; body: any }[] = [], draws = new Map<string, object>()
   const referral = {
@@ -39,13 +40,18 @@ async function welfareFixture(page: Page, authenticated = true) {
   })
   await page.route('**/api/lottery/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
-    if (path.endsWith('/status')) return route.fulfill({ json: {
+    if (path.endsWith('/status')) {
+      state.statusReads++
+      await state.statusDelay
+      if (state.failStatus) return route.fulfill({ status: 503, json: { error: 'LOTTERY_UNAVAILABLE' } })
+      return route.fulfill({ json: {
       settings: { ...config.settings, prizes: config.settings.prizes.filter(p => p.enabled).map((p, i) => ({ ...p, dailyQuota: p.stock, stock: p.stock - (state.participated && i === 3 ? 1 : 0), weight: p.stock - (state.participated && i === 3 ? 1 : 0) })) },
-      daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(), limit: config.settings.dailyLimit, remaining: state.remaining, used: 200 - state.remaining, participated: state.participated },
+      daily: { date: state.date, timezone: 'Asia/Shanghai', resetsAt: state.resetsAt, limit: config.settings.dailyLimit, remaining: state.remaining, used: 200 - state.remaining, participated: state.participated },
       balance: state.balance, creditReady: true, accountLinked: authenticated, inviteUrl: 'http://localhost/activities?invite=17',
       consumption: state.consumption,
       counts: { invites: 0, followers: 0, likes: 0, bestWorkLikes: 0 }, earned: { invites: 0, followers: 0, likes: 0 },
-    } })
+      } })
+    }
     if (path.endsWith('/draw')) {
       const body = request.postDataJSON(); writes.push({ path, body })
       if (state.failBeforeDraw) return route.fulfill({ status: 409, json: { error: 'LOTTERY_DAILY_EXHAUSTED' } })
@@ -55,15 +61,231 @@ async function welfareFixture(page: Page, authenticated = true) {
       if (!draws.has(body.requestId)) {
         state.participated = true; state.remaining--; state.balance--
         const prize = config.settings.prizes[3]!
-        draws.set(body.requestId, { id: 'draw1', createdAt: new Date().toISOString(), prizes: [{ ...prize, prizeId: prize.id, status: 'pending' }] })
+        draws.set(body.requestId, { id: 'draw1', createdAt: new Date().toISOString(), prizes: [{ ...prize, prizeId: prize.id, status: 'pending', rewardKind: 'charity', validityHours: config.settings.rewardValidityHours }] })
       }
       if (state.failAfterDraw) { state.failAfterDraw = false; return route.abort('failed') }
       return route.fulfill({ json: draws.get(body.requestId) })
     }
     return route.fulfill({ json: { items: [...draws.values()], nextCursor: null } })
   })
-  return { state, writes, config, referral, account }
+  return { state, writes, config, referral, account, draws }
 }
+
+test('new prizes show welfare validity while saved rewards retain their own amounts and deadlines', async ({ page }, info) => {
+  const start = new Date('2026-11-21T10:00:00Z')
+  await page.clock.install({ time: start })
+  await page.clock.pauseAt(start)
+  const fixture = await welfareFixture(page)
+  const prize = fixture.config.settings.prizes[0]!
+  fixture.draws.set('history', { id: 'history', createdAt: start.toISOString(), prizes: [
+    { ...prize, prizeId: prize.id, status: 'fulfilled', rewardKind: 'charity', validityHours: 1, points: '500', expiresAt: start.getTime() / 1000 + 3 },
+    { ...prize, prizeId: prize.id, name: '待发福利', status: 'pending', rewardKind: 'charity', validityHours: 2 },
+    { ...prize, prizeId: prize.id, name: '历史永久奖励', status: 'fulfilled', legacyPoints: '2500' },
+  ] })
+  await page.goto('/activities')
+  await expect(page.locator('.prize-list')).toContainText('6,000 福利积分 · 7 天有效')
+  await expect(page.locator('.prize-list')).not.toContainText('永久积分')
+  await page.getByRole('button', { name: '奖励记录', exact: true }).click()
+  const rows = page.getByRole('row')
+  await expect(rows.nth(1)).toContainText('500 福利积分')
+  await expect(rows.nth(2)).toContainText('首次到账后 2 小时有效')
+  await expect(rows.nth(3)).toContainText('2,500 积分')
+  await expect(page.locator('.records-section')).not.toContainText('永久积分）')
+  const timer = page.getByRole('timer', { name: '奖励到期倒计时' })
+  await expect(timer).toHaveText('剩余 00:00:03')
+  await expect(timer).toHaveAttribute('aria-live', 'off')
+  await page.clock.runFor(3000)
+  await expect(timer).toHaveText('已到期')
+  fixture.config.settings.rewardValidityHours = 48
+  await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+  await expect(rows.nth(2)).toContainText('首次到账后 2 小时有效')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    if (width < 640) {
+      const label = await rows.nth(1).locator('.status').boundingBox()
+      const deadline = await rows.nth(1).locator('.reward-expiry').boundingBox()
+      expect(deadline!.x).toBeCloseTo(label!.x, 1)
+    }
+    await page.screenshot({ path: info.outputPath(`timed-rewards-${width}.png`), fullPage: true })
+  }
+  await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
+  await expect(page.locator('.prize-list')).toContainText('6,000 福利积分 · 2 天有效')
+  expect(fixture.writes).toHaveLength(0)
+})
+
+test('a delivered record updates the original draw result with its frozen expiry', async ({ page }) => {
+  const start = new Date('2026-11-21T10:00:00Z')
+  await page.clock.install({ time: start })
+  await page.clock.pauseAt(start)
+  const fixture = await welfareFixture(page)
+  await page.route('**/api/lottery/records', route => route.fulfill({ json: {
+    items: fixture.draws.size ? [{
+      id: 'draw1', createdAt: start.toISOString(), prizes: [{
+        ...fixture.config.settings.prizes[3]!, prizeId: fixture.config.settings.prizes[3]!.id,
+        status: 'fulfilled', rewardKind: 'charity', validityHours: 1,
+        points: '1000', expiresAt: start.getTime() / 1000 + 3600,
+      }],
+    }] : [], nextCursor: null,
+  } }))
+  await page.goto('/activities')
+  await page.locator('.draw-console > .button').click()
+  await expect(page.locator('.draw-result')).toContainText('已到账，1,000 福利积分')
+  await expect(page.locator('.draw-result')).not.toContainText('待发放')
+  await expect(page.locator('.draw-result').getByRole('timer')).toHaveText('剩余 01:00:00')
+  expect(fixture.writes).toHaveLength(1)
+})
+
+test('admin controls reward validity in days or hours and preserves it after saving', async ({ page }, info) => {
+  const fixture = await welfareFixture(page)
+  await page.goto('/admin?tab=lottery')
+  const validity = page.getByLabel('福利积分有效期', { exact: true })
+  const unit = page.getByRole('combobox', { name: '有效期单位', exact: true })
+  const save = page.getByRole('button', { name: '保存抽奖配置', exact: true })
+  await expect(validity).toHaveValue('7')
+  await expect(unit).toHaveValue('days')
+  await expect(validity).toHaveAttribute('aria-describedby', 'lottery-validity-help')
+  for (const invalid of ['', '0', '-1', '0.5', '366']) {
+    await validity.fill(invalid)
+    await save.click()
+    expect(await validity.evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false)
+    expect(fixture.writes).toHaveLength(0)
+  }
+  await unit.selectOption('hours')
+  await validity.fill('3')
+  await save.click()
+  await expect(page.locator('.config-actions')).toContainText('已保存')
+  expect(fixture.writes[0]!.body.settings.rewardValidityHours).toBe(3)
+  await page.reload()
+  await expect(validity).toHaveValue('3')
+  await expect(unit).toHaveValue('hours')
+  await validity.fill('8761')
+  await save.click()
+  expect(fixture.writes).toHaveLength(1)
+  await unit.selectOption('days')
+  await validity.fill('2')
+  await save.click()
+  await expect(page.locator('.config-actions')).toContainText('已保存')
+  expect(fixture.writes[1]!.body.settings.rewardValidityHours).toBe(48)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await validity.scrollIntoViewIfNeeded()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('reward-validity-390.png'), fullPage: true })
+})
+
+test('reset countdown ticks against the server deadline and refreshes the daily pool', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-21T15:59:55Z') })
+  await page.clock.pauseAt(new Date('2026-11-21T15:59:57Z'))
+  const fixture = await welfareFixture(page)
+  Object.assign(fixture.state, { date: '2026-11-21', resetsAt: '2026-11-21T16:00:00Z', participated: true, remaining: 199 })
+  await page.goto('/activities')
+  const timer = page.getByRole('timer', { name: '每日奖池重置倒计时' })
+  await expect(timer).toHaveText('00:00:03')
+  await expect(timer).toHaveAttribute('datetime', 'PT3S')
+  await expect(timer).toHaveAttribute('aria-live', 'off')
+  await expect(page.locator('.daily-overview')).not.toContainText('每人每天限')
+  await expect(page.locator('.daily-overview')).not.toContainText('北京时间 00:00')
+  await expect(page.locator('.draw-console > .button')).toHaveText('今日已参与')
+  await page.clock.runFor(1000)
+  await expect(timer).toHaveText('00:00:02')
+  Object.assign(fixture.state, { date: '2026-11-22', resetsAt: '2026-11-22T16:00:00Z', participated: false, remaining: 200 })
+  await page.clock.runFor(3000)
+  await expect(timer).toHaveText('23:59:59')
+  await expect(page.locator('.draw-console > .button')).toBeEnabled()
+  expect(fixture.state.statusReads).toBe(2)
+  expect(fixture.writes).toHaveLength(0)
+})
+
+test('reset countdown reconciles after background sleep without duplicate refreshes', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-21T12:59:58Z') })
+  await page.clock.pauseAt(new Date('2026-11-21T13:00:00Z'))
+  const fixture = await welfareFixture(page)
+  Object.assign(fixture.state, { date: '2026-11-21', resetsAt: '2026-11-21T16:00:00Z' })
+  await page.goto('/activities')
+  const timer = page.getByRole('timer', { name: '每日奖池重置倒计时' })
+  await expect(timer).toHaveText('03:00:00')
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await page.clock.setSystemTime(new Date('2026-11-21T15:59:59Z'))
+  await page.clock.runFor(1000)
+  expect(fixture.state.statusReads).toBe(1)
+  await page.clock.setSystemTime(new Date('2026-11-21T16:00:02Z'))
+  Object.assign(fixture.state, { date: '2026-11-22', resetsAt: '2026-11-22T16:00:00Z' })
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new Event('focus'))
+  })
+  await expect(timer).toHaveText('23:59:58')
+  expect(fixture.state.statusReads).toBe(2)
+  expect(fixture.writes).toHaveLength(0)
+})
+
+test('reset countdown refreshes after an unfinished draw crosses midnight without resubmitting it', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-21T15:59:55Z') })
+  await page.clock.pauseAt(new Date('2026-11-21T15:59:57Z'))
+  const fixture = await welfareFixture(page)
+  Object.assign(fixture.state, { date: '2026-11-21', resetsAt: '2026-11-21T16:00:00Z', drawConsumptionError: 'LOTTERY_CONSUMPTION_UNAVAILABLE' })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const submissions: { requestId: string }[] = []
+  await page.route('**/api/lottery/draw', async route => {
+    submissions.push(route.request().postDataJSON())
+    await held
+    await route.fallback()
+  })
+  await page.goto('/activities')
+  const draw = page.locator('.draw-console > .button')
+  await expect(draw).toBeEnabled()
+  await draw.click()
+  await expect.poll(() => submissions.length).toBe(1)
+  await page.clock.runFor(4000)
+  expect(fixture.state.statusReads).toBe(1)
+  Object.assign(fixture.state, { date: '2026-11-22', resetsAt: '2026-11-22T16:00:00Z' })
+  release()
+  await expect(page.getByRole('alert')).toContainText('使用原凭证重新核对')
+  await page.clock.runFor(1000)
+  await expect(page.getByRole('timer', { name: '每日奖池重置倒计时' })).toHaveText('23:59:58')
+  await expect(draw).toContainText('核对上次抽奖')
+  expect(fixture.state.statusReads).toBe(2)
+  expect(submissions).toHaveLength(1)
+  expect(fixture.writes).toHaveLength(1)
+  expect(fixture.state.balance).toBe(3)
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ai-community-next:lottery-draw:fixtureAccountUser')!).requestId)).toBe(submissions[0]!.requestId)
+})
+
+test('reset countdown retries stale or failed status without polling rapidly and stops after leaving', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-21T15:59:55Z') })
+  await page.clock.pauseAt(new Date('2026-11-21T15:59:57Z'))
+  const fixture = await welfareFixture(page)
+  Object.assign(fixture.state, { date: '2026-11-21', resetsAt: '2026-11-21T16:00:00Z' })
+  await page.goto('/activities')
+  const timer = page.getByRole('timer', { name: '每日奖池重置倒计时' })
+  await expect(timer).toHaveText('00:00:03')
+  await page.clock.runFor(4000)
+  await expect(timer).toHaveText('00:00:00')
+  expect(fixture.state.statusReads).toBe(2)
+  await page.clock.runFor(4000)
+  expect(fixture.state.statusReads).toBe(2)
+  fixture.state.failStatus = true
+  await page.clock.runFor(11000)
+  await expect(page.getByRole('alert')).toContainText('活动或奖励发放暂不可用')
+  expect(fixture.state.statusReads).toBe(3)
+  fixture.state.failStatus = false
+  let release!: () => void
+  fixture.state.statusDelay = new Promise<void>(resolve => { release = resolve })
+  await page.clock.runFor(15000)
+  await expect(page.getByRole('status', { name: '正在加载活动' })).toBeVisible()
+  expect(fixture.state.statusReads).toBe(4)
+  await page.locator('.account-balance').first().click()
+  await expect(page).toHaveURL(/\/account/)
+  release()
+  await page.clock.runFor(30000)
+  expect(fixture.state.statusReads).toBe(4)
+  expect(fixture.writes).toHaveLength(0)
+})
 
 for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']] as const) {
   test(`welfare wheel and daily pool at ${width}px ${scheme}`, async ({ page }, info) => {
@@ -77,8 +299,8 @@ for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], 
     await expect(page.getByRole('heading', { name: '福利中心', exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: '活动抽奖', exact: true })).toBeVisible()
     await expect(page.getByRole('region', { name: '今日福利' })).toContainText('600,000')
-    await expect(page.locator('.prize-list')).toContainText('6,000 积分')
-    await expect(page.locator('.prize-list')).toContainText('1,000 积分')
+    await expect(page.locator('.prize-list')).toContainText('6,000 福利积分')
+    await expect(page.locator('.prize-list')).toContainText('1,000 福利积分')
     await expect(page.locator('.prize-icon svg')).toHaveCount(4)
     await expect(page.locator('.clown-icon')).toHaveCount(0)
     await expect(page.getByRole('group', { name: '本次抽奖次数' })).toHaveCount(0)
@@ -96,7 +318,7 @@ test('a draw consumes one chance and hides multi-draw; confirmed participation p
   await page.goto('/activities')
   await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toContainText('🤡 非常遗憾')
-  await expect(page.locator('.draw-result')).toContainText('1,000 积分')
+  await expect(page.locator('.draw-result')).toContainText('1,000 福利积分')
   await expect(page.locator('.draw-console > .button')).toHaveText('今日已参与')
   await expect(page.locator('.draw-console > .button')).toBeDisabled()
   await expect(page.getByRole('region', { name: '今日福利' })).toContainText('199')
@@ -171,7 +393,7 @@ test('a guest sees a login action and the configured daily pool', async ({ page 
   await page.goto('/activities')
   await expect(page.getByRole('link', { name: '登录后参与', exact: true })).toBeVisible()
   const conditions = page.getByRole('region', { name: '参与条件', exact: true })
-  await expect(conditions).toContainText('累计消费 > ¥0.00')
+  await expect(conditions).toContainText('累计消费 > ✦0.00')
   await expect(conditions).toContainText('登录后查看累计消费及资格')
   await expect(conditions).not.toContainText('当前累计消费')
 })
@@ -186,8 +408,8 @@ test('cumulative consumption and tickets remain separate participation requireme
   const conditions = page.getByRole('region', { name: '参与条件', exact: true })
   await expect(page.getByRole('heading', { name: '活动抽奖', exact: true })).toBeVisible()
   await expect(draw).toBeDisabled()
-  await expect(conditions).toContainText('累计消费 > ¥0.00')
-  await expect(conditions).toContainText('当前累计消费 ¥0.00')
+  await expect(conditions).toContainText('累计消费 > ✦0.00')
+  await expect(conditions).toContainText('当前累计消费 ✦0.00')
   await expect(conditions).toContainText('未满足')
   await expect(page.locator('.draw-controls')).toContainText('可用 3 次')
   expect(fixture.writes).toHaveLength(0)
@@ -197,14 +419,15 @@ test('cumulative consumption and tickets remain separate participation requireme
   fixture.state.consumption.amountCnyFen = 1000
   await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(page.getByRole('heading', { name: '创作者周末活动', exact: true })).toBeVisible()
-  await expect(conditions).toContainText('累计消费 ≥ ¥10.01')
-  await expect(conditions).toContainText('当前累计消费 ¥10.00')
+  await expect(conditions).toContainText('累计消费 ≥ ✦10.01')
+  await expect(conditions).toContainText('当前累计消费 ✦10.00')
   await expect(conditions).toContainText('未满足')
   await expect(draw).toBeDisabled()
-  fixture.state.consumption = { checked: true, eligible: true, amountCnyFen: 1001 }
+  fixture.state.consumption = { checked: true, eligible: true, amountCnyFen: 7145 }
   await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(draw).toBeEnabled()
   await expect(conditions).toContainText('已满足')
+  await expect(conditions).toContainText('当前累计消费 ✦71.45')
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.screenshot({ path: info.outputPath('consumption-eligible-1440.png'), fullPage: true })
   fixture.state.balance = 0
@@ -224,10 +447,10 @@ test('zero threshold shows verified positive sub-fen consumption without roundin
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
   const conditions = page.getByRole('region', { name: '参与条件', exact: true })
-  await expect(conditions).toContainText('累计消费 > ¥0.00')
-  await expect(conditions).toContainText('当前累计消费 小于 ¥0.01')
+  await expect(conditions).toContainText('累计消费 > ✦0.00')
+  await expect(conditions).toContainText('当前累计消费 小于 ✦0.01')
   await expect(conditions).toContainText('已满足')
-  await expect(conditions.locator('.consumption-status')).not.toContainText('¥0.00')
+  await expect(conditions.locator('.consumption-status')).not.toContainText('✦0.00')
 })
 
 test('a consumption verification failure blocks new draws and can be retried', async ({ page }, info) => {
@@ -279,10 +502,10 @@ test('a temporary consumption error retains the same request across reload and r
 test('admin saves exact consumption cents and rejects empty, negative, excessive or fractional-cent input', async ({ page }, info) => {
   const fixture = await welfareFixture(page)
   await page.goto('/admin?tab=lottery')
-  const consumption = page.getByLabel('累计消费（元）', { exact: true })
+  const consumption = page.getByLabel('累计消费（✦）', { exact: true })
   await expect(consumption).toHaveValue('0')
   await expect(consumption).toHaveAttribute('aria-describedby', 'lottery-consumption-help')
-  await expect(page.locator('#lottery-consumption-help')).toContainText('设为 0 时仍需累计消费大于 ¥0.00')
+  await expect(page.locator('#lottery-consumption-help')).toContainText('设为 0 时仍需累计消费大于 ✦0.00')
   for (const invalid of ['', '-0.01', '1000000.01', '0.001']) {
     await consumption.fill(invalid)
     await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()

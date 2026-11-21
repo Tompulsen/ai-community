@@ -11,6 +11,7 @@ const dailySettings = () => ({ ...defaultLotterySettings(), enabled: true, daily
 test('daily defaults allocate 200 places and exactly 600000 points, including the clown reward', () => {
   const settings = dailySettings()
   assert.equal(validateLotterySettings(settings), settings)
+  assert.equal(settings.rewardValidityHours, 168)
   assert.deepEqual(settings.prizes.map(p => [p.name, p.stock, p.amountCents * 50]), [
     ['一等奖', 40, 6000], ['二等奖', 50, 4000], ['三等奖', 50, 2000], ['🤡 非常遗憾', 60, 1000],
   ])
@@ -49,6 +50,11 @@ test('point edits reject nonrepresentable rewards and daily quotas cannot be unl
 test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.FOLLOWING_TEST_DATABASE_URL }, async t => {
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
   assert.equal(new URL(connectionString).pathname, '/community_follow_test')
+  for (const [key, value] of Object.entries({ COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_QUOTA_PER_CNY: '500000' })) {
+    const before = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (before === undefined) delete process.env[key]; else process.env[key] = before })
+  }
   const control = new pg.Pool({ connectionString })
   assert.equal((await control.query("SELECT to_regnamespace('lottery_daily_test') AS existing")).rows[0].existing, null)
   await control.query('CREATE SCHEMA lottery_daily_test')
@@ -70,7 +76,8 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
   let clock = new Date('2026-11-18T03:00:00Z')
   const consumptionResponse = (url, patch = {}) => new Response(JSON.stringify({
     ready: true, client_id: 'https://community.test', user_id: Number(new URL(url).searchParams.get('user_id')),
-    basis: 'consumption', has_consumption: true, consumption_cny_fen: 100, ...patch,
+    basis: 'consumption', has_consumption: true, consumption_cny_fen: 100,
+    reward_kinds: ['balance', 'charity'], quota_per_point: 100, ...patch,
   }))
   let lookup = async url => consumptionResponse(url)
   // Delivery has separate receipt tests; prevent test draws from starting the real delivery worker.
@@ -80,7 +87,7 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
       assert.equal(options.method, 'GET')
       assert.equal(options.redirect, 'error')
       assert.equal(options.headers.Authorization, `Bearer ${'s'.repeat(32)}`)
-      if (!new URL(url).search) return new Response(JSON.stringify({ ready: true, client_id: 'https://community.test' }))
+      if (!new URL(url).search) return new Response(JSON.stringify({ ready: true, client_id: 'https://community.test', reward_kinds: ['balance', 'charity'], quota_per_point: 100 }))
       assert.equal(new URL(url).searchParams.get('client_id'), 'https://community.test')
       return lookup(url)
     } })
@@ -97,9 +104,11 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
   await t.test('legacy stored configuration migrates its threshold and old form saves retain the current value', async () => {
     const legacy = { ...dailySettings(), minSupportCnyFen: 129 }
     delete legacy.minConsumptionCnyFen
+    delete legacy.rewardValidityHours
     await reset(legacy)
     const config = await service.getConfig()
     assert.equal(config.settings.minConsumptionCnyFen, 129)
+    assert.equal(config.settings.rewardValidityHours, 168)
     assert.equal('minSupportCnyFen' in config.settings, false)
     delete config.settings.minConsumptionCnyFen
     config.settings.minSupportCnyFen = 1
@@ -109,6 +118,41 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     const stored = (await pool.query('SELECT settings FROM community_lottery_config')).rows[0].settings
     assert.equal(stored.minConsumptionCnyFen, 129)
     assert.equal('minSupportCnyFen' in stored, false)
+  })
+  await t.test('new rewards freeze the configured duration while old forms and request retries retain the original snapshots', async () => {
+    await reset({ ...dailySettings(), rewardValidityHours: 24 })
+    const key = randomUUID(), first = await draw(1, key)
+    assert.equal(first.prizes[0].rewardKind, 'charity')
+    assert.equal(first.prizes[0].validityHours, 24)
+    assert.equal(first.prizes[0].points, null)
+    assert.equal(first.prizes[0].expiresAt, null)
+    assert.equal('legacyPoints' in first.prizes[0], false)
+    const config = await service.getConfig()
+    const updated = await service.updateConfig(config.version, { ...config.settings, rewardValidityHours: 72 })
+    delete updated.settings.rewardValidityHours
+    const compatible = await service.updateConfig(updated.version, updated.settings)
+    assert.equal(compatible.settings.rewardValidityHours, 72)
+    assert.equal((await draw(1, key)).id, first.id)
+    assert.equal((await draw(1, key)).prizes[0].validityHours, 24)
+    assert.equal((await draw(2)).prizes[0].validityHours, 72)
+    const stored = (await pool.query('SELECT prizes FROM community_lottery_draw WHERE id=$1', [first.id])).rows[0].prizes[0]
+    assert.equal(stored.rewardKind, 'charity')
+    assert.equal(stored.validityHours, 24)
+    assert.equal(stored.creditReceipt, undefined)
+    assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 4)
+  })
+  await t.test('new draws fail before consuming chances when charity capability or point conversion is absent or incompatible', async () => {
+    for (const patch of [{ reward_kinds: undefined }, { reward_kinds: ['balance'] }, { quota_per_point: undefined },
+      { quota_per_point: 101 }, { quota_per_point: '100' }]) {
+      await reset()
+      lookup = async url => consumptionResponse(url, patch)
+      const status = await service.status('1')
+      assert.equal(status.creditReady, false)
+      assert.equal(status.consumption.eligible, true)
+      await assert.rejects(draw(1), /LOTTERY_UNAVAILABLE/)
+      assert.equal((await pool.query('SELECT balance FROM community_lottery_account WHERE "userId"=\'1\'')).rows[0].balance, 5)
+      assert.equal((await service.status()).daily.used, 0)
+    }
   })
   await t.test('zero needs actual consumption; exact cumulative thresholds and ticket consumption stay independent', async () => {
     for (const [minimum, hasConsumption, fen, eligible] of [[0, false, 0, false], [0, true, 0, true], [0, true, 1, true], [1, true, 0, false], [129, true, 128, false], [129, true, 129, true], [129, true, 130, true]]) {

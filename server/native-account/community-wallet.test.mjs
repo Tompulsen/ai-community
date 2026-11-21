@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import test from 'node:test'
 import { signCommunityRequest } from './community-wallet.ts'
-import { parseCommunityWallet, formatPoints, formatCnyPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
+import { parseCommunityWallet, parseCommunityWalletLots, formatPoints, formatCnyPoints, pointsInCny } from '../../shared/studio/community-wallet.ts'
 
 const url = new URL('https://model.example/v1/images/edits?mode=test')
 const secret = 'fixture-community-secret-'.repeat(2)
@@ -52,6 +52,22 @@ test('decimal balances preserve six fractional digits and exact CNY conversion b
   for (const patch of [{ enabled: false }, { pointsPerCny: 100 }, { currency: 'USD' },
     { paidApiQuota: -1 }, { totalApiQuota: Number.MAX_SAFE_INTEGER + 1 }, { charityExpiringAt: -1 }]) {
     assert.throws(() => parseCommunityWallet({ ...wallet, ...patch }))
+  }
+})
+
+test('welfare expiry amounts and paged lots preserve exact point values and reject invalid metadata', () => {
+  const enriched = { ...wallet, charityExpiringAt: 1800000000, charityExpiringPoints: '2500.000001', charityDetailsAvailable: true }
+  assert.deepEqual(parseCommunityWallet(enriched), enriched)
+  assert.equal(parseCommunityWallet({ ...enriched, charityExpiringPoints: null }).charityExpiringPoints, null)
+  for (const patch of [{ charityExpiringPoints: -1 }, { charityExpiringPoints: '0.0000001' }, { charityDetailsAvailable: 1 }]) {
+    assert.throws(() => parseCommunityWallet({ ...enriched, ...patch }))
+  }
+  const item = { id: '12', source: 'community_lottery', points: '123456789012345678.123456', expiresAt: 1800000000, createdAt: 1700000000 }
+  const page = { items: [item, { ...item, id: '11', source: 'qxchat_legacy', expiresAt: null }], nextCursor: '11', sharedPoints: '99.123456' }
+  assert.deepEqual(parseCommunityWalletLots(page), page)
+  for (const patch of [{ items: [{ ...item, expiresAt: 0 }] }, { items: [{ ...item, points: 'NaN' }] },
+    { items: [item, item] }, { items: [{ ...item, id: '9007199254740992' }] }, { nextCursor: '99' }, { sharedPoints: '-1' }]) {
+    assert.throws(() => parseCommunityWalletLots({ ...page, ...patch }))
   }
 })
 

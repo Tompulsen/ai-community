@@ -18,10 +18,35 @@ describe('community lottery', () => {
 		}
 	});
 
+	test('charity receipts require frozen points, matching duration and the original expiry', () => {
+		const expected = { rewardKind: 'charity' as const, validityHours: 48 };
+		const creditedAt = 1795000000;
+		const receipt = { id: 7, quota_added: 250000, quota_per_usd: '500000', reward_kind: 'charity',
+			validity_hours: 48, credited_at: creditedAt, expires_at: creditedAt + 48 * 3600, points: '2500', quota_per_point: 100, lot_id: 19 };
+		const response = { credited: true, reference: 'community_lottery_fixture_0', user_id: 3, amount_cents: 50, receipt };
+		expect(lotteryCreditReceipt(response, response.reference, 3, 50, expected)).toEqual({
+			id: 7, quotaAdded: 250000, quotaPerUsd: '500000', rewardKind: 'charity', validityHours: 48,
+			creditedAt, expiresAt: receipt.expires_at, points: '2500', quotaPerPoint: 100, lotId: 19,
+		});
+		for (const patch of [{ reward_kind: 'balance' }, { reward_kind: undefined }, { validity_hours: 168 },
+			{ expires_at: receipt.expires_at + 1 }, { expires_at: 0 }, { expires_at: Number.MAX_SAFE_INTEGER + 1 }, { expires_at: 8640000000001 },
+			{ credited_at: undefined }, { credited_at: String(creditedAt) }, { credited_at: 0 },
+			{ points: '2499' }, { points: '02500' }, { points: '2500.0' }, { points: 2500 }, { points: '0' },
+			{ lot_id: 0 }, { lot_id: '19' }, { lot_id: Number.MAX_SAFE_INTEGER + 1 },
+			{ quota_per_point: undefined }, { quota_per_point: 100.5 }, { quota_per_point: 0 }, { quota_per_point: 101 }]) {
+			expect(() => lotteryCreditReceipt({ ...response, receipt: { ...receipt, ...patch } }, response.reference, 3, 50, expected)).toThrow('LOTTERY_CREDIT_RESPONSE');
+		}
+		for (const validityHours of [undefined, 0, -1, 1.5, 8761, Number.MAX_SAFE_INTEGER]) {
+			expect(() => lotteryCreditReceipt(response, response.reference, 3, 50, { ...expected, validityHours })).toThrow('LOTTERY_CREDIT_RESPONSE');
+		}
+		expect(() => lotteryCreditReceipt(response, response.reference, 3, 50)).toThrow('LOTTERY_CREDIT_RESPONSE');
+	});
+
 	test('old settings retain their numeric threshold under consumption and a separate wheel without altering rewards', () => {
-		const { wheel: _, minConsumptionCnyFen: _consumption, ...old } = defaultLotterySettings();
+		const { wheel: _, minConsumptionCnyFen: _consumption, rewardValidityHours: _validity, ...old } = defaultLotterySettings();
 		const first = normalizeLotterySettings(old);
 		expect(first.minConsumptionCnyFen).toBe(0);
+		expect(first.rewardValidityHours).toBe(168);
 		const legacy = { ...old, minSupportCnyFen: 129 };
 		const migrated = normalizeLotterySettings(legacy);
 		expect(migrated.minConsumptionCnyFen).toBe(129);
@@ -32,6 +57,15 @@ describe('community lottery', () => {
 		expect(first.prizes).toEqual(old.prizes);
 		first.wheel.title = 'Changed';
 		expect(normalizeLotterySettings(old).wheel.title).toBe('');
+	});
+
+	test('reward durations accept whole hours within one year and reject zero or invalid stored values', () => {
+		for (const rewardValidityHours of [1, 168, 8760]) {
+			expect(normalizeLotterySettings({ ...defaultLotterySettings(), rewardValidityHours }).rewardValidityHours).toBe(rewardValidityHours);
+		}
+		for (const rewardValidityHours of [0, -1, 1.5, 8761, Number.MAX_SAFE_INTEGER, NaN]) {
+			expect(() => normalizeLotterySettings({ ...defaultLotterySettings(), rewardValidityHours })).toThrow('LOTTERY_INVALID');
+		}
 	});
 
 	test('each work earns separately and milestones cannot be reclaimed after counts fall', () => {

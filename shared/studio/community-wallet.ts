@@ -9,9 +9,26 @@ export interface CommunityWallet {
   paidApiQuota: number
   totalApiQuota: number
   charityExpiringAt: number | null
+  charityExpiringPoints?: string | null
+  charityDetailsAvailable?: boolean
+}
+
+export interface CommunityWalletLot {
+  id: string
+  source: string
+  points: string
+  expiresAt: number | null
+  createdAt: number
+}
+
+export interface CommunityWalletLots {
+  items: CommunityWalletLot[]
+  nextCursor: string | null
+  sharedPoints: string
 }
 
 const decimalPoints = /^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$/
+const validExpiry = (value: unknown) => value === null || Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 8640000000000
 
 export function parseCommunityWallet(value: unknown): CommunityWallet {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('积分余额暂不可用')
@@ -21,8 +38,10 @@ export function parseCommunityWallet(value: unknown): CommunityWallet {
     || typeof wallet.permanentPoints !== 'string' || !decimalPoints.test(wallet.permanentPoints)
     || !['legacyApiQuota', 'paidApiQuota', 'totalApiQuota'].every(key => Number.isSafeInteger(wallet[key]))
     || Number(wallet.paidApiQuota) < 0
-    || !(wallet.charityExpiringAt === null || Number.isSafeInteger(wallet.charityExpiringAt)
-      && Number(wallet.charityExpiringAt) > 0 && Number(wallet.charityExpiringAt) <= 8640000000000)) {
+    || !validExpiry(wallet.charityExpiringAt)
+    || wallet.charityExpiringPoints !== undefined && wallet.charityExpiringPoints !== null
+      && (typeof wallet.charityExpiringPoints !== 'string' || !decimalPoints.test(wallet.charityExpiringPoints))
+    || wallet.charityDetailsAvailable !== undefined && typeof wallet.charityDetailsAvailable !== 'boolean') {
     throw new Error('积分余额暂不可用')
   }
   return {
@@ -30,7 +49,32 @@ export function parseCommunityWallet(value: unknown): CommunityWallet {
     charityPoints: wallet.charityPoints, permanentPoints: wallet.permanentPoints,
     legacyApiQuota: wallet.legacyApiQuota as number, paidApiQuota: wallet.paidApiQuota as number,
     totalApiQuota: wallet.totalApiQuota as number, charityExpiringAt: wallet.charityExpiringAt as number | null,
+    ...(wallet.charityExpiringPoints !== undefined ? { charityExpiringPoints: wallet.charityExpiringPoints as string | null } : {}),
+    ...(wallet.charityDetailsAvailable !== undefined ? { charityDetailsAvailable: wallet.charityDetailsAvailable as boolean } : {}),
   }
+}
+
+export function parseCommunityWalletLots(value: unknown): CommunityWalletLots {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('福利明细暂不可用')
+  const page = value as Record<string, unknown>
+  if (!Array.isArray(page.items) || page.items.length > 50 || typeof page.sharedPoints !== 'string' || !decimalPoints.test(page.sharedPoints)
+    || !(page.nextCursor === null || typeof page.nextCursor === 'string' && /^[1-9]\d{0,15}$/.test(page.nextCursor) && Number.isSafeInteger(Number(page.nextCursor)))) {
+    throw new Error('福利明细暂不可用')
+  }
+  const items = page.items.map((item: unknown): CommunityWalletLot => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('福利明细暂不可用')
+    const lot = item as Record<string, unknown>
+    if (typeof lot.id !== 'string' || !/^[1-9]\d{0,15}$/.test(lot.id) || !Number.isSafeInteger(Number(lot.id))
+      || typeof lot.source !== 'string' || !lot.source || lot.source.length > 64
+      || typeof lot.points !== 'string' || !decimalPoints.test(lot.points)
+      || !validExpiry(lot.expiresAt) || !Number.isSafeInteger(lot.createdAt) || Number(lot.createdAt) < 0 || Number(lot.createdAt) > 8640000000000) {
+      throw new Error('福利明细暂不可用')
+    }
+    return { id: lot.id, source: lot.source, points: lot.points, expiresAt: lot.expiresAt as number | null, createdAt: Number(lot.createdAt) }
+  })
+  if (new Set(items.map(item => item.id)).size !== items.length
+    || page.nextCursor !== null && page.nextCursor !== items.at(-1)?.id) throw new Error('福利明细暂不可用')
+  return { items, nextCursor: page.nextCursor as string | null, sharedPoints: page.sharedPoints }
 }
 
 /** Sum display balances without losing fractional points to floating point. */

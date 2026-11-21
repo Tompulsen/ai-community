@@ -1,7 +1,7 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
 import { readModelPricing } from "./model-pricing.ts";
 import { readWallet, quoteWallet, createWalletPayment, redeemWallet } from "./wallet.ts";
-import { communityQuotaPerPoint, readCommunityWallet } from "./community-wallet.ts";
+import { communityQuotaPerPoint, readCommunityWallet, readCommunityWalletLots } from "./community-wallet.ts";
 import { assertNormalRequest } from "./transport.ts";
 import { readRequestBody, RequestBodyError } from "./request-body.ts";
 import {
@@ -483,6 +483,7 @@ export async function handle(
     }
     if (req.method === "GET" && route === "wallet") return ok(await readWallet(req));
     if (req.method === "GET" && route === "wallet/points") return ok(await readCommunityWallet(req));
+    if (req.method === "GET" && route === "wallet/point-lots") return ok(await readCommunityWalletLots(req));
     if (req.method === "GET" && route === "wallet/topup") return ok(await readWallet(req, "topup"));
     if (req.method === "GET" && route === "wallet/plans") return ok(await readWallet(req, "plans"));
     if (req.method === "GET" && route === "wallet/history") return ok(await readWallet(req, "history"));
