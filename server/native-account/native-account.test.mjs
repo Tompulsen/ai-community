@@ -420,7 +420,8 @@ test("an account without a selection reuses its system Auto key without revealin
   configure(t)
   const fixture = await session(t, { selectedTokenId: undefined, selectedKey: undefined })
   const token = { id: 9, name: "系统创建", user_id: 7, group: "auto", status: 1,
-    expired_time: -1, unlimited_quota: true, remain_quota: 0, auto_groups: [] }
+    expired_time: -1, unlimited_quota: true, remain_quota: 0, auto_groups: [],
+    model_limits_enabled: false, model_limits: '', allow_ips: '', cross_group_retry: false }
   const writes = []
   t.mock.method(globalThis, "fetch", async (url, options) => {
     const path = new URL(url).pathname

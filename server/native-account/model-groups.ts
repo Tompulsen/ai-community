@@ -121,12 +121,9 @@ async function groupToken(
   return tokenId;
 }
 
-async function matchingTokens(
-  request: GroupRequest,
-  group: string,
-  name: string,
-) {
-  const matches: number[] = [];
+async function listTokens(request: GroupRequest) {
+  const tokens: any[] = [];
+  const seen = new Set<number>();
   let loaded = 0;
   for (let page = 1; ; page++) {
     const { data } = await request(`/api/token/?p=${page}&page_size=100`);
@@ -138,12 +135,43 @@ async function matchingTokens(
       throw uncertain();
     loaded += data.items.length;
     for (const token of data.items) {
-      if (token.name === name && token.group === group) matches.push(token.id);
+      if (
+        !Number.isSafeInteger(token?.id) || token.id < 1 || seen.has(token.id)
+      )
+        throw uncertain();
+      seen.add(token.id);
+      tokens.push(token);
     }
-    if (loaded >= data.total) break;
+    if (loaded > data.total) throw uncertain();
+    if (loaded === data.total) break;
     if (!data.items.length || page >= 1000) throw uncertain();
   }
-  return matches;
+  return tokens;
+}
+
+async function matchingTokens(
+  request: GroupRequest,
+  group: string,
+  name: string,
+) {
+  return (await listTokens(request))
+    .filter(token => token.name === name && token.group === group)
+    .map(token => token.id as number);
+}
+
+function reusableSystemToken(token: any, userId: number, group: string) {
+  return (
+    usable(token, group) &&
+    token.user_id === userId &&
+    token.name === SYSTEM_TOKEN_NAME &&
+    token.expired_time === -1 &&
+    token.unlimited_quota === true &&
+    token.model_limits_enabled === false &&
+    (token.allow_ips === null || token.allow_ips === "") &&
+    token.cross_group_retry === false &&
+    (token.auto_groups == null ||
+      (Array.isArray(token.auto_groups) && token.auto_groups.length === 0))
+  );
 }
 
 async function recoverCreation(
@@ -299,29 +327,25 @@ async function resolveGroup(
     }
 
     if (!binding) {
-      if (systemAuto) {
-        const matches = await matchingTokens(request, group, SYSTEM_TOKEN_NAME);
-        if (matches.length > 1) throw uncertain();
-        if (matches.length === 1) {
-          const tokenId = matches[0];
-          if (!Number.isSafeInteger(tokenId) || tokenId < 1) throw uncertain();
-          await groupToken(request, tokenId, group);
-          if (!(await compareBinding(key, null, { tokenId }))) {
-            throw new NewApiError("系统密钥记录已更新，请重试", 409);
-          }
-          return rememberSystemToken(tokenId);
-        }
+      const tokens = await listTokens(request);
+      const matches = tokens.filter(
+        token => token.name === SYSTEM_TOKEN_NAME && token.group === group,
+      );
+      if (matches.length) {
+        const candidate = matches
+          .filter(token => reusableSystemToken(token, userId, group))
+          .sort((a, b) => a.id - b.id)[0];
+        if (!candidate) throw unavailable();
+        // Recheck detail before binding; list metadata may already be stale.
+        const { data: token } = await request(`/api/token/${candidate.id}`);
+        if (token?.id !== candidate.id || !reusableSystemToken(token, userId, group))
+          throw unavailable();
+        const tokenId = candidate.id as number;
+        if (!(await compareBinding(key, null, { tokenId })))
+          throw new NewApiError("系统密钥记录已更新，请重试", 409);
+        return rememberSystemToken(tokenId);
       }
-      if (login) {
-        // Recheck under the shared lock; another login may already have created it.
-        const { data } = await request("/api/token/?p=1&page_size=2");
-        if (
-          data?.total !== 0 ||
-          !Array.isArray(data.items) ||
-          data.items.length !== 0
-        )
-          return;
-      }
+      if (login && tokens.length) return;
       binding = {
         pendingName: `${SYSTEM_TOKEN_NAME}-${randomBytes(8).toString("hex")}`,
         ...(systemAuto && replacedTokenId ? { replacedTokenId } : {}),
