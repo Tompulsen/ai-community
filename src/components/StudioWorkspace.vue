@@ -46,6 +46,7 @@ const submissions = ref<Record<string, boolean>>({}), error = ref(''), waitingFo
 const promptInput = ref<HTMLTextAreaElement | InstanceType<typeof StudioVideoPrompt>>()
 const blank = ref(false)
 const branchTaskId = ref<string>(), editing = ref(false)
+const imageEditTaskId = ref<string>()
 const skipAutomaticReference = ref(false), restoringTask = ref(false), parameterModel = ref('')
 const submitting = computed(() => Boolean(props.entryPending || submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
@@ -107,7 +108,7 @@ function loadDraft() {
   }
   restoringParameters.value = true
   draftRevision++
-  branchTaskId.value = undefined; editing.value = false; parameterModel.value = ''; skipAutomaticReference.value = false
+  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; parameterModel.value = ''; skipAutomaticReference.value = false
   finishRestore()
   blank.value = false
   sourceWorkId.value = undefined
@@ -129,6 +130,7 @@ function loadDraft() {
       if (saved.protocol === 'async') protocol.value = 'async'
       if (typeof saved.sourceWorkId === 'string') sourceWorkId.value = saved.sourceWorkId
       skipAutomaticReference.value = saved.skipAutomaticReference === true
+      if (props.kind === 'image' && typeof saved.imageEditTaskId === 'string') imageEditTaskId.value = saved.imageEditTaskId
       if (Array.isArray(saved.references)) references.value = saved.references.filter((file: any) => file && typeof file.url === 'string' && typeof file.name === 'string').slice(0, props.kind === 'video' ? 10 : 16)
     }
   } catch { /* A malformed local draft does not prevent creation. */ }
@@ -146,9 +148,9 @@ watch(() => [session.user?.id, currentConversation.value?.id, props.kind, curren
 })
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
-watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, restoringParameters], () => {
+watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
-  const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value }))
+  const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }))
   try { localStorage.setItem(draftKey(), JSON.stringify(draft)) }
   catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
   if (currentConversation.value) {
@@ -274,7 +276,7 @@ async function submit(onRegistered?: () => void) {
   const scope = draftScope()
   const conversationId = chat.mediaConversationId || chat.id
   let submittedPrompt = prompt.value
-  const branchId = branchTaskId.value, initialReferenceUrls = references.value.map(file => file.url)
+  const branchId = branchTaskId.value, imageEditId = imageEditTaskId.value, initialReferenceUrls = references.value.map(file => file.url)
   let submittedReferences = JSON.stringify(references.value)
   const branchEdited = editing.value
   const preparation = new AbortController()
@@ -285,7 +287,9 @@ async function submit(onRegistered?: () => void) {
   try {
     const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
       accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
-      ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value, imageContext: buildImageContext(chat, branchId) } : { videoOptions }),
+      ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value,
+        imageContext: imageEditId && !chat.messages.some(message => message.role === 'assistant' && message.taskId === imageEditId)
+          ? { turns: [] } : buildImageContext(chat, branchId || imageEditId) } : { videoOptions }),
       ...(branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
     waitingForMaterials.value = true
     try { await materials.wait(preparation.signal) }
@@ -311,11 +315,11 @@ async function submit(onRegistered?: () => void) {
       if (owner === session.user?.id && live && scope === draftScope()) {
         if (prompt.value === submittedPrompt) prompt.value = ''
         if (JSON.stringify(references.value) === submittedReferences) references.value = []
-        branchTaskId.value = undefined; editing.value = false; skipAutomaticReference.value = false
+        branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; skipAutomaticReference.value = false
         await saveChats()
       } else if (owner === session.user?.id) {
         const draft = chat.mediaDrafts?.[kind]
-        if (draft?.prompt === submittedPrompt) draft.prompt = ''
+        if (draft?.prompt === submittedPrompt) { draft.prompt = ''; if (draft.imageEditTaskId === imageEditId) delete draft.imageEditTaskId }
         if (draft && JSON.stringify(draft.references) === submittedReferences) draft.references = []
         await saveChats()
       }
@@ -326,6 +330,7 @@ async function submit(onRegistered?: () => void) {
     if (result.phase === 'error' && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
       prompt.value = submittedPrompt; references.value = JSON.parse(submittedReferences)
       if (branchId) { branchTaskId.value = result.id; editing.value = branchEdited }
+      imageEditTaskId.value = imageEditId
     }
     await syncMediaConversations()
   } catch (cause) { if (owner === session.user?.id && live && scope === draftScope()) error.value = errorMessage(cause) }
@@ -335,32 +340,35 @@ async function submit(onRegistered?: () => void) {
     if (preparing && owner === session.user?.id) chats.preparing[chat.id] = false
   }
 }
-async function useTask(task: CreationTask) {
+async function useTask(task: CreationTask, generatedImages?: string[]) {
   if (restoringTask.value || task.owner !== session.user?.id || task.kind !== props.kind) return false
   restoringTask.value = true
+  let scope = draftScope()
+  try {
   ensureMediaConversation(task.kind === 'video' ? 'video' : 'image', task)
   const owner = session.user?.id, id = currentConversation.value?.id, kind = props.kind
   await nextTick()
-  if (!live || owner !== session.user?.id || id !== currentConversation.value?.id || kind !== props.kind) { restoringTask.value = false; return false }
-  const scope = draftScope()
-  try {
+  if (!live || owner !== session.user?.id || id !== currentConversation.value?.id || kind !== props.kind) return false
+  scope = draftScope()
   if (task.group && task.group !== creation.selectedGroup) {
     if (!creation.groups.some(group => group.id === task.group)) throw new Error('原作分组当前不可用，请手动选择分组和模型。')
     await selectCreationGroup(task.group)
     if (creation.selectedGroup !== task.group) throw new Error('原作分组未能恢复，请重新选择。')
   }
   if (!live || scope !== draftScope()) return false
+  restoringParameters.value = true
   blank.value = false
+  branchTaskId.value = undefined; editing.value = false; imageEditTaskId.value = generatedImages ? task.id : undefined
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
   parameterModel.value = task.model
-  restoringParameters.value = true; manualSize.value = task.request.exactSize ? task.request.size : ''; finishRestore()
+  manualSize.value = task.request.exactSize ? task.request.size : ''; finishRestore()
   sourceWorkId.value = task.sourceWorkId
   ratio.value = task.request.aspect_ratio; count.value = task.request.n; duration.value = task.request.duration
   const image = imageOptionsSchema.safeParse(task.request.imageOptions || {}), video = videoOptionsSchema.safeParse(task.request.videoOptions || { mode: 'text-to-video' })
   Object.assign(imageOptions, image.success ? image.data : imageOptionsSchema.parse({}))
   Object.assign(videoOptions, video.success ? video.data : videoOptionsSchema.parse({ mode: 'text-to-video' }))
   protocol.value = task.protocol === 'async' ? 'async' : 'openai'
-  references.value = task.references.map(file => ({ ...file }))
+  references.value = generatedImages ? generatedImages.map((url, index) => ({ name: `生成图片 ${index + 1}`, url })) : task.references.map(file => ({ ...file }))
   skipAutomaticReference.value = true
   emit('source', sourceWorkId.value)
   if (!models.value.some(item => item.id === task.model)) error.value = '原作模型在当前分组不可用，请选择可用模型后生成。'
@@ -372,10 +380,19 @@ async function useTask(task: CreationTask) {
   finally { restoringTask.value = false }
 }
 async function editTask(task: CreationTask) {
+  if (busy.value || submitting.value) return
   if (await useTask(task)) {
     branchTaskId.value = task.id; editing.value = true
     void nextTick(() => promptInput.value?.focus())
   }
+}
+async function editImage(task: CreationTask, index?: number) {
+  if (busy.value || submitting.value || task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
+  if (index !== undefined && (!Number.isInteger(index) || index < 0 || index >= task.urls.length)) return
+  const images = [...new Set(index === undefined ? task.urls : [task.urls[index]!])]
+  if (!images.length) return
+  if (images.length > 16) { error.value = '最多编辑 16 张参考图，请从图片右键菜单选择单张图片。'; return }
+  await useTask(task, images)
 }
 async function regenerate(task: CreationTask) {
   if (busy.value || submitting.value || !await useTask(task)) return
@@ -386,7 +403,7 @@ async function regenerate(task: CreationTask) {
   await generate()
 }
 function cancelEditing() {
-  branchTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; skipAutomaticReference.value = false; error.value = ''
+  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; skipAutomaticReference.value = false; error.value = ''
 }
 function chooseReference(task: CreationTask, index: number) {
   if (task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
@@ -398,7 +415,7 @@ function chooseReference(task: CreationTask, index: number) {
 }
 async function clearContext() {
   if (!currentConversation.value || activeTask.value || submitting.value) return
-  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; editing.value = false }
+  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false }
   catch (cause) { error.value = errorMessage(cause) }
 }
 function newCreation() {
@@ -417,14 +434,14 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
+defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
 </script>
 
 <template>
   <section class="native-studio" aria-label="创作工作台">
     <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></div>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
-      <div v-if="branchTaskId" class="creation-editing" role="status"><Pencil :size="14" /><span>{{ editing ? '编辑此轮' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" /></button></div>
+      <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
       <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
       <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="submitting || !composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting || !composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>

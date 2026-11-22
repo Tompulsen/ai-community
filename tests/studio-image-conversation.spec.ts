@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
+import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 async function fixture(page: Page, kind = 'image') {
@@ -45,7 +46,7 @@ async function fixture(page: Page, kind = 'image') {
       ],
     } }))
   })
-  await page.goto(`/create/${kind}`)
+  await page.goto(new URL(`/create/${kind}`, String(test.info().project.use.baseURL)).href)
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(kind === 'video' ? 'sora-2' : kind === 'text' ? 'gpt-5' : 'gpt-image-2')
   return { calls, uploads, image }
 }
@@ -56,6 +57,148 @@ async function send(page: Page, prompt: string, turns: number) {
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
 }
+
+test('editing a result restores its image and prompt without generating until sent', async ({ page }) => {
+  const { calls, image } = await fixture(page)
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'source.jpg', mimeType: 'image/jpeg', buffer: image })
+  await send(page, '原始海报', 1)
+  await send(page, '另一张海报', 2)
+  const first = page.locator('.creation-response').first()
+  await expect(first.getByRole('button', { name: '编辑图片', exact: true })).toBeVisible({ timeout: 3000 })
+  await first.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原始海报')
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.creation-editing')).toContainText('编辑图片')
+  expect(calls).toHaveLength(2)
+  await page.reload()
+  await expect(page.locator('.creation-editing')).toContainText('编辑图片')
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await send(page, '将原始海报改为蓝色', 3)
+  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[2].imageContext.turns).toEqual([])
+  await expect(page.locator('.creation-request').first()).toContainText('原始海报')
+  await expect(page.locator('.creation-request').nth(1)).toContainText('另一张海报')
+})
+
+test('editing the original prompt restores original attachments and reuse clears the edit branch', async ({ page }) => {
+  const { calls, image } = await fixture(page)
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'source.jpg', mimeType: 'image/jpeg', buffer: image })
+  await send(page, '原提问', 1)
+  const response = page.locator('.creation-response').first()
+  await response.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await response.getByRole('button', { name: '编辑原提问', exact: true }).click()
+  await expect(page.locator('.creation-editing')).toContainText('编辑原提问')
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^data:image\/jpeg/)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原提问')
+  expect(calls).toHaveLength(1)
+  await response.getByRole('button', { name: '复用参数', exact: true }).click()
+  await expect(page.locator('.creation-editing')).toHaveCount(0)
+  await send(page, '复用参数的新一轮', 2)
+  expect(calls[1].referenceUrls).toEqual(calls[0].referenceUrls)
+  await expect(page.locator('.creation-request').first()).toContainText('原提问')
+})
+
+test('multi-image edit restores all outputs and the context menu selects the exact image', async ({ page }) => {
+  const { image, calls } = await fixture(page)
+  await page.route('**/api/creation/generate', route => {
+    calls.push(route.request().postDataJSON())
+    return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/a.png' }, { url: 'https://media.example/b.png' }], tokenId: 41, protocol: 'sync' } })
+  })
+  await send(page, '两款海报', 1)
+  const response = page.locator('.creation-response')
+  await response.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await expect(page.locator('.reference-list img')).toHaveCount(2)
+  await page.getByRole('button', { name: '取消编辑此轮', exact: true }).click()
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
+  await response.locator('.creation-media figure').nth(1).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: '编辑这张图片', exact: true }).click()
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /b\.png/)
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'new.jpg', mimeType: 'image/jpeg', buffer: image })
+  await expect(page.locator('.reference-list img')).toHaveCount(2)
+  expect(calls).toHaveLength(1)
+  await send(page, '使用第二张和新上传图', 2)
+  expect(calls[1].referenceUrls[0]).toBe('https://media.example/b.png')
+  expect(calls[1].referenceUrls[1]).toMatch(/^data:image\/jpeg/)
+})
+
+test('an image edit survives deleting its source turn without pulling in unrelated context', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await send(page, '待编辑图片', 1)
+  await send(page, '保留的另一张图', 2)
+  const first = page.locator('.creation-response').first()
+  await first.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await first.getByRole('button', { name: '删除生成记录', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(page.locator('.creation-turn')).toHaveCount(1)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await send(page, '修改已载入的图片', 2)
+  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[2].imageContext.turns).toEqual([])
+})
+
+test('image edit drafts stay in their conversation and busy turns block editing', async ({ page }) => {
+  const { calls } = await fixture(page)
+  await send(page, '会话里的图片', 1)
+  await page.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await page.locator('.studio-sidebar').getByRole('button', { name: '另一图片对话', exact: true }).click()
+  await expect(page.locator('.creation-editing')).toHaveCount(0)
+  await expect(page.locator('.reference-list img')).toHaveCount(0)
+  await page.locator('.studio-sidebar').getByRole('button', { name: '图片对话', exact: true }).click()
+  await expect(page.locator('.creation-editing')).toContainText('编辑图片')
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/generate', async route => {
+    calls.push(route.request().postDataJSON())
+    await held
+    await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/finished.png' }], tokenId: 41, protocol: 'sync' } }).catch(() => {})
+  })
+  try {
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect.poll(() => calls.length).toBe(2)
+    await expect(page.getByRole('button', { name: '编辑图片', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '编辑原提问', exact: true })).toBeDisabled()
+  } finally { release() }
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
+})
+
+test('result tools remain reachable on mobile and support keyboard copy and cancel', async ({ page }, info) => {
+  test.setTimeout(60000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await fixture(page)
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async (text: string) => { (window as any).copiedPrompt = text } })
+  })
+  await send(page, '手机海报', 1)
+  const response = page.locator('.creation-response')
+  for (const button of await response.getByRole('group', { name: '生成结果操作', exact: true }).getByRole('button').all()) {
+    const box = await button.boundingBox()
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  const copy = page.locator('.creation-request').getByRole('button', { name: '复制提示词', exact: true })
+  await copy.focus(); await page.keyboard.press('Enter')
+  await expect.poll(() => page.evaluate(() => (window as any).copiedPrompt)).toBe('手机海报')
+  await response.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeFocused()
+  for (const mode of ['light', 'dark']) {
+    await page.evaluate(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'paper', dark: 'sage' })), mode)
+    await page.reload()
+    await expect(page.locator('.creation-editing')).toContainText('编辑图片')
+    for (const width of [320, 390, 1440]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await expect(response.getByRole('button', { name: '编辑图片', exact: true })).toBeVisible()
+      expect((await new AxeBuilder({ page }).include('.creation-message-actions').include('.creation-editing').analyze()).violations).toEqual([])
+      await page.screenshot({ path: info.outputPath(`editor-${width}-${mode}.png`) })
+    }
+  }
+  await page.getByRole('button', { name: '取消编辑此轮', exact: true }).click()
+  await expect(page.locator('.creation-turn')).toHaveCount(1)
+})
 
 test('follow-up carries the previous image and history in one session, with independent drafts', async ({ page }) => {
   const { calls } = await fixture(page)
@@ -152,7 +295,7 @@ test('the inline clear boundary stays between turns and restores outgoing image 
 
 test('upload, clipboard and drop references share the same attachment flow', async ({ page }) => {
   const { calls, uploads, image } = await fixture(page)
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'upload.jpg', mimeType: 'image/jpeg', buffer: image })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'upload.jpg', mimeType: 'image/jpeg', buffer: image })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0))
@@ -173,7 +316,7 @@ test('upload, clipboard and drop references share the same attachment flow', asy
 
 test('sending clears uploaded references from the composer while retaining sent images and conversation context', async ({ page }) => {
   const { calls, image } = await fixture(page)
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'reference.jpg', mimeType: 'image/jpeg', buffer: image })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'reference.jpg', mimeType: 'image/jpeg', buffer: image })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   await send(page, '使用上传的参考图', 1)
   await expect(page.locator('.reference-list img')).toHaveCount(0)
@@ -210,7 +353,7 @@ async function controlledReader(page: Page) {
 
 test('reference thumbnails scroll horizontally, preview and delete on desktop and touch', async ({ page }) => {
   const { image, uploads } = await fixture(page)
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles(Array.from({ length: 9 }, (_, index) => ({ name: `${index}.jpg`, mimeType: 'image/jpeg', buffer: image })))
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles(Array.from({ length: 9 }, (_, index) => ({ name: `${index}.jpg`, mimeType: 'image/jpeg', buffer: image })))
   const list = page.locator('.reference-list')
   await expect(list.locator('li')).toHaveCount(9)
   expect(await list.evaluate(element => getComputedStyle(element).flexWrap)).toBe('nowrap')
@@ -232,7 +375,7 @@ test('reference thumbnails scroll horizontally, preview and delete on desktop an
 test('removing a ready thumbnail preserves pending files and failed items can be retried', async ({ page }) => {
   await controlledReader(page)
   const { image, uploads } = await fixture(page)
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles([
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles([
     { name: 'ready.jpg', mimeType: 'image/jpeg', buffer: image },
     { name: 'slow.jpg', mimeType: 'image/jpeg', buffer: image },
     { name: 'retry.jpg', mimeType: 'image/jpeg', buffer: image },
@@ -254,7 +397,7 @@ test('removing a ready thumbnail preserves pending files and failed items can be
 test('retrying a video image preserves the identity of numbered prompt references', async ({ page }) => {
   await controlledReader(page)
   const state = await fixture(page, 'video')
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles(['ready.jpg', 'retry.jpg', 'last.jpg'].map((name, index) => ({
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles(['ready.jpg', 'retry.jpg', 'last.jpg'].map((name, index) => ({
     name, mimeType: 'image/jpeg', buffer: Buffer.concat([state.image, Buffer.from(String(index))]),
   })))
   await expect(page.locator('.reference-list img')).toHaveCount(2)
@@ -274,7 +417,7 @@ test('touch reference previews and delete controls have separate hit areas', asy
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   try {
     const page = await context.newPage(), state = await fixture(page)
-    await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'touch.jpg', mimeType: 'image/jpeg', buffer: state.image })
+    await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'touch.jpg', mimeType: 'image/jpeg', buffer: state.image })
     await expect(page.locator('.reference-list img')).toHaveCount(1)
     await page.getByRole('button', { name: '预览参考图 1', exact: true }).tap()
     await expect(page.getByRole('dialog', { name: '参考图预览', exact: true })).toBeVisible()
@@ -310,7 +453,7 @@ for (const kind of ['image', 'video', 'text']) {
 test('cancelling material preparation keeps the draft and switching conversations never submits a late read', async ({ page }) => {
   await controlledReader(page)
   const state = await fixture(page)
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'slow.jpg', mimeType: 'image/jpeg', buffer: state.image })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'slow.jpg', mimeType: 'image/jpeg', buffer: state.image })
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
   await prompt.fill('保留我的草稿')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -335,7 +478,7 @@ test('large local images are compressed before generation without a community up
     context.putImageData(pixels, 0, 0)
     return canvas.toDataURL('image/png').split(',')[1]!
   })
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.from(encoded, 'base64') })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.from(encoded, 'base64') })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   const prepared = await page.locator('.reference-list img').getAttribute('src')
   expect(prepared!.length).toBeLessThanOrEqual(512 * 1024)
@@ -411,7 +554,7 @@ test('a rejected generation preserves its prompt and references without automati
   const { image } = await fixture(page)
   let rejected = 0
   await page.route('**/api/creation/generate', route => { rejected++; return route.fulfill({ status: 400, json: { message: '参考图超过当前模型限制，请减少图片。' } }) })
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'reference.jpg', mimeType: 'image/jpeg', buffer: image })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'reference.jpg', mimeType: 'image/jpeg', buffer: image })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留这个提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()

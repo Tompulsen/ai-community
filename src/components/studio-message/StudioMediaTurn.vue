@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Copy, Download, Maximize, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, Play, RefreshCw, Trash2, Upload } from '@lucide/vue'
 import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, type NativeChat } from '../../native-chat'
 import { confirmStudioDelete } from '../../studio-confirm'
@@ -14,7 +14,7 @@ import StudioContextMenu, { type StudioMenuAction } from './StudioContextMenu.vu
 
 const props = defineProps<{ task: CreationTask; conversation: NativeChat; role: 'user' | 'assistant' }>()
 const emit = defineEmits<{
-  action: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number]
+  action: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number]
   publish: [task: CreationTask, destination: CreationDestination]
   preview: [task: CreationTask, index: number]
 }>()
@@ -31,13 +31,17 @@ function openMenu(event: MouseEvent) {
 const menuItems = computed<StudioMenuAction[]>(() => {
   const task = props.task
   const items: StudioMenuAction[] = props.role === 'user' ? [
-    { label: '复制提问', icon: Copy, run: async () => { await navigator.clipboard.writeText(task.prompt); notify('已复制。') } },
+    { label: '复制提问', icon: Copy, run: copyPrompt },
     { label: '编辑并重新生成', icon: Pencil, disabled: busy.value, run: () => emit('action', 'editTask', task) },
   ] : [
+    ...(task.kind === 'image' && task.urls.length ? [{ label: '编辑这张图片', icon: ImagePlus, disabled: busy.value || task.phase !== 'complete', run: () => emit('action', 'editImage', task, menuIndex.value) }] : []),
+    { label: '编辑原提问', icon: MessageSquareText, disabled: busy.value, run: () => emit('action', 'editTask', task) },
     ...(task.urls.length ? [{ label: task.kind === 'video' ? '放大视频' : '查看大图', icon: Maximize, run: () => emit('preview', task, menuIndex.value) },
       { label: task.kind === 'video' ? '下载视频' : '下载图片', icon: Download, run: () => perform(() => downloadCreation(task, menuIndex.value)) }] : []),
     ...(task.kind === 'image' && task.urls.length ? [{ label: '复制图片', icon: Copy, run: () => perform(async () => { await copyCreationImage(task, menuIndex.value); notify('图片已复制') }) }] : []),
     { label: '重新生成此轮', icon: RefreshCw, disabled: busy.value, run: () => emit('action', 'regenerate', task) },
+    { label: '复制提示词', icon: Copy, run: copyPrompt },
+    { label: '复用参数', icon: CopyPlus, disabled: busy.value, run: () => emit('action', 'useTask', task) },
   ]
   return [...items, { label: '删除此轮消息', icon: Trash2, danger: true, disabled: busy.value, run: remove }]
 })
@@ -63,9 +67,12 @@ async function perform(operation: () => Promise<unknown>) {
   error.value = ''
   try { await operation() } catch (cause) { error.value = errorMessage(cause) }
 }
+function copyPrompt() {
+  return perform(async () => { await navigator.clipboard.writeText(props.task.prompt); notify('提示词已复制') })
+}
 async function remove() {
   const chat = props.conversation, task = props.task
-  if (busy.value || !await confirmStudioDelete('删除 1 轮对话记录？生成图片仍保留在图库。', () => chats.activeId === chat.id && chats.sessions.includes(chat) && props.task === task && !busy.value)) return
+  if (busy.value || !await confirmStudioDelete('删除 1 轮对话记录？已保存到作品库的内容不会删除。', () => chats.activeId === chat.id && chats.sessions.includes(chat) && props.task === task && !busy.value)) return
   await perform(() => deleteMediaTurns(chat, [task.id]))
 }
 </script>
@@ -80,7 +87,11 @@ async function remove() {
     </template>
     <template v-if="role === 'user'">
       <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><img v-for="(file, index) in task.references" :key="file.url" :src="mediaSource(file.url)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></div></div>
-      <div class="creation-turn-tools message-actions"><button class="icon-button" type="button" aria-label="编辑并重新生成" title="编辑并重新生成" :disabled="busy" @click="emit('action', 'editTask', task)"><Pencil :size="15" /></button><button class="icon-button" type="button" aria-label="删除此轮消息" title="删除此轮消息" :disabled="busy" @click="remove"><Trash2 :size="15" /></button></div>
+      <div class="creation-turn-tools message-actions" role="group" aria-label="提问操作">
+        <button class="studio-tool" type="button" aria-label="编辑并重新生成" title="编辑原提问和参考图" :disabled="busy" @click="emit('action', 'editTask', task)"><Pencil :size="16" aria-hidden="true" />编辑</button>
+        <button class="icon-button" type="button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" aria-hidden="true" /></button>
+        <button class="icon-button" type="button" aria-label="删除此轮消息" title="删除此轮消息" :disabled="busy" @click="remove"><Trash2 :size="16" aria-hidden="true" /></button>
+      </div>
     </template>
     <template v-else>
       <progress v-if="working && task.progress != null" class="generation-progress" :value="task.progress" max="100" aria-label="模型返回的生成进度" />
@@ -96,12 +107,16 @@ async function remove() {
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
       <div v-if="task.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
-        <button class="studio-tool" @click="emit('publish', task, 'community')"><Upload :size="15" />发布作品</button>
-        <button v-for="(url, index) in task.urls" :key="url" class="studio-tool" @click="perform(() => downloadCreation(task, index))"><Download :size="16" />下载{{ task.urls.length > 1 ? ` ${index + 1}` : '' }}</button>
-        <button v-if="!task.urls.length && task.text" class="studio-tool" @click="perform(() => downloadCreation(task))"><Download :size="16" />下载文本</button>
-        <button v-if="task.kind !== 'video' && task.sourceWorkId" class="studio-tool" @click="emit('publish', task, 'source-comment')"><Upload :size="15" />发送到源作品评论区</button>
-        <button class="studio-tool" @click="emit('action', 'useTask', task)"><Pencil :size="15" />复用参数</button>
-        <button class="icon-button" type="button" aria-label="重新生成此轮" title="重新生成此轮" :disabled="busy" @click="emit('action', 'regenerate', task)"><RefreshCw :size="16" /></button>
+        <button v-if="task.kind === 'image' && task.urls.length" class="studio-tool" type="button" :title="task.urls.length > 1 ? '将本组生成图片带入输入框编辑' : '将生成图片带入输入框编辑'" :disabled="busy" @click="emit('action', 'editImage', task)"><ImagePlus :size="16" aria-hidden="true" />编辑图片</button>
+        <button class="icon-button" type="button" aria-label="编辑原提问" title="编辑原提问和原参考图" :disabled="busy" @click="emit('action', 'editTask', task)"><MessageSquareText :size="16" aria-hidden="true" /></button>
+        <button class="icon-button" type="button" aria-label="重新生成此轮" title="重新生成此轮" :disabled="busy" @click="emit('action', 'regenerate', task)"><RefreshCw :size="16" aria-hidden="true" /></button>
+        <button v-if="task.kind === 'image' && task.urls.length" class="icon-button" type="button" :aria-label="task.urls.length > 1 ? '复制第一张图片' : '复制图片'" :title="task.urls.length > 1 ? '复制第一张图片' : '复制图片'" @click="perform(async () => { await copyCreationImage(task); notify('图片已复制') })"><Copy :size="16" aria-hidden="true" /></button>
+        <button v-for="(url, index) in task.urls" :key="url" class="icon-button" type="button" :aria-label="task.urls.length > 1 ? `下载图片 ${index + 1}` : task.kind === 'video' ? '下载视频' : '下载图片'" :title="task.urls.length > 1 ? `下载图片 ${index + 1}` : '下载'" @click="perform(() => downloadCreation(task, index))"><Download :size="16" aria-hidden="true" /></button>
+        <button v-if="!task.urls.length && task.text" class="studio-tool" type="button" @click="perform(() => downloadCreation(task))"><Download :size="16" aria-hidden="true" />下载文本</button>
+        <button class="icon-button" type="button" aria-label="删除生成记录" title="删除本轮对话记录" :disabled="busy" @click="remove"><Trash2 :size="16" aria-hidden="true" /></button>
+        <button class="studio-tool" type="button" :disabled="busy" @click="emit('action', 'useTask', task)"><CopyPlus :size="16" aria-hidden="true" />复用参数</button>
+        <button class="studio-tool" type="button" @click="emit('publish', task, 'community')"><Upload :size="16" aria-hidden="true" />发布作品</button>
+        <button v-if="task.kind !== 'video' && task.sourceWorkId" class="studio-tool" type="button" @click="emit('publish', task, 'source-comment')"><Upload :size="16" aria-hidden="true" />发送到源作品评论区</button>
       </div>
       <div v-if="version.total > 1" class="creation-versions" role="group" aria-label="生成版本"><button class="icon-button" type="button" aria-label="上一个版本" title="上一个版本" :disabled="busy || version.index === 0" @click="perform(() => selectMediaVersion(conversation, task.id, -1))"><ChevronLeft :size="16" /></button><output aria-label="当前生成版本">{{ version.index + 1 }} / {{ version.total }}</output><button class="icon-button" type="button" aria-label="下一个版本" title="下一个版本" :disabled="busy || version.index >= version.total - 1" @click="perform(() => selectMediaVersion(conversation, task.id, 1))"><ChevronRight :size="16" /></button></div>
     </template>
@@ -115,7 +130,8 @@ async function remove() {
 .sent-references { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }.sent-references img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; }
 .creation-turn-tools, .creation-versions, .creation-message-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .creation-turn-tools { justify-content: flex-end; margin-top: 12px; }
-.creation-turn-tools .icon-button { width: 32px; min-height: 32px; }
+.creation-turn-tools .icon-button, .creation-message-actions .icon-button { width: 36px; min-height: 36px; flex-shrink: 0; }
+.creation-turn-tools .studio-tool, .creation-message-actions .studio-tool { min-height: 36px; }
 .creation-versions { margin-top: 8px; width: fit-content; }.creation-versions output, .task-elapsed { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .creation-message-actions { margin-top: 12px; gap: 4px 12px; }
 .compact-image-response :deep(.message-heading) { min-height: 28px; margin-bottom: 8px; gap: 6px; }
@@ -134,6 +150,5 @@ async function remove() {
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0; max-width: 72ch; }
 @media (min-width: 1000px) { .creation-media { gap: 4px; }.creation-media video { height: min(440px, 32dvh); background: var(--surface); } }
 @media (max-width: 639px) { .creation-message-actions { gap: 4px; }.creation-media video { max-height: 44dvh; } }
-@media (pointer: coarse), (max-width: 639px) { .creation-turn-tools .icon-button { min-height: 44px; width: 44px; } }
-@media (hover: hover) and (pointer: fine) { .creation-turn-tools { opacity: 0; }.creation-request:hover .creation-turn-tools, .creation-request:focus-within .creation-turn-tools { opacity: 1; } }
+@media (pointer: coarse), (max-width: 639px) { .creation-turn-tools .icon-button, .creation-message-actions .icon-button { min-height: 44px; width: 44px; }.creation-turn-tools .studio-tool, .creation-message-actions .studio-tool { min-height: 44px; } }
 </style>

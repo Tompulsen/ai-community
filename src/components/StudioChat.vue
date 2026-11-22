@@ -48,7 +48,7 @@ import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import type { StudioEntry } from '../studio-entry'
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean; entryOnly?: boolean; entryPending?: boolean }>(), { mode: 'text', headerVisible: true })
-const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
+const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
 const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
 function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }

@@ -41,7 +41,7 @@ export interface NativeChat extends ChatSession {
     prompt?: string
     references: CreationTask['references']; model?: string; manualSize?: string; ratio?: string; count?: number
     duration?: number; protocol?: string; imageOptions?: ImageOptions; videoOptions?: VideoOptions
-    sourceWorkId?: string; skipAutomaticReference?: boolean
+    sourceWorkId?: string; skipAutomaticReference?: boolean; imageEditTaskId?: string
   }
   mediaDrafts?: Partial<Record<'image' | 'video', NonNullable<NativeChat['mediaDraft']>>>
   projectId?: string
