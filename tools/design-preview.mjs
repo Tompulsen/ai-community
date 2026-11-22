@@ -55,7 +55,7 @@ export function createPreviewMiddleware() {
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('X-Design-Preview', 'mock')
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-src 'none'; object-src 'none'; form-action 'self'; base-uri 'self'")
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' blob: data: ws://127.0.0.1:* ws://localhost:*; frame-src 'none'; object-src 'none'; form-action 'self'; base-uri 'self'")
     const reply = (body, status = 200) => json(req, res, status, body)
     const fail = (message, status = 404) => reply({ success: false, message, error: { code: 'UI_PREVIEW_ONLY', message } }, status)
     try {
@@ -240,6 +240,7 @@ async function selfCheck() {
   const session = await request('GET', '/api/session')
   assert.equal(JSON.parse(session.body).user.id, userId)
   assert.equal(session.headers['X-Design-Preview'], 'mock')
+  assert.match(session.headers['Content-Security-Policy'], /connect-src 'self' blob: data:/)
   const lottery = JSON.parse((await request('GET', '/api/lottery/status')).body)
   assert.equal(lottery.daily.limit, 200)
   assert.equal(lottery.settings.prizes.reduce((sum, prize) => sum + prize.dailyQuota, 0), lottery.daily.limit)

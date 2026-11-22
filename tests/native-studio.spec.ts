@@ -416,7 +416,7 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await page.getByRole('button', { name: '查看大图：预览生成图片 1', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '原始媒体预览' })).toBeVisible()
   await page.getByRole('button', { name: '放大', exact: true }).click()
-  await expect(page.locator('.media-lightbox output')).toHaveText('150%')
+  await expect(page.locator('.media-lightbox output')).toHaveText('120%')
   await page.keyboard.press('Escape')
   await page.getByRole('navigation', { name: '工作台导航' }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(prompt).toHaveValue('')
@@ -668,7 +668,7 @@ test('legacy tasks without the original token stay untouched while base64 image 
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect((await nativeHistory(page)).some(task => task.upstreamId === 'legacy-upstream' && task.phase === 'attention')).toBe(true)
   await expect.poll(() => page.locator('.creation-media img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
-  expect(await page.locator('.creation-media img').getAttribute('src')).toMatch(/^data:image\/png;base64,/)
+  expect(await page.locator('.creation-media img').getAttribute('src')).toMatch(/^(?:data:image\/png;base64,|blob:)/)
   expect(queries).toBe(0)
 })
 

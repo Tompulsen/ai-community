@@ -227,7 +227,7 @@ test('result tools remain reachable on mobile and support keyboard copy and canc
     await expect(page.locator('.creation-editing')).toContainText('编辑图片')
     for (const width of [320, 390, 1440]) {
       await page.setViewportSize({ width, height: 900 })
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await expect(response.getByRole('button', { name: '编辑图片', exact: true })).toBeVisible()
       expect((await new AxeBuilder({ page }).include('.creation-message-actions').include('.creation-editing').analyze()).violations).toEqual([])
       await page.screenshot({ path: info.outputPath(`editor-${width}-${mode}.png`) })
