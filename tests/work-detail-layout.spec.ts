@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+import sharp from 'sharp'
 import type { Work, WorkComment } from '../src/data'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
@@ -53,6 +54,77 @@ async function fixture(page: Page, selected: Work = { ...work }, authenticated =
   })
   return state
 }
+
+for (const width of [390, 1440]) for (const format of ['gif', 'webp'] as const) {
+  test(`existing ${format} source comments and replies animate inline at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    await fixture(page)
+    const pixels = Buffer.concat([Buffer.alloc(48 * 48 * 3), Buffer.alloc(48 * 48 * 3, 255)])
+    const animated = await sharp(pixels, { raw: { width: 48, height: 96, channels: 3, pageHeight: 48 } })
+      .toFormat(format, { delay: [240, 240], loop: 0 }).toBuffer()
+    const thumbnail = await sharp(animated).webp().toBuffer()
+    expect((await sharp(animated, { animated: true }).metadata()).pages).toBe(2)
+    const file = { id: 'commentanimation', name: `同款作品.${format}`, type: `image/${format}`,
+      url: '/legacy-files/commentanimation', thumbnailUrl: '/legacy-files/commentanimation?variant=thumbnail', processing: 'ready' as const }
+    const reads: string[] = []
+    await page.route('**/legacy-files/commentanimation*', route => {
+      const url = new URL(route.request().url()); reads.push(url.searchParams.get('variant') || 'original')
+      return route.fulfill({ contentType: url.searchParams.get('variant') === 'thumbnail' ? 'image/webp' : file.type,
+        body: url.searchParams.get('variant') === 'thumbnail' ? thumbnail : animated })
+    })
+    await page.route('**/api/works/detailwork/comments**', route => {
+      const reply = new URL(route.request().url()).searchParams.has('parentId')
+      return route.fulfill({ json: { items: [{ ...comment, id: reply ? 'animationreply' : comment.id,
+        text: '我的同款作品', repliesCount: reply ? 0 : 1, files: [file] }], nextCursor: null } })
+    })
+    await page.goto('/work/detailwork')
+    if (width < 640) await page.getByRole('button', { name: '跳转评论', exact: true }).click()
+    const posted = page.locator('#comment-firstcomment')
+    const image = posted.locator(':scope > .comment-media img')
+    await image.scrollIntoViewIfNeeded()
+    await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+    await expect(image).toHaveAttribute('loading', 'lazy')
+    await expect(image.locator('..')).toHaveAttribute('href', file.url)
+    await image.evaluate((element: HTMLImageElement) => element.decode())
+    const colors = new Set<number>()
+    // Screenshots capture displayed animation frames; drawing an animated img to canvas only captures its first frame.
+    for (let attempt = 0; attempt < 10 && colors.size < 2; attempt++) {
+      const frame = await image.screenshot({ animations: 'allow' })
+      const sample = await sharp(frame).resize(1, 1).raw().toBuffer()
+      colors.add(sample[0]! > 128 ? 255 : 0)
+      if (colors.size < 2) await page.waitForTimeout(80)
+    }
+    expect(colors.size, 'the visible comment must display distinct animation frames').toBe(2)
+    await posted.getByRole('button', { name: '查看 1 条回复', exact: true }).click()
+    await expect(page.locator('#comment-animationreply .comment-media img')).toHaveAttribute('src', await image.getAttribute('src') as string)
+    expect(reads).not.toContain('thumbnail')
+    await page.screenshot({ path: testInfo.outputPath(`comment-animation-${format}-${width}.png`) })
+  })
+}
+
+test('finishing comment processing never switches an animation back to its still thumbnail', async ({ page }) => {
+  await fixture(page); await page.clock.install()
+  const file = { id: 'processinganimation', name: '动画.webp', type: 'image/webp', url: '/legacy-files/processinganimation' }
+  await page.route('**/legacy-files/processinganimation*', route => route.fulfill({ contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="teal"/></svg>' }))
+  await page.route('**/api/works/detailwork/comments', route => route.fulfill({ json: {
+    items: [{ ...comment, files: [{ ...file, processing: 'processing' }] }], nextCursor: null,
+  } }))
+  let refreshes = 0
+  await page.route('**/api/works/detailwork/comments/firstcomment/files', route => {
+    refreshes++
+    return route.fulfill({ json: { files: [{ ...file, processing: 'ready', thumbnailUrl: `${file.url}?variant=thumbnail` }] } })
+  })
+  await page.goto('/work/detailwork')
+  const posted = page.locator('#comment-firstcomment'), image = posted.locator('.comment-media img')
+  await image.scrollIntoViewIfNeeded()
+  await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+  await page.clock.runFor(6000)
+  await expect.poll(() => refreshes).toBe(1)
+  await expect(posted.getByText('素材处理中', { exact: true })).toHaveCount(0)
+  await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+  await page.clock.runFor(15000); expect(refreshes).toBe(1)
+})
 
 test('detail and recommendations adapt without cropping, overlap or horizontal overflow', async ({ page }) => {
   const errors: string[] = []

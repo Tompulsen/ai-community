@@ -250,3 +250,43 @@ test('preview ratio describes the rotated thumbnail rather than original EXIF di
   assert.equal(properties.height, 60);
   assert.equal(properties.previewAspectRatio, 1 / 2);
 });
+
+test('GIF comment display variants retain frames and timing while thumbnails remain still', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'community-comment-animation-'));
+  const cachedFiles = sharp.cache().files.max;
+  sharp.cache({ files: 0 });
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await Promise.all((await readdir(root)).map(name => unlink(join(root, name))));
+    await rmdir(root);
+    sharp.cache({ files: cachedFiles });
+  });
+  await sharp(Buffer.from([255, 0, 0, 0, 0, 255]), { raw: { width: 1, height: 2, channels: 3, pageHeight: 1 } })
+    .gif({ delay: [160, 240], loop: 0 }).toFile(join(root, 'original'));
+  let claimed = false, complete;
+  const processed = new Promise(resolve => { complete = resolve; });
+  const db = { query: async (sql, params) => {
+    if (sql.includes('WITH candidate AS') && !claimed) {
+      claimed = true;
+      return { rows: [{ id: 'animation1', name: 'Animation', type: 'image/gif', accessKey: 'original', url: '/legacy-files/animation1',
+        lease: params[1], properties: { communityMedia: { attempts: 1 } } }], rowCount: 1 };
+    }
+    if (sql.includes('RETURNING id') && sql.includes('"thumbnailAccessKey"=$2')) {
+      complete({ thumbnail: params[1], webpublic: params[3] });
+      return { rows: [{ id: 'animation1' }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  } };
+  const timeout = setTimeout(() => complete(null), 5000);
+  t.after(() => clearTimeout(timeout));
+  stop = startMediaWorker({ db, filesRoot: root });
+  const variants = await processed;
+  assert(variants, 'Media worker must complete successfully');
+  const display = await sharp(await readFile(join(root, variants.webpublic)), { animated: true }).metadata();
+  const thumbnail = await sharp(await readFile(join(root, variants.thumbnail)), { animated: true }).metadata();
+  assert.equal(display.pages, 2);
+  assert.deepEqual(display.delay, [160, 240]);
+  assert.equal(display.loop, 0);
+  assert.equal(thumbnail.pages ?? 1, 1);
+});
