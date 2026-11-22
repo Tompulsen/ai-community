@@ -94,6 +94,7 @@ function fixture(t, options = {}) {
         values.set(key, value)
         if (score === '') due.delete(member)
         else due.set(member, Number(score))
+        options.afterRedisSet?.(key, value)
         return 'OK'
       }
       if (script.includes('ARGV[1]') && values.get(key) === args[0]) values.delete(key)
@@ -203,16 +204,19 @@ test('preview requests keep the public-media private-network restrictions', asyn
     assert.equal((await app.inject(`/api/creation/media?variant=preview&url=${encodeURIComponent(source)}`)).statusCode, 400)
 })
 
-test('background media returns its request ID before the upstream responds and a durable worker saves the final result', async t => {
+test('background media returns its request ID before the upstream responds and a durable worker saves the final result', { timeout: 5000 }, async t => {
   const previous = process.env.NEW_API_SESSION_SECRET
   process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
-  const upstream = deferred()
-  const f = fixture(t, { fetch(url, init) {
-    if (init.method === 'POST') return upstream.promise
-    assert.equal(new URL(url).pathname, '/v1/videos/upstream-video')
-    return Response.json({ id: 'upstream-video', status: 'completed' })
-  } })
+  const upstream = deferred(), trackingSaved = deferred()
+  const f = fixture(t, {
+    afterRedisSet(key, value) { if (key.endsWith(':background-video') && JSON.parse(value).tracking) trackingSaved.resolve() },
+    fetch(url, init) {
+      if (init.method === 'POST') return upstream.promise
+      assert.equal(new URL(url).pathname, '/v1/videos/upstream-video')
+      return Response.json({ id: 'upstream-video', status: 'completed' })
+    },
+  })
   const input = { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'background-video' }
   const response = await submit(f.app, input, { Prefer: 'respond-async' })
   assert.equal(response.statusCode, 202, response.payload)
@@ -225,7 +229,7 @@ test('background media returns its request ID before the upstream responds and a
   await submit(f.app, input, { Prefer: 'respond-async' })
   assert.equal(f.calls.length, 1)
   upstream.resolve(Response.json({ id: 'upstream-video', status: 'queued' }))
-  for (let i = 0; i < 100 && !JSON.parse(f.values.get(key)).tracking; i++) await new Promise(setImmediate)
+  await trackingSaved.promise
   const stored = JSON.parse(f.values.get(key))
   assert.equal(stored.result.upstreamId, 'upstream-video')
   assert.equal(typeof stored.tracking, 'string')
@@ -256,7 +260,7 @@ test('an interrupted text client reads pending until the original request finish
   assert.equal((await f.app.inject('/api/creation/requests/pending-text')).json().outputs[0].text, 'Original answer')
   assert.equal(f.calls.length, 1)
 })
-test('background acceptance failure never crosses the paid boundary and large worker results use file storage', async t => {
+test('background acceptance failure never crosses the paid boundary and large worker results use file storage', { timeout: 5000 }, async t => {
   const previous = process.env.NEW_API_SESSION_SECRET
   process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-background-test-'))
@@ -265,9 +269,14 @@ test('background acceptance failure never crosses the paid boundary and large wo
     await rm(filesRoot, { recursive: true, force: true })
   })
   let rejected = true
+  const trackingSaved = deferred()
   const pixels = 'aW1hZ2U='.repeat(150000)
   const f = fixture(t, { filesRoot,
-    beforeRedisSet(key, _value, flags) { if (rejected && key.endsWith(':request-1') && flags.includes('NX')) throw new Error('Redis unavailable') },
+    async beforeRedisSet(key, value, flags) {
+      if (rejected && key.endsWith(':request-1') && flags.includes('NX')) throw new Error('Redis unavailable')
+      if (key.endsWith(':request-1') && JSON.parse(value).tracking) await new Promise(resolve => setTimeout(resolve, 50))
+    },
+    afterRedisSet(key, value) { if (key.endsWith(':request-1') && JSON.parse(value).tracking) trackingSaved.resolve() },
     fetch(_url, init) { return Response.json(init.method === 'POST'
       ? { id: 'large-image', status: 'queued' }
       : { id: 'large-image', status: 'succeeded', data: [{ b64_json: pixels }] }) },
@@ -278,7 +287,7 @@ test('background acceptance failure never crosses the paid boundary and large wo
   rejected = false
   await submit(f.app, imageRequest, { Prefer: 'respond-async' })
   const key = [...f.values.keys()].find(key => key.endsWith(':request-1'))
-  for (let i = 0; i < 100 && !JSON.parse(f.values.get(key)).tracking; i++) await new Promise(setImmediate)
+  await trackingSaved.promise
   await processCreationTasks(f.redis, f.services)
   const saved = JSON.parse(f.values.get(key))
   assert.equal(typeof saved.file, 'string')
