@@ -4,7 +4,7 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
 
 async function fixture(page: Page) {
-  if (new URL(String(test.info().project.use.baseURL)).hostname === '127.0.0.1') {
+  if (['localhost', '127.0.0.1', '[::1]'].includes(new URL(String(test.info().project.use.baseURL)).hostname)) {
     const runtime = await readFile('server/runtime.ts', 'utf8')
     const policy = runtime.match(/'Content-Security-Policy': "([^"]+)"/)![1]!
     await page.route('**/create/image', async route => {
