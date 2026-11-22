@@ -15,7 +15,7 @@ import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
 import { communityQuotaPerPoint } from './native-account/community-wallet.ts'
 import { lotteryDay } from '../shared/lottery-daily.ts'
 import type { PublicLotteryDraw, PublicLotteryPage } from '../shared/lottery-public.ts'
-import { lotteryPointUnits, lotteryPointsFromUnits, type PublicLotteryParticipant, type PublicLotterySummary } from '../shared/lottery-public.ts'
+import { lotteryPointUnits, lotteryPointsFromUnits, type PublicLotteryParticipant, type PublicLotterySummary, type PublicLotteryRange, type PublicLotteryPeriod } from '../shared/lottery-public.ts'
 
 interface LotteryConfigRow {
   id: string
@@ -212,10 +212,62 @@ export async function readPublicLotteryRecords(db: Queryable, query: URLSearchPa
   return { items, nextCursor: rows.length > 20 ? rows[19]!.id : null, snapshot }
 }
 
-async function buildPublicLotterySummary(db: Database): Promise<PublicLotterySummary> {
+const summaryDayMs = 86_400_000
+function validSummaryDate(value: string): boolean {
+  const time = Date.parse(`${value}T00:00:00Z`)
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value
+}
+export function publicLotteryRange(query: URLSearchParams, now = new Date()): PublicLotteryRange {
+  const period = query.get('period') ?? 'all', start = query.get('start'), end = query.get('end')
+  const today = lotteryDay(now).date
+  if ([...query.keys()].some(key => !['period', 'start', 'end'].includes(key) || query.getAll(key).length !== 1)
+    || !['today', '7d', '30d', 'custom', 'all'].includes(period)) fail('LOTTERY_INVALID')
+  if (period === 'custom') {
+    if (!start || !end || !validSummaryDate(start) || !validSummaryDate(end) || start > end || end > today) fail('LOTTERY_INVALID')
+    const days = (Date.parse(end!) - Date.parse(start!)) / summaryDayMs + 1
+    if (days > 366) fail('LOTTERY_INVALID')
+    return { period, start, end, days, timezone: 'Asia/Shanghai' }
+  }
+  if (start !== null || end !== null) fail('LOTTERY_INVALID')
+  const days = period === 'today' ? 1 : period === '7d' ? 7 : period === '30d' ? 30 : null
+  return { period: period as PublicLotteryPeriod, days, timezone: 'Asia/Shanghai', end: days ? today : null,
+    start: days ? new Date(Date.parse(today) - (days - 1) * summaryDayMs).toISOString().slice(0, 10) : null }
+}
+
+const emptySummaryCounts = () => ({ charity: 0n, permanent: 0n, drawCount: 0n, fulfilledCount: 0n, pendingCount: 0n, unverifiedCount: 0n, emptyCount: 0n })
+type SummaryCounts = ReturnType<typeof emptySummaryCounts>
+interface SummaryParticipant {
+  id: string
+  participant: string
+  days: Map<string, SummaryCounts>
+  undated: SummaryCounts
+}
+interface LotterySummarySnapshot { participants: SummaryParticipant[]; updatedAt: string }
+function summaryDay(days: Map<string, SummaryCounts>, date: string) {
+  let counts = days.get(date)
+  if (!counts) { counts = emptySummaryCounts(); days.set(date, counts) }
+  return counts
+}
+function addSummaryCounts(target: SummaryCounts, source: SummaryCounts) {
+  for (const key of Object.keys(target) as (keyof SummaryCounts)[]) target[key] += source[key]
+}
+function packedSummaryCounts(counts: SummaryCounts) {
+  return { totalPoints: lotteryPointsFromUnits(counts.charity + counts.permanent),
+    charityPoints: lotteryPointsFromUnits(counts.charity), permanentPoints: lotteryPointsFromUnits(counts.permanent),
+    drawCount: counts.drawCount.toString(), fulfilledCount: counts.fulfilledCount.toString() }
+}
+function awardDate(prize: LotteryAward): string | null {
+  // Only called after receipt validation; never substitute a draw date for an unknown delivery date.
+  const value = prize.rewardKind === 'charity' ? (prize.creditReceipt?.creditedAt ?? NaN) * 1000
+    : typeof prize.fulfilledAt === 'string' && validSummaryDate(prize.fulfilledAt.slice(0, 10))
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(prize.fulfilledAt) ? Date.parse(prize.fulfilledAt) : NaN
+  return Number.isFinite(value) && Math.abs(value) < 8.64e15 ? lotteryDay(new Date(value)).date : null
+}
+
+async function buildPublicLotterySummary(db: Database): Promise<LotterySummarySnapshot> {
   type SummaryDraw = PublicDrawSource & { displayName: string | null; redacted: boolean | null }
   const client = await db.connect()
-  const participants = new Map<string, { item: PublicLotteryParticipant; charity: bigint; permanent: bigint }>()
+  const participants = new Map<string, SummaryParticipant>(), updatedAt = new Date().toISOString()
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     let cursor: string | null = null
@@ -230,50 +282,76 @@ async function buildPublicLotterySummary(db: Database): Promise<PublicLotterySum
         let participant = participants.get(key)
         if (!participant) {
           const first = Array.from(row.displayName?.trim() ?? '')[0]
-          participant = { charity: 0n, permanent: 0n, item: {
+          participant = {
             id: row.id, participant: row.userId === null ? '已注销用户（合计）' : first && !row.redacted ? `${first}***` : '匿名用户',
-            drawCount: '0', totalPoints: '0', charityPoints: '0', permanentPoints: '0',
-            fulfilledCount: '0', pendingCount: '0', unverifiedCount: '0', emptyCount: '0',
-          } }
+            days: new Map(), undated: emptySummaryCounts(),
+          }
           participants.set(key, participant)
         }
-        const item = participant.item
-        item.drawCount = (BigInt(item.drawCount) + BigInt(row.prizes.length)).toString()
-        for (const prize of packLotteryDraw(row).prizes) {
+        const drawDay = summaryDay(participant.days, lotteryDay(new Date(row.createdAt)).date)
+        drawDay.drawCount += BigInt(row.prizes.length)
+        for (const [index, prize] of packLotteryDraw(row).prizes.entries()) {
           const points = 'points' in prize ? prize.points : 'legacyPoints' in prize ? prize.legacyPoints : null
           const status = prize.status === 'pending' ? 'pendingCount' : prize.status === 'empty' ? 'emptyCount'
             : points == null ? 'unverifiedCount' : 'fulfilledCount'
-          item[status] = (BigInt(item[status]) + 1n).toString()
           if (status === 'fulfilledCount' && points != null) {
-            participant[prize.rewardKind === 'charity' ? 'charity' : 'permanent'] += lotteryPointUnits(points)
-          }
+            const date = awardDate(row.prizes[index]!)
+            const deliveryDay = date ? summaryDay(participant.days, date) : participant.undated
+            deliveryDay.fulfilledCount++
+            deliveryDay[prize.rewardKind === 'charity' ? 'charity' : 'permanent'] += lotteryPointUnits(points)
+          } else drawDay[status]++
         }
       }
       if (rows.length < 500) break
       cursor = rows[rows.length - 1]!.id
     }
     await client.query('COMMIT')
-    return { items: Array.from(participants.values(), ({ item, charity, permanent }) => ({ ...item,
-      charityPoints: lotteryPointsFromUnits(charity), permanentPoints: lotteryPointsFromUnits(permanent),
-      totalPoints: lotteryPointsFromUnits(charity + permanent),
-    })) }
+    return { participants: Array.from(participants.values()), updatedAt }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})
     throw error
   } finally { client.release() }
 }
 
-// Cache only one short-lived aggregate per database; concurrent readers share its scan.
-const publicSummaries = new WeakMap<Database, Promise<PublicLotterySummary>>()
-export function invalidatePublicLotterySummary(db: Database) { publicSummaries.delete(db) }
-export function readPublicLotterySummary(db: Database): Promise<PublicLotterySummary> {
+// One sparse daily snapshot, no per-range cache or extra event storage. Invalidations also coalesce active scans.
+const publicSummaries = new WeakMap<Database, { promise: Promise<LotterySummarySnapshot>; dirty: boolean }>()
+export function invalidatePublicLotterySummary(db: Database) { const cached = publicSummaries.get(db); if (cached) cached.dirty = true }
+function readLotterySummarySnapshot(db: Database): Promise<LotterySummarySnapshot> {
   const existing = publicSummaries.get(db)
-  if (existing) return existing
-  const pending = buildPublicLotterySummary(db)
-  publicSummaries.set(db, pending)
-  const discard = () => { if (publicSummaries.get(db) === pending) publicSummaries.delete(db) }
-  void pending.then(() => { setTimeout(discard, 30_000).unref() }, discard)
-  return pending
+  if (existing) return existing.dirty ? existing.promise.catch(() => {}).then(() => {
+    if (publicSummaries.get(db) === existing) publicSummaries.delete(db)
+    return readLotterySummarySnapshot(db)
+  }) : existing.promise
+  const entry = { promise: buildPublicLotterySummary(db), dirty: false }
+  publicSummaries.set(db, entry)
+  const discard = () => { if (publicSummaries.get(db) === entry) publicSummaries.delete(db) }
+  void entry.promise.then(() => { setTimeout(discard, 30_000).unref() }, discard)
+  return entry.promise
+}
+export async function readPublicLotterySummary(db: Database, query = new URLSearchParams(), now = new Date()): Promise<PublicLotterySummary> {
+  const range = publicLotteryRange(query, now), snapshot = await readLotterySummarySnapshot(db)
+  const items: PublicLotteryParticipant[] = [], days = new Map<string, SummaryCounts>(), totals = emptySummaryCounts()
+  let undated = 0n
+  for (const participant of snapshot.participants) {
+    const counts = emptySummaryCounts()
+    for (const [date, value] of participant.days) {
+      if (range.start && (date < range.start || date > range.end!)) continue
+      addSummaryCounts(counts, value); addSummaryCounts(summaryDay(days, date), value)
+    }
+    if (range.period === 'all') {
+      addSummaryCounts(counts, participant.undated)
+      undated += participant.undated.charity + participant.undated.permanent
+    }
+    if (!counts.drawCount && !counts.fulfilledCount) continue
+    addSummaryCounts(totals, counts)
+    items.push({ id: participant.id, participant: participant.participant, ...packedSummaryCounts(counts),
+      pendingCount: counts.pendingCount.toString(), unverifiedCount: counts.unverifiedCount.toString(), emptyCount: counts.emptyCount.toString() })
+  }
+  if (range.start) for (let i = 0; i < range.days!; i++) summaryDay(days, new Date(Date.parse(range.start) + i * summaryDayMs).toISOString().slice(0, 10))
+  return { items, range, updatedAt: snapshot.updatedAt,
+    totals: { ...packedSummaryCounts(totals), participantCount: items.length.toString(), undatedPoints: lotteryPointsFromUnits(undated) },
+    daily: Array.from(days, ([date, counts]) => ({ date, ...packedSummaryCounts(counts) })).sort((a, b) => b.date.localeCompare(a.date)),
+  }
 }
 
 export function packAdminLotteryDraw(row: LotteryDrawRow) {
@@ -728,8 +806,7 @@ export async function handleLottery(ctx: RequestContext): Promise<boolean> {
     ctx.json(200, await readPublicLotteryRecords(ctx.db, ctx.url.searchParams)); return true
   }
   if (path === '/api/lottery/public-summary' && ctx.req.method === 'GET') {
-    if (ctx.url.searchParams.size) fail('LOTTERY_INVALID')
-    ctx.json(200, await readPublicLotterySummary(ctx.db)); return true
+    ctx.json(200, await readPublicLotterySummary(ctx.db, ctx.url.searchParams)); return true
   }
   const api = service(ctx)
   const method = ctx.req.method

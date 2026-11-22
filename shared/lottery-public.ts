@@ -21,7 +21,29 @@ export interface PublicLotteryParticipant {
   unverifiedCount: string
   emptyCount: string
 }
-export interface PublicLotterySummary { items: PublicLotteryParticipant[] }
+export type PublicLotteryPeriod = 'today' | '7d' | '30d' | 'custom' | 'all'
+export interface PublicLotteryRange {
+  period: PublicLotteryPeriod
+  start: string | null
+  end: string | null
+  days: number | null
+  timezone: 'Asia/Shanghai'
+}
+export interface PublicLotteryDay {
+  date: string
+  totalPoints: string
+  charityPoints: string
+  permanentPoints: string
+  drawCount: string
+  fulfilledCount: string
+}
+export interface PublicLotterySummary {
+  items: PublicLotteryParticipant[]
+  range: PublicLotteryRange
+  updatedAt: string
+  totals: Omit<PublicLotteryDay, 'date'> & { participantCount: string; undatedPoints: string }
+  daily: PublicLotteryDay[]
+}
 export function lotteryPointUnits(value: string): bigint {
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value)) throw new Error('Invalid lottery points')
   const [whole = '0', fraction = ''] = value.split('.')
