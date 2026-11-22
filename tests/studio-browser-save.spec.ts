@@ -64,6 +64,41 @@ async function storedImages(page: Page) {
   })
 }
 
+test('a recovered legacy request switches to its upstream task and saves the original after reload', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  let requestId = '', recoveries = 0, taskReads = 0
+  await page.route('**/api/creation/generate', route => {
+    state.generations++
+    requestId = route.request().postDataJSON().requestId
+    return route.fulfill({ status: 202, json: { status: 'pending', requestId, outputs: [], protocol: 'async', tokenId: 41 } })
+  })
+  await page.route('**/api/creation/requests/**', route => {
+    recoveries++
+    return route.fulfill({ json: recoveries === 1
+      ? { status: 'pending', requestId, outputs: [], protocol: 'async', tokenId: 41 }
+      : { status: 'pending', upstreamId: 'legacy-image-task', outputs: [], protocol: 'async', tokenId: 41 } })
+  })
+  await page.route('**/api/creation/tasks/image/**', route => {
+    taskReads++
+    expect(new URL(route.request().url()).pathname).toBe('/api/creation/tasks/image/legacy-image-task')
+    return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/legacy.jpg' }], protocol: 'async', tokenId: 41 } })
+  })
+  await send(page)
+  await expect.poll(() => recoveries).toBe(1)
+  await page.reload()
+  await expect.poll(() => recoveries).toBe(2)
+  await expect.poll(() => taskReads, { timeout: 10000 }).toBe(1)
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  state.available = false
+  const reads = state.originals
+  await page.reload()
+  await expect.poll(() => page.locator('.creation-image-preview img').evaluateAll(images => images.length === 1 && (images[0] as HTMLImageElement).naturalWidth > 0)).toBe(true)
+  expect(state.originals).toBe(reads)
+  expect(state.generations).toBe(1)
+  expect(taskReads).toBe(1)
+})
+
 test('generated images save original bytes automatically and survive an expired upstream after reload without downloading', async ({ page }) => {
   const { state, image } = await fixture(page)
   state.count = 2

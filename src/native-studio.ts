@@ -388,7 +388,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
   const status = String(data.status || data.state || '').toLowerCase()
-  if (data.requestId === task.id) task.serverTracked = true
+  task.serverTracked = data.requestId === task.id
   if (typeof data.tokenId === 'number') task.tokenId = data.tokenId
   if (typeof data.protocol === 'string' && ['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(data.protocol)) task.protocol = data.protocol
   const apiFormat = modelApiFormatSchema.safeParse(data.apiFormat).data

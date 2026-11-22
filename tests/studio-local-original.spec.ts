@@ -100,14 +100,19 @@ test('manual gallery downloads adopt local originals and stale or foreign cache 
     await store.saveTaskSnapshot('17', tasks)
     const missing = await store.saveTaskOriginal('17', 'missing-original', 0, 'https://media.example/missing.jpg', blob)
     const removed = await store.saveTaskOriginal('17', deleted.id, 0, deleted.urls[0]!, blob)
-    const mismatched = await store.saveTaskOriginal('17', task.id, 0, 'https://media.example/changed.jpg', blob)
+    const repeated = await store.saveTaskOriginal('17', task.id, 0, 'https://media.example/original-1.jpg', blob)
+    const mismatched = await store.saveTaskOriginal('17', task.id, 0, 'https://media.example/changed.jpg', new Blob(['stale original'], { type: blob.type }))
     const foreign = await store.saveTaskOriginal('18', task.id, 0, task.urls[0]!, blob)
     await studio.downloadCreation(deleted)
     const removedInMemory = !studio.creation.tasks.some(task => task.id === deleted.id)
     await studio.prepareCreationHistory()
     const removedOnDisk = !(await store.readTaskSnapshot('17'))!.some(task => task.id === deleted.id)
+    const retained = await store.readTaskAsset('17', task.urls[0]!)
+    const originalBytes = new Uint8Array(await blob.arrayBuffer()), retainedBytes = new Uint8Array(await retained?.arrayBuffer() || new ArrayBuffer(0))
     return {
       ignored: [missing, removed, mismatched, foreign].every(value => value === undefined),
+      repeated: repeated === task.urls[0],
+      bytesUnchanged: retainedBytes.length === originalBytes.length && retainedBytes.every((value, index) => value === originalBytes[index]),
       removedInMemory, removedOnDisk,
       missingBlob: !await store.readTaskAsset('17', store.taskAssetUrl('missing-original', 0)),
       deletedBlob: !await store.readTaskAsset('17', store.taskAssetUrl(deleted.id, 0)),
@@ -115,7 +120,7 @@ test('manual gallery downloads adopt local originals and stale or foreign cache 
       retainedBytes: (await store.readTaskAsset('17', task.urls[0]!))?.size,
     }
   })
-  expect(guarded).toMatchObject({ ignored: true, removedInMemory: true, removedOnDisk: true, missingBlob: true, deletedBlob: true, foreignBlob: true })
+  expect(guarded).toMatchObject({ ignored: true, repeated: true, bytesUnchanged: true, removedInMemory: true, removedOnDisk: true, missingBlob: true, deletedBlob: true, foreignBlob: true })
   expect(guarded.retainedBytes).toBeGreaterThan(0)
   await expect.poll(() => state.downloads.length).toBe(2)
   state.expire()

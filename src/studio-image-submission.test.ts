@@ -89,9 +89,9 @@ it('automatically follows a server request ID without treating it as an upstream
   const p = await fixture(), { api } = await import('./state')
   p.send.mockImplementationOnce(async (_url, init) => {
     const { requestId } = JSON.parse(init!.body as string)
+    vi.mocked(api).mockResolvedValueOnce({ status: 'succeeded', requestId, outputs: [{ url: 'https://media.example/background.png' }] })
     return Response.json({ status: 'pending', requestId, outputs: [], protocol: 'async' }, { status: 202 })
   })
-  vi.mocked(api).mockResolvedValueOnce({ status: 'succeeded', outputs: [{ url: 'https://media.example/background.png' }] })
   const task = await p.submitCreation(p.input)
   expect(task).toMatchObject({ phase: 'complete', serverTracked: true })
   expect(task.upstreamId).toBeUndefined()
