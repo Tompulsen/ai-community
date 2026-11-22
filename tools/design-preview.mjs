@@ -208,11 +208,16 @@ export function createPreviewMiddleware() {
         if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000) return fail('请输入有效金额。', 400)
         return reply(success({ userId: 17, amount, money: amount.toFixed(2) }))
       }
-      if (path === '/api/creation/models' && read) return reply(page([
-        { id: 'preview-image', name: '图片模型', kinds: ['image'] },
-        { id: 'preview-video', name: '视频模型', kinds: ['video'] },
-        { id: 'preview-text', name: '对话模型', kinds: ['text'] },
-      ]))
+      if (path === '/api/creation/models' && read) {
+        const management = url.searchParams.get('management') === '1'
+        const models = [
+          { id: 'preview-image', name: '图片模型', kinds: ['image'] },
+          { id: 'preview-video', name: '视频模型', kinds: ['video'] },
+          { id: 'preview-text', name: '对话模型', kinds: ['text'] },
+        ]
+        return reply({ ...page(management ? models.map(item => ({ ...item, groups: ['auto'] })) : models),
+          ...(management ? { groups: [{ id: 'auto', name: 'Auto' }] } : {}) })
+      }
       if (path === '/api/notifications' && read) return reply({ ...page([]), unreadCounts: { announcement: 0, activity: 0 } })
       if (['/api/messages/threads', '/api/follow-requests', '/api/creation/tasks', '/api/new-api/logs'].includes(path) && read) return reply(path.includes('new-api') ? success(page([])) : { ...page([]), total: 0, unreadCount: 0 })
       return fail('仅用于 UI 调试，该操作未连接真实服务。', read ? 404 : 409)

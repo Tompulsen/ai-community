@@ -26,6 +26,7 @@ import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes, type ModelApiFormat } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
+import { readAccountModelCatalogue } from './native-account/model-catalogue.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -38,10 +39,11 @@ type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; 
 interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol }
 interface CreationServices {
   credentials: typeof resolveRelayCredentials
+  modelCatalogue: typeof readAccountModelCatalogue
   fetch: typeof fetch
   publicMedia: typeof fetchPublicMedia
 }
-const services: CreationServices = { credentials: resolveRelayCredentials, fetch, publicMedia: fetchPublicMedia }
+const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, fetch, publicMedia: fetchPublicMedia }
 
 function message(error: unknown, secret = '') {
   const value = record(error) && typeof error.message === 'string' ? error.message : typeof error === 'string' ? error : '创作服务暂时不可用。'
@@ -426,18 +428,20 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       const management = ctx.url.searchParams.get('management') === '1'
       if (management) ctx.requireAdmin()
       await rateLimit(ctx, 'models', 60)
-      const credentials = await svc.credentials(req, 'v1/models')
-      const data = await upstreamJson(ctx, req, credentials, 'v1/models', svc)
-      const items = record(data) && Array.isArray(data.data) ? data.data : []
+      const catalogue = management ? await svc.modelCatalogue(req) : undefined
+      const credentials = catalogue ? undefined : await svc.credentials(req, 'v1/models')
+      const data = credentials ? await upstreamJson(ctx, req, credentials, 'v1/models', svc) : undefined
+      const items: unknown[] = catalogue?.items ?? (record(data) && Array.isArray(data.data) ? data.data : [])
       const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
       const types = new Map(readModelTypes(options?.communityModelTypes).map(item => [item.id, item]))
-      ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
+      ctx.json(200, { ...(catalogue ? { groups: catalogue.groups } : { tokenId: credentials!.tokenId }), items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const configured = types.get(id), configuredKind = configured?.kind
         const valid = id.length > 0 && id.length <= 200 && id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)
         const kind = valid ? configuredKind ?? classifyModel(id) : null
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
         return valid && (kind || management) ? [{ id, name: configured?.name || text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: kind ? [kind] : [], ...(configuredKind ? { configuredKind } : {}),
+          ...(catalogue && record(item) ? { groups: item.groups } : {}),
           ...(configured?.tags ? { tags: configured.tags } : {}),
           ...(configured?.apiFormat ? { apiFormat: configured.apiFormat } : {}),
           ...(kind === 'image' && configured?.image ? { image: configured.image } : {}),

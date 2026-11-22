@@ -16,7 +16,7 @@ export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
 export interface PublicationDetails { tagIds: string[]; prompt: string; sourceUrl: string; license: string; referenceIndices: number[] }
-export interface CreationModel { id: string; name?: string; tags?: string[]; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
+export interface CreationModel { id: string; name?: string; tags?: string[]; groups?: string[]; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {

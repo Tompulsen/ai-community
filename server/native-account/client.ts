@@ -318,6 +318,7 @@ export async function accountRequest(
     body?: unknown;
     reuseRequestSession?: boolean;
     paymentEnvelope?: boolean;
+    requireSuccess?: boolean;
     maxResponseBytes?: number;
   } = {},
 ) {

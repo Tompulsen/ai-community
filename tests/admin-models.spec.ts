@@ -2,29 +2,35 @@ import { expect, test, type Page } from '@playwright/test'
 import type { ModelTypeSetting } from '../shared/studio/model-types'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-type CatalogModel = { id: string; name?: string; kinds: ('text' | 'image' | 'video')[]; tags?: string[] }
+type CatalogModel = { id: string; name?: string; kinds: ('text' | 'image' | 'video')[]; tags?: string[]; groups?: string[] }
 async function modelsFixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.isAdmin = true
   const state = {
     catalog: [
-      { id: 'custom/text', name: '原始对话模型', kinds: ['text'], tags: ['写作'] },
-      { id: 'custom/image', name: '原始图片模型', kinds: ['image'] },
-      { id: 'custom/video', name: '原始视频模型', kinds: ['video'] },
-      { id: 'alias/unclassified', name: '未识别别名', kinds: [] },
+      { id: 'custom/text', name: '原始对话模型', kinds: ['text'], tags: ['写作'], groups: ['通用'] },
+      { id: 'custom/image', name: '原始图片模型', kinds: ['image'], groups: ['生图'] },
+      { id: 'custom/video', name: '原始视频模型', kinds: ['video'], groups: ['视频'] },
+      { id: 'alias/unclassified', name: '未识别别名', kinds: [], groups: ['通用', '生图'] },
     ] as CatalogModel[],
+    groups: ['通用', '生图', '视频'].map(id => ({ id, name: id })),
     items: [] as ModelTypeSetting[], revision: 1, conflict: false,
     failCatalog: false, failConfig: false,
   }
   const reads: { path: string; url: string; headers: Record<string, string> }[] = []
   const writes: { path: string; body: Record<string, any>; headers: Record<string, string> }[] = []
+  const groupSwitches: string[] = []
+  await page.route('**/api/new-api/model-groups/select', route => {
+    groupSwitches.push(route.request().postData() || '')
+    return route.fulfill({ status: 409, json: { message: '管理模型不能切换创作分组' } })
+  })
   await page.route('**/api/site', route => route.fulfill({ json: { brand: '测试社区', logoUrl: '' } }))
   await page.route('**/api/creation/models*', route => {
     const request = route.request(), url = new URL(request.url())
     reads.push({ path: url.pathname, url: request.url(), headers: request.headers() })
     if (state.failCatalog) return route.fulfill({ status: 503, json: { message: '模型目录拉取失败，请重试。' } })
     if (url.searchParams.get('management') !== '1') return route.fulfill({ status: 400, json: { message: '管理目录需要 management=1' } })
-    return route.fulfill({ json: { tokenId: 41, items: state.catalog } })
+    return route.fulfill({ json: { items: state.catalog, groups: state.groups } })
   })
   await page.route('**/api/admin/**', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname
@@ -44,7 +50,7 @@ async function modelsFixture(page: Page) {
     if (path === '/api/admin/overview') return route.fulfill({ json: { counts: { pending: 0, published: 0, rejected: 0, reports: 0 }, period: { days: 7, newWorks: 0, newUsers: 0 }, updatedAt: '2026-11-22T00:00:00Z' } })
     return route.fulfill({ json: { items: [] } })
   })
-  return { state, reads, writes, account }
+  return { state, reads, writes, groupSwitches, account }
 }
 const editor = (page: Page) => page.locator('.model-editor')
 const configure = (page: Page, id: string) => page.getByRole('button', { name: `配置：${id}`, exact: true })
@@ -92,6 +98,43 @@ test('model management loads the administrator directory, filters it and keeps m
   await expect.poll(() => item(fixture, 'alias/unclassified')).toMatchObject({ id: 'alias/unclassified', name: '自定义别名图片', kind: 'image' })
   expect(item(fixture, 'retired/private-model')).toEqual({ id: 'retired/private-model', name: '保留旧配置', kind: 'video', tags: ['历史'] })
   await expect(page.getByRole('button', { name: '添加模型类型', exact: true })).toHaveCount(0)
+})
+
+test('authorized groups share one model configuration and local filtering preserves drafts without switching the creation group', async ({ page }) => {
+  const fixture = await modelsFixture(page)
+  fixture.state.catalog.push({ id: 'custom/text', kinds: ['text'], groups: ['生图'] })
+  await page.goto('/admin?tab=models')
+  await expect(combo(page, '筛选模型分组')).toHaveValue('')
+  await expect(configure(page, 'custom/text')).toHaveCount(1)
+  await expect(configure(page, 'custom/text').locator('xpath=ancestor::tr')).toContainText('分组：通用、生图')
+  await expect(page.locator('.model-count')).toHaveText('4 个模型 · 3 个分组 · 0 个已配置')
+  const beforeReads = fixture.reads.length
+  await combo(page, '筛选模型分组').focus()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(combo(page, '筛选模型分组')).toHaveValue('通用')
+  await expect(configure(page, 'custom/image')).toHaveCount(0)
+  await combo(page, '筛选模型分组').selectOption('生图')
+  await expect(configure(page, 'custom/image')).toBeVisible()
+  await expect(configure(page, 'custom/text')).toHaveCount(1)
+  await expect(configure(page, 'custom/video')).toHaveCount(0)
+  await configure(page, 'custom/text').click()
+  await page.getByLabel('显示名称', { exact: true }).fill('跨分组统一名称')
+  await combo(page, '筛选模型分组').selectOption('视频')
+  await expect(configure(page, 'custom/video')).toBeVisible()
+  await expect(configure(page, 'custom/text')).toHaveCount(0)
+  await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('跨分组统一名称')
+  await save(page).click()
+  await expect.poll(() => fixture.state.items).toEqual([{ id: 'custom/text', kind: 'text', name: '跨分组统一名称' }])
+  await page.getByRole('button', { name: '返回模型列表', exact: true }).click()
+  await combo(page, '筛选模型分组').selectOption('通用')
+  await expect(configure(page, 'custom/text').locator('xpath=ancestor::tr')).toContainText('跨分组统一名称')
+  await combo(page, '筛选模型分组').selectOption('生图')
+  await expect(configure(page, 'custom/text')).toHaveCount(1)
+  expect(fixture.reads).toHaveLength(beforeReads)
+  expect(fixture.groupSwitches).toEqual([])
+  expect(fixture.writes).toHaveLength(1)
 })
 
 test('selected models save names, tags, interfaces and typed automatic parameters through the isolated model API', async ({ page }) => {
@@ -220,7 +263,7 @@ test('unavailable saved models remain editable and a failed catalog pull retains
   await expect(page.getByRole('alert')).toContainText('模型目录拉取失败')
   await expect(page.getByRole('button', { name: /^配置：/ })).toHaveCount(count)
   await configure(page, retained.id).click()
-  await expect(editor(page)).toContainText('当前分组不可用')
+  await expect(editor(page)).toContainText('授权目录未收录')
   await page.getByLabel('显示名称', { exact: true }).fill('旧模型重新命名')
   await page.getByLabel('备注', { exact: true }).fill('保留并继续修改')
   await save(page).click()

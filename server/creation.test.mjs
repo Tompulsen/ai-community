@@ -78,6 +78,7 @@ function fixture(t, options = {}) {
   const values = new Map()
   const calls = []
   const credentialCalls = []
+  const catalogueCalls = []
   const app = Fastify({ forceCloseConnections: true })
   t.after(() => app.close())
   const redis = {
@@ -91,6 +92,11 @@ function fixture(t, options = {}) {
     },
   }
   const services = {
+    async modelCatalogue(req) {
+      catalogueCalls.push(req)
+      if (!options.modelCatalogue) throw new Error('Unexpected account model catalogue request')
+      return options.modelCatalogue(req)
+    },
     async credentials(req, path) {
       const tokenId = Number(req.headers.get('x-new-api-token') || options.selectedToken?.() || 71)
       const userId = Number(req.headers.get('x-new-api-user'))
@@ -126,7 +132,7 @@ function fixture(t, options = {}) {
     if (!await handleCreation(ctx, services)) reply.code(404).send({ error: { message: 'Missing route' } })
     return reply
   })
-  return { app, values, calls, credentialCalls }
+  return { app, values, calls, credentialCalls, catalogueCalls }
 }
 
 function submit(app, body = imageRequest, extraHeaders = {}) {
@@ -296,17 +302,30 @@ test('model catalogs publish only authorized public configuration and keep admin
   assert(!Object.hasOwn(fallback, 'tags'))
 })
 
-test('administrators can discover filtered authorized aliases and configure their first creation type', async t => {
+test('administrator catalogs span authorized groups without selecting a relay token and preserve ordinary catalogs', async t => {
   const modelTypes = []
-  const { app } = fixture(t, { isAdmin: true, modelTypes, fetch() {
+  const { app, calls, credentialCalls, catalogueCalls } = fixture(t, { isAdmin: true, modelTypes,
+    modelCatalogue() { return { groups: [{ id: 'images', name: 'images' }, { id: 'chat', name: 'chat' }], items: [
+      { id: 'custom/embedding-alias', groups: ['images', 'chat'] }, { id: 'gpt-5', groups: ['chat'] },
+      { id: '', groups: ['images'] }, { id: ' bad-alias ', groups: ['images'] },
+    ] } },
+    fetch() {
     return Response.json({ data: ['custom/embedding-alias', { id: 'gpt-5' }, '', ' bad-alias ', 'gpt-5\nbad', { id: 'x'.repeat(201) }] })
   } })
   const ordinary = await app.inject('/api/creation/models')
   assert.deepEqual(ordinary.json().items.map(item => item.id), ['gpt-5'])
+  assert.equal(ordinary.json().tokenId, 71)
+  assert.equal(catalogueCalls.length, 0)
   const management = await app.inject('/api/creation/models?management=1')
   assert.equal(management.statusCode, 200)
   assert.deepEqual(management.json().items.map(item => item.id), ['custom/embedding-alias', 'gpt-5'])
   assert.deepEqual(management.json().items.find(item => item.id === 'custom/embedding-alias').kinds, [])
+  assert.deepEqual(management.json().items[0].groups, ['images', 'chat'])
+  assert.deepEqual(management.json().groups.map(group => group.id), ['images', 'chat'])
+  assert(!Object.hasOwn(management.json(), 'tokenId'))
+  assert.equal(catalogueCalls.length, 1)
+  assert.equal(credentialCalls.length, 1)
+  assert.equal(calls.length, 1)
   modelTypes.push({ id: 'custom/embedding-alias', kind: 'image', name: 'Configured alias', tags: ['Edit'] })
   const configured = (await app.inject('/api/creation/models')).json().items.find(item => item.id === 'custom/embedding-alias')
   assert.deepEqual(configured.kinds, ['image'])
@@ -316,9 +335,20 @@ test('administrators can discover filtered authorized aliases and configure thei
 })
 
 test('management model catalogs require a community administrator before reading upstream credentials', async t => {
-  const { app, calls, credentialCalls } = fixture(t)
+  const { app, calls, credentialCalls, catalogueCalls } = fixture(t)
   const response = await app.inject('/api/creation/models?management=1')
   assert.equal(response.statusCode, 403)
+  assert.equal(calls.length, 0)
+  assert.equal(credentialCalls.length, 0)
+  assert.equal(catalogueCalls.length, 0)
+})
+
+test('an unavailable group fails the administrator directory without falling back to the current token', async t => {
+  const { app, calls, credentialCalls } = fixture(t, { isAdmin: true,
+    modelCatalogue() { throw httpError(502, '账号模型目录暂不可用。') },
+  })
+  const response = await app.inject('/api/creation/models?management=1')
+  assert.equal(response.statusCode, 502)
   assert.equal(calls.length, 0)
   assert.equal(credentialCalls.length, 0)
 })

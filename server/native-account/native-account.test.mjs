@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import test, { after } from "node:test"
+import { readAccountModelCatalogue } from "./model-catalogue.ts"
 import {
   AccountRequest, handleAccountRequest, readNativeAccount, resolveRelayCredentials, relayHeaders,
   readSessionById, saveSession, removeSessionById,
@@ -107,6 +108,68 @@ test("group selection reuses the authenticated account, persists its key and rej
   }))
   assert.equal(mismatch.status, 409)
   assert.equal(calls, before)
+})
+
+test("account model catalogs merge every authorized group without pricing or changing the selected token", async t => {
+  configure(t)
+  const fixture = await session(t)
+  const before = await readSessionById(fixture.id), requested = []
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    const target = new URL(url)
+    assert.equal(options.method, "GET")
+    assert.equal(options.headers.get("Authorization"), "Bearer private-access")
+    if (target.pathname === "/api/user/self") return envelope(user)
+    if (target.pathname === "/api/user/self/groups") return envelope({ images: {}, chat: {}, auto: {}, empty: {} })
+    assert.equal(target.pathname, "/api/user/models")
+    const group = target.searchParams.get("group")
+    requested.push(group)
+    assert(["images", "chat", "auto", "empty"].includes(group))
+    return envelope({
+      auto: ["shared-model", "custom/unpriced-alias"],
+      chat: ["shared-model", "text-model", "shared-model"],
+      images: ["custom/unpriced-alias", "shared-model"],
+      empty: [],
+    }[group])
+  })
+  const result = await readAccountModelCatalogue(fixture.request("/api/creation/models?management=1"))
+  assert.deepEqual(result.groups.map(group => group.id), ["auto", "chat", "empty", "images"])
+  assert.deepEqual(result.items, [
+    { id: "custom/unpriced-alias", groups: ["auto", "images"] },
+    { id: "shared-model", groups: ["auto", "chat", "images"] },
+    { id: "text-model", groups: ["chat"] },
+  ])
+  assert.equal(requested.length, 4)
+  const after = await readSessionById(fixture.id)
+  assert.equal(after.selectedTokenId, before.selectedTokenId)
+  assert.equal(after.selectedKey, before.selectedKey)
+  assert.equal(after.version, before.version)
+  requested.length = 0
+  await assert.rejects(readAccountModelCatalogue(fixture.request("/api/creation/models?management=1", {
+    headers: { "x-new-api-user": "8" },
+  })), error => error.status === 409)
+  assert.equal(requested.length, 0)
+})
+
+test("account model catalogs fail as a whole when a group is unavailable or malformed", async t => {
+  configure(t)
+  const fixture = await session(t)
+  for (const invalid of [
+    () => new Response("offline", { status: 503 }),
+    () => Response.json({ success: false, message: "catalog unavailable" }),
+    () => Response.json({ data: ["unverified-success"] }),
+    () => envelope({ models: ["unexpected-shape"] }),
+    () => envelope(["valid", { id: "invalid" }]),
+  ]) {
+    const mock = t.mock.method(globalThis, "fetch", async url => {
+      const target = new URL(url)
+      if (target.pathname === "/api/user/self") return envelope(user)
+      if (target.pathname === "/api/user/self/groups") return envelope({ chat: {}, images: {} })
+      assert.equal(target.pathname, "/api/user/models")
+      return target.searchParams.get("group") === "chat" ? envelope(["valid-chat"]) : invalid()
+    })
+    await assert.rejects(readAccountModelCatalogue(fixture.request("/api/creation/models?management=1")))
+    mock.mock.restore()
+  }
 })
 
 async function session(t, changes = {}) {

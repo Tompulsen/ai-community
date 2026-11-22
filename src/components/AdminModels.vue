@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { ArrowLeft, Bot, Check, Download, Pencil, RotateCcw, Save, Search, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
-import type { CreationModel } from '../native-studio'
+import type { CreationGroup, CreationModel } from '../native-studio'
 import { imageModelSettingSchema, modelApiFormats, modelTypesSchema, textModelSettingSchema, type ModelApiFormat, type ModelTypeSetting } from '../../shared/studio/model-types'
 import { usesGeminiImageChat } from '../../shared/studio/image-params'
 import { kindLabels, searchModels } from '../../shared/studio/model-catalog'
@@ -12,11 +12,13 @@ const props = defineProps<{ confirmLeave: () => boolean | Promise<boolean> }>()
 type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string }
 type Row = CreationModel & { available: boolean; setting?: ModelTypeSetting }
 const models = ref<CreationModel[]>([]), settings = ref<ModelTypeSetting[]>([])
+const groups = ref<CreationGroup[]>([]), groupFilter = ref('')
 const loading = ref(true), pulling = ref(false), busy = ref(false), loaded = ref(false)
 const error = ref(''), catalogError = ref(''), version = ref(''), query = ref('')
 const source = ref('all'), kindFilter = ref('all'), selectedId = ref('')
 const draft = ref<Draft | null>(null), baseline = ref(''), saved = ref(false)
 const editorHeading = ref<HTMLElement>(), resetDialog = ref<HTMLDialogElement>()
+const groupFilterId = useId()
 const owner = session.user?.id, account = session.user?.accountId || owner
 let active = true
 const controller = new AbortController()
@@ -39,13 +41,15 @@ const rows = computed<Row[]>(() => {
 })
 const visibleRows = computed(() => searchModels(rows.value, query.value).filter(item =>
   (source.value !== 'available' || item.available) && (source.value !== 'configured' || item.setting)
-  && (kindFilter.value === 'all' || rowKind(item) === kindFilter.value)))
+  && (kindFilter.value === 'all' || rowKind(item) === kindFilter.value)
+  && (!groupFilter.value || item.groups?.includes(groupFilter.value))))
 const selected = computed(() => rows.value.find(item => item.id === selectedId.value))
 const configured = computed(() => settings.value.some(item => item.id === selectedId.value))
 const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== baseline.value)
 defineExpose({ hasUnsavedChanges: dirty, busy })
 const geminiImage = computed(() => draft.value?.kind === 'image' && usesGeminiImageChat(draft.value.id, draft.value.apiFormat))
 function rowKind(item: Row) { return item.setting?.kind || item.configuredKind || item.kinds?.[0] }
+function groupName(id: string) { return groups.value.find(item => item.id === id)?.name || id }
 function edit(item: Row) {
   const setting = item.setting || { id: item.id, kind: rowKind(item) || 'text' }
   draft.value = { ...setting, tagsInput: setting.tags?.join(', ') || '',
@@ -71,15 +75,25 @@ async function back() {
 async function pull() {
   pulling.value = true; catalogError.value = ''
   try {
-    const result = await api<{ items: CreationModel[] }>('/api/creation/models?management=1', {
+    const result = await api<{ items: CreationModel[]; groups: CreationGroup[] }>('/api/creation/models?management=1', {
       expectedAccount: account, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
     })
     if (!current()) return
-    if (!Array.isArray(result.items)) throw new Error('模型列表返回无效，请重新拉取。')
-    const seen = new Set<string>()
-    models.value = result.items.filter(item => item && typeof item.id === 'string' && item.id.trim() === item.id
-      && item.id.length > 0 && item.id.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(item.id)
-      && !seen.has(item.id) && !!seen.add(item.id))
+    if (!Array.isArray(result.items) || !Array.isArray(result.groups)) throw new Error('模型列表返回无效，请重新拉取。')
+    const nextGroups = new Map(result.groups.filter(item => item && typeof item.id === 'string'
+      && item.id.length > 0 && item.id.length <= 128 && item.id.trim() === item.id
+      && !/[\u0000-\u001f\u007f]/u.test(item.id)).map(item => [item.id, { id: item.id,
+      name: typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 128) : item.id }]))
+    const nextModels = new Map<string, CreationModel>()
+    for (const item of result.items) {
+      if (!item || typeof item.id !== 'string' || item.id.trim() !== item.id || !item.id.length
+        || item.id.length > 200 || /[\u0000-\u001f\u007f]/u.test(item.id)) continue
+      const previous = nextModels.get(item.id)
+      const itemGroups = Array.isArray(item.groups) ? item.groups.filter(id => nextGroups.has(id)) : []
+      nextModels.set(item.id, { ...(previous || item), groups: [...new Set([...(previous?.groups || []), ...itemGroups])] })
+    }
+    groups.value = [...nextGroups.values()]; models.value = [...nextModels.values()]
+    if (groupFilter.value && !nextGroups.has(groupFilter.value)) groupFilter.value = ''
   } catch (cause) { if (current()) catalogError.value = errorMessage(cause) }
   finally { if (current()) pulling.value = false }
 }
@@ -199,7 +213,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 <template>
   <section class="admin-models" :aria-busy="loading || pulling">
     <header class="section-heading model-heading">
-      <div><h2>模型管理</h2><p class="form-note">账号中心模型 · 当前账号分组</p></div>
+      <div><h2>模型管理</h2><p class="form-note">账号中心模型 · 全部授权分组</p></div>
       <button type="button" class="button subtle btn" :disabled="loading || pulling || busy" @click="refresh"><Download :size="16" aria-hidden="true" />{{ pulling ? '正在拉取…' : '拉取模型' }}</button>
     </header>
     <p v-if="catalogError" class="notice-inline" role="alert">{{ catalogError }}<button type="button" class="text-link" :disabled="pulling || busy" @click="pull">重新拉取</button></p>
@@ -208,9 +222,10 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
     <template v-else-if="loaded">
       <div class="model-toolbar">
         <label class="search-control model-search"><Search :size="16" aria-hidden="true" /><input v-model="query" type="search" aria-label="搜索模型" placeholder="搜索名称、ID 或标签" maxlength="200" /></label>
+        <label class="field model-group-filter" :for="groupFilterId"><span class="sr-only">筛选模型分组</span><select :id="groupFilterId" v-model="groupFilter" class="control"><option value="">全部分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
         <label class="field"><span class="sr-only">筛选模型类型</span><select v-model="kindFilter" class="control"><option value="all">全部类型</option><option value="text">对话</option><option value="image">生图</option><option value="video">视频</option></select></label>
-        <label class="field"><span class="sr-only">筛选模型来源</span><select v-model="source" class="control"><option value="all">全部模型</option><option value="available">当前分组可用</option><option value="configured">已配置</option></select></label>
-        <span class="model-count">{{ models.length }} 个可用 · {{ settings.length }} 个已配置</span>
+        <label class="field"><span class="sr-only">筛选模型来源</span><select v-model="source" class="control"><option value="all">全部模型</option><option value="available">授权目录内</option><option value="configured">已配置</option></select></label>
+        <span class="model-count">{{ models.length }} 个模型 · {{ groups.length }} 个分组 · {{ settings.length }} 个已配置</span>
       </div>
       <div class="model-workspace" :class="{ 'is-editing': draft }">
         <div class="model-catalog">
@@ -219,19 +234,19 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
               <caption class="sr-only">账号中心模型与后台配置</caption>
               <thead><tr><th scope="col">模型</th><th scope="col">类型</th><th scope="col">配置</th><th scope="col">操作</th></tr></thead>
               <tbody><tr v-for="item in visibleRows" :key="item.id" :class="{ 'is-selected': selectedId === item.id }">
-                <th scope="row"><strong>{{ item.name }}</strong><code v-if="item.name !== item.id">{{ item.id }}</code><span v-if="item.tags?.length" class="model-tags"><span v-for="tag in item.tags" :key="tag">{{ tag }}</span></span><span v-if="!item.available" class="model-unavailable">当前分组不可用</span></th>
+                <th scope="row"><strong>{{ item.name }}</strong><code v-if="item.name !== item.id">{{ item.id }}</code><small v-if="item.groups?.length" class="model-groups">分组：{{ item.groups.map(groupName).join('、') }}</small><span v-if="item.tags?.length" class="model-tags"><span v-for="tag in item.tags" :key="tag">{{ tag }}</span></span><span v-if="!item.available" class="model-unavailable">授权目录未收录</span></th>
                 <td>{{ rowKind(item) ? kindLabels[rowKind(item)!] : '待识别' }}</td>
                 <td><span>{{ item.setting ? '已配置' : '自动识别' }}</span><small>{{ apiFormatNames[item.setting?.apiFormat || 'auto'] }}</small></td>
                 <td><button :id="`configure-model-${encodeURIComponent(item.id)}`" type="button" class="icon-button" :aria-label="'配置：' + item.id" title="配置模型" :aria-pressed="selectedId === item.id" :disabled="busy" @click="choose(item)"><Pencil :size="17" aria-hidden="true" /></button></td>
               </tr></tbody>
             </table>
           </div>
-          <div v-else class="empty-state"><Bot :size="28" aria-hidden="true" /><h3>{{ query || source !== 'all' || kindFilter !== 'all' ? '没有匹配的模型' : catalogError ? '模型列表暂不可用' : '当前分组暂无模型' }}</h3><button v-if="query || source !== 'all' || kindFilter !== 'all'" type="button" class="button btn" @click="query = ''; source = 'all'; kindFilter = 'all'">清除筛选</button></div>
+          <div v-else class="empty-state"><Bot :size="28" aria-hidden="true" /><h3>{{ query || groupFilter || source !== 'all' || kindFilter !== 'all' ? '没有匹配的模型' : catalogError ? '模型列表暂不可用' : '授权目录暂无模型' }}</h3><button v-if="query || groupFilter || source !== 'all' || kindFilter !== 'all'" type="button" class="button btn" @click="query = ''; groupFilter = ''; source = 'all'; kindFilter = 'all'">清除筛选</button></div>
         </div>
         <form v-if="draft" class="model-editor" @submit.prevent="save">
           <div class="model-editor-heading"><button type="button" class="icon-button" aria-label="返回模型列表" title="返回模型列表" :disabled="busy" @click="back"><ArrowLeft :size="18" aria-hidden="true" /></button><h3 ref="editorHeading" tabindex="-1">模型配置</h3><span v-if="configured" class="form-note">已配置</span></div>
           <div class="model-editor-id"><span>模型 ID</span><code>{{ draft.id }}</code></div>
-          <p v-if="selected && !selected.available" class="form-note">当前分组不可用，已保存的配置继续保留。</p>
+          <p v-if="selected && !selected.available" class="form-note">授权目录未收录，已保存的配置继续保留。</p>
           <fieldset class="fieldset model-fields" :disabled="busy">
             <label class="field"><span>显示名称</span><input v-model="draft.name" class="control" maxlength="120" :placeholder="selected?.name || draft.id" /></label>
             <div class="model-field-pair">
@@ -294,6 +309,8 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 .model-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 .model-search { flex: 1; min-width: 180px; min-height: 44px; }
 .model-toolbar > .field { min-width: 132px; }
+.model-group-filter { max-width: 240px; }
+.model-group-filter .control { min-width: 0; max-width: 100%; }
 .model-count { width: 100%; font-size: 12px; color: var(--muted); }
 .model-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 1fr); gap: 24px; align-items: start; }
 .model-catalog { min-width: 0; }
@@ -306,7 +323,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 .model-table tbody th { text-align: left; white-space: normal; overflow-wrap: anywhere; background: transparent; color: var(--ink); font-size: 14px; }
 .model-table tbody th > strong, .model-table code, .model-table td small { display: block; }
 .model-table tbody th > strong { font-weight: 500; }
-.model-table code, .model-table td small, .model-unavailable { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.model-table code, .model-table td small, .model-unavailable, .model-groups { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .model-table :is(th, td) { padding: 12px 8px; vertical-align: middle; }
 .model-table td:last-child { padding: 4px; }
 .model-table .icon-button { width: 44px; height: 44px; }
@@ -316,7 +333,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 .model-table tr:is(:hover, .is-selected) :is(code, small, .model-unavailable) { color: var(--ink); }
 .model-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .model-tags > span { padding: 2px 6px; border-radius: 4px; background: var(--surface-soft); color: var(--ink); font-size: 12px; font-weight: 400; }
-.model-unavailable { display: block; }
+.model-unavailable, .model-groups { display: block; }
 .model-editor { min-width: 0; padding-left: 24px; border-left: 1px solid var(--border); }
 .model-editor-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
 .model-editor-heading h3 { font-size: 18px; font-weight: 500; }
@@ -347,6 +364,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
   .model-toolbar { gap: 8px; }
   .model-search { flex-basis: 100%; }
   .model-toolbar > .field { flex: 1; min-width: 0; }
+  .model-toolbar > .model-group-filter { flex-basis: 100%; max-width: none; }
   .model-table-wrap { max-height: none; }
   .model-table { min-width: 320px; }
 }
