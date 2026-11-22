@@ -487,3 +487,13 @@ test('native creation endpoints require the community account before upstream ac
   assertJsonError(await app.inject({ method: 'POST', url: '/api/creation/generate', headers: jsonHeaders,
     payload: '{"kind":"image","model":"gpt-image-2","prompt":"Guest generation must be blocked"}' }), 401)
 })
+
+
+test('independent model group resolution is registered and requires same-origin authentication', async t => {
+  const { app } = await fixture(t)
+  const route = { method: 'POST', url: '/api/creation/models', payload: { group: 'text' } }
+  const foreign = await app.inject({ ...route, headers: { ...jsonHeaders, origin: 'https://attacker.test' } })
+  assert.equal(foreign.statusCode, 403)
+  const anonymous = await app.inject({ ...route, headers: jsonHeaders })
+  assert.equal(anonymous.statusCode, 401)
+})

@@ -29,6 +29,8 @@ import { readModelTypes, type ModelApiFormat } from '../shared/studio/model-type
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
 import { readAccountModelCatalogue } from './native-account/model-catalogue.ts'
+import { resolveModelGroup } from './native-account/model-groups.ts'
+import { assertSameOrigin } from './native-account/client.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -59,10 +61,11 @@ interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol }
 interface CreationServices {
   credentials: typeof resolveRelayCredentials
   modelCatalogue: typeof readAccountModelCatalogue
+  groupToken: typeof resolveModelGroup
   fetch: typeof fetch
   publicMedia: typeof fetchPublicMedia
 }
-const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, fetch, publicMedia: fetchPublicMedia }
+const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, groupToken: resolveModelGroup, fetch, publicMedia: fetchPublicMedia }
 
 async function saveRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000) {
   let stored = cached
@@ -572,11 +575,22 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       const stored = await ctx.redis.get(`community-next:creation:request:${accountNamespace(ctx)}:${id}`)
       if (!stored) throw httpError(404, '没有找到此请求记录。')
       ctx.json(200, await cachedResult(ctx, JSON.parse(stored), `community-next:creation:request:${accountNamespace(ctx)}:${id}`))
-    } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/models') {
+    } else if (['GET', 'POST'].includes(ctx.req.method || '') && ctx.url.pathname === '/api/creation/models') {
       const management = ctx.url.searchParams.get('management') === '1'
       if (management) ctx.requireAdmin()
       await rateLimit(ctx, 'models', 60)
-      const catalogue = management ? await svc.modelCatalogue(req) : undefined
+      const allGroups = ctx.url.searchParams.get('scope') === 'all'
+      if (ctx.req.method === 'POST') {
+        // Resolving a group can provision its token; validate origin before any mutation.
+        assertSameOrigin(req)
+        const group = record(ctx.body) ? ctx.body.group : undefined
+        if (management || allGroups || typeof group !== 'string' || !group.trim() || group !== group.trim() || group.length > 200 || /[\u0000-\u001f\u007f]/u.test(group))
+          throw httpError(400, '请选择有效的模型分组。')
+        const tokenId = await svc.groupToken(req, group)
+        if (!Number.isSafeInteger(tokenId) || tokenId < 1) throw httpError(502, '模型分组暂不可用，请重试。')
+        req.headers.set('x-new-api-token', String(tokenId))
+      }
+      const catalogue = management || allGroups ? await svc.modelCatalogue(req) : undefined
       const credentials = catalogue ? undefined : await svc.credentials(req, 'v1/models')
       const data = credentials ? await upstreamJson(ctx, req, credentials, 'v1/models', svc) : undefined
       const items: unknown[] = catalogue?.items ?? (record(data) && Array.isArray(data.data) ? data.data : [])

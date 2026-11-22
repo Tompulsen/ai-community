@@ -157,7 +157,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     handler: async (_request, reply) => reply.redirect('/create', 302) })
   register(handleCreation, [
     ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media', '/api/creation/requests/:id']],
-    ['POST', ['/api/creation/generate']],
+    ['POST', ['/api/creation/generate', '/api/creation/models']],
   ])
   register(handleStudioTools, [
     ['GET', ['/api/creation/skills/catalog', '/api/creation/mcp/status', '/api/creation/mcp/tools']],

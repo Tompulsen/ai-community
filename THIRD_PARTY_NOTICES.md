@@ -97,3 +97,9 @@ The Vue implementation is in `src/components/LoginCharacters.vue` and the
 guest section of `src/views/AccountView.vue`. The full upstream MIT notice ships
 in `public/assets/licenses/careercompass-MIT.txt`. No CareerCompass branding,
 Firebase authentication or Google sign-in service is imported.
+
+The visual prompt reconstruction instructions in `src/studio-reverse-prompt.ts`
+are adapted from wuyoscar/GPT-Image2-Skill, `skills/get-prompt-from-image` and
+its analysis framework (MIT, Copyright (c) 2026 Wuyoscar). The product uses a
+Chinese generation prompt and reuses its existing account relay. The full MIT
+notice is retained in `public/assets/licenses/GPT-Image2-Skill-MIT.txt`.

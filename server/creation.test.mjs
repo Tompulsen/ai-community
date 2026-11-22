@@ -83,6 +83,7 @@ function fixture(t, options = {}) {
   const calls = []
   const credentialCalls = []
   const catalogueCalls = []
+  const groupCalls = []
   const app = Fastify({ forceCloseConnections: true })
   t.after(() => app.close())
   const redis = {
@@ -114,6 +115,11 @@ function fixture(t, options = {}) {
     },
   }
   const services = {
+    async groupToken(req, group) {
+      groupCalls.push({ group, userId: req.headers.get('x-new-api-user') })
+      if (!options.groupToken) throw new Error('Unexpected group token resolution')
+      return options.groupToken(req, group)
+    },
     async modelCatalogue(req) {
       catalogueCalls.push(req)
       if (!options.modelCatalogue) throw new Error('Unexpected account model catalogue request')
@@ -154,7 +160,7 @@ function fixture(t, options = {}) {
     if (!await handleCreation(ctx, services)) reply.code(404).send({ error: { message: 'Missing route' } })
     return reply
   })
-  return { app, values, calls, credentialCalls, catalogueCalls, redis, services }
+  return { app, values, calls, credentialCalls, catalogueCalls, groupCalls, redis, services }
 }
 
 function submit(app, body = imageRequest, extraHeaders = {}) {
@@ -1119,4 +1125,54 @@ test('invalid GIF source images fail before any paid relay call', async t => {
   const response = await submit(app, { ...imageRequest, referenceUrls: ['/legacy-files/brokenGif'] })
   assert.equal(response.statusCode, 400); assert.match(response.json().error.message, /无法解码/)
   assert.equal(calls.length, 0)
+})
+
+
+test('ordinary all-group catalogs expose only available classified models without selecting a token', async t => {
+  const { app, catalogueCalls, credentialCalls, groupCalls } = fixture(t, { modelCatalogue() {
+    return { groups: [{ id: 'text', name: 'Text' }], items: [{ id: 'gpt-5', groups: ['text'] }, { id: 'embedding-alias', groups: ['text'] }] }
+  } })
+  const response = await app.inject('/api/creation/models?scope=all')
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json().items.map(item => item.id), ['gpt-5'])
+  assert.deepEqual(response.json().items[0].groups, ['text'])
+  assert.equal(response.json().tokenId, undefined)
+  assert.equal(catalogueCalls.length, 1)
+  assert.equal(credentialCalls.length + groupCalls.length, 0)
+  assert.equal((await app.inject('/api/creation/models?scope=all&management=1')).statusCode, 403)
+})
+
+test('resolving an independent group uses its token only for the current model request', async t => {
+  const { app, groupCalls, credentialCalls } = fixture(t, { groupToken: () => 83,
+    fetch: () => Response.json({ data: [{ id: 'gpt-5' }] }) })
+  const response = await app.inject({ method: 'POST', url: '/api/creation/models',
+    headers: { ...headers, host: 'community.example', 'x-new-api-user': '17', 'x-new-api-token': '71' }, payload: { group: 'text' } })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.equal(response.json().tokenId, 83)
+  assert.deepEqual(groupCalls, [{ group: 'text', userId: '17' }])
+  await app.inject('/api/creation/models')
+  assert.deepEqual(credentialCalls.map(call => call.tokenId), [83, 71])
+  assert(!response.payload.includes(apiKey))
+})
+
+test('group resolution rejects foreign origins, wrong accounts and invalid groups before provisioning', async t => {
+  const { app, groupCalls, credentialCalls } = fixture(t)
+  for (const extra of [{ origin: 'https://attacker.test' }, { origin: '' }, { 'sec-fetch-site': 'cross-site' }, { 'x-new-api-user': '18' }]) {
+    const response = await app.inject({ method: 'POST', url: '/api/creation/models', headers: { ...headers, host: 'community.example', ...extra }, payload: { group: 'text' } })
+    assert([403, 409].includes(response.statusCode), response.payload)
+  }
+  for (const group of ['', ' text ', 'x'.repeat(201), ['text'], 17]) {
+    const response = await app.inject({ method: 'POST', url: '/api/creation/models', headers: { ...headers, host: 'community.example' }, payload: { group } })
+    assert.equal(response.statusCode, 400)
+  }
+  assert.equal(groupCalls.length + credentialCalls.length, 0)
+})
+
+test('unavailable or malformed group tokens never fall back to the active generation group', async t => {
+  for (const token of [null, 0, -1, '83', 1.5]) {
+    const { app, credentialCalls } = fixture(t, { groupToken: () => token })
+    const response = await app.inject({ method: 'POST', url: '/api/creation/models', headers: { ...headers, host: 'community.example' }, payload: { group: 'text' } })
+    assert.equal(response.statusCode, 502)
+    assert.equal(credentialCalls.length, 0)
+  }
 })

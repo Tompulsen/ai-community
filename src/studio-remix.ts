@@ -2,6 +2,10 @@
 import type { Work } from './data'
 import type { VideoOptions } from '../shared/studio/options'
 
+export function remixPrompt(work: Pick<Work, 'kind' | 'prompt' | 'generation' | 'body'>) {
+  return work.generation?.prompt?.trim() || work.prompt?.trim() || (work.kind === 'resource' ? work.body?.trim() : '') || ''
+}
+
 export function remixReferenceFiles(work: Pick<Work, 'referenceFiles'>) {
   const seen = new Set<string>(), ids = new Set<string>()
   return (work.referenceFiles || []).filter(file => {

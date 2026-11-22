@@ -7,6 +7,7 @@ import { api, errorMessage, session } from '../state'
 import { chats, loadChats, saveChats } from '../native-chat'
 import { creation, initializeCreation, selectCreationGroup, waitCreationGroup } from '../native-studio'
 import { restoreRemixModels } from '../studio-remix-models'
+import { remixPrompt } from '../studio-remix'
 import type { StudioFile } from '../use-studio-materials'
 import StudioRemixDialog from './StudioRemixDialog.vue'
 import StudioWorkspace from './StudioWorkspace.vue'
@@ -21,7 +22,10 @@ const mediaKind = computed(() => source.value.kind === 'image' || source.value.k
 const ready = computed(() => !loading.value && chats.ready && !!workspace.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading)
 let revision = 0, live = true, previousGroup: string | null | undefined
 let previousConversation: string | undefined
-onMounted(() => dialog.value?.showModal())
+onMounted(() => {
+  dialog.value?.showModal()
+  if (session.user && mediaKind.value && !remixPrompt(props.source)) void prepare()
+})
 onBeforeUnmount(() => { live = false; revision++ })
 const current = (value: number) => live && revision === value && owner === session.user?.id
 
@@ -38,7 +42,7 @@ async function prepare() {
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.source.id)}`, { signal: AbortSignal.timeout(20000) })
     if (!current(version)) return
-    source.value = { ...result.work, prompt: result.work.generation?.prompt ?? (result.work.prompt || result.work.body || ''), model: result.work.generation?.model || result.work.model }
+    source.value = { ...result.work, prompt: remixPrompt(result.work), model: result.work.generation?.model || result.work.model }
     if (source.value.kind !== 'image' && source.value.kind !== 'video') throw new Error('此作品请进入工作台生成。')
     await initializeCreation(); await loadChats(); await waitCreationGroup()
     if (!current(version)) return
@@ -47,15 +51,20 @@ async function prepare() {
   } catch (cause) { if (current(version)) issue.value = errorMessage(cause) }
   finally { if (current(version)) loading.value = false }
 }
-async function generate(files: StudioFile[]) {
+async function generate(files: StudioFile[], prompt?: string, backgroundTask = true) {
   if (!current(revision) || !ready.value || busy.value || issue.value || !workspace.value) return
   busy.value = true
   const version = revision, target = workspace.value
   try {
-    if (!await target.applyRemix(source.value, files, true)) throw new Error('生成配置尚未就绪，请重试。')
+    if (!await target.applyRemix({ ...source.value, prompt: prompt ?? source.value.prompt }, files, true)) throw new Error('生成配置尚未就绪，请重试。')
     if (!current(version)) return
     await nextTick()
-    if (target.model !== source.value.model) throw new Error('原作模型未能恢复，请进入工作台确认。')
+    if (source.value.model && target.model !== source.value.model) throw new Error('原作模型未能恢复，请进入工作台确认。')
+    if (!backgroundTask) {
+      await nextTick(); await saveChats()
+      if (current(version)) await router.push({ path: `/create/${source.value.kind}`, query: { remix: source.value.id, conversation: chats.activeId } })
+      return
+    }
     await target.generateBackground(() => { if (current(version)) emit('close') })
     if (current(version)) issue.value = target.submissionIssue || '任务未能提交，请检查配置后重试。'
   } catch (cause) { if (current(version)) issue.value = errorMessage(cause) }
@@ -92,7 +101,7 @@ async function cancel() {
   </dialog>
   <template v-else>
     <div hidden inert><StudioWorkspace v-if="chats.ready && creation.loaded && mediaKind && !loading && !issue" ref="workspace" :kind="mediaKind" remix-preparing /></div>
-    <StudioRemixDialog :source="source" :issue="issue" :loading="loading" :ready="ready" :busy="busy" :can-fallback="false" background-only @background="generate" @cancel="cancel" @retry="prepare" @workbench="workbench" />
+    <StudioRemixDialog :source="source" :issue="issue" :loading="loading" :ready="ready" :busy="busy" :can-fallback="false" background-only @apply="(files, prompt) => generate(files, prompt, false)" @background="generate" @cancel="cancel" @retry="prepare" @workbench="workbench" />
   </template>
 </template>
 

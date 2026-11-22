@@ -10,11 +10,16 @@ import { prepareStudioImage } from '../studio-image-upload'
 import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import StudioBilling from './StudioBilling.vue'
+import StudioReversePrompt from './StudioReversePrompt.vue'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import { usesGeminiImageChat } from '../../shared/studio/image-params'
 
 const props = defineProps<{ source: Work; issue: string; loading: boolean; ready: boolean; busy: boolean; canFallback: boolean; backgroundOnly?: boolean }>()
-const emit = defineEmits<{ apply: [files: StudioFile[]]; background: [files: StudioFile[]]; cancel: []; retry: []; fallback: []; workbench: [] }>()
+const emit = defineEmits<{ apply: [files: StudioFile[], prompt: string]; background: [files: StudioFile[], prompt: string]; cancel: []; retry: []; fallback: []; workbench: [] }>()
+const inferredPrompt = ref(''), reverseBusy = ref(false)
+const reverseEnabled = computed(() => !props.source.prompt.trim() && props.source.kind !== 'resource')
+const effectivePrompt = computed(() => props.source.prompt.trim() || inferredPrompt.value.trim())
+watch(() => [props.source.id, session.user?.id], () => { inferredPrompt.value = ''; reverseBusy.value = false })
 const parameters = computed(() => readRemixParameters(props.source.generation?.parameters))
 const geminiImage = computed(() => props.source.kind === 'image' && usesGeminiImageChat(props.source.model))
 const dialog = ref<HTMLDialogElement>(), upload = ref<HTMLInputElement>()
@@ -34,7 +39,7 @@ watch(ownImages, (items, previous) => {
 const selectedUploads = computed(() => ownImages.value.filter(item => selectedOwn.value.includes(item.id)))
 const issues = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
 const count = computed(() => selected.value.length + selectedUploads.value.length)
-const pending = computed(() => materials.pending.value || importing.value || props.busy)
+const pending = computed(() => materials.pending.value || importing.value || props.busy || reverseBusy.value)
 const blocked = computed(() => pending.value || !props.ready || Boolean(props.issue))
 const controller = new AbortController()
 onMounted(() => dialog.value?.showModal())
@@ -75,8 +80,8 @@ async function apply(withReferences: boolean, background = false) {
     }
     if (images.length > limit.value) throw new Error('参考图数量超过上限，请先移除部分图片。')
     if (controller.signal.aborted || owner !== session.user?.id || source !== props.source) return
-    if (background) emit('background', images)
-    else emit('apply', images)
+    if (background) emit('background', images, effectivePrompt.value)
+    else emit('apply', images, effectivePrompt.value)
   } catch (cause) { if (!controller.signal.aborted) error.value = errorMessage(cause) }
   finally { importing.value = false }
 }
@@ -87,8 +92,10 @@ async function apply(withReferences: boolean, background = false) {
     <header class="dialog-heading"><h2 id="remix-heading">制作同款</h2><button type="button" class="icon-button" aria-label="关闭制作同款" :disabled="busy" @click="cancel"><X :size="20" /></button></header>
     <div class="remix-body">
       <p v-if="loading" class="form-note" role="status">正在读取作品和可用模型…</p>
-      <section class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
+      <StudioReversePrompt v-if="reverseEnabled" :key="source.id + ':' + session.user?.id" :source="source" :disabled="loading || busy || importing" v-model:prompt="inferredPrompt" @busy="reverseBusy = $event" />
+      <section v-else class="remix-prompt" aria-label="作品提示词"><h3>作品提示词</h3><p>{{ source.prompt || '作者未公开提示词，可导入参考图后在工作台填写。' }}</p></section>
       <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
+        <p v-if="!source.model">原作品未提供生成模型，导入提示词后请在工作台选择模型。</p>
         <p>沿用模型 {{ source.model || '（未提供）' }} 和公开参数，使用当前账号可用分组。后台生成会消耗积分，提交后{{ backgroundOnly ? '留在当前作品页' : '返回作品' }}，你可以继续浏览并在小窗中查看进度。</p>
         <StudioBilling v-if="ready && !issue" :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
       </section>
@@ -121,7 +128,7 @@ async function apply(withReferences: boolean, background = false) {
       <p v-if="issue" class="form-error" role="alert">{{ issue }} <button v-if="canFallback" type="button" class="text-link" :disabled="pending" @click="emit('fallback')">使用当前配置</button><button type="button" class="text-link" :disabled="pending" @click="emit('retry')">重新读取原作</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
-    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button v-if="backgroundOnly" type="button" class="button btn" :disabled="pending" @click="emit('workbench')">进入工作台调整</button><template v-else><button type="button" class="button btn" :class="{ primary: !count && source.kind === 'resource' }" :disabled="blocked || !source.prompt.trim()" @click="apply(false)">仅导入提示词</button><button v-if="count" type="button" class="button btn" :class="{ primary: source.kind === 'resource' }" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button></template><button v-if="source.kind !== 'resource'" type="button" class="button btn primary" :disabled="blocked || materials.failed.value || !source.prompt.trim() || !source.model" @click="apply(true, true)"><LoaderCircle v-if="pending" :size="18" />后台生成同款</button></footer>
+    <footer class="remix-footer"><button type="button" class="button btn" :disabled="busy" @click="cancel">取消</button><button v-if="backgroundOnly" type="button" class="button btn" :disabled="pending" @click="emit('workbench')">进入工作台调整</button><button v-if="backgroundOnly && reverseEnabled" type="button" class="button btn" :disabled="blocked || !effectivePrompt" @click="apply(Boolean(count))">导入提示词</button><template v-if="!backgroundOnly"><button type="button" class="button btn" :class="{ primary: !count && source.kind === 'resource' }" :disabled="blocked || !effectivePrompt" @click="apply(false)">{{ reverseEnabled ? '导入提示词' : '仅导入提示词' }}</button><button v-if="count" type="button" class="button btn" :class="{ primary: source.kind === 'resource' }" :disabled="blocked || materials.failed.value" @click="apply(true)"><LoaderCircle v-if="pending" :size="18" />导入提示词和参考图（{{ count }}）</button></template><button v-if="source.kind !== 'resource'" type="button" class="button btn primary" :disabled="blocked || materials.failed.value || !effectivePrompt || !source.model" @click="apply(true, true)"><LoaderCircle v-if="pending" :size="18" />后台生成同款</button></footer>
   </dialog>
 </template>
 

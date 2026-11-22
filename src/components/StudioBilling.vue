@@ -10,11 +10,12 @@ import { formatInvocationPoints, invocationPoints, selectedModelPrices } from '.
 import StudioPopover from './StudioPopover.vue'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 
-const props = withDefaults(defineProps<{ model: string; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; apiFormat?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
+const props = withDefaults(defineProps<{ model: string; group?: string | null; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; apiFormat?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
 const emit = defineEmits<{ prices: [] }>()
 const menu = ref<InstanceType<typeof StudioPopover>>()
 const prices = ref<ModelPricing>(), loading = ref(false), error = ref('')
-const rows = computed(() => selectedModelPrices(prices.value, props.model, creation.selectedGroup))
+const billingGroup = computed(() => props.group === undefined ? creation.selectedGroup : props.group)
+const rows = computed(() => selectedModelPrices(prices.value, props.model, billingGroup.value))
 const billingParameters = computed(() => {
   const configured = creation.models.find(item => item.id === props.model)
   return { ...props, apiFormat: !props.apiFormat || props.apiFormat === 'auto' ? configured?.apiFormat : props.apiFormat,
@@ -24,7 +25,7 @@ const quote = computed(() => invocationPoints(rows.value, prices.value?.currency
 const cost = computed(() => quote.value ? quote.value.min === quote.value.max
   ? formatInvocationPoints(quote.value.min)
   : `${formatInvocationPoints(quote.value.min)}–${formatInvocationPoints(quote.value.max)}` : '')
-const groupName = computed(() => creation.selectedGroup === 'auto' ? '自动分组' : creation.groups.find(group => group.id === creation.selectedGroup)?.name || creation.selectedGroup)
+const groupName = computed(() => billingGroup.value === 'auto' ? '自动分组' : creation.groups.find(group => group.id === billingGroup.value)?.name || billingGroup.value)
 const quantityLabel = computed(() => props.kind === 'image' ? `本次 ${props.quantity ?? 1} 张` : props.kind === 'video' && props.duration ? `本次 ${props.duration} 秒视频` : quote.value ? '单次请求' : '本次调用')
 const pointsPricing = computed(() => prices.value?.currency === '积分')
 const compactLabel = computed(() => quote.value ? cost.value + ' 积分' : loading.value ? '计价中…' : pointsPricing.value && rows.value.length ? '按量计费' : '查看价格')
@@ -52,7 +53,7 @@ async function load() {
   }
 }
 function refreshVisible() { if (document.visibilityState === 'visible') void load() }
-watch(() => [session.user?.id, session.user?.accountId, creation.selectedGroup], () => { void load() }, { immediate: true, flush: 'sync' })
+watch(() => [session.user?.id, session.user?.accountId, billingGroup.value], () => { void load() }, { immediate: true, flush: 'sync' })
 watch(() => props.refreshKey, (value, previous) => { if (value && value !== previous) void load() })
 onMounted(() => window.addEventListener('focus', refreshVisible))
 onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVisible) })
@@ -81,11 +82,11 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
         <template v-else-if="!loading && pointsPricing && rows.length">
           <div class="billing-rates">
             <div v-for="row in rows" :key="row.group" class="billing-rate">
-              <span class="billing-context">{{ creation.selectedGroup === 'auto' ? row.group : '计费标准' }} · {{ billingLabel(row) }}</span>
+              <span class="billing-context">{{ billingGroup === 'auto' ? row.group : '计费标准' }} · {{ billingLabel(row) }}</span>
               <p class="billing-full-price">{{ row.requestPrice !== undefined ? `${formatInvocationPoints(row.requestPrice)} 积分` : row.price }}</p>
             </div>
           </div>
-          <p class="billing-note">{{ usageBased ? '按实际输入、输出及缓存用量结算，调用前无法确定总消耗。' : quote ? kind === 'text' ? '按单次模型请求预估；历史摘要或工具调用产生的额外请求另计。' : '按当前定价预估，实际消耗以结算为准。' : '总消耗随生成参数及实际用量变化，完成后结算。' }}<template v-if="creation.selectedGroup === 'auto' && rows.length > 1"> 自动分组以实际使用的分组为准。</template></p>
+          <p class="billing-note">{{ usageBased ? '按实际输入、输出及缓存用量结算，调用前无法确定总消耗。' : quote ? kind === 'text' ? '按单次模型请求预估；历史摘要或工具调用产生的额外请求另计。' : '按当前定价预估，实际消耗以结算为准。' : '总消耗随生成参数及实际用量变化，完成后结算。' }}<template v-if="billingGroup === 'auto' && rows.length > 1"> 自动分组以实际使用的分组为准。</template></p>
         </template>
         <p v-if="accountBalance.error" class="billing-error" role="alert">积分读取失败，请重试。</p>
         <div class="billing-detail-actions"><button type="button" class="studio-tool billing-refresh" :disabled="loading || accountBalance.loading" @click="load"><RefreshCw :size="15" aria-hidden="true" />{{ error || accountBalance.error ? '重试' : '刷新积分与价格' }}</button><button v-if="!hideCatalog" type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>
