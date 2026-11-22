@@ -123,7 +123,8 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
   })
   await t.test('new rewards freeze the configured duration while old forms and request retries retain the original snapshots', async () => {
     await reset({ ...dailySettings(), rewardValidityHours: 24 })
-    assert.deepEqual(await readPublicLotterySummary(db), { items: [] })
+    const empty = await readPublicLotterySummary(db)
+    assert.deepEqual(empty.items, []); assert.equal(empty.totals.totalPoints, '0'); assert.equal(empty.totals.drawCount, '0')
     const key = randomUUID(), first = await draw(1, key)
     const summary = await readPublicLotterySummary(db)
     assert.equal(summary.items.length, 1); assert.equal(summary.items[0].drawCount, '1'); assert.equal(summary.items[0].pendingCount, '1')
