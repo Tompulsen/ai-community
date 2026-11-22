@@ -96,6 +96,52 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
   expect(errors).toEqual([])
 })
 
+const scrollbarTest = test.extend({
+  launchOptions: async ({ launchOptions }, use) => use({ ...launchOptions, ignoreDefaultArgs: ['--hide-scrollbars'] }),
+})
+scrollbarTest('related thumbnails settle at the scrollbar boundary and remain stable after scrolling and drawer changes', async ({ page }) => {
+  const state = await fixture(page)
+  state.relatedItems = Array.from({ length: 6 }, (_, index) => ({ ...work, id: `related${index}` }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/work/detailwork')
+  await expect(page.locator('.related-grid .work-card')).toHaveCount(6)
+  await page.locator('.related-grid img').evaluateAll(images => Promise.all(images.map(image => (image as HTMLImageElement).decode())))
+
+  async function expectStable() {
+    const frames = await page.locator('.related-content').evaluate(async content => {
+      const samples: number[][] = []
+      for (let frame = 0; frame < 40; frame++) {
+        await new Promise(requestAnimationFrame)
+        if (frame < 8) continue
+        const cards = Array.from(content.querySelectorAll('.work-card')).flatMap(card => {
+          const box = card.getBoundingClientRect()
+          return [box.x, box.y + content.scrollTop, box.width, box.height]
+        })
+        samples.push([content.clientWidth, content.scrollHeight, ...cards])
+      }
+      return samples
+    })
+    const movement = frames[0]!.map((_, index) => Math.max(...frames.map(frame => frame[index]!)) - Math.min(...frames.map(frame => frame[index]!)))
+    expect(Math.max(...movement), 'idle thumbnails must not alternate between layouts').toBeLessThanOrEqual(0.5)
+  }
+
+  await expectStable()
+  await page.setViewportSize({ width: 1440, height: 760 })
+  const content = page.locator('.related-content')
+  await content.hover()
+  await page.mouse.wheel(0, 300)
+  await expect.poll(() => content.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await expectStable()
+  for (const width of [1280, 2560, 390, 320, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    if (width < 1000) await page.getByRole('button', { name: '更多作品', exact: true }).click()
+    await expect(content).toBeVisible()
+    await expectStable()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    if (width < 1000) await page.getByRole('button', { name: '关闭更多作品', exact: true }).click()
+  }
+})
+
 test('an owned comment can be deleted through the confirmation dialog with a valid JSON request', async ({ page }) => {
   await fixture(page)
   let deleted = false, attempts = 0

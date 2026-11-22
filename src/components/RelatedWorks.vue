@@ -63,7 +63,7 @@ onBeforeUnmount(() => { controller?.abort(); controller = undefined })
 .related-heading h2 { font-size: 15px; line-height: 24px; font-weight: 600; }
 .related-heading .text-link { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; font-size: 12px; }
 .related-tags { flex: none; padding-bottom: 12px; color: var(--muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
-.related-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px 4px 8px 0; }
+.related-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; padding: 2px 4px 8px 0; }
 .related-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 8px; --card-row-gap: 8; }
 .related-state { padding: 20px 4px; color: var(--muted); font-size: 13px; line-height: 22px; }
 .related-more { width: 100%; min-height: 44px; margin-top: 8px; }
