@@ -34,6 +34,9 @@ export type VideoModelSetting = z.infer<typeof videoModelSettingSchema>
 
 export const modelTypesSchema = z.array(z.object({
   id: z.string().min(1).max(200).refine(id => id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)),
+  name: z.string().trim().min(1).max(120).refine(value => !/[\u0000-\u001f\u007f]/u.test(value)).optional(),
+  tags: z.array(z.string().trim().min(1).max(32).refine(value => !/[\u0000-\u001f\u007f]/u.test(value)))
+    .max(12).refine(tags => new Set(tags.map(tag => tag.toLowerCase())).size === tags.length).optional(),
   kind: z.enum(['text', 'image', 'video']),
   apiFormat: modelApiFormatSchema.optional(),
   protocol: z.enum(['auto', 'sync', 'async']).optional(),

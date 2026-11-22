@@ -11,6 +11,9 @@ test('new admin routes are registered and deny anonymous access before database 
   })
   t.after(() => app.close())
   for (const [method, url, payload] of [
+    ['GET', '/api/admin/models'],
+    ['PATCH', '/api/admin/models', { items: [], version: 'old' }],
+    ['GET', '/api/creation/models?management=1'],
     ['GET', '/api/admin/audit'],
     ['GET', '/api/admin/roles'],
     ['GET', '/api/admin/users/42'],

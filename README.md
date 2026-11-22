@@ -42,6 +42,18 @@ npm run test:e2e
 浏览器测试使用当前 Windows 电脑安装的 Microsoft Edge；其他环境需先调整
 `playwright.config.ts` 中的浏览器路径。
 
+## 模型管理
+
+管理员从“运营设置 → 模型管理”（`/admin?tab=models`）拉取当前账号分组的模型，
+选中后编辑显示名称、类型、接口、标签、默认请求参数与备注。无需手填模型 ID；
+当前分组不可用的已配置模型继续保留。前台选择“自动”时使用后台默认参数，
+手动选择优先；显示名称和标签用于前台展示，备注仅管理员可见。
+
+模型配置通过独立的 `/api/admin/models` 读取和保存，继续存储在原有
+`communityModelTypes` 中，使用单独的版本校验并记录审计，不与社区设置一同提交。
+管理目录复用 `/api/creation/models?management=1`，仅管理员可读取未识别类型的模型，
+不改变普通创作台的模型权限，也不会发起生成请求。
+
 ## 容器镜像
 
 推送 `main` 分支会通过 GitHub Actions 的 `Build container` 工作流构建并发布

@@ -423,6 +423,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       if (!stored) throw httpError(404, '没有找到此请求记录。')
       ctx.json(200, await cachedResult(ctx, JSON.parse(stored)))
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/models') {
+      const management = ctx.url.searchParams.get('management') === '1'
+      if (management) ctx.requireAdmin()
       await rateLimit(ctx, 'models', 60)
       const credentials = await svc.credentials(req, 'v1/models')
       const data = await upstreamJson(ctx, req, credentials, 'v1/models', svc)
@@ -432,9 +434,11 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const configured = types.get(id), configuredKind = configured?.kind
-        const kind = id.length <= 200 && id.trim() ? configuredKind ?? classifyModel(id) : null
+        const valid = id.length > 0 && id.length <= 200 && id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)
+        const kind = valid ? configuredKind ?? classifyModel(id) : null
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
-        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], ...(configuredKind ? { configuredKind } : {}),
+        return valid && (kind || management) ? [{ id, name: configured?.name || text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: kind ? [kind] : [], ...(configuredKind ? { configuredKind } : {}),
+          ...(configured?.tags ? { tags: configured.tags } : {}),
           ...(configured?.apiFormat ? { apiFormat: configured.apiFormat } : {}),
           ...(kind === 'image' && configured?.image ? { image: configured.image } : {}),
           ...(kind === 'text' && configured?.text ? { text: configured.text } : {}),

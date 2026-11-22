@@ -244,6 +244,19 @@ test('publication reward audit includes only the frozen rule and receipt times',
   assert(!JSON.stringify(result).includes('hidden'))
 })
 
+test('model configuration audit names the action and exposes only a bounded model summary', async () => {
+  const items = Array.from({ length: 22 }, (_, index) => ({
+    id: `custom/model-${index}`, kind: 'image', name: 'private display', tags: ['private tag'], remark: 'private routing note',
+  }))
+  const f = fixture({ state: { audits: [{ id: 'audit1', userId: '17', type: 'updateCommunityModels', info: { items, secret: 'hidden' } }] } })
+  const result = await f.request('/api/admin/audit')
+  assert.equal(result.items[0].label, '修改模型配置')
+  assert.deepEqual(result.items[0].details, { modelCount: 22, modelIds: items.slice(0, 20).map(item => item.id) })
+  assert(!JSON.stringify(result).includes('private'))
+  assert(!JSON.stringify(result).includes('hidden'))
+  assert(result.typeOptions.some(item => item.value === 'updateCommunityModels'))
+})
+
 test('audit filters and next cursors do not load an unbounded log or search private payloads', async () => {
   const audits = Array.from({ length: 33 }, (_, index) => ({
     id: `audit${String(index).padStart(3, '0')}`, userId: '17', type: 'suspend', info: { userId: '18', reason: 'private-only-search' },

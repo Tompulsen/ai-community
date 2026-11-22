@@ -16,7 +16,7 @@ export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
 export interface PublicationDetails { tagIds: string[]; prompt: string; sourceUrl: string; license: string; referenceIndices: number[] }
-export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
+export interface CreationModel { id: string; name?: string; tags?: string[]; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {
@@ -482,13 +482,13 @@ export function loadCreationModels(): Promise<void> {
     const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models', { signal: AbortSignal.timeout(20000) })
     if (version !== epoch || revision !== modelRevision || group !== creation.selectedGroup) return
     creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string').map(item => {
-      const { id, name, description, provider, kinds, configuredKind } = item
+      const { id, name, tags, description, provider, kinds, configuredKind } = item
       const kind = configuredKind || kinds?.[0]
-      const setting = modelTypesSchema.safeParse([{ id, kind, apiFormat: item.apiFormat,
+      const setting = modelTypesSchema.safeParse([{ id, kind, tags, apiFormat: item.apiFormat,
         ...(kind === 'text' ? {} : { protocol: item.protocol === 'openai' ? 'sync' : item.protocol }),
         image: item.image, text: item.text, video: item.video }]).data?.[0]
       return { id, name, description, provider, kinds, configuredKind, ...(setting ? {
-        apiFormat: setting.apiFormat, protocol: setting.protocol, image: setting.image, text: setting.text, video: setting.video,
+        tags: setting.tags, apiFormat: setting.apiFormat, protocol: setting.protocol, image: setting.image, text: setting.text, video: setting.video,
       } : {}) }
     })
     creation.modelTokenId = Number.isSafeInteger(result.tokenId) && result.tokenId! > 0 ? result.tokenId! : null

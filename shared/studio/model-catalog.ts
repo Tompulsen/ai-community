@@ -1,6 +1,6 @@
 // Adapted from octopus_chat app/utils/model.ts, model-metadata.ts and
 // app/components/model-select.tsx. MIT; see public/assets/model-vendors/LICENSE.txt.
-export interface CatalogModel { id: string; name?: string; description?: string; provider?: string }
+export interface CatalogModel { id: string; name?: string; tags?: string[]; description?: string; provider?: string }
 const vendors = [
   ['agnes', /^agnes(?:-|$)/, 'Agnes AI'],
   ['openai', /^(?:gpt(?:-|$)|chatgpt|dall-?e|o[134](?:-|$))/, 'OpenAI'],
@@ -24,7 +24,7 @@ export function modelVendor(id: string) {
 }
 export function searchModels<T extends CatalogModel>(models: T[], query: string): T[] {
   const search = query.trim().toLocaleLowerCase()
-  return search ? models.filter(model => [model.id, model.name, model.description, model.provider, modelVendor(model.id).name]
+  return search ? models.filter(model => [model.id, model.name, model.description, model.provider, modelVendor(model.id).name, ...(model.tags || [])]
     .some(value => value?.toLocaleLowerCase().includes(search))) : models
 }
 export function modelCategories(models: CatalogModel[], favorite: (id: string) => boolean) {

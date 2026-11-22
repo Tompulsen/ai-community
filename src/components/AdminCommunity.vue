@@ -3,19 +3,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Image, Pencil, Plus, RefreshCw, Save, Trash2, X } from '@lucide/vue'
 import { api, errorMessage, notify, uploadFile } from '../state'
 import { updateSite, type SiteBranding } from '../site'
-import { imageModelSettingSchema, modelApiFormats, modelTypesSchema, textModelSettingSchema, type ModelApiFormat, type ModelTypeSetting } from '../../shared/studio/model-types'
-import { usesGeminiImageChat } from '../../shared/studio/image-params'
 import { feedWeightsSchema, readFeedWeights } from '../../shared/recommendation'
 
 const props = defineProps<{ view: 'site' | 'settings' | 'review' | 'tags' | 'ads' }>()
 const isConfigView = computed(() => props.view === 'settings' || props.view === 'review')
-type ModelTypeDraft = ModelTypeSetting & { resolutionInput?: string }
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
   communityFeedWeights: { interest: number; fresh: number; explore: number }
   uploadLimits: Record<'image' | 'video' | 'audio' | 'document' | 'other', number>
-  communityModelTypes: ModelTypeDraft[]
 }
 interface Tag { id: string; category: 'image' | 'video' | 'resource'; name: string }
 interface Ad { id: string; enabled: boolean; title: string; imageUrl: string; linkUrl: string }
@@ -32,13 +28,6 @@ const previewLogo = computed(() => /^(?:https:\/\/|\/(?:assets|files|legacy-file
 const category = ref<Tag['category']>('image'), newName = ref(''), editing = ref(''), editName = ref(''), deleting = ref('')
 const categoryNames = { image: '图片', video: '视频', resource: '资源' }
 const uploadNames = { image: '图片', video: '视频', audio: '音频', document: '文档', other: '其他文件' }
-const apiFormatNames: Record<ModelApiFormat, string> = { auto: '自动识别', 'chat-completions': 'Chat Completions', responses: 'Responses', gemini: 'Gemini', claude: 'Claude', images: 'Images', openai: 'OpenAI 视频' }
-const imageResolutions = imageModelSettingSchema.shape.autoResolution.unwrap().options
-const imageQualities = imageModelSettingSchema.shape.autoQuality.unwrap().options
-const imageBackgrounds = imageModelSettingSchema.shape.autoBackground.unwrap().options
-const reasoningEfforts = textModelSettingSchema.shape.autoReasoningEffort.unwrap().options
-const levelNames = { auto: '自动', low: '低', medium: '中', high: '高', xhigh: '更高', max: '最高', ultra: '超高' }
-const backgroundNames = { auto: '自动', opaque: '不透明', transparent: '透明' }
 const filteredTags = computed(() => tags.value.filter(tag => tag.category === category.value))
 const title = computed(() => ({ site: '站点设置', settings: '社区设置', review: '审核设置', tags: '内容标签', ads: '广告位' })[props.view])
 const description = computed(() => ({ site: '设置社区名称与标识，保存后应用于导航、登录页和页面标题。', settings: '设置发布规则、首页推荐、违规处理与文件上传限制。', review: '设置作品的公开时机、账号封禁规则和刷新方式，保存后生效。', tags: '按内容类型管理标签，帮助创作者分类与用户发现作品。', ads: '按固定位置配置广告。修改后统一保存，空广告位会保留原位置。' })[props.view])
@@ -52,31 +41,6 @@ function readVersion(value: { version: string }) {
   if (!value.version) throw new Error('未能读取配置版本，请刷新后重试。')
   version.value = value.version
 }
-function editableModelTypes(items: ModelTypeSetting[]) {
-  return items.map(item => ({ ...item, resolutionInput: item.video?.resolutions?.join(', ') || '',
-    ...(item.kind === 'image' ? { image: { ...item.image } } : {}),
-    ...(item.kind === 'text' ? { text: { ...item.text } } : {}),
-    ...(item.kind === 'video' ? { video: { ...item.video } } : {}) }))
-}
-function setModelOption<T extends object, K extends keyof T>(item: T, key: K, event: Event) {
-  const value = (event.target as HTMLSelectElement).value
-  if (value === 'auto') delete item[key]
-  else item[key] = value as T[K]
-}
-function changeModelApiFormat(item: ModelTypeDraft, event: Event) {
-  setModelOption(item, 'apiFormat', event)
-  if (item.kind === 'image' && usesGeminiImageChat(item.id, item.apiFormat) && item.protocol === 'async') delete item.protocol
-}
-function changeModelKind(item: ModelTypeDraft) {
-  if (item.apiFormat && item.apiFormat !== 'auto' && !(modelApiFormats[item.kind] as readonly string[]).includes(item.apiFormat)) delete item.apiFormat
-  if (item.kind === 'text') { item.text ||= {}; delete item.protocol }
-  else delete item.text
-  if (item.kind === 'image') item.image ||= {}
-  else delete item.image
-  if (item.kind === 'video') item.video ||= {}
-  else { delete item.video; item.resolutionInput = '' }
-  if (item.kind === 'image' && usesGeminiImageChat(item.id, item.apiFormat) && item.protocol === 'async') delete item.protocol
-}
 async function load() {
   loading.value = true; error.value = ''; reloadPrompt.value = false; saved.value = false
   try {
@@ -89,7 +53,7 @@ async function load() {
     } else if (isConfigView.value) {
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
       if (!active) return
-      readVersion(result); config.value = { ...result.config, communityModelTypes: editableModelTypes(result.config.communityModelTypes || []), communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
+      readVersion(result); config.value = { ...result.config, communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
     } else if (props.view === 'tags') {
       const result = await api<{ items: Tag[] }>('/api/admin/tags')
       if (!active) return
@@ -118,52 +82,13 @@ async function save() {
       readVersion(result); branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
     } else if (isConfigView.value && config.value) {
       if (!validConfig.value) throw new Error('请检查违规阈值、候选池范围及推荐权重。')
-      let communityModelTypes = config.value.communityModelTypes
-      if (props.view === 'settings') {
-        const parsed = modelTypesSchema.safeParse(communityModelTypes.map(({ resolutionInput, ...item }) => {
-          const image = item.kind === 'image' ? { ...item.image } : undefined
-          const text = item.kind === 'text' ? { ...item.text } : undefined
-          const video = item.kind === 'video' ? { ...item.video } : undefined
-          for (const options of [image, video]) {
-            if (!options) continue
-            const ratio = options.autoAspectRatio?.trim().toLowerCase()
-            if (ratio) options.autoAspectRatio = ratio
-            else delete options.autoAspectRatio
-          }
-          if (video) {
-            const automatic = video.autoResolution?.trim().toLowerCase()
-            if (automatic) video.autoResolution = automatic
-            else delete video.autoResolution
-            if (resolutionInput?.trim()) video.resolutions = resolutionInput.toLowerCase().split(/[\s,，]+/u).filter(Boolean)
-            else delete video.resolutions
-          }
-          const remark = item.remark?.trim()
-          return { id: item.id.trim(), kind: item.kind,
-            ...(item.apiFormat ? { apiFormat: item.apiFormat } : {}),
-            ...(item.protocol ? { protocol: item.protocol } : {}),
-            ...(remark ? { remark } : {}),
-            ...(image && Object.keys(image).length ? { image } : {}),
-            ...(text && Object.keys(text).length ? { text } : {}),
-            ...(video && Object.keys(video).length ? { video } : {}) }
-        }))
-        if (!parsed.success) {
-          const issues = parsed.error.issues
-          const interfaceError = issues.find(issue => /接口|协议/u.test(issue.message))
-          throw new Error(issues.some(issue => issue.path.includes('video') && !issue.path.includes('autoAspectRatio') && !issue.path.includes('parameterFormat'))
-            ? '请检查视频分辨率：使用 480p、720p、4k 等有效档位，可选值不可重复且最多 16 个，自动值须包含在可选值中。'
-            : issues.some(issue => issue.path.includes('autoAspectRatio')) ? '请检查自动画面比例：使用 auto 或 16:9 等有效比例。'
-              : issues.some(issue => issue.path.includes('remark')) ? '模型备注最多 2000 字符，不能包含控制字符。'
-                : interfaceError?.message || '请填写完整且不重复的模型 ID（最多 200 字符），并选择有效的模型类型与自动参数；最多可设置 500 个模型。')
-        }
-        communityModelTypes = parsed.data
-      }
-      const { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights } = config.value
+      const { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights, uploadLimits } = config.value
       const patch = props.view === 'review'
         ? { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights }
-        : { ...config.value, communityModelTypes }
+        : { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights, uploadLimits }
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...patch, version: version.value } })
       if (!active) return
-      readVersion(result); config.value = { ...result.config, communityModelTypes: editableModelTypes(result.config.communityModelTypes || []) }
+      readVersion(result); config.value = result.config
     } else if (props.view === 'ads') {
       const result = await api<{ items: Ad[]; version: string }>('/api/admin/community/ads', { method: 'PATCH', body: { items: ads.value, version: version.value } })
       if (!active) return
@@ -231,43 +156,6 @@ watch(dirty, value => { if (value) saved.value = false })
     </form>
     <form v-if="isConfigView && config && !loading" :id="'admin-' + view + '-form'" @submit.prevent="save">
       <fieldset class="fieldset" :disabled="busy">
-        <section v-if="view === 'settings'" class="editor-section"><div class="editor-section-title"><h3>模型配置</h3><p>指定模型类型、接口与自动参数。</p></div><div class="editor-fields">
-          <p id="model-type-help" class="form-note">填写完整模型 ID，所有分组共用。前台选择“自动”时使用这里的参数；未设置时沿用现有识别与上游默认。</p>
-          <div v-for="(item, index) in config.communityModelTypes" :key="index" class="model-type-row">
-            <label class="field"><span>模型 ID {{ index + 1 }}</span><input v-model="item.id" class="control" maxlength="200" required aria-describedby="model-type-help" placeholder="如 custom/model-name" /></label>
-            <label class="field"><span>类型 {{ index + 1 }}</span><select v-model="item.kind" class="control" @change="changeModelKind(item)"><option value="text">对话</option><option value="image">生图</option><option value="video">视频</option></select></label>
-            <button type="button" class="icon-button" :aria-label="'删除模型类型 ' + (index + 1)" title="删除模型类型" @click="config.communityModelTypes.splice(index, 1)"><Trash2 :size="16" /></button>
-            <div class="editor-fields">
-              <div class="fields">
-                <label class="field"><span>接口格式 {{ index + 1 }}</span><select :value="item.apiFormat || 'auto'" class="control" @change="changeModelApiFormat(item, $event)"><option value="auto">自动识别</option><option v-for="format in modelApiFormats[item.kind]" :key="format" :value="format">{{ apiFormatNames[format] }}</option></select></label>
-                <label v-if="item.kind !== 'text'" class="field"><span>任务协议 {{ index + 1 }}</span><select :value="item.protocol || 'auto'" class="control" @change="setModelOption(item, 'protocol', $event)"><option value="auto">沿用默认</option><option value="sync">同步返回</option><option value="async" :disabled="item.kind === 'image' && usesGeminiImageChat(item.id, item.apiFormat)">异步任务</option></select></label>
-              </div>
-              <div v-if="item.kind === 'text' && item.text" class="fields">
-                <label class="field"><span>自动推理强度 {{ index + 1 }}</span><select :value="item.text.autoReasoningEffort || 'auto'" class="control" @change="setModelOption(item.text, 'autoReasoningEffort', $event)"><option v-for="effort in reasoningEfforts" :key="effort" :value="effort">{{ levelNames[effort] }}{{ effort === 'auto' ? '' : ' · ' + effort }}</option></select></label>
-              </div>
-              <fieldset v-if="item.kind === 'image' && item.image" class="fieldset fields" :disabled="usesGeminiImageChat(item.id, item.apiFormat)" :aria-label="'图片自动参数 ' + (index + 1)">
-                <legend class="sr-only">图片自动参数 {{ index + 1 }}</legend>
-                <label class="field"><span>自动分辨率 {{ index + 1 }}</span><select :value="item.image.autoResolution || 'auto'" class="control" @change="setModelOption(item.image, 'autoResolution', $event)"><option v-for="resolution in imageResolutions" :key="resolution" :value="resolution">{{ resolution === 'auto' ? '自动' : resolution.toUpperCase() }}</option></select></label>
-                <label class="field"><span>自动画质 {{ index + 1 }}</span><select :value="item.image.autoQuality || 'auto'" class="control" @change="setModelOption(item.image, 'autoQuality', $event)"><option v-for="quality in imageQualities" :key="quality" :value="quality">{{ levelNames[quality] }}{{ quality === 'auto' ? '' : ' · ' + quality }}</option></select></label>
-                <label class="field"><span>自动画面比例 {{ index + 1 }}</span><input v-model="item.image.autoAspectRatio" class="control" maxlength="7" placeholder="auto 或 16:9" /></label>
-                <label class="field"><span>自动背景 {{ index + 1 }}</span><select :value="item.image.autoBackground || 'auto'" class="control" @change="setModelOption(item.image, 'autoBackground', $event)"><option v-for="background in imageBackgrounds" :key="background" :value="background">{{ backgroundNames[background] }}</option></select></label>
-              </fieldset>
-              <p v-if="item.kind === 'image' && usesGeminiImageChat(item.id, item.apiFormat)" class="form-note">图片对话接口的尺寸、画质和背景由上游决定。</p>
-              <template v-if="item.kind === 'video' && item.video">
-              <div class="fields">
-                <label class="field"><span>自动分辨率 {{ index + 1 }}</span><input v-model="item.video.autoResolution" class="control" maxlength="16" placeholder="auto 或 720p" :aria-describedby="'video-resolution-help-' + index" /></label>
-                <label class="field"><span>可选分辨率 {{ index + 1 }}</span><input v-model="item.resolutionInput" class="control" maxlength="256" placeholder="480p, 720p, 1080p" :aria-describedby="'video-resolution-help-' + index" /></label>
-                <label class="field"><span>自动画面比例 {{ index + 1 }}</span><input v-model="item.video.autoAspectRatio" class="control" maxlength="7" placeholder="auto 或 16:9" /></label>
-                <label class="field"><span>视频参数格式 {{ index + 1 }}</span><select :value="item.video.parameterFormat || 'auto'" class="control" @change="setModelOption(item.video, 'parameterFormat', $event)"><option value="auto">自动识别</option><option value="openai">OpenAI</option><option value="xai">xAI</option><option value="seedance">Seedance</option><option value="gemini">Gemini</option></select></label>
-              </div>
-              <p :id="'video-resolution-help-' + index" class="form-note">自动值留空或填 auto 时由上游决定。可选值以逗号或空格分隔，留空沿用兼容配置。</p>
-              </template>
-              <label class="field"><span>备注 {{ index + 1 }}</span><textarea v-model="item.remark" class="control" rows="3" maxlength="2000" :aria-describedby="'model-remark-help-' + index" /></label>
-              <p :id="'model-remark-help-' + index" class="form-note">仅管理员可见，最多 2000 字符。</p>
-            </div>
-          </div>
-          <button type="button" class="button subtle btn model-type-add" :disabled="config.communityModelTypes.length >= 500" @click="config.communityModelTypes.push({ id: '', kind: 'image', image: {} })"><Plus :size="16" aria-hidden="true" />添加模型类型</button>
-        </div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>发布与审核</h3><p>新作品按所选模式发布，违规内容可在审核列表中下架。</p></div><div class="editor-fields">
           <fieldset v-if="view === 'review'" class="publication-modes" aria-describedby="publication-help"><legend>内容发布方式</legend>
             <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="before" /><span><strong>先审后发</strong><small>新作品进入待审核，通过后才在社区公开。</small></span></label>
@@ -346,14 +234,6 @@ watch(dirty, value => { if (value) saved.value = false })
 .editor-section-title h3 { font-size: 16px; line-height: 24px; font-weight: 500; }
 .editor-section-title p { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 20px; max-width: 24ch; }
 .editor-fields { display: grid; gap: 16px; min-width: 0; align-content: start; }
-.model-type-row { display: grid; grid-template-columns: minmax(0, 1fr) 112px 44px; gap: 12px; align-items: end; }
-.model-type-row .field { min-width: 0; }
-.model-type-row .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.model-type-row > .editor-fields { grid-column: 1 / -1; }
-.model-type-row + .model-type-row { padding-top: 20px; border-top: 1px solid var(--border); }
-.model-type-row textarea { min-height: 96px; resize: vertical; }
-.model-type-row .icon-button { width: 44px; height: 44px; }
-.model-type-add { justify-self: start; min-height: 44px; }
 .site-logo-layout { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: start; gap: 24px; }
 .site-logo-layout .stack { min-width: 0; gap: 12px; }
 .site-logo-layout input[type="file"] { max-width: 100%; min-width: 0; font: inherit; }
@@ -410,8 +290,6 @@ watch(dirty, value => { if (value) saved.value = false })
 @media (max-width: 639px) {
   .publication-modes { grid-template-columns: minmax(0, 1fr); }
   .publication-modes label { padding: 16px; }
-  .model-type-row { grid-template-columns: minmax(0, 1fr) 44px; }
-  .model-type-row .field:first-child { grid-column: 1 / -1; }
   .editor-heading .form-note { font-size: 12px; }
   .fields, .ad-layout, .site-logo-layout { grid-template-columns: 1fr; }
   .upload-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -8,6 +8,7 @@ import test from 'node:test'
 import Fastify from 'fastify'
 import sharp from 'sharp'
 import { handleCreation } from './creation.ts'
+import { httpError } from './auth.ts'
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -108,7 +109,7 @@ function fixture(t, options = {}) {
   })
   app.all('/api/creation/*', async (request, reply) => {
     const accountId = String(request.headers['x-test-account'] || '17')
-    const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: false }
+    const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: options.isAdmin === true }
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
       db: { async query(sql) {
@@ -119,6 +120,7 @@ function fixture(t, options = {}) {
       config: { url: origin },
       url: new URL(request.raw.url, origin), body: request.body || {},
       requireUser() { return user },
+      requireAdmin() { if (!user.isAdmin) throw httpError(403, '需要管理员权限。'); return user },
       json(status, value) { reply.code(status).send(value) },
     }
     if (!await handleCreation(ctx, services)) reply.code(404).send({ error: { message: 'Missing route' } })
@@ -134,10 +136,13 @@ function submit(app, body = imageRequest, extraHeaders = {}) {
 test('automatic text interfaces use model configuration while explicit and legacy formats keep their selection', async t => {
   for (const [apiFormat, expectedPath] of [['auto', '/v1/responses'], ['chat-completions', '/v1/chat/completions'], [undefined, '/v1/chat/completions']]) {
     const { app, calls } = fixture(t, {
-      modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-routing-note' }],
+      modelTypes: [{ id: 'custom-chat', name: 'Configured chat', tags: ['Reasoning'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-routing-note' }],
       fetch(url, init) {
         const body = JSON.parse(init.body)
         assert(!JSON.stringify(body).includes('private-routing-note'))
+        assert.equal(body.model, 'custom-chat')
+        assert(!Object.hasOwn(body, 'name'))
+        assert(!Object.hasOwn(body, 'tags'))
         if (new URL(url).pathname === '/v1/responses') {
           assert.equal(body.reasoning.effort, 'high')
           return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'selected interface' }] }] })
@@ -262,25 +267,60 @@ test('configured model types reject mismatched creation requests before a paid c
 
 test('model catalogs publish only authorized public configuration and keep administrator remarks private', async t => {
   const modelTypes = [
-    { id: 'configured-text', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-text-remark' },
-    { id: 'configured-image', kind: 'image', apiFormat: 'images', protocol: 'async', image: { autoQuality: 'high' }, remark: 'private-image-remark' },
-    { id: 'configured-video', kind: 'video', apiFormat: 'openai', protocol: 'sync', video: { autoResolution: '720p', parameterFormat: 'xai' }, remark: 'private-video-remark' },
-    { id: 'not-in-group', kind: 'text', apiFormat: 'claude', remark: 'private-unauthorized-remark' },
+    { id: 'configured-text', name: 'Configured text', tags: ['Reasoning'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-text-remark' },
+    { id: 'configured-image', name: 'Configured image', tags: ['Edit'], kind: 'image', apiFormat: 'images', protocol: 'async', image: { autoQuality: 'high' }, remark: 'private-image-remark' },
+    { id: 'configured-video', name: 'Configured video', tags: [], kind: 'video', apiFormat: 'openai', protocol: 'sync', video: { autoResolution: '720p', parameterFormat: 'xai' }, remark: 'private-video-remark' },
+    { id: 'not-in-group', name: 'private-unauthorized-display', tags: ['private-unauthorized-tag'], kind: 'text', apiFormat: 'claude', remark: 'private-unauthorized-remark' },
   ]
   const { app } = fixture(t, { modelTypes, fetch() {
-    return Response.json({ data: modelTypes.slice(0, 3).map(({ id }) => ({ id, apiFormat: 'untrusted', remark: 'private-upstream-remark', secret: 'private-upstream-secret' })) })
+    return Response.json({ data: [
+      ...modelTypes.slice(0, 3).map(({ id }) => ({ id, name: 'Upstream title', tags: ['untrusted-upstream-tag'], apiFormat: 'untrusted', remark: 'private-upstream-remark', secret: 'private-upstream-secret' })),
+      { id: 'gpt-5', name: 'Upstream fallback', tags: ['untrusted-upstream-tag'] },
+    ] })
   } })
   const response = await app.inject('/api/creation/models')
   assert.equal(response.statusCode, 200)
-  assert.equal(response.json().items.length, 3)
+  assert.equal(response.json().items.length, 4)
   assert(!response.payload.includes('private-'))
   for (const setting of modelTypes.slice(0, 3)) {
     const item = response.json().items.find(item => item.id === setting.id)
+    assert.equal(item.name, setting.name)
+    assert.deepEqual(item.tags, setting.tags)
     assert.equal(item.apiFormat, setting.apiFormat)
     assert.equal(item.protocol, setting.protocol ?? 'openai')
     for (const key of ['image', 'text', 'video']) assert.deepEqual(item[key], setting[key])
     assert(!Object.hasOwn(item, 'remark'))
   }
+  const fallback = response.json().items.find(item => item.id === 'gpt-5')
+  assert.equal(fallback.name, 'Upstream fallback')
+  assert(!Object.hasOwn(fallback, 'tags'))
+})
+
+test('administrators can discover filtered authorized aliases and configure their first creation type', async t => {
+  const modelTypes = []
+  const { app } = fixture(t, { isAdmin: true, modelTypes, fetch() {
+    return Response.json({ data: ['custom/embedding-alias', { id: 'gpt-5' }, '', ' bad-alias ', 'gpt-5\nbad', { id: 'x'.repeat(201) }] })
+  } })
+  const ordinary = await app.inject('/api/creation/models')
+  assert.deepEqual(ordinary.json().items.map(item => item.id), ['gpt-5'])
+  const management = await app.inject('/api/creation/models?management=1')
+  assert.equal(management.statusCode, 200)
+  assert.deepEqual(management.json().items.map(item => item.id), ['custom/embedding-alias', 'gpt-5'])
+  assert.deepEqual(management.json().items.find(item => item.id === 'custom/embedding-alias').kinds, [])
+  modelTypes.push({ id: 'custom/embedding-alias', kind: 'image', name: 'Configured alias', tags: ['Edit'] })
+  const configured = (await app.inject('/api/creation/models')).json().items.find(item => item.id === 'custom/embedding-alias')
+  assert.deepEqual(configured.kinds, ['image'])
+  assert.equal(configured.configuredKind, 'image')
+  assert.equal(configured.name, 'Configured alias')
+  assert.deepEqual(configured.tags, ['Edit'])
+})
+
+test('management model catalogs require a community administrator before reading upstream credentials', async t => {
+  const { app, calls, credentialCalls } = fixture(t)
+  const response = await app.inject('/api/creation/models?management=1')
+  assert.equal(response.statusCode, 403)
+  assert.equal(calls.length, 0)
+  assert.equal(credentialCalls.length, 0)
 })
 
 test('configured image interfaces select the matching stream parser and history preparation', async t => {

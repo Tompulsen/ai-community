@@ -11,6 +11,7 @@ import { defaultWelfareTasks } from '../shared/welfare-tasks.ts'
 
 const siteUrl = 'https://community.example'
 const welfarePath = '/api/admin/welfare/tasks'
+const modelsPath = '/api/admin/models'
 
 test('public welfare catalog defaults to three tasks and only exposes enabled display fields', async () => {
   const f = fixture({ user: null })
@@ -235,40 +236,91 @@ test('saving unchanged legacy upload limits preserves the effective restrictions
 })
 
 test('model types persist through settings saves and support versioned removal without changing unrelated options', async () => {
-  const f = fixture(), path = '/api/admin/community/config'
+  const f = fixture(), path = modelsPath
   const before = await f.request(path)
-  assert.deepEqual(before.config.communityModelTypes, [])
+  assert.deepEqual(before.items, [])
   const modelTypes = [{ id: 'custom/alias', kind: 'image' }, { id: '__proto__', kind: 'video' }, { id: 'gpt-5', kind: 'text' }]
-  const saved = await f.request(path, 'PATCH', { communityModelTypes: modelTypes, version: before.version })
-  assert.deepEqual((await f.request(path)).config.communityModelTypes, modelTypes)
+  const saved = await f.request(path, 'PATCH', { items: modelTypes, version: before.version })
+  assert.deepEqual((await f.request(path)).items, modelTypes)
   assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
-  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
-  await f.request(path, 'PATCH', { communityFeedMode: 'latest' })
+  await assert.rejects(f.request(path, 'PATCH', { items: [], version: before.version }), { statusCode: 409 })
+  await f.request('/api/admin/community/config', 'PATCH', { communityFeedMode: 'latest' })
   assert.deepEqual(f.state.row.clientOptions.communityModelTypes, modelTypes)
   const latest = await f.request(path)
-  await f.request(path, 'PATCH', { communityModelTypes: [], version: latest.version })
+  await f.request(path, 'PATCH', { items: [], version: latest.version })
   assert.deepEqual(f.state.row.clientOptions.communityModelTypes, [])
   assert.notEqual(saved.version, before.version)
 })
 
 test('model interfaces, automatic parameters and private remarks round-trip through versioned admin configuration', async () => {
-  const f = fixture(), path = '/api/admin/community/config', before = await f.request(path)
+  const f = fixture(), path = modelsPath, before = await f.request(path)
   const communityModelTypes = [
-    { id: 'chat-model', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private chat routing note' },
+    { id: 'chat-model', name: '对话模型', tags: ['推理', '文本'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private chat routing note' },
     { id: 'image-model', kind: 'image', apiFormat: 'images', protocol: 'async',
       image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' }, remark: 'private image routing note' },
     { id: 'video-model', kind: 'video', apiFormat: 'openai', protocol: 'sync',
       video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai' }, remark: 'private video routing note' },
   ]
-  const saved = await f.request(path, 'PATCH', { communityModelTypes, version: before.version })
-  assert.deepEqual(saved.config.communityModelTypes, communityModelTypes)
-  assert.deepEqual((await f.request(path)).config.communityModelTypes, communityModelTypes)
+  const saved = await f.request(path, 'PATCH', { items: communityModelTypes, version: before.version })
+  assert.deepEqual(saved.items, communityModelTypes)
+  assert.deepEqual((await f.request(path)).items, communityModelTypes)
   assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
   assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
   assert(!JSON.stringify(await f.request('/api/site')).includes('private'))
-  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
-  await f.request(path, 'PATCH', { communityFeedMode: 'latest', version: saved.version })
+  await assert.rejects(f.request(path, 'PATCH', { items: [], version: before.version }), { statusCode: 409 })
+  const community = await f.request('/api/admin/community/config')
+  await f.request('/api/admin/community/config', 'PATCH', { communityFeedMode: 'latest', version: community.version })
   assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
+})
+
+test('model and community versions are independent and the community endpoint cannot overwrite models', async () => {
+  const f = fixture(), models = await f.request(modelsPath), path = '/api/admin/community/config'
+  const before = await f.request(path)
+  assert(!Object.hasOwn(before.config, 'communityModelTypes'))
+  const community = await f.request(path, 'PATCH', { communityFeedMode: 'latest', version: before.version })
+  const items = [{ id: 'custom-image', kind: 'image', name: '图像模型', tags: ['编辑'] }]
+  const saved = await f.request(modelsPath, 'PATCH', { items, version: models.version })
+  assert.equal((await f.request(path)).version, community.version)
+  await f.request(path, 'PATCH', { communityPullToRefresh: false, version: community.version })
+  assert.deepEqual(await f.request(modelsPath), saved)
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, items)
+  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: community.version }), { statusCode: 400 })
+  await assert.rejects(f.request(modelsPath, 'PATCH', { ...saved, communityFeedMode: 'shuffle' }), { statusCode: 400 })
+  assert.equal(f.state.row.clientOptions.communityFeedMode, 'latest')
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, items)
+})
+
+test('model edits require their current version under the row lock and reject stale account identity', async () => {
+  const f = fixture(), before = await f.request(modelsPath), items = [{ id: 'custom-image', kind: 'image' }]
+  for (const version of [undefined, null, '', 'obsolete']) {
+    await assert.rejects(f.request(modelsPath, 'PATCH', { items, version }), { statusCode: 409 })
+  }
+  assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  const race = fixture({ beforeLock(row) { row.clientOptions.communityModelTypes = [{ id: 'other-model', kind: 'text' }] } })
+  const read = await race.request(modelsPath)
+  await assert.rejects(race.request(modelsPath, 'PATCH', { items, version: read.version }), { statusCode: 409 })
+  assert(!race.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  for (const headers of [{}, { 'x-new-api-user': 'differentAdmin' }]) {
+    const stale = fixture({ headers })
+    stale.statements.length = 0
+    await assert.rejects(stale.request(modelsPath, 'PATCH', { items, version: before.version }), { statusCode: 409 })
+    assert.equal(stale.statements.length, 0)
+  }
+})
+
+test('model display fields are normalized and auditing remains atomic', async () => {
+  const f = fixture(), before = await f.request(modelsPath)
+  const saved = await f.request(modelsPath, 'PATCH', {
+    items: [{ id: 'custom-image', name: ' 图像模型 ', tags: [' 图像 ', 'Edit'], kind: 'image' }], version: before.version,
+  })
+  assert.deepEqual(saved.items, [{ id: 'custom-image', name: '图像模型', tags: ['图像', 'Edit'], kind: 'image' }])
+  assert.deepEqual(await f.request(modelsPath), saved)
+  assert.equal(f.statements.find(item => item.sql.startsWith('INSERT INTO moderation_log')).parameters[2], 'updateCommunityModels')
+  const failed = fixture({ failAudit: true }), previous = structuredClone(failed.state.row)
+  const initial = await failed.request(modelsPath)
+  await assert.rejects(failed.request(modelsPath, 'PATCH', { items: saved.items, version: initial.version }), /Audit storage unavailable/)
+  assert.deepEqual(failed.state.row, previous)
+  assert(failed.statements.some(item => item.sql === 'ROLLBACK'))
 })
 
 test('model configuration rejects incompatible interfaces, credentials, invalid defaults and oversized remarks', async () => {
@@ -284,30 +336,34 @@ test('model configuration rejects incompatible interfaces, credentials, invalid 
     { kind: 'video', video: { parameterFormat: 'plugin' } }, { kind: 'video', video: { autoAspectRatio: 'javascript:1' } },
     { kind: 'image', apiFormat: 'https://untrusted.example/generate' }, { kind: 'image', apiKey: 'secret' },
     { kind: 'text', remark: 'x'.repeat(2001) }, { kind: 'text', remark: 'private\0note' },
+    ...[{ name: '' }, { name: ' ' }, { name: 'x'.repeat(121) }, { name: 'bad\nname' }, { name: null },
+      { tags: 'tag' }, { tags: [''] }, { tags: [' '] }, { tags: ['x'.repeat(33)] }, { tags: ['bad\0tag'] },
+      { tags: ['same', 'Same'] }, { tags: ['same', ' same '] }, { tags: [1] },
+      { tags: Array.from({ length: 13 }, (_, index) => String(index)) }].map(item => ({ kind: 'text', ...item })),
   ]
-  const f = fixture()
+  const f = fixture(), before = await f.request(modelsPath)
   for (const item of invalid) {
-    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', {
-      communityModelTypes: [{ id: 'configured-model', ...item }],
+    await assert.rejects(f.request(modelsPath, 'PATCH', {
+      items: [{ id: 'configured-model', ...item }], version: before.version,
     }), { statusCode: 400 })
   }
   assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
 })
 
 test('video resolution settings persist with model types and accept automatic upstream resolution', async () => {
-  const f = fixture(), path = '/api/admin/community/config', before = await f.request(path)
+  const f = fixture(), path = modelsPath, before = await f.request(path)
   const videoSettings = [{}, { autoResolution: 'auto' }, { autoResolution: '1p' }, { autoResolution: '65535p' },
     { autoResolution: '4k' }, { autoResolution: '480p', resolutions: ['480p', '720p'] },
     { resolutions: ['720p'] }, { autoResolution: 'auto', resolutions: ['4k'] },
     { resolutions: Array.from({ length: 16 }, (_, index) => `${index + 1}p`) }]
   const communityModelTypes = videoSettings.map((video, index) => ({ id: `video-${index}`, kind: 'video', video }))
-  const saved = await f.request(path, 'PATCH', { communityModelTypes, version: before.version })
-  assert.deepEqual(saved.config.communityModelTypes, communityModelTypes)
-  assert.deepEqual((await f.request(path)).config.communityModelTypes, communityModelTypes)
+  const saved = await f.request(path, 'PATCH', { items: communityModelTypes, version: before.version })
+  assert.deepEqual(saved.items, communityModelTypes)
+  assert.deepEqual((await f.request(path)).items, communityModelTypes)
   assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
   assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
   assert.notEqual(saved.version, before.version)
-  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
+  await assert.rejects(f.request(path, 'PATCH', { items: [], version: before.version }), { statusCode: 409 })
 })
 
 test('video resolution settings reject unsafe, conflicting and oversized configuration before writing', async () => {
@@ -321,7 +377,7 @@ test('video resolution settings reject unsafe, conflicting and oversized configu
   modelTypes.push([{ id: 'image-model', kind: 'image', video: {} }], [{ id: 'chat-model', kind: 'text', video: {} }])
   for (const communityModelTypes of modelTypes) {
     const f = fixture()
-    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModelTypes }), { statusCode: 400 })
+    await assert.rejects(f.request(modelsPath, 'PATCH', { items: communityModelTypes }), { statusCode: 400 })
     assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
   }
 })
@@ -335,7 +391,7 @@ test('review settings save their own fields atomically without changing uploads,
   const saved = await f.request(path, 'PATCH', patch)
   assert.equal(saved.config.communityPublicationMode, 'before')
   assert.equal(saved.config.communityViolationThreshold, 5)
-  assert.deepEqual(saved.config.communityModelTypes, before.config.communityModelTypes)
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, [{ id: 'keep-model', kind: 'video' }])
   assert.deepEqual(saved.config.uploadLimits, before.config.uploadLimits)
   assert.deepEqual(saved.config.communityFeedWeights, before.config.communityFeedWeights)
   assert(!f.statements.some(item => /^(UPDATE|DELETE|INSERT INTO) (community_submission|"user"|community_violation)/.test(item.sql)))
@@ -355,7 +411,7 @@ test('model type settings reject duplicates, invalid types, control characters a
     Array.from({ length: 501 }, (_, index) => ({ id: String(index), kind: 'text' })),
   ]) {
     const f = fixture()
-    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModelTypes }), { statusCode: 400 })
+    await assert.rejects(f.request(modelsPath, 'PATCH', { items: communityModelTypes }), { statusCode: 400 })
     assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
   }
 })
@@ -376,7 +432,7 @@ test('public site metadata contains only branding and every configuration route 
   const anonymous = fixture({ user: null })
   assert.deepEqual(await anonymous.request('/api/site'), { brand: '旧站名称', logoUrl: 'https://images.example/legacy.png' })
   for (const actor of [null, { id: 'mod1', isAdmin: false, isModerator: true }, { id: 'user1', isAdmin: false, isModerator: false }]) {
-    for (const path of ['/api/admin/settings', '/api/admin/community/config', '/api/admin/community/ads']) {
+    for (const path of [modelsPath, '/api/admin/settings', '/api/admin/community/config', '/api/admin/community/ads']) {
       const f = fixture({ user: actor })
       await assert.rejects(f.request(path), { statusCode: actor ? 403 : 401 })
       await assert.rejects(f.request(path, 'PATCH', {}), { statusCode: actor ? 403 : 401 })

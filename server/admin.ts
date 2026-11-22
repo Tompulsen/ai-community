@@ -40,7 +40,7 @@ interface ReportRow {
   contentKey: string | null; contentSnapshot: string | null; moderationNote: string
   targetUsername?: string; reporterUsername?: string
 }
-const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits', 'communityModelTypes'] as const
+const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits'] as const
 const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
 const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."lastActiveDate",u."avatarId",u."bannerId",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
@@ -103,7 +103,6 @@ function publicConfig(options: Body) {
     communityFeedPoolSize: Number.isInteger(options.communityFeedPoolSize) && Number(options.communityFeedPoolSize) >= 20 && Number(options.communityFeedPoolSize) <= 1000 ? Number(options.communityFeedPoolSize) : 200,
     communityFeedWeights: readFeedWeights(options.communityFeedWeights),
     communityPullToRefresh: options.communityPullToRefresh !== false, uploadLimits,
-    communityModelTypes: readModelTypes(options.communityModelTypes),
   }
 }
 export function validateCommunityConfig(input: Body): Body {
@@ -119,11 +118,6 @@ export function validateCommunityConfig(input: Body): Body {
       if (!parsed.success) fail('推荐权重须为 0–100 的整数，三项合计为 100。')
       next[key] = parsed.data
     }
-    else if (key === 'communityModelTypes') {
-      const parsed = modelTypesSchema.safeParse(value)
-      if (!parsed.success) fail('模型配置无效：最多 500 个模型，ID 为 1–200 字符且不能重复；请检查类型、接口、协议、自动参数与备注。')
-      next[key] = parsed.data
-    }
     else if (key === 'uploadLimits') {
       if (!record(value) || Object.keys(value).length !== uploadKinds.length) fail('请填写全部五类上传限制。')
       keys(value, uploadKinds)
@@ -131,6 +125,23 @@ export function validateCommunityConfig(input: Body): Body {
     } else next[key] = boolean(value)
   }
   return next
+}
+async function modelSettings(ctx: RequestContext) {
+  const current = (row: MetaRow) => readModelTypes(row.clientOptions?.communityModelTypes)
+  if (ctx.req.method === 'GET') {
+    const items = current(await meta(ctx.db)); return { items, version: fingerprint(items) }
+  }
+  if (ctx.req.headers?.['x-new-api-user'] !== ctx.requireAdmin().id) fail('登录账号已变化，请刷新后重新核对。', 409)
+  keys(ctx.body, ['items', 'version'])
+  const parsed = modelTypesSchema.safeParse(ctx.body.items)
+  if (!parsed.success) fail('模型配置无效：最多 500 个模型，ID 不得重复；请检查显示名、标签、类型、接口、协议、自动参数与备注。')
+  return transaction(ctx.db, async db => {
+    const row = await meta(db, true)
+    checkVersion(ctx.body, current(row), true)
+    await db.query(`UPDATE meta SET "clientOptions"=COALESCE("clientOptions",'{}'::jsonb)||$2::jsonb WHERE id=$1`, [row.id, JSON.stringify({ communityModelTypes: parsed.data })])
+    await audit(ctx, db, 'updateCommunityModels', { items: parsed.data })
+    return { items: parsed.data, version: fingerprint(parsed.data) }
+  })
 }
 async function welfareTasks(ctx: RequestContext) {
   const current = (row: MetaRow) => readWelfareTasks(row.clientOptions?.communityWelfareTasks)
@@ -518,7 +529,7 @@ const auditLabels: Record<string, string> = {
   updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
   communityWorkEdit: '编辑作品', communityWorkDelete: '删除作品', communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
-  updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
+  updateCommunityConfig: '修改社区配置', updateCommunityModels: '修改模型配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
   createCommunityTag: '创建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
   updateCommunityWelfareTasks: '编辑福利任务', communityPublicationReward: '发作品奖励自动到账', adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
 }
@@ -554,6 +565,12 @@ function safeAuditDetails(type: string, input: unknown): Body {
   else if (type === 'updateCommunityConfig' && record(input.config)) {
     const normalized = publicConfig(input.config)
     result.config = Object.fromEntries(configKeys.filter(key => Object.hasOwn(input.config as Body, key)).map(key => [key, normalized[key]]))
+  } else if (type === 'updateCommunityModels') {
+    const parsed = modelTypesSchema.safeParse(input.items)
+    if (parsed.success) {
+      result.modelCount = parsed.data.length
+      result.modelIds = parsed.data.slice(0, 20).map(item => item.id)
+    }
   } else if (type === 'communitySettings' && record(input.settings)) {
     result.fields = ['brand', 'logoUrl', 'publicationMode', 'autoBan', 'violationThreshold', 'registrationOpen', 'uploadLimits', 'defaultModels', 'ads']
       .filter(key => Object.hasOwn(input.settings as Body, key))
@@ -668,12 +685,13 @@ export async function handleAdmin(ctx: RequestContext): Promise<boolean> {
   const report = /^\/api\/admin\/reports\/([a-zA-Z0-9]{1,32})$/.exec(path), announcement = /^\/api\/admin\/announcements\/([a-zA-Z0-9]{1,32})$/.exec(path)
   const userRoles = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/roles$/.exec(path)
   const userSection = /^\/api\/admin\/users\/([a-zA-Z0-9]{1,32})\/(note|media|logins)$/.exec(path)
-  const recognized = ['/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
+  const recognized = ['/api/admin/models', '/api/admin/welfare/tasks', '/api/admin/community/config', '/api/admin/community/ads', '/api/admin/tags', '/api/admin/users', '/api/admin/reports', '/api/admin/settings', '/api/admin/announcements', '/api/admin/audit', '/api/admin/roles'].includes(path) || tag || person || report || announcement || userRoles || userSection
   if (!recognized) return false
   if (path === '/api/admin/reports' || report) { const actor = ctx.requireUser(); if (!actor.isAdmin && !actor.isModerator) fail('需要审核员权限。', 403) }
   else ctx.requireAdmin()
   let result: unknown
-  if (path === '/api/admin/welfare/tasks' && ['GET', 'PATCH'].includes(method ?? '')) result = await welfareTasks(ctx)
+  if (path === '/api/admin/models' && ['GET', 'PATCH'].includes(method ?? '')) result = await modelSettings(ctx)
+  else if (path === '/api/admin/welfare/tasks' && ['GET', 'PATCH'].includes(method ?? '')) result = await welfareTasks(ctx)
   else if (path === '/api/admin/community/config' && ['GET', 'PATCH'].includes(method ?? '')) result = await config(ctx)
   else if (path === '/api/admin/community/ads' && ['GET', 'PATCH'].includes(method ?? '')) result = await ads(ctx)
   else if ((path === '/api/admin/tags' && ['GET', 'POST'].includes(method ?? '')) || (tag && ['PATCH', 'DELETE'].includes(method ?? ''))) result = await tags(ctx, tag?.[1])

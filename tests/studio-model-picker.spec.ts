@@ -30,6 +30,22 @@ async function open(page: Page) {
   await page.getByRole('combobox', { name: '模型', exact: true }).click()
   return page.getByRole('dialog', { name: '选择模型', exact: true })
 }
+test('configured names and tags are visible and searchable while selection keeps the account model ID', async ({ page }) => {
+  const { requests } = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'custom/alias', name: '社区绘图模型', tags: ['高画质', '中文理解'], kinds: ['image'], configuredKind: 'image', apiFormat: 'images' },
+    { id: 'gpt-5', kinds: ['text'] },
+  ] } }))
+  await page.goto('/create/image')
+  const dialog = await open(page)
+  await expect(dialog.getByText('社区绘图模型', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('高画质', { exact: true })).toBeVisible()
+  await dialog.getByRole('searchbox', { name: '搜索模型' }).fill('中文理解')
+  await expect(dialog.locator('.model-option')).toHaveCount(1)
+  await dialog.getByRole('button', { name: 'custom/alias', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('custom/alias')
+  expect(requests).toEqual([])
+})
 test('the model selector hides its text caret after focus returns while search and keyboard entry still work', async ({ page }) => {
   await fixture(page); await page.goto('/create/image')
   const trigger = page.getByRole('combobox', { name: '模型', exact: true })
