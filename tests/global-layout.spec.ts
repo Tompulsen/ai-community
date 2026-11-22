@@ -48,9 +48,9 @@ async function mockLayout(page: Page, authenticated = true) {
       user: peer, canSend: true, nextCursor: null,
     } })
     if (path === '/api/lottery/status') return route.fulfill({ json: {
-      settings: { enabled: true, minConsumptionCnyFen: 0, prizes: [{ id: 'prize', name: '创作奖励', description: '活动测试奖项', amountCents: 100, kind: 'balance', weight: 1, stock: 10, enabled: true }], invites: { enabled: true, threshold: 1, tickets: 1 }, followers: { enabled: false }, likes: { enabled: false }, likesMode: 'work', wheel: { theme: 'teal', title: '创作抽奖', subtitle: '', buttonText: '抽奖', rulesText: '参与活动前请阅读规则。' } },
+      settings: { enabled: true, minSupportCnyFen: 0, prizes: [{ id: 'prize', name: '创作奖励', description: '活动测试奖项', amountCents: 100, kind: 'balance', weight: 1, stock: 10, enabled: true }], invites: { enabled: true, threshold: 1, tickets: 1 }, followers: { enabled: false }, likes: { enabled: false }, likesMode: 'work', wheel: { theme: 'teal', title: '创作抽奖', subtitle: '', buttonText: '抽奖', rulesText: '参与活动前请阅读规则。' } },
       balance: 3, counts: { invites: 2, followers: 0, likes: 0, bestWorkLikes: 0 }, earned: { invites: 2 }, accountLinked: true, creditReady: false, inviteUrl: '',
-      consumption: { checked: true, eligible: true, amountCnyFen: 1000 },
+      support: { checked: true, eligible: true, amountCnyFen: 1000 },
     } })
     return route.fulfill({ json: { items: [], nextCursor: null } })
   })

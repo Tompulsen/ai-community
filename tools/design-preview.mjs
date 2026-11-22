@@ -122,12 +122,12 @@ export function createPreviewMiddleware() {
         const prizes = defaultDailyLotteryPrizes(5000).map(prize => ({ ...prize, dailyQuota: prize.stock }))
         const limit = prizes.reduce((sum, prize) => sum + prize.stock, 0)
         return reply({
-          settings: { enabled: true, minConsumptionCnyFen: 0, prizes, invites: rule, followers: rule,
+          settings: { enabled: true, minSupportCnyFen: 0, prizes, invites: rule, followers: rule,
             likes: rule, likesMode: 'total', wheel: { theme: 'teal', title: '活动抽奖', subtitle: '每日一次',
               buttonText: '开始抽奖', rulesText: '每日可参与一次。' } },
           balance: 1, counts: { invites: 0, followers: 28, likes: 68, bestWorkLikes: 14 },
           earned: { invites: 0, followers: 0, likes: 0 }, accountLinked: true, creditReady: true, inviteUrl: '',
-          consumption: { checked: true, eligible: true, amountCnyFen: 1000 },
+          support: { checked: true, eligible: true, amountCnyFen: 1000 },
           daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(),
             limit, used: 0, remaining: limit, participated: false },
         })

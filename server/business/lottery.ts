@@ -10,7 +10,7 @@ export type LotteryWheel = { theme: 'teal' | 'violet' | 'sunset'; title: string;
 export type LotteryPrize = { id: string; name: string; description: string; weight: number; stock: number; enabled: boolean; amountCents: number; kind: 'balance' | 'empty' };
 export type LotterySettings = {
 	enabled: boolean;
-	minConsumptionCnyFen: number;
+	minSupportCnyFen: number;
 	rewardValidityHours: number;
 	dailyLimit?: number;
 	invites: LotteryRule;
@@ -20,24 +20,24 @@ export type LotterySettings = {
 	prizes: LotteryPrize[];
 	wheel: LotteryWheel;
 };
-export type LotterySettingsInput = Omit<LotterySettings, 'wheel' | 'minConsumptionCnyFen' | 'rewardValidityHours'> & { wheel?: LotteryWheel; minConsumptionCnyFen?: number; rewardValidityHours?: number };
+export type LotterySettingsInput = Omit<LotterySettings, 'wheel' | 'minSupportCnyFen' | 'rewardValidityHours'> & { wheel?: LotteryWheel; minSupportCnyFen?: number; rewardValidityHours?: number };
 export type LotteryCreditReceipt = { id: number; quotaAdded: number; quotaPerUsd: string; rewardKind?: 'charity'; validityHours?: number; expiresAt?: number; points?: string; lotId?: number; creditedAt?: number; quotaPerPoint?: number };
 export type LotteryAward = { amountCents: number; prizeId: string; name: string; description: string; status: 'pending' | 'fulfilled' | 'empty'; fulfilledAt: string | null; fulfilledBy: string | null; note: string; rewardKind?: 'charity'; validityHours?: number; creditReceipt?: LotteryCreditReceipt; creditBlocked?: boolean };
 export type LotteryProgress = { invites: number; likes: number; followers: number; works: Record<string, number> };
 
 export const defaultLotteryWheel = (): LotteryWheel => ({ theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' });
 
-export function normalizeLotterySettings(settings: LotterySettingsInput & { minSupportCnyFen?: number }): LotterySettings {
-	const { minSupportCnyFen, ...current } = settings;
+export function normalizeLotterySettings(settings: LotterySettingsInput & { minConsumptionCnyFen?: number }): LotterySettings {
+	const { minConsumptionCnyFen, ...current } = settings;
 	const rewardValidityHours = current.rewardValidityHours === undefined ? 168 : current.rewardValidityHours;
 	if (!Number.isInteger(rewardValidityHours) || rewardValidityHours < 1 || rewardValidityHours > 8760) throw new Error('LOTTERY_INVALID');
-	return { ...current, rewardValidityHours, minConsumptionCnyFen: current.minConsumptionCnyFen ?? minSupportCnyFen ?? 0, wheel: { ...defaultLotteryWheel(), ...current.wheel } };
+	return { ...current, rewardValidityHours, minSupportCnyFen: current.minSupportCnyFen ?? minConsumptionCnyFen ?? 0, wheel: { ...defaultLotteryWheel(), ...current.wheel } };
 }
 
 export function defaultLotterySettings(): LotterySettings {
 	return {
 		enabled: false,
-		minConsumptionCnyFen: 0,
+		minSupportCnyFen: 0,
 		rewardValidityHours: 168,
 		invites: { enabled: true, threshold: 1, tickets: 1 },
 		likes: { enabled: true, threshold: 100, tickets: 1 },

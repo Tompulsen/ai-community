@@ -27,7 +27,7 @@ async function fixture(page: Page, authenticated = true) {
   const day = lotteryDay(new Date())
   await page.route('**/api/lottery/status', route => route.fulfill({ json: { settings, balance: 1, creditReady: true, accountLinked: authenticated,
     daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(), limit: 200, remaining: 200, used: 0, participated: state.participated },
-    consumption: { checked: true, eligible: true, amountCnyFen: 1000 }, counts: { invites: 0, likes: 0, bestWorkLikes: 0, followers: 0 }, earned: { invites: 0, likes: 0, followers: 0 } } }))
+    support: { checked: true, eligible: true, amountCnyFen: 1000 }, counts: { invites: 0, likes: 0, bestWorkLikes: 0, followers: 0 }, earned: { invites: 0, likes: 0, followers: 0 } } }))
   await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true, data: { currencySymbol: '积分', pointsPerUsd: 5000 } } }))
   await page.route('**/api/lottery/records*', route => route.fulfill({ json: { items: [], nextCursor: null } }))
   await page.route('**/api/lottery/draw', route => {

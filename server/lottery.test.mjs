@@ -17,11 +17,11 @@ test('settings reject invalid money, overflowing weight and duplicate prize ids'
     assert.throws(() => validateLotterySettings({ ...settings, prizes: [{ ...settings.prizes[0], ...patch }] }), /LOTTERY_INVALID/)
   }
   assert.throws(() => validateLotterySettings({ ...settings, prizes: [settings.prizes[0], settings.prizes[0]] }), /LOTTERY_INVALID/)
-  for (const minConsumptionCnyFen of [-1, 0.1, '100', null, NaN, Infinity, 100000001, Number.MAX_SAFE_INTEGER + 1]) {
-    assert.throws(() => validateLotterySettings({ ...settings, minConsumptionCnyFen }), /LOTTERY_INVALID/)
+  for (const minSupportCnyFen of [-1, 0.1, '100', null, NaN, Infinity, 100000001, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => validateLotterySettings({ ...settings, minSupportCnyFen }), /LOTTERY_INVALID/)
   }
-  for (const minConsumptionCnyFen of [undefined, 0, 129, 100000000]) {
-    assert.doesNotThrow(() => validateLotterySettings({ ...settings, minConsumptionCnyFen }))
+  for (const minSupportCnyFen of [undefined, 0, 129, 100000000]) {
+    assert.doesNotThrow(() => validateLotterySettings({ ...settings, minSupportCnyFen }))
   }
   for (const rewardValidityHours of [0, -1, 1.5, '168', null, NaN, Infinity, 8761, Number.MAX_SAFE_INTEGER]) {
     assert.throws(() => validateLotterySettings({ ...settings, rewardValidityHours }), /LOTTERY_INVALID/)

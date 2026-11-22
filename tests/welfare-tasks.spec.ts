@@ -28,7 +28,7 @@ async function fixture(page: Page, authenticated = true) {
   await page.route('**/api/referrals/status*', route => route.fulfill({ json: state.referral }))
   await page.route('**/api/lottery/status', route => route.fulfill(state.ruleFailure ? { status: 503, json: { error: 'LOTTERY_UNAVAILABLE' } } : { json: {
     ...state.lottery, earned: { invites: 0, likes: 0, followers: 0 }, balance: 0, accountLinked: authenticated, creditReady: true, inviteUrl: '',
-    consumption: { checked: true, eligible: true, amountCnyFen: 1000 },
+    support: { checked: true, eligible: true, amountCnyFen: 1000 },
   } }))
   await page.route('**/api/lottery/records*', route => route.fulfill({ json: { items: [], nextCursor: null } }))
   return { state, account }

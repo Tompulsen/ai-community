@@ -111,8 +111,8 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
   }
   const daily = input.dailyLimit !== undefined
   if (daily && (typeof input.dailyLimit !== 'number' || !Number.isInteger(input.dailyLimit) || input.dailyLimit < 1 || input.dailyLimit > 1000000)) fail('LOTTERY_INVALID')
-  if (input.minConsumptionCnyFen !== undefined && (typeof input.minConsumptionCnyFen !== 'number' || !Number.isSafeInteger(input.minConsumptionCnyFen)
-    || input.minConsumptionCnyFen < 0 || input.minConsumptionCnyFen > 100000000)) fail('LOTTERY_INVALID')
+  if (input.minSupportCnyFen !== undefined && (typeof input.minSupportCnyFen !== 'number' || !Number.isSafeInteger(input.minSupportCnyFen)
+    || input.minSupportCnyFen < 0 || input.minSupportCnyFen > 100000000)) fail('LOTTERY_INVALID')
   if (input.rewardValidityHours !== undefined && (typeof input.rewardValidityHours !== 'number' || !Number.isInteger(input.rewardValidityHours)
     || input.rewardValidityHours < 1 || input.rewardValidityHours > 8760)) fail('LOTTERY_INVALID')
   const ids = new Set<string>()
@@ -332,6 +332,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     if (accountSubject !== undefined) {
       url.searchParams.set('client_id', new URL(config.url).origin)
       url.searchParams.set('user_id', accountSubject)
+      url.searchParams.set('basis', 'support')
     }
     const response = await fetcher(url, {
       method: body ? 'POST' : 'GET', redirect: 'error', signal,
@@ -357,13 +358,13 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     catch { throw Object.assign(new Error('LOTTERY_CREDIT_RESPONSE'), { permanent: true }) }
   }
 
-  async function readConsumption(issuer: string, subject: string) {
+  async function readSupport(issuer: string, subject: string) {
     const response = await creditRequest(issuer, undefined, AbortSignal.timeout(8000), subject)
     if (response.ready !== true || response.client_id !== new URL(config.url).origin || response.user_id !== Number(subject)
-      || response.basis !== 'consumption' || typeof response.has_consumption !== 'boolean' || typeof response.consumption_cny_fen !== 'number'
-      || !Number.isSafeInteger(response.consumption_cny_fen) || response.consumption_cny_fen < 0
-      || (!response.has_consumption && response.consumption_cny_fen > 0)) throw new Error('LOTTERY_CONSUMPTION_RESPONSE')
-    return { hasConsumption: response.has_consumption, amountCnyFen: response.consumption_cny_fen,
+      || response.basis !== 'support' || typeof response.has_support !== 'boolean' || typeof response.support_cny_fen !== 'number'
+      || !Number.isSafeInteger(response.support_cny_fen) || response.support_cny_fen < 0
+      || (!response.has_support && response.support_cny_fen > 0)) throw new Error('LOTTERY_SUPPORT_RESPONSE')
+    return { hasSupport: response.has_support, amountCnyFen: response.support_cny_fen,
       charityReady: charityQuotaPerPoint(response) !== null, checkedAt: Date.now() }
   }
 
@@ -487,15 +488,15 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         inviteUrl: '',
       }
     })
-    let consumption = { checked: false, eligible: false, amountCnyFen: null as number | null }
+    let support = { checked: false, eligible: false, amountCnyFen: null as number | null }
     if (credit && typeof subject === 'string' && /^[1-9]\d{0,14}$/.test(subject)) {
       try {
-        const used = await readConsumption(credit.issuer, subject)
-        result.creditReady = used.charityReady
-        consumption = { checked: true, eligible: used.hasConsumption && used.amountCnyFen >= result.settings.minConsumptionCnyFen, amountCnyFen: used.amountCnyFen }
-      } catch { /* Task opportunities remain available when consumption verification is temporarily unavailable. */ }
+        const checked = await readSupport(credit.issuer, subject)
+        result.creditReady = checked.charityReady
+        support = { checked: true, eligible: checked.hasSupport && checked.amountCnyFen >= result.settings.minSupportCnyFen, amountCnyFen: checked.amountCnyFen }
+      } catch { /* Task opportunities remain available when support verification is temporarily unavailable. */ }
     }
-    return { ...result, consumption }
+    return { ...result, support }
   }
 
   async function dailyPool(client: Queryable, settings: LotterySettings, userId: string | undefined, time: Date) {
@@ -534,7 +535,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       return preflight.receipt
     }
     // Verify without holding the global pool lock; restore concurrent receipts even if verification failed.
-    const consumption = await readConsumption(preflight.issuer, preflight.subject).catch(() => null)
+    const support = await readSupport(preflight.issuer, preflight.subject).catch(() => null)
     const receipt = await transaction(db, async client => {
       await actor(client, userId)
       const pool = await configuration(client, true)
@@ -559,9 +560,9 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       const subject = rows[0]?.subject
       if (!credit || typeof subject !== 'string' || !/^[1-9]\d{0,14}$/.test(subject) || !Number.isSafeInteger(Number(subject))) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
       if (credit.issuer !== preflight.issuer || subject !== preflight.subject) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
-      if (!consumption || Date.now() - consumption.checkedAt > 60000) fail('LOTTERY_CONSUMPTION_UNAVAILABLE', 503)
-      if (!consumption.charityReady) fail('LOTTERY_UNAVAILABLE', 409)
-      if (!consumption.hasConsumption || consumption.amountCnyFen < pool.settings.minConsumptionCnyFen) fail('LOTTERY_CONSUMPTION_REQUIRED', 409)
+      if (!support || Date.now() - support.checkedAt > 60000) fail('LOTTERY_SUPPORT_UNAVAILABLE', 503)
+      if (!support.charityReady) fail('LOTTERY_UNAVAILABLE', 409)
+      if (!support.hasSupport || support.amountCnyFen < pool.settings.minSupportCnyFen) fail('LOTTERY_SUPPORT_REQUIRED', 409)
       const { account } = await sync(client, userId, pool.settings)
       if (account.balance < count) fail('LOTTERY_INSUFFICIENT', 409)
       const prizes: LotteryAward[] = []
@@ -633,7 +634,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     return transaction(db, async client => {
       const current = await configuration(client, true)
       if (version !== current.version) fail('LOTTERY_CONFLICT', 409)
-      const settings = normalizeLotterySettings({ ...normalized, minConsumptionCnyFen: normalized.minConsumptionCnyFen ?? current.settings.minConsumptionCnyFen,
+      const settings = normalizeLotterySettings({ ...normalized, minSupportCnyFen: normalized.minSupportCnyFen ?? current.settings.minSupportCnyFen,
         rewardValidityHours: normalized.rewardValidityHours ?? current.settings.rewardValidityHours, wheel: normalized.wheel ?? current.settings.wheel })
       settings.invites.enabled = false
       for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) settings.wheel[key] = settings.wheel[key].trim()

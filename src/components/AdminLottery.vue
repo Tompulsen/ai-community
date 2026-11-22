@@ -23,8 +23,8 @@ const loading = ref(true), saving = ref(false), error = ref(''), saved = ref(fal
 const percentages = ref<Record<string, number>>({})
 const probabilitiesEdited = ref(false)
 const pointsPerUsd = ref<number | null>(null)
-const minConsumptionCny = ref<number | string>(0)
-const consumptionInput = ref<HTMLInputElement | null>(null), consumptionInvalid = ref(false)
+const minSupportCny = ref<number | string>(0)
+const supportInput = ref<HTMLInputElement | null>(null), supportInvalid = ref(false)
 const rewardValidity = ref<number | string>(7), rewardValidityUnit = ref<'days' | 'hours'>('days')
 const validityInput = ref<HTMLInputElement | null>(null), validityInvalid = ref(false)
 const prizeEditorVersion = ref(0)
@@ -49,7 +49,7 @@ function setPoints(prize: LotteryPrize, event: Event) {
 }
 const baseline = ref('')
 const reloadPrompt = ref(false)
-const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minConsumptionCny: minConsumptionCny.value, rewardValidity: rewardValidity.value, rewardValidityUnit: rewardValidityUnit.value })
+const configSnapshot = () => JSON.stringify({ draft: draft.value, percentages: percentages.value, minSupportCny: minSupportCny.value, rewardValidity: rewardValidity.value, rewardValidityUnit: rewardValidityUnit.value })
 const hasUnsavedChanges = computed(() => !!baseline.value && configSnapshot() !== baseline.value)
 defineExpose({ hasUnsavedChanges })
 const ruleNames = { followers: '获得关注', likes: '作品获赞' }
@@ -70,14 +70,14 @@ function message(cause: unknown) {
 }
 function setDraft(value: Config) {
   draft.value = value
-  minConsumptionCny.value = (value.settings.minConsumptionCnyFen ?? 0) / 100
+  minSupportCny.value = (value.settings.minSupportCnyFen ?? 0) / 100
   const hours = value.settings.rewardValidityHours ?? 168
   rewardValidityUnit.value = hours % 24 === 0 ? 'days' : 'hours'
   rewardValidity.value = hours / (rewardValidityUnit.value === 'days' ? 24 : 1)
   validityInvalid.value = false
   validityInput.value?.setCustomValidity('')
-  consumptionInvalid.value = false
-  consumptionInput.value?.setCustomValidity('')
+  supportInvalid.value = false
+  supportInput.value?.setCustomValidity('')
   prizeEditorVersion.value++
   const enabled = value.settings.prizes.filter(prize => prize.enabled)
   const total = enabled.reduce((sum, prize) => sum + prize.weight, 0)
@@ -122,17 +122,17 @@ function probability(prize: LotteryPrize) {
 async function saveConfig() {
   if (!draft.value || saving.value) return
   error.value = ''; saved.value = false
-  const minimum = minConsumptionCny.value
+  const minimum = minSupportCny.value
   if (typeof minimum !== 'number' || !Number.isFinite(minimum) || minimum < 0 || minimum > 1000000
     || Math.abs(minimum * 100 - Math.round(minimum * 100)) > 0.000001) {
     error.value = '请输入 ✦0 至 ✦1,000,000，最多两位小数。'
-    consumptionInvalid.value = true
-    consumptionInput.value?.setCustomValidity(error.value)
-    consumptionInput.value?.reportValidity()
+    supportInvalid.value = true
+    supportInput.value?.setCustomValidity(error.value)
+    supportInput.value?.reportValidity()
     return
   }
   const value = structuredClone(toRaw(draft.value))
-  value.settings.minConsumptionCnyFen = Math.round(minimum * 100)
+  value.settings.minSupportCnyFen = Math.round(minimum * 100)
   const hours = Number(rewardValidity.value) * (rewardValidityUnit.value === 'days' ? 24 : 1)
   if (typeof rewardValidity.value !== 'number' || !Number.isInteger(rewardValidity.value)
     || !Number.isSafeInteger(hours) || hours < 1 || hours > 8760) {
@@ -211,7 +211,7 @@ onMounted(() => { void loadConfig(); void loadRecords() })
             <label class="field"><span>活动简介</span><input v-model="draft.settings.wheel.subtitle" class="control" maxlength="120" /></label>
           </div>
           <label class="field"><span>活动规则</span><textarea v-model="draft.settings.wheel.rulesText" class="control" rows="3" maxlength="2000" /></label>
-          <div class="field"><label for="lottery-min-consumption">累计消费（✦）</label><input id="lottery-min-consumption" ref="consumptionInput" v-model.number="minConsumptionCny" name="minConsumptionCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-consumption-help" :aria-invalid="consumptionInvalid || undefined" @invalid="consumptionInvalid = true" @input="consumptionInvalid = false; consumptionInput?.setCustomValidity(''); saved = false" /><p id="lottery-consumption-help" class="form-note">参与抽奖所需的累计消费金额。设为 0 时仍需累计消费大于 ✦0.00；满足条件后仍需抽奖次数。</p></div>
+          <div class="field"><label for="lottery-min-support">累计支持（✦）</label><input id="lottery-min-support" ref="supportInput" v-model.number="minSupportCny" name="minSupportCny" class="control" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" required aria-describedby="lottery-support-help" :aria-invalid="supportInvalid || undefined" @invalid="supportInvalid = true" @input="supportInvalid = false; supportInput?.setCustomValidity(''); saved = false" /><p id="lottery-support-help" class="form-note">参与抽奖所需的累计支持金额。设为 0 时仍需累计支持大于 ✦0.00；满足条件后仍需抽奖次数。</p></div>
           <div class="field">
             <label for="lottery-reward-validity">福利积分有效期</label>
             <div class="reward-validity-fields">

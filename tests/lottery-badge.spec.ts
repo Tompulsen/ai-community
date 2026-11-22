@@ -16,7 +16,7 @@ async function fixture(page: Page, balance = 2, authenticated = true) {
   await page.route('**/api/lottery/status', route => route.fulfill({ json: {
     settings: { ...defaultLotterySettings(), enabled: true, prizes: [{ id: 'empty', name: '谢谢参与', kind: 'empty', description: '', amountCents: 0, weight: 1, stock: -1, enabled: true }] }, balance: state.balance,
     counts: { likes: 0, bestWorkLikes: 0, followers: 0, invites: 0 }, earned: { likes: 0, followers: 0, invites: 0 },
-    creditReady: true, accountLinked: true, consumption: { checked: true, eligible: true, amountCnyFen: 10000 },
+    creditReady: true, accountLinked: true, support: { checked: true, eligible: true, amountCnyFen: 10000 },
   } }))
   await page.route('**/api/lottery/records*', route => route.fulfill({ json: { items: [], nextCursor: null } }))
   await page.route('**/api/lottery/draw', route => {
