@@ -4,7 +4,7 @@ import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
 import { errorMessage, session } from '../state'
-import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, stopCreation, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
+import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
 import { chats, newChat, saveChats } from '../native-chat'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
@@ -61,7 +61,6 @@ const selected = computed(() => blank.value ? undefined : currentTasks.value.fin
 const automaticReferences = computed(() => props.kind === 'image' && currentConversation.value && !references.value.length && !skipAutomaticReference.value
   ? imageContinuationReferences(currentConversation.value, branchTaskId.value) : [])
 const requestReferences = computed(() => references.value.length ? references.value : automaticReferences.value)
-const activeTask = computed(() => currentTasks.value.find(task => ['submitting', 'running'].includes(task.phase)))
 const busy = computed(() => currentConversation.value && isConversationBusy(currentConversation.value))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
@@ -337,9 +336,12 @@ async function submit(onRegistered?: () => void) {
       }
       if (owner === session.user?.id) chats.preparing[chat.id] = false
       preparing = false
+      if (materialSubmission === preparation) {
+        materialSubmission = undefined; waitingForMaterials.value = false; submissions.value[kind] = false
+      }
       onRegistered?.()
     }, () => owner === session.user?.id && chats.sessions.some(item => item.id === chat.id))
-    if (result.phase === 'error' && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
+    if (result.phase === 'error' && creation.selectedId === result.id && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
       prompt.value = submittedPrompt; references.value = JSON.parse(submittedReferences)
       if (branchId) { branchTaskId.value = result.id; editing.value = branchEdited }
       imageEditTaskId.value = imageEditId
@@ -347,8 +349,7 @@ async function submit(onRegistered?: () => void) {
     await syncMediaConversations()
   } catch (cause) { if (owner === session.user?.id && live && scope === draftScope()) error.value = errorMessage(cause) }
   finally {
-    if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false }
-    submissions.value[kind] = false
+    if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false; submissions.value[kind] = false }
     if (preparing && owner === session.user?.id) chats.preparing[chat.id] = false
   }
 }
@@ -427,7 +428,7 @@ function chooseReference(task: CreationTask, index: number) {
   void nextTick(() => promptInput.value?.focus())
 }
 async function clearContext() {
-  if (!currentConversation.value || activeTask.value || submitting.value) return
+  if (!currentConversation.value) return
   try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false }
   catch (cause) { error.value = errorMessage(cause) }
 }
@@ -457,7 +458,7 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
       <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
-      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="submitting && !activeTask || !composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting && !activeTask || !composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
+      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="!composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="!composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="submitting || busy || materials.snapshot.value.items.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="380"><template #trigger><SlidersHorizontal :size="20" /><span>高级参数</span></template>
@@ -466,8 +467,7 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @update:model-value="modelChanged" @keys="emit('keys')" /></div>
         <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" :api-format="apiFormat" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
-        <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
-        <button v-else-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
+        <button v-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
         <button v-else class="composer-submit generation-button" :title="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :aria-label="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>

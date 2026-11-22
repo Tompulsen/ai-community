@@ -35,6 +35,7 @@ export interface CreationTask {
   protocol: string
   apiFormat?: Exclude<ModelApiFormat, 'auto'>
   upstreamId?: string
+  serverTracked?: boolean
   tokenId?: number | null
   group?: string
   progress?: number
@@ -387,6 +388,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
   const status = String(data.status || data.state || '').toLowerCase()
+  if (data.requestId === task.id) task.serverTracked = true
   if (typeof data.tokenId === 'number') task.tokenId = data.tokenId
   if (typeof data.protocol === 'string' && ['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(data.protocol)) task.protocol = data.protocol
   const apiFormat = modelApiFormatSchema.safeParse(data.apiFormat).data
@@ -420,10 +422,10 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     task.phase = 'attention'; task.error = '上游任务已结束，但未返回可读取的结果，记录已保留。'
     return true
   }
-  task.phase = task.upstreamId ? 'running' : 'attention'
+  task.phase = task.upstreamId || task.serverTracked ? 'running' : 'attention'
   if (task.phase === 'running') { task.settledAt = undefined; task.error = '' }
-  if (!task.upstreamId) task.error = '未收到可恢复的任务编号，请核对账号使用记录，勿重复提交。'
-  return !task.upstreamId
+  if (!task.upstreamId && !task.serverTracked) task.error = '未收到可恢复的任务编号，请核对账号使用记录，勿重复提交。'
+  return !task.upstreamId && !task.serverTracked
 }
 function delay(signal: AbortSignal, duration: number) {
   return new Promise<void>((resolve, reject) => {
@@ -471,25 +473,33 @@ function taskRetryDelay(value: unknown, minimum: number) {
   return Number.isFinite(duration) ? Math.max(minimum, duration) : minimum
 }
 async function poll(task: CreationTask, controller: AbortController, version: number) {
-  const deadline = Date.now() + (task.kind === 'video' ? 2 * 60 * 60_000 : 30 * 60_000)
+  const deadline = task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : 30 * 60_000)
   let failures = 0, rateLimited = 0
-  while (!controller.signal.aborted && epoch === version && Date.now() < deadline) {
+  let firstRead = true
+  while (!controller.signal.aborted && epoch === version && (firstRead || Date.now() < deadline)) {
+    firstRead = false
     const query = new URLSearchParams({ protocol: task.protocol })
     if (task.tokenId != null) query.set('tokenId', String(task.tokenId))
     let data: unknown
     try {
-      data = await queryCreationTask(`/api/creation/tasks/${task.kind}/${encodeURIComponent(task.upstreamId!)}?${query}`, task, controller, version)
+      const path = task.serverTracked || !task.upstreamId ? `/api/creation/requests/${encodeURIComponent(task.id)}`
+        : `/api/creation/tasks/${task.kind}/${encodeURIComponent(task.upstreamId)}?${query}`
+      data = await queryCreationTask(path, task, controller, version)
       failures = 0; rateLimited = 0
     } catch (error) {
       if (epoch !== version || controller.signal.aborted) return
-      task.phase = 'attention'; task.settledAt = Date.now(); task.error = errorMessage(error)
-      await persist()
       const status = record(error) ? error.status : undefined
+      const permanent = typeof status === 'number' && status < 500 && status !== 429
+      task.phase = permanent ? 'attention' : 'running'
+      task.error = permanent ? errorMessage(error) : '正在恢复任务状态…'
+      if (permanent) task.settledAt = Date.now()
+      await persist()
       let wait = 5000
       if (status === 429) {
         failures = 0
         wait = taskRetryDelay(record(error) ? error.retryAfter : undefined, Math.min(60000, 5000 * 2 ** Math.min(rateLimited++, 4)))
-      } else if (++failures >= 3 || typeof status === 'number' && status < 500) return
+      } else if (permanent) return
+      else wait = Math.min(60000, 5000 * 2 ** Math.min(failures++, 4))
       await delay(controller.signal, Math.min(wait, Math.max(0, deadline - Date.now())))
       continue
     }
@@ -497,6 +507,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     const finished = applyResult(task, data)
     await persist()
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
+    if (Date.now() >= deadline) break
     await delay(controller.signal, 5000)
   }
   if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，已停止等待，任务记录已保留。'; await persist() }
@@ -574,20 +585,13 @@ export function selectCreationGroup(group: string): Promise<void> {
 }
 export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
-  if (creationRequestTimedOut(task)) return
+  if (creationRequestTimedOut(task) && !task.serverTracked) return
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
   const controller = new AbortController(), version = epoch
   controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.settledAt = undefined
   try {
-    if (!task.upstreamId) {
-      const data = await queryCreationTask(`/api/creation/requests/${encodeURIComponent(task.id)}`, task, controller, version)
-      if (epoch !== version || controller.signal.aborted) return
-      const finished = applyResult(task, data)
-      await persist()
-      if (finished) return
-    }
     await poll(task, controller, version)
   }
   catch (error) {
@@ -632,9 +636,6 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   }
   if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 27 * 1024 ** 2) throw new Error('图片和对话上下文超过请求大小上限，请清除上下文或减少参考图。')
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
-  if (input.kind !== 'text' && input.conversationId && creation.tasks.some(task => task.owner === acceptedOwner
-    && creationConversationId(task) === input.conversationId && (controllers.has(task.id) || ['submitting', 'running', 'paused', 'attention'].includes(task.phase))))
-    throw new Error('原请求尚未结束，请保留记录，勿重复提交生成。')
   const id = crypto.randomUUID()
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
@@ -675,7 +676,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
+      headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}) },
       body: JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
@@ -732,6 +733,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       if (controller.signal.aborted && task.kind !== 'text') task.phase = 'paused'
       task.settledAt ??= Date.now()
       task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : notAccepted ? errorMessage(error) : `${errorMessage(error)} 原请求可能已被受理，请勿重复提交。`
+      if (!controller.signal.aborted && !notAccepted) {
+        task.serverTracked = true
+        await poll(task, controller, version).catch(() => {})
+      }
     }
   } finally {
     if (epoch === version) await persist()
@@ -871,7 +876,7 @@ export function initializeCreation() {
     creation.loaded = true
     creation.selectedId = creation.tasks[0]?.id || ''
     await persist()
-    for (const task of creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && item.kind !== 'text' && !item.legacy)
+    for (const task of creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && !item.legacy)
       && !item.customApiBase && (!item.legacy || item.tokenId != null))) void resumeCreation(task)
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting

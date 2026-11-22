@@ -4,10 +4,13 @@
  */
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 import Fastify from 'fastify'
 import sharp from 'sharp'
-import { handleCreation } from './creation.ts'
+import { handleCreation, processCreationTasks } from './creation.ts'
 import { httpError } from './auth.ts'
 
 const origin = 'https://community.example'
@@ -76,13 +79,31 @@ function deferred() {
 
 function fixture(t, options = {}) {
   const values = new Map()
+  const due = new Map()
   const calls = []
   const credentialCalls = []
   const catalogueCalls = []
   const app = Fastify({ forceCloseConnections: true })
   t.after(() => app.close())
   const redis = {
-    async eval() { return 1 },
+    async eval(script, _count, key, ...args) {
+      if (script.includes('"ZADD"')) {
+        const [, value, ttl, score, member] = args
+        if (script.includes('"NX"') && values.has(key)) return null
+        await options.beforeRedisSet?.(key, value, ['EX', ttl, ...(script.includes('"NX"') ? ['NX'] : [])])
+        values.set(key, value)
+        if (score === '') due.delete(member)
+        else due.set(member, Number(score))
+        return 'OK'
+      }
+      if (script.includes('ARGV[1]') && values.get(key) === args[0]) values.delete(key)
+      return 1
+    },
+    async zadd(_name, score, key) { due.set(key, Number(score)); return 1 },
+    async zrem(_name, key) { return Number(due.delete(key)) },
+    async zrangebyscore(_name, min, max) {
+      return [...due].filter(([, score]) => score >= Number(min) && score <= Number(max)).slice(0, 4).map(([key]) => key)
+    },
     async get(key) { return values.get(key) ?? null },
     async set(key, value, ...flags) {
       if (flags.includes('NX') && values.has(key)) return null
@@ -123,7 +144,7 @@ function fixture(t, options = {}) {
         if (options.modelReadError) throw options.modelReadError
         return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
       } },
-      config: { url: origin },
+      config: { url: origin }, filesRoot: options.filesRoot,
       url: new URL(request.raw.url, origin), body: request.body || {},
       requireUser() { return user },
       requireAdmin() { if (!user.isAdmin) throw httpError(403, '需要管理员权限。'); return user },
@@ -132,7 +153,7 @@ function fixture(t, options = {}) {
     if (!await handleCreation(ctx, services)) reply.code(404).send({ error: { message: 'Missing route' } })
     return reply
   })
-  return { app, values, calls, credentialCalls, catalogueCalls }
+  return { app, values, calls, credentialCalls, catalogueCalls, redis, services }
 }
 
 function submit(app, body = imageRequest, extraHeaders = {}) {
@@ -180,6 +201,119 @@ test('preview requests keep the public-media private-network restrictions', asyn
   const { app } = fixture(t)
   for (const source of ['http://127.0.0.1/a.png', 'http://169.254.169.254/a.png', 'https://user:password@media.example/private.png'])
     assert.equal((await app.inject(`/api/creation/media?variant=preview&url=${encodeURIComponent(source)}`)).statusCode, 400)
+})
+
+test('background media returns its request ID before the upstream responds and a durable worker saves the final result', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
+  const upstream = deferred()
+  const f = fixture(t, { fetch(url, init) {
+    if (init.method === 'POST') return upstream.promise
+    assert.equal(new URL(url).pathname, '/v1/videos/upstream-video')
+    return Response.json({ id: 'upstream-video', status: 'completed' })
+  } })
+  const input = { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'background-video' }
+  const response = await submit(f.app, input, { Prefer: 'respond-async' })
+  assert.equal(response.statusCode, 202, response.payload)
+  assert.equal(response.json().requestId, input.requestId)
+  assert.equal(response.json().status, 'pending')
+  assert.equal(response.json().upstreamId, undefined)
+  const key = [...f.values.keys()].find(key => key.endsWith(':background-video'))
+  assert(key)
+  assert.equal((await f.app.inject('/api/creation/requests/background-video')).json().status, 'pending')
+  await submit(f.app, input, { Prefer: 'respond-async' })
+  assert.equal(f.calls.length, 1)
+  upstream.resolve(Response.json({ id: 'upstream-video', status: 'queued' }))
+  for (let i = 0; i < 100 && !JSON.parse(f.values.get(key)).tracking; i++) await new Promise(setImmediate)
+  const stored = JSON.parse(f.values.get(key))
+  assert.equal(stored.result.upstreamId, 'upstream-video')
+  assert.equal(typeof stored.tracking, 'string')
+  assert(!JSON.stringify(stored).includes(apiKey))
+  // This pass needs only persisted Redis data, not the original request or browser.
+  await processCreationTasks(f.redis, f.services)
+  const result = (await f.app.inject('/api/creation/requests/background-video')).json()
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.requestId, input.requestId)
+  assert.equal(result.upstreamId, 'upstream-video')
+  assert.equal(result.mediaPath, 'videos/upstream-video/content')
+  assert.equal(JSON.parse(f.values.get(key)).tracking, undefined)
+  assert.equal((await f.app.inject({ url: '/api/creation/requests/background-video', headers: { 'x-test-account': '18' } })).statusCode, 404)
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+})
+test('an interrupted text client reads pending until the original request finishes without another paid POST', async t => {
+  const started = deferred(), finished = deferred()
+  const f = fixture(t, { fetch() { started.resolve(); return finished.promise } })
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'pending-text',
+    chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: false } }
+  const sending = submit(f.app, input).then(value => value)
+  await started.promise
+  const pending = (await f.app.inject('/api/creation/requests/pending-text')).json()
+  assert.equal(pending.status, 'pending')
+  assert.equal(pending.requestId, input.requestId)
+  finished.resolve(Response.json({ choices: [{ message: { content: 'Original answer' } }] }))
+  await sending
+  assert.equal((await f.app.inject('/api/creation/requests/pending-text')).json().outputs[0].text, 'Original answer')
+  assert.equal(f.calls.length, 1)
+})
+test('background acceptance failure never crosses the paid boundary and large worker results use file storage', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-background-test-'))
+  t.after(async () => {
+    if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous
+    await rm(filesRoot, { recursive: true, force: true })
+  })
+  let rejected = true
+  const pixels = 'aW1hZ2U='.repeat(150000)
+  const f = fixture(t, { filesRoot,
+    beforeRedisSet(key, _value, flags) { if (rejected && key.endsWith(':request-1') && flags.includes('NX')) throw new Error('Redis unavailable') },
+    fetch(_url, init) { return Response.json(init.method === 'POST'
+      ? { id: 'large-image', status: 'queued' }
+      : { id: 'large-image', status: 'succeeded', data: [{ b64_json: pixels }] }) },
+  })
+  assert.equal((await submit(f.app, imageRequest, { Prefer: 'respond-async' })).statusCode, 500)
+  assert.equal(f.calls.length, 0)
+  assert.equal((await f.app.inject('/api/creation/requests/request-1')).statusCode, 404)
+  rejected = false
+  await submit(f.app, imageRequest, { Prefer: 'respond-async' })
+  const key = [...f.values.keys()].find(key => key.endsWith(':request-1'))
+  for (let i = 0; i < 100 && !JSON.parse(f.values.get(key)).tracking; i++) await new Promise(setImmediate)
+  await processCreationTasks(f.redis, f.services)
+  const saved = JSON.parse(f.values.get(key))
+  assert.equal(typeof saved.file, 'string')
+  assert(f.values.get(key).length < 10000)
+  const result = (await f.app.inject('/api/creation/requests/request-1')).json()
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.outputs[0].b64_json, pixels)
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+})
+for (const failures of [1, 3]) test(`background results survive ${failures} storage failures without replaying generation`, async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-result-recovery-'))
+  t.after(async () => {
+    if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous
+    await rm(filesRoot, { recursive: true, force: true })
+  })
+  let remaining = failures
+  const f = fixture(t, { filesRoot,
+    beforeRedisSet(key, value) {
+      if (key.endsWith(':request-1') && JSON.parse(value).result.status === 'succeeded' && remaining-- > 0)
+        throw new Error('Temporary result storage failure')
+    },
+    fetch() { return Response.json({ data: [{ url: 'https://media.example/paid-result.png' }] }) },
+  })
+  assert.equal((await submit(f.app, imageRequest, { Prefer: 'respond-async' })).statusCode, 202)
+  let result
+  for (let i = 0; i < 100; i++) {
+    result = (await f.app.inject('/api/creation/requests/request-1')).json()
+    if (result.status === 'succeeded') break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.outputs[0].url, 'https://media.example/paid-result.png')
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
 })
 
 test('automatic text interfaces use model configuration while explicit and legacy formats keep their selection', async t => {
@@ -275,7 +409,7 @@ test('image requests retain their resolved interface while pending and cached ac
   const pending = submit(app, input).then(response => response)
   await started.promise
   const inProgress = await submit(app, input)
-  assert.equal(inProgress.json().status, 'indeterminate')
+  assert.equal(inProgress.json().status, 'pending')
   assert.equal(inProgress.json().apiFormat, 'chat-completions')
   modelTypes[0].apiFormat = 'images'
   completed.resolve(Response.json(chatResult))
@@ -564,7 +698,7 @@ test('concurrent and repeated paid submissions send one upstream POST, and reque
   await started.promise
   const inProgress = await submit(app)
   assert.equal(inProgress.statusCode, 200)
-  assert.equal(inProgress.json().status, 'indeterminate')
+  assert.equal(inProgress.json().status, 'pending')
   assert.equal(calls.length, 1)
   assert.match(calls[0].init.headers.get('Idempotency-Key'), /^[a-f0-9]{64}$/)
   assert.equal(calls[0].init.headers.get('cookie'), null)

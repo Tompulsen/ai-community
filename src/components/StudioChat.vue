@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, L
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
-import { chats, createEmptyChat, newChat, loadChats, saveChats as persistChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, recoverMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
+import { chats, createEmptyChat, newChat, loadChats, saveChats as persistChats, removeChat, cloneChat, sendChat, stopChat, switchBranch, removeMessage as deleteChatMessage, submitMessageOptions, rerunMessageTool, editAssistantMessage, type NativeMessage, type NativeChat } from '../native-chat'
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
 import { prepareStudioImage } from '../studio-image-upload'
@@ -137,8 +137,9 @@ async function restoreContext() {
   if (!current.value || busy.value) return
   try { await restoreMediaContext(current.value) } catch (cause) { error.value = errorMessage(cause) }
 }
-function stop() {
+function stop(message?: NativeMessage) {
   if (!current.value || chats.preparing[current.value.id]) return
+  if (message) { stopChat(current.value, message); return }
   if (chats.busy[current.value.id]) stopChat(current.value)
   for (const task of mediaTasksForConversation(current.value)) if (['submitting', 'running'].includes(task.phase)) stopCreation(task)
 }
@@ -146,7 +147,7 @@ const latestTask = computed(() => creation.tasks.find(task => task.id === curren
 function messageText(message: NativeMessage) { return typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') }
 function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
 function branch(message: NativeMessage) { return current.value ? answerBranches(current.value, message.id) : { index: 0, total: 1, messageIds: [] } }
-function pending(message: NativeMessage) { return message.role === 'assistant' && Boolean(message.streaming || current.value && chats.busy[current.value.id] && current.value.messages.at(-1)?.id === message.id) }
+function pending(message: NativeMessage) { return message.role === 'assistant' && Boolean(message.streaming || message.contextCompressing) }
 function messageStage(message: NativeMessage) {
   if (message.error) return 'error'
   if (!pending(message)) return 'done'
@@ -391,7 +392,6 @@ async function removeMessage(chat: NativeChat, message: NativeMessage) {
   if (busy.value || !await confirmStudioDelete('删除这条消息？', () => current.value === chat && chat.messages.includes(message) && !busy.value)) return
   deleteChatMessage(chat, message)
 }
-async function recover(message: NativeMessage) { try { await recoverMessage(message) } catch (cause) { error.value = errorMessage(cause) } }
 async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task, 0, undefined, messageText(message)) } catch (cause) { error.value = errorMessage(cause) } }
 function publish(message: NativeMessage, destination: CreationDestination = 'community') {
   const task = creation.tasks.find(item => item.id === message.taskId)
@@ -460,6 +460,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
           <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
           <StudioReasoningPanel v-if="message.reasoning" :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" />
+          <button v-if="canStop && pending(message)" class="icon-button" type="button" title="停止本页等待" aria-label="停止等待" @click="stop(message)"><Square :size="16" /></button>
           <StudioMessageEditor v-if="edited?.id === message.id" :initial-value="messageText(message)" :disabled="sourceBlocked || busy" :save-label="message.role === 'assistant' ? '保存修改' : '保存并重新生成'" :on-save="text => saveEdit(message, text)" @cancel="edited = undefined" />
           <StudioMarkdown v-else-if="message.role === 'assistant'" class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" @render="followOutput" /><p v-else class="user-text message-bubble">{{ messageText(message) }}</p>
           <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index">
@@ -476,7 +477,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <div class="message-actions">
             <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="16" /></button><button v-if="message.role === 'user' || message.role === 'assistant'" class="icon-button" :title="message.role === 'user' ? '编辑提问' : '编辑回答'" :aria-label="message.role === 'user' ? '编辑提问' : '编辑回答'" :disabled="sourceBlocked || busy || message.role === 'user' && !models.some(item => item.id === model)" @click="edit(message)"><Pencil :size="16" /></button>
             <button v-if="message.role === 'assistant'" class="icon-button" title="重新生成回答" aria-label="重新生成回答" :disabled="sourceBlocked || busy || !models.some(item => item.id === model)" @click="regenerate(message)"><RefreshCw :size="16" /></button>
-            <button v-if="message.interrupted && message.taskId" class="button subtle btn" :disabled="busy" @click="recover(message)">查询原请求</button><button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="16" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
+            <button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="16" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </StudioMessageFrame>
         <StudioClearContext v-if="messageIndex + 1 === current.clearContextIndex" :disabled="Boolean(busy)" @restore="restoreContext" />
@@ -500,7 +501,6 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <div class="studio-composer-models chat-models"><StudioModelPicker v-model="model" kind="text" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @keys="emit('keys')" /></div>
           <StudioBilling :compact="entryOnly" :model="model" :refresh-key="latestTask?.settledAt" @prices="emit('prices')" />
           <button v-if="waitingForMaterials" class="composer-submit" type="button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
-          <button v-else-if="canStop" class="composer-submit" type="button" title="停止等待" aria-label="停止等待" @click="stop"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
           <button v-else class="composer-submit send-button" :title="entryOnly ? '发送到创作台' : '发送'" :aria-label="entryOnly ? '发送到创作台' : '发送'" :disabled="!canSend"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
         <p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>

@@ -4,10 +4,11 @@
  *
  * Reuses the Studio account relay, media import and generation protocol rules.
  */
-import { createHash } from 'node:crypto'
-import { mkdir, writeFile, readFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
+import { sealData, unsealData } from 'iron-session'
 import { httpError } from './auth.ts'
 import {
   AccountRequest, NewApiError, getNewApiConfig, relayHeaders, resolveRelayCredentials,
@@ -36,7 +37,24 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。' }
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
-type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'> }
+type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string }
+interface TrackedRequest {
+  fingerprint: string
+  kind: CreationKind
+  result: Result
+  deadline?: number
+  tracking?: string
+  file?: string
+  background?: boolean
+  filesRoot?: string
+}
+interface PollCredentials {
+  key: string
+  credentials: Credentials
+  deadline: number
+  filesRoot?: string
+}
+const pendingTasks = 'community-next:creation:pending'
 interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol }
 interface CreationServices {
   credentials: typeof resolveRelayCredentials
@@ -45,6 +63,98 @@ interface CreationServices {
   publicMedia: typeof fetchPublicMedia
 }
 const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, fetch, publicMedia: fetchPublicMedia }
+
+async function saveRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000) {
+  let stored = cached
+  if (JSON.stringify(cached).length > MiB) {
+    if (!filesRoot) throw new Error('Result storage is unavailable')
+    const directory = path.join(filesRoot, '.creation-results'), file = hash(key) + '.json'
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await writeFile(path.join(directory, file), JSON.stringify(cached.result), { mode: 0o600 })
+    stored = { ...cached, result: { ...cached.result, ...uncertain }, file }
+  }
+  if (!cached.background) { await redis.set(key, JSON.stringify(stored), 'EX', requestTtl); return }
+  await redis.eval(
+    'redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2]); if ARGV[3]=="" then redis.call("ZREM",KEYS[2],ARGV[4]) else redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]) end; return "OK"',
+    2, key, pendingTasks, JSON.stringify(stored), requestTtl,
+    cached.result.status === 'pending' ? String(Date.now() + nextPoll) : '', key,
+  )
+  if (filesRoot) await unlink(path.join(filesRoot, '.creation-results', hash(key) + '.request.json')).catch(() => {})
+}
+async function requestFallback(cached: TrackedRequest, key: string) {
+  if (cached.result.status !== 'pending' || !cached.filesRoot) return cached
+  try {
+    const fallback = JSON.parse(await readFile(path.join(cached.filesRoot, '.creation-results', hash(key) + '.request.json'), 'utf8')) as TrackedRequest
+    if (fallback.fingerprint === cached.fingerprint && fallback.kind === cached.kind) return fallback
+  } catch { /* The Redis record remains authoritative when no recovery file exists. */ }
+  return cached
+}
+// Only GET credentials survive a restart; the paid POST is never replayed.
+export async function processCreationTasks(redis: RequestContext['redis'], overrides: Partial<CreationServices> = {}) {
+  const svc = { ...services, ...overrides }
+  const keys = await redis.zrangebyscore(pendingTasks, 0, Date.now(), 'LIMIT', 0, 4)
+  await Promise.all(keys.map(async key => {
+    const lease = randomUUID(), lock = `${key}:poll`
+    if (await redis.set(lock, lease, 'PX', 120000, 'NX') !== 'OK') return
+    try {
+      const stored = await redis.get(key)
+      if (!stored) { await redis.zrem(pendingTasks, key); return }
+      const cached = await requestFallback(JSON.parse(stored) as TrackedRequest, key)
+      let filesRoot = cached.filesRoot
+      if (cached.result.status !== 'pending') {
+        await saveRequestResult(redis, key, cached, filesRoot)
+        return
+      }
+      if (!cached.deadline || Date.now() >= cached.deadline) {
+        cached.result = { ...cached.result, ...uncertain }
+        delete cached.tracking
+      } else if (cached.tracking) {
+        const credentials = await unsealData<PollCredentials>(cached.tracking, { password: getNewApiConfig().secret })
+        if (credentials.key !== key || credentials.deadline !== cached.deadline || !cached.result.upstreamId
+          || !['image', 'video'].includes(cached.kind)) throw new Error('Invalid task tracking record')
+        filesRoot = credentials.filesRoot
+        const route = creationTaskPath(cached.kind as 'image' | 'video', cached.result.upstreamId, cached.result.protocol)
+        const response = await svc.fetch(new URL(`/${route}`, credentials.credentials.baseUrl), {
+          headers: { Authorization: `Bearer ${credentials.credentials.apiKey}`, 'Cache-Control': 'no-store' },
+          redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(60000),
+        })
+        if (!response.ok) {
+          await response.body?.cancel()
+          await redis.zadd(pendingTasks, Date.now() + (response.status === 429 ? 30000 : 10000), key)
+          return
+        }
+        const result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
+          cached.result.protocol, cached.result.upstreamId)
+        cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
+        if (result.status !== 'pending') delete cached.tracking
+        if (result.mediaPath) {
+          const namespace = /^community-next:creation:request:([a-f0-9]{64}):/.exec(key)?.[1]
+          if (!namespace) throw new Error('Invalid task namespace')
+          await redis.set(`community-next:creation:media:${namespace}:${hash(mediaPath(result.mediaPath))}`,
+            JSON.stringify({ tokenId: result.tokenId, protocol: result.protocol }), 'EX', taskTtl)
+        }
+      }
+      await saveRequestResult(redis, key, cached, filesRoot)
+    } catch {
+      await redis.zadd(pendingTasks, Date.now() + 15000, key)
+    } finally {
+      await redis.eval('if redis.call("GET",KEYS[1])==ARGV[1] then return redis.call("DEL",KEYS[1]) else return 0 end', 1, lock, lease)
+    }
+  }))
+}
+export function startCreationWorker(redis: RequestContext['redis']) {
+  let running = false, stopped = false
+  const run = async () => {
+    if (running || stopped) return
+    running = true
+    try { await processCreationTasks(redis) } catch { /* Durable tasks remain queued for the next pass. */ }
+    finally { running = false }
+  }
+  void run()
+  const timer = setInterval(() => { void run() }, 1000)
+  timer.unref()
+  return () => { stopped = true; clearInterval(timer) }
+}
 
 function message(error: unknown, secret = '') {
   const value = record(error) && typeof error.message === 'string' ? error.message : typeof error === 'string' ? error : '创作服务暂时不可用。'
@@ -231,18 +341,28 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
   return files
 }
 
-async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>) {
+async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>, key?: string) {
+  if (key) {
+    const original = cached as unknown as TrackedRequest
+    const recovered = await requestFallback(original, key)
+    if (recovered !== original) {
+      cached = recovered as unknown as Record<string, unknown>
+      await saveRequestResult(ctx.redis, key, recovered, ctx.filesRoot, 0).catch(() => {})
+    }
+  }
   let result = cached.result as Result
   if (typeof cached.file === 'string' && /^[a-f0-9]{64}\.json$/.test(cached.file) && ctx.filesRoot) {
     try { result = JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
     catch { /* Keep the saved request state when its result file is unavailable. */ }
   }
+  if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline)
+    result = { ...result, ...uncertain }
   if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
     await remember(ctx, cached.kind, result).catch(() => {})
   }
   return result
 }
-async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}) {
+async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}, background = false) {
   let input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
   const key = `community-next:creation:request:${accountNamespace(ctx)}:${input.requestId}`
@@ -251,7 +371,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   if (existing) {
     const cached: unknown = JSON.parse(existing)
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cachedResult(ctx, cached)
+    return cachedResult(ctx, cached, key)
   }
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
@@ -274,14 +394,22 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const signed = await signCommunityRequest(url, credentials.userId, headers, payload.body)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
-  const pending = { fingerprint, kind: input.kind, result: { ...uncertain, tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) } }
-  const accepted = await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
+  if (background && getNewApiConfig().secret.length < 32) throw httpError(503, '任务服务配置不完整，请联系管理员。')
+  const pending: TrackedRequest = { fingerprint, kind: input.kind, result: { status: 'pending', outputs: [], requestId: input.requestId,
+    tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
+    deadline: Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : 195000),
+    ...(background ? { background: true, filesRoot: ctx.filesRoot } : {}) }
+  const accepted = background ? await ctx.redis.eval(
+    'if redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2],"NX") then redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]); return "OK" end; return false',
+    2, key, pendingTasks, JSON.stringify(pending), requestTtl, pending.deadline!, key,
+  ) : await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
   if (accepted !== 'OK') {
     const previous = await ctx.redis.get(key)
     const cached: unknown = previous ? JSON.parse(previous) : null
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cachedResult(ctx, cached)
+    return cachedResult(ctx, cached, key)
   }
+  const finish = async () => {
   let result: Result
   try {
     // Keep a paid request alive after the browser stops waiting, and never replay it.
@@ -317,18 +445,30 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     result = { ...uncertain, tokenId: credentials.tokenId, protocol }
   }
   if (apiFormat) result.apiFormat = apiFormat
+  if (background) result.requestId = input.requestId
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
   await remember(ctx, input.kind, result).catch(() => {})
-  const serialized = JSON.stringify({ ...pending, result })
-  if (serialized.length > MiB && ctx.filesRoot) {
-    try {
-      const directory = path.join(ctx.filesRoot, '.creation-results'), file = hash(key) + '.json'
-      await mkdir(directory, { recursive: true, mode: 0o700 })
-      await writeFile(path.join(directory, file), JSON.stringify(result), { mode: 0o600 })
-      await ctx.redis.set(key, JSON.stringify({ ...pending, file }), 'EX', requestTtl)
-    } catch { await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl) }
-  } else await ctx.redis.set(key, serialized.length <= MiB ? serialized : JSON.stringify(pending), 'EX', requestTtl)
+  const tracked = { ...pending, result }
+  if (background && result.status === 'pending' && result.upstreamId) {
+    tracked.deadline = Date.now() + (input.kind === 'video' ? 7200000 : 1800000)
+    tracked.tracking = await sealData({ key, credentials, deadline: tracked.deadline, filesRoot: ctx.filesRoot } satisfies PollCredentials,
+      { password: getNewApiConfig().secret, ttl: 86400 })
+  }
+  let saved = false
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await saveRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0); saved = true; break }
+    catch { if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt)) }
+  }
+  if (!saved && background && ctx.filesRoot) {
+    const directory = path.join(ctx.filesRoot, '.creation-results')
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(tracked), { mode: 0o600 })
+  } else if (!saved && !background) await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl)
   return result
+  }
+  if (!background) return finish()
+  void finish().catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
+  return pending.result
 }
 
 function classifyModel(id: string): CreationKind | null {
@@ -409,7 +549,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
       await rateLimit(ctx, 'generate', 12)
       const input = validateCreationInput(ctx.body)
-      if (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream) {
+      const background = input.kind !== 'text' && String(ctx.req.headers.prefer || '').split(',').some(value => value.trim() === 'respond-async')
+      if (!background && (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream)) {
         // A disconnected browser stops receiving events; the paid job still finishes and is recoverable.
         ctx.reply.hijack()
         ctx.res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' })
@@ -424,13 +565,13 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
             ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
         finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
-      } else ctx.json(200, await generate(ctx, req, svc))
+      } else ctx.json(background ? 202 : 200, await generate(ctx, req, svc, undefined, background))
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
       await rateLimit(ctx, 'tasks', 180)
       const id = ctx.url.pathname.split('/').pop()!
       const stored = await ctx.redis.get(`community-next:creation:request:${accountNamespace(ctx)}:${id}`)
       if (!stored) throw httpError(404, '没有找到此请求记录。')
-      ctx.json(200, await cachedResult(ctx, JSON.parse(stored)))
+      ctx.json(200, await cachedResult(ctx, JSON.parse(stored), `community-next:creation:request:${accountNamespace(ctx)}:${id}`))
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/models') {
       const management = ctx.url.searchParams.get('management') === '1'
       if (management) ctx.requireAdmin()

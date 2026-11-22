@@ -175,8 +175,8 @@ test('an image edit survives deleting its source turn without pulling in unrelat
   expect(calls[2].imageContext.turns).toEqual([])
 })
 
-test('image edit drafts stay in their conversation and busy turns block editing', async ({ page }) => {
-  const { calls, image } = await fixture(page)
+test('image edit drafts stay in their conversation and remain editable during another generation', async ({ page }) => {
+  const { calls } = await fixture(page)
   await send(page, '会话里的图片', 1)
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
   await page.locator('.studio-sidebar').getByRole('button', { name: '另一图片对话', exact: true }).click()
@@ -195,8 +195,8 @@ test('image edit drafts stay in their conversation and busy turns block editing'
   try {
     await page.getByRole('button', { name: '开始生成', exact: true }).click()
     await expect.poll(() => calls.length).toBe(2)
-    await expect(page.getByRole('button', { name: '编辑图片', exact: true })).toBeDisabled()
-    await expect(page.getByRole('button', { name: '编辑原提问', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '编辑图片', exact: true })).toBeEnabled()
+    await expect(page.getByRole('button', { name: '编辑原提问', exact: true })).toBeEnabled()
   } finally { release() }
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
   if (await page.locator('.creation-response .browser-save').count()) await expect(page.locator('.creation-response .browser-save').last()).toHaveText('图片已保存到此浏览器')
@@ -554,16 +554,14 @@ test('model and group changes affect the next round while retaining history and 
   expect(errors).toEqual([])
 })
 
-test('streamed image previews appear before the final result and keep the conversation intact', async ({ page }) => {
+test('compatible streamed responses still render previews when an async submission returns a stream', async ({ page }) => {
   const { image } = await fixture(page)
-  await page.getByRole('button', { name: '高级参数', exact: true }).click()
-  await page.getByRole('checkbox', { name: '流式预览', exact: true }).check()
-  await page.keyboard.press('Escape')
   await page.evaluate(base64 => {
     const original = window.fetch.bind(window)
     window.fetch = async (input, init) => {
       if (String(input) !== '/api/creation/generate') return original(input, init)
       ;(window as any).__streamInput = JSON.parse(String(init?.body))
+      ;(window as any).__streamPrefer = new Headers(init?.headers).get('prefer')
       const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`)
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -583,7 +581,7 @@ test('streamed image previews appear before the final result and keep the conver
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
   await expect(page.locator('.creation-image-preview img')).toBeVisible()
   await expect(page.getByRole('img', { name: '生成中的预览', exact: true })).toHaveCount(0)
-  expect(await page.evaluate(() => (window as any).__streamInput.imageOptions.imageStream)).toBe(true)
+  expect(await page.evaluate(() => (window as any).__streamPrefer)).toBe('respond-async')
   await expect(page.locator('.creation-turn')).toHaveCount(1)
 })
 

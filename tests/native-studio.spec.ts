@@ -56,8 +56,102 @@ async function fixture(page: Page) {
   })
   return { ...account, calls, image, uploads: () => uploads }
 }
+test('refresh restores a pending server task and returns its result without resubmitting', async ({ page }) => {
+  await fixture(page)
+  let submissions = 0, queries = 0, requestId = '', finished = false
+  await page.route('**/api/creation/generate', route => {
+    submissions++; requestId = route.request().postDataJSON().requestId
+    return route.fulfill({ status: 202, json: { status: 'pending', requestId, outputs: [], protocol: 'async' } })
+  })
+  await page.route('**/api/creation/requests/**', route => {
+    queries++
+    expect(new URL(route.request().url()).pathname).toBe(`/api/creation/requests/${requestId}`)
+    return route.fulfill({ json: finished
+      ? { status: 'succeeded', requestId, outputs: [{ url: 'https://media.example/restored.png' }] }
+      : { status: 'pending', requestId, outputs: [] } })
+  })
+  await page.goto('/create/image')
+  await page.clock.install()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('刷新后继续原任务')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => queries).toBe(1)
+  await page.reload()
+  await expect.poll(() => queries).toBe(2)
+  finished = true
+  await page.clock.fastForward(5000)
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  expect(submissions).toBe(1)
+  expect((await nativeHistory(page))[0]).toMatchObject({ id: requestId, phase: 'complete' })
+})
+test('text messages can be sent in the same conversation while an earlier answer is still generating', async ({ page }) => {
+  await fixture(page)
+  let release!: () => void, submissions = 0
+  const first = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/generate', async route => {
+    const index = ++submissions
+    if (index === 1) await first
+    await route.fulfill({ json: { status: 'succeeded', outputs: [{ text: index === 1 ? '第一条回答' : '第二条回答' }] } }).catch(() => {})
+  })
+  await page.goto('/create/text')
+  const input = page.getByRole('textbox', { name: '消息', exact: true })
+  await input.fill('第一条问题')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(() => submissions).toBe(1)
+  await input.fill('第二条问题')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message').last()).toContainText('第二条回答')
+  release()
+  await expect(page.locator('.chat-message').nth(1)).toContainText('第一条回答')
+  await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(1)
+  expect(submissions).toBe(2)
+})
 
 for (const kind of ['image', 'video'] as const) {
+  test(`${kind} keeps the same conversation interactive while multiple server tasks finish out of order`, async ({ page }, info) => {
+    await fixture(page)
+    const requests: string[] = [], complete = new Set<string>()
+    await page.route('**/api/creation/generate', route => {
+      const requestId = route.request().postDataJSON().requestId
+      requests.push(requestId)
+      return route.fulfill({ status: 202, json: { status: 'pending', requestId, outputs: [], protocol: 'async' } })
+    })
+    await page.route('**/api/creation/requests/**', route => {
+      const requestId = new URL(route.request().url()).pathname.split('/').pop()!
+      return route.fulfill({ json: complete.has(requestId)
+        ? { status: 'succeeded', requestId, outputs: [{ url: `https://media.example/${requestId}.png` }] }
+        : { status: 'pending', requestId, outputs: [] } })
+    })
+    await page.goto(`/create/${kind}`)
+    await page.clock.install()
+    const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
+    const send = page.getByRole('button', { name: '开始生成', exact: true })
+    await prompt.fill('第一条仍在生成')
+    await send.click()
+    await expect(page.locator('.creation-request')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: '清除上下文', exact: true }).last()).toBeEnabled()
+    await page.getByRole('button', { name: '清除上下文', exact: true }).last().click()
+    await prompt.fill('同会话发送第二条')
+    await expect(send).toBeEnabled()
+    await send.click()
+    await expect(page.locator('.creation-request')).toHaveCount(2)
+    await expect(page.locator('.studio-sidebar .studio-record')).toHaveCount(1)
+    await prompt.fill('保留正在编辑的草稿')
+    complete.add(requests[1]!)
+    await page.clock.fastForward(5000)
+    await expect(page.locator('.creation-response').last().locator('.task-status')).toContainText('生成完成')
+    await expect(page.locator('.creation-response').first().locator('.task-status')).toContainText(/正在生成|正在思考/)
+    complete.add(requests[0]!)
+    await page.clock.fastForward(5000)
+    await expect(page.locator('.creation-response').first().locator('.task-status')).toContainText('生成完成')
+    await expect(prompt).toHaveValue('保留正在编辑的草稿')
+    expect(requests).toHaveLength(2)
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await page.screenshot({ path: info.outputPath(`same-conversation-${kind}-${width}.png`) })
+    }
+  })
   test(`${kind} sends append to the same conversation until explicitly starting a new one`, async ({ page }) => {
     const state = await fixture(page)
     await page.goto(`/create/${kind}`)
@@ -146,7 +240,9 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
     await expect(page.locator('.task-elapsed')).toContainText(/\d+s/)
     await page.getByRole('textbox', { name: '提示词', exact: true }).fill('下一幅想画海边的小狗')
     await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
-    await expect(page.locator('.generation-button')).toHaveAccessibleName('停止等待')
+    await expect(page.locator('.generation-button')).toHaveAccessibleName('开始生成')
+    await expect(page.locator('.generation-button')).toBeEnabled()
+    await expect(page.locator('.creation-response').getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
     expect(submissions).toBe(1)
     await mkdir(screenshotDirectory, { recursive: true })
     for (const width of [1440, 768, 390]) {
@@ -229,11 +325,13 @@ test('media request errors show their message without a manual query or an autom
   expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
 })
 
-test('a lost submission response stops the timer and blocks duplicate generation even when its saved request returns 404', async ({ page }) => {
+test('a lost submission response automatically checks the original request without locking the conversation', async ({ page }) => {
   await fixture(page)
   let submissions = 0, recoveries = 0, requestId = ''
   await page.route('**/api/creation/generate', route => {
-    submissions++; requestId = route.request().postDataJSON().requestId
+    submissions++
+    if (submissions > 1) return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/next.png' }] } })
+    requestId = route.request().postDataJSON().requestId
     return route.abort('failed')
   })
   await page.route('**/api/creation/requests/**', route => {
@@ -246,20 +344,27 @@ test('a lost submission response stops the timer and blocks duplicate generation
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留原请求，避免重复付费')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('请求异常')
-  await expect(page.locator('.task-message')).toContainText('原请求可能已被受理')
+  await expect(page.locator('.task-message')).toContainText('没有找到此请求记录')
   await page.clock.fastForward(20 * 60_000)
   await expect(page.locator('.task-elapsed')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
-  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 0 })
+  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 1 })
   await page.reload()
   await expect(page.locator('.task-message')).toContainText('没有找到此请求记录')
   await expect(page.locator('.task-status')).toContainText('请求异常')
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
   expect((await nativeHistory(page))[0]).toMatchObject({ id: requestId, phase: 'attention' })
-  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 1 })
+  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 2 })
+  await page.getByRole('button', { name: '清除上下文', exact: true }).last().click()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('同会话继续发送')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.creation-request')).toHaveCount(2)
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  expect(submissions).toBe(2)
 })
 
 test('a temporary video status error recovers the original task without another generation request', async ({ page }, info) => {
@@ -280,10 +385,10 @@ test('a temporary video status error recovers the original task without another 
   await page.clock.install()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('短暂断线后继续原任务')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('请求异常')
-  await expect(page.locator('.task-message')).toContainText('任务状态暂时无法读取')
-  await expect(page.locator('.task-elapsed')).toHaveCount(0)
-  await expect(page.locator('.generation-button')).toBeDisabled()
+  await expect(page.locator('.task-status')).toContainText('正在生成')
+  await expect.poll(() => queries).toBe(1)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('查询恢复时也能输入')
+  await expect(page.locator('.generation-button')).toBeEnabled()
   await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 })
@@ -302,7 +407,7 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await prompt.fill('可复用的小猫提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
   await prompt.fill('临时修改')
   await page.getByRole('button', { name: '复用参数', exact: true }).click()

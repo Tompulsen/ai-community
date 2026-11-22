@@ -184,15 +184,18 @@ it('does not interleave a second mutation while a conversation save is unresolve
   release(); await clearing
   expect(p.visibleMediaTasks(p.thread)).toHaveLength(3)
 })
-it('blocks destructive actions and version changes until uncertain or active tasks are checked', async () => {
-  const p = await fixture()
+it('keeps context and message interactions available without cancelling active or uncertain tasks', async () => {
   for (const phase of ['submitting', 'running', 'attention'] as const) {
+    const p = await fixture()
     p.creation.tasks[0]!.phase = phase
-    await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('核对')
-    await expect(p.clearMediaContext(p.thread)).rejects.toThrow('核对')
-    await expect(p.selectMediaVersion(p.thread, 'two', -1)).rejects.toThrow('核对')
+    await p.clearMediaContext(p.thread)
+    expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
+    await p.restoreMediaContext(p.thread)
+    await p.selectMediaVersion(p.thread, 'two', -1)
+    await p.deleteMediaTurns(p.thread, ['one'])
+    expect(p.visibleMediaTasks(p.thread).map(task => task.id)).not.toContain('one')
+    expect(p.creation.tasks[0]!.phase).toBe(phase)
   }
-  expect(storage.write).not.toHaveBeenCalled()
 })
 it('cannot bind another owner task or restore old-account state after a rejected write', async () => {
   const p = await fixture()

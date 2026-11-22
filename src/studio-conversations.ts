@@ -41,8 +41,8 @@ export function attachMediaTask(chat: NativeChat, task: CreationTask) {
     const oldQuestion = oldAnswer && chat.messages.find(message => message.id === oldAnswer.parentId && message.role === 'user')
     if (!oldQuestion) return false
     return task.mediaBranch.edited
-      ? createEditedMessageBranch(chat, oldQuestion.id, question, answer)
-      : createAnswerBranch(chat, oldQuestion.id, answer)
+      ? createEditedMessageBranch(chat, oldQuestion.id, question, answer, true)
+      : createAnswerBranch(chat, oldQuestion.id, answer, true)
   }
   chat.messages.push(question, answer)
   initializeBranches(chat)

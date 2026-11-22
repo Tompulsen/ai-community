@@ -140,16 +140,16 @@ it('expires undo after five seconds and clears it immediately on an account swit
   p.session.user = { id: '18' } as any; await p.undoRemovedChats()
   expect(p.chatDeletion.count).toBe(0); expect(p.chats.sessions).toEqual([])
 })
-it('rejects deletion of running or uncertain media tasks before changing either store', async () => {
-  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
-  for (const phase of ['submitting', 'running', 'attention'] as const) {
+it.each(['submitting', 'running', 'attention'] as const)('allows conversation deletion during %s while retaining the background tasks', async phase => {
+    const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
     p.creation.tasks[0]!.phase = phase
     expect(p.conversationGenerating(image)).toBe(phase !== 'attention')
-    expect(p.isConversationBusy(image)).toBe(true)
-    await expect(p.removeChats([image.id, 'text'])).rejects.toThrow('核对')
-    expect(p.chats.sessions).toHaveLength(3)
-  }
-  expect(storage.write).not.toHaveBeenCalled()
+    expect(p.isConversationBusy(image)).toBe(false)
+    await p.removeChats([image.id, 'text'])
+    expect(p.chats.sessions).toHaveLength(1)
+    expect(p.creation.tasks[0]!.phase).toBe(phase)
+    await p.syncMediaConversations()
+    expect(p.chats.sessions).toHaveLength(1)
 })
 it('paused media does not lock the conversation and removing the conversation retains its task', async () => {
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
@@ -245,9 +245,7 @@ it('keeps mixed media, archived versions and deletion tombstones in the original
   expect(p.chats.sessions).toHaveLength(1)
   expect(p.mediaTasksForConversation(chat).map(task => task.id)).toEqual(['mixed-video', 'mixed-image'])
   video.phase = 'running'
-  expect(p.isConversationBusy(chat)).toBe(true)
-  await expect(p.removeChats([chat.id])).rejects.toThrow('核对')
-  video.phase = 'complete'
+  expect(p.isConversationBusy(chat)).toBe(false)
   await p.removeChats([chat.id])
   expect(p.chats.deletedMediaConversationIds.sort()).toEqual([`image:${chat.id}`, `video:${chat.id}`].sort())
   await p.syncMediaConversations()

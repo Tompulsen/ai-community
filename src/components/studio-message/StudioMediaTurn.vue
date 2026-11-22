@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Trash2, Upload } from '@lucide/vue'
-import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, type CreationDestination, type CreationTask } from '../../native-studio'
+import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2, Upload } from '@lucide/vue'
+import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, type NativeChat } from '../../native-chat'
 import { confirmStudioDelete } from '../../studio-confirm'
 import { isConversationBusy } from '../../studio-conversations'
@@ -96,6 +96,7 @@ async function remove() {
     </template>
     <template v-else>
       <progress v-if="working && task.progress != null" class="generation-progress" :value="task.progress" max="100" aria-label="模型返回的生成进度" />
+      <button v-if="working" class="icon-button" type="button" title="停止本页等待，上游任务继续执行" aria-label="停止等待" @click="stopCreation(task)"><Square :size="16" /></button>
       <p v-if="task.error && !working" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />

@@ -475,7 +475,7 @@ test('task error codes supply safe fallback reasons without replacing provider m
     data: { id: 'job_1', status: 'failed', error: { code: 'missing_upstream_image' } } })
   assert.equal(wrapped.error, '供应商原始错误')
   assert.deepEqual(normalizeCreationTask('video', { id: 'job_1', status: 'indeterminate', error: { code: 'generation_outcome_unknown' } }),
-    { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '上游返回错误：generation_outcome_unknown' })
+    { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '暂时无法确认生成结果，原任务记录已保留，请核对使用记录，避免重复生成。' })
 })
 
 test('completed image/text results and protected OpenAI video media keep their actual outputs', () => {

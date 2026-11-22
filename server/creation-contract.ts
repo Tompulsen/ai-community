@@ -58,6 +58,8 @@ const operationPattern = /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/
 const successStates = new Set(['completed', 'succeeded', 'success', 'done'])
 const failedStates = new Set(['failed', 'failure', 'error', 'cancelled', 'canceled'])
 const taskErrorMessages: Record<string, string> = {
+  generation_outcome_unknown: '暂时无法确认生成结果，原任务记录已保留，请核对使用记录，避免重复生成。',
+  upstream_rejected: '上游拒绝了生成请求，请检查模型、参数或参考素材。',
   upstream_image_count_exceeded: '上游返回图片数量超过安全上限',
   invalid_upstream_image_item: '上游返回的图片条目格式不正确',
   missing_upstream_image: '上游未返回有效图片链接或图片数据',

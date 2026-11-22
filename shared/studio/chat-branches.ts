@@ -256,9 +256,9 @@ export function selectAnswerBranch(
   session: ChatSession,
   messageId: string,
   targetId: string,
-  deleting = false,
+  allowBusy = false,
 ) {
-  if (!deleting && branchBusy(session)) return false;
+  if (!allowBusy && branchBusy(session)) return false;
   const sourceIndex = session.messages.findIndex(
     (message) => message.id === messageId && message.role !== "system",
   );
@@ -297,8 +297,9 @@ export function createAnswerBranch(
   session: ChatSession,
   userId: string,
   answer: ChatMessage,
+  allowBusy = false,
 ) {
-  if (branchBusy(session)) return false;
+  if (!allowBusy && branchBusy(session)) return false;
   const userIndex = session.messages.findIndex(
     (message) => message.id === userId && message.role === "user",
   );
@@ -316,8 +317,9 @@ export function createEditedMessageBranch(
   userId: string,
   user: ChatMessage,
   answer: ChatMessage,
+  allowBusy = false,
 ) {
-  if (branchBusy(session)) return false;
+  if (!allowBusy && branchBusy(session)) return false;
   const index = session.messages.findIndex(
     (message) => message.id === userId && message.role === "user",
   );

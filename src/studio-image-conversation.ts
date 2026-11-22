@@ -102,9 +102,9 @@ export async function selectMediaVersion(chat: NativeChat, taskId: string, direc
   const target = versions[versions.findIndex(message => message.id === answer?.id) + direction]
   if (!answer || !target) return
   await savedMutation(chat, () => {
-    if (answer.parentId !== target.parentId && !selectAnswerBranch(chat, answer.parentId!, target.parentId!)) throw new Error('当前无法切换版本。')
+    if (answer.parentId !== target.parentId && !selectAnswerBranch(chat, answer.parentId!, target.parentId!, true)) throw new Error('当前无法切换版本。')
     const current = chat.messages.find(message => message.role === 'assistant' && message.parentId === target.parentId)
-    if (current?.id !== target.id && (!current || !selectAnswerBranch(chat, current.id, target.id))) throw new Error('当前无法切换版本。')
+    if (current?.id !== target.id && (!current || !selectAnswerBranch(chat, current.id, target.id, true))) throw new Error('当前无法切换版本。')
   })
   creation.selectedId = visibleMediaTasks(chat).at(-1)?.id || ''
 }
@@ -162,7 +162,8 @@ export async function deleteMediaTurns(chat: NativeChat, ids: string[]) {
       let next = message.parentId
       const seen = new Set<string>()
       while (next && removed.has(next) && !seen.has(next)) { seen.add(next); next = parent.get(next) }
-      return [{ ...message, parentId: next }]
+      if (message.parentId !== next) message.parentId = next
+      return [message]
     }
     chat.messages = chat.messages.flatMap(keep)
     chat.messageBranches = (chat.messageBranches || []).flatMap(keep)

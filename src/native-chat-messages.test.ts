@@ -53,6 +53,84 @@ function toolSource() {
   ] }
   return source
 }
+it('keeps concurrent replies in the same conversation and does not restore cleared memory from an older reply', async () => {
+  const p = await fixture()
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async (_input, update) => new Promise(resolve => {
+    release = () => {
+      const task = { id: 'first-task', phase: 'complete', text: '第一条回答' }
+      update?.(task); resolve(task)
+    }
+  }))
+  const first = p.sendChat(p.chat, '第一条提问', [], 'model')
+  await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1))
+  const second = await p.sendChat(p.chat, '第二条提问', [], 'model')
+  expect(second).toBe(true)
+  expect(p.chat.messages.map(message => message.content)).toEqual(['第一条提问', '', '第二条提问', '回答'])
+  expect(p.chats.busy[p.chat.id]).toBe(true)
+  p.chat.clearContextIndex = p.chat.messages.length; p.chat.memoryPrompt = ''
+  release(); await first
+  expect(p.chat.messages.map(message => message.content)).toEqual(['第一条提问', '第一条回答', '第二条提问', '回答'])
+  expect(p.chat.clearContextIndex).toBe(4)
+  expect(p.chats.busy[p.chat.id]).toBe(false)
+})
+it('retains a paid task but never continues tool execution after its conversation is deleted', async () => {
+  const p = await fixture()
+  p.chat.settings.mcpServers = ['original']
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async () => new Promise(resolve => {
+    release = () => resolve({ id: 'paid-task', phase: 'complete', text: '', toolCalls: [{ id: 'call', type: 'function', function: { name: 'mcp_original', arguments: '{}' } }] })
+  }))
+  const first = p.sendChat(p.chat, '删除前已提交', [], 'model')
+  await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1))
+  await p.removeChats([p.chat.id])
+  release(); await first
+  expect(mocks.api).not.toHaveBeenCalled()
+  expect(mocks.submit).toHaveBeenCalledTimes(1)
+  expect(p.chats.sessions.some(chat => chat.id === p.chat.id)).toBe(false)
+})
+it('stops only the selected answer while other replies in the conversation continue', async () => {
+  const p = await fixture()
+  const finish: (() => void)[] = []
+  mocks.submit.mockImplementation(async (_input, update) => new Promise(resolve => {
+    const index = finish.length
+    finish.push(() => {
+      const task = { id: `task-${index}`, phase: 'complete', text: `回答 ${index}` }
+      update?.(task); resolve(task)
+    })
+  }))
+  const first = p.sendChat(p.chat, '第一条', [], 'model')
+  await vi.waitFor(() => expect(finish).toHaveLength(1))
+  const second = p.sendChat(p.chat, '第二条', [], 'model')
+  await vi.waitFor(() => expect(finish).toHaveLength(2))
+  p.stopChat(p.chat, p.chat.messages[1]!)
+  expect(p.chats.busy[p.chat.id]).toBe(true)
+  finish[0]!(); finish[1]!()
+  await Promise.all([first, second])
+  expect(p.chat.messages[1]!.content).toBe('')
+  expect(p.chat.messages[3]!.content).toBe('回答 1')
+  expect(p.chats.busy[p.chat.id]).toBe(false)
+})
+it('creates and switches reply branches while an older reply is still streaming', async () => {
+  const p = await fixture()
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async (_input, update) => {
+    const task = { id: 'original', phase: 'running', text: '生成中' }
+    update?.(task)
+    await new Promise<void>(resolve => { release = resolve })
+    return { ...task, phase: 'complete', text: '旧版本完成' }
+  })
+  const first = p.sendChat(p.chat, '原问题', [], 'model')
+  await vi.waitFor(() => expect(p.chat.messages[1]?.streaming).toBe(true))
+  const oldId = p.chat.messages[1]!.id
+  expect(await p.sendChat(p.chat, '原问题', [], 'model', p.chat.messages[0])).toBe(true)
+  const newId = p.chat.messages[1]!.id
+  expect(newId).not.toBe(oldId)
+  p.switchBranch(p.chat, newId, oldId)
+  expect(p.chat.messages[1]!.id).toBe(oldId)
+  release(); await first
+  expect(p.chat.messages[1]!.content).toBe('旧版本完成')
+})
 it('uses the configured format for automatic chats without replacing the stored setting', async () => {
   const p = await fixture()
   const prepare = vi.spyOn(await import('../shared/studio/video-input'), 'prepareVideoMessages')
@@ -111,6 +189,23 @@ it('clears compression immediately when stopped and does not submit the answer a
   await sending
   expect(mocks.submit).toHaveBeenCalledTimes(1)
   expect(p.chat.messages.at(-1)?.contextCompressed).toBeUndefined()
+})
+it('does not restore an old summary when context is cleared while the summary is generating', async () => {
+  const p = await fixture()
+  p.chat.compressionThreshold = 500
+  p.chat.messages.push({ id: 'old', role: 'user', content: '历史内容'.repeat(1000) })
+  let release!: () => void
+  mocks.submit.mockImplementationOnce(async () => new Promise(resolve => {
+    release = () => resolve({ id: 'summary', phase: 'complete', text: '过时摘要' })
+  }))
+  const sending = p.sendChat(p.chat, '继续', [], 'model')
+  await vi.waitFor(() => expect(p.chat.messages.at(-1)?.contextCompressing).toBe(true))
+  p.chat.clearContextIndex = p.chat.messages.length
+  p.chat.memoryPrompt = ''; p.chat.lastSummarizeIndex = 0
+  release(); await sending
+  expect(p.chat.memoryPrompt).toBe('')
+  expect(p.chat.lastSummarizeIndex).toBe(0)
+  expect(p.chat.clearContextIndex).toBe(3)
 })
 it('does not label invalid summaries as successfully compressed', async () => {
   const p = await fixture()

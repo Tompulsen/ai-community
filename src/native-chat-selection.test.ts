@@ -44,14 +44,14 @@ it('creates one empty chat and persists once when all chats are deleted', async 
   expect(p.chats.activeId).toBe(p.chats.sessions[0]!.id)
   expect(storage.write).toHaveBeenCalledTimes(1)
 })
-it('rejects a selection containing a running chat without partially deleting or saving', async () => {
+it('removes a selection containing a running chat in one save', async () => {
   const p = await fixture()
   p.chats.busy.c = true
-  await expect(p.removeChats(['a', 'c'])).rejects.toThrow('请先停止')
-  expect(p.chats.sessions.map(chat => chat.id)).toEqual(['a', 'b', 'c', 'd'])
-  expect(storage.write).not.toHaveBeenCalled()
+  await p.removeChats(['a', 'c'])
+  expect(p.chats.sessions.map(chat => chat.id)).toEqual(['b', 'd'])
+  expect(storage.write).toHaveBeenCalledTimes(1)
   await p.removeChats(['unknown'])
-  expect(storage.write).not.toHaveBeenCalled()
+  expect(storage.write).toHaveBeenCalledTimes(1)
 })
 it('restores the original chats when persistence fails', async () => {
   const p = await fixture()

@@ -13,7 +13,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 async function fixture() {
   const { session, api } = await import('./state')
-  vi.mocked(api).mockReset()
+  vi.mocked(api).mockReset().mockRejectedValue(Object.assign(new Error('没有找到此请求记录。'), { status: 404 }))
   session.user = null
   const studio = await import('./native-studio')
   session.user = { id: 'fixture-owner', accountId: '17' } as any
@@ -70,6 +70,42 @@ it('awaits durable conversation registration before the paid POST and sends an i
   expect(body.conversationId).toBeUndefined()
   expect(body.references).toBeUndefined()
   expect(task.conversationPending).toBe(false)
+})
+it('submits two tasks in the same conversation and keeps out-of-order results on their original tasks', async () => {
+  const p = await fixture()
+  let release!: (response: Response) => void
+  p.send.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve }))
+  const first = p.submitCreation(p.input)
+  await vi.waitFor(() => expect(p.send).toHaveBeenCalledTimes(1))
+  const firstId = p.creation.tasks[0]!.id
+  const second = await p.submitCreation({ ...p.input, prompt: '第二条消息' })
+  expect(second.phase).toBe('complete')
+  release(Response.json({ status: 'succeeded', outputs: [{ url: 'https://media.example/first.png' }] }))
+  expect(await first).toMatchObject({ id: firstId, phase: 'complete', urls: ['https://media.example/first.png'] })
+  expect(p.creation.tasks).toHaveLength(2)
+  expect(p.send).toHaveBeenCalledTimes(2)
+})
+it('automatically follows a server request ID without treating it as an upstream ID or sending another POST', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockImplementationOnce(async (_url, init) => {
+    const { requestId } = JSON.parse(init!.body as string)
+    return Response.json({ status: 'pending', requestId, outputs: [], protocol: 'async' }, { status: 202 })
+  })
+  vi.mocked(api).mockResolvedValueOnce({ status: 'succeeded', outputs: [{ url: 'https://media.example/background.png' }] })
+  const task = await p.submitCreation(p.input)
+  expect(task).toMatchObject({ phase: 'complete', serverTracked: true })
+  expect(task.upstreamId).toBeUndefined()
+  expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything())
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it('reads a completed server result when returning after the local polling deadline', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  const original = await p.submitCreation(p.input)
+  vi.mocked(api).mockResolvedValue({ status: 'succeeded', outputs: [{ url: 'https://media.example/finished-hours-ago.png' }] })
+  await restoreTasks(p, [{ ...original, createdAt: Date.now() - 4 * 60 * 60_000, phase: 'running', serverTracked: true, urls: [] }])
+  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ phase: 'complete', urls: ['https://media.example/finished-hours-ago.png'] }))
+  expect(api).toHaveBeenCalledWith(`/api/creation/requests/${original.id}`, expect.anything())
+  expect(p.send).toHaveBeenCalledTimes(1)
 })
 it('stores the compatible Gemini parameters before registration and sends only one request', async () => {
   const p = await fixture()
@@ -133,7 +169,7 @@ it('does not send after the user stops while the initial conversation save is pe
   expect(task.phase).toBe('error')
   expect(task.error).toContain('未提交生成')
 })
-it('retains a stopped in-flight request and blocks a second POST in the same conversation', async () => {
+it('retains a stopped in-flight request and permits a new message in the same conversation', async () => {
   const p = await fixture()
   p.send.mockImplementationOnce(async (_url, options) => new Promise<Response>((_resolve, reject) => {
     const signal = options!.signal!
@@ -144,10 +180,10 @@ it('retains a stopped in-flight request and blocks a second POST in the same con
   const task = p.creation.tasks[0]!
   p.stopCreation(task)
   expect(await pending).toMatchObject({ id: task.id, phase: 'paused' })
-  await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
-  expect(p.creation.tasks).toHaveLength(1)
-  expect(p.creation.tasks[0]!.id).toBe(task.id)
-  expect(p.send).toHaveBeenCalledTimes(1)
+  expect((await p.submitCreation(p.input)).phase).toBe('complete')
+  expect(p.creation.tasks).toHaveLength(2)
+  expect(p.creation.tasks[1]!.id).toBe(task.id)
+  expect(p.send).toHaveBeenCalledTimes(2)
 })
 it('bounds the original-request recovery read and retains its ID when the read times out', async () => {
   const p = await fixture(), { api } = await import('./state')
@@ -163,13 +199,14 @@ it('bounds the original-request recovery read and retains its ID when the read t
     const recovery = p.resumeCreation(task)
     expect(deadline).toHaveBeenCalledWith(65000)
     timeout.abort(new DOMException('读取超时', 'TimeoutError'))
+    await vi.waitFor(() => expect(task.error).toBe('正在恢复任务状态…'))
+    p.stopCreation(task)
     await recovery
-    expect(task).toMatchObject({ id: task.id, phase: 'attention', error: '读取超时' })
-    await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
+    expect(task).toMatchObject({ id: task.id, phase: 'paused' })
     expect(p.send).toHaveBeenCalledTimes(1)
   } finally { deadline.mockRestore() }
 })
-it.each([413, 409, 503, 0])('retains an uncertain request after %s and only permits another POST after explicit rejection', async status => {
+it.each([413, 409, 503, 0])('retains the original request after %s while allowing an explicit new message', async status => {
   const p = await fixture()
   p.send.mockImplementationOnce(async () => {
     if (!status) throw new TypeError('Failed to fetch')
@@ -177,16 +214,13 @@ it.each([413, 409, 503, 0])('retains an uncertain request after %s and only perm
   })
   const task = await p.submitCreation(p.input)
   expect(task.phase).toBe(status === 413 ? 'error' : 'attention')
-  expect(task.error).toContain(status ? '请求错误' : 'Failed to fetch')
-  if (status === 413) expect((await p.submitCreation(p.input)).phase).toBe('complete')
-  else {
-    await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
-    expect(p.creation.tasks).toHaveLength(1)
-    expect(p.creation.tasks[0]!.id).toBe(task.id)
-  }
-  expect(p.send).toHaveBeenCalledTimes(status === 413 ? 2 : 1)
+  expect(task.error).toContain(status === 413 ? '请求错误' : '没有找到此请求记录')
+  expect((await p.submitCreation(p.input)).phase).toBe('complete')
+  expect(p.creation.tasks).toHaveLength(2)
+  expect(p.creation.tasks[1]!.id).toBe(task.id)
+  expect(p.send).toHaveBeenCalledTimes(2)
   const { api } = await import('./state')
-  expect(api).not.toHaveBeenCalled()
+  expect(api).toHaveBeenCalledTimes(status === 413 ? 0 : 1)
 })
 it('recovers a known task from a temporary read failure using GET without another POST', async () => {
   const p = await fixture(), { api } = await import('./state')
@@ -196,28 +230,28 @@ it('recovers a known task from a temporary read failure using GET without anothe
   vi.useFakeTimers()
   const pending = p.submitCreation(p.input)
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
-  expect(p.creation.tasks[0]).toMatchObject({ phase: 'attention', upstreamId: 'known-task', error: '读取暂时不可用' })
-  await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
+  expect(p.creation.tasks[0]).toMatchObject({ phase: 'running', upstreamId: 'known-task', error: '正在恢复任务状态…' })
   await vi.advanceTimersByTimeAsync(5000)
   expect(await pending).toMatchObject({ phase: 'complete', error: '', urls: ['https://media.example/recovered.png'] })
   expect(api).toHaveBeenCalledTimes(2)
   expect(p.send).toHaveBeenCalledTimes(1)
   expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/tasks/image/known-task?'))).toBe(true)
 })
-it('stops after three failed task reads while retaining the original task and blocking a new POST', async () => {
+it('continues automatic recovery after three failed reads without repeating the paid POST', async () => {
   const p = await fixture(), { api } = await import('./state')
   p.send.mockImplementationOnce(async () => Response.json({ status: 'pending', protocol: 'async', upstreamId: 'known-task', outputs: [] }))
-  vi.mocked(api).mockRejectedValue(Object.assign(new Error('暂时无法查询此任务'), { status: 502 }))
+  vi.mocked(api).mockRejectedValueOnce(Object.assign(new Error('暂时无法查询此任务'), { status: 502 }))
+    .mockRejectedValueOnce(Object.assign(new Error('暂时无法查询此任务'), { status: 502 }))
+    .mockRejectedValueOnce(Object.assign(new Error('暂时无法查询此任务'), { status: 502 }))
+    .mockResolvedValueOnce({ status: 'succeeded', outputs: [{ url: 'https://media.example/recovered.png' }] })
   vi.useFakeTimers()
   const pending = p.submitCreation(p.input)
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
-  await vi.advanceTimersByTimeAsync(10_000)
+  await vi.advanceTimersByTimeAsync(35_000)
   const task = await pending
-  expect(task).toMatchObject({ phase: 'attention', upstreamId: 'known-task' })
-  expect(api).toHaveBeenCalledTimes(3)
-  await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
+  expect(task).toMatchObject({ phase: 'complete', upstreamId: 'known-task' })
+  expect(api).toHaveBeenCalledTimes(4)
   expect(p.send).toHaveBeenCalledTimes(1)
-  await p.removeCreationTasks([task.id]).then(() => { throw new Error('uncertain task was deleted') }, error => expect(error.message).toContain('保留'))
 })
 it('keeps streamed preflight validation rejection editable instead of waiting for a nonexistent request', async () => {
   const p = await fixture()
@@ -253,8 +287,8 @@ it.each(['attention', 'submitting', 'paused'])('retains the original ID of a res
   await p.initializeCreation()
   await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention', error: '没有找到此请求记录。' }))
   expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything())
-  await expect(p.submitCreation(p.input)).rejects.toThrow('原请求')
-  expect(p.send).toHaveBeenCalledTimes(1)
+  expect((await p.submitCreation(p.input)).phase).toBe('complete')
+  expect(p.send).toHaveBeenCalledTimes(2)
 })
 it('shows an asynchronous media error while retaining the original task ID', async () => {
   const p = await fixture()
