@@ -41,6 +41,10 @@ watch(owner, () => {
 export function modelPreferenceKey(id: string) { return JSON.stringify(['account', creation.modelTokenId, id]) }
 export function modelType(id: string): ModelType { return modelPreferences.overrides[modelPreferenceKey(id)] || 'auto' }
 export function modelFormat(id: string): ChatApiFormat | undefined { return modelPreferences.apiFormats[modelPreferenceKey(id)] }
+export function configuredModelFormat(id: string): ChatApiFormat | undefined {
+  const format = creation.models.find(item => item.id === id)?.apiFormat
+  return CHAT_API_FORMATS.includes(format as ChatApiFormat) ? format as ChatApiFormat : undefined
+}
 export function favoriteModel(id: string) { return modelPreferences.favorites.includes(modelPreferenceKey(id)) }
 function save(next: Saved) {
   if (!session.user || creation.groupSwitching || creation.modelsLoading || !creation.modelTokenId) throw new Error('当前模型分组尚未就绪，请稍后重试。')

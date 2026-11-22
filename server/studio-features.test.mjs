@@ -27,13 +27,121 @@ test('video capability rules validate final custom overrides, preserving the old
   assert.deepEqual(videoCapabilities('sora-2').durations, [4, 8, 12])
   assert.deepEqual(videoCapabilities('veo-3.1', 'reference-to-video').durations, [8])
   assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, duration: 7, videoOptions: { mode: 'text-to-video' } })), /4 \/ 8 \/ 12/)
-  assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, model: 'unknown-video', videoOptions: { mode: 'text-to-video' } })), /尚未配置/)
+  assert.equal(buildCreationPayload(validateCreationInput({ ...video, model: 'unknown-video', videoOptions: { mode: 'text-to-video' } })).body.get('model'), 'unknown-video')
   const sent = JSON.parse(buildCreationPayload(validateCreationInput({ ...video, model: 'doubao-seedance-2-0', referenceUrls: [png, png], videoOptions: { mode: 'first-last-frame', generateAudio: true } })).body)
   assert.deepEqual(sent.metadata.content.map(part => part.role), ['first_frame', 'last_frame'])
   assert.equal(sent.metadata.generate_audio, true)
   assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, videoOptions: { mode: 'text-to-video', customParameters: '{"seconds":30}' } })), /时长/)
   assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, videoOptions: { mode: 'text-to-video', customParameters: '{"model":"another"}' } })), /受保护/)
   assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, videoOptions: { mode: 'text-to-video', customParameters: '{"images":["http://127.0.0.1/private"]}' } })), /远程素材/)
+})
+test('SD-compatible aliases reuse the working workbench range without changing existing model limits', () => {
+  for (const [model, resolution] of [['sd2.0-fast-480p', '480p'], ['sd2.0-mini-480p', '480p'], ['sd2.0-fast-720p', '720p']]) {
+    for (const protocol of ['openai', 'async']) for (const duration of [3, 8, 30]) {
+      const payload = buildCreationPayload(validateCreationInput({ ...video, model, duration, protocol, size: 'auto',
+        videoOptions: { mode: 'text-to-video', resolution } }))
+      assert.equal(payload.body.get('model'), model)
+      assert.equal(payload.body.get('seconds'), String(duration))
+      assert.equal(payload.body.has('size'), false)
+      assert.equal(JSON.parse(payload.body.get('metadata')).resolution, resolution)
+      assert.equal(payload.path, protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos')
+    }
+    assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, model, duration: 31, size: 'auto',
+      videoOptions: { mode: 'text-to-video', resolution } })), /时长/)
+    assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, model, size: '1920x1080',
+      videoOptions: { mode: 'text-to-video', resolution } })), /分辨率/)
+  }
+  assert.deepEqual(videoCapabilities('sd2.0-mini-720p').durations, Array.from({ length: 12 }, (_, index) => index + 4))
+  assert.equal(videoCapabilities('unknown-video-model'), undefined)
+})
+test('automatic video size is omitted from multipart and JSON reference requests', () => {
+  const automatic = buildCreationPayload(validateCreationInput({ ...video, size: 'auto',
+    videoOptions: { mode: 'text-to-video', resolution: 'auto' } }))
+  assert.equal(automatic.body.has('size'), false)
+  const references = buildCreationPayload(validateCreationInput({ ...video, size: 'auto', referenceUrls: [png],
+    videoOptions: { mode: 'reference-to-video', resolution: 'auto' } }))
+  assert.equal(Object.hasOwn(JSON.parse(references.body), 'size'), false)
+  const explicit = buildCreationPayload(validateCreationInput({ ...video,
+    videoOptions: { mode: 'text-to-video', resolution: '720p' } }))
+  assert.equal(explicit.body.get('size'), '1280x720')
+})
+test('backend video resolution settings govern automatic requests without replacing explicit selections', () => {
+  const setting = { autoResolution: '720p', resolutions: ['480p', '720p', '1080p'] }
+  const fields = payload => typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+  const metadata = sent => typeof sent.metadata === 'string' ? JSON.parse(sent.metadata) : sent.metadata
+  const make = values => validateCreationInput({ ...video, model: 'configured-video', size: 'auto',
+    videoOptions: { mode: 'text-to-video', resolution: 'auto' }, ...values })
+  for (const protocol of ['openai', 'async']) {
+    const input = make({ protocol }), original = structuredClone(input)
+    const automatic = fields(buildCreationPayload(input, [], [], setting))
+    assert.equal(automatic.size, '1280x720')
+    assert.equal(metadata(automatic).resolution, '720p')
+    assert.deepEqual(input, original)
+    const explicit = fields(buildCreationPayload(make({ protocol, size: '1920x1080',
+      videoOptions: { mode: 'text-to-video', resolution: '1080p' } }), [], [], setting))
+    assert.equal(explicit.size, '1920x1080')
+    assert.equal(metadata(explicit).resolution, '1080p')
+    const adaptive = fields(buildCreationPayload(make({ protocol, aspect_ratio: 'auto' }), [], [], setting))
+    assert.equal(adaptive.size, undefined)
+    assert.equal(metadata(adaptive).resolution, '720p')
+    for (const fallback of [undefined, { ...setting, autoResolution: 'auto' }]) {
+      const upstream = fields(buildCreationPayload(input, [], [], fallback))
+      assert.equal(upstream.size, undefined)
+      assert.equal(metadata(upstream)?.resolution, undefined)
+    }
+    const custom = fields(buildCreationPayload(make({ protocol,
+      videoOptions: { mode: 'text-to-video', resolution: 'auto', customParameters: '{"metadata":{"resolution":"1080p"}}' } }), [], [], setting))
+    assert.equal(custom.size, undefined)
+    assert.equal(metadata(custom).resolution, '1080p')
+    const customSize = fields(buildCreationPayload(make({ protocol, size: '854x480', exactSize: true }), [], [], setting))
+    assert.equal(customSize.size, '854x480')
+    assert.equal(metadata(customSize).resolution, '480p')
+    assert.throws(() => buildCreationPayload(make({ protocol, size: '4K', exactSize: true }), [], [], setting), { statusCode: 400 })
+  }
+})
+test('configured resolution choices override built-in tiers while unknown models retain generic safety checks', () => {
+  assert.deepEqual(videoCapabilities('sora-2', 'text-to-video', { autoResolution: '1080p', resolutions: ['720p', '1080p'] }),
+    { resolutions: ['720p', '1080p'], durations: [4, 8, 12] })
+  assert.equal(videoCapabilities('new-video', 'text-to-video', { autoResolution: '540p' }), undefined)
+  const make = customParameters => validateCreationInput({ ...video, model: 'new-video', size: 'auto',
+    videoOptions: { mode: 'text-to-video', resolution: 'auto', customParameters } })
+  for (const custom of ['{"seconds":-1}', '{"seconds":3601}', '{"seconds":1.5}', '{"seconds":true}',
+    '{"size":"1280x0"}', '{"size":"999999x720"}', '{"resolution":"anything"}', 'null', '[]']) {
+    assert.throws(() => buildCreationPayload(make(custom)), { statusCode: 400 })
+  }
+  const payload = buildCreationPayload(make('{"resolution":"540p"}'))
+  assert.equal(payload.body.get('resolution'), '540p')
+})
+test('an automatic resolution default alone does not restrict an unknown model manual selection', () => {
+  const input = validateCreationInput({ ...video, model: 'new-video', size: '854x480',
+    videoOptions: { mode: 'text-to-video', resolution: '480p' } })
+  const payload = buildCreationPayload(input, [], [], { autoResolution: '720p' })
+  assert.equal(payload.body.get('size'), '854x480')
+  assert.equal(JSON.parse(payload.body.get('metadata')).resolution, '480p')
+})
+test('2160p backend settings accept automatic and explicitly sized 4k video requests', () => {
+  for (const automatic of [true, false]) {
+    const setting = { autoResolution: automatic ? '2160p' : '720p', resolutions: ['720p', '2160p'] }
+    const input = validateCreationInput({ ...video, model: 'new-video', size: automatic ? 'auto' : '3840x2160',
+      videoOptions: { mode: 'text-to-video', resolution: 'auto' } })
+    const payload = buildCreationPayload(input, [], [], setting)
+    assert.equal(payload.body.get('size'), '3840x2160')
+    assert.equal(JSON.parse(payload.body.get('metadata')).resolution, '2160p')
+  }
+})
+test('automatic backend resolution reaches vendor metadata and reference JSON through the existing formats', () => {
+  for (const model of ['sora-2', 'veo-3.1', 'seedance-2-0', 'grok-imagine-video']) {
+    const payload = buildCreationPayload(validateCreationInput({ ...video, model, size: 'auto',
+      videoOptions: { mode: 'text-to-video', resolution: 'auto' } }), [], [], { autoResolution: '720p' })
+    const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    const metadata = typeof sent.metadata === 'string' ? JSON.parse(sent.metadata) : sent.metadata
+    assert.equal(metadata.resolution, '720p')
+  }
+  const payload = buildCreationPayload(validateCreationInput({ ...video, size: 'auto', referenceUrls: [png],
+    videoOptions: { mode: 'reference-to-video', resolution: 'auto' } }), [], [], { autoResolution: '720p' })
+  const sent = JSON.parse(payload.body)
+  assert.equal(sent.size, '1280x720')
+  assert.equal(sent.metadata.resolution, '720p')
 })
 test('chat formats retain real multi-turn history, attachment bytes and advanced parameters', () => {
   const messages = [{ role: 'user', content: 'previous' }, { role: 'assistant', content: 'answer' }, { role: 'user', content: [{ type: 'file', file: { filename: 'report.pdf', file_data: 'data:application/pdf;base64,aGVsbG8=' } }] }]

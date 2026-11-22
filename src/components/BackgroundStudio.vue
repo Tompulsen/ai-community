@@ -2,24 +2,24 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus, RefreshCw } from '@lucide/vue'
-import { creation, mediaSource, resumeCreation, type CreationTask } from '../native-studio'
+import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus } from '@lucide/vue'
+import { creation, mediaSource, type CreationTask } from '../native-studio'
 import { errorMessage, session } from '../state'
 
 const route = useRoute(), router = useRouter()
-const hidden = ref(false), index = ref(0), error = ref(''), checking = ref(false)
+const hidden = ref(false), index = ref(0), error = ref('')
 const unread = ref<string[]>([]), dock = ref<HTMLElement>(), handle = ref<HTMLButtonElement>()
 const point = ref<{ x: number; y: number }>(), dragging = ref(false)
 let pointer: { id: number; x: number; y: number; left: number; top: number; target: HTMLElement } | undefined
 const position = computed(() => point.value ? { left: `${point.value.x}px`, top: `${point.value.y}px`, right: 'auto', bottom: 'auto' } : {})
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const active = (phase: string) => ['submitting', 'running'].includes(phase)
-const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '结果待确认' }
+const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '请求异常' }
 watch(() => ({
   owner: session.user?.id, studio: studioPage.value,
   phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
 }), (current, previous) => {
-  if (current.owner !== previous?.owner) { hidden.value = false; point.value = undefined; error.value = ''; checking.value = false; stopDrag() }
+  if (current.owner !== previous?.owner) { hidden.value = false; point.value = undefined; error.value = ''; stopDrag() }
   if (!current.owner || current.owner !== previous?.owner || current.studio) unread.value = []
   else {
     const settled = [...current.phases].filter(([id, phase]) => !active(phase) && active(previous?.phases.get(id) || '')).map(([id]) => id)
@@ -41,14 +41,6 @@ async function open(value: CreationTask) {
     const conversation = value.kind === 'text' ? chats.sessions.find(chat => chat.messages.some(message => message.taskId === value.id)) : ensureMediaConversation(value.kind, value)
     await router.push({ path: `/create/${value.kind}`, query: conversation ? { conversation: conversation.id } : { reuse: value.id } })
   } catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
-}
-async function check() {
-  const value = task.value, owner = session.user?.id
-  if (!value || checking.value) return
-  checking.value = true; error.value = ''
-  try { await resumeCreation(value) }
-  catch (cause) { if (owner === session.user?.id) error.value = errorMessage(cause) }
-  finally { if (owner === session.user?.id) checking.value = false }
 }
 function clamp(x: number, y: number) {
   const rect = dock.value?.getBoundingClientRect(), viewport = window.visualViewport
@@ -97,9 +89,8 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
     <template v-if="!hidden">
       <div class="dock-content" role="status" aria-live="polite"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" /><LoaderCircle v-else-if="active(task.phase)" :size="20" /><CircleAlert v-else :size="20" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
       <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0])" alt="本次生成的图片" /></button>
-      <p v-if="error || task.phase === 'error' && task.error" class="dock-error form-error" role="alert">{{ error || task.error }}</p>
-      <details v-if="task.error && (task.phase === 'paused' || task.phase === 'attention')" :key="task.id" class="dock-note muted"><summary>查看详情</summary><p>{{ task.error }}</p></details>
-      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><button v-if="task.phase === 'paused' || task.phase === 'attention'" class="button btn" :disabled="checking" @click="check"><RefreshCw :size="16" />{{ checking ? '查询中…' : '查询结果' }}</button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
+      <p v-if="error || task.error && !active(task.phase)" class="dock-error" :class="task.phase === 'paused' ? 'muted' : 'form-error'" :role="task.phase === 'paused' ? 'status' : 'alert'">{{ error || task.error }}</p>
+      <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
     </template>
   </aside>
 </template>
@@ -124,7 +115,6 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
 .dock-actions .button { min-height: 44px; }
 .dock-preview { display: block; margin: 0 16px 12px; width: calc(100% - 32px); }
 .dock-preview img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
-.dock-error, .dock-note { margin: 0 16px 12px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-.dock-note summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }.dock-note p { margin: 0; }
+.dock-error { margin: 0 16px 12px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
 @media (max-width: 999px) { .background-dock { right: 16px; bottom: calc(80px + env(safe-area-inset-bottom)); } }
 </style>

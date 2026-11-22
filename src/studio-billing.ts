@@ -9,12 +9,12 @@ export function selectedModelPrices(pricing: ModelPricing | undefined, model: st
 
 /** Preview only complete fixed charges; New API owns routing and settlement. */
 export function invocationPoints(rows: ModelPriceRow[], currency: string | undefined, input: {
-  kind: 'text' | 'image' | 'video'; model: string; quantity?: number; protocol?: string;
+  kind: 'text' | 'image' | 'video'; model: string; quantity?: number; protocol?: string; apiFormat?: string;
 }): { min: number; max: number } | undefined {
   if (currency !== '积分' || !rows.length || input.kind === 'video' || input.protocol === 'async') return
   const count = input.kind === 'image' ? input.quantity ?? 1 : 1
   if (!Number.isInteger(count) || count < 1 || count > 16) return
-  if (input.kind === 'image' && usesGeminiImageChat(input.model) && count !== 1) return
+  if (input.kind === 'image' && usesGeminiImageChat(input.model, input.apiFormat) && count !== 1) return
   // Legacy DALL·E adds size/quality multipliers that the catalog does not quote.
   if (input.kind === 'image' && /^dall-e/i.test(input.model)) return
   const totals = rows.map(row => {

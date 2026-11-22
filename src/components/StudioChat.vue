@@ -44,7 +44,8 @@ import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { createMessageQuote, type MessageQuote } from '../../shared/studio/message-quote'
 import { isConversationBusy, mediaTasksForConversation } from '../studio-conversations'
 import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
-import { modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
+import { configuredModelFormat, modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
+import { CHAT_API_FORMATS, type ChatApiFormat } from '../../shared/studio/chat-api-format'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import type { StudioEntry } from '../studio-entry'
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean; entryOnly?: boolean; entryPending?: boolean }>(), { mode: 'text', headerVisible: true })
@@ -52,7 +53,8 @@ const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; ki
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
 const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
 function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }
-const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || current.value?.settings.format)
+const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || (current.value?.formatAutomatic === true ? 'auto' : current.value?.settings.format || 'auto'))
+const effectiveFormat = computed(() => currentFormat.value === 'auto' ? configuredModelFormat(model.value) || 'chat-completions' : currentFormat.value)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
 const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), referenceLoading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
@@ -198,11 +200,14 @@ function chooseModel() {
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing, () => props.mode], chooseModel)
 function changeFormat(event: Event) {
   if (!current.value) return
-  const format = (event.target as HTMLSelectElement).value as typeof current.value.settings.format
-  if (current.value.formatOverride) { current.value.formatOverride = format; void saveChats() }
-  else if (modelFormat(model.value)) {
-    try { setModelFormat(model.value, format) } catch (cause) { error.value = errorMessage(cause) }
-  } else { current.value.settings.format = format; void saveChats() }
+  const format = (event.target as HTMLSelectElement).value
+  if (format !== 'auto' && !CHAT_API_FORMATS.includes(format as ChatApiFormat)) return
+  if (modelFormat(model.value)) {
+    try { setModelFormat(model.value, format as ChatApiFormat | 'auto') } catch (cause) { error.value = errorMessage(cause); return }
+  }
+  current.value.formatOverride = format === 'auto' ? undefined : format as ChatApiFormat
+  current.value.formatAutomatic = format === 'auto'
+  void saveChats()
 }
 watch(() => current.value?.id, () => { chooseModel(); files.value = current.value?.draftFiles || []; prompt.value = current.value?.draft || ''; edited.value = undefined; selecting.value = false; selectedTurns.value = []; nearBottom.value = true; void nextTick(scrollToBottom) }, { immediate: true })
 let appliedSource = ''
@@ -220,7 +225,8 @@ function applyRemix(source: Work, initialFiles: StudioFile[] = []) {
   const parameters = readRemixParameters(source.generation?.parameters)
   if (parameters?.kind === 'text' && parameters.chatOptions) {
     Object.assign(next.settings, parameters.chatOptions)
-    next.formatOverride = parameters.chatOptions.format
+    next.formatOverride = parameters.apiFormat === 'auto' ? undefined : parameters.chatOptions.format
+    next.formatAutomatic = parameters.apiFormat === 'auto'
   }
   prompt.value = source.prompt; files.value = initialFiles
   void saveChats()
@@ -340,7 +346,7 @@ async function sendEntry() {
     await materials.wait(preparation.signal)
     if (!live || preparation.signal.aborted || owner !== session.user?.id || current.value?.id !== chat.id || props.mode !== 'text') return
     if (acceptedModel !== model.value || group !== creation.selectedGroup || tokenId !== creation.modelTokenId) throw new Error('模型或分组已变化，请重新发送。')
-    const parameters = JSON.parse(JSON.stringify({ model: acceptedModel, group, tokenId, settings: { ...chat.settings, format: currentFormat.value }, system: chat.system, skillIds: chat.skillIds, search: chat.search, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory, toolContext: chat.toolContext, files: files.value }))
+    const parameters = JSON.parse(JSON.stringify({ model: acceptedModel, group, tokenId, apiFormat: currentFormat.value, settings: { ...chat.settings, format: effectiveFormat.value }, system: chat.system, skillIds: chat.skillIds, search: chat.search, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory, toolContext: chat.toolContext, files: files.value }))
     emit('entry', { owner: owner || null, kind: 'text', prompt: prompt.value, parameters })
   } catch (cause) { if (live && !preparation.signal.aborted && owner === session.user?.id) error.value = errorMessage(cause) }
   finally { if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false } }
@@ -398,7 +404,7 @@ async function useTask(task: CreationTask) {
   const currentScope = () => live && props.mode === 'text' && owner === session.user?.id && conversation === current.value?.id
   restoringTask.value = true; error.value = ''
   try {
-    const parameters = readRemixParameters({ version: 1, kind: 'text', group: task.group, chatOptions: task.request.chatOptions })
+    const parameters = readRemixParameters({ version: 1, kind: 'text', group: task.group, apiFormat: task.request.apiFormat, chatOptions: task.request.chatOptions })
     if (!parameters) throw new Error('原任务生成参数无效，请使用当前配置。')
     await waitCreationGroup(); await loadCreationGroups()
     if (!currentScope()) return false
@@ -417,7 +423,8 @@ async function useTask(task: CreationTask) {
     next.model = task.model; next.textModel = task.model; next.draft = task.prompt; next.sourceWorkId = task.sourceWorkId
     if (parameters.chatOptions) {
       Object.assign(next.settings, parameters.chatOptions)
-      next.formatOverride = parameters.chatOptions.format
+      next.formatOverride = parameters.apiFormat === 'auto' ? undefined : parameters.chatOptions.format
+      next.formatAutomatic = parameters.apiFormat === 'auto'
     }
     prompt.value = task.prompt; model.value = task.model; files.value = []
     await saveChats(true)

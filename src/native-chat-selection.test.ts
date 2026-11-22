@@ -8,7 +8,7 @@ vi.mock('./state', async () => {
 vi.mock('./native-studio', () => ({
   creation: { tasks: [] }, resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn(),
 }))
-vi.mock('./model-preferences', () => ({ modelFormat: () => undefined }))
+vi.mock('./model-preferences', () => ({ modelFormat: () => undefined, configuredModelFormat: () => undefined }))
 vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: vi.fn(), writeChatSnapshot: storage.write }))
 beforeEach(() => { vi.resetModules(); storage.write.mockReset().mockResolvedValue(undefined) })
 async function fixture(activeId = 'b') {

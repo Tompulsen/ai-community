@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import { buildCreationPayload, resolveCreationModelSettings, validateCreationInput } from '../server/creation-contract'
 const screenshots = '.impeccable/review/restored-studio'
 async function selectSearch(page: Page, name: string) {
   await page.getByRole('button', { name: /^联网搜索：/ }).click()
@@ -218,6 +219,381 @@ test('image advanced settings survive reload, reach the request, and streaming r
   await capture(page, 'image')
   expect(errors).toEqual([])
 })
+test('image output count accepts ten and blocks invalid counts even without native form validation', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('十张独立的图片')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const count = page.getByRole('spinbutton', { name: '图片数量', exact: true })
+  await expect(count).toHaveAttribute('max', '10')
+  const generate = page.getByRole('button', { name: '开始生成', exact: true })
+  for (const invalid of ['11', '0', '1.5']) {
+    await count.fill(invalid)
+    await expect(generate).toBeDisabled()
+    await page.locator('.creation-controls').dispatchEvent('submit')
+    expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(0)
+  }
+  await count.fill('10')
+  await expect(generate).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await generate.click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate').map(call => call.body.n)).toEqual([10])
+})
+
+test('an old image draft normalizes output count to ten while retaining sixteen references', async ({ page }) => {
+  const state = await fixture(page)
+  await page.addInitScript(() => localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+    _hasHydrated: true, activeId: 'old-count-draft', mediaConversationsMigrated: true,
+    sessions: [{ id: 'old-count-draft', creationKind: 'image', topic: '旧草稿', messages: [], settings: {}, skillIds: [], mediaDrafts: { image: {
+      prompt: '保留十六张参考图的旧草稿', model: 'gpt-image-2', count: 16,
+      references: Array.from({ length: 16 }, (_, index) => ({ name: `参考图 ${index + 1}`, url: `https://media.example/reference-${index + 1}.jpg` })),
+    } } }],
+  } })))
+  await page.goto('/create/image')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留十六张参考图的旧草稿')
+  await expect(page.locator('.reference-list li')).toHaveCount(16)
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(page.getByRole('spinbutton', { name: '图片数量', exact: true })).toHaveValue('10')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  const generated = state.calls.filter(call => call.path === '/api/creation/generate')
+  expect(generated).toHaveLength(1)
+  expect(generated[0]!.body.n).toBe(10)
+  expect(generated[0]!.body.referenceUrls).toHaveLength(16)
+})
+
+test('reusing an image result above ten requires adjustment without rewriting its historical request', async ({ page }) => {
+  const state = await fixture(page)
+  await page.addInitScript(() => {
+    localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+      _hasHydrated: true, activeId: 'legacy-count', mediaConversationsMigrated: true,
+      sessions: [{ id: 'legacy-count', creationKind: 'image', topic: '原来的十六张图片', model: 'gpt-image-2', messages: [], settings: {}, skillIds: [] }],
+    } }))
+    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
+      id: 'legacy-count', conversationId: 'legacy-count', owner: '17', kind: 'image', model: 'gpt-image-2', prompt: '原来的十六张图片',
+      createdAt: Date.now(), settledAt: Date.now(), phase: 'complete', protocol: 'sync', references: [], text: '',
+      urls: ['https://media.example/legacy-count.jpg'], request: { size: '1024x1024', aspect_ratio: '1:1', n: 16, duration: 8 },
+    }]))
+  })
+  await page.goto('/create/image')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await page.getByRole('button', { name: '复用参数', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原来的十六张图片')
+  await expect(page.locator('.creation-controls').getByRole('alert')).toHaveText('图片数量需为 1 到 10 的整数。')
+  const generate = page.getByRole('button', { name: '开始生成', exact: true })
+  await expect(generate).toBeDisabled()
+  await page.locator('.creation-controls').dispatchEvent('submit')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(0)
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const count = page.getByRole('spinbutton', { name: '图片数量', exact: true })
+  await expect(count).toHaveValue('16')
+  await count.fill('10')
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.creation-controls').getByRole('alert')).toHaveCount(0)
+  await generate.click()
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate').map(call => call.body.n)).toEqual([10])
+  expect(await page.evaluate(async () => {
+    const { readTaskSnapshot } = await import('/src/studio-task-store.ts')
+    const tasks = await readTaskSnapshot('17')
+    return tasks?.find(task => task.id === 'legacy-count')?.request.n
+  })).toBe(16)
+})
+
+test('video models without local capabilities accept auto and validate the numeric duration', async ({ page }) => {
+  const state = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'unknown-video-model', kinds: ['video'] },
+  ] } }))
+  await page.goto('/create/video')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('unknown-video-model')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('阳光下缓慢移动的画面')
+  const generate = page.getByRole('button', { name: '开始生成', exact: true })
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const resolutions = page.getByRole('radiogroup', { name: '视频分辨率', exact: true })
+  await expect(resolutions.getByRole('radio', { name: '自动', exact: true })).toBeChecked()
+  expect(await resolutions.getByRole('radio').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).value))).toEqual(['auto', '480p', '720p', '1080p'])
+  const duration = page.getByRole('spinbutton', { name: '时长（秒）', exact: true })
+  await expect(duration).toHaveValue('8')
+  for (const invalid of ['0', '1.5', '3601']) {
+    await duration.fill(invalid)
+    await expect(generate).toBeDisabled()
+    await page.locator('.creation-controls').dispatchEvent('submit')
+    expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(0)
+  }
+  await duration.fill('8')
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.locator('.advanced-options .form-error')).toHaveCount(0)
+  await expect(page.locator('.creation-controls').getByRole('alert')).toHaveCount(0)
+  await expect(generate).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await generate.click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  const generated = state.calls.filter(call => call.path === '/api/creation/generate')
+  expect(generated).toHaveLength(1)
+  expect(generated[0]!.body).toMatchObject({ model: 'unknown-video-model', duration: 8, size: 'auto', videoOptions: { resolution: 'auto' } })
+  expect(() => buildCreationPayload(validateCreationInput(generated[0]!.body))).not.toThrow()
+})
+
+test('unknown video models with only an automatic default retain manual resolution choices', async ({ page }) => {
+  const state = await fixture(page)
+  const video = { autoResolution: '720p' }
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'unknown-video-model', kinds: ['video'], video },
+  ] } }))
+  await page.goto('/create/video')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('手动选择低分辨率')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const resolutions = page.getByRole('radiogroup', { name: '视频分辨率', exact: true })
+  await expect(resolutions.getByRole('radio', { name: '自动', exact: true })).toBeChecked()
+  await resolutions.getByRole('radio', { name: '480P', exact: true }).check()
+  await page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '16:9', exact: true }).check()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  const generated = state.calls.filter(call => call.path === '/api/creation/generate')
+  expect(generated).toHaveLength(1)
+  expect(generated[0]!.body).toMatchObject({ model: 'unknown-video-model', duration: 8, size: '854x480', videoOptions: { resolution: '480p' } })
+  const payload = buildCreationPayload(validateCreationInput(generated[0]!.body), [], [], video)
+  const fields = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+  expect(fields).toMatchObject({ model: 'unknown-video-model', seconds: '8', size: '854x480' })
+})
+
+test('automatic image defaults reach the backend while manual aspect ratios and saved overrides remain explicit', async ({ page }) => {
+  const state = await fixture(page)
+  const setting = { id: 'image-alias', kind: 'image' as const, apiFormat: 'images' as const, protocol: 'async' as const,
+    image: { autoResolution: '2k' as const, autoQuality: 'high' as const, autoAspectRatio: '9:16', autoBackground: 'transparent' as const } }
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ ...setting, kinds: ['image'] }] } }))
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('自动分辨率配合手动比例')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const ratios = page.getByRole('radiogroup', { name: '画面比例', exact: true })
+  await expect(ratios.getByRole('radio', { name: '自动', exact: true })).toBeChecked()
+  await ratios.getByRole('radio', { name: '9:16', exact: true }).check()
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.getByRole('combobox', { name: '接口格式', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '请求方式', exact: true })).toHaveValue('auto')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  const automatic = state.calls.filter(call => call.path === '/api/creation/generate')[0]!.body
+  expect(automatic).toMatchObject({ apiFormat: 'auto', protocol: 'auto', size: 'auto', aspect_ratio: '9:16',
+    imageOptions: { resolution: 'auto', quality: 'auto', imageBackground: 'auto' } })
+  const automaticPayload = buildCreationPayload(resolveCreationModelSettings(validateCreationInput(automatic), setting))
+  expect(automaticPayload.path).toBe('async-images/v1/tasks')
+  expect(JSON.parse(automaticPayload.body as string)).toMatchObject({ size: '1440x2560', quality: 'high', background: 'transparent' })
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保存我的手动参数')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await ratios.getByRole('radio', { name: '1:1', exact: true }).check()
+  await page.getByRole('radiogroup', { name: '分辨率', exact: true }).getByRole('radio', { name: '1K', exact: true }).check()
+  await page.getByRole('radiogroup', { name: '画质', exact: true }).getByRole('radio', { name: '低', exact: true }).check()
+  const advanced = page.locator('.parameter-advanced')
+  if (await advanced.getAttribute('open') === null) await advanced.locator(':scope > summary').click()
+  await page.getByRole('combobox', { name: '接口格式', exact: true }).selectOption('images')
+  await page.getByRole('combobox', { name: '请求方式', exact: true }).selectOption('openai')
+  await page.getByRole('combobox', { name: '背景', exact: true }).selectOption('opaque')
+  await page.getByRole('textbox', { name: '尺寸', exact: true }).fill('900x900')
+  await page.reload()
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(ratios.getByRole('radio', { name: '1:1', exact: true })).toBeChecked()
+  await page.locator('.parameter-advanced > summary').click()
+  await expect(page.getByRole('combobox', { name: '接口格式', exact: true })).toHaveValue('images')
+  await expect(page.getByRole('combobox', { name: '请求方式', exact: true })).toHaveValue('openai')
+  await expect(page.getByRole('textbox', { name: '尺寸', exact: true })).toHaveValue('900x900')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  const manual = state.calls.filter(call => call.path === '/api/creation/generate')[1]!.body
+  expect(manual).toMatchObject({ apiFormat: 'images', protocol: 'openai', size: '900x900', exactSize: true, aspect_ratio: '1:1',
+    imageOptions: { resolution: '1k', quality: 'low', imageBackground: 'opaque' } })
+  const prepared = manual.referenceUrls.map(() => ({ blob: new Blob([Uint8Array.from(state.photo)], { type: 'image/jpeg' }), name: 'reference.jpg' }))
+  const manualPayload = buildCreationPayload(resolveCreationModelSettings(validateCreationInput(manual), setting), prepared)
+  expect(manualPayload.path).toBe('v1/images/edits')
+  const manualFields = typeof manualPayload.body === 'string' ? JSON.parse(manualPayload.body) : Object.fromEntries(manualPayload.body.entries())
+  expect(manualFields).toMatchObject({ size: '900x900', quality: 'low', background: 'opaque' })
+})
+
+test('configured image formats override name detection while explicit image chat remains selectable', async ({ page }) => {
+  const state = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'gemini-3-pro-image', kinds: ['image'], apiFormat: 'images' },
+  ] } }))
+  await page.goto('/create/image')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('按照 Images 接口生成两张')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const count = page.getByRole('spinbutton', { name: '图片数量', exact: true })
+  await expect(count).not.toHaveAttribute('readonly')
+  await count.fill('2')
+  await page.locator('.parameter-advanced > summary').click()
+  await page.getByRole('textbox', { name: '随机种子', exact: true }).fill('123')
+  await page.getByRole('combobox', { name: '接口格式', exact: true }).selectOption('chat-completions')
+  await expect(count).toHaveValue('1')
+  await expect(count).toHaveAttribute('readonly')
+  await expect(page.getByRole('textbox', { name: '随机种子', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')[0]!.body).toMatchObject({
+    apiFormat: 'chat-completions', n: 1, size: 'auto', imageOptions: { seed: '' },
+  })
+})
+
+test('text format auto follows the catalog and manual selections survive reload and reset', async ({ page }) => {
+  const state = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'gpt-5', kinds: ['text'], apiFormat: 'responses', protocol: 'openai', text: { autoReasoningEffort: 'high' } },
+  ] } }))
+  await page.goto('/create/text')
+  async function openFormat() {
+    await page.getByRole('button', { name: '对话参数', exact: true }).click()
+    const advanced = page.locator('.chat-advanced-settings')
+    if (await advanced.getAttribute('open') === null) await advanced.locator(':scope > summary').click()
+  }
+  await openFormat()
+  const format = page.getByRole('combobox', { name: '接口格式', exact: true })
+  await expect(format).toHaveValue('auto')
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('使用后台默认接口')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(1)
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')[0]!.body).toMatchObject({ apiFormat: 'auto', chatOptions: { format: 'responses', reasoningEffort: 'auto' } })
+  await openFormat()
+  await format.selectOption('chat-completions')
+  await page.reload()
+  await openFormat()
+  await expect(format).toHaveValue('chat-completions')
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('保留手动接口')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(2)
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')[1]!.body).toMatchObject({ apiFormat: 'chat-completions', chatOptions: { format: 'chat-completions' } })
+  await openFormat()
+  await format.selectOption('auto')
+  await page.reload()
+  await openFormat()
+  await expect(format).toHaveValue('auto')
+})
+
+test('video auto uses backend choices while explicit drafts survive reload and configuration changes', async ({ page }, info) => {
+  const state = await fixture(page)
+  let resolutions = ['480p', '1080p']
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+    { id: 'sora-2', kinds: ['video'], video: { autoResolution: '1080p', resolutions } },
+  ] } }))
+  await page.goto('/create/video')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('使用后台自动分辨率')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const choices = page.getByRole('radiogroup', { name: '视频分辨率', exact: true })
+  await expect(choices.getByRole('radio', { name: '自动', exact: true })).toBeChecked()
+  expect(await choices.getByRole('radio').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).value))).toEqual(['auto', '480p', '1080p'])
+  await expect(page.getByRole('slider', { name: '视频时长', exact: true })).toHaveAttribute('aria-valuetext', '8 秒')
+  await page.screenshot({ path: info.outputPath('backend-video-auto.png'), fullPage: true })
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate')[0]!.body).toMatchObject({ duration: 8, size: 'auto', videoOptions: { resolution: 'auto' } })
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留手动分辨率的草稿')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await choices.getByRole('radio', { name: '480P', exact: true }).check()
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-creation-draft:video') || '{}').videoOptions?.resolution)).toBe('480p')
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留手动分辨率的草稿')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(choices.getByRole('radio', { name: '480P', exact: true })).toBeChecked()
+  resolutions = ['720p', '1080p']
+  await page.reload()
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(page.locator('[aria-label="视频分辨率"] h3')).toContainText('480p')
+  await expect(page.locator('.creation-controls').getByRole('alert')).toHaveText('原作时长或分辨率不受当前模型支持，请在高级参数中调整。')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-creation-draft:video') || '{}').videoOptions?.resolution)).toBe('480p')
+  resolutions = ['480p', '1080p']
+  await page.reload()
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await expect(choices.getByRole('radio', { name: '480P', exact: true })).toBeChecked()
+  await expect(page.locator('.creation-controls').getByRole('alert')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  expect(state.calls.filter(call => call.path === '/api/creation/generate').map(call => call.body.videoOptions.resolution)).toEqual(['auto', '480p'])
+})
+
+for (const resolution of ['480p', '720p']) {
+  test(`saved video drafts and reused ${resolution} requests keep their explicit resolution`, async ({ page }) => {
+    const state = await fixture(page)
+    await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [
+      { id: 'sora-2', kinds: ['video'], video: { autoResolution: '1080p', resolutions: [resolution, '1080p'] } },
+    ] } }))
+    await page.addInitScript(value => {
+      const videoOptions = { mode: 'text-to-video', resolution: value }
+      localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+        _hasHydrated: true, activeId: 'legacy-video', mediaConversationsMigrated: true,
+        sessions: [{ id: 'legacy-video', creationKind: 'video', topic: '旧视频', model: 'sora-2', messages: [], settings: {}, skillIds: [],
+          mediaDrafts: { video: { prompt: '旧视频草稿', model: 'sora-2', duration: 8, videoOptions } } }],
+      } }))
+      localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
+        id: 'legacy-video', conversationId: 'legacy-video', owner: '17', kind: 'video', model: 'sora-2', prompt: '旧视频参数',
+        createdAt: Date.now(), settledAt: Date.now(), phase: 'complete', protocol: 'sync', references: [], text: '',
+        urls: ['https://media.example/legacy-video.mp4'], request: { size: 'auto', aspect_ratio: '16:9', n: 1, duration: 8, videoOptions },
+      }]))
+    }, resolution)
+    await page.goto('/create/video')
+    await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('旧视频草稿')
+    await page.getByRole('button', { name: '高级参数', exact: true }).click()
+    const selected = page.getByRole('radiogroup', { name: '视频分辨率', exact: true }).getByRole('radio', { name: resolution.toUpperCase(), exact: true })
+    await expect(selected).toBeChecked()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: '复用参数', exact: true }).click()
+    await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('旧视频参数')
+    await page.getByRole('button', { name: '高级参数', exact: true }).click()
+    await expect(selected).toBeChecked()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect(page.locator('.task-status').last()).toContainText('生成完成')
+    expect(state.calls.filter(call => call.path === '/api/creation/generate').map(call => call.body.videoOptions.resolution)).toEqual([resolution])
+    expect(await page.evaluate(async () => {
+      const { readTaskSnapshot } = await import('/src/studio-task-store.ts')
+      return (await readTaskSnapshot('17'))?.find(task => task.id === 'legacy-video')?.request.videoOptions?.resolution
+    })).toBe(resolution)
+  })
+}
+
+test('configured SD video submits once per existing protocol and automatic size stays omitted upstream', async ({ page }, info) => {
+  const state = await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'sd2.0-fast-480p', kinds: ['video'] }] } }))
+  await page.goto('/create/video')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('sd2.0-fast-480p')
+  for (const [index, protocol] of ['openai', 'async'].entries()) {
+    const prompt = `阳光下缓慢移动的画面 ${protocol}`
+    await page.getByRole('textbox', { name: '提示词', exact: true }).fill(prompt)
+    await page.getByRole('button', { name: '高级参数', exact: true }).click()
+    await page.getByRole('radiogroup', { name: '视频分辨率', exact: true }).getByRole('radio', { name: '自动', exact: true }).check()
+    await expect(page.getByRole('radio', { name: '480P', exact: true })).toBeVisible()
+    const advanced = page.locator('.parameter-advanced')
+    if (await advanced.getAttribute('open') === null) await advanced.locator(':scope > summary').click()
+    await page.getByRole('combobox', { name: '请求方式', exact: true }).selectOption(protocol)
+    await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+    await page.screenshot({ path: info.outputPath(`sd-video-${protocol}-parameters.png`), fullPage: true })
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    await expect(page.locator('.task-status')).toHaveCount(index + 1)
+    await expect(page.locator('.task-status').last()).toContainText('生成完成')
+    const generated = state.calls.filter(call => call.path === '/api/creation/generate')
+    expect(generated).toHaveLength(index + 1)
+    expect(generated[index]!.body).toMatchObject({ kind: 'video', model: 'sd2.0-fast-480p', prompt, protocol, size: 'auto', videoOptions: { resolution: 'auto' } })
+    const payload = buildCreationPayload(validateCreationInput(generated[index]!.body))
+    expect(payload.path).toBe(protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos')
+    expect(payload.body).toBeInstanceOf(FormData)
+    const fields = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    expect(fields).toMatchObject({ model: 'sd2.0-fast-480p', prompt, seconds: '8' })
+    expect(fields).not.toHaveProperty('size')
+    await page.screenshot({ path: info.outputPath(`sd-video-${protocol}-complete.png`), fullPage: true })
+  }
+})
+
 test('video controls follow model limits and retain first-last mode and custom parameters', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/create/video')

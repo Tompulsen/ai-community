@@ -32,8 +32,8 @@ export function videoParameterFormat(
   return format;
 }
 
-export function videoBuiltinParameters(draft: VideoDraft) {
-  const format = videoParameterFormat(draft.apiFormat, draft.model);
+export function videoBuiltinParameters(draft: VideoDraft, parameterFormat?: VideoApiFormat) {
+  const format = parameterFormat ?? videoParameterFormat(draft.apiFormat, draft.model);
   const options = draft.protocolOptions?.[draft.apiFormat] ?? {};
   const result: Record<string, unknown> = {};
   if (options.seed?.trim()) {
@@ -64,8 +64,9 @@ export function videoOptions(
   model = "",
   mode?: VideoGenMode,
   _resolution?: VideoResolution,
+  parameterFormat?: VideoApiFormat,
 ) {
-  format = videoParameterFormat(format, model);
+  format = parameterFormat ?? videoParameterFormat(format, model);
   const modes: VideoGenMode[] = [
     "text-to-video",
     "image-to-video",
@@ -99,13 +100,14 @@ export function videoUploadMode(
   return mode === "text-to-video" ? "image-to-video" : mode;
 }
 
-export function videoDraftForFormat(draft: VideoDraft): Partial<VideoDraft> {
+export function videoDraftForFormat(draft: VideoDraft, parameterFormat?: VideoApiFormat): Partial<VideoDraft> {
   const format = videoApiFormat(draft.apiFormat);
   const options = videoOptions(
     format,
     draft.model,
     draft.mode,
     draft.resolution,
+    parameterFormat,
   );
   const mode = options.modes.includes(draft.mode)
     ? draft.mode
@@ -175,14 +177,14 @@ function imageData(url: string) {
   return { mimeType: match[1], bytesBase64Encoded: match[2] };
 }
 
-export function openaiVideoReference(draft: VideoDraft) {
+export function openaiVideoReference(draft: VideoDraft, parameterFormat?: VideoApiFormat) {
   if (
     draft.apiFormat !== "openai" ||
     !["image-to-video", "first-last-frame"].includes(draft.mode)
   )
     return undefined;
   if (draft.openaiReferenceSource === "file_id") {
-    if (videoParameterFormat("openai", draft.model) !== "openai")
+    if ((parameterFormat ?? videoParameterFormat("openai", draft.model)) !== "openai")
       throw new Error("当前兼容格式请使用本地图片或图片 URL");
     const fileId = draft.openaiFileId?.trim();
     if (!fileId || /\s/.test(fileId))
@@ -215,24 +217,25 @@ function validateVideoImageUrl(url: string) {
 export function buildVideoRequest(
   draft: VideoDraft,
   model: string,
+  parameterFormat?: VideoApiFormat,
 ): { path: string; body: string | FormData } {
   draft = {
     ...draft,
-    ...videoDraftForFormat({ ...draft, model }),
+    ...videoDraftForFormat({ ...draft, model }, parameterFormat),
     mode: draft.mode,
   };
   const format = videoApiFormat(draft.apiFormat);
   const custom = videoCustomParams(draft);
   const nativeSize = videoSizeParameters(draft, "gemini");
-  const builtin = videoBuiltinParameters({ ...draft, model });
+  const builtin = videoBuiltinParameters({ ...draft, model }, parameterFormat);
   if (!model || !draft.prompt.trim())
     throw new Error("请选择模型并填写视频提示词");
-  const options = videoOptions(format, model, draft.mode, draft.resolution);
+  const options = videoOptions(format, model, draft.mode, draft.resolution, parameterFormat);
   if (!options.modes.includes(draft.mode))
     throw new Error("当前接口或模型不支持此生成模式");
   if (!Number.isFinite(draft.duration))
     throw new Error("视频时长必须是有效数字");
-  const compat = videoParameterFormat(format, model);
+  const compat = parameterFormat ?? videoParameterFormat(format, model);
   const customMetadata = custom.metadata;
   if (compat === "seedance" && Object.hasOwn(custom, "input_reference"))
     throw new Error(
@@ -255,7 +258,7 @@ export function buildVideoRequest(
     Object.hasOwn(custom, "images");
   const reference = hasCustomReference
     ? undefined
-    : openaiVideoReference({ ...draft, model });
+    : openaiVideoReference({ ...draft, model }, parameterFormat);
   const customMaterials = !!reference || hasCustomReference;
   if (!customMaterials && draft.materials.some((item) => item.type !== "image"))
     throw new Error("当前接口仅支持图片参考素材，请移除音频或视频素材");
@@ -379,7 +382,9 @@ export function buildVideoRequest(
     };
   }
   let compatibleMetadata: unknown = customMetadata;
-  const compatibleSize = videoSizeParameters(draft, "openai").size;
+  const compatibleSize = isVideoSizeAuto(draft)
+    ? undefined
+    : videoSizeParameters(draft, "openai").size;
   if (
     customMetadata === undefined ||
     (customMetadata &&
@@ -485,7 +490,7 @@ export function buildVideoRequest(
   body.set("model", model);
   body.set("prompt", draft.prompt);
   body.set("seconds", String(draft.duration));
-  body.set("size", compatibleSize);
+  if (compatibleSize) body.set("size", compatibleSize);
   if (images[0]) {
     const image = imageData(images[0]);
     const bytes = Uint8Array.from(atob(image.bytesBase64Encoded), (c) =>

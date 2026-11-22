@@ -13,7 +13,7 @@ import {
   AccountRequest, NewApiError, getNewApiConfig, relayHeaders, resolveRelayCredentials,
 } from './native-account/index.ts'
 import {
-  buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, normalizeNativeChat, validateCreationInput,
+  buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, normalizeNativeChat, resolveCreationModelSettings, validateCreationInput,
   type CreationInput, type CreationKind, type CreationReference, type CreationTask, type CreationTaskProtocol,
 } from './creation-contract.ts'
 import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
@@ -23,7 +23,7 @@ import type { RequestContext } from './types.ts'
 import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
-import { readModelTypes } from '../shared/studio/model-types.ts'
+import { readModelTypes, type ModelApiFormat } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
 
@@ -34,7 +34,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。' }
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
-type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol }
+type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'> }
 interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol }
 interface CreationServices {
   credentials: typeof resolveRelayCredentials
@@ -107,7 +107,7 @@ function responseResult(kind: CreationKind, value: unknown, credentials: Credent
   return { ...result, tokenId: credentials.tokenId, protocol }
 }
 
-async function upstreamJson(req: AccountRequest, credentials: Credentials, path: string, svc: CreationServices) {
+async function upstreamJson(ctx: RequestContext, req: AccountRequest, credentials: Credentials, path: string, svc: CreationServices) {
   if (!creationRelayPath('GET', path)) throw httpError(400, '任务地址无效。')
   const response = await svc.fetch(new URL(`/${path}`, credentials.baseUrl), {
     headers: relayHeaders(req, credentials.apiKey), redirect: 'error', cache: 'no-store',
@@ -115,6 +115,11 @@ async function upstreamJson(req: AccountRequest, credentials: Credentials, path:
   })
   if (!response.ok) {
     await response.body?.cancel()
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after')
+      if (retryAfter) ctx.reply.header('Retry-After', retryAfter)
+      throw httpError(429, '任务查询过于频繁，请稍后重试。')
+    }
     throw httpError(response.status === 404 ? 404 : response.status === 401 || response.status === 403 ? 403 : 502,
       response.status === 404 ? '任务或生成文件不存在，可能已过期。' : '暂时无法查询此任务，请稍后再试。')
   }
@@ -133,12 +138,12 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
   } else if (!requestedToken) throw httpError(409, '旧任务缺少原始密钥编号，请保留记录并核对。')
   else req.headers.set('x-new-api-token', requestedToken)
   const credentials = await svc.credentials(req, path)
-  let data = await upstreamJson(req, credentials, path, svc)
+  let data = await upstreamJson(ctx, req, credentials, path, svc)
   ownedResponse(data, credentials, !saved)
   const envelope = record(data) ? data : {}
   const details = record(envelope.data) ? envelope.data : envelope
   if (kind === 'video' && protocol === 'plugin' && ['completed', 'succeeded', 'success', 'done'].includes(String(details.status).toLowerCase())) {
-    const artifacts = await upstreamJson(req, credentials, `v1/tasks/${id}/artifacts`, svc)
+    const artifacts = await upstreamJson(ctx, req, credentials, `v1/tasks/${id}/artifacts`, svc)
     const rows = Array.isArray(artifacts) ? artifacts : record(artifacts) ? artifacts.data ?? artifacts.artifacts : []
     data = { ...details, artifacts: Array.isArray(rows) ? rows : [] }
   }
@@ -207,7 +212,7 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
     files.push({ blob: value.blob, name: `reference-${index}.${value.blob.type.split('/')[1]}` })
     urls.push(value.url)
   }
-  if (input.kind === 'image' && usesGeminiImageChat(input.model) && input.imageContext) {
+  if (input.kind === 'image' && usesGeminiImageChat(input.model, input.apiFormat) && input.imageContext) {
     for (const turn of input.imageContext.turns) {
       const images: string[] = []
       for (const source of turn.images) images.push((await prepare(source)).url)
@@ -235,7 +240,7 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
   return result
 }
 async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}) {
-  const input = validateCreationInput(ctx.body)
+  let input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
   const key = `community-next:creation:request:${accountNamespace(ctx)}:${input.requestId}`
   const fingerprint = hash(JSON.stringify(ctx.body))
@@ -245,6 +250,9 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return cachedResult(ctx, cached)
   }
+  const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
+  const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
+  input = resolveCreationModelSettings(input, setting)
   if (input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'image_url') {
     input.referenceUrls = [input.videoOptions.openaiImageUrl || '', ...(input.videoOptions.mode === 'first-last-frame' ? [input.videoOptions.openaiLastImageUrl || ''] : [])]
     if (input.referenceUrls.some(value => { try { const url = new URL(value); return !['http:', 'https:'].includes(url.protocol) || !!url.username || !!url.password } catch { return true } })) throw httpError(400, '请填写有效的参考图片 URL。')
@@ -252,7 +260,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   }
   const files = await references(ctx, req, input, svc)
   const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
-  const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })))
+  const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })), setting?.video)
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   const credentials = await svc.credentials(req, payload.path)
   const url = new URL(`/${payload.path}`, credentials.baseUrl)
@@ -262,7 +270,8 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   headers.set('Idempotency-Key', hash(`${accountNamespace(ctx)}:${input.requestId}`))
   const signed = await signCommunityRequest(url, credentials.userId, headers, payload.body)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
-  const pending = { fingerprint, kind: input.kind, result: { ...uncertain, tokenId: credentials.tokenId, protocol } }
+  const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
+  const pending = { fingerprint, kind: input.kind, result: { ...uncertain, tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) } }
   const accepted = await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
   if (accepted !== 'OK') {
     const previous = await ctx.redis.get(key)
@@ -275,7 +284,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     // Keep a paid request alive after the browser stops waiting, and never replay it.
     const response = await svc.fetch(url, {
       method: 'POST', ...signed, redirect: 'error', cache: 'no-store',
-      signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : 180000),
+      signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : input.kind === 'video' ? 360000 : 180000),
     })
     if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
       result = { ...await readGenerationStream(response, input, emit), tokenId: credentials.tokenId, protocol }
@@ -304,6 +313,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   } catch {
     result = { ...uncertain, tokenId: credentials.tokenId, protocol }
   }
+  if (apiFormat) result.apiFormat = apiFormat
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
   await remember(ctx, input.kind, result).catch(() => {})
   const serialized = JSON.stringify({ ...pending, result })
@@ -415,16 +425,21 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/models') {
       await rateLimit(ctx, 'models', 60)
       const credentials = await svc.credentials(req, 'v1/models')
-      const data = await upstreamJson(req, credentials, 'v1/models', svc)
+      const data = await upstreamJson(ctx, req, credentials, 'v1/models', svc)
       const items = record(data) && Array.isArray(data.data) ? data.data : []
       const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
-      const types = new Map(readModelTypes(options?.communityModelTypes).map(item => [item.id, item.kind]))
+      const types = new Map(readModelTypes(options?.communityModelTypes).map(item => [item.id, item]))
       ctx.json(200, { tokenId: credentials.tokenId, items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
-        const configuredKind = types.get(id)
+        const configured = types.get(id), configuredKind = configured?.kind
         const kind = id.length <= 200 && id.trim() ? configuredKind ?? classifyModel(id) : null
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
-        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], ...(configuredKind ? { configuredKind } : {}), protocol: 'openai' }] : []
+        return kind ? [{ id, name: text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: [kind], ...(configuredKind ? { configuredKind } : {}),
+          ...(configured?.apiFormat ? { apiFormat: configured.apiFormat } : {}),
+          ...(kind === 'image' && configured?.image ? { image: configured.image } : {}),
+          ...(kind === 'text' && configured?.text ? { text: configured.text } : {}),
+          ...(kind === 'video' && configured?.video ? { video: configured.video } : {}),
+          protocol: configured?.protocol || 'openai' }] : []
       }) })
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/media') {
       await rateLimit(ctx, 'media', 120)

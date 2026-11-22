@@ -142,14 +142,23 @@ it('expires undo after five seconds and clears it immediately on an account swit
 })
 it('rejects deletion of running or uncertain media tasks before changing either store', async () => {
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
-  for (const phase of ['running', 'paused', 'attention'] as const) {
+  for (const phase of ['submitting', 'running', 'attention'] as const) {
     p.creation.tasks[0]!.phase = phase
-    expect(p.conversationGenerating(image)).toBe(phase === 'running')
+    expect(p.conversationGenerating(image)).toBe(phase !== 'attention')
     expect(p.isConversationBusy(image)).toBe(true)
     await expect(p.removeChats([image.id, 'text'])).rejects.toThrow('核对')
     expect(p.chats.sessions).toHaveLength(3)
   }
   expect(storage.write).not.toHaveBeenCalled()
+})
+it('paused media does not lock the conversation and removing the conversation retains its task', async () => {
+  const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!
+  p.creation.tasks[0]!.phase = 'paused'
+  expect(p.isConversationBusy(image)).toBe(false)
+  await p.removeChats([image.id])
+  expect(p.chats.sessions.some(chat => chat.id === image.id)).toBe(false)
+  expect(p.creation.tasks).toHaveLength(3)
+  expect(p.creation.tasks[0]!.phase).toBe('paused')
 })
 it('rolls back media deletion and tombstones when its snapshot cannot be saved', async () => {
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!

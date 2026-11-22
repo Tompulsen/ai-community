@@ -51,7 +51,7 @@ async function readChatImageStream(response: Response, emit: (event: CreationEve
 }
 export async function readGenerationStream(response: Response, input: CreationInput, emit: (event: CreationEvent) => void): Promise<CreationTask> {
   if (input.kind === 'image') {
-    if (usesGeminiImageChat(input.model)) return readChatImageStream(response, emit)
+    if (usesGeminiImageChat(input.model, input.apiFormat)) return readChatImageStream(response, emit)
     let images: string[] = []
     await readImageStream(response, url => emit({ type: 'preview', url }), values => { images = values })
     return { status: 'succeeded', outputs: images.map(url => ({ url })) }

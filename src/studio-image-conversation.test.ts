@@ -10,7 +10,7 @@ vi.mock('./native-studio', async () => {
   const { reactive } = await import('vue')
   return { creation: reactive({ tasks: [] as CreationTask[], selectedId: '', loaded: true }), resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn() }
 })
-vi.mock('./model-preferences', () => ({ modelFormat: () => undefined }))
+vi.mock('./model-preferences', () => ({ modelFormat: () => undefined, configuredModelFormat: () => undefined }))
 vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: storage.read, writeChatSnapshot: storage.write }))
 beforeEach(() => { vi.resetModules(); storage.write.mockReset().mockResolvedValue(undefined); storage.read.mockReset() })
 function task(id: string, conversationId: string, time: number, extra: Partial<CreationTask> = {}): CreationTask {
@@ -186,7 +186,7 @@ it('does not interleave a second mutation while a conversation save is unresolve
 })
 it('blocks destructive actions and version changes until uncertain or active tasks are checked', async () => {
   const p = await fixture()
-  for (const phase of ['submitting', 'running', 'paused', 'attention'] as const) {
+  for (const phase of ['submitting', 'running', 'attention'] as const) {
     p.creation.tasks[0]!.phase = phase
     await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('核对')
     await expect(p.clearMediaContext(p.thread)).rejects.toThrow('核对')

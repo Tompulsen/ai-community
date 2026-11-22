@@ -1,7 +1,7 @@
 import { reactive, watch } from 'vue'
 import { api, errorMessage, session } from './state'
 import { creation, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
-import { modelFormat } from './model-preferences'
+import { configuredModelFormat, modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
 import { initializeBranches, createAnswerBranch, createEditedMessageBranch, selectAnswerBranch, deleteBranchMessage, cloneBranchMessages, branchMessages } from '../shared/studio/chat-branches'
 import { prepareContext } from '../shared/studio/context-budget'
@@ -40,7 +40,7 @@ export interface NativeChat extends ChatSession {
   mediaDraft?: {
     prompt?: string
     references: CreationTask['references']; model?: string; manualSize?: string; ratio?: string; count?: number
-    duration?: number; protocol?: string; imageOptions?: ImageOptions; videoOptions?: VideoOptions
+    duration?: number; protocol?: string; apiFormat?: CreationTask['request']['apiFormat']; imageOptions?: ImageOptions; videoOptions?: VideoOptions
     sourceWorkId?: string; skipAutomaticReference?: boolean; imageEditTaskId?: string
   }
   mediaDrafts?: Partial<Record<'image' | 'video', NonNullable<NativeChat['mediaDraft']>>>
@@ -61,6 +61,7 @@ export interface NativeChat extends ChatSession {
   draftQuote?: MessageQuote
   sourceWorkId?: string
   formatOverride?: ChatApiFormat
+  formatAutomatic?: boolean
 }
 const defaults = () => {
   const { messages: _, ...settings } = chatOptionsSchema.parse({ messages: [{ role: 'user', content: 'initial' }] })
@@ -96,7 +97,7 @@ export function conversationGenerating(chat: NativeChat) {
     conversationMediaTasks(chat).some(task => ['submitting', 'running'].includes(task.phase)))
 }
 export function conversationBusy(chat: NativeChat) {
-  return conversationGenerating(chat) || conversationMediaTasks(chat).some(task => ['paused', 'attention'].includes(task.phase))
+  return conversationGenerating(chat) || conversationMediaTasks(chat).some(task => task.phase === 'attention')
 }
 function restoreMessage(message: NativeMessage): NativeMessage {
   return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
@@ -115,7 +116,7 @@ function applyAnswer(message: NativeMessage, text: string, mode: 'stream' | 'fin
 }
 export function createEmptyChat(kind: 'text' | 'image' | 'video' = 'text'): NativeChat {
   const id = crypto.randomUUID()
-  return { id, creationKind: kind, ...(kind !== 'text' ? { mediaConversationId: id } : {}), topic: '新对话', messages: [], messageBranches: [], memoryPrompt: '', lastSummarizeIndex: 0, lastUpdate: Date.now(), settings: defaults(), system: '', skillIds: [], search: 'off', compressionThreshold: 272000, sendMemory: true, toolContext: '' }
+  return { id, creationKind: kind, ...(kind !== 'text' ? { mediaConversationId: id } : {}), topic: '新对话', messages: [], messageBranches: [], memoryPrompt: '', lastSummarizeIndex: 0, lastUpdate: Date.now(), settings: defaults(), formatAutomatic: true, system: '', skillIds: [], search: 'off', compressionThreshold: 272000, sendMemory: true, toolContext: '' }
 }
 export function newChat(kind: 'text' | 'image' | 'video' = 'text') {
   const next = createEmptyChat(kind)
@@ -332,7 +333,8 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   let accepted = false
   let searchMode = chat.search
   const settings = JSON.parse(JSON.stringify(chat.settings)), system = chat.system, skillIds = [...chat.skillIds]
-  settings.format = chat.formatOverride || modelFormat(model) || settings.format
+  const apiFormat = chat.formatOverride || modelFormat(model) || (chat.formatAutomatic === true ? 'auto' : chat.settings.format)
+  settings.format = apiFormat === 'auto' ? configuredModelFormat(model) || 'chat-completions' : apiFormat
   const sourceWorkId = chat.sourceWorkId
   const references = typeof user.content === 'string' ? [] : user.content.flatMap((part, index) => part.type === 'image_url' && part.image_url?.url ? [{ name: `参考图 ${index + 1}`, url: part.image_url.url }] : [])
   try {
@@ -379,7 +381,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       summarize: async messages => {
         if (!current()) throw new Error('对话已停止。')
         result.contextCompressing = true
-        const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
+        const task = await submitCreation({ kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
           chatOptions: { ...settings, mcpServers: [], stream: false, max_tokens: 2048, messages: [{ role: 'system', content: '将对话整理为准确简洁的历史摘要，不超过2000 tokens，保留用户目标、约束和关键事实。' }, ...messages.map(message => ({ role: message.role === 'tool' ? 'user' as const : message.role, content: message.content }))] } }, task => { if (current()) result.taskId = task.id }, current)
         if (task.phase !== 'complete') throw new Error(task.error || '历史摘要生成失败。')
         return task.text
@@ -394,7 +396,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     const toolHistory: RequestMessage[] = []
     for (let round = 0; round < 8; round++) {
       if (!current()) return accepted
-      const task = await submitCreation({ kind: 'text', model, accountTokenId: tokenId, accountGroup, sourceWorkId, references, prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
+      const task = await submitCreation({ kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, sourceWorkId, references, prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
         if (!current()) return
         result.taskId = task.id; applyAnswer(result, task.text, 'stream'); result.reasoning = task.reasoning; result.usage = task.usage; result.streaming = true
         result.generationProgress = task.generationProgress

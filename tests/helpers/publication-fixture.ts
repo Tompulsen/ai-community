@@ -1,7 +1,11 @@
 import { expect, type Page } from '@playwright/test'
 
 export async function mockPublicationTags(page: Page) {
-  await page.route('**/api/tags**', route => route.fulfill({ json: { items: [{ id: 'tagFixture', name: '创作', category: new URL(route.request().url()).searchParams.get('kind') || 'image' }] } }))
+  await page.route('**/api/tags**', route => route.fulfill({ json: { items: [
+    { id: 'tagFixture', name: '创作', category: 'image' },
+    { id: 'tagFixtureVideo', name: '创作', category: 'video' },
+    { id: 'tagFixtureResource', name: '创作', category: 'resource' },
+  ] } }))
 }
 
 export async function completePublicationFields(page: Page) {

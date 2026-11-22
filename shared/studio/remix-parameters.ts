@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema } from './options.ts'
+import { modelApiFormatSchema, modelApiFormats } from './model-types.ts'
 
 // Public recipes never contain account credentials, chat history or private media references.
 type OptionalShape<S extends z.ZodRawShape> = { [K in keyof S]: z.ZodOptional<S[K] extends z.ZodDefault<infer T> ? T : S[K]> }
@@ -30,7 +31,8 @@ export const remixParametersSchema = z.object({
   version: z.literal(1),
   kind: z.enum(['image', 'video', 'text']),
   group: z.string().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/).optional(),
-  protocol: z.enum(['openai', 'sync', 'async']).optional(),
+  protocol: z.enum(['auto', 'openai', 'sync', 'async']).optional(),
+  apiFormat: modelApiFormatSchema.optional(),
   size: z.string().regex(/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|(?:1|2|4)K)$/).optional(),
   aspect_ratio: z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/).optional(),
   n: z.number().int().min(1).max(16).optional(),
@@ -41,6 +43,8 @@ export const remixParametersSchema = z.object({
 }).superRefine((value, ctx) => {
   if (value.kind !== 'image' && value.imageOptions || value.kind !== 'video' && value.videoOptions || value.kind !== 'text' && value.chatOptions)
     ctx.addIssue({ code: 'custom', message: '生成参数与作品类型不匹配。' })
+  if (value.apiFormat && value.apiFormat !== 'auto' && !(modelApiFormats[value.kind] as readonly string[]).includes(value.apiFormat))
+    ctx.addIssue({ code: 'custom', message: '接口格式与作品类型不匹配。' })
 })
 export type RemixParameters = z.infer<typeof remixParametersSchema>
 export function readRemixParameters(value: unknown) {

@@ -113,6 +113,7 @@ function fixture(t, options = {}) {
       req: request.raw, res: reply.raw, request, reply, redis, user,
       db: { async query(sql) {
         assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
+        if (options.modelReadError) throw options.modelReadError
         return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
       } },
       config: { url: origin },
@@ -129,6 +130,313 @@ function fixture(t, options = {}) {
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
+
+test('automatic text interfaces use model configuration while explicit and legacy formats keep their selection', async t => {
+  for (const [apiFormat, expectedPath] of [['auto', '/v1/responses'], ['chat-completions', '/v1/chat/completions'], [undefined, '/v1/chat/completions']]) {
+    const { app, calls } = fixture(t, {
+      modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-routing-note' }],
+      fetch(url, init) {
+        const body = JSON.parse(init.body)
+        assert(!JSON.stringify(body).includes('private-routing-note'))
+        if (new URL(url).pathname === '/v1/responses') {
+          assert.equal(body.reasoning.effort, 'high')
+          return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'selected interface' }] }] })
+        }
+        return Response.json({ choices: [{ message: { content: 'selected interface' } }] })
+      },
+    })
+    const response = await submit(app, { kind: 'text', model: 'custom-chat', prompt: 'Hello', requestId: 'text-interface',
+      ...(apiFormat ? { apiFormat } : {}), chatOptions: { messages: [{ role: 'user', content: 'Hello' }], format: 'chat-completions', stream: false, reasoningEffort: 'auto' } })
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().outputs[0].text, 'selected interface')
+    assert.equal(response.json().apiFormat, apiFormat === 'auto' ? 'responses' : apiFormat)
+    assert.deepEqual(calls.map(call => call.path), [expectedPath])
+  }
+})
+
+test('model configuration changes never rewrite or replay an accepted request and database failures stay visible', async t => {
+  const options = {
+    modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses', remark: 'private-admin-note' }],
+    fetch(url) {
+      const text = new URL(url).pathname === '/v1/responses' ? 'original response' : 'new response'
+      return Response.json(new URL(url).pathname === '/v1/responses'
+        ? { output: [{ type: 'message', content: [{ type: 'output_text', text }] }] }
+        : { choices: [{ message: { content: text } }] })
+    },
+  }
+  const { app, calls } = fixture(t, options)
+  const input = { kind: 'text', model: 'custom-chat', prompt: 'Hello', requestId: 'configured-interface', apiFormat: 'auto',
+    chatOptions: { messages: [{ role: 'user', content: 'Hello' }], stream: false } }
+  const original = await submit(app, input)
+  assert.equal(original.json().outputs[0].text, 'original response')
+  assert.equal(original.json().apiFormat, 'responses')
+  options.modelTypes[0].apiFormat = 'chat-completions'
+  options.modelReadError = new Error('Model configuration is unavailable')
+  assert.deepEqual((await submit(app, input)).json(), original.json())
+  assert.deepEqual((await app.inject('/api/creation/requests/configured-interface')).json(), original.json())
+  assert.equal(calls.length, 1)
+  const unavailable = await submit(app, { ...input, requestId: 'unavailable-interface' })
+  assert.equal(unavailable.statusCode, 500)
+  assert.equal((await app.inject('/api/creation/requests/unavailable-interface')).statusCode, 404)
+  assert.equal(calls.length, 1)
+  delete options.modelReadError
+  const next = await submit(app, { ...input, requestId: 'updated-interface' })
+  assert.equal(next.json().outputs[0].text, 'new response')
+  assert.equal(next.json().apiFormat, 'chat-completions')
+  assert.deepEqual(calls.map(call => call.path), ['/v1/responses', '/v1/chat/completions'])
+})
+
+test('configured image transport and automatic parameters preserve manual selections and actual recovery protocol', async t => {
+  for (const manual of [false, true]) {
+    const { app, calls } = fixture(t, {
+      modelTypes: [{ id: 'gpt-image-2', kind: 'image', apiFormat: 'images', protocol: 'async',
+        image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '3:2', autoBackground: 'transparent' } }],
+      fetch() { return Response.json({ data: [{ url: 'https://media.example/configured.png' }] }) },
+    })
+    const input = { ...imageRequest, apiFormat: 'auto', protocol: manual ? 'sync' : 'auto', size: 'auto', aspect_ratio: manual ? '1:1' : 'auto',
+      imageOptions: { resolution: manual ? '1k' : 'auto', quality: manual ? 'low' : 'auto', imageBackground: manual ? 'opaque' : 'auto' } }
+    const response = await submit(app, input)
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().status, 'succeeded')
+    assert.equal(response.json().protocol, manual ? 'sync' : 'async')
+    assert.equal(response.json().apiFormat, 'images')
+    assert.equal(calls[0].path, manual ? '/v1/images/generations' : '/async-images/v1/tasks')
+    const body = JSON.parse(calls[0].init.body)
+    assert.equal(body.size, manual ? '1024x1024' : '2160x1440')
+    assert.equal(body.quality, manual ? 'low' : 'high')
+    assert.equal(body.background, manual ? 'opaque' : 'transparent')
+  }
+})
+
+test('image requests retain their resolved interface while pending and cached across administrator changes', async t => {
+  const started = deferred(), completed = deferred()
+  const chatResult = { choices: [{ message: { content: '![Image](https://media.example/original-interface.png)' } }] }
+  t.after(() => completed.resolve(Response.json(chatResult)))
+  const modelTypes = [{ id: 'custom-image', kind: 'image', apiFormat: 'chat-completions', protocol: 'sync', remark: 'private-interface-note' }]
+  const { app, calls } = fixture(t, { modelTypes, fetch() {
+    if (calls.length === 1) { started.resolve(); return completed.promise }
+    return Response.json({ data: [{ url: 'https://media.example/new-interface.png' }] })
+  } })
+  const input = { ...imageRequest, model: 'custom-image', apiFormat: 'auto', protocol: 'auto' }
+  const pending = submit(app, input).then(response => response)
+  await started.promise
+  const inProgress = await submit(app, input)
+  assert.equal(inProgress.json().status, 'indeterminate')
+  assert.equal(inProgress.json().apiFormat, 'chat-completions')
+  modelTypes[0].apiFormat = 'images'
+  completed.resolve(Response.json(chatResult))
+  const original = await pending
+  assert.equal(original.json().status, 'succeeded')
+  assert.equal(original.json().apiFormat, 'chat-completions')
+  assert.deepEqual((await submit(app, input)).json(), original.json())
+  assert.deepEqual((await app.inject('/api/creation/requests/request-1')).json(), original.json())
+  assert.equal(calls.length, 1)
+  const next = await submit(app, { ...input, requestId: 'new-image-interface' })
+  assert.equal(next.json().apiFormat, 'images')
+  assert.equal(next.json().outputs[0].url, 'https://media.example/new-interface.png')
+  assert.deepEqual(calls.map(call => call.path), ['/v1/chat/completions', '/v1/images/generations'])
+  assert(!original.payload.includes('private-'))
+})
+
+test('an uncertain paid result retains its resolved interface and never replays the request', async t => {
+  const { app, calls } = fixture(t, {
+    modelTypes: [{ id: 'custom-image', kind: 'image', apiFormat: 'images' }],
+    fetch() { throw new DOMException('Provider timed out', 'TimeoutError') },
+  })
+  const input = { ...imageRequest, model: 'custom-image', apiFormat: 'auto' }
+  const response = await submit(app, input)
+  assert.equal(response.json().status, 'indeterminate')
+  assert.equal(response.json().apiFormat, 'images')
+  assert.deepEqual((await submit(app, input)).json(), response.json())
+  assert.equal(calls.length, 1)
+})
+
+test('configured model types reject mismatched creation requests before a paid call', async t => {
+  const { app, calls, credentialCalls } = fixture(t, { modelTypes: [{ id: 'gpt-image-2', kind: 'text' }] })
+  const response = await submit(app)
+  assert.equal(response.statusCode, 400)
+  assert.equal((await app.inject('/api/creation/requests/request-1')).statusCode, 404)
+  assert.equal(calls.length, 0)
+  assert.equal(credentialCalls.length, 0)
+})
+
+test('model catalogs publish only authorized public configuration and keep administrator remarks private', async t => {
+  const modelTypes = [
+    { id: 'configured-text', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-text-remark' },
+    { id: 'configured-image', kind: 'image', apiFormat: 'images', protocol: 'async', image: { autoQuality: 'high' }, remark: 'private-image-remark' },
+    { id: 'configured-video', kind: 'video', apiFormat: 'openai', protocol: 'sync', video: { autoResolution: '720p', parameterFormat: 'xai' }, remark: 'private-video-remark' },
+    { id: 'not-in-group', kind: 'text', apiFormat: 'claude', remark: 'private-unauthorized-remark' },
+  ]
+  const { app } = fixture(t, { modelTypes, fetch() {
+    return Response.json({ data: modelTypes.slice(0, 3).map(({ id }) => ({ id, apiFormat: 'untrusted', remark: 'private-upstream-remark', secret: 'private-upstream-secret' })) })
+  } })
+  const response = await app.inject('/api/creation/models')
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().items.length, 3)
+  assert(!response.payload.includes('private-'))
+  for (const setting of modelTypes.slice(0, 3)) {
+    const item = response.json().items.find(item => item.id === setting.id)
+    assert.equal(item.apiFormat, setting.apiFormat)
+    assert.equal(item.protocol, setting.protocol ?? 'openai')
+    for (const key of ['image', 'text', 'video']) assert.deepEqual(item[key], setting[key])
+    assert(!Object.hasOwn(item, 'remark'))
+  }
+})
+
+test('configured image interfaces select the matching stream parser and history preparation', async t => {
+  for (const apiFormat of ['chat-completions', 'images']) {
+    const model = apiFormat === 'images' ? 'gemini-3.1-flash-image-preview' : 'custom-image-alias'
+    const reads = [], imageUrl = 'https://media.example/explicit-interface.png'
+    const { app, calls } = fixture(t, {
+      modelTypes: [{ id: model, kind: 'image', apiFormat, protocol: 'sync' }],
+      publicMedia(url) { reads.push(url); return new Response('image', { headers: { 'content-type': 'image/png' } }) },
+      fetch() {
+        const event = apiFormat === 'images' ? { type: 'image_generation.completed', data: [{ url: imageUrl }] }
+          : { choices: [{ delta: { content: `![Image](${imageUrl})` }, finish_reason: 'stop' }] }
+        return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+      },
+    })
+    const input = { ...imageRequest, model, apiFormat: 'auto', protocol: 'auto', imageOptions: { imageStream: true },
+      imageContext: { turns: [{ prompt: 'Previous image', images: ['https://media.example/history.png'] }] } }
+    const response = await submit(app, input)
+    assert.match(response.headers['content-type'], /text\/event-stream/)
+    assert.match(response.payload, /"status":"succeeded"/)
+    const recovered = (await app.inject('/api/creation/requests/request-1')).json()
+    assert.equal(recovered.outputs[0].url, imageUrl)
+    assert.equal(recovered.apiFormat, apiFormat)
+    assert.equal(calls[0].path, apiFormat === 'images' ? '/v1/images/generations' : '/v1/chat/completions')
+    assert.equal(reads.length, apiFormat === 'images' ? 0 : 1)
+    await submit(app, input)
+    assert.equal(calls.length, 1)
+  }
+})
+
+test('automatic text interfaces use the resolved response stream format', async t => {
+  const { app, calls } = fixture(t, {
+    modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses' }],
+    fetch() {
+      const events = [{ type: 'response.output_text.delta', delta: 'resolved stream' }, { type: 'response.completed', response: { usage: { input_tokens: 2, output_tokens: 3 } } }]
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } })
+    },
+  })
+  const input = { kind: 'text', model: 'custom-chat', prompt: 'Hello', requestId: 'resolved-text-stream', apiFormat: 'auto',
+    chatOptions: { messages: [{ role: 'user', content: 'Hello' }], format: 'chat-completions', stream: true } }
+  const response = await submit(app, input)
+  assert.match(response.payload, /"status":"succeeded"/)
+  assert.match(response.payload, /"apiFormat":"responses"/)
+  assert.equal(calls[0].path, '/v1/responses')
+  assert.equal((await app.inject('/api/creation/requests/resolved-text-stream')).json().outputs[0].text, 'resolved stream')
+})
+
+test('video preflight rejections return 400 before recording or sending a paid request', async t => {
+  const { app, calls, credentialCalls } = fixture(t)
+  for (const withOptions of [false, true]) {
+    const requestId = `preflight-known-${withOptions}`
+    const response = await submit(app, {
+      kind: 'video', model: 'sora-2', prompt: 'Video', duration: 5, requestId,
+      ...(withOptions ? { videoOptions: { mode: 'text-to-video', resolution: '720p' } } : {}),
+    })
+    assert.equal(response.statusCode, 400)
+    assert.match(response.json().error.message, /视频时长/)
+    assert.equal((await app.inject(`/api/creation/requests/${requestId}`)).statusCode, 404)
+  }
+  assert.equal(calls.length, 0)
+  assert.equal(credentialCalls.length, 0)
+})
+
+test('unregistered video models can submit automatic resolution while unsafe values fail before another paid request', async t => {
+  const { app, calls } = fixture(t, { fetch() { return Response.json({ id: 'new-model-job', status: 'queued' }) } })
+  const input = { kind: 'video', model: 'unknown-video-model', prompt: 'Video', duration: 8, size: 'auto',
+    requestId: 'new-model-request', videoOptions: { mode: 'text-to-video', resolution: 'auto' } }
+  const accepted = await submit(app, input)
+  assert.equal(accepted.statusCode, 200, accepted.payload)
+  assert.equal(accepted.json().status, 'pending')
+  assert.equal(calls.length, 1)
+  const rejected = await submit(app, { ...input, requestId: 'unsafe-resolution',
+    videoOptions: { ...input.videoOptions, resolution: 'javascript:alert(1)' } })
+  assert.equal(rejected.statusCode, 400)
+  assert.equal((await app.inject('/api/creation/requests/unsafe-resolution')).statusCode, 404)
+  assert.equal(calls.length, 1)
+})
+
+test('automatic video resolution uses the administrator setting while explicit and upstream choices stay intact', async t => {
+  for (const [video, resolution, expected] of [
+    [{ autoResolution: '480p' }, 'auto', '480p'],
+    [{ autoResolution: '480p' }, '1080p', '1080p'],
+    [{ autoResolution: '480p' }, undefined, '480p'],
+    [undefined, 'auto', undefined],
+    [{ autoResolution: 'auto' }, 'auto', undefined],
+    [{ resolutions: ['720p'] }, 'auto', undefined],
+  ]) {
+    const { app, calls } = fixture(t, {
+      modelTypes: video ? [{ id: 'wan3.0', kind: 'video', video }] : [],
+      fetch() { return Response.json({ id: 'resolution-job', status: 'queued' }) },
+    })
+    const response = await submit(app, { kind: 'video', model: 'wan3.0', prompt: 'Video', duration: 8, requestId: 'resolution-request',
+      size: 'auto', videoOptions: { mode: 'text-to-video', ...(resolution ? { resolution } : {}) } })
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().status, 'pending')
+    assert.equal(calls.length, 1)
+    const body = typeof calls[0].init.body === 'string' ? JSON.parse(calls[0].init.body) : Object.fromEntries(calls[0].init.body.entries())
+    const metadata = typeof body.metadata === 'string' ? JSON.parse(body.metadata) : body.metadata
+    assert.equal(body.resolution ?? metadata?.resolution, expected)
+    assert.equal(String(body.seconds), '8')
+    if (!expected) assert.equal(body.size, undefined)
+  }
+})
+
+test('changed video settings apply to new requests while original IDs only return their cached results', async t => {
+  const modelTypes = [{ id: 'wan3.0', kind: 'video', video: { autoResolution: '480p', resolutions: ['480p', '720p', '1080p'] } }]
+  const { app, calls } = fixture(t, {
+    modelTypes, fetch() { return Response.json({ id: `resolution-job-${calls.length}`, status: 'queued' }) },
+  })
+  const input = { kind: 'video', model: 'wan3.0', prompt: 'Video', duration: 8, size: 'auto', requestId: 'fixed-resolution',
+    videoOptions: { mode: 'text-to-video', resolution: 'auto' } }
+  const first = await submit(app, input)
+  assert.equal(first.statusCode, 200, first.payload)
+  modelTypes[0].video.autoResolution = '1080p'
+  assert.deepEqual((await submit(app, input)).json(), first.json())
+  assert.deepEqual((await app.inject('/api/creation/requests/fixed-resolution')).json(), first.json())
+  assert.equal(calls.length, 1)
+  const next = await submit(app, { ...input, requestId: 'new-resolution' })
+  assert.equal(next.statusCode, 200, next.payload)
+  assert.equal(calls.length, 2)
+  const resolutions = calls.map(({ init }) => {
+    const body = typeof init.body === 'string' ? JSON.parse(init.body) : Object.fromEntries(init.body.entries())
+    const metadata = typeof body.metadata === 'string' ? JSON.parse(body.metadata) : body.metadata
+    return body.resolution ?? metadata?.resolution
+  })
+  assert.deepEqual(resolutions, ['480p', '1080p'])
+})
+
+test('administrator video resolution choices still reject unsupported explicit values before a paid request', async t => {
+  const { app, calls, credentialCalls } = fixture(t, {
+    modelTypes: [{ id: 'wan3.0', kind: 'video', video: { autoResolution: '480p', resolutions: ['480p', '720p'] } }],
+  })
+  const response = await submit(app, { kind: 'video', model: 'wan3.0', prompt: 'Video', duration: 8, size: 'auto',
+    requestId: 'unsupported-resolution', videoOptions: { mode: 'text-to-video', resolution: '1080p' } })
+  assert.equal(response.statusCode, 400)
+  assert.equal((await app.inject('/api/creation/requests/unsupported-resolution')).statusCode, 404)
+  assert.equal(calls.length, 0)
+  assert.equal(credentialCalls.length, 0)
+})
+
+test('upstream read throttling preserves HTTP 429 and Retry-After without replaying requests', async t => {
+  for (const retryAfter of ['7', 'Sun, 22 Nov 2026 12:00:00 GMT', undefined]) {
+    const { app, calls } = fixture(t, { fetch(_url, init) {
+      assert.notEqual(init.method, 'POST')
+      return Response.json({ error: { code: 'rate_limited' } }, {
+        status: 429, headers: retryAfter ? { 'Retry-After': retryAfter } : {},
+      })
+    } })
+    for (const url of ['/api/creation/tasks/image/rate-limited?protocol=async&tokenId=71', '/api/creation/models']) {
+      const response = await app.inject(url)
+      assert.equal(response.statusCode, 429)
+      assert.equal(response.headers['retry-after'], retryAfter)
+    }
+    assert.equal(calls.length, 2)
+  }
+})
 
 test('concurrent and repeated paid submissions send one upstream POST, and request IDs cannot be reused for different content', async t => {
   const started = deferred()
@@ -171,6 +479,25 @@ for (const scenario of ['server-error', 'submission-timeout']) {
   })
 }
 
+test('video submissions wait up to six minutes and never replay the paid request after a timeout', async t => {
+  let elapsed = 0
+  t.mock.method(AbortSignal, 'timeout', duration => duration > elapsed
+    ? new AbortController().signal : AbortSignal.abort(new DOMException('Submission timed out', 'TimeoutError')))
+  for (const [duration, status] of [[359999, 'pending'], [360001, 'indeterminate']]) {
+    elapsed = duration
+    const { app, calls } = fixture(t, { fetch(_url, init) {
+      init.signal.throwIfAborted()
+      return Response.json({ id: 'slow-video', status: 'queued' })
+    } })
+    const input = { kind: 'video', model: 'sora-2', prompt: 'A slow video', duration: 8, requestId: 'slow-video' }
+    const response = await submit(app, input)
+    assert.equal(response.json().status, status)
+    if (status === 'pending') assert.equal(response.json().upstreamId, 'slow-video')
+    assert.deepEqual((await submit(app, input)).json(), response.json())
+    assert.equal(calls.length, 1)
+  }
+})
+
 test('task and protected video recovery retain the original token and account ownership', async t => {
   let selectedToken = 71
   const { app, calls, credentialCalls } = fixture(t, {
@@ -184,7 +511,7 @@ test('task and protected video recovery retain the original token and account ow
       return new Response('vid', { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 0-2/12' } })
     },
   })
-  const created = await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Video', requestId: 'video-1' })
+  const created = await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Video', duration: 8, requestId: 'video-1' })
   assert.equal(created.json().tokenId, 71)
   selectedToken = 99
   const recovered = await app.inject({ url: '/api/creation/tasks/video/job_1?protocol=openai' })
@@ -229,7 +556,7 @@ for (const failedMapping of ['task', 'media']) {
         return new Response('video', { headers: { 'content-type': 'video/mp4' } })
       },
     })
-    const input = { kind: 'video', model: 'sora-2', prompt: 'A paid video', requestId: `metadata-${failedMapping}` }
+    const input = { kind: 'video', model: 'sora-2', prompt: 'A paid video', duration: 8, requestId: `metadata-${failedMapping}` }
     const created = await submit(app, input)
     assert.equal(failed, true)
     assert.equal(created.statusCode, 200)
@@ -270,9 +597,10 @@ for (const failedMapping of ['task', 'media']) {
 
 test('server model types apply to exact IDs across group catalogs without granting access to other models', async t => {
   let token = 71
+  const video = { autoResolution: '480p', resolutions: ['480p', '720p'] }
   const { app } = fixture(t, {
     selectedToken: () => token,
-    modelTypes: [{ id: 'custom/alias', kind: 'image' }, { id: 'tts-custom', kind: 'video' }, { id: 'not-in-group', kind: 'image' }],
+    modelTypes: [{ id: 'custom/alias', kind: 'image' }, { id: 'tts-custom', kind: 'video', video }, { id: 'not-in-group', kind: 'video', video }],
     fetch() { return Response.json({ data: token === 71 ? ['custom/alias', 'gpt-5', 'whisper-1', 'tts-custom'] : ['custom/alias', 'CUSTOM/alias'] }) },
   })
   const first = await app.inject('/api/creation/models')
@@ -282,12 +610,29 @@ test('server model types apply to exact IDs across group catalogs without granti
     { id: 'gpt-5', kinds: ['text'], configuredKind: undefined },
     { id: 'tts-custom', kinds: ['video'], configuredKind: 'video' },
   ])
+  assert.deepEqual(first.json().items.find(item => item.id === 'tts-custom').video, video)
+  assert(first.json().items.filter(item => item.id !== 'tts-custom').every(item => !Object.hasOwn(item, 'video')))
   token = 99
   const second = (await app.inject('/api/creation/models')).json()
   assert.equal(second.tokenId, 99)
   assert.deepEqual(second.items.map(item => [item.id, item.kinds[0], item.configuredKind]), [
     ['custom/alias', 'image', 'image'], ['CUSTOM/alias', 'text', undefined],
   ])
+  assert(second.items.every(item => !Object.hasOwn(item, 'video')))
+})
+
+test('model catalogs only publish validated administrator video settings instead of upstream metadata', async t => {
+  for (const video of [undefined, { autoResolution: '720p', headers: { authorization: 'must-not-forward' } }]) {
+    const { app } = fixture(t, {
+      modelTypes: video ? [{ id: 'wan3.0', kind: 'video', video }] : [],
+      fetch() { return Response.json({ data: [{ id: 'wan3.0', video: { autoResolution: '4k', secret: 'must-not-forward' } }] }) },
+    })
+    const response = await app.inject('/api/creation/models')
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.json().items.length, 1)
+    assert(!Object.hasOwn(response.json().items[0], 'video'))
+    assert(!response.payload.includes('must-not-forward'))
+  }
 })
 
 test('unrecorded historical task recovery is GET-only and rejects an upstream owner mismatch', async t => {
@@ -321,7 +666,7 @@ test('recorded tasks remain readable when upstream omits the owner field', async
   const { app, values } = fixture(t, { fetch(_url, init) {
     return Response.json({ id: 'tracked_job', status: init.method === 'POST' ? 'queued' : 'completed' })
   } })
-  const created = await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Test', requestId: 'tracked-request' })
+  const created = await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Test', duration: 8, requestId: 'tracked-request' })
   assert.equal(created.statusCode, 200)
   assert([...values.keys()].some(key => key.includes(':task:')))
   const recovered = await app.inject('/api/creation/tasks/video/tracked_job?protocol=openai')

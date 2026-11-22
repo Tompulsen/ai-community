@@ -73,7 +73,7 @@ export async function api<T>(path: string, options: {
     const code = typeof payload?.error === 'object' ? payload.error?.code || payload.code : payload?.code
     if (version === sessionVersion && owner === session.user?.id && response.status === 401 && (!code || code === 'AUTH_REQUIRED' || code === 'INVALID_CREDENTIALS')) session.user = null
     const detail = typeof payload?.error === 'string' ? payload.error : payload?.error?.message
-    throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code, status: response.status })
+    throw Object.assign(new Error(detail || payload?.message || (response.status === 401 ? '请先登录。' : `请求失败（${response.status}）。`)), { code, status: response.status, retryAfter: response.headers.get('Retry-After') })
   }
   if (result === null) throw new Error('服务器返回了无效的数据，请稍后重试。')
   return result as T

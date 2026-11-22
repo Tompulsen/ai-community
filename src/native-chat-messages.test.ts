@@ -1,10 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { NativeMessage } from './native-chat'
 import type { StudioToolActivity } from './studio-message-types'
+import type { ChatApiFormat } from '../shared/studio/chat-api-format'
 
 const mocks = vi.hoisted(() => ({
   write: vi.fn(async (_key: string, _snapshot: unknown) => {}),
   read: vi.fn(), api: vi.fn(), submit: vi.fn(), confirm: vi.fn(() => true),
+  modelFormat: vi.fn<() => ChatApiFormat | undefined>(), configuredModelFormat: vi.fn<() => ChatApiFormat | undefined>(),
 }))
 vi.mock('./state', async () => {
   const { reactive } = await import('vue')
@@ -14,11 +16,12 @@ vi.mock('./native-studio', () => ({
   creation: { tasks: [], modelTokenId: 7, selectedGroup: 'default' },
   resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: mocks.submit,
 }))
-vi.mock('./model-preferences', () => ({ modelFormat: () => undefined }))
+vi.mock('./model-preferences', () => ({ modelFormat: mocks.modelFormat, configuredModelFormat: mocks.configuredModelFormat }))
 vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: mocks.read, writeChatSnapshot: mocks.write }))
 beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks()
   mocks.read.mockReset(); mocks.write.mockReset().mockResolvedValue(undefined)
+  mocks.modelFormat.mockReset(); mocks.configuredModelFormat.mockReset()
   mocks.submit.mockReset().mockImplementation(async (_input, update) => {
     const task = { id: 'task', owner: '17', phase: 'complete', text: '回答', toolCalls: [] }
     update?.(task)
@@ -49,6 +52,32 @@ function toolSource() {
     { role: 'tool', content: '{"old":true}', tool_call_id: 'call' },
   ] }
   return source
+}
+it('uses the configured format for automatic chats without replacing the stored setting', async () => {
+  const p = await fixture()
+  const prepare = vi.spyOn(await import('../shared/studio/video-input'), 'prepareVideoMessages')
+  mocks.configuredModelFormat.mockReturnValue('responses')
+  await p.sendChat(p.chat, '自动格式', [], 'model')
+  expect(mocks.submit.mock.calls[0]?.[0]).toMatchObject({ apiFormat: 'auto', chatOptions: { format: 'responses' } })
+  expect(prepare).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ format: 'responses' }))
+  prepare.mockRestore()
+  expect(p.chat.settings.format).toBe('chat-completions')
+})
+for (const format of ['chat-completions', 'responses'] as const) {
+  it(`preserves a legacy ${format} selection and keeps model and conversation overrides above it`, async () => {
+    const p = await fixture()
+    delete p.chat.formatAutomatic
+    p.chat.settings.format = format
+    mocks.configuredModelFormat.mockReturnValue('claude')
+    await p.sendChat(p.chat, '保留旧格式', [], 'model')
+    expect(mocks.submit.mock.calls.at(-1)?.[0]).toMatchObject({ apiFormat: format, chatOptions: { format } })
+    mocks.modelFormat.mockReturnValue('gemini')
+    await p.sendChat(p.chat, '保留模型手选', [], 'model')
+    expect(mocks.submit.mock.calls.at(-1)?.[0]).toMatchObject({ apiFormat: 'gemini', chatOptions: { format: 'gemini' } })
+    p.chat.formatOverride = 'responses'
+    await p.sendChat(p.chat, '保留对话手选', [], 'model')
+    expect(mocks.submit.mock.calls.at(-1)?.[0]).toMatchObject({ apiFormat: 'responses', chatOptions: { format: 'responses' } })
+  })
 }
 it('shows compression only during real summary calls and marks completion after context preparation succeeds', async () => {
   const p = await fixture()

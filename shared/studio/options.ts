@@ -14,7 +14,7 @@ export const imageOptionsSchema = z.object({
 })
 export const videoOptionsSchema = z.object({
   mode: z.enum(['text-to-video', 'image-to-video', 'first-last-frame', 'reference-to-video']),
-  resolution: z.string().max(20).default('720p'),
+  resolution: z.string().max(20).default('auto'),
   negativePrompt: z.string().max(32000).default(''),
   openaiReferenceSource: z.enum(['upload', 'image_url', 'file_id']).default('upload'),
   openaiImageUrl: z.string().max(8192).optional(),

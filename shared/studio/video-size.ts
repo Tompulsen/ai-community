@@ -67,7 +67,7 @@ export function videoSizeParameters(
 export function videoSizeParameters(
   config: SizeConfig,
   format: "gemini",
-): { aspectRatio: string; resolution?: string };
+): { aspectRatio?: string; resolution?: string };
 export function videoSizeParameters(
   config: SizeConfig,
   format: "script",
@@ -78,11 +78,9 @@ export function videoSizeParameters(
 ) {
   if (format === "gemini")
     return {
-      aspectRatio:
-        config.resolution === "auto" ||
-        ["auto", "adaptive"].includes(config.aspectRatio)
-          ? "16:9"
-          : config.aspectRatio,
+      ...(["auto", "adaptive"].includes(config.aspectRatio)
+        ? {}
+        : { aspectRatio: config.aspectRatio }),
       ...(config.resolution === "auto"
         ? {}
         : { resolution: config.resolution }),

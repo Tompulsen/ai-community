@@ -10,12 +10,17 @@ import { formatInvocationPoints, invocationPoints, selectedModelPrices } from '.
 import StudioPopover from './StudioPopover.vue'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 
-const props = withDefaults(defineProps<{ model: string; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
+const props = withDefaults(defineProps<{ model: string; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; apiFormat?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
 const emit = defineEmits<{ prices: [] }>()
 const menu = ref<InstanceType<typeof StudioPopover>>()
 const prices = ref<ModelPricing>(), loading = ref(false), error = ref('')
 const rows = computed(() => selectedModelPrices(prices.value, props.model, creation.selectedGroup))
-const quote = computed(() => invocationPoints(rows.value, prices.value?.currency, props))
+const billingParameters = computed(() => {
+  const configured = creation.models.find(item => item.id === props.model)
+  return { ...props, apiFormat: !props.apiFormat || props.apiFormat === 'auto' ? configured?.apiFormat : props.apiFormat,
+    protocol: props.protocol === 'auto' ? configured?.protocol || 'openai' : props.protocol }
+})
+const quote = computed(() => invocationPoints(rows.value, prices.value?.currency, billingParameters.value))
 const cost = computed(() => quote.value ? quote.value.min === quote.value.max
   ? formatInvocationPoints(quote.value.min)
   : `${formatInvocationPoints(quote.value.min)}–${formatInvocationPoints(quote.value.max)}` : '')
@@ -25,7 +30,7 @@ const pointsPricing = computed(() => prices.value?.currency === '积分')
 const compactLabel = computed(() => quote.value ? cost.value + ' 积分' : loading.value ? '计价中…' : pointsPricing.value && rows.value.length ? '按量计费' : '查看价格')
 const usageBased = computed(() => rows.value.some(row => row.details?.unit === 'tokens'))
 function billingLabel(row: ModelPriceRow) {
-  return props.kind === 'image' && props.protocol !== 'async' && row.imageCountMultiplier ? '每张图片 · 已含分组倍率' : row.billing
+  return props.kind === 'image' && billingParameters.value.protocol !== 'async' && row.imageCountMultiplier ? '每张图片 · 已含分组倍率' : row.billing
 }
 function showPrices() { menu.value?.close(); emit('prices') }
 let version = 0

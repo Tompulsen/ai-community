@@ -20,6 +20,7 @@ import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { remapVideoMentions } from '../../shared/studio/video-mentions'
 import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
+import { modelApiFormatSchema, type ModelApiFormat } from '../../shared/studio/model-types'
 import { imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
@@ -32,14 +33,17 @@ import type { StudioEntry } from '../studio-entry'
 
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; entryOnly?: boolean; entryPending?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; model: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string] }>()
-const model = ref(''), prompt = ref(''), ratio = ref('1:1'), count = ref(1), duration = ref(8)
+const model = ref(''), prompt = ref(''), ratio = ref('auto'), count = ref(1), duration = ref(8)
 const ime = createImeGuard()
 const imageOptions = reactive(imageOptionsSchema.parse({}))
 const videoOptions = reactive(videoOptionsSchema.parse({ mode: 'text-to-video' }))
-const protocol = ref('openai')
+const protocol = ref('auto'), apiFormat = ref<ModelApiFormat>('auto')
 const manualSize = ref(''), restoringParameters = ref(false)
 const remixApplied = ref(false)
-const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode))
+const selectedModel = computed(() => creation.models.find(item => item.id === model.value))
+const selectedApiFormat = computed(() => apiFormat.value === 'auto' ? selectedModel.value?.apiFormat : apiFormat.value)
+const videoSetting = computed(() => selectedModel.value?.video)
+const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode, videoSetting.value))
 const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
 const submissions = ref<Record<string, boolean>>({}), error = ref(''), waitingForMaterials = ref(false)
@@ -61,10 +65,16 @@ const activeTask = computed(() => currentTasks.value.find(task => ['submitting',
 const busy = computed(() => currentConversation.value && isConversationBusy(currentConversation.value))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
-const videoParameterIssue = computed(() => props.kind === 'video' && videoLimits.value && (!videoLimits.value.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && !videoLimits.value.resolutions.includes(videoOptions.resolution)) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : '')
-const submissionIssue = computed(() => error.value || videoParameterIssue.value)
+const videoParameterIssue = computed(() => {
+  if (props.kind !== 'video' || !model.value) return ''
+  if (!Number.isInteger(duration.value) || duration.value < 1 || duration.value > 3600) return '视频时长需为 1 到 3600 的整数秒。'
+  const limits = videoLimits.value
+  return limits?.durations.length && !limits.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(videoOptions.resolution) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : ''
+})
+const imageCountIssue = computed(() => props.kind === 'image' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 10) ? '图片数量需为 1 到 10 的整数。' : '')
+const submissionIssue = computed(() => error.value || imageCountIssue.value || videoParameterIssue.value)
 const referenceLimitIssue = computed(() => references.value.length > (props.kind === 'video' ? 10 : 16) ? '参考图数量超过当前创作类型上限，请减少所选图片。' : '')
-const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
+const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 onUnmounted(() => { live = false; draftRevision++; materialSubmission?.abort() })
@@ -90,8 +100,9 @@ function finishRestore() {
   const scope = draftScope(), revision = ++restoreRevision
   void nextTick(() => { if (live && scope === draftScope() && revision === restoreRevision) restoringParameters.value = false })
 }
-const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value))
+const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value, selectedApiFormat.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
+const requestSize = computed(() => props.kind === 'image' && (!manualSize.value || manualSize.value === 'auto') && (imageOptions.resolution === 'auto' || ratio.value === 'auto') ? 'auto' : size.value)
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
 function chooseModel() {
   if (props.remixPreparing || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
@@ -99,10 +110,13 @@ function chooseModel() {
   if (choice) model.value = choice
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
 }
+function legacyApiFormat(value: string): ModelApiFormat {
+  return props.kind === 'image' ? usesGeminiImageChat(value) ? 'chat-completions' : 'images' : 'openai'
+}
 function loadDraft() {
   materialSubmission?.abort()
   if (props.entryOnly) {
-    draftRevision++; model.value = ''; manualSize.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'
+    draftRevision++; model.value = ''; manualSize.value = ''; ratio.value = 'auto'
     if (props.kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, references.value.length)
     chooseModel(); return
   }
@@ -112,22 +126,23 @@ function loadDraft() {
   finishRestore()
   blank.value = false
   sourceWorkId.value = undefined
-  prompt.value = ''; model.value = ''; manualSize.value = ''; ratio.value = props.kind === 'video' ? '16:9' : '1:1'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
-  Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' })); protocol.value = 'openai'
+  prompt.value = ''; model.value = ''; manualSize.value = ''; ratio.value = 'auto'; count.value = 1; duration.value = 8; references.value = []; error.value = ''
+  Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' })); protocol.value = 'auto'; apiFormat.value = 'auto'
   if (!session.user) return
   try {
     const chat = currentConversation.value
-    const saved = chat?.mediaDrafts?.[props.kind] || (chat?.creationKind === props.kind && !chat.mediaDrafts ? { ...chat.mediaDraft, prompt: chat.draft || '' } : null) ||
+    const saved = chat?.mediaDrafts?.[props.kind] || (chat?.creationKind === props.kind && !chat.mediaDrafts && (chat.mediaDraft || chat.draft) ? { ...chat.mediaDraft, prompt: chat.draft || '' } : null) ||
       (!chat?.messages.length && !chat?.mediaDrafts ? JSON.parse(localStorage.getItem(draftKey()) || 'null') : null)
     if (saved && typeof saved.prompt === 'string') {
       prompt.value = saved.prompt; model.value = typeof saved.model === 'string' ? saved.model : ''
       ratio.value = typeof saved.ratio === 'string' && /^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/.test(saved.ratio) ? saved.ratio : ratio.value
       manualSize.value = typeof saved.manualSize === 'string' && /^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|[124]K)$/.test(saved.manualSize) ? saved.manualSize : ''
-      count.value = Math.min(16, Math.max(1, Number(saved.count) || 1)); duration.value = Math.min(3600, Math.max(1, Number(saved.duration) || 8))
+      count.value = Math.min(10, Math.max(1, Number(saved.count) || 1)); duration.value = Math.min(3600, Math.max(1, Number(saved.duration) || 8))
       const image = imageOptionsSchema.safeParse(saved.imageOptions || {}), video = videoOptionsSchema.safeParse(saved.videoOptions || { mode: 'text-to-video' })
       if (image.success) Object.assign(imageOptions, image.data)
       if (video.success) Object.assign(videoOptions, video.data)
-      if (saved.protocol === 'async') protocol.value = 'async'
+      protocol.value = ['auto', 'openai', 'sync', 'async'].includes(saved.protocol) ? saved.protocol : 'openai'
+      apiFormat.value = modelApiFormatSchema.safeParse(saved.apiFormat).data ?? legacyApiFormat(model.value)
       if (typeof saved.sourceWorkId === 'string') sourceWorkId.value = saved.sourceWorkId
       skipAutomaticReference.value = saved.skipAutomaticReference === true
       if (props.kind === 'image' && typeof saved.imageEditTaskId === 'string') imageEditTaskId.value = saved.imageEditTaskId
@@ -141,16 +156,16 @@ watch(() => session.user?.id, () => {
   if (!props.entryOnly) return
   prompt.value = ''; references.value = []; error.value = ''; count.value = 1; duration.value = 8
   Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' }))
-  protocol.value = 'openai'
+  protocol.value = 'auto'; apiFormat.value = 'auto'
 })
 watch(() => [session.user?.id, currentConversation.value?.id, props.kind, currentConversation.value?.mediaDrafts?.[props.kind]?.skipAutomaticReference] as const, (value, before) => {
   if (value[0] === before[0] && value[1] === before[1] && value[2] === before[2] && typeof value[3] === 'boolean' && value[3] !== before[3]) skipAutomaticReference.value = value[3]
 })
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
-watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, references, sourceWorkId, skipAutomaticReference, imageEditTaskId, restoringParameters], () => {
+watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, skipAutomaticReference, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
-  const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }))
+  const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, apiFormat: apiFormat.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }))
   try { localStorage.setItem(draftKey(), JSON.stringify(draft)) }
   catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
   if (currentConversation.value) {
@@ -160,17 +175,11 @@ watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOpt
   }
 }, { deep: true, flush: 'sync' })
 watch(model, value => { if (!restoringTask.value && value !== parameterModel.value) parameterModel.value = '' })
-watch([model, () => props.kind, restoringParameters], () => {
-  if (restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value)) return
-  manualSize.value = ''; imageOptions.seed = ''; protocol.value = 'openai'; count.value = 1
+watch([model, selectedApiFormat, () => props.kind, restoringParameters], () => {
+  if (restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value, selectedApiFormat.value)) return
+  manualSize.value = ''; imageOptions.seed = ''; count.value = 1
 })
 function modelChanged() { error.value = ''; emit('model') }
-watch(videoLimits, limits => {
-  if (props.remixPreparing || !limits || props.kind !== 'video') return
-  if (props.source?.generation?.parameters?.kind === 'video' && sourceWorkId.value === props.source.id) return
-  if (!limits.resolutions.includes(videoOptions.resolution) && videoOptions.resolution !== 'auto') videoOptions.resolution = limits.resolutions[0]!
-  if (!limits.durations.includes(duration.value)) duration.value = limits.durations.reduce((best, value) => Math.abs(value - duration.value) < Math.abs(best - duration.value) ? value : best)
-})
 watch([() => props.source?.id, () => chats.ready], async () => {
   if (!props.source || !chats.ready || sourceWorkId.value === props.source.id) return
   await applyRemix(props.source)
@@ -197,7 +206,8 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
     if (parameters.aspect_ratio !== undefined) ratio.value = parameters.aspect_ratio
     if (parameters.n !== undefined) count.value = parameters.n
     if (parameters.duration !== undefined) duration.value = parameters.duration
-    if (parameters.protocol !== undefined) protocol.value = parameters.protocol === 'async' ? 'async' : 'openai'
+    protocol.value = parameters.protocol || 'openai'
+    apiFormat.value = parameters.apiFormat || legacyApiFormat(source.model)
     if (parameters.imageOptions) Object.assign(imageOptions, parameters.imageOptions)
     Object.assign(videoOptions, { openaiReferenceSource: 'upload', openaiImageUrl: undefined, openaiLastImageUrl: undefined, openaiFileId: undefined }, parameters.videoOptions || {})
     if (parameters.size !== undefined) manualSize.value = parameters.size
@@ -253,7 +263,7 @@ function generate() { return submit() }
 async function sendEntry() {
   const scope = draftScope(), owner = session.user?.id, kind = props.kind, preparation = new AbortController()
   materialSubmission = preparation; submissions.value[kind] = true; waitingForMaterials.value = true; error.value = ''
-  const parameters = JSON.parse(JSON.stringify({ model: model.value, group: creation.selectedGroup, tokenId: creation.modelTokenId, ratio: ratio.value, manualSize: manualSize.value, count: count.value, duration: duration.value, protocol: protocol.value, imageOptions, videoOptions }))
+  const parameters = JSON.parse(JSON.stringify({ model: model.value, group: creation.selectedGroup, tokenId: creation.modelTokenId, ratio: ratio.value, manualSize: manualSize.value, count: count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, imageOptions, videoOptions }))
   try {
     await materials.wait(preparation.signal)
     if (!live || preparation.signal.aborted || scope !== draftScope() || owner !== session.user?.id || kind !== props.kind) return
@@ -267,7 +277,7 @@ async function sendEntry() {
 }
 async function submit(onRegistered?: () => void) {
   if (!canGenerate.value) {
-    if (onRegistered && !videoParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
+    if (onRegistered && !imageCountIssue.value && !videoParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
     return
   }
   if (props.entryOnly) return sendEntry()
@@ -285,7 +295,7 @@ async function submit(onRegistered?: () => void) {
   blank.value = false
   error.value = ''; submissions.value[kind] = true; chats.preparing[chat.id] = true
   try {
-    const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: size.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, references: references.value, sourceWorkId: sourceWorkId.value,
+    const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: requestSize.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, references: references.value, sourceWorkId: sourceWorkId.value,
       accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
       ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value,
         imageContext: imageEditId && !chat.messages.some(message => message.role === 'assistant' && message.taskId === imageEditId)
@@ -297,12 +307,14 @@ async function submit(onRegistered?: () => void) {
     if (!live || scope !== draftScope() || owner !== session.user?.id) return
     submittedReferences = JSON.stringify(references.value)
     input.references = JSON.parse(JSON.stringify(kind === 'image' ? requestReferences.value : references.value))
+    if (kind === 'image' && (!Number.isInteger(input.n) || input.n < 1 || input.n > 10)) throw new Error('图片数量需为 1 到 10 的整数。')
     if (input.videoOptions) {
       submittedPrompt = remapVideoMentions(submittedPrompt, initialReferenceUrls, references.value.map(file => file.url))
       input.prompt = submittedPrompt
       input.videoOptions.mode = videoOptions.mode
-      const limits = videoCapabilities(input.model, input.videoOptions.mode)
-      if (limits && (!limits.durations.includes(input.duration) || input.videoOptions.resolution !== 'auto' && !limits.resolutions.includes(input.videoOptions.resolution)))
+      if (!Number.isInteger(input.duration) || input.duration < 1 || input.duration > 3600) throw new Error('视频时长需为 1 到 3600 的整数秒。')
+      const limits = videoCapabilities(input.model, input.videoOptions.mode, creation.models.find(item => item.id === input.model)?.video)
+      if (limits?.durations.length && !limits.durations.includes(input.duration) || input.videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(input.videoOptions.resolution))
         throw new Error('当前参考图模式不支持所选时长或分辨率，请在高级参数中调整。')
     }
     await saveChats(true)
@@ -367,7 +379,8 @@ async function useTask(task: CreationTask, generatedImages?: string[]) {
   const image = imageOptionsSchema.safeParse(task.request.imageOptions || {}), video = videoOptionsSchema.safeParse(task.request.videoOptions || { mode: 'text-to-video' })
   Object.assign(imageOptions, image.success ? image.data : imageOptionsSchema.parse({}))
   Object.assign(videoOptions, video.success ? video.data : videoOptionsSchema.parse({ mode: 'text-to-video' }))
-  protocol.value = task.protocol === 'async' ? 'async' : 'openai'
+  protocol.value = task.request.protocol || (task.protocol === 'async' ? 'async' : 'openai')
+  apiFormat.value = task.request.apiFormat || legacyApiFormat(task.model)
   references.value = generatedImages ? generatedImages.map((url, index) => ({ name: `生成图片 ${index + 1}`, url })) : task.references.map(file => ({ ...file }))
   skipAutomaticReference.value = true
   emit('source', sourceWorkId.value)
@@ -444,15 +457,15 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
       <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
-      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="submitting || !composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting || !composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
+      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="submitting && !activeTask || !composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="submitting && !activeTask || !composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
         <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="submitting || busy || materials.snapshot.value.items.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="380"><template #trigger><SlidersHorizontal :size="20" /><span>高级参数</span></template>
-            <StudioMediaParameters :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" v-model:ratio="ratio" v-model:count="count" v-model:duration="duration" v-model:size="size" :kind="kind" :model="model" @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
+            <StudioMediaParameters :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" v-model:api-format="apiFormat" v-model:ratio="ratio" v-model:count="count" v-model:duration="duration" v-model:size="size" :kind="kind" :model="model" :model-api-format="selectedModel?.apiFormat" :video-setting="videoSetting" @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @update:model-value="modelChanged" @keys="emit('keys')" /></div>
-        <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
+        <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :protocol="protocol" :api-format="apiFormat" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
         <button v-if="activeTask" type="button" class="composer-submit generation-button" title="停止本页等待，上游任务可能继续执行" aria-label="停止等待" @click="stopCreation(activeTask)"><Square :size="17" /><span class="mobile-send-label">停止</span></button>
         <button v-else-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
         <button v-else class="composer-submit generation-button" :title="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :aria-label="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
@@ -463,6 +476,7 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
       <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels">重试</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="creation.storageError" class="form-error" role="alert">{{ creation.storageError }}</p>
       <p v-if="videoParameterIssue" class="form-error" role="alert">{{ videoParameterIssue }}</p>
+      <p v-if="imageCountIssue" class="form-error" role="alert">{{ imageCountIssue }}</p>
       <p v-if="referenceLimitIssue" class="form-error" role="alert">{{ referenceLimitIssue }}</p>
     </form>
 

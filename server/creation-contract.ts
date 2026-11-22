@@ -7,14 +7,17 @@
 
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema, toolCallSchema, type ImageOptions, type VideoOptions, type ChatOptions } from '../shared/studio/options.ts'
 import { imageOutputParams, supportsImageOutputOptions, imageRequestSize, normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params.ts'
-import { buildVideoRequest } from '../shared/studio/video-api.ts'
+import { buildVideoRequest, videoParameterFormat } from '../shared/studio/video-api.ts'
 import { validateVideoRequestParameters } from '../shared/studio/video-capabilities.ts'
+import { selectedVideoSize } from '../shared/studio/video-size.ts'
+import { modelApiFormats, modelApiFormatSchema, type ModelApiFormat, type ModelTypeSetting, type VideoModelSetting } from '../shared/studio/model-types.ts'
+import { CHAT_API_FORMATS } from '../shared/studio/chat-api-format.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
 import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
 import { imageConversationPrompt, MAX_IMAGE_CONTEXT_IMAGES, MAX_IMAGE_CONTEXT_TEXT, MAX_IMAGE_CONTEXT_TURNS, type ImageConversationContext } from '../shared/studio/image-conversation.ts'
 export type CreationKind = 'image' | 'video' | 'text'
-export type CreationProtocol = 'openai' | 'sync' | 'async'
-export type CreationTaskProtocol = CreationProtocol | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
+export type CreationProtocol = 'auto' | 'openai' | 'sync' | 'async'
+export type CreationTaskProtocol = Exclude<CreationProtocol, 'auto'> | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
 export interface CreationInput {
   kind: CreationKind
   model: string
@@ -28,6 +31,7 @@ export interface CreationInput {
   sourceWorkId?: string
   requestId?: string
   protocol?: CreationProtocol
+  apiFormat?: ModelApiFormat
   imageOptions?: ImageOptions
   imageContext?: ImageConversationContext
   videoOptions?: VideoOptions
@@ -53,6 +57,20 @@ const taskIdPattern = /^[A-Za-z0-9_-]{1,200}$/
 const operationPattern = /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/
 const successStates = new Set(['completed', 'succeeded', 'success', 'done'])
 const failedStates = new Set(['failed', 'failure', 'error', 'cancelled', 'canceled'])
+const taskErrorMessages: Record<string, string> = {
+  upstream_image_count_exceeded: '上游返回图片数量超过安全上限',
+  invalid_upstream_image_item: '上游返回的图片条目格式不正确',
+  missing_upstream_image: '上游未返回有效图片链接或图片数据',
+  invalid_upstream_image_json: '上游返回的图片响应格式不正确',
+  invalid_image_url: '上游返回的图片链接不合法',
+  blocked_image_port: '上游图片链接使用了不允许的端口',
+  blocked_image_destination: '上游图片链接指向不允许的地址',
+  invalid_image_base64: '上游返回的图片 Base64 数据无效',
+  unsupported_image_type: '上游返回的图片格式不受支持',
+  image_too_large: '上游返回的单张图片超过大小限制',
+  image_storage_capacity_reached: '图片保存空间不足，勿重复生成，请联系管理员',
+  insufficient_disk_space: '服务器磁盘空间不足，勿重复生成，请联系管理员',
+}
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 function invalid(message: string): never {
   throw Object.assign(new Error(message), { statusCode: 400, code: 'INVALID_CREATION_REQUEST' })
@@ -98,7 +116,8 @@ export function validateCreationInput(value: unknown): CreationInput {
     result.aspect_ratio = value.aspect_ratio
   }
   if (value.n !== undefined) {
-    if (typeof value.n !== 'number' || !Number.isInteger(value.n) || value.n < 1 || value.n > 16) invalid('生成数量须为 1 至 16。')
+    const maximum = result.kind === 'image' ? 10 : 16
+    if (typeof value.n !== 'number' || !Number.isInteger(value.n) || value.n < 1 || value.n > maximum) invalid(`生成数量须为 1 至 ${maximum}。`)
     result.n = value.n
   }
   if (value.duration !== undefined) {
@@ -133,9 +152,15 @@ export function validateCreationInput(value: unknown): CreationInput {
     result.requestId = value.requestId
   }
   if (value.protocol !== undefined) {
-    if (!['openai', 'sync', 'async'].includes(String(value.protocol))) invalid('生成协议无效。')
+    if (!['auto', 'openai', 'sync', 'async'].includes(String(value.protocol))) invalid('生成协议无效。')
     if (result.kind === 'text' && value.protocol === 'async') invalid('文本生成不支持此异步接口。')
     result.protocol = value.protocol as CreationProtocol
+  }
+  if (value.apiFormat !== undefined) {
+    const format = modelApiFormatSchema.safeParse(value.apiFormat)
+    if (!format.success || format.data !== 'auto' && !(modelApiFormats[result.kind] as readonly string[]).includes(format.data))
+      invalid('接口格式与创作类型不匹配。')
+    result.apiFormat = format.data
   }
   for (const [key, schema] of [['imageOptions', imageOptionsSchema], ['videoOptions', videoOptionsSchema], ['chatOptions', chatOptionsSchema]] as const) {
     if (value[key] === undefined) continue
@@ -152,7 +177,55 @@ export function validateCreationInput(value: unknown): CreationInput {
       if (item.type === 'text' ? typeof item.text !== 'string' : item.type === 'image_url' ? !item.image_url : item.type === 'video_url' ? !item.video_url : item.type === 'file' ? !item.file : !item.input_audio) invalid('附件内容不完整。')
     }
   }
-  normalizeImageRequest(result)
+  if (result.apiFormat !== 'auto') normalizeImageRequest(result)
+  return result
+}
+
+/** Resolve only automatic selections; the original request remains the idempotency identity. */
+export function resolveCreationModelSettings(input: CreationInput, modelSetting?: ModelTypeSetting): CreationInput {
+  if (modelSetting?.id === input.model && modelSetting.kind !== input.kind) invalid('所选创作类型与后台模型配置不一致，请重新选择模型。')
+  const setting = modelSetting?.id === input.model && modelSetting.kind === input.kind ? modelSetting : undefined
+  const result: CreationInput = { ...input,
+    ...(input.imageOptions ? { imageOptions: { ...input.imageOptions } } : {}),
+    ...(input.videoOptions ? { videoOptions: { ...input.videoOptions } } : {}),
+    ...(input.chatOptions ? { chatOptions: { ...input.chatOptions } } : {}),
+  }
+  if (input.apiFormat === 'auto') {
+    result.apiFormat = setting?.apiFormat && setting.apiFormat !== 'auto' ? setting.apiFormat
+      : input.kind === 'text' ? input.chatOptions?.format ?? 'chat-completions'
+      : input.kind === 'video' ? 'openai'
+      : usesGeminiImageChat(input.model) ? 'chat-completions' : 'images'
+  }
+  if (input.protocol === 'auto') {
+    result.protocol = setting?.protocol && setting.protocol !== 'auto' ? setting.protocol : 'openai'
+  }
+  if (result.kind === 'text') {
+    if (result.apiFormat && result.apiFormat !== 'auto' && (CHAT_API_FORMATS as readonly string[]).includes(result.apiFormat)) {
+      result.chatOptions = { ...chatOptionsSchema.parse({ messages: [{ role: 'user', content: input.prompt }] }),
+        ...result.chatOptions, format: result.apiFormat as ChatOptions['format'] }
+    }
+    if (result.chatOptions?.reasoningEffort === 'auto' && setting?.text?.autoReasoningEffort) {
+      result.chatOptions.reasoningEffort = setting.text.autoReasoningEffort
+    }
+  } else if (result.kind === 'image') {
+    if (setting?.image) {
+      const automatic = setting.image
+      const options = result.imageOptions ?? imageOptionsSchema.parse({})
+      if (options.resolution === 'auto' && automatic.autoResolution) options.resolution = automatic.autoResolution
+      if (options.quality === 'auto' && automatic.autoQuality) options.quality = automatic.autoQuality
+      if (options.imageBackground === 'auto' && automatic.autoBackground) options.imageBackground = automatic.autoBackground
+      if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && automatic.autoAspectRatio) result.aspect_ratio = automatic.autoAspectRatio
+      result.imageOptions = options
+    }
+    normalizeImageRequest(result)
+    if (usesGeminiImageChat(result.model, result.apiFormat) && result.protocol === 'async') invalid('图片对话接口不支持异步任务。')
+    if (result.imageOptions?.imageStream && result.protocol === 'async') invalid('流式预览请使用同步接口。')
+  } else if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && setting?.video?.autoAspectRatio) {
+    result.aspect_ratio = setting.video.autoAspectRatio
+    if ((!result.size || result.size === 'auto') && result.videoOptions?.resolution && result.videoOptions.resolution !== 'auto') {
+      result.size = selectedVideoSize({ resolution: result.videoOptions.resolution, aspectRatio: result.aspect_ratio })
+    }
+  }
   return result
 }
 
@@ -169,8 +242,47 @@ function referenceFiles(input: CreationInput, prepared: CreationReference[]): Cr
   })
 }
 
+function automaticVideoResolution(input: CreationInput, setting?: VideoModelSetting): CreationInput {
+  if (input.videoOptions && input.videoOptions.resolution !== 'auto') return input
+  if (!input.videoOptions && (!setting?.autoResolution || setting.autoResolution === 'auto')) return input
+  const custom = input.videoOptions?.customParameters.trim() ? JSON.parse(input.videoOptions.customParameters) : {}
+  if (!record(custom)) invalid('自定义参数必须是 JSON 对象。')
+  const metadata = record(custom.metadata) ? custom.metadata : {}
+  if ([custom, metadata].some(source => ['size', 'resolution', 'resolution_name'].some(key => Object.hasOwn(source, key)))) return input
+  const dimensions = /^(\d+)x(\d+)$/.exec(input.size ?? '')
+  if (input.size && input.size !== 'auto' && !dimensions) invalid('请填写有效的视频宽度和高度。')
+  const short = dimensions ? Math.min(Number(dimensions[1]), Number(dimensions[2])) : undefined
+  let resolution = short === undefined ? setting?.autoResolution : `${short}p`
+  if (short === 2160 && setting?.autoResolution !== '2160p' && !setting?.resolutions?.includes('2160p')) resolution = '4k'
+  if (!resolution || resolution === 'auto') return input
+  const customRatio = [custom, metadata].flatMap(source => ['aspect_ratio', 'aspectRatio', 'ratio']
+    .map(key => source[key])).find((value): value is string => typeof value === 'string')
+  const ratio = customRatio ?? input.aspect_ratio ?? '16:9'
+  return {
+    ...input, aspect_ratio: ratio,
+    size: dimensions ? input.size : selectedVideoSize({ resolution, aspectRatio: ratio }),
+    videoOptions: { ...videoOptionsSchema.parse({ mode: (input.referenceUrls?.length ?? 0) > 1 ? 'reference-to-video'
+      : input.referenceUrls?.length ? 'image-to-video' : 'text-to-video' }), ...input.videoOptions, resolution },
+  }
+}
+
 /** Reuses the existing image-generation and video-api request shapes without provider fallback. */
-export function buildCreationPayload(input: CreationInput, preparedReferences: CreationReference[] = [], tools: unknown[] = []): CreationPayload {
+export function buildCreationPayload(input: CreationInput, preparedReferences: CreationReference[] = [], tools: unknown[] = [], videoSetting?: VideoModelSetting): CreationPayload {
+  if (input.kind !== 'video') return creationPayload(input, preparedReferences, tools)
+  try {
+    const payload = creationPayload(automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
+    const references = input.referenceUrls?.length ?? 0
+    const mode = input.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
+    validateVideoRequestParameters(payload.body, mode, videoSetting)
+    return payload
+  } catch (error) {
+    if (error instanceof SyntaxError) invalid('视频参数格式无效，请检查自定义参数。')
+    if (error instanceof Error && error.constructor === Error) invalid(error.message)
+    throw error
+  }
+}
+
+function creationPayload(input: CreationInput, preparedReferences: CreationReference[], tools: unknown[], videoSetting?: VideoModelSetting): CreationPayload {
   const json = (path: string, value: Record<string, unknown>): CreationPayload => ({
     path, body: JSON.stringify(value), contentType: 'application/json',
   })
@@ -190,7 +302,7 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
   }
   if (input.kind === 'image') {
     if (Array.from(input.prompt).length > 32000) invalid('生图提示词不能超过 32,000 个字符。')
-    if (usesGeminiImageChat(input.model)) {
+    if (usesGeminiImageChat(input.model, input.apiFormat)) {
       if (input.protocol === 'async') invalid('此 Gemini 图片模型使用对话接口，不支持异步图片协议。')
       if ((input.n ?? 1) !== 1) invalid('此 Gemini 图片接口每次只能提交一张，不能隐式重复付费请求。')
       const content = references.length ? [{ type: 'text', text: input.prompt },
@@ -206,11 +318,13 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
     const prompt = imageConversationPrompt(input.prompt, input.imageContext)
     if (Array.from(prompt).length > 32000) invalid('生图提示词和历史合计不能超过 32,000 个字符，请清除上下文后继续。')
     const payload = { model: input.model, prompt, n: input.n ?? 1,
-      size: input.size && input.size !== 'auto' ? input.size : options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model) : input.size ?? 'auto',
+      size: input.size && input.size !== 'auto' ? input.size : options ? imageRequestSize(input.aspect_ratio, options.resolution, input.model, input.apiFormat) : input.size ?? 'auto',
       response_format: options?.imageResponseFormat ?? 'url',
       ...(options?.seed ? { seed: Number(options.seed) } : {}),
-      ...(options ? { quality: options.quality, ...(options.style ? { style: options.style } : {}),
-        ...(supportsImageOutputOptions(input.model) ? imageOutputParams(options) : {}) } : {}) }
+      ...(options?.quality && options.quality !== 'auto' ? { quality: options.quality } : {}),
+      ...(options ? { ...(options.style ? { style: options.style } : {}),
+        ...(supportsImageOutputOptions(input.model) || options.imageBackground !== 'auto' ? imageOutputParams(options) : {}) } : {}) }
+    if (input.protocol === 'async') { delete payload.stream; delete payload.partial_images }
     if (!references.length) return json(input.protocol === 'async' ? 'async-images/v1/tasks' : 'v1/images/generations', payload)
     const body = new FormData()
     for (const [key, value] of Object.entries(payload)) body.set(key, String(value))
@@ -239,10 +353,9 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
       materials: references.map((url, index) => ({ id: String(index), name: `参考图 ${index + 1}`, type: 'image', url })),
       customParams: { openai: options.customParameters },
       protocolOptions: { openai: { seed: options.seed, generateAudio: options.generateAudio, personGeneration: options.personGeneration } },
-    }, input.model)
+    }, input.model, videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto' ? videoSetting.parameterFormat : undefined)
     const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
     if (sent.model !== input.model || sent.prompt !== input.prompt) invalid('自定义参数不能覆盖模型或提示词。')
-    validateVideoRequestParameters(payload.body, options.mode)
     return { ...payload, path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', ...(typeof payload.body === 'string' ? { contentType: 'application/json' } as const : {}) }
   }
   const path = input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos'
@@ -250,18 +363,19 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
   const ratio = input.aspect_ratio === 'auto' ? '16:9' : input.aspect_ratio ?? '16:9'
   const size = input.size && input.size !== 'auto' ? input.size : undefined
   const base = { model: input.model, prompt: input.prompt, seconds }
-  // Existing videoParameterFormat recognizes vendor parameter families behind /v1/videos.
-  if (/seedance/i.test(input.model)) {
+  const parameterFormat = videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto'
+    ? videoSetting.parameterFormat : videoParameterFormat('openai', input.model)
+  if (parameterFormat === 'seedance') {
     return json(path, { ...base, metadata: { ratio,
       content: references.map(url => ({ type: 'image_url', image_url: { url }, role: 'reference_image' })) } })
   }
-  if (/grok|grok-imagine-video/i.test(input.model)) {
+  if (parameterFormat === 'xai') {
     const extensions = { aspect_ratio: ratio,
       ...(references.length > 1 ? { reference_images: references.map(url => ({ url })) } : {}) }
     return json(path, { ...base, ...(references.length === 1 ? { input_reference: references[0] } : {}),
       ...extensions, metadata: extensions })
   }
-  if (/veo/i.test(input.model)) {
+  if (parameterFormat === 'gemini') {
     const files = referenceFiles(input, preparedReferences)
     const images = files.length ? files.map(file => file.blob) : []
     // The caller may prepare a remote image, but Veo's JSON needs its original Base64 bytes.
@@ -364,18 +478,24 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
   const rawId = data.task_id ?? data.id ?? data.request_id ?? data.name ?? taskId
   const id = typeof rawId === 'string' && (taskIdPattern.test(rawId) || operationPattern.test(rawId)) ? rawId : undefined
   const result: CreationTask = { ...(id ? { id, upstreamId: id } : {}), status: 'pending', outputs: [] }
-  let state = String(data.status ?? '').toLowerCase()
+  const envelopeState = String(envelope.status ?? envelope.state ?? '').toLowerCase()
+  let state = String(data.status ?? data.state ?? envelopeState).toLowerCase()
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace(/%$/, '')) : data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) result.progress = Math.max(0, Math.min(100, progress))
-  const error = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string'
-    ? data.error.message : typeof data.fail_reason === 'string' ? data.fail_reason : typeof data.message === 'string' ? data.message : undefined
+  const failure = data.error || envelope.error, reason = data.fail_reason || envelope.fail_reason
+  const detail = data.message ?? envelope.message
+  const failures = [data.error, envelope.error]
+  const failureMessage = failures.map(value => typeof value === 'string' ? value : record(value) && typeof value.message === 'string' ? value.message : undefined).find(value => value)
+  const code = failures.map(value => record(value) && typeof value.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(value.code) ? value.code : undefined).find(value => value)
+  const error = failureMessage || (typeof reason === 'string' ? reason : typeof detail === 'string' ? detail : undefined)
+    || (code ? Object.hasOwn(taskErrorMessages, code) ? taskErrorMessages[code] : `上游返回错误：${code}` : undefined)
   if (['save_failed', 'indeterminate', 'expired'].includes(state)) {
     result.status = state as CreationTask['status']
     result.error = error || (state === 'save_failed' ? '生成已完成，但保存失败；请保留记录并核对，勿重复生成。'
       : state === 'expired' ? '任务或文件已过期。' : '生成结果尚无法确认，请保留记录并核对，勿重复生成。')
     return result
   }
-  if (failedStates.has(state) || data.error || data.fail_reason) {
+  if (failedStates.has(state) || failedStates.has(envelopeState) || data.success === false || envelope.success === false || failure || reason) {
     result.status = 'failed'
     result.error = error || '生成失败。'
     return result

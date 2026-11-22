@@ -233,8 +233,8 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
     if (parameters?.model) modelChoices[entry.kind] = ''
     const next = newChat(entry.kind)
     if (entry.kind === 'text') {
-      const { model, settings, system, skillIds, search, compressionThreshold, sendMemory, toolContext, files } = entry.parameters
-      Object.assign(next, { textModel: model, settings, formatOverride: settings.format, system, skillIds, search, compressionThreshold, sendMemory, toolContext, draft: entry.prompt, draftFiles: files })
+      const { model, apiFormat, settings, system, skillIds, search, compressionThreshold, sendMemory, toolContext, files } = entry.parameters
+      Object.assign(next, { textModel: model, settings, formatOverride: apiFormat === 'auto' ? undefined : settings.format, formatAutomatic: apiFormat === 'auto', system, skillIds, search, compressionThreshold, sendMemory, toolContext, draft: entry.prompt, draftFiles: files })
     } else next.mediaDrafts = { [entry.kind]: { ...entry.parameters, prompt: entry.prompt, references: entry.references } }
     await saveChats(true)
     if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return

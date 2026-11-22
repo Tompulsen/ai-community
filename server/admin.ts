@@ -121,7 +121,7 @@ export function validateCommunityConfig(input: Body): Body {
     }
     else if (key === 'communityModelTypes') {
       const parsed = modelTypesSchema.safeParse(value)
-      if (!parsed.success) fail('模型类型设置无效：最多 500 个模型，ID 为 1–200 字符且不能重复，类型请选择对话、生图或视频。')
+      if (!parsed.success) fail('模型配置无效：最多 500 个模型，ID 为 1–200 字符且不能重复；请检查类型、接口、协议、自动参数与备注。')
       next[key] = parsed.data
     }
     else if (key === 'uploadLimits') {

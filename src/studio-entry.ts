@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { chatOptionsSchema, imageOptionsSchema, videoOptionsSchema } from '../shared/studio/options'
+import { modelApiFormatSchema } from '../shared/studio/model-types'
 
 const mediaEntrySchema = z.object({
   owner: z.string().nullable(), kind: z.enum(['image', 'video']),
@@ -9,7 +10,8 @@ const mediaEntrySchema = z.object({
     ratio: z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/),
     manualSize: z.union([z.literal(''), z.string().regex(/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|[124]K)$/)]),
     count: z.number().int().min(1).max(16), duration: z.number().int().min(1).max(3600),
-    protocol: z.enum(['openai', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
+    apiFormat: modelApiFormatSchema.optional(),
+    protocol: z.enum(['auto', 'openai', 'sync', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
   }).optional(),
   references: z.array(z.object({ name: z.string(), url: z.string().startsWith('data:image/') })).max(16),
 })
@@ -17,6 +19,7 @@ const textEntrySchema = z.object({
   owner: z.string().nullable(), kind: z.literal('text'), prompt: z.string().trim().max(100000),
   parameters: z.object({
     model: z.string().max(200), group: z.string().min(1).max(200).nullable(), tokenId: z.number().int().positive().nullable(),
+    apiFormat: z.enum(['auto', 'chat-completions', 'responses', 'gemini', 'claude']).optional(),
     settings: chatOptionsSchema.omit({ messages: true }), system: z.string().max(100000),
     skillIds: z.array(z.string().min(1).max(200)).max(100), search: z.enum(['off', 'quick', 'deep']),
     compressionThreshold: z.number().int().min(500).max(2000000), sendMemory: z.boolean(), toolContext: z.string().max(1000000),

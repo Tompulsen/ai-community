@@ -3,14 +3,17 @@
 import { computed } from 'vue'
 import { ChevronDown, Sparkles } from '@lucide/vue'
 import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
+import type { ModelApiFormat, VideoModelSetting } from '../../shared/studio/model-types'
 import { IMAGE_QUALITIES, IMAGE_RATIOS, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
-import { VIDEO_RATIOS } from '../../shared/studio/video-size'
+import { VIDEO_RATIOS, VIDEO_RESOLUTIONS } from '../../shared/studio/video-size'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import StudioChoiceGroup from './StudioChoiceGroup.vue'
 import CreationAdvanced from './CreationAdvanced.vue'
 
-const props = defineProps<{ kind: 'image' | 'video'; model: string }>()
-const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model))
+const props = defineProps<{ kind: 'image' | 'video'; model: string; modelApiFormat?: ModelApiFormat; videoSetting?: VideoModelSetting }>()
+const apiFormat = defineModel<ModelApiFormat>('apiFormat', { required: true })
+const effectiveApiFormat = computed(() => apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value)
+const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model, effectiveApiFormat.value))
 const image = defineModel<ImageOptions>('image', { required: true })
 const video = defineModel<VideoOptions>('video', { required: true })
 const ratio = defineModel<string>('ratio', { required: true })
@@ -20,8 +23,8 @@ const size = defineModel<string>('size', { required: true })
 const protocol = defineModel<string>('protocol', { required: true })
 const options = (values: readonly string[]) => values.map(value => ({ value, label: value === 'auto' ? '自动' : value.toUpperCase() }))
 const ratioOptions = computed(() => options(props.kind === 'image' ? IMAGE_RATIOS : VIDEO_RATIOS))
-const limits = computed(() => videoCapabilities(props.model, video.value.mode))
-const resolutions = computed(() => options([...new Set(['auto', ...(limits.value?.resolutions || [])])]))
+const limits = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
+const resolutions = computed(() => options([...new Set(['auto', ...(limits.value?.resolutions.length ? limits.value.resolutions : VIDEO_RESOLUTIONS)])]))
 const durationIndex = computed(() => Math.max(0, limits.value?.durations.indexOf(duration.value) ?? 0))
 const qualityLabel: Record<string, string> = { auto: '自动', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高' }
 function ratioShape(value: string) {
@@ -48,13 +51,13 @@ function revealInvalid(event: Event) {
     <template v-if="kind === 'image'">
       <section class="parameter-section" aria-label="图片分辨率"><h3>分辨率</h3><StudioChoiceGroup v-model="image.resolution" label="分辨率" :options="options(IMAGE_RESOLUTIONS)" /></section>
       <section class="parameter-section" aria-label="图片画质"><h3>画质</h3><StudioChoiceGroup v-model="image.quality" label="画质" :columns="3" :options="IMAGE_QUALITIES.map(value => ({ value, label: qualityLabel[value] || value }))" /></section>
-      <label class="parameter-inline"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" :max="geminiImage ? 1 : 16" :readonly="geminiImage" step="1" required aria-label="图片数量" /></label>
+      <label class="parameter-inline"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" :max="geminiImage ? 1 : 10" :readonly="geminiImage" step="1" required aria-label="图片数量" /></label>
     </template>
     <template v-else>
-      <section class="parameter-section" aria-label="视频分辨率"><h3>分辨率<span v-if="!resolutions.some(option => option.value === video.resolution)">{{ video.resolution }} · 当前模型不支持</span></h3><StudioChoiceGroup v-model="video.resolution" label="视频分辨率" :options="resolutions" :columns="Math.min(4, resolutions.length)" /></section>
+      <section class="parameter-section" aria-label="视频分辨率"><h3>分辨率<span v-if="!resolutions.some(option => option.value === video.resolution)">{{ video.resolution }} · 不在可选列表中</span></h3><StudioChoiceGroup v-model="video.resolution" label="视频分辨率" :options="resolutions" :columns="Math.min(4, resolutions.length)" /></section>
       <section class="parameter-section" aria-label="视频时长">
         <h3><span>时长</span><output>{{ duration }} 秒</output></h3>
-        <template v-if="limits">
+        <template v-if="limits?.durations.length">
           <input class="duration-range" type="range" aria-label="视频时长" :aria-valuetext="`${duration} 秒`" min="0" :max="Math.max(0, limits.durations.length - 1)" step="1" :value="durationIndex" :disabled="limits.durations.length <= 1" @input="duration = limits.durations[Number(($event.target as HTMLInputElement).value)]!" />
           <div class="duration-labels"><span>{{ limits.durations[0] }} 秒</span><span>{{ limits.durations.at(-1) }} 秒</span></div>
           <StudioChoiceGroup v-if="limits.durations.length <= 6" :model-value="String(duration)" label="时长档位" :options="limits.durations.map(value => ({ value: String(value), label: `${value} 秒` }))" @update:model-value="duration = Number($event)" />
@@ -66,7 +69,7 @@ function revealInvalid(event: Event) {
     <details class="parameter-advanced">
       <summary>自定义参数<ChevronDown :size="15" /></summary>
       <label v-if="!geminiImage" class="parameter-inline"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required aria-label="尺寸" /></label>
-      <CreationAdvanced v-model:image="image" v-model:video="video" v-model:protocol="protocol" :kind="kind" :model="model" embedded hide-primary />
+      <CreationAdvanced v-model:image="image" v-model:video="video" v-model:protocol="protocol" v-model:api-format="apiFormat" :kind="kind" :model="model" :model-api-format="modelApiFormat" :video-setting="videoSetting" embedded hide-primary />
     </details>
   </div>
 </template>

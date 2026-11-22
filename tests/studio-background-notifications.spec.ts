@@ -183,34 +183,29 @@ test('previously completed history stays quiet in the community and after reload
   expect(state.submissions()).toBe(0)
 })
 
-for (const width of [390, 1440]) test(`viewing an uncertain task acknowledges its reminder until a new result at ${width}px`, async ({ page }, info) => {
+for (const width of [390, 1440]) test(`viewing a failed task acknowledges its reminder without a query at ${width}px`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: 900 })
   const state = await fixture(page, '/work/backgroundsource')
-  state.controls.disconnect = true
+  state.controls.reject = true
   try {
     await page.getByRole('button', { name: '制作同款', exact: true }).click()
     await page.getByRole('button', { name: /^后台生成(?:$|\s)/ }).click()
     await page.getByRole('button', { name: '后台生成同款', exact: true }).click()
     await expect.poll(state.submissions).toBe(1)
     state.finish()
-    await expect(dock(page)).toContainText('结果待确认')
+    await expect(dock(page)).toContainText('生成失败')
+    await expect(dock(page).getByRole('alert')).toBeVisible()
+    await expect(dock(page).getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
     await dock(page).getByRole('button', { name: '查看任务', exact: true }).click()
     await expect(page).toHaveURL(/\/create\/image/)
-    await expect(page.locator('.task-status')).toContainText('结果待确认')
+    await expect(page.locator('.task-status')).toContainText('生成失败')
     await leaveWorkbench(page)
     await expect(dock(page)).toHaveCount(0)
     await page.reload()
     await expect(page.locator('.app-header')).toBeVisible()
     await expect(dock(page)).toHaveCount(0)
     await page.screenshot({ path: info.outputPath(`acknowledged-task-${width}.png`) })
-    await page.evaluate(async () => {
-      const path = performance.getEntriesByType('resource').map(entry => entry.name).filter(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name)).at(-1)!
-      const studio = await import(/* @vite-ignore */ path)
-      const task = studio.creation.tasks.find(item => item.sourceWorkId === 'backgroundsource')
-      await studio.resumeCreation(task)
-    })
-    await expect(dock(page)).toContainText('生成完成')
-    expect(state.controls.recoveries).toBe(1)
+    expect(state.controls.recoveries).toBe(0)
     expect(state.submissions()).toBe(1)
   } finally { state.finish() }
 })
@@ -387,7 +382,7 @@ test('background remix preserves invalid video duration for editing and sends no
   state.finish()
 })
 
-for (const disconnect of [false, true]) test(`background failure is visible and ${disconnect ? 'uncertain request is recovered without POST' : 'rejection does not auto retry'}`, async ({ page }) => {
+for (const disconnect of [false, true]) test(`background ${disconnect ? 'connection error' : 'rejection'} is visible without a manual query or an automatic retry`, async ({ page }) => {
   const state = await fixture(page, '/work/backgroundsource')
   state.controls.reject = !disconnect; state.controls.disconnect = disconnect
   try {
@@ -397,14 +392,11 @@ for (const disconnect of [false, true]) test(`background failure is visible and 
     await expect(page).toHaveURL(/\/work\/backgroundsource$/)
     await expect.poll(state.submissions).toBe(1)
     state.finish()
-    await expect(dock(page)).toContainText(disconnect ? '结果待确认' : '生成失败')
-    if (disconnect) {
-      await expect(dock(page).getByRole('alert')).toHaveCount(0)
-      await expect(dock(page).locator('details')).not.toHaveAttribute('open')
-      await dock(page).getByRole('button', { name: '查询结果', exact: true }).click()
-      await expect(dock(page)).toContainText('生成完成')
-      expect(state.controls.recoveries).toBe(1)
-    }
+    await expect(dock(page)).toContainText(disconnect ? '请求异常' : '生成失败')
+    await expect(dock(page).getByRole('alert')).toBeVisible()
+    await expect(dock(page).getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+    await expect(dock(page).locator('details')).toHaveCount(0)
+    expect(state.controls.recoveries).toBe(0)
     expect(state.submissions()).toBe(1)
   } finally { state.finish() }
 })

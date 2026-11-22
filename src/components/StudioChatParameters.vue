@@ -18,7 +18,7 @@ defineEmits<{ format: [event: Event] }>()
     <details class="chat-advanced-settings">
       <summary>高级参数<ChevronDown :size="15" /></summary>
       <div class="advanced-settings-content">
-        <label class="setting-row"><span>接口格式</span><select :value="format" class="control" @change="$emit('format', $event)"><option v-for="value in CHAT_API_FORMATS" :key="value" :value="value">{{ value }}</option></select></label>
+        <label class="setting-row"><span>接口格式</span><select :value="format" class="control" @change="$emit('format', $event)"><option value="auto">自动</option><option v-for="value in CHAT_API_FORMATS" :key="value" :value="value">{{ value }}</option></select></label>
         <label class="setting-row"><span>Top P</span><input v-model.number="chat.settings.top_p" class="control" type="number" min="0" max="1" step="0.05" @change="saveChats()" /></label>
         <label class="setting-row"><span>话题惩罚</span><input v-model.number="chat.settings.presence_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label>
         <label class="setting-row"><span>重复惩罚</span><input v-model.number="chat.settings.frequency_penalty" class="control" type="number" min="-2" max="2" step="0.1" @change="saveChats()" /></label>

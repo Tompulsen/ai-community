@@ -1,7 +1,138 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, validateCreationInput } from './creation-contract.ts'
+import { buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, resolveCreationModelSettings, validateCreationInput } from './creation-contract.ts'
+import { modelTypesSchema } from '../shared/studio/model-types.ts'
 import { readGenerationStream } from './creation/stream.ts'
+
+test('model configuration only accepts existing interfaces and type-specific automatic parameters', () => {
+  const accepted = [
+    { id: 'alias-image', kind: 'image', apiFormat: 'images', protocol: 'sync', remark: 'Only administrators can read this.',
+      image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' } },
+    { id: 'alias-chat', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' } },
+    { id: 'alias-video', kind: 'video', apiFormat: 'openai', protocol: 'async',
+      video: { autoResolution: '720p', autoAspectRatio: '9:16', parameterFormat: 'seedance' } },
+  ]
+  assert.deepEqual(modelTypesSchema.parse(accepted), accepted)
+  for (const invalid of [
+    { ...accepted[0], apiFormat: 'responses' }, { ...accepted[0], apiFormat: 'https://private/generate' },
+    { ...accepted[0], image: { api_key: 'private' } }, { ...accepted[0], image: { autoQuality: 'ultra' } },
+    { ...accepted[0], apiFormat: 'chat-completions', protocol: 'async' },
+    { ...accepted[0], id: 'gemini-3.1-flash-image-preview', apiFormat: 'auto', protocol: 'async' },
+    { ...accepted[0], text: {} }, { ...accepted[1], protocol: 'async' },
+    { ...accepted[2], video: { parameterFormat: 'native-seedance-url' } },
+    { ...accepted[2], video: { autoAspectRatio: '0:9' } }, { ...accepted[1], remark: 'x'.repeat(2001) },
+  ]) assert.equal(modelTypesSchema.safeParse([invalid]).success, false)
+})
+
+test('automatic image selections use backend settings while explicit selections and original input survive', () => {
+  const setting = modelTypesSchema.parse([{ id: 'custom-image', kind: 'image', apiFormat: 'images', protocol: 'async',
+    remark: 'Private operator note', image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' } }])[0]
+  const make = patch => validateCreationInput({ kind: 'image', model: setting.id, prompt: 'water',
+    size: 'auto', aspect_ratio: 'auto', apiFormat: 'auto', protocol: 'auto', imageOptions: {}, ...patch })
+  const input = make({}), original = structuredClone(input)
+  const resolved = resolveCreationModelSettings(input, setting), payload = buildCreationPayload(resolved)
+  const sent = JSON.parse(payload.body)
+  assert.equal(payload.path, 'async-images/v1/tasks')
+  assert.equal(sent.size, '2560x1440')
+  assert.equal(sent.quality, 'high')
+  assert.equal(sent.background, 'transparent')
+  assert.equal(Object.hasOwn(sent, 'remark'), false)
+  assert.deepEqual(input, original)
+  const explicit = resolveCreationModelSettings(make({ protocol: 'sync', size: '1024x1536', aspect_ratio: '2:3',
+    imageOptions: { resolution: '1k', quality: 'low', imageBackground: 'opaque' } }), setting)
+  assert.equal(explicit.protocol, 'sync')
+  assert.equal(explicit.aspect_ratio, '2:3')
+  assert.equal(explicit.imageOptions.resolution, '1k')
+  assert.equal(explicit.imageOptions.quality, 'low')
+  assert.equal(explicit.imageOptions.imageBackground, 'opaque')
+  const manualPayload = JSON.parse(buildCreationPayload(explicit).body)
+  assert.equal(manualPayload.size, '1024x1536')
+  assert.equal(manualPayload.background, 'opaque')
+  const jpeg = resolveCreationModelSettings(make({ imageOptions: { imageOutputFormat: 'jpeg' } }), setting)
+  assert.equal(JSON.parse(buildCreationPayload(jpeg).body).output_format, 'png')
+  const manualRatio = resolveCreationModelSettings(make({ aspect_ratio: '9:16', size: 'auto' }), setting)
+  assert.equal(JSON.parse(buildCreationPayload(manualRatio).body).size, '1440x2560')
+  const legacySize = resolveCreationModelSettings(make({ aspect_ratio: '9:16', size: '720x1280' }), setting)
+  assert.equal(JSON.parse(buildCreationPayload(legacySize).body).size, '720x1280')
+  const exactSize = resolveCreationModelSettings(make({ aspect_ratio: '9:16', size: '720x1280', exactSize: true }), setting)
+  assert.equal(JSON.parse(buildCreationPayload(exactSize).body).size, '720x1280')
+  assert.deepEqual(resolveCreationModelSettings(input, { ...setting, id: 'other-model' }).imageOptions, input.imageOptions)
+})
+
+test('automatic image interface follows configuration even when a model alias disagrees with name recognition', () => {
+  for (const [model, apiFormat, path] of [
+    ['custom-image-alias', 'chat-completions', 'v1/chat/completions'],
+    ['gemini-3.1-flash-image-preview', 'images', 'v1/images/generations'],
+  ]) {
+    const input = validateCreationInput({ kind: 'image', model, prompt: 'water', apiFormat: 'auto',
+      protocol: 'auto', size: '1024x1536', imageOptions: { seed: '42' } })
+    const resolved = resolveCreationModelSettings(input, { id: model, kind: 'image', apiFormat })
+    const payload = buildCreationPayload(resolved), body = JSON.parse(payload.body)
+    assert.equal(payload.path, path)
+    if (apiFormat === 'images') { assert.equal(body.seed, 42); assert.equal(body.size, '1024x1536') }
+    else { assert.equal(resolved.size, 'auto'); assert.equal(resolved.imageOptions.seed, ''); assert(body.messages.length) }
+  }
+})
+
+test('automatic text interface and reasoning use model settings without replacing explicit parameters', () => {
+  const setting = { id: 'alias-text', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' } }
+  const make = (apiFormat, reasoningEffort = 'auto') => validateCreationInput({ kind: 'text', model: setting.id,
+    prompt: 'water', apiFormat, chatOptions: { messages: [{ role: 'user', content: 'water' }], format: 'chat-completions', reasoningEffort } })
+  const automatic = resolveCreationModelSettings(make('auto'), setting)
+  assert.equal(automatic.chatOptions.format, 'responses')
+  assert.equal(automatic.chatOptions.reasoningEffort, 'high')
+  assert.equal(buildCreationPayload(automatic).path, 'v1/responses')
+  const explicit = resolveCreationModelSettings(make('claude', 'low'), setting)
+  assert.equal(explicit.chatOptions.reasoningEffort, 'low')
+  assert.equal(buildCreationPayload(explicit).path, 'v1/messages')
+  assert.equal(resolveCreationModelSettings(make(undefined), setting).chatOptions.format, 'chat-completions')
+  assert.throws(() => resolveCreationModelSettings(make('auto'), { ...setting, kind: 'image' }), { statusCode: 400 })
+  assert.throws(() => validateCreationInput({ ...make('auto'), apiFormat: 'images' }), { statusCode: 400 })
+})
+
+test('automatic video configuration selects parameter families without changing the task interface', () => {
+  for (const parameterFormat of ['openai', 'xai', 'seedance', 'gemini']) {
+    const setting = { id: 'custom-video', kind: 'video', apiFormat: 'openai', protocol: 'async',
+      video: { autoResolution: '720p', autoAspectRatio: '9:16', parameterFormat } }
+    const input = validateCreationInput({ kind: 'video', model: setting.id, prompt: 'water', duration: 8, size: 'auto',
+      aspect_ratio: 'auto', apiFormat: 'auto', protocol: 'auto', videoOptions: { mode: 'text-to-video', generateAudio: true } })
+    const payload = buildCreationPayload(resolveCreationModelSettings(input, setting), [], [], setting.video)
+    const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    const metadata = typeof sent.metadata === 'string' ? JSON.parse(sent.metadata) : sent.metadata
+    assert.equal(payload.path, 'async-videos/v1/tasks')
+    assert.equal(metadata.resolution, '720p')
+    if (parameterFormat === 'gemini') assert.equal(metadata.aspectRatio, '9:16')
+    else if (parameterFormat === 'seedance') { assert.equal(metadata.ratio, '9:16'); assert.equal(metadata.generate_audio, true) }
+    else assert.equal(metadata.aspect_ratio, '9:16')
+  }
+  const input = validateCreationInput({ kind: 'video', model: 'veo-3.1', prompt: 'water', duration: 8, size: 'auto',
+    aspect_ratio: 'auto', videoOptions: { mode: 'text-to-video' } })
+  const forcedOpenai = buildCreationPayload(input, [], [], { parameterFormat: 'openai' })
+  assert(forcedOpenai.body instanceof FormData, 'an explicit OpenAI parameter format bypasses model-name inference')
+})
+
+test('backend automatic video ratio survives an automatic resolution and manual resolutions', () => {
+  const setting = { id: 'custom-video', kind: 'video', video: { autoAspectRatio: '9:16', parameterFormat: 'seedance' } }
+  for (const resolution of ['auto', '720p']) {
+    const input = validateCreationInput({ kind: 'video', model: setting.id, prompt: 'water', duration: 8, size: 'auto',
+      aspect_ratio: 'auto', videoOptions: { mode: 'text-to-video', resolution } })
+    const payload = buildCreationPayload(resolveCreationModelSettings(input, setting), [], [], setting.video)
+    assert.equal(JSON.parse(payload.body).metadata.ratio, '9:16')
+  }
+})
+
+test('unconfigured automatic video ratios remain upstream defaults across compatible parameter families', () => {
+  for (const parameterFormat of ['openai', 'xai', 'seedance', 'gemini']) {
+    const input = validateCreationInput({ kind: 'video', model: 'custom-video', prompt: 'water', duration: 8,
+      apiFormat: 'auto', protocol: 'auto', size: 'auto', aspect_ratio: 'auto', videoOptions: { mode: 'text-to-video' } })
+    const payload = buildCreationPayload(resolveCreationModelSettings(input), [], [], { parameterFormat })
+    const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    const metadata = typeof sent.metadata === 'string' ? JSON.parse(sent.metadata) : sent.metadata
+    for (const source of [sent, metadata ?? {}]) {
+      for (const key of ['size', 'resolution', 'aspectRatio', 'aspect_ratio', 'ratio']) assert.equal(source[key], undefined)
+    }
+  }
+})
 
 test('image conversation context is bounded, image-only and cannot introduce arbitrary media schemes', () => {
   const image = 'https://media.example/previous.png'
@@ -83,6 +214,17 @@ test('creation input keeps model parameters but cannot forward account credentia
   }
 })
 
+test('image requests allow ten outputs while retaining the separate sixteen-reference limit', () => {
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Images', n: 10,
+    referenceUrls: Array(16).fill('https://media.example/reference.png') }
+  const accepted = validateCreationInput(input)
+  assert.equal(accepted.n, 10)
+  assert.equal(accepted.referenceUrls.length, 16)
+  for (const n of [11, 16]) assert.throws(() => validateCreationInput({ ...input, n }), {
+    statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: '生成数量须为 1 至 10。',
+  })
+})
+
 test('relay allowlist admits existing generation protocols and read-only task/media routes', () => {
   for (const path of ['v1/images/generations', 'v1/images/edits', 'v1/chat/completions', 'v1/responses',
     'v1/videos', 'v1/videos/generations', 'async-images/v1/tasks', 'async-images/v1/edits', 'async-videos/v1/tasks']) {
@@ -119,6 +261,36 @@ test('generation payloads preserve explicit sync/async and multipart reference u
   assert.throws(() => buildCreationPayload({ ...input, referenceUrls: ['http://internal/reference'] }), { statusCode: 400 })
 })
 
+test('image quality auto is omitted while explicit qualities survive JSON and multipart in both protocols', () => {
+  for (const quality of [undefined, 'auto', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    for (const protocol of ['openai', 'async']) for (const referenceUrls of [[], ['https://media.example/reference.png']]) {
+      const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: 'Image',
+        protocol, referenceUrls, imageOptions: { quality } })
+      const { body } = buildCreationPayload(input, [{ blob: new Blob(['image'], { type: 'image/png' }), name: 'reference.png' }])
+      const payload = body instanceof FormData ? Object.fromEntries(body.entries()) : JSON.parse(body)
+      assert.equal(Object.hasOwn(payload, 'quality'), Boolean(quality && quality !== 'auto'))
+      if (quality && quality !== 'auto') assert.equal(payload.quality, quality)
+      assert.equal(input.imageOptions.quality, quality || 'auto')
+    }
+  }
+})
+
+test('async Images payloads omit streaming fields in JSON and multipart without changing synchronous requests', () => {
+  for (const imageStream of [false, true]) for (const referenceUrls of [[], ['https://media.example/reference.png']]) {
+    const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: 'Image',
+      referenceUrls, imageOptions: { imageStream, imagePartialImages: 2 } })
+    for (const protocol of ['openai', 'async']) {
+      const { body } = buildCreationPayload({ ...input, protocol },
+        [{ blob: new Blob(['image'], { type: 'image/png' }), name: 'reference.png' }])
+      const payload = body instanceof FormData ? Object.fromEntries(body.entries()) : JSON.parse(body)
+      assert.equal(Object.hasOwn(payload, 'stream'), protocol === 'openai')
+      assert.equal(Object.hasOwn(payload, 'partial_images'), protocol === 'openai' && imageStream)
+      if (protocol === 'openai') assert.equal(payload.stream, body instanceof FormData ? String(imageStream) : imageStream)
+    }
+    assert.equal(input.imageOptions.imageStream, imageStream)
+  }
+})
+
 test('remix image requests retain exact size and an explicit seed through JSON and multipart', () => {
   const input = validateCreationInput({ kind: 'image', model: 'gpt-image-2', prompt: '同款',
     size: '1200x900', aspect_ratio: '4:3', n: 3, imageOptions: { resolution: '2k', quality: 'high', seed: '0' } })
@@ -138,6 +310,38 @@ test('remix compatible video requests retain exact size and seed metadata', () =
   const payload = buildCreationPayload(input)
   assert.equal(payload.body.get('size'), '720x1280')
   assert.equal(JSON.parse(payload.body.get('metadata')).seed, 42)
+})
+
+test('all final video payloads reject invalid durations with an actionable 400', () => {
+  for (const protocol of ['openai', 'async']) for (const videoOptions of [undefined, { mode: 'text-to-video', resolution: '720p' }]) {
+    const input = validateCreationInput({ kind: 'video', model: 'sora-2', prompt: 'Video', duration: 5, protocol, videoOptions })
+    assert.throws(() => buildCreationPayload(input), {
+      statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: '当前模型和生成方式仅支持 4 / 8 / 12 秒，请调整视频时长',
+    })
+  }
+})
+
+test('unknown video models can use the compatible protocol without a local model registration', () => {
+  for (const videoOptions of [undefined, { mode: 'text-to-video', resolution: '480p' }]) {
+    const input = validateCreationInput({ kind: 'video', model: 'unknown-video-model', prompt: 'Video', duration: 8, videoOptions })
+    const payload = buildCreationPayload(input)
+    assert.equal(payload.path, 'v1/videos')
+    assert.equal(payload.body.get('model'), 'unknown-video-model')
+    assert.equal(payload.body.get('seconds'), '8')
+  }
+})
+
+test('video request builder errors become safe actionable 400 responses', () => {
+  const input = validateCreationInput({ kind: 'video', model: 'seedance-2-0', prompt: 'Video', duration: 8,
+    videoOptions: { mode: 'text-to-video', resolution: '720p', customParameters: '{"input_reference":"unsupported"}' } })
+  assert.throws(() => buildCreationPayload(input), {
+    statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: 'Seedance 兼容格式请使用参考素材或 metadata.content 传入参考图',
+  })
+  const malformed = validateCreationInput({ ...input, model: 'sora-2',
+    videoOptions: { mode: 'text-to-video', resolution: '720p', customParameters: '{"metadata":"not-json"}' } })
+  assert.throws(() => buildCreationPayload(malformed), {
+    statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: '视频参数格式无效，请检查自定义参数。',
+  })
 })
 
 test('Gemini image models retain their existing single chat-completions transport with image references', () => {
@@ -168,7 +372,7 @@ test('OpenAI video uses existing multipart transport while compatible model fami
   assert(openai.body instanceof FormData)
   assert.equal(openai.body.get('seconds'), '8')
   assert.equal(openai.body.get('size'), '1280x720')
-  const seedance = buildCreationPayload({ ...input, model: 'seedance-2', referenceUrls: ['https://media.example/reference.png'] })
+  const seedance = buildCreationPayload({ ...input, model: 'seedance-2-0', referenceUrls: ['https://media.example/reference.png'] })
   assert.equal(seedance.path, 'v1/videos')
   assert.equal(JSON.parse(seedance.body).metadata.content[0].role, 'reference_image')
   const grok = JSON.parse(buildCreationPayload({ ...input, model: 'grok-imagine-video', referenceUrls: ['https://media.example/reference.png'] }).body)
@@ -179,7 +383,7 @@ test('OpenAI video uses existing multipart transport while compatible model fami
 })
 
 test('Veo preserves embedded PNG/JPEG/WebP references and requires remote images to be converted first', () => {
-  const input = { kind: 'video', model: 'veo-3', prompt: 'Video', aspect_ratio: '9:16' }
+  const input = { kind: 'video', model: 'veo-3', prompt: 'Video', aspect_ratio: '9:16', duration: 8 }
   for (const [mime, bytes] of [['image/png', 'iVBORw0KGgo='], ['image/jpeg', '/9j/2Q=='], ['image/webp', 'UklGRg==']]) {
     const reference = `data:${mime};base64,${bytes}`
     const validated = validateCreationInput({ ...input, referenceUrls: [reference] })
@@ -215,6 +419,63 @@ test('a running job never becomes complete merely because it contains a preview 
   assert.equal(result.progress, 42)
   assert.deepEqual(result.outputs, [])
   assert.equal(normalizeCreationTask('image', { id: 'job', status: 'unknown', data: [{ url: 'https://media.example/preview.png' }] }).status, 'pending')
+  for (const status of ['queued', 'running', 'unknown', undefined]) {
+    assert.equal(normalizeCreationTask('video', { id: 'job-1', status, message: 'Provider message' }).status, 'pending')
+  }
+})
+
+test('task state aliases preserve terminal failure messages and IDs', () => {
+  const result = normalizeCreationTask('video', { id: 'job-1', state: 'error', message: 'Provider failed' })
+  assert.deepEqual(result, { id: 'job-1', upstreamId: 'job-1', status: 'failed', outputs: [], error: 'Provider failed' })
+})
+
+test('explicit unsuccessful task responses cannot stay pending', () => {
+  for (const value of [
+    { id: 'job-1', success: false, message: 'Provider failed' },
+    { success: false, message: 'Provider failed', data: { id: 'job-1', status: 'queued' } },
+  ]) {
+    assert.deepEqual(normalizeCreationTask('video', value),
+      { id: 'job-1', upstreamId: 'job-1', status: 'failed', outputs: [], error: 'Provider failed' })
+  }
+})
+
+test('outer task failures override inner queued states and keep the original error', () => {
+  for (const failure of [
+    { success: false, error: { message: 'Provider failed' } },
+    { error: 'Provider failed' },
+    { fail_reason: 'Provider failed' },
+    { status: 'failed', message: 'Provider failed' },
+    { state: 'error', message: 'Provider failed' },
+  ]) {
+    assert.deepEqual(normalizeCreationTask('video', { ...failure, data: { id: 'job-1', status: 'queued' } }),
+      { id: 'job-1', upstreamId: 'job-1', status: 'failed', outputs: [], error: 'Provider failed' })
+  }
+})
+
+test('task error codes supply safe fallback reasons without replacing provider messages or terminal states', () => {
+  for (const [error, message, expected] of [
+    [{ code: 'missing_upstream_image' }, undefined, '上游未返回有效图片链接或图片数据'],
+    [{ code: 'provider_task_failed' }, undefined, '上游返回错误：provider_task_failed'],
+    [{ code: 'constructor' }, undefined, '上游返回错误：constructor'],
+    [{ code: '<private-provider-url>' }, undefined, '生成失败。'],
+    ['供应商原始错误', undefined, '供应商原始错误'],
+    [{ code: 'missing_upstream_image', message: '供应商原始错误' }, undefined, '供应商原始错误'],
+    [{ code: 'missing_upstream_image' }, '供应商说明', '供应商说明'],
+  ]) {
+    assert.deepEqual(normalizeCreationTask('image', { id: 'job_1', status: 'failed', error, message }),
+      { id: 'job_1', upstreamId: 'job_1', status: 'failed', outputs: [], error: expected })
+  }
+  for (const status of ['save_failed', 'indeterminate', 'expired']) {
+    const result = normalizeCreationTask('image', { id: 'job_1', status, error: { code: 'image_storage_capacity_reached' } })
+    assert.equal(result.status, status)
+    assert.equal(result.upstreamId, 'job_1')
+    assert.equal(result.error, '图片保存空间不足，勿重复生成，请联系管理员')
+  }
+  const wrapped = normalizeCreationTask('image', { error: { message: '供应商原始错误' },
+    data: { id: 'job_1', status: 'failed', error: { code: 'missing_upstream_image' } } })
+  assert.equal(wrapped.error, '供应商原始错误')
+  assert.deepEqual(normalizeCreationTask('video', { id: 'job_1', status: 'indeterminate', error: { code: 'generation_outcome_unknown' } }),
+    { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '上游返回错误：generation_outcome_unknown' })
 })
 
 test('completed image/text results and protected OpenAI video media keep their actual outputs', () => {

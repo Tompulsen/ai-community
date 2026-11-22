@@ -47,7 +47,7 @@ async function fixture(page: Page) {
     const request = route.request(), path = new URL(request.url()).pathname
     if (path === '/api/creation/models') return route.fulfill({ json: { items: [
       { id: 'fixture-image', name: '图片测试模型', kinds: ['image'], protocol: 'openai' },
-      { id: 'fixture-video', name: '视频测试模型', kinds: ['video'], protocol: 'openai' },
+      { id: 'sora-2', name: '视频测试模型', kinds: ['video'], protocol: 'openai' },
       { id: 'fixture-text', name: '文本测试模型', kinds: ['text'], protocol: 'openai' },
     ] } })
     if (path === '/api/creation/media') return route.fulfill({ contentType: 'image/jpeg', body: image })
@@ -163,66 +163,136 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
   await expect(page.locator('.task-elapsed')).toHaveText(elapsed)
 })
 
-test('recovering an unknown request persists its task ID, can stop and only polls the original task', async ({ page }) => {
+test('an active video task keeps the existing generating status until the result arrives', async ({ page }, info) => {
   await fixture(page)
-  let submissions = 0, recoveries = 0, queries = 0
-  let release!: () => void
-  const pending = new Promise<void>(resolve => { release = resolve })
-  await page.route('**/api/creation/generate', route => { submissions++; return route.fulfill({ status: 503, json: { message: '连接中断' } }) })
+  let submissions = 0, queries = 0, taskQueries = 0, finished = false
+  await page.route('**/api/creation/generate', route => {
+    submissions++
+    return route.fulfill({ json: { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [] } })
+  })
+  await page.route('**/api/creation/tasks/video/waiting-video?*', route => {
+    taskQueries++
+    return route.fulfill({ json: finished
+      ? { status: 'succeeded', outputs: [{ url: 'https://media.example/video.mp4' }] }
+      : { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [] } })
+  })
   await page.route('**/api/creation/requests/**', route => {
-    recoveries++
-    return route.fulfill({ json: { status: 'pending', upstreamId: 'recovered-task', tokenId: 83, protocol: 'async', progress: 25, outputs: [] } })
-  })
-  await page.route('**/api/creation/tasks/image/recovered-task?*', async route => {
     queries++
-    expect(new URL(route.request().url()).searchParams.get('tokenId')).toBe('83')
-    if (queries === 1) await pending
-    await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/recovered.jpg' }] } }).catch(() => {})
+    return route.fulfill({ status: 404, json: { message: 'Unexpected recovery query' } })
   })
-  await page.goto('/create/image')
-  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('找回小猫图片')
+  await page.goto('/create/video')
+  await page.clock.install()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('缓慢动的画面，暖活的阳光照射')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('结果待确认')
-  await expect(page.locator('.task-status')).not.toHaveClass(/task-error/)
-  await expect(page.locator('.creation-response .task-message')).toHaveCount(0)
-  await expect(page.locator('.task-details')).not.toHaveAttribute('open')
-  await page.locator('.task-details summary').click()
-  await expect(page.locator('.task-details p')).toBeVisible()
-  await page.locator('.task-details summary').click()
-  await page.getByRole('button', { name: '查询结果', exact: true }).click()
-  try {
-    await expect.poll(() => queries).toBe(1)
-    await expect(page.getByRole('progressbar', { name: '模型返回的生成进度' })).toHaveAttribute('value', '25')
-    const saved = await nativeHistory(page)
-    expect(saved[0]).toMatchObject({ upstreamId: 'recovered-task', tokenId: 83, protocol: 'async' })
-    await page.getByRole('button', { name: '停止等待', exact: true }).click()
-    await expect(page.locator('.task-status')).toContainText('等待已暂停')
-  } finally { release() }
-  await page.getByRole('button', { name: '查询结果', exact: true }).click()
+  await expect.poll(() => submissions).toBe(1)
+  await expect.poll(() => taskQueries).toBeGreaterThan(0)
+  await page.clock.fastForward(385_000)
+  await expect(page.locator('.creation-response')).toContainText('正在生成视频')
+  await expect(page.locator('.task-elapsed')).toContainText('6m')
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  await expect(page.locator('.task-details')).toHaveCount(0)
+  await page.screenshot({ path: info.outputPath('video-waiting.png') })
+  finished = true
+  await page.clock.fastForward(5000)
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  expect({ submissions, recoveries, queries }).toEqual({ submissions: 1, recoveries: 1, queries: 2 })
+  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
 })
 
-test('stopping a recovery before its response cannot revive the task', async ({ page }) => {
+test('media request errors show their message without a manual query or an automatic retry', async ({ page }, info) => {
   await fixture(page)
-  let release!: () => void
-  const pending = new Promise<void>(resolve => { release = resolve })
-  let queries = 0
-  await page.route('**/api/creation/generate', route => route.fulfill({ status: 503, json: { message: '连接中断' } }))
-  await page.route('**/api/creation/requests/**', async route => {
-    await pending
-    await route.fulfill({ json: { status: 'pending', upstreamId: 'late-task', tokenId: 83, protocol: 'async', outputs: [] } }).catch(() => {})
+  let submissions = 0, queries = 0
+  await page.route('**/api/creation/generate', route => {
+    submissions++
+    return route.fulfill({ status: 400, json: { message: '当前模型不支持所选视频时长。' } })
   })
-  await page.route('**/api/creation/tasks/**', route => { queries++; return route.fulfill({ json: { status: 'succeeded', outputs: [] } }) })
+  await page.route('**/api/creation/requests/**', route => { queries++; return route.fulfill({ json: { status: 'succeeded', outputs: [] } }) })
   await page.goto('/create/image')
-  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('停止查询测试')
+  await page.clock.install()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('错误直接提示')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await page.getByRole('button', { name: '查询结果', exact: true }).click()
-  await page.getByRole('button', { name: '停止等待', exact: true }).click()
-  release()
-  await expect(page.locator('.task-status')).toContainText('结果待确认')
-  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toBeVisible()
-  expect(queries).toBe(0)
+  await expect(page.locator('.task-status')).toContainText('生成失败')
+  await expect(page.locator('.task-message')).toHaveText('当前模型不支持所选视频时长。')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  await expect(page.locator('.task-details')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toBeEnabled()
+  await page.clock.fastForward(20 * 60_000)
+  await expect(page.locator('.task-status')).toContainText('生成失败')
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`generation-error-${width}.png`) })
+  }
+  await page.reload()
+  await expect(page.locator('.task-message')).toHaveText('当前模型不支持所选视频时长。')
+  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
+})
+
+test('a lost submission response stops the timer and blocks duplicate generation even when its saved request returns 404', async ({ page }) => {
+  await fixture(page)
+  let submissions = 0, recoveries = 0, requestId = ''
+  await page.route('**/api/creation/generate', route => {
+    submissions++; requestId = route.request().postDataJSON().requestId
+    return route.abort('failed')
+  })
+  await page.route('**/api/creation/requests/**', route => {
+    recoveries++
+    expect(new URL(route.request().url()).pathname).toBe(`/api/creation/requests/${requestId}`)
+    return route.fulfill({ status: 404, json: { message: '没有找到此请求记录。' } })
+  })
+  await page.goto('/create/image')
+  await page.clock.install()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留原请求，避免重复付费')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('请求异常')
+  await expect(page.locator('.task-message')).toContainText('原请求可能已被受理')
+  await page.clock.fastForward(20 * 60_000)
+  await expect(page.locator('.task-elapsed')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 0 })
+  await page.reload()
+  await expect(page.locator('.task-message')).toContainText('没有找到此请求记录')
+  await expect(page.locator('.task-status')).toContainText('请求异常')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect((await nativeHistory(page))[0]).toMatchObject({ id: requestId, phase: 'attention' })
+  expect({ submissions, recoveries }).toEqual({ submissions: 1, recoveries: 1 })
+})
+
+test('a temporary video status error recovers the original task without another generation request', async ({ page }, info) => {
+  await fixture(page)
+  let submissions = 0, queries = 0
+  await page.route('**/api/creation/generate', route => {
+    submissions++
+    return route.fulfill({ json: { status: 'pending', upstreamId: 'recovering-video', tokenId: 83, protocol: 'openai', outputs: [] } })
+  })
+  await page.route('**/api/creation/tasks/video/recovering-video?*', route => {
+    queries++
+    expect(new URL(route.request().url()).searchParams.get('tokenId')).toBe('83')
+    return queries === 1
+      ? route.fulfill({ status: 502, json: { message: '任务状态暂时无法读取' } })
+      : route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/video.mp4' }] } })
+  })
+  await page.goto('/create/video')
+  await page.clock.install()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('短暂断线后继续原任务')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.task-status')).toContainText('请求异常')
+  await expect(page.locator('.task-message')).toContainText('任务状态暂时无法读取')
+  await expect(page.locator('.task-elapsed')).toHaveCount(0)
+  await expect(page.locator('.generation-button')).toBeDisabled()
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`video-status-error-${width}.png`) })
+  }
+  await page.clock.fastForward(5000)
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 2 })
 })
 
 test('completed requests support reuse, preview and a fresh draft without deleting history', async ({ page }) => {
@@ -302,19 +372,18 @@ test('a failed generation keeps its request and allows an explicit edited retry 
   expect((await new AxeBuilder({ page }).include('.native-studio').analyze()).violations).toEqual([])
 })
 
-test('switching accounts while recovering never displays the previous account result', async ({ page }) => {
+test('switching accounts while generating never displays the previous account result', async ({ page }) => {
   const state = await fixture(page)
   let release!: () => void
   const pending = new Promise<void>(resolve => { release = resolve })
-  await page.route('**/api/creation/generate', route => route.fulfill({ status: 503, json: { message: '连接中断' } }))
-  await page.route('**/api/creation/requests/**', async route => {
+  await page.route('**/api/creation/generate', async route => {
     await pending
     await route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/private.jpg' }] } }).catch(() => {})
   })
   await page.goto('/create/image')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('旧账号的私有创作')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await page.getByRole('button', { name: '查询结果', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
   try {
     state.state.user.id = '18'
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -342,9 +411,10 @@ test('native image generation uses the existing account, uploads references and 
   expect(generation.body).toMatchObject({ kind: 'image', model: 'fixture-image', n: 1 })
   expect(generation.body.referenceUrls).toEqual([expect.stringMatching(/^data:image\/jpeg;base64,/)])
   expect(await page.evaluate(async source => {
-    const image = await createImageBitmap(await (await fetch(source)).blob())
-    try { return image.width > 0 && image.height > 0 }
-    finally { image.close() }
+    const image = new Image()
+    image.src = source
+    await image.decode()
+    return image.naturalWidth > 0 && image.naturalHeight > 0
   }, (generation.body.referenceUrls as string[])[0]!)).toBe(true)
   expect(state.uploads()).toBe(0)
   expect(generation.body.requestId).toMatch(/^[a-f\d-]{36}$/)
@@ -383,12 +453,14 @@ test('asynchronous video waits can stop and recover with GET using the original 
       : { status: 'succeeded', upstreamId: 'upstream-video', tokenId: 83, protocol: 'async', mediaPath: 'videos/upstream-video/content', outputs: [] } })
   })
   await page.goto('/create/video')
-  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-video')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('sora-2')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('水母在深海发光')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => queries).toBe(1)
   await page.getByRole('button', { name: '停止等待', exact: true }).click()
-  await expect(page.locator('.task-details')).toContainText('上游任务可能仍在执行')
+  await expect(page.locator('.task-message')).toContainText('上游任务可能仍在执行')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEnabled()
   await page.reload()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(submissions).toBe(1)
@@ -421,8 +493,8 @@ test('a synchronous provider timeout ends the request without offering or sendin
   await expect(page.locator('.task-elapsed')).toHaveCount(0)
   await expect(page.locator('.task-message')).toContainText('504')
   await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toBeEnabled()
-  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '编辑后重试', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
   await page.clock.setFixedTime(new Date(Date.now() + 8 * 60 * 60 * 1000))
   await expect(page.locator('.task-status')).toContainText('请求超时')
   await expect(page.locator('.task-elapsed')).toHaveCount(0)
@@ -444,26 +516,24 @@ test('a synchronous provider timeout ends the request without offering or sendin
   await page.screenshot({ path: info.outputPath('provider-timeout-mobile.png') })
 })
 
-test('an uncertain paid request stays in history and is never automatically submitted again', async ({ page }) => {
+test('an unsuccessful media response stays in history without a query or an automatic submission', async ({ page }) => {
   await fixture(page)
-  let submissions = 0
+  let submissions = 0, queries = 0
   await page.route('**/api/creation/generate', route => {
     submissions++
-    return route.fulfill({ status: 503, json: { message: '上游响应中断' } })
+    return route.fulfill({ json: { status: 'indeterminate', outputs: [], error: '上游响应中断' } })
   })
+  await page.route('**/api/creation/requests/**', route => { queries++; return route.fulfill({ json: { status: 'indeterminate', outputs: [], error: '上游响应中断' } }) })
   await page.goto('/create/image')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留一次请求的记录')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('结果待确认')
-  await expect(page.locator('.task-details')).toContainText('请勿自动重复提交')
+  await expect(page.locator('.task-status')).toContainText('请求异常')
+  await expect(page.locator('.task-message')).toHaveText('上游响应中断')
+  await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
   await page.reload()
-  await expect(page.locator('.task-status')).toContainText('结果待确认')
-  expect(submissions).toBe(1)
-  let recoveries = 0
-  await page.route('**/api/creation/requests/**', route => { recoveries++; return route.fulfill({ json: { status: 'indeterminate', outputs: [] } }) })
-  await page.getByRole('button', { name: '查询结果', exact: true }).click()
-  await expect.poll(() => recoveries).toBe(1)
-  expect(submissions).toBe(1)
+  await expect(page.locator('.task-status')).toContainText('请求异常')
+  await expect(page.locator('.task-message')).toHaveText('上游响应中断')
+  expect({ submissions, queries }).toEqual({ submissions: 1, queries: 1 })
 })
 
 test('legacy tasks without the original token stay untouched while base64 image results still render', async ({ page }) => {
@@ -479,12 +549,12 @@ test('legacy tasks without the original token stay untouched while base64 image 
       id: 'missing-token', kind: 'image', model: 'fixture-image', prompt: '缺少原始令牌的旧任务', upstreamId: 'legacy-upstream', protocol: 'async',
     }))
     localStorage.setItem('octopus:user-17:task:custom-source', JSON.stringify({
-      id: 'custom-source', kind: 'video', model: 'fixture-video', prompt: '自定义接口的旧任务', upstreamId: 'custom-upstream', tokenId: 83, customApiBase: 'https://custom.example', protocol: 'openai',
+      id: 'custom-source', kind: 'video', model: 'sora-2', prompt: '自定义接口的旧任务', upstreamId: 'custom-upstream', tokenId: 83, customApiBase: 'https://custom.example', protocol: 'openai',
     }))
   })
   await page.goto('/create/image')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(1)
-  await expect(page.locator('.task-details')).toContainText('缺少原始令牌')
+  await expect(page.locator('.task-message')).toContainText('缺少原始令牌')
   expect(queries).toBe(0)
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '新对话', exact: true }).click()
@@ -607,6 +677,8 @@ test('legacy account-scoped gallery and video attachments remain readable withou
   await page.getByRole('button', { name: '视频生成', exact: true }).click()
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(201)
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="video"]')).toHaveCount(1)
+  await page.locator('.studio-sidebar').getByRole('button', { name: '旧视频提示词', exact: true }).click()
+  await expect(page.locator('.creation-media video')).toBeVisible()
   const videoUrl = new URL((await page.locator('.creation-media video').getAttribute('src'))!, page.url())
   expect(videoUrl.searchParams.get('url')).toBe('https://media.example/legacy-video.mp4')
   expect(videoUrl.searchParams.get('kind')).toBe('video')

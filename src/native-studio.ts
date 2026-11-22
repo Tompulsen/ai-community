@@ -4,18 +4,19 @@ import { accountApi, api, errorMessage, notify, session, uploadFile } from './st
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
 import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/options'
+import { modelApiFormatSchema, modelTypesSchema, type ModelApiFormat, type ModelTypeSetting } from '../shared/studio/model-types'
 import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatResponseMetrics } from '../shared/studio/types'
 import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { captureTaskSnapshot, deleteTaskRecords, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
+import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
 export type CreationDestination = 'community' | 'source-comment'
 export interface PublicationDetails { tagIds: string[]; prompt: string; sourceUrl: string; license: string; referenceIndices: number[] }
-export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; protocol?: 'openai' | 'sync' | 'async' }
+export interface CreationModel { id: string; name?: string; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
 export interface CreationTask {
@@ -31,6 +32,7 @@ export interface CreationTask {
   settledAt?: number
   phase: CreationPhase
   protocol: string
+  apiFormat?: Exclude<ModelApiFormat, 'auto'>
   upstreamId?: string
   tokenId?: number | null
   group?: string
@@ -52,7 +54,7 @@ export interface CreationTask {
   publicationFiles?: string[]
   publicationReferences?: string[]
   publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; details?: PublicationDetails; files?: string[]; work?: Work }>>
-  request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; protocol?: 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
+  request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
 }
@@ -70,6 +72,7 @@ export interface CreationInput {
   aspect_ratio: string
   n: number
   duration: number
+  apiFormat?: ModelApiFormat
   protocol?: string
   sourceWorkId?: string
   references?: CreationTask['references']
@@ -358,16 +361,19 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   const status = String(data.status || data.state || '').toLowerCase()
   if (typeof data.tokenId === 'number') task.tokenId = data.tokenId
   if (typeof data.protocol === 'string' && ['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(data.protocol)) task.protocol = data.protocol
+  const apiFormat = modelApiFormatSchema.safeParse(data.apiFormat).data
+  if (apiFormat && apiFormat !== 'auto') task.apiFormat = apiFormat
   const urls = resultUrls(data, task), text = resultText(data)
   const id = data.upstreamId || data.task_id || data.id || data.taskId
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
-  if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress <= 1 && progress > 0 ? progress * 100 : progress))
+  if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
   const detail = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
-    task.phase = 'attention'; task.error = `${detail ? detail + ' ' : ''}任务结果暂时无法确认，记录已保留，请先核对使用记录，避免重复生成。`
+    task.phase = 'attention'
+    task.error = task.kind === 'text' ? `${detail ? detail + ' ' : ''}任务结果暂时无法确认，记录已保留，请先核对使用记录，避免重复生成。` : detail || '生成服务未返回可读取的结果。'
     if (status === 'indeterminate' && creationRequestTimedOut(task)) {
-      task.phase = 'error'; task.error = `${detail} 本次请求已超时，未收到生成结果。扣费请核对账号使用记录，重试需手动发起。`
+      task.error = `${detail} 本次请求已超时，未收到生成结果。扣费请核对账号使用记录，勿重复提交。`
     }
     return true
   }
@@ -386,7 +392,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     return true
   }
   task.phase = task.upstreamId ? 'running' : 'attention'
-  if (task.phase === 'running') task.settledAt = undefined
+  if (task.phase === 'running') { task.settledAt = undefined; task.error = '' }
   if (!task.upstreamId) task.error = '未收到可恢复的任务编号，请核对账号使用记录，勿重复提交。'
   return !task.upstreamId
 }
@@ -399,19 +405,72 @@ function delay(signal: AbortSignal, duration: number) {
     if (signal.aborted) abort()
   })
 }
+// Waiting between polls must leave capacity for every restored task.
+let activeTaskQueries = 0
+const waitingTaskQueries: (() => void)[] = []
+async function queryCreationTask(path: string, task: CreationTask, controller: AbortController, version: number) {
+  const signal = controller.signal
+  const check = () => {
+    if (signal.aborted || epoch !== version || task.owner !== activeOwner()) throw new DOMException('Stopped', 'AbortError')
+  }
+  check()
+  if (activeTaskQueries >= 4) await new Promise<void>((resolve, reject) => {
+    const start = () => { signal.removeEventListener('abort', abort); resolve() }
+    const abort = () => {
+      const index = waitingTaskQueries.indexOf(start)
+      if (index !== -1) waitingTaskQueries.splice(index, 1)
+      reject(new DOMException('Stopped', 'AbortError'))
+    }
+    waitingTaskQueries.push(start)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+  })
+  else activeTaskQueries++
+  try {
+    check()
+    return await api<unknown>(path, { signal: AbortSignal.any([signal, AbortSignal.timeout(65000)]) })
+  } finally {
+    const next = waitingTaskQueries.shift()
+    if (next) next()
+    else activeTaskQueries--
+  }
+}
+function taskRetryDelay(value: unknown, minimum: number) {
+  if (typeof value !== 'string' || !value.trim()) return minimum
+  const seconds = Number(value)
+  const duration = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now()
+  return Number.isFinite(duration) ? Math.max(minimum, duration) : minimum
+}
 async function poll(task: CreationTask, controller: AbortController, version: number) {
   const deadline = Date.now() + (task.kind === 'video' ? 2 * 60 * 60_000 : 30 * 60_000)
+  let failures = 0, rateLimited = 0
   while (!controller.signal.aborted && epoch === version && Date.now() < deadline) {
     const query = new URLSearchParams({ protocol: task.protocol })
     if (task.tokenId != null) query.set('tokenId', String(task.tokenId))
-    const data = await api<unknown>(`/api/creation/tasks/${task.kind}/${encodeURIComponent(task.upstreamId!)}?${query}`, { signal: controller.signal })
+    let data: unknown
+    try {
+      data = await queryCreationTask(`/api/creation/tasks/${task.kind}/${encodeURIComponent(task.upstreamId!)}?${query}`, task, controller, version)
+      failures = 0; rateLimited = 0
+    } catch (error) {
+      if (epoch !== version || controller.signal.aborted) return
+      task.phase = 'attention'; task.settledAt = Date.now(); task.error = errorMessage(error)
+      await persist()
+      const status = record(error) ? error.status : undefined
+      let wait = 5000
+      if (status === 429) {
+        failures = 0
+        wait = taskRetryDelay(record(error) ? error.retryAfter : undefined, Math.min(60000, 5000 * 2 ** Math.min(rateLimited++, 4)))
+      } else if (++failures >= 3 || typeof status === 'number' && status < 500) return
+      await delay(controller.signal, Math.min(wait, Math.max(0, deadline - Date.now())))
+      continue
+    }
     if (epoch !== version || controller.signal.aborted) return
     const finished = applyResult(task, data)
     await persist()
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
     await delay(controller.signal, 5000)
   }
-  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，任务记录已保留，可继续查询。'; await persist() }
+  if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，已停止等待，任务记录已保留。'; await persist() }
 }
 export function loadCreationModels(): Promise<void> {
   if (!session.user) return Promise.resolve()
@@ -422,7 +481,16 @@ export function loadCreationModels(): Promise<void> {
   modelRead = (async () => { try {
     const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models', { signal: AbortSignal.timeout(20000) })
     if (version !== epoch || revision !== modelRevision || group !== creation.selectedGroup) return
-    creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string')
+    creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string').map(item => {
+      const { id, name, description, provider, kinds, configuredKind } = item
+      const kind = configuredKind || kinds?.[0]
+      const setting = modelTypesSchema.safeParse([{ id, kind, apiFormat: item.apiFormat,
+        ...(kind === 'text' ? {} : { protocol: item.protocol === 'openai' ? 'sync' : item.protocol }),
+        image: item.image, text: item.text, video: item.video }]).data?.[0]
+      return { id, name, description, provider, kinds, configuredKind, ...(setting ? {
+        apiFormat: setting.apiFormat, protocol: setting.protocol, image: setting.image, text: setting.text, video: setting.video,
+      } : {}) }
+    })
     creation.modelTokenId = Number.isSafeInteger(result.tokenId) && result.tokenId! > 0 ? result.tokenId! : null
   } catch (error) {
     if (version === epoch && revision === modelRevision && group === creation.selectedGroup) {
@@ -477,7 +545,7 @@ export function selectCreationGroup(group: string): Promise<void> {
 }
 export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
-  if (creationRequestTimedOut(task)) { task.phase = 'error'; await persist(); return }
+  if (creationRequestTimedOut(task)) return
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
@@ -485,7 +553,7 @@ export async function resumeCreation(task: CreationTask) {
   controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.settledAt = undefined
   try {
     if (!task.upstreamId) {
-      const data = await api<unknown>(`/api/creation/requests/${encodeURIComponent(task.id)}`, { signal: controller.signal })
+      const data = await queryCreationTask(`/api/creation/requests/${encodeURIComponent(task.id)}`, task, controller, version)
       if (epoch !== version || controller.signal.aborted) return
       const finished = applyResult(task, data)
       await persist()
@@ -494,7 +562,11 @@ export async function resumeCreation(task: CreationTask) {
     await poll(task, controller, version)
   }
   catch (error) {
-    if (epoch === version) { task.phase = task.upstreamId ? 'paused' : 'attention'; task.settledAt ??= Date.now(); task.error = controller.signal.aborted ? '已停止本页等待，上游任务可能仍在执行。' : errorMessage(error); await persist() }
+    if (epoch === version) {
+      task.phase = (task.kind === 'text' ? task.upstreamId : controller.signal.aborted) ? 'paused' : 'attention'
+      task.settledAt ??= Date.now(); task.error = controller.signal.aborted ? '已停止本页等待，上游任务可能仍在执行。' : errorMessage(error)
+      await persist()
+    }
   } finally { if (controllers.get(task.id) === controller) controllers.delete(task.id) }
 }
 export function stopCreation(task: CreationTask) {
@@ -513,7 +585,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
   input = JSON.parse(JSON.stringify(input)) as CreationInput
-  normalizeImageRequest(input)
+  if (input.apiFormat !== 'auto') normalizeImageRequest(input, input.apiFormat)
   if (input.mediaBranch) {
     const { mediaBranchTask } = await import('./studio-conversations')
     if (input.kind === 'text' || !mediaBranchTask(input.kind, input.conversationId, input.mediaBranch.taskId))
@@ -531,17 +603,21 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   }
   if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 27 * 1024 ** 2) throw new Error('图片和对话上下文超过请求大小上限，请清除上下文或减少参考图。')
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
+  if (input.kind !== 'text' && input.conversationId && creation.tasks.some(task => task.owner === acceptedOwner
+    && creationConversationId(task) === input.conversationId && (controllers.has(task.id) || ['submitting', 'running', 'paused', 'attention'].includes(task.phase))))
+    throw new Error('原请求尚未结束，请保留记录，勿重复提交生成。')
   const id = crypto.randomUUID()
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
     id, conversationId: previous ? creationConversationId(previous) : validId(input.conversationId) ? input.conversationId : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
-    createdAt: Date.now(), phase: 'submitting', protocol: input.protocol || 'openai', urls: [], text: '',
+    createdAt: Date.now(), phase: 'submitting', protocol: input.protocol === 'auto' ? 'openai' : input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
     ...(input.mediaBranch ? { mediaBranch: input.mediaBranch } : {}),
     ...(input.kind !== 'text' && !mediaSettings.autoSaveGallery ? { galleryHidden: true } : {}),
     ...(input.kind !== 'text' && onUpdate ? { conversationPending: true } : {}),
     request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
-      protocol: input.protocol === 'async' ? 'async' : 'openai',
+      protocol: input.protocol === 'auto' || input.protocol === 'sync' || input.protocol === 'async' ? input.protocol : 'openai',
+      ...(input.apiFormat ? { apiFormat: input.apiFormat } : {}),
       ...(input.imageOptions ? { imageOptions: JSON.parse(JSON.stringify(input.imageOptions)) } : {}),
       ...(input.videoOptions ? { videoOptions: JSON.parse(JSON.stringify(input.videoOptions)) } : {}),
       ...(input.chatOptions ? { chatOptions: JSON.parse(JSON.stringify(input.chatOptions)) } : {}) },
@@ -623,9 +699,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   } catch (error) {
     if (epoch === version) {
       const notAccepted = record(error) && error.notAccepted === true
-      task.phase = notAccepted ? 'error' : task.upstreamId ? 'paused' : 'attention'
+      task.phase = notAccepted ? 'error' : task.kind === 'text' && task.upstreamId ? 'paused' : 'attention'
+      if (controller.signal.aborted && task.kind !== 'text') task.phase = 'paused'
       task.settledAt ??= Date.now()
-      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : notAccepted ? errorMessage(error) : `${errorMessage(error)} 任务记录已保留，请勿自动重复提交。`
+      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : notAccepted ? errorMessage(error) : `${errorMessage(error)} 原请求可能已被受理，请勿重复提交。`
     }
   } finally {
     if (epoch === version) await persist()
@@ -660,7 +737,7 @@ async function importLegacy(version: number) {
       tokenId: typeof task.tokenId === 'number' ? task.tokenId : null, createdAt: Number(task.createdAt) || Date.now(),
       urls: [], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 },
       customApiBase: typeof task.customApiBase === 'string' ? task.customApiBase : undefined,
-      error: '历史任务已保留，可继续查询；不会重新提交生成。',
+      error: '历史任务记录已保留。',
     })
   }
   const snapshotKey = prefix + 'video-workspace-results'
@@ -687,7 +764,7 @@ async function importLegacy(version: number) {
         const mediaId = /^(?:videos|tasks)\/([A-Za-z0-9_-]+)\//.exec(value.mediaPath)?.[1]
         if (!task.upstreamId && mediaId) task.upstreamId = mediaId
         task.phase = task.upstreamId ? 'paused' : 'attention'
-        task.error = task.upstreamId ? '正在恢复历史视频，可继续查询原任务。' : '历史视频记录已保留，请先核对原任务。'
+        task.error = task.upstreamId ? '正在恢复历史视频。' : '历史视频记录已保留，请先核对原任务。'
       } else { task.urls = [url]; task.phase = 'complete'; task.error = '' }
     }
     else if (value.status === 'failed') { task.phase = 'error'; task.error = typeof value.error === 'string' ? value.error : '历史生成未成功完成。' }
@@ -752,7 +829,8 @@ export function initializeCreation() {
     if (version !== epoch) return
     creation.tasks = Array.isArray(stored) ? stored.filter(validTask).filter(task => task.owner === owner).map(task => ({
       ...task, conversationId: validId(task.conversationId) ? task.conversationId : undefined,
-      phase: ['attention', 'paused'].includes(task.phase) && creationRequestTimedOut(task) ? 'error' : task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
+      phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
+      error: task.kind !== 'text' && task.phase === 'submitting' ? task.error || '上次生成请求已中断。' : task.error,
       localSave: task.localSave?.state === 'saving' ? { ...task.localSave, state: 'failed', error: '上次下载准备已中断，可重试保存剩余文件。' } : task.localSave,
     })) : []
     if (saved === undefined) await importLegacy(version)
@@ -760,7 +838,8 @@ export function initializeCreation() {
     creation.loaded = true
     creation.selectedId = creation.tasks[0]?.id || ''
     await persist()
-    for (const task of creation.tasks.filter(item => item.upstreamId && item.phase === 'paused' && !item.customApiBase && (!item.legacy || item.tokenId != null)).slice(0, 4)) void resumeCreation(task)
+    for (const task of creation.tasks.filter(item => (item.upstreamId && item.phase === 'paused' || ['paused', 'attention'].includes(item.phase) && item.kind !== 'text' && !item.legacy)
+      && !item.customApiBase && (!item.legacy || item.tokenId != null))) void resumeCreation(task)
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting
 }
@@ -889,9 +968,14 @@ async function preparePublication(task: CreationTask, title: string, destination
   const files = task.kind === 'text' ? publication.files ??= [...(task.publicationFiles || [])] : task.publicationFiles ??= []
   await persist(true); checkOwner()
   async function uploadMedia(url: string, kind: CreationKind, name: string) {
-    const response = await fetch(await readableMedia(url, kind), { credentials: 'same-origin' })
-    if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
-    const blob = await response.blob()
+    const source = await readableMedia(url, kind)
+    let blob = await imageBlob(source)
+    if (!blob) {
+      if (source.startsWith('data:')) throw new Error('作品文件格式无效，请重新获取生成结果。')
+      const response = await fetch(source, { credentials: 'same-origin' })
+      if (!response.ok) throw new Error('生成文件读取失败，请稍后重试。')
+      blob = await response.blob()
+    }
     checkOwner()
     if (!blob.size || !blob.type.startsWith(`${kind}/`)) throw new Error('作品文件格式无效，请重新获取生成结果。')
     const extension = blob.type.split('/')[1]!.split(';')[0]!.replace(/[^a-z0-9]/g, '')
@@ -922,7 +1006,7 @@ async function preparePublication(task: CreationTask, title: string, destination
     ...(publication.details ? { sourceUrl: publication.details.sourceUrl, license: publication.details.license } : {}),
     model: task.model, generation: { prompt: publication.details?.prompt ?? task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
       parameters: task.legacy ? undefined : readRemixParameters({ version: 1, kind: task.kind, group: task.group,
-        ...(task.kind === 'image' && usesGeminiImageChat(task.model) ? { protocol: task.request.protocol, n: task.request.n } : task.request) }) },
+        ...(task.kind === 'image' && usesGeminiImageChat(task.model, task.apiFormat ?? (task.request.apiFormat === 'auto' ? undefined : task.request.apiFormat)) ? { protocol: task.request.protocol, apiFormat: task.request.apiFormat, n: task.request.n } : task.request) }) },
     fileIds: files, ...(publication.details ? { tagIds: publication.details.tagIds } : { tags: [] }), status: 'pending', destination,
     requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })

@@ -83,7 +83,7 @@ export function taskAssetUrl(taskId: string, index: number | 'preview') {
 function assetKey(url: string) {
   return /^studio-asset:([A-Za-z0-9_-]{1,200}):(\d{1,4}|preview)$/.exec(url)
 }
-async function imageBlob(url: string) {
+export async function imageBlob(url: string) {
   const match = /^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url)
   if (!match) return
   const raw = atob(match[2]!.replace(/[\r\n]/g, '')), bytes = new Uint8Array(raw.length)

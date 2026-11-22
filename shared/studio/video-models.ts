@@ -17,6 +17,17 @@ export const VIDEO_MODEL_PROFILES: VideoModelProfile[] = [
     resolutions: ["720p"],
     durations: { min: 4, max: 15 },
   },
+  // These aliases reuse the working workbench range; the gateway validates provider support.
+  {
+    models: ["sd2.0-fast-480p", "sd2.0-mini-480p"],
+    resolutions: ["480p"],
+    durations: { min: 3, max: 30 },
+  },
+  {
+    models: ["sd2.0-fast-720p"],
+    resolutions: ["720p"],
+    durations: { min: 3, max: 30 },
+  },
   {
     models: ["wan3.0"],
     resolutions: ["720p", "1080p"],

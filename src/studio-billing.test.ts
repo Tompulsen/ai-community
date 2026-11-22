@@ -19,6 +19,10 @@ describe('invocation points', () => {
     expect(invocationPoints([expression], '积分', { ...input, model: 'gemini-2.5-flash-image', quantity: 1 })).toEqual({ min: 150, max: 150 })
     expect(invocationPoints([row], '积分', { ...input, kind: 'text' })).toEqual({ min: 150, max: 150 })
   })
+  it('uses the configured image interface when an alias disagrees with name recognition', () => {
+    expect(invocationPoints([row], '积分', { ...input, apiFormat: 'chat-completions' })).toBeUndefined()
+    expect(invocationPoints([row], '积分', { ...input, model: 'gemini-2.5-flash-image', apiFormat: 'images' })).toEqual({ min: 450, max: 450 })
+  })
   it('shows the complete auto range and refuses partial ranges with an unknown candidate', () => {
     expect(invocationPoints([row, { ...row, group: 'default', requestPrice: 50 }], '积分', input)).toEqual({ min: 150, max: 450 })
     expect(invocationPoints([row, { ...row, requestPrice: undefined }], '积分', input)).toBeUndefined()

@@ -46,6 +46,15 @@ it('isolates preferences by account and token and restores them for the original
   p.session.user = { id: 'creator-a', accountId: '17' } as any
   expect(p.favoriteModel('alias')).toBe(true); expect(p.modelFormat('alias')).toBe('responses')
 })
+it('reads configured chat formats without treating image formats as chat overrides', async () => {
+  const p = await fixture()
+  p.creation.models = [{ id: 'alias', apiFormat: 'responses' }, { id: 'image', apiFormat: 'images' }]
+  expect(p.configuredModelFormat('alias')).toBe('responses')
+  expect(p.configuredModelFormat('image')).toBeUndefined()
+  p.setModelFormat('alias', 'claude')
+  expect(p.modelFormat('alias')).toBe('claude')
+  expect(p.configuredModelFormat('alias')).toBe('responses')
+})
 it('uses group aliases but explicit overrides win and can be reset', async () => {
   const p = await fixture()
   p.creation.selectedGroup = '生图'

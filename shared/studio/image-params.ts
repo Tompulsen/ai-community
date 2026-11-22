@@ -1,11 +1,13 @@
 import type { DalleQuality } from "./types.ts";
 import type { ModelConfig } from "./types.ts";
-export function usesGeminiImageChat(model: string) {
+export function usesGeminiImageChat(model: string, apiFormat?: string) {
+  if (apiFormat === "images") return false;
+  if (apiFormat === "chat-completions") return true;
   return /^gemini-(?:.*-)?(?:image|nano-banana)(?:-|$)/.test(model.toLowerCase().split("/").pop() ?? "");
 }
 
-export function normalizeImageRequest(input: { kind: string; model: string; size?: string; exactSize?: boolean; imageOptions?: { seed?: string } }) {
-  if (input.kind !== 'image' || !usesGeminiImageChat(input.model)) return;
+export function normalizeImageRequest(input: { kind: string; model: string; size?: string; exactSize?: boolean; apiFormat?: string; imageOptions?: { seed?: string } }, apiFormat = input.apiFormat) {
+  if (input.kind !== 'image' || !usesGeminiImageChat(input.model, apiFormat)) return;
   // The chat transport omits these Images-only settings, including inherited remix values.
   input.size = 'auto';
   delete input.exactSize;
@@ -198,8 +200,9 @@ export function imageRequestSize(
   size?: string,
   resolution?: string,
   model = "",
+  apiFormat?: string,
 ) {
-  if (usesGeminiImageChat(model)) return "auto";
+  if (usesGeminiImageChat(model, apiFormat)) return "auto";
   const ratio = imageRatio(size);
   const tier = imageResolution(resolution);
   const [width, height] = (ratio === "auto" ? "1:1" : ratio)

@@ -19,6 +19,14 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('real API state', () => {
+  it.each(['9', 'Sun, 22 Nov 2026 04:00:09 GMT'])('preserves task-query Retry-After as received (%s)', async retryAfter => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: 'Task query rate limited' }), {
+      status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': retryAfter },
+    }))
+    const { api } = await import('./state')
+    await expect(api('/api/creation/tasks/video/original-task')).rejects.toMatchObject({ status: 429, retryAfter })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
   it.each([['90', 90], ['invalid', undefined]])('preserves registration throttling without retrying or signing in (%s)', async (header, retryAfter) => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: false, message: '请稍后重试。' }), {
       status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': header as string },

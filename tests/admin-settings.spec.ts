@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { defaultLotterySettings } from '../server/business/lottery'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import type { ModelTypeSetting } from '../shared/studio/model-types'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3YQAAAAASUVORK5CYII=', 'base64')
 async function adminFixture(page: Page) {
@@ -11,7 +12,7 @@ async function adminFixture(page: Page) {
   const state = {
     settings: { brand: '旧站点名称', logoUrl: '', registrationOpen: false, defaultModels: { image: 'kept-model' } },
     config: { communityPublicationMode: 'before', communityAutoBanEnabled: true, communityViolationThreshold: 3,
-      communityModelTypes: [] as { id: string; kind: string }[],
+      communityModelTypes: [] as ModelTypeSetting[],
       communityFeedMode: 'shuffle', communityFeedPoolSize: 200, communityPullToRefresh: true,
       communityFeedWeights: { interest: 60, fresh: 25, explore: 15 },
       uploadLimits: { image: 20, video: 100, audio: 20, document: 20, other: 10 } },
@@ -129,7 +130,7 @@ test('site settings remain usable on desktop and narrow phones', async ({ page }
   }
 })
 
-test('administrators configure model types, retain invalid drafts and save or remove them on desktop and phones', async ({ page }) => {
+test('administrators configure model types, retain invalid drafts and save or remove them on desktop and phones', async ({ page }, info) => {
   const fixture = await adminFixture(page)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -155,12 +156,311 @@ test('administrators configure model types, retain invalid drafts and save or re
     await page.getByLabel('模型 ID 1', { exact: true }).scrollIntoViewIfNeeded()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await expect(page.getByRole('combobox', { name: '类型 1', exact: true })).toBeVisible()
-    await page.screenshot({ path: `.taste-skill/model-types-20261115/admin-${width}.png`, fullPage: true })
+    await page.screenshot({ path: info.outputPath(`model-types-${width}.png`), fullPage: true })
   }
   await page.getByRole('button', { name: '删除模型类型 1', exact: true }).click()
   await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
   await expect.poll(() => fixture.state.config.communityModelTypes).toEqual([{ id: '自定义视频模型', kind: 'video' }])
   expect(errors).toEqual([])
+})
+
+test('administrators save video resolutions, restore them and clear optional or non-video settings', async ({ page }, info) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'custom/video', kind: 'video' }]
+  await page.goto('/admin?tab=settings')
+  const automatic = page.getByLabel('自动分辨率 1', { exact: true })
+  const resolutions = page.getByLabel('可选分辨率 1', { exact: true })
+  await expect(automatic).toBeVisible()
+  await automatic.fill('720p')
+  await resolutions.fill('480p 720p, 1080p')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(1)
+  expect(fixture.writes[0]!.body).toMatchObject({ version: 'version-1', communityModelTypes: [
+    { id: 'custom/video', kind: 'video', video: { autoResolution: '720p', resolutions: ['480p', '720p', '1080p'] } },
+  ] })
+  expect(fixture.writes[0]!.body.communityModelTypes[0]).not.toHaveProperty('resolutionInput')
+  await page.reload()
+  await expect(automatic).toHaveValue('720p')
+  await expect(resolutions).toHaveValue('480p, 720p, 1080p')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await automatic.scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect(await page.locator('.model-type-row').evaluate(element => [...element.querySelectorAll('input,select,button')].every(control => {
+      const bounds = control.getBoundingClientRect()
+      return bounds.left >= 0 && bounds.right <= innerWidth && bounds.width > 0
+    }))).toBe(true)
+    await page.screenshot({ path: info.outputPath(`video-resolutions-${width}.png`), fullPage: true })
+  }
+  await automatic.fill('')
+  await resolutions.fill('')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(2)
+  expect(fixture.writes[1]!.body).toMatchObject({ version: 'version-2', communityModelTypes: [{ id: 'custom/video', kind: 'video' }] })
+  expect(fixture.writes[1]!.body.communityModelTypes[0]).not.toHaveProperty('video')
+  await automatic.fill('480p')
+  await resolutions.fill('480p, 720p')
+  await page.getByRole('combobox', { name: '类型 1', exact: true }).selectOption('image')
+  await expect(automatic).toHaveCount(0)
+  await expect(resolutions).toHaveCount(0)
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(3)
+  expect(fixture.writes[2]!.body).toMatchObject({ version: 'version-3', communityModelTypes: [{ id: 'custom/video', kind: 'image' }] })
+  expect(fixture.writes[2]!.body.communityModelTypes[0]).not.toHaveProperty('video')
+})
+
+test('invalid video resolution drafts stay editable and send no configuration patch', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'custom/video', kind: 'video' }]
+  await page.goto('/admin?tab=settings')
+  const automatic = page.getByLabel('自动分辨率 1', { exact: true })
+  const resolutions = page.getByLabel('可选分辨率 1', { exact: true })
+  await expect(automatic).toBeVisible()
+  for (const [value, list] of [
+    ['invalid', '480p, 720p'],
+    ['1080p', '480p, 720p'],
+    ['auto', '480p, 480p'],
+    ['auto', '720p, invalid'],
+    ['auto', Array.from({ length: 17 }, (_, index) => `${100 + index}p`).join(', ')],
+    ['auto', ', ,'],
+  ]) {
+    await automatic.fill(value!)
+    await resolutions.fill(list!)
+    await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+    await expect(page.getByRole('alert')).toContainText('视频分辨率')
+    await expect(automatic).toHaveValue(value!)
+    await expect(resolutions).toHaveValue(list!)
+    expect(fixture.writes).toHaveLength(0)
+  }
+  await automatic.fill('540p')
+  await resolutions.fill('480p，540p 720p')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(1)
+  expect(fixture.state.config.communityModelTypes).toEqual([
+    { id: 'custom/video', kind: 'video', video: { autoResolution: '540p', resolutions: ['480p', '540p', '720p'] } },
+  ])
+})
+
+test('administrators configure model interfaces, automatic parameters and private remarks with responsive controls', async ({ page }, info) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [
+    { id: 'custom/text', kind: 'text' },
+    { id: 'custom/image', kind: 'image' },
+    { id: 'custom/video', kind: 'video' },
+  ]
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/admin?tab=settings')
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('responses')
+  await page.getByRole('combobox', { name: '自动推理强度 1', exact: true }).selectOption('high')
+  await page.getByLabel('备注 1', { exact: true }).fill('仅供管理员查看\n对话模型')
+  await page.getByRole('combobox', { name: '接口格式 2', exact: true }).selectOption('images')
+  await page.getByRole('combobox', { name: '任务协议 2', exact: true }).selectOption('async')
+  await page.getByRole('combobox', { name: '自动分辨率 2', exact: true }).selectOption('2k')
+  await page.getByRole('combobox', { name: '自动画质 2', exact: true }).selectOption('high')
+  await page.getByLabel('自动画面比例 2', { exact: true }).fill(' 3:2 ')
+  await page.getByRole('combobox', { name: '自动背景 2', exact: true }).selectOption('transparent')
+  await page.getByLabel('备注 2', { exact: true }).fill('图片接口')
+  await page.getByRole('combobox', { name: '接口格式 3', exact: true }).selectOption('openai')
+  await page.getByRole('combobox', { name: '任务协议 3', exact: true }).selectOption('sync')
+  await page.getByLabel('自动分辨率 3', { exact: true }).fill('720P')
+  await page.getByLabel('可选分辨率 3', { exact: true }).fill('480p，720p 1080p')
+  await page.getByLabel('自动画面比例 3', { exact: true }).fill('16:9')
+  await page.getByRole('combobox', { name: '视频参数格式 3', exact: true }).selectOption('seedance')
+  await page.getByLabel('备注 3', { exact: true }).fill('视频参数由后台统一设置')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  const expected: ModelTypeSetting[] = [
+    { id: 'custom/text', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: '仅供管理员查看\n对话模型' },
+    { id: 'custom/image', kind: 'image', apiFormat: 'images', protocol: 'async', image: {
+      autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '3:2', autoBackground: 'transparent',
+    }, remark: '图片接口' },
+    { id: 'custom/video', kind: 'video', apiFormat: 'openai', protocol: 'sync', video: {
+      autoResolution: '720p', resolutions: ['480p', '720p', '1080p'], autoAspectRatio: '16:9', parameterFormat: 'seedance',
+    }, remark: '视频参数由后台统一设置' },
+  ]
+  await expect.poll(() => fixture.state.config.communityModelTypes).toEqual(expected)
+  expect(fixture.writes[0]!.body.version).toBe('version-1')
+  expect(fixture.writes[0]!.body.communityModelTypes.every((item: Record<string, unknown>) => !('resolutionInput' in item))).toBe(true)
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: '接口格式 1', exact: true })).toHaveValue('responses')
+  await expect(page.getByRole('combobox', { name: '自动推理强度 1', exact: true })).toHaveValue('high')
+  await expect(page.getByLabel('备注 1', { exact: true })).toHaveValue('仅供管理员查看\n对话模型')
+  await expect(page.getByRole('combobox', { name: '任务协议 2', exact: true })).toHaveValue('async')
+  await expect(page.getByRole('combobox', { name: '自动分辨率 2', exact: true })).toHaveValue('2k')
+  await expect(page.getByRole('combobox', { name: '自动画质 2', exact: true })).toHaveValue('high')
+  await expect(page.getByLabel('自动画面比例 2', { exact: true })).toHaveValue('3:2')
+  await expect(page.getByRole('combobox', { name: '自动背景 2', exact: true })).toHaveValue('transparent')
+  await expect(page.getByRole('combobox', { name: '视频参数格式 3', exact: true })).toHaveValue('seedance')
+  await expect(page.getByLabel('可选分辨率 3', { exact: true })).toHaveValue('480p, 720p, 1080p')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await page.getByLabel('模型 ID 1', { exact: true }).scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect(await page.locator('.model-type-row').evaluateAll(elements => elements.every(element =>
+      [...element.querySelectorAll('input,select,textarea,button')].every(control => {
+        const bounds = control.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= innerWidth && bounds.width > 0
+      })))).toBe(true)
+    await page.screenshot({ path: info.outputPath(`model-settings-${width}.png`), fullPage: true })
+  }
+  expect(errors).toEqual([])
+})
+
+test('model automatic selections can clear every override without filling missing defaults', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [
+    { id: 'custom/text', kind: 'text', apiFormat: 'claude', text: { autoReasoningEffort: 'max' }, remark: '清除此备注' },
+    { id: 'custom/image', kind: 'image', apiFormat: 'images', protocol: 'async', image: {
+      autoResolution: '4k', autoQuality: 'max', autoAspectRatio: '1:1', autoBackground: 'opaque',
+    } },
+    { id: 'custom/video', kind: 'video', apiFormat: 'openai', protocol: 'sync', video: {
+      autoResolution: '1080p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai',
+    } },
+  ]
+  await page.goto('/admin?tab=settings')
+  for (const label of ['接口格式 1', '自动推理强度 1', '接口格式 2', '任务协议 2', '自动分辨率 2',
+    '自动画质 2', '自动背景 2', '接口格式 3', '任务协议 3', '视频参数格式 3']) {
+    await page.getByRole('combobox', { name: label, exact: true }).selectOption('auto')
+  }
+  for (const label of ['备注 1', '自动画面比例 2', '自动分辨率 3', '可选分辨率 3', '自动画面比例 3']) {
+    await page.getByLabel(label, { exact: true }).fill('')
+  }
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.state.config.communityModelTypes).toEqual([
+    { id: 'custom/text', kind: 'text' }, { id: 'custom/image', kind: 'image' }, { id: 'custom/video', kind: 'video' },
+  ])
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: '接口格式 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '自动分辨率 2', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '自动推理强度 1', exact: true })).toHaveValue('auto')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(2)
+  expect(fixture.writes[1]!.body.communityModelTypes).toEqual(fixture.writes[0]!.body.communityModelTypes)
+})
+
+test('changing model interfaces and kinds clears incompatible settings while retaining remarks', async ({ page }, info) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'custom/model', kind: 'image', apiFormat: 'images', protocol: 'async',
+    image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '3:2', autoBackground: 'transparent' }, remark: '保留此模型备注' }]
+  await page.goto('/admin?tab=settings')
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('chat-completions')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true }).locator('option[value="auto"]')).toHaveText('沿用默认')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true }).locator('option[value="async"]')).toBeDisabled()
+  const parameters = page.getByRole('group', { name: '图片自动参数 1', exact: true })
+  await expect(parameters).toHaveAttribute('disabled', '')
+  for (const name of ['自动分辨率 1', '自动画质 1', '自动背景 1']) {
+    await expect(page.getByRole('combobox', { name, exact: true })).toBeDisabled()
+  }
+  await expect(page.getByLabel('自动画面比例 1', { exact: true })).toBeDisabled()
+  const notice = page.getByText('图片对话接口的尺寸、画质和背景由上游决定。', { exact: true })
+  await expect(notice).toBeVisible()
+  await expect(page.getByLabel('备注 1', { exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.state.config.communityModelTypes[0]?.image).toEqual({
+    autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '3:2', autoBackground: 'transparent',
+  })
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('images')
+  await expect(parameters).not.toHaveAttribute('disabled')
+  await expect(notice).toHaveCount(0)
+  await page.getByRole('combobox', { name: '任务协议 1', exact: true }).selectOption('async')
+  await page.getByLabel('模型 ID 1', { exact: true }).fill('gemini-2.5-flash-image')
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('auto')
+  await expect(parameters).toHaveAttribute('disabled', '')
+  await expect(notice).toBeVisible()
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true }).locator('option[value="async"]')).toBeDisabled()
+  await page.setViewportSize({ width: 320, height: 1000 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('image-chat-parameters-320.png'), fullPage: true })
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('images')
+  await expect(parameters).not.toHaveAttribute('disabled')
+  await expect(notice).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true }).locator('option[value="async"]')).toBeEnabled()
+  await expect(page.getByRole('combobox', { name: '自动分辨率 1', exact: true })).toHaveValue('2k')
+  await expect(page.getByRole('combobox', { name: '自动画质 1', exact: true })).toHaveValue('high')
+  await expect(page.getByLabel('自动画面比例 1', { exact: true })).toHaveValue('3:2')
+  await expect(page.getByRole('combobox', { name: '自动背景 1', exact: true })).toHaveValue('transparent')
+  await page.getByLabel('模型 ID 1', { exact: true }).fill('custom/model')
+  await page.getByRole('combobox', { name: '任务协议 1', exact: true }).selectOption('sync')
+  await page.getByRole('combobox', { name: '类型 1', exact: true }).selectOption('video')
+  await expect(page.getByRole('combobox', { name: '接口格式 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true })).toHaveValue('sync')
+  await expect(page.getByRole('combobox', { name: '自动画质 1', exact: true })).toHaveCount(0)
+  await page.getByLabel('自动分辨率 1', { exact: true }).fill('720p')
+  await page.getByRole('combobox', { name: '视频参数格式 1', exact: true }).selectOption('seedance')
+  await page.getByRole('combobox', { name: '类型 1', exact: true }).selectOption('text')
+  await expect(page.getByRole('combobox', { name: '任务协议 1', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '视频参数格式 1', exact: true })).toHaveCount(0)
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('claude')
+  await page.getByRole('combobox', { name: '自动推理强度 1', exact: true }).selectOption('ultra')
+  await page.getByRole('combobox', { name: '类型 1', exact: true }).selectOption('image')
+  await expect(page.getByRole('combobox', { name: '接口格式 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByRole('combobox', { name: '自动推理强度 1', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '自动分辨率 1', exact: true })).toHaveValue('auto')
+  await expect(page.getByLabel('备注 1', { exact: true })).toHaveValue('保留此模型备注')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.state.config.communityModelTypes).toEqual([
+    { id: 'custom/model', kind: 'image', remark: '保留此模型备注' },
+  ])
+})
+
+test('invalid automatic model parameters retain the draft and do not send configuration patches', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'custom/image', kind: 'image', apiFormat: 'chat-completions', protocol: 'async' }]
+  await page.goto('/admin?tab=settings')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('不支持异步任务协议')
+  expect(fixture.writes).toHaveLength(0)
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('images')
+  const ratio = page.getByLabel('自动画面比例 1', { exact: true })
+  for (const value of ['0:9', '16/9', '1000:9']) {
+    await ratio.fill(value)
+    await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+    await expect(page.getByRole('alert')).toContainText('画面比例')
+    await expect(ratio).toHaveValue(value)
+    expect(fixture.writes).toHaveLength(0)
+  }
+  await ratio.fill('')
+  await page.getByRole('combobox', { name: '任务协议 1', exact: true }).selectOption('sync')
+  await page.getByLabel('备注 1', { exact: true }).fill('无效\u0001备注')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('备注')
+  await expect(page.getByLabel('备注 1', { exact: true })).toHaveValue('无效\u0001备注')
+  expect(fixture.writes).toHaveLength(0)
+  await page.getByLabel('备注 1', { exact: true }).fill('修正后的备注')
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect.poll(() => fixture.writes.length).toBe(1)
+  expect(fixture.state.config.communityModelTypes).toEqual([
+    { id: 'custom/image', kind: 'image', apiFormat: 'images', protocol: 'sync', remark: '修正后的备注' },
+  ])
+})
+
+test('conflicting model configuration saves preserve raw parameters and remarks until a successful save', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModelTypes = [{ id: 'custom/video', kind: 'video' }]
+  await page.goto('/admin?tab=settings')
+  await page.getByRole('combobox', { name: '接口格式 1', exact: true }).selectOption('openai')
+  await page.getByRole('combobox', { name: '任务协议 1', exact: true }).selectOption('async')
+  await page.getByLabel('自动分辨率 1', { exact: true }).fill('720P')
+  await page.getByLabel('可选分辨率 1', { exact: true }).fill('480p 720p')
+  await page.getByLabel('自动画面比例 1', { exact: true }).fill(' 16:9 ')
+  await page.getByLabel('备注 1', { exact: true }).fill('未保存的备注\n第二行')
+  fixture.state.conflict = true
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('你的输入仍保留')
+  await expect(page.getByLabel('自动分辨率 1', { exact: true })).toHaveValue('720P')
+  await expect(page.getByLabel('可选分辨率 1', { exact: true })).toHaveValue('480p 720p')
+  await expect(page.getByLabel('自动画面比例 1', { exact: true })).toHaveValue(' 16:9 ')
+  await expect(page.getByLabel('备注 1', { exact: true })).toHaveValue('未保存的备注\n第二行')
+  expect(fixture.state.config.communityModelTypes).toEqual([{ id: 'custom/video', kind: 'video' }])
+  fixture.state.conflict = false
+  await page.getByRole('button', { name: '保存社区设置', exact: true }).click()
+  await expect(page.locator('.editor-savebar')).toContainText('修改已保存')
+  expect(fixture.writes[1]!.body).toMatchObject({ version: 'version-1', communityModelTypes: [
+    { id: 'custom/video', kind: 'video', apiFormat: 'openai', protocol: 'async',
+      video: { autoResolution: '720p', resolutions: ['480p', '720p'], autoAspectRatio: '16:9' }, remark: '未保存的备注\n第二行' },
+  ] })
 })
 
 test('moderators and ordinary accounts cannot read site settings', async ({ page }) => {

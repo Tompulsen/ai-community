@@ -251,6 +251,81 @@ test('model types persist through settings saves and support versioned removal w
   assert.notEqual(saved.version, before.version)
 })
 
+test('model interfaces, automatic parameters and private remarks round-trip through versioned admin configuration', async () => {
+  const f = fixture(), path = '/api/admin/community/config', before = await f.request(path)
+  const communityModelTypes = [
+    { id: 'chat-model', kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private chat routing note' },
+    { id: 'image-model', kind: 'image', apiFormat: 'images', protocol: 'async',
+      image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' }, remark: 'private image routing note' },
+    { id: 'video-model', kind: 'video', apiFormat: 'openai', protocol: 'sync',
+      video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai' }, remark: 'private video routing note' },
+  ]
+  const saved = await f.request(path, 'PATCH', { communityModelTypes, version: before.version })
+  assert.deepEqual(saved.config.communityModelTypes, communityModelTypes)
+  assert.deepEqual((await f.request(path)).config.communityModelTypes, communityModelTypes)
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
+  assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
+  assert(!JSON.stringify(await f.request('/api/site')).includes('private'))
+  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
+  await f.request(path, 'PATCH', { communityFeedMode: 'latest', version: saved.version })
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
+})
+
+test('model configuration rejects incompatible interfaces, credentials, invalid defaults and oversized remarks', async () => {
+  const invalid = [
+    { kind: 'text', apiFormat: 'images' }, { kind: 'text', protocol: 'sync' },
+    { kind: 'image', apiFormat: 'responses' }, { kind: 'image', apiFormat: 'chat-completions', protocol: 'async' },
+    { kind: 'video', apiFormat: 'gemini' }, { kind: 'video', protocol: 'plugin' },
+    { kind: 'image', image: { autoResolution: '8k' } }, { kind: 'image', image: { autoQuality: 'standard' } },
+    { kind: 'image', image: { autoAspectRatio: '0:1' } }, { kind: 'image', image: { autoBackground: 'red' } },
+    { kind: 'image', image: { headers: { authorization: 'secret' } } },
+    { kind: 'text', text: { autoReasoningEffort: 'unbounded' } }, { kind: 'text', text: { model: 'another' } },
+    { kind: 'image', text: {} }, { kind: 'video', image: {} }, { kind: 'text', video: {} },
+    { kind: 'video', video: { parameterFormat: 'plugin' } }, { kind: 'video', video: { autoAspectRatio: 'javascript:1' } },
+    { kind: 'image', apiFormat: 'https://untrusted.example/generate' }, { kind: 'image', apiKey: 'secret' },
+    { kind: 'text', remark: 'x'.repeat(2001) }, { kind: 'text', remark: 'private\0note' },
+  ]
+  const f = fixture()
+  for (const item of invalid) {
+    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', {
+      communityModelTypes: [{ id: 'configured-model', ...item }],
+    }), { statusCode: 400 })
+  }
+  assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+})
+
+test('video resolution settings persist with model types and accept automatic upstream resolution', async () => {
+  const f = fixture(), path = '/api/admin/community/config', before = await f.request(path)
+  const videoSettings = [{}, { autoResolution: 'auto' }, { autoResolution: '1p' }, { autoResolution: '65535p' },
+    { autoResolution: '4k' }, { autoResolution: '480p', resolutions: ['480p', '720p'] },
+    { resolutions: ['720p'] }, { autoResolution: 'auto', resolutions: ['4k'] },
+    { resolutions: Array.from({ length: 16 }, (_, index) => `${index + 1}p`) }]
+  const communityModelTypes = videoSettings.map((video, index) => ({ id: `video-${index}`, kind: 'video', video }))
+  const saved = await f.request(path, 'PATCH', { communityModelTypes, version: before.version })
+  assert.deepEqual(saved.config.communityModelTypes, communityModelTypes)
+  assert.deepEqual((await f.request(path)).config.communityModelTypes, communityModelTypes)
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, communityModelTypes)
+  assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
+  assert.notEqual(saved.version, before.version)
+  await assert.rejects(f.request(path, 'PATCH', { communityModelTypes: [], version: before.version }), { statusCode: 409 })
+})
+
+test('video resolution settings reject unsafe, conflicting and oversized configuration before writing', async () => {
+  const invalid = [null, [], { autoResolution: '' }, { autoResolution: '0p' }, { autoResolution: '65536p' },
+    { autoResolution: '0720p' }, { autoResolution: '720P' }, { autoResolution: 720 }, { autoResolution: 'https://model.example' },
+    { resolutions: [] }, { resolutions: ['auto'] }, { resolutions: ['720p', '720p'] }, { resolutions: ['65536p'] },
+    { resolutions: Array.from({ length: 17 }, (_, index) => `${index + 1}p`) },
+    { autoResolution: '1080p', resolutions: ['720p'] }, { autoResolution: '720p', duration: 8 },
+    { headers: { authorization: 'secret' } }]
+  const modelTypes = invalid.map(video => [{ id: 'video-model', kind: 'video', video }])
+  modelTypes.push([{ id: 'image-model', kind: 'image', video: {} }], [{ id: 'chat-model', kind: 'text', video: {} }])
+  for (const communityModelTypes of modelTypes) {
+    const f = fixture()
+    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModelTypes }), { statusCode: 400 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  }
+})
+
 test('review settings save their own fields atomically without changing uploads, models or existing submissions', async () => {
   const f = fixture({ clientOptions: { communityModelTypes: [{ id: 'keep-model', kind: 'video' }], communityFeedWeights: { interest: 50, fresh: 30, explore: 20 } } })
   const path = '/api/admin/community/config', before = await f.request(path)
