@@ -59,6 +59,10 @@ delivery now includes the frontend and an independent community backend.
   heat, and following retains its author relationship filter. Refresh replaces some
   first-page works whenever eligible alternatives exist, with stable pagination
   within each batch and preserved list/scroll when returning from work details.
+  Scrolling near the end appends further pages until all eligible public works are
+  shown, with manual retry and a load-more button for keyboard access. Popular
+  keeps its first 120 works in stable heat order, then continues through the rest
+  of the catalogue in descending ID order. Filters offer a clear return to all works.
   Only tag aggregates and limited recent IDs are retained locally, with expiry and
   a clear action; no server-side recommendation history is created. Mobile bottom navigation is
   首页 / 创作 / ＋ / 消息 / 我, with a 58px bar plus the device safe area.

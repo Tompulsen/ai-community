@@ -27,8 +27,14 @@ test('feed validates bounds before querying and never writes preference or searc
   }
   await assert.rejects(handleContent(context(db, { seen: Array(121).fill('work1') })), { statusCode: 400 })
   await assert.rejects(handleContent(context(db, { sort: 'following' }, null)), { statusCode: 401 })
+  const legacy = Buffer.from(JSON.stringify({ v: 1, id: 'w1', order: 'hot', remaining: ['w2'], context: 'a'.repeat(64), anchor: Date.now() })).toString('base64url')
+  await assert.rejects(handleContent(context(db, { sort: 'featured', cursor: legacy })), { statusCode: 409, code: 'FEED_CHANGED' })
   const cursor = Buffer.from(JSON.stringify({ v: 1, id: 'w1', order: 'hot', remaining: ['../bad'], context: 'a'.repeat(64), anchor: Date.now() })).toString('base64url')
   assert.throws(() => readWorkCursor(cursor), { statusCode: 400 })
+  for (const offset of [-1, 0, 1.5, 2, '1']) {
+    const invalid = Buffer.from(JSON.stringify({ v: 1, id: 'w1', order: 'hot', remaining: ['w1'], offset, context: 'a'.repeat(64), anchor: Date.now() })).toString('base64url')
+    assert.throws(() => readWorkCursor(invalid), { statusCode: 400 })
+  }
 })
 
 test('discovery PostgreSQL replacement, ranking, stable pages and permissions', { skip: !process.env.FOLLOWING_TEST_DATABASE_URL }, async t => {
@@ -130,5 +136,56 @@ test('discovery PostgreSQL replacement, ranking, stable pages and permissions', 
       assert.equal(next.items.length, count); assert.equal(next.nextCursor, null)
       if (count) assert.equal(next.replaced, false)
     }
+  })
+  async function collect(body, first = null) {
+    let result = first ?? await call(body), pages = 0
+    const ids = new Set()
+    for (;;) {
+      for (const item of result.items) { assert(!ids.has(item.id), `Duplicate ${item.id}`); ids.add(item.id) }
+      if (!result.nextCursor) return ids
+      assert(++pages < 50, 'Pagination must terminate')
+      assert(result.nextCursor.length <= 8192)
+      result = await call({ ...body, cursor: result.nextCursor })
+    }
+  }
+  await t.test('all modes traverse the complete catalogue, including the hot 120 boundary', async () => {
+    for (const count of [0, 12, 120, 121, 241]) {
+      await reset(count)
+      const expected = new Set(Array.from({ length: count }, (_, i) => `w${String(i + 1).padStart(4, '0')}`))
+      assert.deepEqual(await collect({ sort: 'featured' }), expected)
+      if (count === 241) for (const sort of ['recommended', 'latest', 'following']) assert.deepEqual(await collect({ sort }), expected)
+    }
+  })
+  await t.test('hot tail survives hidden snapshot pages, heat changes, and cursor deletion without admitting new publications', async () => {
+    await reset(241)
+    // Put low IDs at the top; the tail must still include higher IDs after the head.
+    await db.query('UPDATE note SET "repliesCount"=1000-"repliesCount"')
+    const first = await call({ sort: 'featured' }), snapshot = readWorkCursor(first.nextCursor).remaining
+    assert.equal(snapshot.length, 120)
+    await db.query('DELETE FROM community_submission WHERE id=ANY($1)', [snapshot.slice(12)])
+    await db.query('UPDATE note SET "repliesCount"=0')
+    await db.query(`INSERT INTO note (id,"userId") VALUES ('nnew','author');
+      INSERT INTO community_submission (id,"authorId","approvedNoteId","submittedAt") VALUES ('w9999','author','nnew',now()+interval '1 hour')`)
+    const next = await call({ sort: 'featured', cursor: first.nextCursor })
+    assert.equal(next.items[0].id, 'w0241')
+    await db.query('DELETE FROM community_submission WHERE id=$1', [next.items.at(-1).id])
+    const tail = await collect({ sort: 'featured' }, next)
+    assert.equal(tail.size, 121); assert(!tail.has('w9999'))
+    for (const id of snapshot) assert(!tail.has(id))
+  })
+  await t.test('hot tail applies the same filters, publication and account visibility rules', async () => {
+    await reset(300)
+    await db.query('UPDATE note SET "repliesCount"=1000-"repliesCount"')
+    const body = { sort: 'featured', tag: '海报', kind: 'image' }, first = await call(body)
+    const snapshot = readWorkCursor(first.nextCursor).remaining
+    assert.equal(snapshot.length, 120)
+    await db.query("UPDATE community_submission SET status='pending' WHERE id='w0300'")
+    await db.query("UPDATE note SET visibility='followers' WHERE id='n298'")
+    const all = await collect(body, first)
+    assert.equal(all.size, 148); assert(!all.has('w0300')); assert(!all.has('w0298'))
+    assert([...all].every(id => Number(id.slice(1)) % 2 === 0))
+    await db.query("INSERT INTO blocking VALUES ('reader','author')")
+    const blocked = await call({ ...body, cursor: first.nextCursor })
+    assert.equal(blocked.items.length, 0); assert.equal(blocked.nextCursor, null)
   })
 })

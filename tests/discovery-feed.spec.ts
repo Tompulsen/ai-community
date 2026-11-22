@@ -38,6 +38,112 @@ async function fixture(page: Page, authenticated = true) {
 }
 const ids = (page: Page) => page.locator('.discover-grid [data-work-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-work-id')))
 
+for (const width of [320, 390, 1440, 2560]) test(`scrolling loads every visible work once at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  await fixture(page)
+  await page.goto('/discover')
+  await expect(page.locator('[data-work-id]').first()).toBeVisible()
+  for (let count = 24; count <= 48; count += 12) {
+    await page.locator('.feed-end').scrollIntoViewIfNeeded()
+    await expect.poll(async () => (await ids(page)).length).toBeGreaterThanOrEqual(Math.min(count, items.length))
+  }
+  expect(new Set(await ids(page))).toEqual(new Set(items.map(item => item.id)))
+  await expect(page.locator('.feed-end')).toContainText('已全部加载')
+  await expect(page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: test.info().outputPath(`complete-feed-${width}.png`) })
+})
+
+test('short pages keep loading while the end remains visible and stop at the real end', async ({ page }) => {
+  await page.setViewportSize({ width: 2560, height: 1400 })
+  await fixture(page)
+  const requests: any[] = []
+  await page.route('**/api/works/feed', route => {
+    const body = route.request().postDataJSON(); requests.push(body)
+    const offset = Number(body.cursor || 0)
+    return route.fulfill({ json: { items: items.slice(offset, offset + 2), nextCursor: offset < 6 ? String(offset + 2) : null } })
+  })
+  await page.goto('/discover')
+  await expect(page.locator('[data-work-id]')).toHaveCount(8)
+  await expect(page.locator('.feed-end')).toContainText('已全部加载')
+  expect(requests.map(body => body.cursor)).toEqual([undefined, '2', '4', '6'])
+  await page.mouse.wheel(0, 1500)
+  await expect.poll(() => requests.length).toBe(4)
+})
+
+test('failed automatic pagination pauses and retries the same page without dropping works', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 })
+  const state = await fixture(page)
+  await page.goto('/discover'); await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  const first = state.requests[0]
+  state.fail(); await page.locator('.feed-end').scrollIntoViewIfNeeded()
+  await expect(page.locator('.feed-end').getByRole('alert')).toContainText('请重试')
+  expect(state.requests.at(-1)).toEqual({ ...first, cursor: '12' })
+  await page.mouse.wheel(0, -100); await page.mouse.wheel(0, 200)
+  await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  expect(state.requests.length).toBe(2)
+  await page.getByRole('button', { name: '重试加载', exact: true }).click()
+  await expect.poll(async () => (await ids(page)).length).toBeGreaterThanOrEqual(24)
+  expect(state.requests[2]).toEqual(state.requests[1])
+  expect((await ids(page)).slice(0, 12)).toEqual(items.slice(0, 12).map(item => item.id))
+})
+
+test('expired cursors require a new batch and a repeated cursor cannot cause a request loop', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 })
+  const state = await fixture(page)
+  let mode = 'expired'
+  await page.route('**/api/works/feed', route => {
+    const body = route.request().postDataJSON()
+    if (!body.cursor) return route.fallback()
+    return route.fulfill(mode === 'expired' ? { status: 409, json: { message: '作品列表已更新', code: 'FEED_CHANGED' } }
+      : { json: { items: [], nextCursor: body.cursor } })
+  })
+  await page.goto('/discover'); await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  await page.locator('.feed-end').scrollIntoViewIfNeeded()
+  await expect(page.getByRole('button', { name: '刷新作品列表', exact: true })).toBeVisible()
+  const seed = state.requests[0].seed
+  mode = 'stuck'
+  await page.getByRole('button', { name: '刷新作品列表', exact: true }).click()
+  await expect.poll(() => state.requests.at(-1)?.seed).not.toBe(seed)
+  await page.locator('.feed-end').scrollIntoViewIfNeeded()
+  await expect(page.locator('.feed-end').getByRole('alert')).toContainText('加载未能继续')
+  await expect(page.locator('[data-work-id]')).toHaveCount(12)
+})
+
+test('view all works clears following, type, tag and query together', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/discover?sort=following&kind=image&tag=海报&q=海报')
+  await expect(page.getByText('当前仅显示已关注作者的作品。', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看全部作品', exact: true }).click()
+  await expect.poll(() => state.requests.at(-1)).toMatchObject({ sort: 'recommended', kind: 'all', tag: '', query: '' })
+  await expect(page).toHaveURL('/discover')
+  await expect(page.getByRole('button', { name: '查看全部作品', exact: true })).toHaveCount(0)
+})
+
+test('scrolling during a slow page sends one request and filtering discards its late response', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await fixture(page)
+  let release!: () => void, pending = 0
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/works/feed', async route => {
+    const body = route.request().postDataJSON()
+    if (body.sort === 'latest') return route.fulfill({ json: { items: [items[39]], nextCursor: null } })
+    if (!body.cursor) return route.fallback()
+    pending++; await gate
+    await route.fulfill({ json: { items: items.slice(12, 24), nextCursor: '24' } }).catch(() => {})
+  })
+  await page.goto('/discover'); await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  await page.locator('.feed-end').scrollIntoViewIfNeeded()
+  await expect.poll(() => pending).toBe(1)
+  await page.mouse.wheel(0, -100); await page.mouse.wheel(0, 200)
+  await expect(page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
+  await page.getByRole('group', { name: '浏览方式', exact: true }).getByRole('button', { name: '最新', exact: true }).click()
+  await expect(page.locator('[data-work-id]')).toHaveCount(1)
+  release()
+  await expect(page.locator('[data-work-id]')).toHaveAttribute('data-work-id', items[39]!.id)
+  expect(pending).toBe(1)
+})
+
 for (const width of [320, 390, 1440]) test(`four browse modes, filtering and refresh fit ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   const state = await fixture(page)
@@ -75,17 +181,20 @@ test('reload replaces works while pagination freezes the original preference sna
 test('back from a work preserves list and scroll; normal homepage navigation starts another batch', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/discover'); await expect(page.locator('[data-work-id]')).toHaveCount(12)
-  await page.locator('[data-work-id]').last().scrollIntoViewIfNeeded()
+  await page.locator('.feed-end').scrollIntoViewIfNeeded()
+  await expect(page.locator('[data-work-id]')).toHaveCount(24)
+  const selected = page.locator('[data-work-id]').nth(8).getByRole('link').first()
+  await selected.scrollIntoViewIfNeeded()
   const original = await ids(page), requestCount = state.requests.length, scroll = await page.evaluate(() => scrollY)
-  await page.locator('[data-work-id]').last().getByRole('link').first().click()
+  await selected.click()
   await expect(page).toHaveURL(/\/work\//)
-  await page.goBack(); await expect(page.locator('.discover-grid [data-work-id]')).toHaveCount(12)
+  await page.goBack(); await expect(page.locator('.discover-grid [data-work-id]')).toHaveCount(24)
   expect(await ids(page)).toEqual(original); expect(state.requests.length).toBe(requestCount)
   await expect.poll(() => page.evaluate(() => scrollY)).toBeCloseTo(scroll, 0)
   await page.locator('[data-work-id]').first().getByRole('link').first().click()
   await page.locator('.community-rail .nav-link[href="/discover"]').click()
   await expect.poll(() => state.requests.length).toBeGreaterThan(requestCount)
-  await expect.poll(async () => (await ids(page)).some(id => !original.includes(id))).toBe(true)
+  await expect.poll(async () => (await ids(page)).some(id => !original.slice(0, 12).includes(id))).toBe(true)
 })
 
 test('search learns bounded existing tags without retaining the query and can be cleared', async ({ page }) => {

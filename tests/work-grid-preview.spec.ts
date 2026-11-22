@@ -26,6 +26,7 @@ async function fixture(page: Page, items = [image, resource], brokenImage = fals
         : route.fulfill({ contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(800 * ratio)}" height="800"><rect width="100%" height="100%" fill="#60765d"/><rect x="10%" y="10%" width="80%" height="80%" fill="#ccd6c9"/></svg>` })
     }
     if (!url.pathname.startsWith('/api/')) return route.continue()
+    if (url.pathname === '/api/works/feed' && request.method() === 'POST') return route.fulfill({ json: { items, nextCursor: null } })
     if (request.method() !== 'GET') {
       if (request.method() === 'POST' && url.pathname.endsWith('/view')) return route.fulfill({ json: { viewsCount: 1 } })
       writes.push(`${request.method()} ${url.pathname}`)
@@ -142,16 +143,16 @@ test('legacy covers use decoded dimensions and repack after delayed loading', as
 test('pagination and filtering register and remove masonry cards', async ({ page }) => {
   const items = Array.from({ length: 18 }, (_, index) => ({ ...image, id: `page-${index}` }))
   const state = await fixture(page, items)
-  await page.route('**/api/works?*', route => {
-    const url = new URL(route.request().url())
-    if (url.searchParams.get('kind') === 'video') return route.fulfill({ json: { items: [items[0]], nextCursor: null } })
-    return route.fulfill({ json: url.searchParams.has('cursor')
+  await page.route('**/api/works/feed', route => {
+    const body = route.request().postDataJSON()
+    if (body.kind === 'video') return route.fulfill({ json: { items: [items[0]], nextCursor: null } })
+    return route.fulfill({ json: body.cursor
       ? { items: items.slice(8), nextCursor: null }
       : { items: items.slice(0, 8), nextCursor: 'page2' } })
   })
   await page.goto('/discover')
   await expectPacked(page, 8)
-  await page.getByRole('button', { name: '加载更多', exact: true }).click()
+  await page.locator('.feed-end').scrollIntoViewIfNeeded()
   await expectPacked(page, 18)
   await page.getByRole('group', { name: '作品类型', exact: true }).getByRole('button', { name: '视频', exact: true }).click()
   await expectPacked(page, 1)

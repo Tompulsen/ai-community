@@ -313,6 +313,7 @@ interface WorkCursor {
   rank?: string;
   context?: string;
   remaining?: string[];
+  offset?: number;
 }
 
 export function readWorkCursor(value: string | null): WorkCursor | null {
@@ -328,6 +329,11 @@ export function readWorkCursor(value: string | null): WorkCursor | null {
     typeof parsed.boundary !== 'string' || !idPattern.test(parsed.boundary) || typeof parsed.anchor !== 'number' ||
     !Number.isSafeInteger(parsed.anchor) || parsed.anchor <= 0 || parsed.anchor > Date.now() + 60000)) fail(400, 'Invalid page cursor');
   if (parsed.order === 'hot' && (!Array.isArray(parsed.remaining) || parsed.remaining.length > 120 || parsed.remaining.some(id => typeof id !== 'string' || !idPattern.test(id)))) fail(400, 'Invalid page cursor');
+  if (parsed.order === 'hot' && parsed.offset !== undefined) {
+    const ids = parsed.remaining as string[];
+    if (typeof parsed.offset !== 'number' || !Number.isInteger(parsed.offset) || parsed.offset < 1 || parsed.offset > ids.length ||
+      new Set(ids).size !== ids.length || (ids.includes(parsed.id) ? ids[parsed.offset - 1] !== parsed.id : parsed.offset !== ids.length)) fail(400, 'Invalid page cursor');
+  }
   if (parsed.order === 'discovery' && (typeof parsed.rank !== 'string' || !/^[01]{2}(?:[0-9]{6}|[0-9]{16})[a-f0-9]{32}$/.test(parsed.rank))) fail(400, 'Invalid page cursor');
   if (['discovery', 'hot'].includes(String(parsed.order)) && (
     typeof parsed.context !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.context) || typeof parsed.anchor !== 'number' ||
@@ -352,6 +358,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
   const order = feed ? requestedOrder === 'featured' ? 'hot' : 'discovery' : requestedOrder === 'recommended' && !authorId && (cursor?.order === 'random' || !cursor && options.communityFeedMode !== 'latest')
     ? 'random' : ['popular', 'featured'].includes(requestedOrder) ? requestedOrder : 'latest';
   if (cursor && cursor.order !== order) fail(400, 'Page cursor does not match this work order');
+  if (order === 'hot' && cursor && cursor.offset === undefined) fail(409, '作品列表已更新，请刷新后继续浏览。', 'FEED_CHANGED');
   const likesFor = (note: string) => `(SELECT COUNT(*) FROM note_reaction cr WHERE cr."noteId"=${note} AND cr.reaction IN ('${heart}','${heart}\ufe0f'))`;
   const heat = order === 'popular' ? likesFor('n.id') : `(COALESCE(n."repliesCount",0)::bigint+COALESCE(n."renoteCount",0)::bigint+COALESCE((SELECT SUM(reaction.value::bigint) FROM jsonb_each_text(n.reactions) reaction),0))`;
   if (scope === 'public' && requestedOrder === 'following') {
@@ -429,11 +436,12 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     contextHash = createHash('sha256').update(JSON.stringify({ ...feed, cursor: undefined, viewer: viewer(ctx), weights })).digest('hex');
     if (cursor && cursor.context !== contextHash) fail(409, '推荐条件已更新，请刷新作品后继续。', 'FEED_CHANGED');
     conditions.push(`s."submittedAt"<=to_timestamp(${add(anchor)}/1000.0)`);
-    // Prior-batch exclusion precedes ranking across ALL eligible works, including the older tail.
+    // Keep the hot snapshot stable, then include every eligible work beyond it.
     if (order === 'hot' && cursor) {
       const ids = add(cursor.remaining!.join(','));
-      rank = `array_position(string_to_array(${ids},','),s.id::text)`;
-      conditions.push(`s.id=ANY(string_to_array(${ids},','))`);
+      rank = `COALESCE(array_position(string_to_array(${ids},','),s.id::text),121)`;
+      conditions.push(`(${rank})>${add(cursor.offset!)}`);
+      if (!cursor.remaining!.includes(cursor.id)) conditions.push(`s.id<${add(cursor.id)}`);
     } else {
       const previous = add(JSON.stringify(feed.previous)), seen = add(JSON.stringify(feed.seen));
       const prefix = `(CASE WHEN ${previous}::jsonb ? s.id THEN '1' ELSE '0' END)||(CASE WHEN ${seen}::jsonb ? s.id THEN '1' ELSE '0' END)`;
@@ -501,7 +509,9 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     v: 1, id: last.id, order, ...(order === 'featured' || order === 'popular' ? { heat: Number(last.heat ?? 0) } : {}),
     ...(order === 'random' ? { seed, boundary, anchor } : {}),
     ...(order === 'discovery' ? { rank: String(last.rank), anchor, context: contextHash } : {}),
-    ...(order === 'hot' ? { remaining: cursor ? cursor.remaining!.slice(cursor.remaining!.indexOf(last.id) + 1) : result.rows.slice(pageLimit).map(row => row.id), anchor, context: contextHash } : {}),
+    ...(order === 'hot' ? { remaining: cursor ? cursor.remaining : result.rows.map(row => row.id),
+      offset: cursor ? (cursor.remaining!.includes(last.id) ? cursor.remaining!.indexOf(last.id) + 1 : cursor.remaining!.length) : pageLimit,
+      anchor, context: contextHash } : {}),
   }) : null;
   const identities = await readPublicIdentities(ctx, rows.map(row => row.authorId));
   return { rows: rows.map(row => {
