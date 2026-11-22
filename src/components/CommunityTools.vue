@@ -3,6 +3,7 @@ import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
 import { inbox, loadInbox, type InboxCategory } from '../inbox'
+import { lotteryCount, lotteryDescription, lotteryLabel, refreshLotteryBalance } from '../lottery-balance'
 import { session } from '../state'
 import { site } from '../site'
 
@@ -40,7 +41,7 @@ function close() {
   if (menu.value) menu.value.open = false
   trigger.value?.focus()
 }
-function toggle() { if (menu.value?.open) void loadInbox() }
+function toggle() { if (menu.value?.open) { void loadInbox(); void refreshLotteryBalance() } }
 function blur(event: FocusEvent) {
   if (event.relatedTarget instanceof Node && !menu.value?.contains(event.relatedTarget) && menu.value) menu.value.open = false
 }
@@ -62,7 +63,7 @@ watch(() => session.user?.id, () => {
 
 <template>
   <details ref="menu" class="header-menu community-tools" :class="{ compact }" @toggle="toggle" @focusout="blur">
-    <summary ref="trigger" class="icon-button tools-trigger" :aria-label="compact && unreadCount ? `社区工具，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '社区工具'" :aria-description="compact && unreadCount ? `共 ${unreadCount} 条未读消息` : undefined" title="社区工具" aria-haspopup="dialog"><component :is="compact ? Menu : LayoutGrid" class="rail-icon" :size="compact ? 23 : 22" aria-hidden="true" /><span v-if="compact && unreadCount" class="tools-unread" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></summary>
+    <summary ref="trigger" class="icon-button tools-trigger" :aria-label="compact && unreadCount ? `社区工具，${unreadCount > 99 ? '99+' : unreadCount} 条未读` : '社区工具'" :aria-description="[compact && unreadCount ? `共 ${unreadCount} 条未读消息` : '', lotteryCount ? `福利中心剩余 ${lotteryCount} 次抽奖机会` : ''].filter(Boolean).join('；') || undefined" :title="lotteryCount ? `社区工具，${lotteryLabel}` : '社区工具'" aria-haspopup="dialog"><component :is="compact ? Menu : LayoutGrid" class="rail-icon" :size="compact ? 23 : 22" aria-hidden="true" /><span v-if="compact && unreadCount" class="tools-unread" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</span><span v-if="compact && lotteryCount" class="tools-welfare-dot" aria-hidden="true" /></summary>
     <div class="tools-panel" role="dialog" :aria-label="compact ? '社区工具' : undefined" :aria-labelledby="compact ? undefined : 'community-tools-heading'">
       <div class="tools-heading"><h2 id="community-tools-heading"><img v-if="compact && site.logoUrl" :src="site.logoUrl" width="28" height="28" alt="" />{{ compact ? site.brand : '社区工具' }}</h2><button type="button" class="icon-button" aria-label="关闭社区工具" @click="close"><X :size="20" aria-hidden="true" /></button></div>
       <slot :close="close" />
@@ -70,8 +71,9 @@ watch(() => session.user?.id, () => {
       <nav class="tools-grid" aria-label="社区工具入口">
         <template v-for="tool in tools" :key="tool.label">
           <button v-if="compact && session.user && tool.category" type="button" class="tool-item" aria-haspopup="dialog" :aria-label="tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :aria-description="tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" @click="close(); emit('message', tool.category)"><component :is="tool.icon" :size="20" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span><span v-if="tool.count" class="tool-count" aria-hidden="true">{{ tool.count > 99 ? '99+' : tool.count }}</span></button>
-          <RouterLink v-else-if="tool.to" v-wallet-prefetch="tool.to === '/account?tab=balance'" :to="destination(tool)" class="tool-item" :aria-label="session.user && tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :aria-description="session.user && tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" :aria-describedby="tool.member && !session.user ? 'tools-member-hint' : undefined" @click="close">
+          <RouterLink v-else-if="tool.to" v-wallet-prefetch="tool.to === '/account?tab=balance'" :to="destination(tool)" class="tool-item" :aria-label="tool.to === '/activities' ? lotteryLabel : session.user && tool.count ? `${tool.label}，${tool.count > 99 ? '99+' : tool.count} 条未读` : tool.label" :title="tool.to === '/activities' ? lotteryDescription : undefined" :aria-description="tool.to === '/activities' ? lotteryDescription : session.user && tool.count && tool.count > 99 ? `共 ${tool.count} 条未读` : undefined" :aria-describedby="tool.member && !session.user ? 'tools-member-hint' : undefined" @click="close">
             <component :is="tool.icon" :size="20" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span><span v-if="session.user && tool.count" class="tool-count" aria-hidden="true">{{ tool.count > 99 ? '99+' : tool.count }}</span><LockKeyhole v-if="tool.member && !session.user" class="tool-lock" :size="12" aria-hidden="true" />
+            <span v-if="tool.to === '/activities' && lotteryCount" class="tool-count lottery-count" aria-hidden="true"> {{ lotteryCount > 99 ? '99+' : lotteryCount }}</span>
           </RouterLink>
           <button v-else type="button" class="tool-item" @click="run(tool.action)"><component :is="tool.icon" :size="20" aria-hidden="true" /><span class="tool-label">{{ tool.label }}</span></button>
         </template>
@@ -84,6 +86,7 @@ watch(() => session.user?.id, () => {
 <style scoped>
 .tools-trigger { width: 44px; min-height: 44px; border-radius: 6px; }
 .compact > .tools-trigger { position: relative; color: var(--ink); }
+.tools-welfare-dot { position: absolute; bottom: 5px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 2px var(--canvas); }
 .tools-unread { position: absolute; top: 0; right: -3px; display: grid; place-items: center; min-width: 16px; height: 16px; padding-inline: 3px; border-radius: 8px; background: var(--blue); color: var(--action-ink); font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .compact .tools-panel { left: 12px; right: 12px; width: auto; max-width: 480px; }
 .compact .tools-heading h2 { display: flex; align-items: center; gap: 10px; }

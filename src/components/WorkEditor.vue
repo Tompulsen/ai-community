@@ -7,6 +7,7 @@ import PublicationTagPicker from './PublicationTagPicker.vue'
 import { kindLabels, type Work, type WorkKind, type WorkTag } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session } from '../state'
 import { useFileUploads, type UploadFile } from '../use-file-uploads'
+import { refreshLotteryBalance } from '../lottery-balance'
 import '../publication-controls.css'
 
 const props = defineProps<{ open: boolean; work?: Work | null }>()
@@ -190,6 +191,7 @@ async function save(status: 'draft' | 'pending') {
     }
     const result = await api<{ work: Work }>(props.work ? `/api/works/${encodeURIComponent(props.work.id)}` : '/api/works', { method: props.work ? 'PATCH' : 'POST', body })
     if (current !== loadId || session.user?.id !== owner) return
+    if (result.work.status !== 'draft') void refreshLotteryBalance(true)
     baseline.value = snapshot()
     saving.value = false
     emit('saved', result.work)

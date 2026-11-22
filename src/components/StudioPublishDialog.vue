@@ -5,6 +5,7 @@ import { ChevronDown, Send, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
 import type { Work, WorkTag } from '../data'
 import PublicationTagPicker from './PublicationTagPicker.vue'
+import { refreshLotteryBalance } from '../lottery-balance'
 import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
 import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
@@ -87,6 +88,7 @@ async function submit() {
     const response = await publishCreation(task.value, title.value, destination.value, text.value, content.value, details)
     if (current !== revision) return
     result.value = response.work
+    if (!direct.value) void refreshLotteryBalance(true)
     notify(resultMessage.value)
   } catch (cause) { if (current === revision) { error.value = errorMessage(cause); if (!direct.value && !locked.value) { if (extra.value) extra.value.open = true; if ((cause as { status?: number }).status === 400) void loadTags() } } }
   finally { if (current === revision) busy.value = false }

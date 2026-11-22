@@ -715,6 +715,14 @@ export function startPendingWorker(options: ServiceContext) {
 export async function handleLottery(ctx: RequestContext): Promise<boolean> {
   const path = ctx.url.pathname
   if (!path.startsWith('/api/lottery/') && !path.startsWith('/api/admin/lottery/')) return false
+  if (path === '/api/lottery/balance' && ctx.req.method === 'GET') {
+    const user = ctx.requireUser(), expected = ctx.req.headers?.['x-new-api-user']
+    if (expected !== undefined && expected !== user.id) fail('LOTTERY_ACCOUNT_CHANGED', 409)
+    if (ctx.url.searchParams.size) fail('LOTTERY_INVALID')
+    // Navigation only reads credited chances; it must not synchronize rewards or check consumption.
+    const { rows } = await ctx.db.query<{ balance: number }>('SELECT balance FROM community_lottery_account WHERE "userId"=$1', [user.id])
+    ctx.json(200, { userId: user.id, balance: rows[0]?.balance ?? 0 }); return true
+  }
   if (path === '/api/lottery/public-records' && ctx.req.method === 'GET') {
     ctx.json(200, await readPublicLotteryRecords(ctx.db, ctx.url.searchParams)); return true
   }

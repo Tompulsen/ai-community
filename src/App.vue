@@ -11,6 +11,7 @@ import GooeyInput from './components/GooeyInput.vue'
 import type { Work } from './data'
 import { errorMessage, loadSession, logout, notice, notify, rememberLotteryInvite, rememberReferralInvite, session, sessionStatus } from './state'
 import { inbox, loadInbox, type InboxCategory } from './inbox'
+import { lotteryBalance, lotteryCount, lotteryDescription, lotteryLabel, refreshLotteryBalance } from './lottery-balance'
 import { loadSite, site } from './site'
 import { studioSidebarWidth } from './studio-preferences'
 import { appearance, themeState } from './appearance'
@@ -127,15 +128,22 @@ const unreadCount = computed(() => session.user ? inbox.counts.announcement + in
 const messageMenu = ref<HTMLDetailsElement>(), profileMenu = ref<HTMLDetailsElement>()
 const messageCenter = ref<InstanceType<typeof MessageCenterDialog>>()
 let poll: ReturnType<typeof setInterval> | undefined
+let lotteryPoll: ReturnType<typeof setInterval> | undefined
 let hoverCloseTimer: ReturnType<typeof setTimeout> | undefined
-function refreshActiveIdentity() {
-  if (session.user && document.visibilityState !== 'hidden') void loadSession(true)
+async function refreshActiveIdentity() {
+  if (session.user && document.visibilityState !== 'hidden') {
+    await loadSession(true)
+    if (!document.hidden) void refreshLotteryBalance(true)
+  }
 }
+function refreshVisibleLottery() { if (document.visibilityState !== 'hidden') void refreshLotteryBalance() }
+watch([() => session.user?.id, () => session.user?.accountId, () => route.path], refreshVisibleLottery, { immediate: true })
 watch(() => route.query.invite, value => { rememberLotteryInvite(value) }, { immediate: true })
 watch(() => route.query.aff, value => { rememberReferralInvite(value) }, { immediate: true })
 onMounted(() => {
   void loadSession()
   void loadSite()
+  lotteryPoll = setInterval(refreshVisibleLottery, 30000)
   window.addEventListener('focus', refreshActiveIdentity)
   window.addEventListener('pageshow', refreshActiveIdentity)
   document.addEventListener('visibilitychange', refreshActiveIdentity)
@@ -143,7 +151,7 @@ onMounted(() => {
   window.addEventListener('resize', resizeViewport)
 })
 onBeforeUnmount(() => {
-  clearInterval(poll); clearTimeout(hoverCloseTimer); clearTimeout(searchTimer)
+  clearInterval(poll); clearInterval(lotteryPoll); clearTimeout(hoverCloseTimer); clearTimeout(searchTimer)
   window.removeEventListener('focus', refreshActiveIdentity)
   window.removeEventListener('pageshow', refreshActiveIdentity)
   document.removeEventListener('visibilitychange', refreshActiveIdentity)
@@ -298,7 +306,7 @@ function restoreMessageTrigger() {
             <div v-else class="message-login"><p>{{ sessionStatus === 'loading' ? '正在加载账号…' : '账号暂时无法加载' }}</p><button v-if="sessionStatus === 'error'" type="button" class="button btn subtle" @click="loadSession(true)">重新加载</button></div>
           </div>
         </details>
-        <RouterLink v-if="desktopCommunity" to="/activities" class="icon-button header-welfare" aria-label="福利中心" title="福利中心" :aria-current="isCurrent('/activities') ? 'page' : undefined"><Gift class="rail-icon" :size="22" aria-hidden="true" /></RouterLink>
+        <RouterLink v-if="desktopCommunity" to="/activities" class="icon-button header-welfare" :aria-label="lotteryLabel" :aria-description="lotteryDescription" :title="lotteryDescription || '福利中心'" :aria-current="isCurrent('/activities') ? 'page' : undefined"><Gift class="rail-icon" :size="22" aria-hidden="true" /><span v-if="lotteryCount" class="message-count lottery-count" aria-hidden="true">{{ lotteryCount > 99 ? '99+' : lotteryCount }}</span></RouterLink>
         <template v-if="session.user">
         <AccountBalance />
         <div class="profile-menu" @pointerleave="leaveHoverMenu($event, profileMenu)" @focusout="leaveHoverMenu($event, profileMenu)">
@@ -323,6 +331,7 @@ function restoreMessageTrigger() {
       <RouterLink :to="session.user ? '/messages' : { path: '/account', query: { returnTo: '/messages' } }" :class="{ active: route.path.startsWith('/messages') }" :aria-current="route.path.startsWith('/messages') ? 'page' : undefined"><span>消息<span v-if="unreadCount" class="mobile-unread" :aria-label="`${unreadCount} 条未读`">{{ unreadCount > 99 ? '99+' : unreadCount }}</span></span></RouterLink>
       <RouterLink :to="meDestination" :class="{ active: ownProfile || route.path === '/account' || route.path === '/library' }" :aria-current="ownProfile || route.path === '/account' || route.path === '/library' ? 'page' : undefined">我</RouterLink>
     </nav>
+    <span class="lottery-status" role="status" aria-atomic="true">{{ session.user && lotteryBalance.balance !== null ? `剩余 ${lotteryBalance.balance} 次抽奖机会` : '' }}</span>
     <Transition name="toast"><div v-if="notice" class="toast-message" role="status">{{ notice }}</div></Transition>
     <WorkEditor :open="route.query.publish === '1'" @close="closePublish" @saved="published" />
     <MessageCenterDialog v-if="session.user" ref="messageCenter" @close="restoreMessageTrigger" />
@@ -411,6 +420,7 @@ function restoreMessageTrigger() {
 .account-popover > a[aria-current="page"]:hover { background: var(--state-pressed); }
 .message-trigger { position: relative; }
 .message-count { position: absolute; right: 0; top: 0; min-width: 16px; height: 18px; display: grid; place-items: center; border: 2px solid var(--canvas); border-radius: 9px; background: var(--blue); color: var(--action-ink); font-size: 10px; line-height: 14px; padding: 0 3px; font-variant-numeric: tabular-nums; }
+.lottery-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .message-popover { min-width: 192px; padding: 8px; }
 .message-popover::before { content: ''; position: absolute; bottom: 100%; left: 0; right: 0; height: 12px; }
 .message-popover > .message-menu-link { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 8px 12px; gap: 10px; border-radius: 4px; font-size: 14px; text-align: left; }

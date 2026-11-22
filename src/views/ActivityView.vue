@@ -11,6 +11,7 @@ import { api, errorMessage, loadSession, notify, queryString, session } from '..
 import WelfareTasks from '../components/WelfareTasks.vue'
 import LotteryPublicResults from '../components/LotteryPublicResults.vue'
 import { isClownPrize } from '../../shared/lottery-public'
+import { refreshLotteryBalance } from '../lottery-balance'
 import { useRoute } from 'vue-router'
 import { formatPoints } from '../../shared/studio/community-wallet'
 
@@ -160,6 +161,7 @@ async function load() {
     ])
     if (!current()) return
     status.value = lottery; statusFailed.value = false; if (lottery.daily) count.value = 1
+    void refreshLotteryBalance(true)
     restorePending(); scheduleReset()
     await loadRecords().catch(cause => { if (current()) error.value = `奖励记录读取失败：${drawMessage(cause)}` })
   }
@@ -207,6 +209,7 @@ async function draw() {
   }
   drawing.value = true; error.value = ''
   let receipt: Draw
+  const owner = session.user.id
   try { receipt = await api<Draw>('/api/lottery/draw', { method: 'POST', body: pending.value }) }
   catch (cause) {
     const code = errorMessage(cause)
@@ -218,7 +221,7 @@ async function draw() {
       try { status.value = await api<LotteryStatus>('/api/lottery/status'); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset() } catch { /* Keep the authoritative draw error visible. */ }
     }
     error.value = drawMessage(cause); drawing.value = false; return
-  }
+  } finally { if (owner === session.user?.id) void refreshLotteryBalance(true) }
   result.value = receipt; pending.value = null; scheduleReset()
   try { sessionStorage.removeItem(storageKey) } catch { /* Retrying a confirmed receipt cannot consume another chance. */ }
   const winner = receipt.prizes.at(-1)
@@ -229,7 +232,7 @@ async function draw() {
   }
   notify('抽奖结果已记录。')
   void publicResults.value?.refresh()
-  try { status.value = await api<LotteryStatus>('/api/lottery/status'); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
+  try { status.value = await api<LotteryStatus>('/api/lottery/status'); if (owner === session.user?.id) void refreshLotteryBalance(true); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
   catch (cause) { error.value = `抽奖已完成，账户信息刷新失败：${drawMessage(cause)}` }
   finally { drawing.value = false }
 }
