@@ -58,6 +58,39 @@ async function send(page: Page, prompt: string, turns: number) {
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
 }
 
+for (const width of [390, 1440]) test(`image results load lightweight previews and retain original editing and downloads at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { calls, image } = await fixture(page)
+  const { default: sharp } = await import('sharp')
+  const original = await sharp(image).resize(2160, 3840, { fit: 'cover' }).png().toBuffer()
+  const preview = await sharp(original).resize(960, 960, { fit: 'inside' }).webp({ quality: 82 }).toBuffer()
+  const reads: URL[] = []
+  await page.route('**/api/creation/media?**', route => {
+    const url = new URL(route.request().url())
+    reads.push(url)
+    return route.fulfill({ contentType: url.searchParams.get('variant') === 'preview' ? 'image/webp' : 'image/png',
+      body: url.searchParams.get('variant') === 'preview' ? preview : original })
+  })
+  await send(page, '轻量图片预览', 1)
+  const first = page.locator('.creation-response').first()
+  await expect(first.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'false')
+  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(960)
+  expect(reads.length).toBeGreaterThan(0)
+  expect(reads.every(url => url.searchParams.get('variant') === 'preview')).toBe(true)
+  await first.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await send(page, '保留原图继续编辑', 2)
+  expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  await first.locator('.creation-image-preview').click()
+  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+  await expect(viewer).toBeVisible()
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(3840)
+  expect(reads.some(url => !url.searchParams.has('variant'))).toBe(true)
+  const pending = page.waitForEvent('download')
+  await viewer.getByRole('button', { name: '下载原文件', exact: true }).click()
+  const download = await pending
+  expect((await readFile((await download.path())!)).equals(original)).toBe(true)
+})
+
 test('editing a result restores its image and prompt without generating until sent', async ({ page }) => {
   const { calls, image } = await fixture(page)
   await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'source.jpg', mimeType: 'image/jpeg', buffer: image })

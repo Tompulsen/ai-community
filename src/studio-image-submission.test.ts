@@ -33,6 +33,25 @@ async function restoreTasks(p: Awaited<ReturnType<typeof fixture>>, tasks: Creat
   p.session.user = user
   await p.initializeCreation()
 }
+it('display previews use the image proxy without changing original media, videos or local assets', async () => {
+  const p = await fixture()
+  vi.stubGlobal('location', new URL('https://community.example/create/image'))
+  const remote = 'https://media.example/original.png?signature=test'
+  const original = p.mediaSource(remote)!
+  const preview = p.mediaSource(remote, true)!
+  expect(new URL(preview, location.origin).searchParams.get('variant')).toBe('preview')
+  expect(new URL(preview, location.origin).searchParams.get('url')).toBe(remote)
+  expect(original).not.toContain('variant=')
+  for (const source of [remote, original, new URL(original, location.origin).href]) {
+    expect(new URL((await p.readableMedia(source, 'image', true))!, location.origin).searchParams.get('variant')).toBe('preview')
+    expect(await p.readableMedia(source, 'image')).not.toContain('variant=')
+  }
+  for (const source of ['data:image/png;base64,AA==', 'blob:https://community.example/asset', '/legacy-files/id', '/assets/image.png', '/api/creation/media?path=videos/job/content'])
+    expect(p.mediaSource(source, true)).toBe(source)
+  expect(p.mediaSource(remote, true, 'video')).not.toContain('variant=')
+  expect(p.mediaSource('/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fmovie.mp4&kind=video', true)).not.toContain('variant=')
+  expect(p.input.references![0]!.url).toBe('https://media.example/original.png')
+})
 it('awaits durable conversation registration before the paid POST and sends an immutable input snapshot', async () => {
   const p = await fixture()
   let release!: () => void, entered = false

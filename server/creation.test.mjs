@@ -139,6 +139,49 @@ function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
 
+test('image previews are small WebP responses while original downloads retain every byte', async t => {
+  const original = await sharp({ create: { width: 2160, height: 3840, channels: 4, background: '#3488bb80' } }).png().toBuffer()
+  const reads = []
+  const { app } = fixture(t, { publicMedia(url, kind, maximum, signal) {
+    reads.push({ url, kind, maximum, signal })
+    return new Response(original, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(original.length) } })
+  } })
+  const url = '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Flarge.png&kind=image'
+  const preview = await app.inject(url + '&variant=preview')
+  assert.equal(preview.statusCode, 200, preview.payload)
+  assert.equal(preview.headers['content-type'], 'image/webp')
+  assert.equal(preview.headers['cache-control'], 'private, no-store')
+  assert.equal(preview.headers['x-content-type-options'], 'nosniff')
+  assert.equal(Number(preview.headers['content-length']), preview.rawPayload.length)
+  const info = await sharp(preview.rawPayload).metadata()
+  assert.equal(info.width, 540)
+  assert.equal(info.height, 960)
+  assert.equal(info.hasAlpha, true)
+  assert(preview.rawPayload.length < original.length / 5)
+  const download = await app.inject(url)
+  assert.equal(download.headers['content-type'], 'image/png')
+  assert.deepEqual(download.rawPayload, original)
+  assert.equal(reads.length, 2)
+  assert(reads.every(read => read.url === 'https://media.example/large.png' && read.kind === 'image' && read.maximum === 32 * 1024 * 1024 && read.signal instanceof AbortSignal))
+})
+
+test('preview requests reject invalid variants, protected paths, videos and switched accounts before reading media', async t => {
+  let reads = 0
+  const { app } = fixture(t, { publicMedia() { reads++; throw new Error('Unexpected media read') } })
+  const url = '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Flarge.png'
+  for (const query of ['&variant=', '&variant=unknown', '&variant=preview&variant=preview', '&variant=preview&kind=video',
+    '&variant=preview&kind=text', '&variant=preview&path=videos/job/content', '&variant=preview&path='])
+    assert.equal((await app.inject(url + query)).statusCode, 400, query)
+  assert.equal((await app.inject({ url: url + '&variant=preview', headers: { 'x-new-api-user': '18' } })).statusCode, 409)
+  assert.equal(reads, 0)
+})
+
+test('preview requests keep the public-media private-network restrictions', async t => {
+  const { app } = fixture(t)
+  for (const source of ['http://127.0.0.1/a.png', 'http://169.254.169.254/a.png', 'https://user:password@media.example/private.png'])
+    assert.equal((await app.inject(`/api/creation/media?variant=preview&url=${encodeURIComponent(source)}`)).statusCode, 400)
+})
+
 test('automatic text interfaces use model configuration while explicit and legacy formats keep their selection', async t => {
   for (const [apiFormat, expectedPath] of [['auto', '/v1/responses'], ['chat-completions', '/v1/chat/completions'], [undefined, '/v1/chat/completions']]) {
     const { app, calls } = fixture(t, {

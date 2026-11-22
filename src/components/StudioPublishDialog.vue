@@ -99,7 +99,7 @@ defineExpose({ open })
   <Teleport to="body"><dialog ref="dialog" class="compact-dialog studio-publish-dialog" aria-labelledby="studio-publish-title" @cancel="busy && $event.preventDefault()">
     <div class="dialog-heading"><h2 id="studio-publish-title">{{ heading }}</h2><button class="icon-button" aria-label="关闭发布作品" :disabled="busy" @click="dialog?.close()"><X :size="18" /></button></div>
     <form v-if="task" class="dialog-body stack" @submit.prevent="submit" @invalid.capture="revealInvalid">
-      <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url)" :alt="task.prompt" /></template></div>
+      <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url, true)" :alt="task.prompt" /></template></div>
       <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，按社区审核设置公开。</p>
       <template v-if="!result">
         <label class="field"><span>作品标题</span><input v-model="title" class="control" maxlength="100" required :disabled="busy || locked" placeholder="给作品起一个清晰的名字" /></label>
@@ -119,7 +119,7 @@ defineExpose({ open })
           <label class="field"><span>生成提示词（选填）</span><textarea v-model="prompt" class="control" rows="4" maxlength="100000" :disabled="busy || locked" aria-describedby="publish-prompt-hint" /></label>
           <p class="publish-context">{{ task.model }}</p>
           <p id="publish-prompt-hint" class="form-note">制作同款会使用这里的提示词和选中的参考图，作品简介不会作为提示词导入。</p>
-          <fieldset v-if="task.references.length" class="publish-references" :disabled="busy || locked"><legend>公开参考图</legend><p class="form-note">仅勾选你希望随作品公开、供他人制作同款的参考图。</p><div class="publish-reference-options"><label v-for="(reference, index) in task.references" :key="index"><input v-model="referenceIndices" type="checkbox" :value="index" /><img :src="mediaSource(reference.url)" alt="" /><span>{{ reference.name || `参考图 ${index + 1}` }}</span></label></div></fieldset>
+          <fieldset v-if="task.references.length" class="publish-references" :disabled="busy || locked"><legend>公开参考图</legend><p class="form-note">仅勾选你希望随作品公开、供他人制作同款的参考图。</p><div class="publish-reference-options"><label v-for="(reference, index) in task.references" :key="index"><input v-model="referenceIndices" type="checkbox" :value="index" /><img :src="mediaSource(reference.url, true)" alt="" /><span>{{ reference.name || `参考图 ${index + 1}` }}</span></label></div></fieldset>
           <label class="field"><span>来源链接</span><input v-model="sourceUrl" class="control" type="url" maxlength="2000" placeholder="https://" :disabled="busy || locked" /></label><label class="field"><span>授权说明</span><input v-model="license" class="control" maxlength="200" :disabled="busy || locked" /></label>
           </div></details>
           <label class="publish-rights"><input v-model="rights" type="checkbox" :disabled="busy || locked" /><span>我确认拥有作品发布权，并已核实所填写的来源与授权说明。</span></label>

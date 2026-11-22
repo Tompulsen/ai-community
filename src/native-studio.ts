@@ -265,18 +265,32 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
     if (!localMedia[key]) void gallerySource(url, preview)
     return localMedia[key]
   }
-  if (url.startsWith('data:') || url.startsWith('/legacy-files/') || url.startsWith('/api/creation/')) return url
-  return `/api/creation/media?${new URLSearchParams({ url, kind })}`
+  if (typeof location !== 'undefined' && /^https?:/.test(url)) {
+    try {
+      const direct = new URL(url)
+      if (direct.origin === location.origin && ['/api/creation/', '/legacy-files/', '/assets/'].some(path => direct.pathname.startsWith(path)))
+        return mediaSource(direct.pathname + direct.search + direct.hash, preview, kind)
+    } catch { /* Let the safe media endpoint reject malformed remote addresses. */ }
+  }
+  if (url.startsWith('/api/creation/')) {
+    const direct = new URL(url, 'https://community.invalid')
+    if (preview && kind === 'image' && direct.pathname === '/api/creation/media' && direct.searchParams.has('url')
+      && !direct.searchParams.has('path') && direct.searchParams.get('kind') !== 'video') direct.searchParams.set('variant', 'preview')
+    return direct.pathname + direct.search + direct.hash
+  }
+  if (['data:', 'blob:', '/legacy-files/', '/assets/'].some(prefix => url.startsWith(prefix))) return url
+  return `/api/creation/media?${new URLSearchParams({ url, kind, ...(preview && kind === 'image' ? { variant: 'preview' } : {}) })}`
 }
 export async function readableMedia(url: string, kind: CreationKind, preview = false) {
   if (url.startsWith('blob:')) return url
   if (typeof location !== 'undefined') {
     try {
       const direct = new URL(url, location.href)
-      if (direct.origin === location.origin && ['/api/creation/', '/legacy-files/', '/assets/'].some(path => direct.pathname.startsWith(path))) return direct.href
+      if (direct.origin === location.origin && ['/api/creation/', '/legacy-files/', '/assets/'].some(path => direct.pathname.startsWith(path)))
+        return new URL(mediaSource(direct.pathname + direct.search + direct.hash, preview, kind)!, location.origin).href
     } catch { /* Other media keeps using the existing safe proxy. */ }
   }
-  let source = url.startsWith('legacy-gallery:') ? await gallerySource(url, preview) : mediaSource(url, false, kind)
+  let source = url.startsWith('legacy-gallery:') ? await gallerySource(url, preview) : mediaSource(url, preview, kind)
   if (url.startsWith('studio-asset:') && !source) {
     const key = `${activeOwner()}:${url}:original`
     source = await mediaLoads.get(key)

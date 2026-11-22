@@ -39,7 +39,7 @@ watch([() => session.user?.id, () => props.task.id, () => props.index, identity,
         } else {
           let blob = original
           if (!blob) {
-            const response = await fetch(await readableMedia(url, 'image', url.startsWith('legacy-gallery:')), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
+            const response = await fetch(await readableMedia(url, 'image', true), { credentials: 'same-origin', signal: controller.signal, ...(retry.value ? { cache: 'reload' } : {}) })
             if (!response.ok) throw new Error('缩略图加载失败，可重试或查看原图。')
             blob = await response.blob()
           }

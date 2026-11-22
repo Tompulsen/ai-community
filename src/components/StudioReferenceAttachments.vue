@@ -16,7 +16,7 @@ watch(() => props.references.map(file => file.url).join('\n'), () => preview.val
   <ul v-if="references.length" class="reference-list" aria-label="参考图片">
     <li v-for="(file, index) in references" :key="`${file.url}:${index}`">
       <button class="reference-preview" type="button" :aria-label="`预览参考图 ${index + 1}`" :title="file.name" @click="preview?.open(index)">
-        <img :src="mediaSource(file.url)" :alt="file.name" />
+        <img :src="mediaSource(file.url, true)" :alt="file.name" />
       </button>
       <button class="reference-remove" type="button" :disabled="disabled" :aria-label="`移除参考图 ${index + 1}`" title="移除参考图" @click="$emit('remove', index)"><X :size="14" /></button>
     </li>

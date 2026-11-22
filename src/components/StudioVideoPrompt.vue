@@ -63,7 +63,7 @@ defineExpose({ focus: () => input.value?.focus() })
   <Teleport to="body">
     <div v-if="opened" :id="id" ref="panel" class="video-reference-menu" role="listbox" aria-label="选择参考图">
       <button v-for="(file, index) in choices" :id="`${id}-${file.number}`" :key="`${file.url}:${file.number}`" type="button" role="option" :aria-selected="index === selected"
-        @pointerdown.prevent="choose(file.number)" @mouseenter="selected = index"><img :src="mediaSource(file.url)" alt="" /><span>图片{{ file.number }}</span><small>{{ file.name }}</small></button>
+        @pointerdown.prevent="choose(file.number)" @mouseenter="selected = index"><img :src="mediaSource(file.url, true)" alt="" /><span>图片{{ file.number }}</span><small>{{ file.name }}</small></button>
     </div>
   </Teleport>
 </template>

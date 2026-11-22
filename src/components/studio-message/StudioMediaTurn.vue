@@ -86,7 +86,7 @@ async function remove() {
       </template>
     </template>
     <template v-if="role === 'user'">
-      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><img v-for="(file, index) in task.references" :key="file.url" :src="mediaSource(file.url)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></div></div>
+      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><img v-for="(file, index) in task.references" :key="file.url" :src="mediaSource(file.url, true)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></div></div>
       <div class="creation-turn-tools message-actions" role="group" aria-label="提问操作">
         <button class="studio-tool" type="button" aria-label="编辑并重新生成" title="编辑原提问和参考图" :disabled="busy" @click="emit('action', 'editTask', task)"><Pencil :size="16" aria-hidden="true" />编辑</button>
         <button class="icon-button" type="button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" aria-hidden="true" /></button>
@@ -97,10 +97,10 @@ async function remove() {
       <progress v-if="working && task.progress != null" class="generation-progress" :value="task.progress" max="100" aria-label="模型返回的生成进度" />
       <p v-if="task.error && !working" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
-      <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview)" alt="生成中的预览" />
+      <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media"><figure v-for="(url, index) in task.urls" :key="url">
         <template v-if="task.kind === 'video'"><video :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" @dblclick="emit('preview', task, index)" /><button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button></template>
-        <StudioCreationImage v-else :src="mediaSource(url) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
+        <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
       <div v-if="task.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">

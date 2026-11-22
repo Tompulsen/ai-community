@@ -88,7 +88,7 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
     </div>
     <template v-if="!hidden">
       <div class="dock-content" role="status" aria-live="polite"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" /><LoaderCircle v-else-if="active(task.phase)" :size="20" /><CircleAlert v-else :size="20" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>
-      <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0])" alt="本次生成的图片" /></button>
+      <button v-if="task.kind === 'image' && task.phase === 'complete' && task.urls[0]" class="dock-preview" aria-label="打开生成结果" @click="open(task)"><img :src="mediaSource(task.urls[0], true)" alt="本次生成的图片" /></button>
       <p v-if="error || task.error && !active(task.phase)" class="dock-error" :class="task.phase === 'paused' ? 'muted' : 'form-error'" :role="task.phase === 'paused' ? 'status' : 'alert'">{{ error || task.error }}</p>
       <div class="dock-actions"><button class="button primary btn" @click="open(task)">{{ task.phase === 'complete' ? '查看结果' : '查看任务' }}<ArrowUpRight :size="15" /></button><template v-if="tasks.length > 1"><button class="icon-button" aria-label="上一个任务" @click="index = (index + tasks.length - 1) % tasks.length"><ChevronLeft :size="18" /></button><button class="icon-button" aria-label="下一个任务" @click="index = (index + 1) % tasks.length"><ChevronRight :size="18" /></button></template></div>
     </template>

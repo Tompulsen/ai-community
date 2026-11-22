@@ -18,6 +18,7 @@ import {
 } from './creation-contract.ts'
 import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
+import { imagePreview } from './creation/image-preview.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
 import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
@@ -341,6 +342,10 @@ function classifyModel(id: string): CreationKind | null {
 async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServices) {
   const path = ctx.url.searchParams.get('path')
   const kind = ctx.url.searchParams.get('kind') === 'video' ? 'video' : 'image'
+  const variant = ctx.url.searchParams.get('variant')
+  if (variant !== null && (variant !== 'preview' || ctx.url.searchParams.getAll('variant').length !== 1
+    || ctx.url.searchParams.has('path') || ctx.url.searchParams.has('kind') && ctx.url.searchParams.get('kind') !== 'image'))
+    throw httpError(400, '图片预览地址无效。')
   let response: Response
   if (path) {
     const normalized = mediaPath(path)
@@ -382,10 +387,12 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
   } else {
     const url = ctx.url.searchParams.get('url')
     if (!url || url.length > 8192) throw httpError(400, '生成文件地址无效。')
-    response = await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal)
+    response = variant === 'preview' ? await imagePreview(url, svc.publicMedia, req.signal)
+      : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal)
   }
   response.headers.set('Cache-Control', 'private, no-store')
   response.headers.set('X-Content-Type-Options', 'nosniff')
+  if (variant === 'preview') ctx.reply.header('Content-Length', response.headers.get('content-length')!)
   await sendWebResponse(ctx.reply, response)
 }
 
