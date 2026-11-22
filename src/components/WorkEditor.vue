@@ -34,10 +34,10 @@ const selectedTagIds = computed({
 let tagLoadId = 0
 const files = ref<UploadFile[]>([])
 const references = ref<UploadFile[]>([])
-const uploads = useFileUploads()
+const uploads = useFileUploads(() => props.work && session.user?.isAdmin && props.work.authorId !== session.user.id ? props.work.id : undefined)
 const version = ref(0)
 const error = ref('')
-const loading = ref(false)
+const loading = ref(false), loadFailed = ref(false)
 const uploading = uploads.uploading
 const saving = ref(false)
 const requestId = ref(crypto.randomUUID())
@@ -60,19 +60,23 @@ function fill(work?: Work | null) {
   version.value = work?.version || 0
   baseline.value = snapshot()
 }
-watch(() => [props.open, props.work?.id] as const, async ([open]) => {
-  const current = ++loadId
-  if (!open) { uploads.reset(); dialog.value?.close(); return }
-  error.value = ''; loading.value = false; fill(props.work)
+async function loadWork() {
+  const current = ++loadId;
+  error.value = ''; loadFailed.value = false; loading.value = false; fill(props.work)
   await nextTick()
+  if (current !== loadId || !props.open) return
   if (!dialog.value?.open) dialog.value?.showModal()
   if (!props.work) return
   loading.value = true
   try {
     const result = await api<{ work: Work }>(`/api/works/${encodeURIComponent(props.work.id)}`)
     if (current === loadId) { fill(result.work); if (!sourceComment.value) void loadTags() }
-  } catch (cause) { if (current === loadId) error.value = errorMessage(cause) }
+  } catch (cause) { if (current === loadId) { error.value = errorMessage(cause); loadFailed.value = true } }
   finally { if (current === loadId) loading.value = false }
+}
+watch(() => [props.open, props.work?.id] as const, ([open]) => {
+  if (open) void loadWork()
+  else { loadId++; uploads.reset(); dialog.value?.close() }
 }, { immediate: true })
 
 async function loadTags() {
@@ -160,7 +164,7 @@ function removeFile(index: number, reference = false) {
   if (!reference) inferKind()
 }
 async function save(status: 'draft' | 'pending') {
-  if (saving.value || loading.value) return
+  if (saving.value || loading.value || loadFailed.value) return
   if (!draft.title.trim()) { error.value = '请填写作品标题。'; return }
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
@@ -189,7 +193,7 @@ async function save(status: 'draft' | 'pending') {
       fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
     }
-    const result = await api<{ work: Work }>(props.work ? `/api/works/${encodeURIComponent(props.work.id)}` : '/api/works', { method: props.work ? 'PATCH' : 'POST', body })
+    const result = await api<{ work: Work }>(props.work ? `/api/works/${encodeURIComponent(props.work.id)}` : '/api/works', { method: props.work ? 'PATCH' : 'POST', body, expectedAccount: owner })
     if (current !== loadId || session.user?.id !== owner) return
     if (result.work.status !== 'draft') void refreshLotteryBalance(true)
     baseline.value = snapshot()
@@ -210,7 +214,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
     <form class="editor-form" @submit.prevent="save('pending')" @invalid.capture="invalidField">
       <div class="editor-scroll" tabindex="0" role="region" aria-label="作品信息">
         <p v-if="loading" role="status">正在加载作品…</p>
-        <fieldset :disabled="loading || saving" class="editor-fields editor-layout">
+        <fieldset :disabled="loading || saving || loadFailed" class="editor-fields editor-layout">
           <legend class="editor-sr-only">作品信息</legend>
           <section class="attachment-section editor-media" aria-label="作品文件">
             <input ref="fileInput" type="file" multiple hidden aria-label="添加作品文件" @change="choose($event)" />
@@ -248,8 +252,8 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
           </div>
         </fieldset>
       </div>
-      <div class="editor-feedback"><p v-if="uploading" role="status">{{ saving ? '已安排提交，上传完成后自动保存。' : '文件正在上传，可继续填写作品信息。' }}</p><p v-if="error" class="form-error" role="alert">{{ error }}</p></div>
-      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
+      <div class="editor-feedback"><p v-if="uploading" role="status">{{ saving ? '已安排提交，上传完成后自动保存。' : '文件正在上传，可继续填写作品信息。' }}</p><p v-if="error" class="form-error" role="alert">{{ error }} <button v-if="loadFailed" type="button" class="text-link" @click="loadWork">重新加载作品</button></p></div>
+      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || loadFailed" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || loadFailed"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
     </form>
   </dialog>
   <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">

@@ -15,6 +15,7 @@ const coverLabel = computed(() => {
   const work = props.work
   if (work.kind === 'resource') return undefined
   const parts = ['查看作品', work.title]
+  if (props.management) parts.push(work.revisionPending ? '修改待审核' : statusLabels[work.status])
   if ((!work.cover || failed.value) && !work.video) parts.push(failed.value ? '封面加载失败' : '暂无封面')
   if (work.kind === 'video') parts.push(work.duration || '视频')
   return parts.join('：')

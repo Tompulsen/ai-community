@@ -10,9 +10,9 @@ export interface UploadStatus {
 }
 export interface UploadFile extends WorkFile { upload?: UploadStatus }
 
-export function useFileUploads() {
+export function useFileUploads(workId?: () => string | undefined) {
   const items = ref<UploadFile[]>([])
-  const jobs = new Map<UploadFile, { file: File; controller: AbortController; done: Promise<void>; finish: () => void }>()
+  const jobs = new Map<UploadFile, { file: File; workId?: string; controller: AbortController; done: Promise<void>; finish: () => void }>()
   let active = 0, disposed = false
   const uploading = computed(() => items.value.some(item => item.upload && ['queued', 'uploading', 'saving'].includes(item.upload.state)))
   function pump() {
@@ -24,7 +24,7 @@ export function useFileUploads() {
       void uploadFile(job.file, job.controller.signal, percent => {
         if (jobs.get(item) !== job || job.controller.signal.aborted) return
         item.upload!.progress = percent; item.upload!.state = percent === 100 ? 'saving' : 'uploading'
-      }).then(result => {
+      }, job.workId).then(result => {
         if (jobs.get(item) !== job || job.controller.signal.aborted) return
         const preview = item.url
         Object.assign(item, result, { url: preview })
@@ -39,7 +39,7 @@ export function useFileUploads() {
     let finish!: () => void
     const done = new Promise<void>(resolve => { finish = resolve })
     item.upload = { state: 'queued' }
-    jobs.set(item, { file, controller: new AbortController(), done, finish })
+    jobs.set(item, { file, workId: workId?.(), controller: new AbortController(), done, finish })
   }
   function add(files: File[]) {
     const added = files.map(file => {

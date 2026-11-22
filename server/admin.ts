@@ -517,7 +517,7 @@ function packAnnouncement(row: AnnouncementRow) {
 const auditLabels: Record<string, string> = {
   updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '停用公告',
-  communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
+  communityWorkEdit: '编辑作品', communityWorkDelete: '删除作品', communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解除封禁', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '修改社区配置', communitySettings: '修改站点设置', updateCommunityAds: '修改广告位',
   createCommunityTag: '创建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
   updateCommunityWelfareTasks: '编辑福利任务', communityPublicationReward: '发作品奖励自动到账', adjustLotteryChances: '调整抽奖次数', updateCommunityRoles: '调整管理授权',
@@ -533,6 +533,8 @@ function safeAuditDetails(type: string, input: unknown): Body {
   }
   if (['createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement'].includes(type)) {
     copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive'])
+  } else if (type === 'communityWorkEdit' || type === 'communityWorkDelete') {
+    copyId('submissionId'); copyId('userId'); copyNumber('version')
   } else if (type === 'communityReview') {
     copyId('submissionId'); copyEnum('action', ['approve', 'reject', 'remove']); copyNumber('version')
   } else if (type === 'communityPublicationReward') {

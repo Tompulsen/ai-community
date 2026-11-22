@@ -128,3 +128,15 @@ test('new HTTP routes reach authentication instead of falling through to 404', a
   const response = await app.inject({ method: 'POST', url: '/api/notifications/read-all', headers: { origin }, payload: { category: 'activity', through: '1-0' } })
   assert.equal(response.statusCode, 401)
 })
+
+test('work edit and deletion logs link to the author even after the work is removed', async () => {
+  for (const [type, label] of [['communityWorkEdit', '编辑作品'], ['communityWorkDelete', '删除作品']]) {
+    const f = fixture()
+    f.logs.push({ id: 'audit1', userId: 'operator', type, info: { submissionId: 'work1', userId: 'owner1', version: 2, prompt: 'private' } })
+    const result = await f.request(`/api/admin/logs?type=${type}`)
+    assert.equal(result.items[0].label, label)
+    assert.deepEqual(result.items[0].details, [{ label: '作品编号', value: 'work1' }, { label: '作者编号', value: 'owner1' }])
+    assert.deepEqual(result.items[0].target, { label: '作者主页', to: '/community?creator=owner1' })
+    assert(!JSON.stringify(result).includes('private'))
+  }
+})

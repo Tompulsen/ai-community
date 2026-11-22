@@ -165,7 +165,7 @@ async function classify(path: string, size: number, requested: string): Promise<
   return { type, ambiguous: false };
 }
 
-export async function uploadMedia(ctx: RequestContext) {
+export async function uploadMedia(ctx: RequestContext, workId?: string) {
   const actor = ctx.requireUser();
   const policy = await uploadPolicy(ctx);
   let tempLimit = Math.floor(Math.min(policy.maximum, Math.max(...Object.values(policy.limits)) * MiB));
@@ -253,6 +253,11 @@ export async function uploadMedia(ctx: RequestContext) {
     let discardClient = false;
     try {
       await client.query('BEGIN');
+      // Lock the work before its author, matching edit/review publication lock order.
+      if (workId) {
+        const work = await client.query("SELECT id FROM community_submission WHERE id=$1 AND \"authorId\"=$2 AND destination='community' FOR SHARE", [workId, actor.id]);
+        if (!work.rows.length) throw httpError(409, '作品已变化，请刷新后重新上传。');
+      }
       const owner = await client.query('SELECT id FROM "user" WHERE id=$1 AND NOT "isDeleted" AND NOT "isSuspended" FOR UPDATE', [actor.id]);
       if (!owner.rows.length) throw httpError(403, '账号当前不可用。');
       const used = (await client.query<{ size: string }>('SELECT COALESCE(SUM(size),0)::text AS size FROM drive_file WHERE "userId"=$1 AND "storedInternal" AND NOT "isLink"', [actor.id])).rows[0];

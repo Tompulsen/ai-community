@@ -10,7 +10,7 @@ import type { RequestContext } from './types.ts'
 
 const logLabels: Record<string, string> = {
   updateUserModerationNote: '更新管理笔记', clearUserProfileMedia: '清除资料图片',
-  communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解封账号', resolveAbuseReport: '处理举报',
+  communityWorkEdit: '编辑作品', communityWorkDelete: '删除作品', communityReview: '作品审核', suspend: '封禁账号', unsuspend: '解封账号', resolveAbuseReport: '处理举报',
   updateCommunityConfig: '社区设置', communitySettings: '站点设置', updateCommunityAds: '广告位设置',
   createCommunityTag: '新建标签', updateCommunityTag: '修改标签', deleteCommunityTag: '删除标签',
   createAnnouncement: '发布公告', updateAnnouncement: '修改公告', deleteAnnouncement: '删除公告',
@@ -23,7 +23,10 @@ function logSummary(type: string, value: unknown) {
   const info = object(value), details: { label: string; value: string }[] = []
   let target: { label: string; to: string } | undefined
   const add = (label: string, value: unknown) => { if (typeof value === 'string' && value) details.push({ label, value: value.slice(0, 1000) }) }
-  if (type === 'communityReview') {
+  if (type === 'communityWorkEdit' || type === 'communityWorkDelete') {
+    if (validId(info.submissionId)) add('作品编号', info.submissionId)
+    if (validId(info.userId)) { add('作者编号', info.userId); target = { label: '作者主页', to: `/community?creator=${info.userId}` } }
+  } else if (type === 'communityReview') {
     add('结果', { approve: '通过', reject: '驳回', remove: '撤下' }[String(info.action)])
     add('说明', info.reason)
     if (validId(info.submissionId)) target = { label: '查看作品', to: `/work/${info.submissionId}` }

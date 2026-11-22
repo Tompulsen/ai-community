@@ -374,3 +374,13 @@ test('audit write failures roll back permission and announcement changes', async
   assert.equal(notices.state.announcements[0].text, previous.text)
   assert.equal(notices.state.audits.length, 0)
 })
+
+test('work management audit retains only author, work and version identifiers', async () => {
+  for (const [type, label] of [['communityWorkEdit', '编辑作品'], ['communityWorkDelete', '删除作品']]) {
+    const f = fixture({ state: { audits: [{ id: 'audit1', userId: 'root1', type,
+      info: { submissionId: 'work1', userId: 'owner1', version: 2, prompt: 'private prompt', token: 'secret' } }] } })
+    const result = await f.request(`/api/admin/audit?type=${type}`)
+    assert.equal(result.items[0].label, label)
+    assert.deepEqual(result.items[0].details, { submissionId: 'work1', userId: 'owner1', version: 2 })
+  }
+})

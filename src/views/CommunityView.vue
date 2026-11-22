@@ -3,11 +3,12 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch, type Ref } fro
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowUpRight, Bookmark, Heart, Images, LockKeyhole, MessageSquare, Pencil, Settings, LayoutGrid, WandSparkles, Trash2, Users, X } from '@lucide/vue'
 import WorkCard from '../components/WorkCard.vue'
+import WorkManagementDialogs from '../components/WorkManagementDialogs.vue'
 import BentoGrid from '../components/BentoGrid.vue'
 import CommunityAds from '../components/CommunityAds.vue'
 import ContentSkeleton from '../components/ContentSkeleton.vue'
 import { type Creator, type Work } from '../data'
-import { api, errorMessage, loadSession, notify, queryString, session, uploadFile } from '../state'
+import { api, canManageWork, errorMessage, loadSession, notify, queryString, session, uploadFile } from '../state'
 import FollowButton from '../components/FollowButton.vue'
 import { changeRelationship, followRevision, seedRelationships, type Relationship } from '../following'
 import ProfileWorkControls, { type ProfileWorkFilters } from '../components/ProfileWorkControls.vue'
@@ -22,6 +23,7 @@ const creators = ref<Creator[]>([]), creator = ref<Creator | null>(null), works 
 const profileTabs = [{ value: 'works', label: '作品' }, { value: 'saved', label: '收藏' }, { value: 'liked', label: '喜欢' }] as const
 const profileTab = ref<'works' | 'saved' | 'liked'>('works'), people = ref<Creator[]>([])
 const filters = ref<ProfileWorkFilters>({ kind: 'all', visibility: 'all', from: '', to: '' })
+const workManager = ref<InstanceType<typeof WorkManagementDialogs>>()
 const selecting = ref(false), selectedWorks = ref(new Set<string>()), deleting = ref(false)
 const nextCursor = ref<string | null>(null), worksCursor = ref<string | null>(null), collectionLoading = ref(false)
 const loading = ref(true), error = ref(''), collectionError = ref('')
@@ -183,7 +185,7 @@ function openPeople(mode: 'followers' | 'following') {
   void loadPeople()
 }
 function closePeople() { ++peopleId; peopleLoading.value = false; peopleError.value = ''; people.value = []; nextCursor.value = null }
-watch([creatorId, () => session.user?.id], () => { void load() }, { immediate: true })
+watch([creatorId, () => session.user?.id, () => session.user?.isAdmin], () => { void load() }, { immediate: true })
 watch([profileTab, filters], () => { selecting.value = false; selectedWorks.value = new Set(); if (!loading.value) void loadCollection() })
 function toggleWorkSelection(id: string) {
   const next = new Set(selectedWorks.value)
@@ -200,13 +202,22 @@ async function deleteSelectedWorks() {
   try {
     for (const item of items) {
       if (!current()) return
-      await api(`/api/works/${encodeURIComponent(item.id)}`, { method: 'DELETE', body: { version: item.version } })
+      await api(`/api/works/${encodeURIComponent(item.id)}`, { method: 'DELETE', expectedAccount: owner, body: { version: item.version } })
       if (!current()) return
       works.value = works.value.filter(work => work.id !== item.id); selectedWorks.value.delete(item.id); removed++
     }
     selecting.value = false
   } catch (cause) { if (current()) collectionError.value = `${removed ? `已删除 ${removed} 件。` : ''}${errorMessage(cause)} 剩余作品已保留，请核对后重试。` }
   finally { deleting.value = false }
+}
+function workSaved(work: Work) {
+  const existing = works.value.find(item => item.id === work.id)
+  if (existing) Object.assign(existing, work)
+  void loadCollection()
+}
+function workDeleted(work: Work) {
+  works.value = works.value.filter(item => item.id !== work.id)
+  selectedWorks.value.delete(work.id)
 }
 function updateRelationship(result: Relationship) {
   for (const item of [...creators.value, ...people.value, ...(creator.value ? [creator.value] : [])]) if (item.id === result.id) Object.assign(item, result)
@@ -279,11 +290,12 @@ async function removeFollower() {
           <div v-if="selecting && isOwnProfile && profileTab === 'works'" class="profile-selection" role="toolbar" aria-label="作品批量操作"><label><input type="checkbox" aria-label="全选当前作品" :checked="allSelected" :disabled="deleting || collectionLoading" @change="selectedWorks = allSelected ? new Set() : new Set(works.filter(work => work.owned).map(work => work.id))" />全选当前页</label><span role="status">已选 {{ selectedItems.length }} 件</span><button type="button" class="icon-button" title="删除所选作品" aria-label="删除所选作品" :disabled="deleting || !selectedItems.length" @click="deleteSelectedWorks"><Trash2 :size="17" /></button><button type="button" class="icon-button" title="退出批量管理" aria-label="退出批量管理" :disabled="deleting" @click="selecting = false; selectedWorks = new Set()"><X :size="18" /></button></div>
           <p v-if="collectionError" class="form-error" role="alert">{{ collectionError }} <button class="text-link" @click="loadCollection()">重试</button></p>
           <div v-if="collectionLoading && !works.length" class="empty-state" role="status">正在加载作品…</div>
-          <BentoGrid v-else-if="works.length" class="profile-works"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :management="isOwnProfile && profileTab === 'works'" :eager="index < 3"><template #actions><label v-if="selecting && work.owned" class="profile-work-select"><input type="checkbox" :aria-label="`选择作品：${work.title}`" :checked="selectedWorks.has(work.id)" :disabled="deleting" @change="toggleWorkSelection(work.id)" /><span class="studio-sr-only">选择作品</span></label></template></WorkCard></BentoGrid>
+          <BentoGrid v-else-if="works.length" class="profile-works"><WorkCard v-for="(work, index) in works" :key="work.id" :work="work" :management="canManageWork(work) && profileTab === 'works'" :eager="index < 3"><template #actions><label v-if="selecting && work.owned" class="profile-work-select"><input type="checkbox" :aria-label="`选择作品：${work.title}`" :checked="selectedWorks.has(work.id)" :disabled="deleting" @change="toggleWorkSelection(work.id)" /><span class="studio-sr-only">选择作品</span></label><div v-else-if="profileTab === 'works' && canManageWork(work)" class="profile-work-actions"><button type="button" class="button subtle btn" :aria-label="`编辑作品：${work.title}`" :disabled="deleting || collectionLoading" @click="workManager?.edit(work)"><Pencil :size="15" aria-hidden="true" />编辑</button><button type="button" class="button subtle btn work-delete" :aria-label="`删除作品：${work.title}`" :disabled="deleting || collectionLoading" @click="workManager?.remove(work)"><Trash2 :size="15" aria-hidden="true" />删除</button></div></template></WorkCard></BentoGrid>
           <div v-else-if="!collectionError" class="empty-state"><component :is="profileTab === 'saved' ? Bookmark : profileTab === 'liked' ? Heart : Images" :size="28" /><h2>{{ emptyLabel }}</h2></div>
           <div v-if="worksCursor" class="feed-end"><button class="button btn" :disabled="collectionLoading" @click="loadCollection(true)">加载更多</button></div>
         </template>
         </div>
+        <WorkManagementDialogs ref="workManager" :disabled="deleting" @saved="workSaved" @deleted="workDeleted" />
         <dialog ref="peopleDialog" class="profile-people-dialog" aria-labelledby="profile-people-heading" @close="closePeople">
           <div class="dialog-heading"><h2 id="profile-people-heading">{{ peopleMode === 'followers' ? '粉丝' : '关注' }}</h2><button class="icon-button" aria-label="关闭列表" title="关闭列表" @click="peopleDialog?.close()"><X :size="20" /></button></div>
           <div class="profile-people-body">
@@ -312,6 +324,13 @@ async function removeFollower() {
 </template>
 
 <style scoped>
+.profile-work-actions { display: flex; gap: 8px; margin: 8px 4px 0; border-top: 1px solid var(--border); padding-top: 4px; }
+.profile-work-actions button { flex: 1; min-width: 0; min-height: 44px; padding-inline: 8px; background: transparent; color: var(--muted); }
+.profile-work-actions .work-delete:hover { color: var(--danger); }
+@media (max-width: 999px) {
+  .profile-work-actions { gap: 0; margin: 4px 0 0; padding-top: 0; }
+  .profile-work-actions button { flex-direction: column; gap: 4px; min-width: 44px; padding: 6px 2px; font-size: 12px; line-height: 16px; }
+}
 .person-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .person-actions > button { min-height: 44px; }
 .community-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }

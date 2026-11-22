@@ -794,13 +794,20 @@ async function createWork(ctx: RequestContext): Promise<true> {
   return send(ctx, 201, await workResponse(ctx, id));
 }
 
-async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
+function workActor(ctx: RequestContext): SessionUser {
   const actor = user(ctx);
+  const expected = ctx.req.headers?.['x-new-api-user'];
+  if (expected !== undefined && expected !== actor.id) fail(409, '登录账号已变化，请刷新后重新核对。');
+  return actor;
+}
+
+async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
+  const actor = workActor(ctx);
   const body = ctx.body ?? {};
   const version = integer(body.version, 0, 2147483647);
   await transaction(ctx.db, async db => {
     const row = await accessibleWork(ctx, workId, { lock: true, db });
-    if (row.authorId !== actor.id) fail(403, 'Only the owner may edit this work');
+    if (row.authorId !== actor.id && !actor.isAdmin) fail(403, '只有作者或管理员可以编辑此作品。');
     if (row.version !== version) fail(409, 'Work changed; refresh before editing');
     if (row.destination === 'source-comment' && (row.sourceCommentId || row.status !== 'pending')) fail(409, 'A completed source comment cannot be reposted');
     const previous = row.pendingRevision ?? row;
@@ -809,7 +816,7 @@ async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
     revision.tagIds = previous.tagIds ?? row.tagIds;
     const isPublished = ['approved', 'published'].includes(row.status) && row.approvedNoteId;
     const draft = !isPublished && body.status === 'draft';
-    const attachments = await validateRevision(db, actor.id, revision, body, draft, row.approvedNoteId);
+    const attachments = await validateRevision(db, row.authorId, revision, body, draft, row.approvedNoteId);
     if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     const mode = (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     if (isPublished && (row.pendingRevision || mode !== 'after')) {
@@ -818,6 +825,8 @@ async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
       const noteId = isPublished ? await publish(ctx, db, row, revision, attachments) : null;
       await writeRevision(db, row.id, revision, { noteId, status: isPublished ? 'published' : draft ? 'draft' : 'pending' });
     }
+    if (actor.isAdmin) await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4)',
+      [newId(ctx), actor.id, 'communityWorkEdit', { submissionId: row.id, userId: row.authorId, version }]);
   });
   return send(ctx, 200, await workResponse(ctx, workId));
 }
@@ -912,9 +921,22 @@ async function syncReactions(db: Queryable, noteId: string): Promise<void> {
     (SELECT reaction,COUNT(*)::int AS amount FROM note_reaction WHERE "noteId"=$1 GROUP BY reaction) counted),'{}'::jsonb) WHERE id=$1`, [noteId]);
 }
 
+async function workUploadContext(ctx: RequestContext): Promise<RequestContext> {
+  const workId = ctx.url.searchParams.get('workId');
+  if (workId === null) return ctx;
+  const actor = workActor(ctx);
+  if (!actor.isAdmin) fail(403, '只有管理员可以为其他作者上传作品文件。');
+  const work = await accessibleWork(ctx, workId);
+  if (work.destination !== 'community') fail(400, '此内容不支持代传作品文件。');
+  const author = await getUser(ctx.db, work.authorId);
+  if (!author) fail(409, '作品作者当前不可用。');
+  return { ...ctx, user: author, requireUser: () => author };
+}
+
 async function upload(ctx: RequestContext): Promise<true> {
-  user(ctx);
-  return send(ctx, 201, { file: await uploadMedia(ctx) });
+  workActor(ctx);
+  const uploadContext = await workUploadContext(ctx);
+  return send(ctx, 201, { file: await uploadMedia(uploadContext, ctx.url.searchParams.get('workId') ?? undefined) });
 }
 
 export function byteRange(header: string | undefined, size: number): ByteRange | false | null {
@@ -1326,7 +1348,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   let match: RegExpExecArray | null;
   if ((match = /^\/(?:legacy-files|files)\/([^/]+)$/.exec(path)) && (method === 'GET' || method === 'HEAD')) return media(ctx, decodeURIComponent(match[1]), path.startsWith('/files/'));
   if (path === '/api/uploads' && method === 'POST') return upload(ctx);
-  if (path === '/api/uploads/limits' && method === 'GET') return send(ctx, 200, await uploadLimitsFor(ctx));
+  if (path === '/api/uploads/limits' && method === 'GET') return send(ctx, 200, await uploadLimitsFor(await workUploadContext(ctx)));
   if ((match = /^\/api\/uploads\/([a-zA-Z0-9]+)$/.exec(path)) && method === 'GET') {
     const actor = user(ctx);
     const file = (await ctx.db.query<DriveFileRow & { url: string }>('SELECT id,name,type,size,url,"thumbnailAccessKey",properties,"storedInternal" FROM drive_file WHERE id=$1 AND "userId"=$2 AND "storedInternal" AND NOT "isLink"', [identifier(match[1]), actor.id])).rows[0];
@@ -1400,15 +1422,17 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
     }
     if (method === 'PATCH') return updateWork(ctx, id);
     if (method === 'DELETE') {
-      const actor = user(ctx);
+      const actor = workActor(ctx);
       const version = integer(ctx.body?.version, 0, 2147483647);
       await transaction(ctx.db, async db => {
         const row = await accessibleWork(ctx, id, { lock: true, db: db });
-        if (row.authorId !== actor.id) fail(403, 'Only the owner may delete this work');
+        if (row.authorId !== actor.id && !actor.isAdmin) fail(403, '只有作者或管理员可以删除此作品。');
         if (row.version !== version) fail(409, 'Work changed; refresh before deleting');
         await removeNote(db, row.approvedNoteId);
         if (row.destination === 'source-comment') await db.query('UPDATE community_submission SET status=\'removed\',"approvedNoteId"=NULL,version=version+1 WHERE id=$1', [id]);
         else await db.query('DELETE FROM community_submission WHERE id=$1', [id]);
+        if (actor.isAdmin) await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4)',
+          [newId(ctx), actor.id, 'communityWorkDelete', { submissionId: row.id, userId: row.authorId, version }]);
       });
       return send(ctx, 200, { deleted: true });
     }
