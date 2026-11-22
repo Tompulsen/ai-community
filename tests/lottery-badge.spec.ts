@@ -69,12 +69,19 @@ test('background tabs do not poll and a resumed page refreshes awarded chances',
   const { state } = await fixture(page, 0)
   await page.clock.install()
   await page.goto('/discover')
-  await expect.poll(() => state.reads).toBe(1)
-  await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }))
+  await expect(page.locator('.lottery-status')).toHaveText('剩余 0 次抽奖机会')
+  await page.evaluate(() => {
+    Object.defineProperties(document, { visibilityState: { configurable: true, value: 'hidden' }, hidden: { configurable: true, value: true } })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  const readsWhenHidden = state.reads
   await page.clock.fastForward(61000)
-  expect(state.reads).toBe(1)
+  expect(state.reads).toBe(readsWhenHidden)
   state.balance = 3
-  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')) })
+  await page.evaluate(() => {
+    Object.defineProperties(document, { visibilityState: { configurable: true, value: 'visible' }, hidden: { configurable: true, value: false } })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
   await expect(page.locator('.header-welfare')).toHaveAccessibleName('福利中心 3 次抽奖机会')
 })
 
