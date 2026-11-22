@@ -7,6 +7,7 @@ import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, h
 import { errorMessage, session } from '../state'
 import { galleryOutputIndexes, getTaskPage, getTaskStorageSize, type TaskPageQuery } from '../studio-task-store'
 import StudioGalleryCover from './StudioGalleryCover.vue'
+import StudioBrowserSave from './StudioBrowserSave.vue'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 
 const props = defineProps<{ kind?: string; embedded?: boolean; previewOnly?: boolean }>()
@@ -112,6 +113,8 @@ async function toggleSettings(event: Event) {
   settingsOpen.value = (event as ToggleEvent).newState === 'open'
   if (!settingsOpen.value) return
   const panel = event.target as HTMLElement
+  const owner = session.user?.id
+  if (owner) void getTaskStorageSize(owner).then(bytes => { if (owner === session.user?.id) storageBytes.value = bytes }).catch(() => {})
   await nextTick()
   const anchor = settingsButton.value?.getBoundingClientRect()
   if (!anchor) return
@@ -212,6 +215,7 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
         <article v-for="item in items" :key="item.key" class="gallery-item" :class="{ selected: selected.includes(item.key), selecting: batchMode }" @click="batchMode && !busy && toggle(item.key)">
           <label v-if="batchMode" class="card-select" @click.stop><input v-model="selected" type="checkbox" :value="item.key" :disabled="busy" :aria-label="`选择 ${item.task.prompt}${item.task.urls.length > 1 && view === 'gallery' ? ` · ${item.index + 1}` : ''}`" /></label>
           <StudioGalleryCover v-if="view === 'gallery'" :task="item.task" :index="item.index" :selecting="batchMode" :selected="selected.includes(item.key)" @open="!batchMode && open(item.task, item.index, true)" />
+          <StudioBrowserSave :task="item.task" />
           <div class="card-info"><span v-if="view === 'tasks'" class="task-phase">{{ phases[item.task.phase] }}</span><p class="task-prompt" :title="item.task.prompt">{{ item.task.prompt }}</p><p class="task-model" :title="item.task.model">{{ item.task.model }}</p><div class="task-meta"><span>{{ dimensions(item.task) }}</span><span>{{ new Date(item.task.createdAt).toLocaleDateString('zh-CN') }} · 本地</span></div><p v-if="view === 'tasks' && item.task.error" class="form-error">{{ item.task.error }}</p></div>
           <div v-if="item.task.localSave" class="local-save-status" :class="{ failed: item.task.localSave.state === 'failed' }" role="status"><template v-if="item.task.localSave.state === 'saving'"><LoaderCircle :size="14" /><span>正在准备下载</span></template><span v-else-if="item.task.localSave.state === 'downloadRequested'">已发起下载</span><template v-else><span :title="item.task.localSave.error">原文件下载失败</span><button class="icon-button" type="button" aria-label="重试原文件下载" title="重试原文件下载" :disabled="busy" @click="run(() => saveCreationLocally(canonicalCreationTask(item.task)))"><RefreshCw :size="15" /></button></template></div>
           <div v-if="!batchMode" class="item-actions"><button v-if="item.task.phase === 'complete'" class="card-action" type="button" :aria-label="item.task.urls.length > 1 ? '发布本组到社区' : '发布到社区'" :title="item.task.urls.length > 1 ? '发布本组到社区' : '发布到社区'" @click="publish(item.task, 'community')"><Upload :size="16" /></button><button v-if="item.task.phase === 'complete'" class="card-action" type="button" title="下载" aria-label="下载此记录" :disabled="busy" @click="run(() => downloadCreation(canonicalCreationTask(item.task), item.index))"><Download :size="16" /></button><button class="card-action" type="button" title="复用参数" aria-label="复用参数" @click="reuse(item.task)"><CopyPlus :size="16" /></button><button v-if="view === 'gallery'" class="card-action danger" type="button" title="从作品库移除" aria-label="从作品库移除" :disabled="busy" @click="run(current => removeItems([item], current))"><Trash2 :size="16" /></button><button v-if="item.task.kind !== 'video' && item.task.sourceWorkId && item.task.phase === 'complete'" class="card-action" type="button" title="发送到源作品评论区" aria-label="发送到源作品评论区" @click="publish(item.task, 'source-comment')"><Upload :size="16" /></button></div>

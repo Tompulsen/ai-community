@@ -50,12 +50,14 @@ async function fixture(page: Page, kind = 'image') {
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(kind === 'video' ? 'sora-2' : kind === 'text' ? 'gpt-5' : 'gpt-image-2')
   return { calls, uploads, image }
 }
+const imageReference = (image: Buffer, type = 'jpeg') => `data:image/${type};base64,${image.toString('base64')}`
 async function send(page: Page, prompt: string, turns: number) {
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill(prompt)
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.creation-turn')).toHaveCount(turns)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
+  if (await page.locator('.creation-response .browser-save').count()) await expect(page.locator('.creation-response .browser-save').last()).toHaveText('图片已保存到此浏览器')
 }
 
 for (const width of [390, 1440]) test(`image results load lightweight previews and retain original editing and downloads at ${width}px`, async ({ page }) => {
@@ -74,12 +76,13 @@ for (const width of [390, 1440]) test(`image results load lightweight previews a
   await send(page, '轻量图片预览', 1)
   const first = page.locator('.creation-response').first()
   await expect(first.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'false')
-  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(960)
+  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(384)
   expect(reads.length).toBeGreaterThan(0)
-  expect(reads.every(url => url.searchParams.get('variant') === 'preview')).toBe(true)
+  expect(reads.some(url => url.searchParams.get('variant') === 'preview')).toBe(true)
+  expect(reads.filter(url => !url.searchParams.has('variant'))).toHaveLength(1)
   await first.getByRole('button', { name: '编辑图片', exact: true }).click()
   await send(page, '保留原图继续编辑', 2)
-  expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[1].referenceUrls).toEqual([imageReference(original, 'png')])
   await first.locator('.creation-image-preview').click()
   const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
   await expect(viewer).toBeVisible()
@@ -101,14 +104,14 @@ test('editing a result restores its image and prompt without generating until se
   await first.getByRole('button', { name: '编辑图片', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原始海报')
   await expect(page.locator('.reference-list img')).toHaveCount(1)
-  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
   await expect(page.locator('.creation-editing')).toContainText('编辑图片')
   expect(calls).toHaveLength(2)
   await page.reload()
   await expect(page.locator('.creation-editing')).toContainText('编辑图片')
-  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
   await send(page, '将原始海报改为蓝色', 3)
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[2].referenceUrls).toEqual([imageReference(image)])
   expect(calls[2].imageContext.turns).toEqual([])
   await expect(page.locator('.creation-request').first()).toContainText('原始海报')
   await expect(page.locator('.creation-request').nth(1)).toContainText('另一张海报')
@@ -148,17 +151,17 @@ test('multi-image edit restores all outputs and the context menu selects the exa
   await response.locator('.creation-media figure').nth(1).click({ button: 'right' })
   await page.getByRole('menuitem', { name: '编辑这张图片', exact: true }).click()
   await expect(page.locator('.reference-list img')).toHaveCount(1)
-  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /b\.png/)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
   await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'new.jpg', mimeType: 'image/jpeg', buffer: image })
   await expect(page.locator('.reference-list img')).toHaveCount(2)
   expect(calls).toHaveLength(1)
   await send(page, '使用第二张和新上传图', 2)
-  expect(calls[1].referenceUrls[0]).toBe('https://media.example/b.png')
+  expect(calls[1].referenceUrls[0]).toBe(imageReference(image))
   expect(calls[1].referenceUrls[1]).toMatch(/^data:image\/jpeg/)
 })
 
 test('an image edit survives deleting its source turn without pulling in unrelated context', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '待编辑图片', 1)
   await send(page, '保留的另一张图', 2)
   const first = page.locator('.creation-response').first()
@@ -166,14 +169,14 @@ test('an image edit survives deleting its source turn without pulling in unrelat
   await first.getByRole('button', { name: '删除生成记录', exact: true }).click()
   await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(page.locator('.creation-turn')).toHaveCount(1)
-  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
   await send(page, '修改已载入的图片', 2)
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[2].referenceUrls).toEqual([imageReference(image)])
   expect(calls[2].imageContext.turns).toEqual([])
 })
 
 test('image edit drafts stay in their conversation and busy turns block editing', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '会话里的图片', 1)
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
   await page.locator('.studio-sidebar').getByRole('button', { name: '另一图片对话', exact: true }).click()
@@ -196,6 +199,7 @@ test('image edit drafts stay in their conversation and busy turns block editing'
     await expect(page.getByRole('button', { name: '编辑原提问', exact: true })).toBeDisabled()
   } finally { release() }
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
+  if (await page.locator('.creation-response .browser-save').count()) await expect(page.locator('.creation-response .browser-save').last()).toHaveText('图片已保存到此浏览器')
 })
 
 test('result tools remain reachable on mobile and support keyboard copy and cancel', async ({ page }, info) => {
@@ -234,13 +238,13 @@ test('result tools remain reachable on mobile and support keyboard copy and canc
 })
 
 test('follow-up carries the previous image and history in one session, with independent drafts', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '一只白猫', 1)
   await expect(page.locator('.reference-list img')).toHaveCount(0)
   await send(page, '背景改成蓝色', 2)
   expect(calls[0].imageContext.turns).toEqual([])
-  expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
-  expect(calls[1].imageContext.turns).toEqual([{ prompt: '一只白猫', images: ['https://media.example/output-1.png'] }])
+  expect(calls[1].referenceUrls).toEqual([imageReference(image)])
+  expect(calls[1].imageContext.turns).toEqual([{ prompt: '一只白猫', images: [imageReference(image)] }])
   expect(calls[1].conversationId).toBeUndefined()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('当前对话的草稿')
   const sidebar = page.locator('.studio-sidebar')
@@ -253,7 +257,7 @@ test('follow-up carries the previous image and history in one session, with inde
 })
 
 test('regeneration and edited prompts preserve alternate versions and use the selected branch for follow-up', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '一只白猫', 1)
   await page.getByRole('button', { name: '重新生成此轮', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
@@ -262,7 +266,7 @@ test('regeneration and edited prompts preserve alternate versions and use the se
   await page.getByRole('button', { name: '上一个版本', exact: true }).click()
   await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveText('1 / 2')
   await send(page, '戴上帽子', 2)
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[2].referenceUrls).toEqual([imageReference(image)])
   await page.getByRole('button', { name: '编辑并重新生成', exact: true }).first().click()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只黑猫')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -275,11 +279,11 @@ test('regeneration and edited prompts preserve alternate versions and use the se
 })
 
 test('automatic references follow the latest result; clearing context and deleting turns keep gallery data', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '第一张', 1)
   await send(page, '第二张', 2)
   await send(page, '修改第二张', 3)
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-2.png'])
+  expect(calls[2].referenceUrls).toEqual([imageReference(image)])
   await page.getByRole('button', { name: '清除上下文', exact: true }).click()
   await expect(page.locator('.reference-list img')).toHaveCount(0)
   await send(page, '全新图片', 4)
@@ -305,7 +309,7 @@ test('automatic references follow the latest result; clearing context and deleti
 })
 
 test('the inline clear boundary stays between turns and restores outgoing image history', async ({ page }) => {
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '清除前的图片', 1)
   await page.getByRole('button', { name: '清除上下文', exact: true }).click()
   const marker = page.locator('.chat-transcript .clear-context-divider')
@@ -320,7 +324,7 @@ test('the inline clear boundary stays between turns and restores outgoing image 
   await expect(marker).toHaveCount(0)
   await send(page, '恢复后继续', 3)
   expect(calls[2].imageContext.turns.map((turn: any) => turn.prompt)).toEqual(['清除前的图片', '清除后的图片'])
-  expect(calls[2].referenceUrls).toEqual(['https://media.example/output-2.png'])
+  expect(calls[2].referenceUrls).toEqual([imageReference(image)])
   await page.reload()
   await expect(page.locator('.creation-turn')).toHaveCount(3)
   await expect(marker).toHaveCount(0)
@@ -361,7 +365,7 @@ test('sending clears uploaded references from the composer while retaining sent 
   await expect(page.locator('.creation-request .sent-references img')).toHaveCount(1)
   await send(page, '把背景改成蓝色', 2)
   await expect(page.locator('.reference-list img')).toHaveCount(0)
-  expect(calls[1].referenceUrls).toEqual(['https://media.example/output-1.png'])
+  expect(calls[1].referenceUrls).toEqual([imageReference(image)])
   expect(calls[1].imageContext.turns[0].references).toEqual([`data:image/jpeg;base64,${image.toString('base64')}`])
 })
 
@@ -524,7 +528,7 @@ test('large local images are compressed before generation without a community up
 test('model and group changes affect the next round while retaining history and image sizing on mobile', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', cause => errors.push(cause.message))
-  const { calls } = await fixture(page)
+  const { calls, image } = await fixture(page)
   await send(page, '保留人物', 1)
   await page.getByRole('combobox', { name: '模型', exact: true }).click()
   await page.getByRole('button', { name: '选择分组', exact: true }).click()

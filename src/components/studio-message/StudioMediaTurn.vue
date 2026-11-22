@@ -10,6 +10,7 @@ import { errorMessage, notify, session } from '../../state'
 import StudioMessageFrame from './StudioMessageFrame.vue'
 import StudioAiStatus from './StudioAiStatus.vue'
 import StudioCreationImage from './StudioCreationImage.vue'
+import StudioBrowserSave from '../StudioBrowserSave.vue'
 import StudioContextMenu, { type StudioMenuAction } from './StudioContextMenu.vue'
 
 const props = defineProps<{ task: CreationTask; conversation: NativeChat; role: 'user' | 'assistant' }>()
@@ -103,6 +104,7 @@ async function remove() {
         <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
+      <StudioBrowserSave :task="task" />
       <div v-if="task.phase === 'complete'" class="creation-message-actions" role="group" aria-label="生成结果操作">
         <button v-if="task.kind === 'image' && task.urls.length" class="studio-tool" type="button" :title="task.urls.length > 1 ? '将本组生成图片带入输入框编辑' : '将生成图片带入输入框编辑'" :disabled="busy" @click="emit('action', 'editImage', task)"><ImagePlus :size="16" aria-hidden="true" />编辑图片</button>
         <button class="icon-button" type="button" aria-label="编辑原提问" title="编辑原提问和原参考图" :disabled="busy" @click="emit('action', 'editTask', task)"><MessageSquareText :size="16" aria-hidden="true" /></button>

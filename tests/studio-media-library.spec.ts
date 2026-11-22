@@ -94,12 +94,13 @@ test('gallery reads cursor pages without duplicate timestamps and combines model
   expect(generationCalls).toHaveLength(0)
 })
 
-test('image thumbnails are reduced to 384px, persisted across reload, and original media opens only on activation', async ({ page }) => {
+test('visible images cache originals and 384px thumbnails for offline reload and activation', async ({ page }) => {
   const { library, mediaReads, generationCalls } = await fixture(page, 1)
   const cover = library.getByRole('button', { name: '预览 作品 000', exact: true })
   await expect(cover.locator('img')).toBeVisible()
   expect(await cover.locator('img').evaluate((image: HTMLImageElement) => ({ width: image.naturalWidth, height: image.naturalHeight }))).toEqual({ width: 384, height: 216 })
   await expect.poll(() => previewMetadata(page)).toEqual([expect.objectContaining({ owner: '17', id: 'library-000', type: 'image/webp' })])
+  if (!await library.locator('video').count() && await library.locator('.browser-save').count()) await expect(library.locator('.browser-save').first()).toHaveText('图片已保存到此浏览器')
   mediaReads.length = 0
   await page.reload()
   await openLibrary(page)
@@ -109,7 +110,7 @@ test('image thumbnails are reduced to 384px, persisted across reload, and origin
   await reopened.getByRole('button', { name: '预览 作品 000', exact: true }).click()
   const preview = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
   await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1280)
-  expect(mediaReads).toHaveLength(1)
+  expect(mediaReads).toHaveLength(0)
   await page.getByRole('button', { name: '关闭媒体预览', exact: true }).click()
   await expect(reopened).toBeVisible()
   await mkdir('.taste-skill/media-library-20261115', { recursive: true })
@@ -137,6 +138,7 @@ test('video covers skip a black intro, show actual duration and reuse the cached
   expect(brightness).toBeGreaterThan(100)
   expect((await previewMetadata(page))[0]?.duration).toBeCloseTo(2.5, 1)
   await expect(library.locator('video')).toHaveCount(0)
+  if (!await library.locator('video').count() && await library.locator('.browser-save').count()) await expect(library.locator('.browser-save').first()).toHaveText('图片已保存到此浏览器')
   mediaReads.length = 0
   await page.reload()
   await openLibrary(page)
@@ -162,12 +164,9 @@ test('automatic original download preference is persisted per account without re
   expect(generationCalls).toHaveLength(0)
 })
 
-test('a failed thumbnail can be retried without blocking the original and fits both themes on desktop and mobile', async ({ page }) => {
+test('a failed remote thumbnail recovers from the saved original and fits both themes on desktop and mobile', async ({ page }) => {
   const { library, generationCalls } = await fixture(page, 1, false, true)
-  const retry = library.getByRole('button', { name: '重新加载封面：作品 000', exact: true })
-  await expect(retry).toBeVisible()
-  await expect(library.getByRole('button', { name: '预览 作品 000', exact: true })).toBeEnabled()
-  await retry.click()
+  await expect(library.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
   await expect(library.getByRole('button', { name: '预览 作品 000', exact: true }).locator('img')).toBeVisible()
   await mkdir('.taste-skill/media-library-20261115', { recursive: true })
   for (const theme of ['light', 'dark']) for (const width of [1440, 390, 320]) {

@@ -110,11 +110,12 @@ test('old library layout has a fixed toolbar, a scrollable grid, narrow two-colu
 
 test('removing a middle output keeps original indexes, task history, thumbnails and filtered previews', async ({ page }) => {
   const { library, generation } = await fixture(page, 1, true)
+  await expect(library.locator('.browser-save').first()).toHaveText('图片已保存到此浏览器')
   await library.locator('.gallery-item').nth(1).getByRole('button', { name: '从作品库移除', exact: true }).click()
   await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(2)
   expect((await stored(page))?.[0]).toMatchObject({ urls: [
-    'https://media.example/0/output-0.jpg', 'https://media.example/0/output-1.jpg', 'https://media.example/0/output-2.jpg',
+    'studio-asset:reuse-0:0', 'studio-asset:reuse-0:1', 'studio-asset:reuse-0:2',
   ], galleryHiddenIndices: [1] })
   await page.reload()
   await page.getByRole('button', { name: '作品库', exact: true }).click()
@@ -123,7 +124,12 @@ test('removing a middle output keeps original indexes, task history, thumbnails 
   const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
   await expect(viewer.getByRole('combobox', { name: '预览图片序号', exact: true }).locator('option')).toHaveCount(2)
   await viewer.getByRole('button', { name: '下一张', exact: true }).click()
-  await expect(viewer.locator('img')).toHaveAttribute('src', /output-2/)
+  await expect(viewer.locator('img')).toHaveAttribute('src', /^blob:/)
+  const pixel = await viewer.locator('img').evaluate(async (image: HTMLImageElement) => {
+    await image.decode(); const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
+    const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0, 1, 1); return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3)
+  })
+  expect(pixel.every((value, index) => Math.abs(value - [88, 128, 106][index]!) <= 2)).toBe(true)
   await page.keyboard.press('Escape')
   await expect(library).toBeVisible()
   const download = page.waitForEvent('download')
@@ -172,15 +178,26 @@ test('switching A to B and back aborts a pending export without late files or pr
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await expect(library.locator('.gallery-cover img')).toHaveCount(3)
   await expect.poll(() => library.locator('.gallery-cover img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
-  gate.enabled = true
+  await page.evaluate(() => {
+    const fetchOriginal = window.fetch.bind(window)
+    ;(window as any).exportEntered = 0
+    window.fetch = async (input, init) => {
+      if (!String(input).startsWith('blob:')) return fetchOriginal(input, init)
+      ;(window as any).exportEntered++
+      return new Promise((resolve, reject) => {
+        ;(window as any).releaseExport = () => resolve(fetchOriginal(input, init))
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')), { once: true })
+      })
+    }
+  })
   try {
     await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
-    await expect.poll(() => gate.entered).toBe(1)
+    await expect.poll(() => page.evaluate(() => (window as any).exportEntered)).toBe(1)
     await expect(library.getByRole('progressbar', { name: '作品导出进度', exact: true })).toBeVisible()
     state.user.id = '18'; await setOwner(page, '18')
     await expect(library).not.toBeVisible()
     state.user.id = '17'; await setOwner(page, '17')
-  } finally { gate.release() }
+  } finally { gate.release(); await page.evaluate(() => (window as any).releaseExport?.()) }
   await page.getByRole('button', { name: '作品库', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(3)
   await expect(library.locator('.gallery-export')).toHaveCount(0)

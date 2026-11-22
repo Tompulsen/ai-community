@@ -1,0 +1,185 @@
+import { expect, test, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { mockUnifiedAccount } from './helpers/account-fixture'
+import AxeBuilder from '@axe-core/playwright'
+
+async function fixture(page: Page) {
+  const account = await mockUnifiedAccount(page, true)
+  account.state.user.id = '17'
+  const image = await readFile('public/assets/brand/octopus-community.jpg')
+  const state = { available: true, generations: 0, originals: 0, downloads: 0, count: 1 }
+  page.on('download', () => state.downloads++)
+  await page.route('**/api/new-api/model-groups**', route => route.fulfill({ json: { success: true, data: {
+    selectedGroup: 'auto', selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }],
+  } } }))
+  await page.route('**/api/creation/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/creation/models') return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
+    if (url.pathname === '/api/creation/media') {
+      if (!url.searchParams.has('variant')) state.originals++
+      return state.available ? route.fulfill({ contentType: 'image/jpeg', body: image }) : route.fulfill({ status: 502 })
+    }
+    if (url.pathname === '/api/creation/generate') {
+      state.generations++
+      return route.fulfill({ json: { status: 'succeeded', outputs: Array.from({ length: state.count }, (_, i) => ({ url: `https://media.example/${state.generations}-${i}.jpg` })), tokenId: 41, protocol: 'sync' } })
+    }
+    return route.fulfill({ json: { items: [] } })
+  })
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('browser-save-fixture')) return
+    sessionStorage.setItem('browser-save-fixture', '1')
+    localStorage.setItem('octopus:user-17:native-media-settings', JSON.stringify({ autoDownload: false, autoSaveGallery: false }))
+  })
+  await page.goto('/create/image')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  return { state, image }
+}
+async function send(page: Page) {
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('浏览器保存原图')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.creation-response')).toHaveCount(1)
+}
+async function storedImages(page: Page) {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('community-studio-media', 1)
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+    })
+    try {
+      const tx = db.transaction(['tasks', 'originals'])
+      const getAll = (name: string) => new Promise<any[]>(resolve => {
+        const request = tx.objectStore(name).getAll(); request.onsuccess = () => resolve(request.result)
+      })
+      const [tasks, originals] = await Promise.all([getAll('tasks'), getAll('originals')])
+      return { urls: tasks.filter(t => t.owner === '17').flatMap(t => t.value.urls), sizes: originals.filter(a => a.owner === '17').map(a => a.blob.size) }
+    } finally { db.close() }
+  })
+}
+
+test('generated images save original bytes automatically and survive an expired upstream after reload without downloading', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  state.count = 2
+  await send(page)
+  await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length, image.length])
+  expect((await storedImages(page)).urls.every(url => url.startsWith('studio-asset:'))).toBe(true)
+  await expect(page.getByText('图片已保存到此浏览器', { exact: true })).toBeVisible()
+  expect(state.downloads).toBe(0)
+  state.available = false
+  const reads = state.originals
+  await page.reload()
+  await expect(page.locator('.creation-image img')).toHaveCount(2)
+  for (const img of await page.locator('.creation-image img').all()) await expect.poll(() => img.evaluate((e: HTMLImageElement) => e.naturalWidth)).toBeGreaterThan(0)
+  expect(state.originals).toBe(reads)
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载图片 1', exact: true }).click()
+  const file = await download
+  expect((await readFile((await file.path())!))).toEqual(image)
+})
+
+for (const mode of ['inline', 'stream', 'async']) test(`${mode} completion automatically stores the original image`, async ({ page }) => {
+  const { image, state } = await fixture(page)
+  const output = { status: 'succeeded', outputs: [{ url: mode === 'inline' ? `data:image/jpeg;base64,${image.toString('base64')}` : 'https://media.example/completed.jpg' }], tokenId: 41, protocol: mode === 'async' ? 'async' : 'sync' }
+  await page.route('**/api/creation/generate', route => {
+    state.generations++
+    return mode === 'stream'
+      ? route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'result', ...output })}\n\n` })
+      : route.fulfill({ json: mode === 'async' ? { status: 'running', upstreamId: 'browser-task', protocol: 'async', tokenId: 41 } : output })
+  })
+  await page.route('**/api/creation/tasks/image/browser-task?**', route => route.fulfill({ json: output }))
+  await send(page)
+  await expect(page.getByText('图片已保存到此浏览器', { exact: true })).toBeVisible()
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+})
+
+test('an expired image keeps its record and supports retry without generating again', async ({ page }, info) => {
+  const { state, image } = await fixture(page)
+  state.available = false
+  await send(page)
+  const status = page.locator('.creation-response .browser-save')
+  await expect(status).toContainText('原图暂时无法读取或链接已失效')
+  expect((await storedImages(page)).urls).toEqual(['https://media.example/1-0.jpg'])
+  expect((await storedImages(page)).sizes).toEqual([])
+  for (const width of [320, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect((await status.getByRole('button').boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    expect((await new AxeBuilder({ page }).include('.browser-save').analyze()).violations).toEqual([])
+    await page.screenshot({ path: info.outputPath(`save-failed-${width}.png`) })
+  }
+  state.available = true
+  await status.getByRole('button', { name: '重试保存图片', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expect(status).toHaveText('图片已保存到此浏览器')
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+})
+
+test('quota failure cannot commit a local pointer and retry can finish the same generation', async ({ page }) => {
+  await fixture(page)
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    ;(window as any).denyOriginalSave = true
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      if ((window as any).denyOriginalSave && mode === 'readwrite' && Array.isArray(names) && names.length === 3 && names.includes('originals')) throw new DOMException('Full', 'QuotaExceededError')
+      return Reflect.apply(transaction, this, [names, mode, options])
+    }
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('浏览器空间不足')
+  expect((await storedImages(page)).urls[0]).toMatch(/^https:/)
+  expect((await storedImages(page)).sizes).toEqual([])
+  await page.evaluate(() => { (window as any).denyOriginalSave = false })
+  await page.getByRole('button', { name: '重试保存图片', exact: true }).click()
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+})
+
+test('manual download corrects an earlier browser-save failure after the upstream recovers', async ({ page }) => {
+  const { state } = await fixture(page)
+  state.available = false
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('尚未保存到此浏览器')
+  state.available = true
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载图片', exact: true }).click()
+  await download
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  expect(state.generations).toBe(1)
+})
+
+test('refresh resumes an interrupted original save and preserves the generation', async ({ page }) => {
+  const { image, state } = await fixture(page)
+  let blocked = true, entered = false, release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/media?**', async route => {
+    if (!new URL(route.request().url()).searchParams.has('variant') && blocked) { entered = true; await gate }
+    await route.fulfill({ contentType: 'image/jpeg', body: image }).catch(() => {})
+  })
+  await send(page)
+  await expect.poll(() => entered).toBe(true)
+  await expect(page.locator('.browser-save')).toContainText('正在保存')
+  blocked = false
+  await page.reload()
+  release()
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+})
+
+test('one failed output does not prevent the other original from being saved', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  state.count = 2
+  await page.route('**/api/creation/media?**', route => new URL(route.request().url()).searchParams.get('url')?.endsWith('-0.jpg')
+    ? route.fulfill({ status: 502 }) : route.fulfill({ contentType: 'image/jpeg', body: image }))
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('尚未保存到此浏览器')
+  const saved = await storedImages(page)
+  expect(saved.urls[0]).toMatch(/^https:/)
+  expect(saved.urls[1]).toMatch(/^studio-asset:/)
+  expect(saved.sizes).toEqual([image.length])
+})

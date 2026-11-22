@@ -33,6 +33,81 @@ async function fixture(page: Page) {
   await page.goto('/__task-store-check')
 }
 
+test('originals commit with task pointers and survive concurrent per-output snapshots and deleted tasks', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'atomic', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model',
+      prompt: 'original', urls: ['https://media.example/0.png', 'https://media.example/1.png'] }
+    await store.saveTaskSnapshot('17', [task])
+    const original = new Blob(['original bytes'], { type: 'image/png' })
+    await store.saveTaskOriginal('17', task.id, 0, task.urls[0], original)
+    const committed = (await store.getTaskPage('17')).tasks[0]
+    await store.saveTaskOriginal('17', task.id, 1, task.urls[1], original)
+    task.urls[0] = store.taskAssetUrl(task.id, 0)
+    task.prompt = 'metadata changed while saving'
+    await store.saveTaskSnapshot('17', [task])
+    const merged = (await store.getTaskPage('17')).tasks[0]
+    const bytes = await store.readTaskAsset('17', merged.urls[1])
+    const foreign = await store.readTaskAsset('18', merged.urls[1])
+    await store.deleteTaskRecords('17', [task.id])
+    const late = await store.saveTaskOriginal('17', task.id, 1, task.urls[1], original)
+    await store.saveTaskSnapshot('17', [task])
+    return { committed: committed.urls[0], merged: merged.urls, prompt: merged.prompt, bytes: await bytes?.text(),
+      foreign: foreign === undefined, late: late === undefined, count: (await store.getTaskPage('17')).total }
+  })
+  expect(result).toEqual({ committed: 'studio-asset:atomic:0', merged: ['studio-asset:atomic:0', 'studio-asset:atomic:1'],
+    prompt: 'metadata changed while saving', bytes: 'original bytes', foreign: true, late: true, count: 0 })
+})
+
+test('an aborted original transaction rolls back both bytes and the task pointer', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'rollback', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'rollback', urls: ['https://media.example/original.png'] }
+    await store.saveTaskSnapshot('17', [task])
+    const put = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = Reflect.apply(put, this, args)
+      if (this.name === 'tasks') request.addEventListener('success', () => this.transaction.abort())
+      return request
+    }
+    let rejected = false
+    try { await store.saveTaskOriginal('17', task.id, 0, task.urls[0], new Blob(['original'], { type: 'image/png' })) }
+    catch { rejected = true }
+    finally { IDBObjectStore.prototype.put = put }
+    return { rejected, urls: (await store.getTaskPage('17')).tasks[0].urls,
+      missing: !await store.readTaskAsset('17', store.taskAssetUrl(task.id, 0)) }
+  })
+  expect(result).toEqual({ rejected: true, urls: ['https://media.example/original.png'], missing: true })
+})
+
+test('loading a foreign-tab task cannot expand an already captured snapshot deletion scope', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'known', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'known', urls: ['https://media.example/known.png'] }
+    await store.saveTaskSnapshot('17', [task])
+    const captured = store.captureTaskSnapshot('17', [task])
+    const db = await new Promise<IDBDatabase>(resolve => { const r = indexedDB.open('community-studio-media', 1); r.onsuccess = () => resolve(r.result) })
+    await new Promise<void>(resolve => {
+      const tx = db.transaction('tasks', 'readwrite')
+      tx.objectStore('tasks').put({ owner: '17', id: 'foreign', createdAt: 2, mediaIdentity: '', value: { ...task, id: 'foreign', createdAt: 2 } })
+      tx.oncomplete = () => resolve()
+    })
+    const loaded = await store.readTaskForUpdate('17', 'foreign')
+    await store.saveCapturedTaskSnapshot('17', captured)
+    const retained = (await store.getTaskPage('17')).tasks.map(task => task.id)
+    await new Promise<void>(resolve => {
+      const tx = db.transaction('tasks', 'readwrite'); tx.objectStore('tasks').delete(['17', 'foreign']); tx.oncomplete = () => resolve()
+    })
+    await store.saveTaskSnapshot('17', [task, loaded])
+    db.close()
+    return { retained, remaining: (await store.getTaskPage('17')).tasks.map(task => task.id) }
+  })
+  expect(result).toEqual({ retained: ['foreign', 'known'], remaining: ['known'] })
+})
+
 test('media snapshot migration preserves unknown metadata, original bytes and owner isolation without mutating input', async ({ page }) => {
   await fixture(page)
   const result = await page.evaluate(async () => {

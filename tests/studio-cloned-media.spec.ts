@@ -9,7 +9,7 @@ async function fixture(page: Page) {
   const external: string[] = [], generated: any[] = []
   await page.route('**/*', route => {
     const url = new URL(route.request().url())
-    if (url.origin === 'http://localhost:18775') return route.continue()
+    if (url.origin === new URL(String(test.info().project.use.baseURL)).origin) return route.continue()
     external.push(url.href)
     return route.abort()
   })
@@ -49,6 +49,7 @@ async function fixture(page: Page) {
   await page.goto('/create/image')
   await expect(page.locator('.creation-turn')).toHaveCount(1)
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
   return { generated, external }
 }
 
@@ -69,12 +70,12 @@ test('a copied image conversation can edit and generate after regenerating its o
   await page.getByRole('button', { name: '重新生成此轮', exact: true }).click()
   await expect.poll(() => state.generated.length).toBe(1)
   await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveText('2 / 2')
-  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /^blob:/)
   expect(state.generated[0]).toMatchObject({ kind: 'image', model: 'gpt-image-2', prompt: originalPrompt })
 
   await copied.click()
   await expect(page.locator('.creation-request')).toContainText(originalPrompt)
-  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /original\.png/)
+  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /^blob:/)
   await page.getByRole('button', { name: '编辑并重新生成', exact: true }).click()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill(copiedPrompt)
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -82,7 +83,7 @@ test('a copied image conversation can edit and generate after regenerating its o
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
   await expect(page.locator('.creation-turn')).toHaveCount(1)
   await expect(page.locator('.creation-request')).toContainText(copiedPrompt)
-  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /output-2\.png/)
+  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /^blob:/)
   expect(state.generated[1]).toMatchObject({ kind: 'image', model: 'gpt-image-2', prompt: copiedPrompt })
 
   await original.click()
@@ -90,10 +91,10 @@ test('a copied image conversation can edit and generate after regenerating its o
   await expect(page.locator('.creation-request')).toContainText(originalPrompt)
   await expect(page.locator('.creation-request')).not.toContainText(copiedPrompt)
   await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveText('2 / 2')
-  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /output-1\.png/)
+  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /^blob:/)
   await copied.click()
   await expect(page.locator('.creation-request')).toContainText(copiedPrompt)
-  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /output-2\.png/)
+  await expect(page.locator('.creation-image-preview img')).toHaveAttribute('src', /^blob:/)
   await expect(page.getByRole('alert').filter({ hasText: '原生成记录不属于当前会话' })).toHaveCount(0)
   expect(state.generated).toHaveLength(2)
   expect(state.external).toEqual([])

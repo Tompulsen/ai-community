@@ -16,6 +16,115 @@ async function fixture(page: Page) {
   })
 }
 
+for (const action of ['delete', 'switch', 'disable']) test(`automatic browser saving respects ${action} before a pending automatic download`, async ({ page }) => {
+  await fixture(page)
+  let entered = false, release!: () => void, downloads = 0
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  page.on('download', () => downloads++)
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/held.png' }] } }))
+  await page.route('**/api/creation/media**', async route => {
+    entered = true; await blocked
+    await route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }).catch(() => {})
+  })
+  await page.evaluate(async () => {
+    const studio = window.mediaTest
+    await studio.updateMediaSettings(true)
+    const task = await studio.submitCreation({ kind: 'image', model: 'test', prompt: 'held result', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 })
+    window.pendingBrowserSave = studio.cacheCreationImages(task)
+  })
+  await expect.poll(() => entered).toBe(true)
+  await page.evaluate(async action => {
+    const studio = window.mediaTest
+    if (action === 'delete') await studio.removeCreationTasks([studio.creation.tasks[0].id])
+    if (action === 'disable') await studio.updateMediaSettings(false)
+    if (action === 'switch') {
+      const { session } = await import('/src/state.ts')
+      session.user = { id: '18' }
+      await (await import('/node_modules/.vite/deps/vue.js')).nextTick()
+      await studio.initializeCreation()
+    }
+  }, action)
+  release()
+  await page.evaluate(() => window.pendingBrowserSave)
+  expect(downloads).toBe(0)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    return { count: window.mediaTest.creation.tasks.length, own: (await store.getTaskPage('17')).total,
+      foreign: (await store.getTaskPage('18')).total, bytes: await store.getTaskStorageSize('18') }
+  })
+  expect(result).toEqual({ count: action === 'disable' ? 1 : 0, own: action === 'delete' ? 0 : 1, foreign: 0, bytes: 0 })
+})
+
+test('concurrent automatic caching and download preserve every local image pointer', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  const downloaded = page.waitForEvent('download')
+  await page.evaluate(async () => {
+    const studio = window.mediaTest
+    const task = { id: 'concurrent', owner: '17', kind: 'image', model: 'test', prompt: 'two images', phase: 'complete', protocol: 'sync', createdAt: 1,
+      urls: ['https://media.example/0.png', 'https://media.example/1.png'], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 2, duration: 8 } }
+    studio.creation.tasks.push(task)
+    await studio.prepareCreationHistory()
+    await Promise.all([studio.cacheCreationImages(task), studio.downloadCreation(task, 1), studio.cacheCreationImages(task)])
+  })
+  await downloaded
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts'), tasks = await store.readTaskSnapshot('17')
+    return { urls: tasks[0].urls, originals: await Promise.all(tasks[0].urls.map(async url => (await store.readTaskAsset('17', url))?.text())) }
+  })
+  expect(result).toEqual({ urls: ['studio-asset:concurrent:0', 'studio-asset:concurrent:1'], originals: ['original bytes', 'original bytes'] })
+})
+
+test('browser-save reads are bounded and invalid or oversized originals never replace their source', async ({ page }) => {
+  await fixture(page)
+  let active = 0, maximum = 0, reads = 0
+  await page.route('**/api/creation/media**', async route => {
+    active++; reads++; maximum = Math.max(maximum, active)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const source = new URL(route.request().url()).searchParams.get('url') || ''
+    await route.fulfill({ contentType: source.endsWith('4.png') ? 'text/html' : 'image/png', body: Buffer.from('original'),
+      headers: source.endsWith('5.png') ? { 'content-length': String(33 * 1024 ** 2) } : {} })
+    active--
+  })
+  const result = await page.evaluate(async () => {
+    const studio = window.mediaTest
+    for (let i = 0; i < 6; i++) studio.creation.tasks.push({ id: `bounded-${i}`, owner: '17', kind: 'image', model: 'test', prompt: 'bounded', phase: 'complete', protocol: 'sync', createdAt: i,
+      urls: [`https://media.example/${i}.png`], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 } })
+    await Promise.all(studio.creation.tasks.map(task => studio.cacheCreationImages(task)))
+    return studio.creation.tasks.map(task => ({ state: task.browserSave.state, local: task.urls[0].startsWith('studio-asset:'), phase: task.phase }))
+  })
+  expect(maximum).toBe(2)
+  expect(reads).toBe(6)
+  expect(result).toEqual([...Array(4).fill({ state: 'saved', local: true, phase: 'complete' }), ...Array(2).fill({ state: 'failed', local: false, phase: 'complete' })])
+})
+
+test('a visible history record created in another tab is loaded safely and saved without reviving deleted records', async ({ page }) => {
+  await fixture(page)
+  const other = await page.context().newPage()
+  await fixture(other)
+  const task = await other.evaluate(async () => {
+    const studio = window.mediaTest
+    const task = { id: 'other-tab', owner: '17', kind: 'image', model: 'test', prompt: 'other tab result', phase: 'complete', protocol: 'sync', createdAt: 1,
+      urls: ['https://media.example/other.png'], text: '', references: [], browserSave: { state: 'saving' }, request: { size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 } }
+    studio.creation.tasks.push(task)
+    await studio.prepareCreationHistory()
+    return task
+  })
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  await page.evaluate(task => window.mediaTest.cacheCreationImages(task), task)
+  expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].browserSave.state)).toBe('saved')
+  await other.evaluate(() => window.mediaTest.removeCreationTasks(['other-tab']))
+  await page.evaluate(async task => {
+    const studio = window.mediaTest
+    studio.creation.tasks = []
+    await studio.cacheCreationImages(task, true)
+    await studio.prepareCreationHistory()
+  }, task)
+  expect(await page.evaluate(async () => (await (await import('/src/studio-task-store.ts')).getTaskPage('17')).total)).toBe(0)
+  expect(await page.evaluate(() => window.mediaTest.creation.tasks.length)).toBe(0)
+  await other.close()
+})
+
 test('video @ references support keyboard selection, removal numbering and IME without submitting', async ({ page }) => {
   await fixture(page)
   await page.evaluate(async () => {
@@ -136,7 +245,7 @@ test('new accounts generate without downloading and can still download manually'
   expect(downloads).toBe(1)
 })
 
-test('completed generations automatically request originals only while the preference is enabled', async ({ page }) => {
+test('generations always cache originals while file downloads remain opt-in', async ({ page }) => {
   await fixture(page)
   let generations = 0, originals = 0, downloads = 0
   await page.route('**/api/creation/generate', route => {
@@ -159,7 +268,7 @@ test('completed generations automatically request originals only while the prefe
     await studio.submitCreation({ kind: 'image', model: 'fixture', prompt: 'do not download', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 })
   })
   expect(generations).toBe(2)
-  expect(originals).toBe(1)
+  await expect.poll(() => originals).toBe(2)
   expect(downloads).toBe(1)
   expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].localSave)).toBeUndefined()
 })
@@ -229,7 +338,7 @@ test('video workspace reference menu keeps numbered mentions correct after remov
   })
   await page.goto('/create/video')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('sora-2')
-  await page.getByLabel('添加参考图', { exact: true }).setInputFiles([{ name: 'first.jpg', mimeType: 'image/jpeg', buffer: image }, { name: 'second.jpg', mimeType: 'image/jpeg', buffer: image }])
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles([{ name: 'first.jpg', mimeType: 'image/jpeg', buffer: image }, { name: 'second.jpg', mimeType: 'image/jpeg', buffer: image }])
   await expect(page.locator('.reference-list img')).toHaveCount(2)
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
   await prompt.fill('从 @')

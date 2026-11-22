@@ -3,6 +3,7 @@ import type { CreationTask } from './native-studio'
 
 const databaseName = 'community-studio-media'
 const initialized = new Map<string, Map<string, string>>()
+const loadedForUpdate = new Map<string, Map<string, string>>()
 const mediaIdentities = new Map<string, Map<string, string>>()
 const deletedTaskIds = new Map<string, Set<string>>()
 const writes = new Map<string, Promise<void>>()
@@ -98,11 +99,12 @@ async function prepareTask(owner: string, raw: string, db: IDBDatabase, previous
   const task: CreationTask = JSON.parse(raw), assets: AssetRecord[] = [], sources: string[] = []
   checkTask(task, owner)
   const previous: CreationTask | undefined = previousRaw ? JSON.parse(previousRaw) : undefined
+  const unchangedUrls = task.urls.map((url, index) => task.kind === previous?.kind && url === previous.urls[index])
   const preserveMedia = !!previous && task.kind === previous.kind && task.preview === previous.preview && task.urls.length === previous.urls.length
     && task.urls.every((url, index) => url === previous.urls[index])
   if (preserveMedia) {
     return { record: { owner, id: task.id, createdAt: task.createdAt, value: task, mediaIdentity: previousIdentity || '' } satisfies TaskRecord,
-      assets, previous, preserveMedia }
+      assets, previous, preserveMedia, unchangedUrls }
   }
   for (const [index, url] of task.urls.entries()) {
     const blob = await imageBlob(url)
@@ -124,7 +126,7 @@ async function prepareTask(owner: string, raw: string, db: IDBDatabase, previous
     }
   }
   return { record: { owner, id: task.id, createdAt: task.createdAt, value: task, mediaIdentity: JSON.stringify([task.kind, sources]) } satisfies TaskRecord,
-    assets, previous, preserveMedia }
+    assets, previous, preserveMedia, unchangedUrls }
 }
 export async function readTaskSnapshot(owner: string): Promise<CreationTask[] | undefined> {
   checkOwner(owner)
@@ -143,11 +145,25 @@ export async function readTaskSnapshot(owner: string): Promise<CreationTask[] | 
   const metadata = await marker
   await done
   initialized.set(owner, new Map(tasks.map(task => [task.id, JSON.stringify(task)])))
+  loadedForUpdate.delete(owner)
   mediaIdentities.set(owner, identities)
   return metadata?.initialized ? tasks : undefined
 }
 export function saveTaskSnapshot(owner: string, tasks: CreationTask[]): Promise<void> {
   return saveCapturedTaskSnapshot(owner, captureTaskSnapshot(owner, tasks))
+}
+export async function readTaskForUpdate(owner: string, id: string): Promise<CreationTask | undefined> {
+  checkOwner(owner)
+  await writes.get(owner)?.catch(() => {})
+  if (deletedTaskIds.get(owner)?.has(id)) return
+  const db = await database(), transaction = db.transaction('tasks'), done = completed(transaction)
+  const record = await read<TaskRecord>(transaction.objectStore('tasks'), [owner, id])
+  await done
+  if (!record) return
+  // A single-record read must not expand an older full snapshot's deletion scope.
+  const previous = loadedForUpdate.get(owner) || new Map<string, string>()
+  previous.set(id, JSON.stringify(record.value)); loadedForUpdate.set(owner, previous)
+  return record.value
 }
 function clearTaskPreviews(store: IDBObjectStore, owner: string, id: string) {
   store.delete([owner, id])
@@ -164,7 +180,7 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     const db = await database()
     const prepared: Awaited<ReturnType<typeof prepareTask>>[] = []
     for (const [id, raw] of changed) {
-      const item = await prepareTask(owner, raw, db, previous.get(id), mediaIdentities.get(owner)?.get(id))
+      const item = await prepareTask(owner, raw, db, previous.get(id) ?? loadedForUpdate.get(owner)?.get(id), mediaIdentities.get(owner)?.get(id))
       if (item.record.id !== id) throw new Error('生成记录编号与快照不一致，原记录已保留。')
       prepared.push(item)
     }
@@ -174,7 +190,7 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
       records.delete([owner, id]); clearTaskPreviews(previews, owner, id)
       // Other turns can still reference this task's original image.
     }
-    for (const { record, assets, previous, preserveMedia } of prepared) {
+    for (const { record, assets, previous, preserveMedia, unchangedUrls } of prepared) {
       const request = records.get([owner, record.id])
       request.onsuccess = () => {
         const stored = request.result as TaskRecord | undefined
@@ -187,7 +203,12 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
               Object.assign(merged, { [key]: record.value[key] })
           }
           if (preserveMedia) record.mediaIdentity = stored.mediaIdentity
-          else Object.assign(merged, { kind: record.value.kind, urls: record.value.urls, preview: record.value.preview })
+          else {
+            const urls = record.value.urls.map((url, index) => unchangedUrls[index] ? stored.value.urls[index] ?? url : url)
+            Object.assign(merged, { kind: record.value.kind, urls,
+              preview: previous.preview === record.value.preview ? stored.value.preview : record.value.preview })
+            if (urls.some((url, index) => url !== record.value.urls[index])) record.mediaIdentity = JSON.stringify([merged.kind, urls])
+          }
           record.value = merged; record.createdAt = merged.createdAt
         }
         if (stored && stored.mediaIdentity !== record.mediaIdentity) clearTaskPreviews(previews, owner, record.id)
@@ -198,6 +219,7 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
     transaction.objectStore('meta').put({ owner, initialized: true })
     await done
     initialized.set(owner, values)
+    for (const id of values.keys()) loadedForUpdate.get(owner)?.delete(id)
     const identities = new Map(mediaIdentities.get(owner))
     for (const id of removed) identities.delete(id)
     for (const { record } of prepared) identities.set(record.id, record.mediaIdentity)
@@ -230,7 +252,7 @@ export function deleteTaskRecords(owner: string, ids: readonly string[]): Promis
     }
     try { await done } catch (cause) { throw failure || cause }
     const deleted = deletedTaskIds.get(owner) || new Set<string>()
-    for (const id of selected) { deleted.add(id); initialized.get(owner)?.delete(id); mediaIdentities.get(owner)?.delete(id) }
+    for (const id of selected) { deleted.add(id); initialized.get(owner)?.delete(id); loadedForUpdate.get(owner)?.delete(id); mediaIdentities.get(owner)?.delete(id) }
     deletedTaskIds.set(owner, deleted)
   })
   writes.set(owner, pending)
@@ -306,20 +328,37 @@ export async function readTaskAsset(owner: string, url: string, preview = false)
   }
   return (await read<AssetRecord>(db.transaction('originals').objectStore('originals'), [owner, `${key[1]}:${key[2]}`]))?.blob
 }
-export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob): Promise<string | undefined> {
+export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob, signal?: AbortSignal): Promise<string | undefined> {
   checkOwner(owner)
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(id) || !Number.isInteger(index) || index < 0 || index > 9999
-    || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size) throw new Error('本地原图无效。')
+    || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size || blob.size > 32 * 1024 ** 2) throw new Error('本地原图无效或超过 32 MB。')
   let saved: string | undefined
   const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
     const hash = await identity(blob), db = await database()
-    const transaction = db.transaction(['tasks', 'originals'], 'readwrite'), done = completed(transaction)
-    const request = transaction.objectStore('tasks').get([owner, id])
+    signal?.throwIfAborted()
+    const transaction = db.transaction(['tasks', 'originals', 'previews'], 'readwrite'), done = completed(transaction)
+    const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), previews = transaction.objectStore('previews')
+    const request = records.get([owner, id]), local = taskAssetUrl(id, index)
     request.onsuccess = () => {
-      const task = (request.result as TaskRecord | undefined)?.value
-      if (!task || task.kind !== 'image' || task.urls[index] !== source) return
-      transaction.objectStore('originals').put({ owner, key: `${id}:${index}`, taskId: id, blob, identity: hash } satisfies AssetRecord)
-      saved = taskAssetUrl(id, index)
+      if (signal?.aborted) { transaction.abort(); return }
+      const record = request.result as TaskRecord | undefined, task = record?.value
+      if (!record || !task || task.kind !== 'image') return
+      if (task.urls[index] === local) {
+        const existing = originals.get([owner, `${id}:${index}`])
+        existing.onsuccess = () => { if ((existing.result as AssetRecord | undefined)?.identity === hash) saved = local }
+        return
+      }
+      if (task.urls[index] !== source) return
+      originals.put({ owner, key: `${id}:${index}`, taskId: id, blob, identity: hash } satisfies AssetRecord)
+      task.urls[index] = local
+      record.mediaIdentity = JSON.stringify([task.kind, task.urls])
+      records.put(record)
+      const preview = previews.get([owner, index ? `${id}:${index}` : id])
+      preview.onsuccess = () => {
+        const cached = preview.result as PreviewRecord | undefined
+        if (cached?.identity === JSON.stringify(['image', source])) previews.put({ ...cached, identity: JSON.stringify(['image', local]) })
+      }
+      saved = local
     }
     await done
   })

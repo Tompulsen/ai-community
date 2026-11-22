@@ -10,7 +10,8 @@ import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
 import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params'
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
-import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal } from './studio-task-store'
+import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
+import { imageThumbnail } from './studio-media-previews'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -45,6 +46,7 @@ export interface CreationTask {
   responseMetrics?: ChatResponseMetrics
   preview?: string
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
+  browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string }
   galleryHidden?: boolean
   galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
@@ -89,6 +91,9 @@ export const creation = reactive({
 export const mediaSettings = reactive({ autoDownload: false, autoSaveGallery: true, loaded: false })
 const controllers = new Map<string, AbortController>()
 const downloads = new Map<string, { controller: AbortController; promise: Promise<void> }>()
+const imageSaves = new Map<string, { controller: AbortController; promise: Promise<void> }>()
+let activeImageSaves = 0
+const waitingImageSaves: (() => void)[] = []
 const localMedia = reactive<Record<string, string>>({})
 const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
@@ -126,7 +131,7 @@ function parse(value: unknown): unknown {
   if (typeof value !== 'string') return value
   try { return JSON.parse(value) } catch { return undefined }
 }
-async function persist(required = false) {
+async function persist(required = false, refreshHistory = true) {
   if (!owner || owner !== activeOwner()) return
   const acceptedOwner = owner, key = storeKey(), snapshot = captureTaskSnapshot(owner, creation.tasks)
   writes = writes.catch(() => {}).then(async () => {
@@ -135,7 +140,7 @@ async function persist(required = false) {
       await saveCapturedTaskSnapshot(acceptedOwner, snapshot)
       if (acceptedOwner === activeOwner()) {
         localStorage.removeItem(key + ':v2-fallback')
-        creation.historyRevision++
+        if (refreshHistory) creation.historyRevision++
       }
     } catch {
       try { localStorage.setItem(key + ':v2-fallback', `[${[...snapshot.values()].join(',')}]`) }
@@ -250,12 +255,21 @@ async function gallerySource(url: string, preview: boolean): Promise<string | un
 }
 export function mediaSource(url: string, preview = false, kind: CreationKind = 'image'): string | undefined {
   if (url.startsWith('studio-asset:')) {
-    const key = `${activeOwner()}:${url}:original`
+    const key = `${activeOwner()}:${url}:${preview ? 'preview' : 'original'}`
     if (!localMedia[key] && !mediaLoads.has(key)) {
       const accepted = activeOwner(), version = epoch
-      const loading = readTaskAsset(accepted, url).then(blob => {
+      const loading = (async () => {
+        const [, id, index] = url.split(':'), identity = JSON.stringify(['image', url])
+        const cached = preview ? await readTaskPreview(accepted, id!, identity, Number(index)) : undefined
+        let blob = cached?.blob || await readTaskAsset(accepted, url)
+        if (preview && blob && !cached) {
+          try {
+            blob = await imageThumbnail(blob, new AbortController().signal)
+            await saveTaskPreview(accepted, id!, identity, blob, undefined, Number(index)).catch(() => {})
+          } catch { /* Original bytes remain readable if thumbnail creation is unavailable. */ }
+        }
         if (blob && version === epoch) return localMedia[key] = URL.createObjectURL(blob)
-      }).catch(() => undefined).finally(() => mediaLoads.delete(key))
+      })().catch(() => undefined).finally(() => mediaLoads.delete(key))
       mediaLoads.set(key, loading)
     }
     return localMedia[key]
@@ -292,7 +306,7 @@ export async function readableMedia(url: string, kind: CreationKind, preview = f
   }
   let source = url.startsWith('legacy-gallery:') ? await gallerySource(url, preview) : mediaSource(url, preview, kind)
   if (url.startsWith('studio-asset:') && !source) {
-    const key = `${activeOwner()}:${url}:original`
+    const key = `${activeOwner()}:${url}:${preview ? 'preview' : 'original'}`
     source = await mediaLoads.get(key)
   }
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
@@ -398,6 +412,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   }
   if ((urls.length || text || task.toolCalls?.length) && (!status || ['complete', 'completed', 'success', 'succeeded'].includes(status))) {
     task.urls = urls; task.text = text; task.phase = 'complete'; task.progress = 100; task.error = ''
+    if (task.kind === 'image') void cacheCreationImages(task)
     if (task.kind !== 'text') void autoDownloadCreation(task)
     return true
   }
@@ -730,7 +745,10 @@ export async function removeCreationTasks(ids: string[]) {
   await writes.catch(() => {})
   await deleteTaskRecords(acceptedOwner, ids)
   if (version !== epoch || acceptedOwner !== activeOwner()) return
-  for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === acceptedOwner)) downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
+  for (const task of creation.tasks.filter(task => selected.has(task.id) && task.owner === acceptedOwner)) {
+    downloads.get(`${task.owner}:${task.id}`)?.controller.abort()
+    imageSaves.get(`${task.owner}:${task.id}`)?.controller.abort()
+  }
   creation.tasks = creation.tasks.filter(task => task.owner !== acceptedOwner || !selected.has(task.id))
   if (selected.has(creation.selectedId)) creation.selectedId = creation.tasks[0]?.id || ''
   await persist(true)
@@ -846,6 +864,7 @@ export function initializeCreation() {
       phase: task.phase === 'submitting' ? 'attention' : task.phase === 'running' ? 'paused' : task.phase,
       error: task.kind !== 'text' && task.phase === 'submitting' ? task.error || '上次生成请求已中断。' : task.error,
       localSave: task.localSave?.state === 'saving' ? { ...task.localSave, state: 'failed', error: '上次下载准备已中断，可重试保存剩余文件。' } : task.localSave,
+      browserSave: task.browserSave?.state === 'saving' ? undefined : task.browserSave,
     })) : []
     if (saved === undefined) await importLegacy(version)
     if (version !== epoch) return
@@ -856,6 +875,82 @@ export function initializeCreation() {
       && !item.customApiBase && (!item.legacy || item.tokenId != null))) void resumeCreation(task)
   })().finally(() => { if (version === epoch) booting = undefined })
   return booting
+}
+export function cacheCreationImages(value: CreationTask, retry = false): Promise<void> {
+  const task = creation.tasks.find(item => item.id === value.id && item.owner === activeOwner())
+  if (!task && value.owner === activeOwner()) {
+    const version = epoch
+    return readTaskForUpdate(value.owner, value.id).then(saved => {
+      if (!saved || version !== epoch || saved.owner !== activeOwner() || !validTask(saved)) return
+      if (!creation.tasks.some(item => item.id === saved.id)) {
+        if (saved.browserSave?.state === 'saving') saved.browserSave = undefined
+        creation.tasks.push(saved)
+      }
+      return cacheCreationImages(saved, retry)
+    }).catch(cause => { if (version === epoch) value.browserSave = { state: 'failed', error: errorMessage(cause) } })
+  }
+  if (!task || task.owner !== value.owner || task.kind !== 'image' || task.phase !== 'complete' || !task.urls.length) return Promise.resolve()
+  const key = `${task.owner}:${task.id}`, pending = imageSaves.get(key)
+  if (pending) return pending.promise
+  if (!retry && task.browserSave) return Promise.resolve()
+  const version = epoch, controller = new AbortController(), signal = controller.signal
+  const current = () => version === epoch && task.owner === activeOwner() && creation.tasks.includes(task) && !signal.aborted
+  const check = () => { if (!current()) throw new DOMException('Stopped', 'AbortError') }
+  task.browserSave = { state: 'saving' }
+  const promise = (async () => {
+    let acquired = false
+    try {
+      if (typeof indexedDB === 'undefined') throw new Error('此浏览器无法保存图片，请下载原图保存。')
+      await persist(true, false); check()
+      if (activeImageSaves >= 2) await new Promise<void>((resolve, reject) => {
+        const start = () => { signal.removeEventListener('abort', abort); resolve() }
+        const abort = () => {
+          const index = waitingImageSaves.indexOf(start)
+          if (index !== -1) waitingImageSaves.splice(index, 1)
+          reject(new DOMException('Stopped', 'AbortError'))
+        }
+        waitingImageSaves.push(start); signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+      })
+      else activeImageSaves++
+      acquired = true; check()
+      let failure: unknown
+      for (let index = 0; index < task.urls.length; index++) {
+        try {
+          const source = task.urls[index]!
+          if (source.startsWith('studio-asset:')) {
+            if (!await readTaskAsset(task.owner, source)) throw new Error('此浏览器中的原图已丢失，请从已下载的文件恢复。')
+            check(); continue
+          }
+          let blob = await imageBlob(source)
+          if (!blob) {
+            const response = await fetch(await readableMedia(source, 'image'), { credentials: 'same-origin',
+              signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
+            if (!response.ok) throw new Error('原图暂时无法读取或链接已失效，尚未保存到此浏览器。')
+            if (Number(response.headers.get('content-length')) > 32 * 1024 ** 2) throw new Error('原图超过 32 MB，请手动下载保存。')
+            blob = await response.blob()
+          }
+          check()
+          const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal); check()
+          if (!local || ![source, local].includes(task.urls[index]!)) throw new Error('原图记录已变化，请重新打开后保存。')
+          task.urls[index] = local
+        } catch (cause) { check(); failure ||= cause }
+      }
+      if (failure) throw failure
+      check(); task.browserSave = { state: 'saved' }
+    } catch (cause) {
+      if (current()) task.browserSave = { state: 'failed', error: cause instanceof DOMException && cause.name === 'QuotaExceededError'
+        ? '浏览器空间不足，请释放空间后重试，或下载原图保存。' : errorMessage(cause) }
+    } finally {
+      if (acquired) {
+        const next = waitingImageSaves.shift()
+        if (next) next(); else activeImageSaves--
+      }
+      if (current()) await persist(false, false)
+    }
+  })().finally(() => { if (imageSaves.get(key)?.controller === controller) imageSaves.delete(key) })
+  imageSaves.set(key, { controller, promise })
+  return promise
 }
 function requestDownload(blob: Blob, task: CreationTask, index: number) {
   const extensions: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'text/markdown': 'md' }
@@ -874,6 +969,9 @@ async function cacheDownloadedImage(task: CreationTask, index: number, source: s
     if (local && version === epoch && task.owner === activeOwner() && current?.urls[index] === source) {
       current.urls[index] = local
       task.urls[index] = local
+      if (current.urls.every(url => url.startsWith('studio-asset:'))
+        && (await Promise.all(current.urls.map(url => readTaskAsset(task.owner, url)))).every(Boolean)
+        && version === epoch && task.owner === activeOwner()) current.browserSave = { state: 'saved' }
       return local
     }
   } catch {
@@ -890,7 +988,8 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
   const check = () => {
     controller.signal.throwIfAborted()
     if (version !== epoch || task.owner !== activeOwner()) throw new Error('账号已切换。')
-    if (!creation.tasks.some(item => item.id === task.id && item.owner === task.owner) || urls.some((url, index) => task.urls[index] !== url)) throw new Error('生成记录已删除或原文件已变化。')
+    if (!creation.tasks.some(item => item.id === task.id && item.owner === task.owner)
+      || urls.some((url, index) => task.urls[index] !== url && task.urls[index] !== taskAssetUrl(task.id, index))) throw new Error('生成记录已删除或原文件已变化。')
   }
   const promise = (async () => {
     let completed = Math.min(task.urls.length, Math.max(0, task.localSave?.completed || 0))
@@ -927,7 +1026,12 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
 }
 async function autoDownloadCreation(task: CreationTask) {
   if (typeof document === 'undefined' || !mediaSettings.autoDownload || task.localSave) return
-  try { await saveCreationLocally(task) }
+  const version = epoch
+  try {
+    if (task.kind === 'image') await cacheCreationImages(task)
+    if (version !== epoch || task.owner !== activeOwner() || !creation.tasks.includes(task) || !mediaSettings.autoDownload || task.localSave) return
+    await saveCreationLocally(task)
+  }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
 export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string) {
@@ -1042,6 +1146,8 @@ watch(() => activeOwner(), next => {
   epoch++
   for (const controller of controllers.values()) controller.abort()
   for (const download of downloads.values()) download.controller.abort()
+  for (const save of imageSaves.values()) save.controller.abort()
+  imageSaves.clear()
   downloads.clear()
   controllers.clear(); owner = next; booting = undefined
   for (const key of Object.keys(localMedia)) { if (localMedia[key]?.startsWith('blob:')) URL.revokeObjectURL(localMedia[key]); delete localMedia[key] }
