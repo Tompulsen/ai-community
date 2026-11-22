@@ -10,9 +10,32 @@ python3 release.py ghcr.io/tompulsen/ai-community@sha256:<published-digest>
 
 The image must already be pulled and its revision label must identify the intended
 commit. Confirm that commit before running the command. The script validates the
-image source, tests a candidate with workers disabled, archives assets, gracefully
-stops the previous worker, replaces only `web`, and switches the existing vhost.
+image source, tests a candidate with workers disabled, and archives assets.
+Host loopback port `43000` must be available for the temporary candidate.
+The current vhost is `/opt/1panel/www/conf.d/zhangyu-community.conf`.
+For its 1Panel include layout, only `proxy/root.conf` may exist in the proxy
+directory. Production keeps the original include, limits and root directives.
+Only the temporary candidate vhost inlines that fragment; the original
+`root.conf` is never modified. Unexpected fragments or upstreams abort preparation.
+
+The existing vhost first switches to the verified candidate on `43000`, and public
+probes must pass before the previous web is stopped. After the previous Nginx
+workers exit naturally, the script leaves the old web and its background workers
+running for another 720 seconds. It then sends SIGTERM, waits for a successful
+exit, and recreates only `web` on `13000`. The candidate keeps serving throughout.
+Once the new web passes direct checks, the vhost switches back to `13000` and
+public checks run again. The script waits for the candidate's previous Nginx
+workers and another 720 seconds before gracefully stopping and removing it.
+These waits make a normal release take at least 24 minutes while traffic continues.
 The first run also retires `unified_web` and `legacy-display` after verification.
+
+The 720 seconds are a conservative operational window, not a verified active-task
+count. Legacy images do not track paid generation after the browser disconnects.
+Their image upstream timeout is 600 seconds, followed by result persistence;
+reference preparation and result storage are outside that timeout. An unusually
+slow request can therefore exceed this window. The script never escalates a
+production stop to SIGKILL or sends a second SIGTERM after a stop timeout.
+Nginx must also allow its previous workers to exit naturally.
 
 Old `/assets/` files are kept under
 `/opt/1panel/www/sites/zaiduyu.top/community-assets/assets`. OpenResty tries the
@@ -25,8 +48,20 @@ Release records and private rollback definitions are saved in
 `/opt/ai-community-next/releases/single-web-<UTC timestamp>`. They can contain
 deployment secrets and must not be committed or served over HTTP.
 
-The script restores the previous deployment on a failed cutover. Previous images
-and retired containers are preserved. PostgreSQL, Redis, documents and other
+On a failed switch, the script keeps the candidate serving while restoring the
+previous pinned web, then switches traffic back after health checks. A failure
+before the old web is stopped restores its original proxy without recreating it.
+If the candidate has exited but the new web is verified healthy, the script
+preserves the new web on `13000` and reports that rollback needs attention.
+If a drain or rollback cannot complete, the candidate is retained rather than
+forcibly removed; inspect `result.json` for `retainedCandidate`, `cleanupError`
+and `rollback` before starting another release. A retained candidate can still
+own port `43000`. Successful application verification can report `complete`
+with a retained candidate if only its cleanup timed out.
+
+Previous images and retired containers are preserved. Rollback restores the app
+and proxy configuration; it does not undo database writes or upstream charges.
+PostgreSQL, Redis, documents and other
 containers must retain their IDs and start times. No paid generation, payment or
 manual lottery request is used for verification; normal production workers resume.
 

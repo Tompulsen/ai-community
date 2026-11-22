@@ -26,7 +26,8 @@ class ReleaseHarness:
 
     def __init__(self, root, failure=None, trusted_proxy=None, gateway='172.18.0.1'):
         self.root, self.failure = root, failure
-        self.commands, self.probe_ports = [], []
+        self.commands, self.probe_ports, self.events = [], [], []
+        self.proxy_port, self.proxy_generation = 33000, 0
         self.failed, self.switches = False, 0
         self.compose, self.vhost = root / 'deploy/compose.json', root / 'site.conf'
         self.compose.parent.mkdir()
@@ -72,6 +73,8 @@ class ReleaseHarness:
         self.commands.append(tuple(args))
         if args[:2] == ['docker', 'ps']:
             return '\n'.join(self.items).encode()
+        if args[:2] == ['docker', 'top']:
+            return f'PID COMMAND\n{100 + self.proxy_generation} nginx: worker process\n'.encode()
         if args[:3] == ['docker', 'image', 'inspect']:
             image = {'Id': 'sha256:new', 'Config': {'Env': ['NODE_ENV=production'], 'Labels': {
                 'org.opencontainers.image.revision': 'b' * 40,
@@ -80,6 +83,11 @@ class ReleaseHarness:
         if args[:2] == ['docker', 'cp']:
             (Path(args[-1]) / 'entry-hash.js').write_bytes(b'js')
         elif args[:2] == ['docker', 'exec']:
+            if args[3:] == ['nginx', '-s', 'reload']:
+                self.proxy_generation += 1
+                self.proxy_port = int(release.re.search(r'proxy_pass http://127\.0\.0\.1:(\d+);',
+                                                       self.vhost.read_text())[1])
+                self.events.append(('proxy', self.proxy_port))
             return self.html if args[3] == 'cat' else b''
         elif args[:2] == ['docker', 'compose']:
             definition = json.loads(Path(args[args.index('-f') + 1]).read_bytes())
@@ -88,9 +96,17 @@ class ReleaseHarness:
                 self.items[name] = copy.deepcopy(self.before[self.current])
             elif 'up' in args:
                 self.switches += 1
+                self.events.append(('up', 'rollback' if 'unified_web' in definition['services'] else 'new'))
                 if 'unified_web' in definition['services']:
+                    self.fail('rollback')
                     self.items.update(copy.deepcopy(self.before))
                 else:
+                    if self.failure == 'candidate-exit' and not self.failed:
+                        self.failed = True
+                        for name, item in self.items.items():
+                            if name.startswith('ai-community-check-'):
+                                item['State']['Running'] = False
+                        raise RuntimeError('candidate exited during new-start')
                     self.fail('new-start')
                     web = copy.deepcopy(self.before[self.current])
                     web.update({'Name': '/' + release.WEB, 'Id': 'new-web', 'Image': 'sha256:new'})
@@ -98,15 +114,20 @@ class ReleaseHarness:
                     web['Config']['Env'] = [k + '=' + v for k, v in env.items()]
                     self.items[release.WEB] = web
         elif args[:2] == ['docker', 'kill']:
-            if self.failure != 'worker-draining':
+            self.events.append(('stop', args[-1]))
+            draining = self.failure == 'worker-draining' and args[-1] == release.WEB \
+                or self.failure == 'retired-draining' and args[-1] == self.current
+            if not draining:
                 self.items[args[-1]]['State']['Running'] = False
         elif args[:2] == ['docker', 'wait']:
-            if self.failure == 'worker-draining':
+            if self.failure == 'worker-draining' and args[-1] == release.WEB \
+                    or self.failure == 'retired-draining' and args[-1] == self.current:
                 raise subprocess.TimeoutExpired(args, timeout)
             return b'0\n'
         elif args[:2] == ['docker', 'stop']:
             self.items[args[-1]]['State']['Running'] = False
         elif args[:2] == ['docker', 'rm']:
+            self.events.append(('remove', args[-1]))
             del self.items[args[-1]]
         else:
             raise AssertionError('Unexpected operation: ' + repr(args))
@@ -119,10 +140,42 @@ class ReleaseHarness:
 
     def probes(self, port=None):
         self.probe_ports.append(port)
-        self.fail({43000: 'candidate', 13000: 'new-validation', None: 'proxy'}[port])
+        self.events.append(('probe', port, self.proxy_port))
+        if self.failure == 'verify-candidate-exit' and not self.failed and port is None and self.proxy_port == 13000:
+            self.failed = True
+            for name, item in self.items.items():
+                if name.startswith('ai-community-check-'):
+                    item['State']['Running'] = False
+            raise RuntimeError('candidate exited during verify')
+        self.fail({43000: 'candidate', 13000: 'new-validation',
+                   None: 'candidate-proxy' if self.proxy_port == 43000 else 'proxy'}[port])
         return [{'port': port, 'status': 200}]
 
-    def request(self, path, port=None, method='GET'):
+    def wait_requests(self, name, guard=None):
+        self.events.append(('request-drain', name))
+        if name.startswith('ai-community-check-'):
+            self.fail('candidate-draining')
+        if guard:
+            if self.failure == 'candidate-exit-request-wait':
+                for candidate, item in self.items.items():
+                    if candidate.startswith('ai-community-check-'):
+                        item['State']['Running'] = False
+            guard()
+
+    def wait_proxy(self, workers, guard=None):
+        self.events.append(('proxy-drain', self.proxy_port))
+        if guard:
+            if self.failure == 'candidate-exit-proxy-wait':
+                for candidate, item in self.items.items():
+                    if candidate.startswith('ai-community-check-'):
+                        item['State']['Running'] = False
+            guard()
+
+    def request(self, path, port=None, method='GET', timeout=15):
+        if path == '/healthz' and port == 43000:
+            running = any(item['State']['Running'] for name, item in self.items.items()
+                          if name.startswith('ai-community-check-'))
+            return (200 if running else 503), {}, b''
         body = self.html if path == '/discover' else b'js'
         return 200, {'x-content-type-options': 'nosniff', 'content-type': 'text/javascript',
                      'content-length': str(len(body))}, b'' if method == 'HEAD' else body
@@ -143,6 +196,7 @@ class ReleaseHarness:
             for name, value in [('COMPOSE', self.compose), ('VHOST', self.vhost), ('ARCHIVE', self.root / 'archive'),
                                 ('Path', mapped_path), ('execute', self.execute), ('inspect', self.inspect),
                                 ('probes', self.probes), ('request', self.request),
+                                ('wait_request_drain', self.wait_requests), ('wait_proxy_workers', self.wait_proxy),
                                 ('wait_healthy', lambda name: self.inspect([name])[name])]:
                 stack.enter_context(patch.object(release, name, value))
             stack.enter_context(patch.object(release.os, 'geteuid', return_value=0, create=True))
@@ -170,7 +224,16 @@ class ReleaseFlowTests(unittest.TestCase):
             self.assertEqual(set(desired['services']), {'web', 'db'})
             self.assertEqual(desired['services']['web']['image'], fixture.image)
             self.assertEqual(desired['services']['web']['environment']['TRUSTED_PROXY_CIDRS'], 'loopback,172.18.0.1')
-            self.assertEqual(fixture.probe_ports, [43000, 13000, None])
+            self.assertEqual(fixture.probe_ports, [43000, None, 13000, None])
+            candidate = next(command[command.index('--name') + 1] for command in fixture.commands
+                             if command[:2] == ('docker', 'compose') and 'run' in command)
+            order = [fixture.events.index(event) for event in [
+                ('proxy', 43000), ('probe', None, 43000), ('proxy-drain', 43000),
+                ('request-drain', release.WEB), ('stop', release.WEB), ('up', 'new'),
+                ('probe', 13000, 43000), ('proxy', 13000), ('probe', None, 13000),
+                ('proxy-drain', 13000), ('request-drain', candidate), ('stop', candidate),
+                ('remove', candidate)]]
+            self.assertEqual(order, sorted(order))
 
     def test_candidate_failure_does_not_stop_or_reconfigure_production(self):
         with tempfile.TemporaryDirectory() as root:
@@ -182,7 +245,39 @@ class ReleaseFlowTests(unittest.TestCase):
             self.assertEqual(fixture.items, fixture.before)
             self.assertEqual(fixture.switches, 0)
             self.assertNotIn('rollback', fixture.report())
-            self.assertFalse(any(command[:2] == ('docker', 'kill') for command in fixture.commands))
+            self.assertFalse(any(command[:2] == ('docker', 'kill') and command[-1] == release.WEB
+                                 for command in fixture.commands))
+
+    def test_candidate_proxy_failure_restores_traffic_without_restarting_old_web(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'candidate-proxy')
+            original_wait = fixture.wait_requests
+            def wait_requests(name, guard=None):
+                if name.startswith('ai-community-check-'):
+                    report = fixture.report()
+                    self.assertEqual(report['phase'], 'failed')
+                    self.assertIn('injected candidate-proxy', report['error'])
+                return original_wait(name, guard)
+            fixture.wait_requests = wait_requests
+            with self.assertRaisesRegex(RuntimeError, 'injected candidate-proxy'):
+                fixture.run()
+            self.assertEqual(fixture.items, fixture.before)
+            self.assertEqual(fixture.switches, 0)
+            self.assertEqual(fixture.vhost.read_bytes(), fixture.proxy_before)
+            self.assertEqual(fixture.report()['rollback'], 'restored')
+            self.assertNotIn(('stop', release.WEB), fixture.events)
+
+    def test_candidate_exit_during_either_wait_preserves_old_web_and_restores_proxy(self):
+        for failure in ['candidate-exit-proxy-wait', 'candidate-exit-request-wait']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root:
+                fixture = ReleaseHarness(Path(root), failure)
+                with self.assertRaisesRegex(AssertionError, 'Candidate health check failed'):
+                    fixture.run()
+                self.assertEqual(fixture.items[release.WEB], fixture.before[release.WEB])
+                self.assertNotIn(('stop', release.WEB), fixture.events)
+                self.assertEqual(fixture.switches, 0)
+                self.assertEqual(fixture.vhost.read_bytes(), fixture.proxy_before)
+                self.assertEqual(fixture.report()['rollback'], 'restored')
 
     def test_application_switch_failures_restore_old_config_and_services(self):
         for failure in ['new-start', 'new-validation', 'proxy']:
@@ -201,6 +296,82 @@ class ReleaseFlowTests(unittest.TestCase):
                 self.assertEqual(fixture.switches, 2)
                 self.assertEqual(fixture.probe_ports[-1], None)
                 self.assertEqual(fixture.items['ai-community-db-1'], fixture.before['ai-community-db-1'])
+                restore = fixture.events.index(('up', 'rollback'))
+                fallback = max(index for index, event in enumerate(fixture.events[:restore])
+                               if event == ('proxy', 43000))
+                self.assertLess(fallback, restore)
+                self.assertIn(('probe', None, 43000), fixture.events[fallback:restore])
+                self.assertIn(('proxy-drain', 43000), fixture.events[fallback:restore])
+
+    def test_rollback_failure_preserves_the_candidate_serving_traffic(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'new-validation')
+            original_fail = fixture.fail
+            def fail(phase):
+                if phase == 'rollback':
+                    raise RuntimeError('injected rollback')
+                original_fail(phase)
+            fixture.fail = fail
+            with self.assertRaisesRegex(RuntimeError, 'injected new-validation'):
+                fixture.run()
+            report = fixture.report()
+            candidate = report['retainedCandidate']
+            self.assertTrue(fixture.items[candidate]['State']['Running'])
+            self.assertEqual(fixture.proxy_port, 43000)
+            self.assertIn('injected rollback', report['rollback'])
+            self.assertNotIn(('stop', candidate), fixture.events)
+            self.assertNotIn(('remove', candidate), fixture.events)
+
+    def test_candidate_exit_does_not_prevent_restoring_the_old_web(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'candidate-exit')
+            with self.assertRaisesRegex(RuntimeError, 'candidate exited during new-start'):
+                fixture.run()
+            report = fixture.report()
+            self.assertTrue(report['candidateUnavailable'])
+            self.assertEqual(report['rollback'], 'restored')
+            self.assertTrue(fixture.items[release.WEB]['State']['Running'])
+            self.assertEqual(fixture.items[release.WEB]['Image'], fixture.before[release.WEB]['Image'])
+            self.assertEqual(fixture.vhost.read_bytes(), fixture.proxy_before)
+
+    def test_retired_web_drain_timeout_is_not_force_recreated_during_rollback(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'retired-draining')
+            with self.assertRaises(subprocess.TimeoutExpired):
+                fixture.run()
+            report = fixture.report()
+            self.assertIn('still draining', report['rollback'])
+            self.assertEqual(fixture.switches, 1)
+            self.assertEqual(fixture.events.count(('stop', fixture.current)), 1)
+            self.assertTrue(fixture.items[fixture.current]['State']['Running'])
+            self.assertTrue(fixture.items[report['retainedCandidate']]['State']['Running'])
+            self.assertEqual(fixture.proxy_port, 43000)
+
+    def test_dead_candidate_does_not_replace_a_healthy_new_web_during_rollback(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'verify-candidate-exit')
+            with self.assertRaisesRegex(RuntimeError, 'candidate exited during verify'):
+                fixture.run()
+            report = fixture.report()
+            self.assertIn('verified production web was preserved', report['rollback'])
+            self.assertEqual(fixture.proxy_port, 13000)
+            self.assertEqual(fixture.items[release.WEB]['Image'], 'sha256:new')
+            self.assertEqual(fixture.switches, 1)
+            failed_probe = fixture.events.index(('probe', None, 13000))
+            self.assertNotIn(('proxy', 43000), fixture.events[failed_probe:])
+            self.assertNotIn(('stop', release.WEB), fixture.events[failed_probe:])
+
+    def test_candidate_drain_timeout_keeps_new_web_and_candidate_without_killing_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), 'candidate-draining')
+            fixture.run()
+            report = fixture.report()
+            candidate = report['retainedCandidate']
+            self.assertEqual(report['phase'], 'complete')
+            self.assertEqual(fixture.proxy_port, 13000)
+            self.assertTrue(fixture.items[candidate]['State']['Running'])
+            self.assertEqual(fixture.items[release.WEB]['Image'], 'sha256:new')
+            self.assertNotIn(('stop', candidate), fixture.events)
 
     def test_draining_worker_is_not_killed_or_replaced_on_timeout(self):
         with tempfile.TemporaryDirectory() as root:
@@ -211,11 +382,15 @@ class ReleaseFlowTests(unittest.TestCase):
             self.assertEqual(report['failedPhase'], 'worker-handoff')
             self.assertIn('still draining', report['rollback'])
             self.assertEqual(fixture.switches, 0)
-            self.assertEqual(fixture.items, fixture.before)
+            for name, item in fixture.before.items():
+                self.assertEqual(fixture.items[name], item)
+            candidate = report['retainedCandidate']
+            self.assertTrue(fixture.items[candidate]['State']['Running'])
+            self.assertEqual(fixture.proxy_port, 43000)
             signals = [command for command in fixture.commands if command[:2] == ('docker', 'kill')]
             self.assertEqual(signals, [('docker', 'kill', '--signal', 'SIGTERM', release.WEB)])
             self.assertEqual(json.loads(fixture.compose.read_bytes()), fixture.original)
-            self.assertEqual(fixture.vhost.read_bytes(), fixture.proxy_before)
+            self.assertIn('127.0.0.1:43000;', fixture.vhost.read_text())
 
     def test_proxy_trust_preserves_explicit_setting_and_ignores_other_networks(self):
         for configured, gateway, expected in [('loopback,192.0.2.10', '172.18.0.1', 'loopback,192.0.2.10'),
@@ -309,8 +484,52 @@ server {
         self.assertNotIn(':33000', result)
         self.assertNotIn(':23000', result)
         self.assertEqual(release.proxy_config(result), result)
+        candidate = release.proxy_config(source, 43000)
+        self.assertEqual(candidate.count('proxy_pass http://127.0.0.1:43000;'), 2)
+        self.assertEqual(release.proxy_config(candidate), result)
+        with self.assertRaises(AssertionError):
+            release.proxy_config(source, 23000)
         with self.assertRaises(AssertionError):
             release.proxy_config('unexpected configuration')
+
+    def test_split_proxy_preserves_production_include_and_only_inlines_the_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'root.conf'
+            fragment = '''location ^~ / {
+    proxy_pass http://127.0.0.1:13000;
+    proxy_set_header Host $host;
+    proxy_read_timeout 300s;
+    proxy_buffering off;
+}
+'''
+            root.write_text(fragment)
+            source = '''server {
+    # Current assets first; archived versions contain static files only.
+    location ^~ /assets/ {
+        proxy_pass http://127.0.0.1:13000;
+    }
+    root /www/sites/zhangyu-community/index;
+    limit_conn perserver 20;
+    include /www/sites/zhangyu-community/proxy/*.conf;
+}
+'''
+            with patch.object(release, 'PROXY_ROOT', root):
+                self.assertEqual(release.proxy_config(source), source)
+                candidate = release.proxy_config(source, 43000)
+                self.assertNotIn(release.PROXY_INCLUDE, candidate)
+                self.assertEqual(candidate.count('proxy_pass http://127.0.0.1:43000;'), 2)
+                self.assertIn('limit_conn perserver 20;', candidate)
+                self.assertIn('proxy_read_timeout 300s;', candidate)
+                self.assertEqual(root.read_text(), fragment)
+                with self.assertRaisesRegex(AssertionError, 'asset upstream'):
+                    release.proxy_config(source.replace(':13000;', ':23000;'), 43000)
+                root.write_text(fragment.replace(':13000;', ':23000;'))
+                with self.assertRaisesRegex(AssertionError, 'root upstream'):
+                    release.proxy_config(source, 43000)
+                root.write_text(fragment)
+                (root.parent / 'extra.conf').write_text('location /extra {}')
+                with self.assertRaisesRegex(AssertionError, 'proxy fragments'):
+                    release.proxy_config(source, 43000)
 
     def test_archive_deduplicates_and_rejects_changed_url_without_overwrite(self):
         with tempfile.TemporaryDirectory() as root:
@@ -343,6 +562,39 @@ server {
         with patch.object(release, 'execute', side_effect=[b'', b'137\n']):
             with self.assertRaisesRegex(AssertionError, 'did not exit gracefully'):
                 release.graceful_stop('application')
+
+    def test_proxy_html_waits_for_old_workers_to_serve_the_new_index(self):
+        for name in ['candidate', release.WEB]:
+            with self.subTest(name=name), \
+                    patch.object(release, 'execute', return_value=b'new html') as execute, \
+                    patch.object(release, 'request', side_effect=[(200, {}, b'old html'), (200, {}, b'new html')]) as request, \
+                    patch.object(release.time, 'monotonic', return_value=0), \
+                    patch.object(release.time, 'sleep') as sleep:
+                release.wait_proxy_html(name)
+                execute.assert_called_once_with(['docker', 'exec', name, 'cat', '/app/dist/index.html'])
+                self.assertEqual(request.call_count, 2)
+                sleep.assert_called_once_with(0.25)
+
+    def test_proxy_html_timeout_reports_the_last_http_status_and_hash(self):
+        with patch.object(release, 'execute', return_value=b'new html'), \
+                patch.object(release, 'request', return_value=(503, {}, b'last html')), \
+                patch.object(release.time, 'monotonic', side_effect=[0, 0, 15]):
+            with self.assertRaisesRegex(RuntimeError, 'within 15 seconds: HTTP 503, HTML SHA256 ' + release.digest(b'last html')):
+                release.wait_proxy_html('candidate')
+
+    def test_proxy_drain_waits_only_for_workers_from_before_reload(self):
+        with patch.object(release, 'proxy_workers', side_effect=[{'101', '102'}, {'102'}, {'103'}]), \
+                patch.object(release.time, 'sleep') as sleep:
+            release.wait_proxy_workers({'101', '102'})
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_proxy_drain_timeout_preserves_the_application(self):
+        with patch.object(release, 'proxy_workers', return_value={'101'}), \
+                patch.object(release.time, 'monotonic', side_effect=[0, 621]), \
+                patch.object(release, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'still draining'):
+                release.wait_proxy_workers({'101'})
+        execute.assert_not_called()
 
 
 if __name__ == '__main__':
