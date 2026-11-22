@@ -4,6 +4,14 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
 
 async function fixture(page: Page) {
+  if (new URL(String(test.info().project.use.baseURL)).hostname === '127.0.0.1') {
+    const runtime = await readFile('server/runtime.ts', 'utf8')
+    const policy = runtime.match(/'Content-Security-Policy': "([^"]+)"/)![1]!
+    await page.route('**/create/image', async route => {
+      const response = await route.fetch()
+      await route.fulfill({ response, headers: { ...response.headers(), 'content-security-policy': policy } })
+    })
+  }
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
@@ -59,6 +67,21 @@ async function storedImages(page: Page) {
 test('generated images save original bytes automatically and survive an expired upstream after reload without downloading', async ({ page }) => {
   const { state, image } = await fixture(page)
   state.count = 2
+  const scriptChecks = await page.evaluate(async () => {
+    const script = 'window.__unexpectedLocalMediaScript = true'
+    const urls = [`data:text/javascript,${encodeURIComponent(script)}`, URL.createObjectURL(new Blob([script], { type: 'text/javascript' }))]
+    try {
+      return await Promise.all(urls.map(src => new Promise<string>(resolve => {
+        const element = document.createElement('script')
+        element.src = src
+        element.onload = () => { element.remove(); resolve('loaded') }
+        element.onerror = () => { element.remove(); resolve('blocked') }
+        document.head.appendChild(element)
+      })))
+    } finally { URL.revokeObjectURL(urls[1]!) }
+  })
+  expect(scriptChecks).toEqual(['blocked', 'blocked'])
+  expect(await page.evaluate(() => (window as any).__unexpectedLocalMediaScript)).toBeUndefined()
   await send(page)
   await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length, image.length])
   expect((await storedImages(page)).urls.every(url => url.startsWith('studio-asset:'))).toBe(true)
@@ -72,10 +95,14 @@ test('generated images save original bytes automatically and survive an expired 
   expect(state.originals).toBe(reads)
   expect(state.generations).toBe(1)
   expect(state.downloads).toBe(0)
-  const download = page.waitForEvent('download')
+  const download = page.waitForEvent('download', { timeout: 10000 })
   await page.getByRole('button', { name: '下载图片 1', exact: true }).click()
   const file = await download
   expect((await readFile((await file.path())!))).toEqual(image)
+  await page.getByRole('button', { name: '编辑图片', exact: true }).click()
+  const nextGeneration = page.waitForRequest('**/api/creation/generate')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  expect((await nextGeneration).postDataJSON().referenceUrls).toEqual(Array(2).fill(`data:image/jpeg;base64,${image.toString('base64')}`))
 })
 
 for (const mode of ['inline', 'stream', 'async']) test(`${mode} completion automatically stores the original image`, async ({ page }) => {
@@ -105,7 +132,7 @@ test('an expired image keeps its record and supports retry without generating ag
   expect((await storedImages(page)).sizes).toEqual([])
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     expect((await status.getByRole('button').boundingBox())!.height).toBeGreaterThanOrEqual(44)
     expect((await new AxeBuilder({ page }).include('.browser-save').analyze()).violations).toEqual([])
     await page.screenshot({ path: info.outputPath(`save-failed-${width}.png`) })
@@ -148,6 +175,28 @@ test('manual download corrects an earlier browser-save failure after the upstrea
   await page.getByRole('button', { name: '下载图片', exact: true }).click()
   await download
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  expect(state.generations).toBe(1)
+})
+
+test('an inline result remains downloadable when browser storage is full', async ({ page }) => {
+  const { image, state } = await fixture(page)
+  await page.route('**/api/creation/generate', route => {
+    state.generations++
+    return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: `data:image/jpeg;base64,${image.toString('base64')}` }], tokenId: 41, protocol: 'sync' } })
+  })
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      if (mode === 'readwrite' && Array.isArray(names) && names.includes('originals')) throw new DOMException('Full', 'QuotaExceededError')
+      return Reflect.apply(transaction, this, [names, mode, options])
+    }
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('浏览器空间不足')
+  const download = page.waitForEvent('download', { timeout: 10000 })
+  await page.getByRole('button', { name: '下载图片', exact: true }).click()
+  expect(await readFile((await (await download).path())!)).toEqual(image)
+  expect((await storedImages(page)).sizes).toEqual([])
   expect(state.generations).toBe(1)
 })
 

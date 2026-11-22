@@ -311,7 +311,7 @@ test('pages and static assets remain available during an account-store outage wi
   assert.equal(queries.length, 0, 'an unavailable session must not fall through to content access')
 })
 
-test('account page policy permits Turnstile without allowing arbitrary scripts or frames', async t => {
+test('page policy permits local media and Turnstile without allowing arbitrary scripts or frames', async t => {
   const { app } = await fixture(t)
   for (const method of ['GET', 'HEAD']) {
     const page = await app.inject({ method, url: '/account?returnTo=/create/image' })
@@ -324,6 +324,9 @@ test('account page policy permits Turnstile without allowing arbitrary scripts o
       assert(directives.get(name).includes('https://challenges.cloudflare.com'), `${name} must allow account verification`)
       assert(!directives.get(name).some(value => ['*', 'https:', "'unsafe-inline'", "'unsafe-eval'"].includes(value)))
     }
+    assert.deepEqual(directives.get('connect-src'), ["'self'", 'blob:', 'data:', 'https://challenges.cloudflare.com'])
+    assert.deepEqual(directives.get('script-src'), ["'self'", 'https://challenges.cloudflare.com', 'https://static.cloudflareinsights.com/beacon.min.js', 'https://static.cloudflareinsights.com/beacon.min.js/'])
+    assert.deepEqual(directives.get('frame-src'), ["'self'", 'https://challenges.cloudflare.com'])
     assert.deepEqual(directives.get('default-src'), ["'self'"])
     assert.deepEqual(directives.get('frame-ancestors'), ["'self'"])
     assert.deepEqual(directives.get('object-src'), ["'none'"])
