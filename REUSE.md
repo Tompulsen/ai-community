@@ -459,6 +459,7 @@ Vue 适配将代码、图表和媒体即时显示，避免截断预览或复制�
 媒体放大预览适配旧项目 `gallery/lightbox.tsx` 的全屏布局、缩放、拖动、
 双击、复制和下载，抽为 `StudioMediaPreview.vue`，供图库、聊天附件和
 Markdown 共用。视频沿用原生播放器并接入同一预览外框，关闭暂停并释放源。
+缩放交互进一步参考 `D:/ip/QXChat(积分)/app/components/ui-lib.tsx` 的 `ZoomableImage`：复用 10%–500% 范围、1.2 倍按钮步进、双指缩放及边界约束思路；在现有 Vue 查看器内用 Pointer Events 统一鼠标/触屏，实现手指中心锚定和真实图像尺寸边界。QXChat 仅作只读参考，MIT/NextChat 署名保留，不新增依赖。
 普通附件使用通用媒体复制函数，不伪造生成任务；图库仍执行原有任务归属校验。
 
 作品库排版及交互适配旧 `gallery/gallery.tsx`、`gallery.module.scss` 和

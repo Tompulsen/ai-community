@@ -548,7 +548,7 @@ test('mobile work and reference thumbnails open a full-screen viewer with separa
       expect(boxes.image.left).toBeGreaterThanOrEqual(0)
       expect(boxes.image.right).toBeLessThanOrEqual(width)
       await viewer.getByRole('button', { name: '放大', exact: true }).click()
-      await expect(viewer.getByRole('status', { name: '缩放比例' })).toHaveText('150%')
+      await expect(viewer.getByRole('status', { name: '缩放比例' })).toHaveText('120%')
       await viewer.getByRole('button', { name: '重置缩放', exact: true }).click()
       await expect(viewer.getByRole('status', { name: '缩放比例' })).toHaveText('100%')
       await viewer.getByRole('button', { name: '关闭预览', exact: true }).click()

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdir, readFile } from 'node:fs/promises'
 import sharp from 'sharp'
+import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 async function fixture(page: Page, kind: 'image' | 'video' = 'image') {
@@ -48,13 +49,98 @@ async function fixture(page: Page, kind: 'image' | 'video' = 'image') {
   return { viewer, image, video }
 }
 
+test('pinch zoom keeps its focal point and continues with one finger without closing the viewer', async ({ page }) => {
+  const { viewer } = await fixture(page)
+  const picture = viewer.locator('img'), percent = viewer.getByRole('status', { name: '缩放比例', exact: true })
+  await picture.evaluate((element: HTMLImageElement) => element.decode())
+  const bounds = (await picture.boundingBox())!, x = bounds.x + bounds.width / 2 + 30, y = bounds.y + bounds.height / 2
+  const touch = await page.context().newCDPSession(page)
+  const point = (id: number, x: number, y: number) => ({ id, x, y, radiusX: 2, radiusY: 2 })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1,x-40,y),point(2,x+40,y)] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(1,x-80,y),point(2,x+80,y)] })
+  await expect(percent).toHaveText('200%')
+  const zoomed = (await picture.boundingBox())!
+  expect((x - zoomed.x) / zoomed.width).toBeCloseTo((x - bounds.x) / bounds.width, 3)
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [point(2,x+80,y)] })
+  const before = await picture.boundingBox()
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(1,x-60,y)] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await expect(viewer).toBeVisible()
+  await expect.poll(async () => (await picture.boundingBox())!.x - before!.x).toBeCloseTo(20,0)
+  await viewer.getByRole('button', { name: '重置缩放', exact: true }).click()
+  await expect(percent).toHaveText('100%')
+  const tap = async () => {
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1,x,y)] })
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+  await tap()
+  await expect(viewer).toBeVisible()
+  await expect(percent).toHaveText('100%')
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1,x,y)] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] })
+  await tap()
+  await expect(percent).toHaveText('100%')
+  await tap()
+  await expect(percent).toHaveText('250%')
+  await tap(); await tap()
+  await expect(percent).toHaveText('100%')
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1,x-15,y),point(2,x+15,y)] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(1,x-140,y),point(2,x+140,y)] })
+  await expect(percent).toHaveText('500%')
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1,x-140,y),point(2,x+140,y)] })
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(1,x-1,y),point(2,x+1,y)] })
+  await expect(percent).toHaveText('10%')
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] })
+  await expect(viewer.locator('.lightbox-content')).not.toHaveClass(/is-dragging/)
+  await expect(viewer).toBeVisible()
+  await viewer.getByRole('button', { name: '重置缩放', exact: true }).click()
+  await expect(percent).toHaveText('100%')
+  await touch.detach()
+  await viewer.getByRole('button', { name: '放大', exact: true }).click()
+  await expect(percent).toHaveText('120%')
+  await viewer.locator('.lightbox-stage').click({ position: { x: 1, y: 1 } })
+  await expect(viewer).not.toBeVisible()
+})
+
+test('wheel zoom follows the cursor, drag stays in bounds, and rotation and keyboard reset remain usable', async ({ page }) => {
+  const { viewer } = await fixture(page)
+  const picture = viewer.locator('img'), stage = viewer.locator('.lightbox-stage')
+  const percent = viewer.getByRole('status', { name: '缩放比例', exact: true })
+  await picture.evaluate((element: HTMLImageElement) => element.decode())
+  const before = (await picture.boundingBox())!, x = before.x + before.width / 2 + 45, y = before.y + before.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.wheel(0, -Math.log(2) / .002)
+  await expect(percent).toHaveText('200%')
+  const after = (await picture.boundingBox())!
+  expect((x - after.x) / after.width).toBeCloseTo((x - before.x) / before.width, 3)
+  await page.mouse.down(); await page.mouse.move(x + 2000, y + 1000); await page.mouse.up()
+  const panned = (await picture.boundingBox())!, viewport = (await stage.boundingBox())!
+  expect(panned.x).toBeCloseTo(viewport.x, 0)
+  expect(panned.y + panned.height / 2).toBeCloseTo(viewport.y + viewport.height / 2, 0)
+  await page.setViewportSize({ width: 900, height: 390 })
+  await expect.poll(async () => {
+    const image = (await picture.boundingBox())!, box = (await stage.boundingBox())!
+    return Math.abs(image.x + image.width / 2 - box.x - box.width / 2)
+  }).toBeLessThan(1)
+  await page.keyboard.press('0'); await expect(percent).toHaveText('100%')
+  await page.keyboard.press('+'); await expect(percent).toHaveText('120%')
+  await page.keyboard.press('-'); await expect(percent).toHaveText('100%')
+  const targets = await viewer.locator('.viewer-button').evaluateAll(elements => elements.map(element => {
+    const box = element.getBoundingClientRect(); return { width: box.width, height: box.height }
+  }))
+  expect(targets.every(box => box.width >= 44 && box.height >= 44)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.media-lightbox[open]').analyze()).violations).toEqual([])
+})
+
 test('shared gallery viewer preserves original pixels, zooms, pans, changes items, downloads and copies', async ({ page }) => {
   const { viewer, image } = await fixture(page)
   const picture = viewer.locator('img'), percent = viewer.getByRole('status', { name: '缩放比例', exact: true })
   await expect.poll(() => picture.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
   await expect(percent).toHaveText('100%')
   await viewer.getByRole('button', { name: '放大', exact: true }).click()
-  await expect(percent).toHaveText('150%')
+  await expect(percent).toHaveText('120%')
+  await viewer.getByRole('button', { name: '放大', exact: true }).click()
   const content = viewer.locator('.lightbox-content')
   const box = (await content.boundingBox())!
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -63,7 +149,7 @@ test('shared gallery viewer preserves original pixels, zooms, pans, changes item
   await expect(content).toHaveClass(/is-dragging/)
   await page.mouse.up()
   await expect(content).not.toHaveClass(/is-dragging/)
-  await expect(picture).toHaveAttribute('style', /translate\(35px, 20px\)/)
+  await expect(picture).toHaveAttribute('style', /translate\(35px, 0px\)/)
   await content.dispatchEvent('pointercancel', { pointerId: 91 })
   await viewer.getByRole('button', { name: '下一张', exact: true }).click()
   await expect(percent).toHaveText('100%')
@@ -76,7 +162,7 @@ test('shared gallery viewer preserves original pixels, zooms, pans, changes item
   await expect(percent).toHaveText('500%')
   await expect(viewer.getByRole('button', { name: '放大', exact: true })).toBeDisabled()
   await content.dispatchEvent('wheel', { deltaY: 10000 })
-  await expect(percent).toHaveText('50%')
+  await expect(percent).toHaveText('10%')
   await expect(viewer.getByRole('button', { name: '缩小', exact: true })).toBeDisabled()
   await viewer.getByRole('button', { name: '复制图片', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedImageTypes)).toEqual([['image/png']])
@@ -119,7 +205,10 @@ test('viewer resolves delayed stored assets, rejects unsafe sources and closes o
   await fixture(page)
   await page.keyboard.press('Escape')
   await page.evaluate(async () => {
-    const vuePath = '/node_modules/.vite/deps/vue.js', componentPath = '/src/components/studio-message/StudioMediaPreview.vue'
+    const componentPath = '/src/components/studio-message/StudioMediaPreview.vue'
+    // Import the component's exact Vite runtime URL so the harness shares Vue's ref owner.
+    const source = await (await fetch(componentPath)).text()
+    const vuePath = source.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)![1]!
     const { createApp, h, ref, nextTick } = await import(vuePath)
     const { default: Preview } = await import(componentPath)
     const handle = ref(), items = ref([{ src: undefined, kind: 'image', alt: '延迟图片' }])

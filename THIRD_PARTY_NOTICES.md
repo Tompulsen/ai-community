@@ -48,6 +48,9 @@ These ports retain the Studio MIT/NextChat provenance; moving them into the
 community service does not remove the original notice below.
 `services/documents/` remains an independent service and retains its AGPL
 service declarations and QXChat MIT / GenOffice Apache-2.0 provenance.
+The shared media viewer also adapts zoom controls and touch interaction from
+QXChat `app/components/ui-lib.tsx` (`ZoomableImage`), under the same MIT /
+Copyright (c) 2023-2025 NextChat notice retained below.
 
 MIT notice for the reused Studio sources, retained here so it is distributed
 with the community image after the root `studio/` directory was retired:

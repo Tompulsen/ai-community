@@ -1,9 +1,11 @@
 <!-- Adapted from octopus_chat app/components/gallery/lightbox.tsx (MIT). -->
+<!-- Zoom gestures also adapted from QXChat app/components/ui-lib.tsx (MIT, NextChat 2023–2025). -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, X } from '@lucide/vue'
 import { copyMediaImage, mediaSource, readableMedia } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
+import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
 const props = withDefaults(defineProps<{
   items: { src?: string; kind: 'image' | 'video'; alt?: string }[]
@@ -14,6 +16,7 @@ const props = withDefaults(defineProps<{
 }>(), { label: '原始媒体预览', closeLabel: '关闭媒体预览' })
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>(), video = ref<HTMLVideoElement>()
+const stage = ref<HTMLElement>(), picture = ref<HTMLImageElement>()
 const opened = ref(false), index = ref(0), scale = ref(1), offset = ref({ x: 0, y: 0 })
 const loading = ref(true), failed = ref(false), attempt = ref(0), actionError = ref('')
 const action = ref<'download' | 'copy'>()
@@ -31,8 +34,12 @@ const source = computed(() => {
 })
 let acceptedOwner: string | undefined, operation = 0, pending: AbortController | undefined
 let oldOverflow: string | undefined, notified = true
-let dragging: { id: number; target: HTMLElement; x: number; y: number; left: number; top: number } | undefined
+const pointers = new Map<number, MediaPoint>()
+let gesture: { center: MediaPoint; distance: number; scale: number; offset: MediaPoint } | undefined
+let tap: { id: number; point: MediaPoint; time: number; background: boolean } | undefined, lastTap: { point: MediaPoint; time: number } | undefined
+let suppressClickUntil = 0, lastTouchAt = -Infinity, observer: ResizeObserver | undefined
 const isDragging = ref(false)
+const canZoom = computed(() => current.value?.kind === 'image' && !loading.value && !failed.value && !!source.value)
 function stopVideo() {
   const element = video.value
   if (element) { element.pause(); element.removeAttribute('src'); element.load() }
@@ -40,37 +47,113 @@ function stopVideo() {
 function playVideo() {
   document.querySelectorAll('video').forEach(element => { if (element !== video.value) element.pause() })
 }
-function endPan(event?: PointerEvent) {
-  if (!dragging || event && event.pointerId !== dragging.id) return
-  const previous = dragging
-  dragging = undefined; isDragging.value = false
-  if (previous.target.hasPointerCapture(previous.id)) previous.target.releasePointerCapture(previous.id)
+function endPan() {
+  const ids = [...pointers.keys()]
+  pointers.clear(); gesture = undefined; tap = undefined; lastTap = undefined; isDragging.value = false
+  for (const id of ids) if (stage.value?.hasPointerCapture(id)) stage.value.releasePointerCapture(id)
 }
 function reset() { endPan(); scale.value = 1; offset.value = { x: 0, y: 0 } }
-function zoom(value: number) {
-  if (current.value?.kind !== 'image') return
-  scale.value = Math.min(5, Math.max(.5, value))
-  if (scale.value <= 1) offset.value = { x: 0, y: 0 }
+function contain(point: MediaPoint, value = scale.value) {
+  if (!picture.value || !stage.value) return { x: 0, y: 0 }
+  return clampMediaOffset(point, value, { width: picture.value.clientWidth, height: picture.value.clientHeight },
+    { width: stage.value.clientWidth, height: stage.value.clientHeight })
+}
+function localPoint(point: MediaPoint) {
+  const bounds = stage.value!.getBoundingClientRect()
+  return { x: point.x - bounds.x - bounds.width / 2, y: point.y - bounds.y - bounds.height / 2 }
+}
+function zoom(value: number, anchor: MediaPoint = { x: 0, y: 0 }) {
+  if (!canZoom.value) return
+  endPan()
+  const next = mediaScale(value)
+  offset.value = contain(mediaZoomOffset(offset.value, next / scale.value, anchor), next)
+  scale.value = next
+}
+function trackGesture() {
+  const [first, second] = [...pointers.values()]
+  if (!first) { gesture = undefined; isDragging.value = false; return }
+  gesture = { center: localPoint(second ? { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 } : first),
+    distance: second ? Math.hypot(second.x - first.x, second.y - first.y) : 0, scale: scale.value, offset: { ...offset.value } }
+  isDragging.value = pointers.size > 1 || scale.value > 1
 }
 function startPan(event: PointerEvent) {
-  if (current.value?.kind !== 'image' || scale.value <= 1 || dragging || event.button !== 0) return
+  if (!canZoom.value || event.button !== 0 || pointers.size >= 2) return
   event.preventDefault()
-  const target = event.currentTarget as HTMLElement
-  dragging = { id: event.pointerId, target, x: event.clientX, y: event.clientY, left: offset.value.x, top: offset.value.y }
-  isDragging.value = true; target.setPointerCapture(event.pointerId)
+  if (event.pointerType === 'touch') lastTouchAt = performance.now()
+  const point = { x: event.clientX, y: event.clientY }
+  pointers.set(event.pointerId, point)
+  tap = pointers.size === 1 ? { id: event.pointerId, point, time: performance.now(), background: event.target === stage.value } : undefined
+  if (pointers.size > 1) { lastTap = undefined; suppressClickUntil = performance.now() + 500 }
+  stage.value!.setPointerCapture(event.pointerId)
+  trackGesture()
 }
 function pan(event: PointerEvent) {
-  if (!dragging || dragging.id !== event.pointerId) return
+  if (!gesture || !pointers.has(event.pointerId)) return
+  if (event.pointerType === 'mouse' && event.buttons === 0) { endPan(); return }
   event.preventDefault()
-  offset.value = { x: dragging.left + event.clientX - dragging.x, y: dragging.top + event.clientY - dragging.y }
+  const point = { x: event.clientX, y: event.clientY }
+  pointers.set(event.pointerId, point)
+  if (tap && Math.hypot(point.x - tap.point.x, point.y - tap.point.y) > 6) { tap = undefined; lastTap = undefined }
+  if (!tap) suppressClickUntil = performance.now() + 500
+  const [first, second] = [...pointers.values()]
+  if (!first) return
+  if (second && gesture.distance > 0) {
+    const next = mediaScale(gesture.scale * Math.hypot(second.x - first.x, second.y - first.y) / gesture.distance)
+    const center = localPoint({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 })
+    offset.value = contain(mediaZoomOffset(gesture.offset, next / gesture.scale, gesture.center, center), next)
+    scale.value = next
+  } else if (!second && scale.value > 1) {
+    const center = localPoint(first)
+    offset.value = contain({ x: gesture.offset.x + center.x - gesture.center.x, y: gesture.offset.y + center.y - gesture.center.y })
+  }
+}
+function finishPan(event: PointerEvent) {
+  if (!pointers.has(event.pointerId)) return
+  if (event.type !== 'pointerup') lastTap = undefined
+  const touchTap = event.type === 'pointerup' && event.pointerType === 'touch' && tap?.id === event.pointerId && !tap.background && pointers.size === 1
+    && performance.now() - tap.time < 300
+  if (event.pointerType === 'touch') lastTouchAt = performance.now()
+  if (!tap || !tap.background || event.type !== 'pointerup') suppressClickUntil = performance.now() + 500
+  else suppressClickUntil = 0
+  const point = pointers.get(event.pointerId)!
+  pointers.delete(event.pointerId); tap = undefined
+  if (stage.value?.hasPointerCapture(event.pointerId)) stage.value.releasePointerCapture(event.pointerId)
+  trackGesture()
+  if (touchTap) {
+    if (lastTap && performance.now() - lastTap.time < 350 && Math.hypot(point.x - lastTap.point.x, point.y - lastTap.point.y) < 24) {
+      suppressClickUntil = performance.now() + 500
+      if (scale.value > 1) reset(); else zoom(2.5, localPoint(point))
+      lastTap = undefined
+    } else lastTap = { point, time: performance.now() }
+  }
+}
+function doubleClick(event: MouseEvent) {
+  if (!canZoom.value || performance.now() - lastTouchAt < 500) return
+  if (scale.value > 1) reset(); else zoom(2.5, localPoint({ x: event.clientX, y: event.clientY }))
+}
+function stageClick(event: MouseEvent) {
+  if (event.target === stage.value && performance.now() > suppressClickUntil) close()
 }
 function wheel(event: WheelEvent) {
-  if (current.value?.kind !== 'image') return
-  event.preventDefault(); event.stopPropagation(); zoom(scale.value - event.deltaY * .001)
+  if (!canZoom.value) return
+  event.preventDefault(); event.stopPropagation()
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.value!.clientHeight : 1)
+  zoom(scale.value * Math.exp(Math.max(-4, Math.min(4, -delta * .002))), localPoint({ x: event.clientX, y: event.clientY }))
+}
+function resized() { endPan(); offset.value = contain(offset.value) }
+function loadedImage() { loading.value = false; offset.value = contain(offset.value) }
+function retryMedia() { reset(); failed.value = false; loading.value = true; attempt.value++ }
+function failedMedia() { endPan(); loading.value = false; failed.value = true }
+function blur() { endPan() }
+function observeStage() {
+  observer?.disconnect()
+  observer = new ResizeObserver(resized)
+  if (stage.value) observer.observe(stage.value)
 }
 function release() {
   operation++; pending?.abort(); pending = undefined; action.value = undefined
   endPan(); stopVideo()
+  observer?.disconnect(); observer = undefined
   window.removeEventListener('blur', blur)
   if (oldOverflow !== undefined) { document.body.style.overflow = oldOverflow; oldOverflow = undefined }
 }
@@ -85,7 +168,6 @@ function close() {
   if (dialog.value?.open) dialog.value.close()
   else closed()
 }
-function blur() { endPan() }
 async function open(position = 0) {
   if (!props.items.length) return
   const owner = session.user?.id
@@ -101,6 +183,7 @@ async function open(position = 0) {
   await nextTick()
   if (owner !== session.user?.id || !opened.value) return
   if (!dialog.value?.open) dialog.value?.showModal()
+  observeStage()
 }
 defineExpose({ open, close })
 function choose(position: number) {
@@ -111,6 +194,11 @@ function keys(event: KeyboardEvent) {
   if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLVideoElement) return
   if (event.key === 'ArrowLeft' && props.items.length > 1) { event.preventDefault(); choose(index.value - 1) }
   else if (event.key === 'ArrowRight' && props.items.length > 1) { event.preventDefault(); choose(index.value + 1) }
+  else if (canZoom.value && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (event.key === '+' || event.key === '=') { event.preventDefault(); zoom(scale.value * 1.2) }
+    else if (event.key === '-') { event.preventDefault(); zoom(scale.value / 1.2) }
+    else if (event.key === '0') { event.preventDefault(); reset() }
+  }
 }
 watch([index, source], () => {
   operation++; pending?.abort(); pending = undefined; action.value = undefined; actionError.value = ''
@@ -157,19 +245,19 @@ async function run(kind: 'download' | 'copy') {
           <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="复制图片" title="复制图片" :disabled="!source || !!action" @click="run('copy')"><LoaderCircle v-if="action === 'copy'" :size="20" /><Copy v-else :size="20" /></button>
           <button class="viewer-button" type="button" :aria-label="closeLabel" :title="closeLabel" autofocus @click="close"><X :size="22" /></button>
         </div>
-        <div class="lightbox-stage" @click.self="close">
-          <div class="lightbox-content" :class="{ 'is-image': current?.kind === 'image', 'is-dragging': isDragging, zoomed: scale > 1 }" @click.stop @wheel="wheel" @pointerdown="startPan" @pointermove="pan" @pointerup="endPan" @pointercancel="endPan" @lostpointercapture="endPan" @dblclick="current?.kind === 'image' && (scale > 1 ? reset() : zoom(2.5))">
-            <div v-if="failed" class="lightbox-error" role="status"><p>{{ current?.kind === 'video' ? '视频加载失败' : '图片加载失败' }}</p><button type="button" class="viewer-retry" @click="failed = false; loading = true; attempt++">重新加载</button></div>
+        <div ref="stage" class="lightbox-stage" :class="{ 'is-image': current?.kind === 'image' }" @click="stageClick" @wheel="wheel" @pointerdown="startPan" @pointermove="pan" @pointerup="finishPan" @pointercancel="finishPan" @lostpointercapture="finishPan" @dblclick="doubleClick">
+          <div class="lightbox-content" :class="{ 'is-image': current?.kind === 'image', 'is-dragging': isDragging, zoomed: scale > 1 }" @click.stop>
+            <div v-if="failed" class="lightbox-error" role="status"><p>{{ current?.kind === 'video' ? '视频加载失败' : '图片加载失败' }}</p><button type="button" class="viewer-retry" @click="retryMedia">重新加载</button></div>
             <template v-else>
               <div v-if="loading || !source" class="lightbox-loading" role="status"><LoaderCircle :size="28" aria-hidden="true" /><span class="viewer-sr-only">正在加载原文件</span></div>
-              <img v-if="current?.kind === 'image' && source" :key="`${index}:${attempt}:${source}`" draggable="false" :src="source" :alt="current.alt || ''" :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }" @load="loading = false" @error="loading = false; failed = true" />
+              <img v-if="current?.kind === 'image' && source" :key="`${index}:${attempt}:${source}`" ref="picture" draggable="false" :src="source" :alt="current.alt || ''" :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }" @load="loadedImage" @error="failedMedia" />
               <video v-else-if="current?.kind === 'video' && source" :key="`${index}:${attempt}:${source}`" ref="video" :src="source" :aria-label="current.alt || '视频预览'" controls playsinline preload="metadata" @loadeddata="loading = false" @error="loading = false; failed = true" @play="playVideo" @dblclick.stop />
             </template>
           </div>
         </div>
         <p v-if="actionError" class="lightbox-action-error" role="alert">{{ actionError }}</p>
         <div v-if="current?.kind === 'image' || items.length > 1" class="lightbox-controls">
-          <template v-if="current?.kind === 'image'"><button class="viewer-button" type="button" aria-label="缩小" title="缩小" :disabled="scale <= .5" @click="zoom(scale - .5)"><Minus :size="18" /></button><output aria-label="缩放比例">{{ Math.round(scale * 100) }}%</output><button class="viewer-button" type="button" aria-label="放大" title="放大" :disabled="scale >= 5" @click="zoom(scale + .5)"><Plus :size="18" /></button><button class="viewer-button" type="button" aria-label="重置缩放" title="重置缩放" @click="reset"><RotateCcw :size="18" /></button></template>
+          <div v-if="current?.kind === 'image'" class="lightbox-zoom" role="group" aria-label="图片缩放"><button class="viewer-button" type="button" aria-label="缩小" title="缩小 (-)" :disabled="!canZoom || scale <= MIN_MEDIA_SCALE" @click="zoom(scale / 1.2)"><Minus :size="18" /></button><output aria-label="缩放比例">{{ Math.round(scale * 100) }}%</output><button class="viewer-button" type="button" aria-label="放大" title="放大 (+)" :disabled="!canZoom || scale >= MAX_MEDIA_SCALE" @click="zoom(scale * 1.2)"><Plus :size="18" /></button><button class="viewer-button" type="button" aria-label="重置缩放" title="适应屏幕 (0)" :disabled="!canZoom" @click="reset"><RotateCcw :size="18" /></button></div>
           <div v-if="items.length > 1" class="lightbox-sequence"><button class="viewer-button" type="button" aria-label="上一张" title="上一张" :disabled="index === 0" @click="choose(index - 1)"><ChevronLeft :size="18" /></button><select :value="index" aria-label="预览图片序号" @change="choose(Number(($event.target as HTMLSelectElement).value))"><option v-for="(_, position) in items" :key="position" :value="position">{{ position + 1 }} / {{ items.length }}</option></select><button class="viewer-button" type="button" aria-label="下一张" title="下一张" :disabled="index >= items.length - 1" @click="choose(index + 1)"><ChevronRight :size="18" /></button></div>
         </div>
       </template>
@@ -182,16 +270,17 @@ async function run(kind: 'download' | 'copy') {
 .media-lightbox::backdrop { background: rgb(0 0 0 / 30%); }
 .lightbox-stage { position: absolute; inset: 64px 16px 84px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .lightbox-content { position: relative; display: flex; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
-.lightbox-content.is-image { touch-action: none; cursor: zoom-in; }.lightbox-content.zoomed { cursor: grab; }.lightbox-content.is-dragging { cursor: grabbing; }
+.lightbox-stage.is-image { touch-action: none; }.lightbox-content.is-image { cursor: zoom-in; }.lightbox-content.zoomed { cursor: grab; }.lightbox-content.is-dragging { cursor: grabbing; }
 .lightbox-content img, .lightbox-content video { display: block; max-width: min(90vw, calc(100vw - 32px)); max-height: calc(100dvh - 164px); width: auto; height: auto; object-fit: contain; border-radius: 8px; }
-.lightbox-content img { user-select: none; transition: transform .2s ease-out; }.lightbox-content.is-dragging img { transition: none; }
+.lightbox-content img { user-select: none; }
 .lightbox-content video { max-width: min(1200px, calc(100vw - 32px)); }
 .lightbox-actions { position: absolute; right: max(16px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); z-index: 2; display: flex; align-items: center; gap: 8px; }
-.viewer-button { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 6px; color: #f5f5f5; background: rgb(38 38 38 / 85%); cursor: pointer; }
+.viewer-button { display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px; color: #f5f5f5; background: rgb(38 38 38 / 85%); cursor: pointer; }
 .viewer-button:hover:not(:disabled), .viewer-retry:hover { background: #404040; }.viewer-button:disabled { opacity: .4; cursor: default; }
 .viewer-button:focus-visible, select:focus-visible, .viewer-retry:focus-visible { outline: 2px solid #fff; outline-offset: var(--focus-outline-offset); }
 .lightbox-controls { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 2; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; width: max-content; max-width: calc(100% - 24px); padding: 4px; border-radius: 8px; background: rgb(24 24 24 / 94%); }
 .lightbox-controls .viewer-button { background: transparent; }.lightbox-controls output { min-width: 48px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.lightbox-zoom { display: flex; align-items: center; gap: 8px; }
 .lightbox-sequence { display: flex; align-items: center; gap: 4px; }.lightbox-sequence select { box-sizing: border-box; width: auto; max-width: 104px; height: 40px; padding: 4px 8px; border: 0; border-radius: 4px; font: inherit; font-size: 13px; color: #f5f5f5; background: #262626; font-variant-numeric: tabular-nums; }
 .lightbox-loading { position: absolute; inset: 0; min-width: 120px; min-height: 120px; display: flex; align-items: center; justify-content: center; pointer-events: none; }.lightbox-loading svg { animation: spin 1s linear infinite; }
 .lightbox-error { min-width: min(240px, calc(100vw - 48px)); padding: 24px; text-align: center; }.lightbox-error p { margin: 0 0 16px; font-size: 14px; }
@@ -199,7 +288,7 @@ async function run(kind: 'download' | 'copy') {
 .lightbox-action-error { position: absolute; top: 64px; left: 24px; right: 24px; margin: 0; color: #fff; font-size: 14px; line-height: 24px; overflow-wrap: anywhere; pointer-events: none; }
 .viewer-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 639px) { .viewer-button { width: 44px; height: 44px; }.lightbox-controls { gap: 0; }.lightbox-controls output { min-width: 44px; }.lightbox-sequence { gap: 0; }.lightbox-content img, .lightbox-content video { border-radius: 4px; max-height: calc(100dvh - 184px); }.lightbox-stage { inset: 68px 12px 104px; } }
+@media (max-width: 639px) { .lightbox-controls { gap: 8px; }.lightbox-controls output { min-width: 44px; }.lightbox-sequence { gap: 8px; }.lightbox-content img, .lightbox-content video { border-radius: 4px; max-height: calc(100dvh - 184px); }.lightbox-stage { inset: 68px 12px 104px; } }
 @media (max-width: 639px) { .has-sequence .lightbox-stage { bottom: 128px; }.has-sequence .lightbox-content img, .has-sequence .lightbox-content video { max-height: calc(100dvh - 208px); } }
 @media (prefers-reduced-motion: reduce) { .lightbox-content img { transition: none; }.lightbox-loading svg { animation: none; } }
 </style>
