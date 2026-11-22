@@ -424,6 +424,23 @@ test('a running job never becomes complete merely because it contains a preview 
   }
 })
 
+test('download stages require an explicit active upstream state and never override failures', () => {
+  for (const kind of ['image', 'video']) {
+    for (const status of ['saving', 'downloading']) {
+      const task = normalizeCreationTask(kind, { data: { id: 'job-1', status } })
+      assert.equal(task.status, 'pending')
+      assert.equal(task.stage, 'downloading')
+      assert.deepEqual(task.outputs, [])
+    }
+    for (const status of ['queued', 'running', 'failed', 'save_failed', 'indeterminate', 'completed']) {
+      assert.equal(normalizeCreationTask(kind, { id: 'job-1', status, progress: 99 }).stage, undefined)
+    }
+    const failure = normalizeCreationTask(kind, { success: false, data: { id: 'job-1', status: 'saving' } })
+    assert.equal(failure.status, 'failed')
+    assert.equal(failure.stage, undefined)
+  }
+})
+
 test('task state aliases preserve terminal failure messages and IDs', () => {
   const result = normalizeCreationTask('video', { id: 'job-1', state: 'error', message: 'Provider failed' })
   assert.deepEqual(result, { id: 'job-1', upstreamId: 'job-1', status: 'failed', outputs: [], error: 'Provider failed' })

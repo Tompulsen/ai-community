@@ -75,6 +75,7 @@ test('refresh restores a pending server task and returns its result without resu
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('刷新后继续原任务')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => queries).toBe(1)
+  await expect(page.locator('.task-status')).toContainText('正在生成中')
   await page.reload()
   await expect.poll(() => queries).toBe(2)
   finished = true
@@ -140,7 +141,7 @@ for (const kind of ['image', 'video'] as const) {
     complete.add(requests[1]!)
     await page.clock.fastForward(5000)
     await expect(page.locator('.creation-response').last().locator('.task-status')).toContainText('生成完成')
-    await expect(page.locator('.creation-response').first().locator('.task-status')).toContainText(/正在生成|正在思考/)
+    await expect(page.locator('.creation-response').first().locator('.task-status')).toContainText('正在生成中')
     complete.add(requests[0]!)
     await page.clock.fastForward(5000)
     await expect(page.locator('.creation-response').first().locator('.task-status')).toContainText('生成完成')
@@ -237,6 +238,7 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
   try {
     await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
     await expect(page.locator('.creation-response')).toContainText('fixture-image')
+    await expect(page.locator('.task-status')).toContainText('正在提交')
     await expect(page.locator('.task-elapsed')).toContainText(/\d+s/)
     await page.getByRole('textbox', { name: '提示词', exact: true }).fill('下一幅想画海边的小狗')
     await expect(page.locator('.creation-request')).toContainText('一只坐在窗边的小猫')
@@ -261,7 +263,7 @@ test('a slow image request keeps the sent prompt, elapsed time and editor usable
 
 test('an active video task keeps the existing generating status until the result arrives', async ({ page }, info) => {
   await fixture(page)
-  let submissions = 0, queries = 0, taskQueries = 0, finished = false
+  let submissions = 0, queries = 0, taskQueries = 0, finished = false, downloading = false, reportedProgress: number | undefined
   await page.route('**/api/creation/generate', route => {
     submissions++
     return route.fulfill({ json: { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [] } })
@@ -270,7 +272,8 @@ test('an active video task keeps the existing generating status until the result
     taskQueries++
     return route.fulfill({ json: finished
       ? { status: 'succeeded', outputs: [{ url: 'https://media.example/video.mp4' }] }
-      : { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [] } })
+      : { status: 'pending', upstreamId: 'waiting-video', tokenId: 83, protocol: 'async', outputs: [], progress: reportedProgress,
+        ...(downloading ? { stage: 'downloading' } : {}) } })
   })
   await page.route('**/api/creation/requests/**', route => {
     queries++
@@ -283,17 +286,82 @@ test('an active video task keeps the existing generating status until the result
   await expect.poll(() => submissions).toBe(1)
   await expect.poll(() => taskQueries).toBeGreaterThan(0)
   await page.clock.fastForward(385_000)
-  await expect(page.locator('.creation-response')).toContainText('正在生成视频')
+  await expect(page.locator('.task-status')).toContainText('正在生成中')
+  await expect(page.locator('.task-status')).not.toContainText('正在思考')
   await expect(page.locator('.task-elapsed')).toContainText('6m')
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
+  reportedProgress = 35
+  await page.clock.fastForward(5000)
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
+  await page.clock.fastForward(60000)
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
+  await expect(page.locator('.creation-response')).not.toContainText('上游报告')
+  await expect(page.locator('.creation-response')).not.toContainText('35%')
+  await expect(page.locator('.creation-response .message-heading').getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '查询结果', exact: true })).toHaveCount(0)
   await expect(page.locator('.task-details')).toHaveCount(0)
-  await page.screenshot({ path: info.outputPath('video-waiting.png') })
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`video-waiting-${width}.png`) })
+  }
+  downloading = true
+  await page.clock.fastForward(5000)
+  await expect(page.locator('.task-status')).toContainText('下载中')
+  await page.reload()
+  await expect(page.locator('.task-status')).toContainText('下载中')
+  await expect(page.getByRole('button', { name: '停止等待', exact: true })).toBeVisible()
+  await page.screenshot({ path: info.outputPath('video-downloading-390.png') })
   finished = true
   await page.clock.fastForward(5000)
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect({ submissions, queries }).toEqual({ submissions: 1, queries: 0 })
 })
+
+for (const [shape, file] of [['landscape', 'poster-black-intro.mp4'], ['portrait', 'portrait-preview.mp4']] as const) {
+  test(`inline ${shape} video follows the actual frame dimensions on desktop and mobile`, async ({ page }, info) => {
+    await fixture(page)
+    const video = await readFile(`tests/fixtures/${file}`)
+    await page.route('**/api/creation/generate', route => route.fulfill({ json: {
+      status: 'succeeded', outputs: [{ url: 'https://media.example/adaptive.mp4' }], protocol: 'openai', tokenId: 41,
+    } }))
+    await page.route('**/api/creation/media?**', route => route.fulfill({ contentType: 'video/mp4', body: video }))
+    await page.goto('/create/video')
+    await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保持完整视频比例')
+    await page.getByRole('button', { name: '开始生成', exact: true }).click()
+    const player = page.locator('.creation-media video')
+    await expect.poll(() => player.evaluate((element: HTMLVideoElement) => element.videoWidth)).toBeGreaterThan(0)
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 })
+      await expect.poll(async () => player.evaluate((element: HTMLVideoElement) => {
+        const bounds = element.getBoundingClientRect()
+        return Math.abs(bounds.width / bounds.height - element.videoWidth / element.videoHeight)
+      })).toBeLessThan(.01)
+      const bounds = await player.boundingBox()
+      const frame = await player.locator('..').boundingBox()
+      expect(Math.abs(frame!.width - bounds!.width)).toBeLessThan(1)
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+      expect(bounds!.height).toBeLessThanOrEqual(width === 1440 ? 360 : 320)
+      await expect(page.getByRole('button', { name: '放大视频', exact: true })).toBeVisible()
+      await player.evaluate((element: HTMLVideoElement) => element.play())
+      await expect.poll(() => player.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(.2)
+      await player.evaluate((element: HTMLVideoElement) => element.pause())
+      if (shape === 'portrait') {
+        await expect.poll(() => player.evaluate((element: HTMLVideoElement) => {
+          const canvas = document.createElement('canvas')
+          canvas.width = canvas.height = 1
+          const context = canvas.getContext('2d')!
+          context.drawImage(element, 0, 0, 1, 1)
+          return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).reduce((sum, value) => sum + value, 0)
+        })).toBeGreaterThan(30)
+      }
+      await page.screenshot({ path: info.outputPath(`inline-${shape}-${width}.png`) })
+    }
+    await page.getByRole('button', { name: '放大视频', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '原始媒体预览', exact: true })).toBeVisible()
+  })
+}
 
 test('media request errors show their message without a manual query or an automatic retry', async ({ page }, info) => {
   await fixture(page)

@@ -44,6 +44,7 @@ export interface CreationTask {
   id?: string
   upstreamId?: string
   status: 'pending' | 'succeeded' | 'failed' | 'indeterminate' | 'save_failed' | 'expired'
+  stage?: 'downloading'
   progress?: number
   outputs: CreationOutput[]
   error?: string
@@ -525,7 +526,10 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
   const isSynchronous = !state && (kind === 'text' && text !== undefined
     || kind === 'image' && (images.length > 0 || !id && direct !== undefined)
     || kind === 'video' && protocol === 'xai' && video !== undefined)
-  if (!successStates.has(state) && !isSynchronous) return result
+  if (!successStates.has(state) && !isSynchronous) {
+    if (kind !== 'text' && ['saving', 'downloading'].includes(state)) result.stage = 'downloading'
+    return result
+  }
   result.status = 'succeeded'
   result.outputs = text !== undefined ? [{ text }] : images.length ? images : video ? [{ url: video }] : direct ? [{ url: direct }] : []
   if (kind === 'video' && protocol === 'openai' && id) result.mediaPath = `videos/${id}/content`

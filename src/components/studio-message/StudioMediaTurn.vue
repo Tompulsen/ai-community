@@ -50,7 +50,9 @@ watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
 const timedOut = computed(() => creationRequestTimedOut(props.task))
 const version = computed(() => mediaVersion(props.conversation, props.task.id))
-const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成', paused: '等待已暂停', complete: '生成完成', error: '生成失败', attention: '请求异常' }
+const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成中', paused: '已停止等待', complete: '生成完成', error: '生成失败', attention: '请求异常' }
+const activityLabel = computed(() => props.task.phase === 'submitting' ? phases.submitting
+  : props.task.stage === 'downloading' ? '下载中' : phases.running)
 const elapsed = computed(() => {
   if (timedOut.value || props.task.phase === 'paused' || props.task.phase === 'attention') return ''
   const end = working.value ? now.value : props.task.settledAt
@@ -82,7 +84,10 @@ async function remove() {
   <StudioMessageFrame :role="role" :model="task.model" :created-at="task.createdAt" :class="[role === 'user' ? 'creation-request' : 'creation-response', { 'compact-image-response': role === 'assistant' && task.kind === 'image' }]" :aria-label="role === 'user' ? '已发送的创作请求' : '模型生成结果'" tabindex="-1" @contextmenu="openMenu">
     <template #status>
       <template v-if="role === 'assistant'">
-        <StudioAiStatus v-if="working" class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="task.kind === 'video' ? '正在生成视频' : task.preview ? '正在生成图片' : undefined" :timer="false" :elapsed="elapsed" />
+        <span v-if="working" class="task-activity">
+          <StudioAiStatus class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="activityLabel" :timer="false" :elapsed="elapsed" />
+          <button class="icon-button task-stop" type="button" title="停止本页等待，上游任务继续执行" aria-label="停止等待" @click="stopCreation(task)"><Square :size="14" aria-hidden="true" /></button>
+        </span>
         <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' || task.phase === 'attention' }" :role="task.phase === 'error' || task.phase === 'attention' ? 'alert' : 'status'">{{ timedOut ? '请求超时' : phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
       </template>
     </template>
@@ -95,12 +100,10 @@ async function remove() {
       </div>
     </template>
     <template v-else>
-      <progress v-if="working && task.progress != null" class="generation-progress" :value="task.progress" max="100" aria-label="模型返回的生成进度" />
-      <button v-if="working" class="icon-button" type="button" title="停止本页等待，上游任务继续执行" aria-label="停止等待" @click="stopCreation(task)"><Square :size="16" /></button>
       <p v-if="task.error && !working" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
-      <div v-if="task.urls.length" class="creation-media"><figure v-for="(url, index) in task.urls" :key="url">
+      <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url">
         <template v-if="task.kind === 'video'"><video :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" @dblclick="emit('preview', task, index)" /><button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button></template>
         <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
       </figure></div>
@@ -138,16 +141,19 @@ async function remove() {
 .compact-image-response :deep(.message-avatar) { width: 24px; height: 24px; }
 .compact-image-response .creation-message-actions { margin-top: 8px; gap: 4px 8px; }
 .compact-image-response .creation-media { width: min(680px, 100%); grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
-.generation-progress { display: block; width: min(100%, 360px); height: 4px; margin-bottom: 12px; accent-color: var(--muted); }
+.task-activity { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+.task-stop { width: 32px; height: 32px; min-height: 32px; color: var(--muted); }
 .task-status { color: var(--muted); font-size: 12px; }.task-error { color: var(--danger, #b64646); }
 .task-message { color: var(--danger); font-size: 14px; line-height: 24px; margin-block: 0 16px; overflow-wrap: anywhere; }
 .creation-recovery { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 8px; }
 .stream-preview { display: block; max-width: 100%; max-height: 480px; }
 .creation-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px; width: min(880px, 100%); }
 .creation-media figure { position: relative; margin: 0; min-width: 0; }.video-expand { position: absolute; top: 8px; right: 8px; color: white; background: rgb(0 0 0 / 65%); }
-.creation-media video { width: 100%; max-height: 600px; display: block; object-fit: contain; }
+.video-results { display: flex; align-items: flex-start; flex-wrap: wrap; width: fit-content; max-width: 100%; }
+.video-results figure { max-width: 100%; }
+.creation-media video { width: auto; height: auto; aspect-ratio: auto 16 / 9; max-width: min(100%, 640px); max-height: min(360px, 36dvh); display: block; object-fit: contain; }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0; max-width: 72ch; }
-@media (min-width: 1000px) { .creation-media { gap: 4px; }.creation-media video { height: min(440px, 32dvh); background: var(--surface); } }
-@media (max-width: 639px) { .creation-message-actions { gap: 4px; }.creation-media video { max-height: 44dvh; } }
-@media (pointer: coarse), (max-width: 639px) { .creation-turn-tools .icon-button, .creation-message-actions .icon-button { min-height: 44px; width: 44px; }.creation-turn-tools .studio-tool, .creation-message-actions .studio-tool { min-height: 44px; } }
+@media (min-width: 1000px) { .creation-media { gap: 4px; } }
+@media (max-width: 639px) { .creation-message-actions { gap: 4px; }.creation-media video { max-height: 32dvh; } }
+@media (pointer: coarse), (max-width: 639px) { .task-stop, .creation-turn-tools .icon-button, .creation-message-actions .icon-button { min-height: 44px; width: 44px; }.creation-turn-tools .studio-tool, .creation-message-actions .studio-tool { min-height: 44px; } }
 </style>
