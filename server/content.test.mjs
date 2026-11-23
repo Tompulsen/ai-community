@@ -557,7 +557,7 @@ test('work covers expose only valid processed preview ratios', async () => {
     await handleContent(ctx);
     const cover = ctx.result.payload.items[0];
     assert.equal(cover.coverAspectRatio, typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0 ? ratio : undefined);
-    assert.equal(cover.cover, '/legacy-files/cover1?variant=thumbnail');
+    assert.equal(cover.cover, '/legacy-files/cover1?variant=cover');
   }
 });
 

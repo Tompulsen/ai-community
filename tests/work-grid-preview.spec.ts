@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+import sharp from 'sharp'
 import type { Work } from '../src/data'
 
 const image: Work = {
@@ -83,6 +84,38 @@ for (const width of [1440, 390]) {
     await expect(page).toHaveURL(`/work/${image.id}`)
     expect(state.writes).toEqual([])
     expect(state.errors).toEqual([])
+  })
+}
+
+for (const width of [390, 1440]) for (const format of ['gif', 'webp'] as const) {
+  test(`animated work covers play without hovering and still open details for ${format} at ${width}px`, async ({ page }) => {
+    const selected = { ...image, cover: '/legacy-files/animatedcover?variant=cover', coverAspectRatio: 1 }
+    const state = await fixture(page, [selected])
+    const pixels = Buffer.concat([Buffer.alloc(48 * 48 * 3), Buffer.alloc(48 * 48 * 3, 255)])
+    const animation = await sharp(pixels, { raw: { width: 48, height: 96, channels: 3, pageHeight: 48 } })
+      .toFormat(format, { delay: [240, 240], loop: 0 }).toBuffer()
+    const thumbnail = await sharp(animation).webp().toBuffer()
+    await page.route('**/legacy-files/animatedcover*', route => route.fulfill({
+      contentType: 'image/' + format,
+      body: new URL(route.request().url()).searchParams.get('variant') === 'cover' ? animation : thumbnail,
+    }))
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/discover')
+    const cover = page.locator(`[data-work-id="${image.id}"] .work-cover img`)
+    await expect(cover).toBeVisible()
+    await cover.evaluate((element: HTMLImageElement) => element.decode())
+    const colors = new Set<number>()
+    for (let attempt = 0; attempt < 10 && colors.size < 2; attempt++) {
+      const pixels = await sharp(await cover.screenshot({ animations: 'allow' })).resize(1, 1).raw().toBuffer()
+      colors.add(pixels[0]! > 128 ? 255 : 0)
+      if (colors.size < 2) await page.waitForTimeout(80)
+    }
+    expect(colors.size, 'the cover must visibly advance through its animation').toBe(2)
+    const bounds = await cover.boundingBox()
+    expect(bounds!.width / bounds!.height).toBeCloseTo(1, 2)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await openWork(page, selected)
+    expect(state.errors).toEqual([]); expect(state.writes).toEqual([])
   })
 }
 

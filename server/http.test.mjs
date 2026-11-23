@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process'
 import { AccountRequest, AccountResponse } from './native-account/http.ts'
 import { closeNewApiRedis, getNewApiRedis } from './native-account/session.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
+import { coverImage } from './image-export.ts'
 
 const origin = 'https://community.example'
 const jsonHeaders = { origin, 'content-type': 'application/json' }
@@ -147,6 +148,116 @@ test('JPEG export keeps animations and videos intact and rejects damaged image b
   Object.assign(f.media, { type: 'video/mp4', properties: { communityVideoPrivacy: { 'original-key': 1 } } })
   const video = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?format=jpeg' })
   assert.equal(video.headers['content-type'], 'video/mp4'); assert.equal(video.payload, 'damaged')
+})
+
+test('work cover preserves historical animation frames, timing and loop with bounded size and authorized caching', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.concat([Buffer.alloc(600 * 600 * 3), Buffer.alloc(600 * 600 * 3, 255)])
+  const original = await sharp(pixels, { raw: { width: 600, height: 1200, channels: 3, pageHeight: 600 } })
+    .webp({ delay: [160, 240], loop: 0 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', publiclyVisible: true,
+    properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const url = '/legacy-files/file1?variant=cover'
+  const full = await f.app.inject({ method: 'GET', url })
+  assert.equal(full.statusCode, 200)
+  assert.equal(full.headers['content-type'], 'image/webp')
+  const details = await sharp(full.rawPayload, { animated: true }).metadata()
+  assert.equal(details.pages, 2); assert.deepEqual(details.delay, [160, 240]); assert.equal(details.loop, 0)
+  assert.equal(details.width, 422); assert.equal(details.pageHeight, 422); assert.equal(details.exif, undefined)
+  assert(full.rawPayload.length < original.length)
+  assert.deepEqual(await readFile(path.join(f.filesRoot, 'original-key')), original)
+  assert.match(full.headers.etag, /^W\//)
+  assert.equal(full.headers['cache-control'], 'private, no-cache')
+  const head = await f.app.inject({ method: 'HEAD', url })
+  assert.equal(head.headers['content-length'], String(full.rawPayload.length)); assert.equal(head.rawPayload.length, 0)
+  const part = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-7' } })
+  assert.equal(part.statusCode, 206); assert.deepEqual(part.rawPayload, full.rawPayload.subarray(0, 8))
+  assert.equal((await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': full.headers.etag } })).statusCode, 304)
+  const jpeg = await f.app.inject({ method: 'GET', url: url + '&format=jpeg' })
+  assert.equal((await sharp(jpeg.rawPayload, { animated: true }).metadata()).pages, 2)
+  const changed = await sharp(original, { animated: true }).webp({ delay: [300, 300], loop: 2 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), changed)
+  const updated = await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': full.headers.etag } })
+  assert.equal(updated.statusCode, 200); assert.notEqual(updated.headers.etag, full.headers.etag)
+  assert.deepEqual((await sharp(updated.rawPayload, { animated: true }).metadata()).delay, [300, 300])
+  f.denyMedia()
+  assertJsonError(await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': updated.headers.etag } }), 404)
+})
+
+test('work cover reuses static thumbnails and keeps video posters unchanged', async t => {
+  const f = await fixture(t)
+  const original = await sharp({ create: { width: 800, height: 400, channels: 3, background: 'blue' } }).webp().toBuffer()
+  const thumbnail = await readFile(path.join(f.filesRoot, 'thumbnail-key'))
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', publiclyVisible: true,
+    properties: { communityImagePrivacy: { 'original-key': 1, 'thumbnail-key': 1 } } })
+  const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+  assert.equal(response.statusCode, 200); assert.deepEqual(response.rawPayload, thumbnail)
+  assert.equal(response.headers['content-type'], 'image/jpeg')
+  const thumb = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=thumbnail' })
+  assert.deepEqual(thumb.rawPayload, thumbnail)
+  f.media.type = 'video/mp4'
+  const video = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=thumbnail' })
+  assert.deepEqual(video.rawPayload, thumbnail)
+  f.media.type = 'image/webp'; f.media.thumbnailAccessKey = 'missing-thumbnail'
+  const fallback = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+  assert.equal(fallback.statusCode, 200); assert.deepEqual(fallback.rawPayload, original)
+})
+
+test('work cover privacy failure never exposes the original or a cached image', async t => {
+  const f = await fixture(t)
+  const original = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } })
+    .withExif({ IFD0: { Artist: 'PRIVATE' } }).png().toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/png', publiclyVisible: true, properties: {} })
+  f.failMediaUpdate()
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' }), 503)
+})
+
+test('work cover uses surviving derivatives when an old original is missing', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.concat([Buffer.alloc(48 * 48 * 3), Buffer.alloc(48 * 48 * 3, 255)])
+  const display = await sharp(pixels, { raw: { width: 48, height: 96, channels: 3, pageHeight: 48 } })
+    .webp({ delay: [160, 240], loop: 0 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'display-key'), display)
+  Object.assign(f.media, { type: 'image/webp', accessKey: 'missing-original', webpublicAccessKey: 'display-key', webpublicType: 'image/webp',
+    properties: { communityImagePrivacy: { 'display-key': 1, 'thumbnail-key': 1 } } })
+  const animated = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+  assert.equal(animated.statusCode, 200)
+  assert.equal((await sharp(animated.rawPayload, { animated: true }).metadata()).pages, 2)
+  f.media.webpublicAccessKey = 'missing-display'
+  const thumbnail = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+  assert.equal(thumbnail.statusCode, 200)
+  assert.deepEqual(thumbnail.rawPayload, await readFile(path.join(f.filesRoot, 'thumbnail-key')))
+  f.media.thumbnailAccessKey = 'missing-thumbnail'
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' }), 404)
+})
+
+test('work cover keeps the safe original moving when the conversion queue is full', async t => {
+  const f = await fixture(t)
+  const source = path.join(f.filesRoot, 'original-key')
+  const pixels = Buffer.concat([Buffer.alloc(48 * 48 * 3), Buffer.alloc(48 * 48 * 3, 255)])
+  const original = await sharp(pixels, { raw: { width: 48, height: 96, channels: 3, pageHeight: 48 } })
+    .webp({ delay: [160, 240], loop: 0 }).toBuffer()
+  await writeFile(source, original)
+  Object.assign(f.media, { type: 'image/webp', publiclyVisible: true,
+    properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const metadata = await stat(source), gate = deferred(), readMetadata = sharp.prototype.metadata
+  const mocked = t.mock.method(sharp.prototype, 'metadata', function (...args) {
+    return gate.promise.then(() => readMetadata.apply(this, args))
+  })
+  const queued = Array.from({ length: 16 }, (_, index) => coverImage(source, { ...metadata, mtimeMs: metadata.mtimeMs + index + 1 }))
+  try {
+    const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+    assert.equal(response.statusCode, 200); assert.deepEqual(response.rawPayload, original)
+    assert.equal(response.headers.etag, undefined); assert.equal(response.headers['cache-control'], 'private, no-store')
+  } finally {
+    gate.resolve(); await Promise.all(queued); mocked.mock.restore()
+  }
+  const retried = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=cover' })
+  assert.equal(retried.statusCode, 200); assert(retried.headers.etag)
+  assert.equal((await sharp(retried.rawPayload, { animated: true }).metadata()).pages, 2)
 })
 
 test('public image downloads hide upload names and metadata on every original route', async t => {

@@ -17,7 +17,7 @@ import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './
 import { getUser } from './auth.ts';
 import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { privateMetadataFreeVideo } from './video-privacy.ts';
-import { jpegImage } from './image-export.ts';
+import { coverImage, jpegImage } from './image-export.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
@@ -584,7 +584,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
     avatar: (row.authorName || row.authorUsername || '?').slice(0, 1), authorId: row.authorId, authorUsername: row.authorUsername,
     ...(row.authorAccountId ? { authorAccountId: row.authorAccountId } : {}),
     avatarUrl: row.authorAvatarId ? `/legacy-files/${row.authorAvatarId}?variant=thumbnail` : null,
-    kind: content.category, cover: image?.thumbnailAccessKey ? `${mediaUrl(image)}?variant=thumbnail` : mediaUrl(image) || (video?.thumbnailAccessKey ? `${mediaUrl(video)}?variant=thumbnail` : ''),
+    kind: content.category, cover: image && mediaUrl(image) ? `${mediaUrl(image)}?variant=cover` : video?.thumbnailAccessKey && mediaUrl(video) ? `${mediaUrl(video)}?variant=thumbnail` : '',
     ...(skill?.success ? { isSkill: true } : {}),
     ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
     tags: tags.map(tag => tag.name), tagIds: tags.map(tag => tag.id),
@@ -1002,7 +1002,7 @@ function commentVisibilitySql(ctx: RequestContext, author = 'u', note = 'n'): st
 async function media(ctx: RequestContext, value: string, byKey = false): Promise<true> {
   const requestedVariant = ctx.url.searchParams.get('variant') ?? 'original';
   const variant = requestedVariant === 'web' ? 'webpublic' : requestedVariant;
-  if (!['original', 'thumbnail', 'webpublic'].includes(variant)) fail(400, 'Invalid media variant');
+  if (!['original', 'thumbnail', 'webpublic', 'cover'].includes(variant)) fail(400, 'Invalid media variant');
   const format = ctx.url.searchParams.get('format');
   if (format !== null && format !== 'jpeg') fail(400, 'Invalid media format');
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
@@ -1041,9 +1041,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin]);
   const file = result.rows[0];
   if (!file) fail(404, 'File not found');
-  const preferred = byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
-  let role = preferred === 'thumbnail' && file.thumbnailAccessKey ? 'thumbnail' : preferred === 'webpublic' && file.webpublicAccessKey ? 'webpublic' : 'original';
-  const key = role === 'thumbnail' ? file.thumbnailAccessKey : role === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
+  const preferred = variant === 'cover' ? 'original' : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
   const storedFile = async (accessKey: string | null): Promise<{ path: string; metadata: Stats }> => {
     if (typeof accessKey !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(accessKey) || accessKey === '.' || accessKey === '..') fail(404, 'File not found');
     const root = await realpath(ctx.filesRoot);
@@ -1054,43 +1052,62 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
     if (!metadata.isFile()) fail(404, 'File not found');
     return { path, metadata };
   };
-  let path: string, metadata: Stats;
-  try { ({ path, metadata } = await storedFile(key)); }
-  catch (error) {
-    if (role === 'original' || !isRecord(error) || error.code !== 'ENOENT') fail(404, 'File not found');
-    role = 'original';
-    try { ({ path, metadata } = await storedFile(file.accessKey)); } catch { fail(404, 'File not found'); }
-  }
-  let type = role === 'webpublic' ? file.webpublicType : file.type;
-  if (role === 'thumbnail') {
-    const descriptor = await open(path, 'r');
-    try {
-      const header = Buffer.alloc(16);
-      const { bytesRead } = await descriptor.read(header, 0, header.length, 0);
-      type = sniffType(header.subarray(0, bytesRead), 'application/octet-stream');
-    } finally { await descriptor.close(); }
-  }
-  const storageKey = role === 'thumbnail' ? file.thumbnailAccessKey : role === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
-  const video = Boolean(type && videoExtensions[type]);
-  const privacyKey = video ? 'communityVideoPrivacy' : 'communityImagePrivacy';
-  const privacy = file.properties?.[privacyKey];
-  if (type && (imageExtensions[type] || video) && storageKey && (!isRecord(privacy) || privacy[storageKey] !== 1)) {
-    try {
-      const sanitized = video ? await privateMetadataFreeVideo(path, type) : await privateMetadataFreeImage(path);
-      metadata = await stat(path);
-      type = sanitized.type;
-      const marker = `jsonb_set(COALESCE(properties,'{}'::jsonb),'{${privacyKey}}', COALESCE(properties->'${privacyKey}','{}'::jsonb)||jsonb_build_object($2::text,1))`;
-      const updated = role === 'original'
-        ? await ctx.db.query(`UPDATE drive_file SET size=$3,md5=$4,type=$5,name=$6,properties=${marker} WHERE id=$1 AND "accessKey"=$2`, [file.id, storageKey, sanitized.size, sanitized.md5, type, publicImageName({ ...file, type })])
-        : await ctx.db.query(`UPDATE drive_file SET "webpublicType"=CASE WHEN "webpublicAccessKey"=$2 THEN $3::varchar ELSE "webpublicType" END,properties=${marker} WHERE id=$1 AND ("thumbnailAccessKey"=$2 OR "webpublicAccessKey"=$2)`, [file.id, storageKey, type]);
-      if (updated.rowCount === 0) fail(503, '媒体状态已变化，请稍后重试。');
-    } catch (error) {
-      if (isRecord(error) && error.statusCode === 503) throw error;
-      fail(503, '媒体暂时无法安全提供，请稍后重试。');
+  const loadMedia = async (preferred: string) => {
+    let role = preferred === 'thumbnail' && file.thumbnailAccessKey ? 'thumbnail' : preferred === 'webpublic' && file.webpublicAccessKey ? 'webpublic' : 'original';
+    let located: { path: string; metadata: Stats } | undefined;
+    const candidates = new Set([role, 'original', ...(variant === 'cover' ? ['webpublic', 'thumbnail'] : [])]);
+    for (const candidate of candidates) {
+      const key = candidate === 'thumbnail' ? file.thumbnailAccessKey : candidate === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
+      if (!key) continue;
+      try { located = await storedFile(key); role = candidate; break; }
+      catch (error) { if (!isRecord(error) || error.code !== 'ENOENT') fail(404, 'File not found'); }
     }
-  }
+    if (!located) fail(404, 'File not found');
+    let { path, metadata } = located;
+    let type = role === 'webpublic' ? file.webpublicType : file.type;
+    if (role === 'thumbnail') {
+      const descriptor = await open(path, 'r');
+      try {
+        const header = Buffer.alloc(16);
+        const { bytesRead } = await descriptor.read(header, 0, header.length, 0);
+        type = sniffType(header.subarray(0, bytesRead), 'application/octet-stream');
+      } finally { await descriptor.close(); }
+    }
+    const storageKey = role === 'thumbnail' ? file.thumbnailAccessKey : role === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
+    const video = Boolean(type && videoExtensions[type]);
+    const privacyKey = video ? 'communityVideoPrivacy' : 'communityImagePrivacy';
+    const privacy = file.properties?.[privacyKey];
+    if (type && (imageExtensions[type] || video) && storageKey && (!isRecord(privacy) || privacy[storageKey] !== 1)) {
+      try {
+        const sanitized = video ? await privateMetadataFreeVideo(path, type) : await privateMetadataFreeImage(path);
+        metadata = await stat(path);
+        type = sanitized.type;
+        const marker = `jsonb_set(COALESCE(properties,'{}'::jsonb),'{${privacyKey}}', COALESCE(properties->'${privacyKey}','{}'::jsonb)||jsonb_build_object($2::text,1))`;
+        const updated = role === 'original'
+          ? await ctx.db.query(`UPDATE drive_file SET size=$3,md5=$4,type=$5,name=$6,properties=${marker} WHERE id=$1 AND "accessKey"=$2`, [file.id, storageKey, sanitized.size, sanitized.md5, type, publicImageName({ ...file, type })])
+          : await ctx.db.query(`UPDATE drive_file SET "webpublicType"=CASE WHEN "webpublicAccessKey"=$2 THEN $3::varchar ELSE "webpublicType" END,properties=${marker} WHERE id=$1 AND ("thumbnailAccessKey"=$2 OR "webpublicAccessKey"=$2)`, [file.id, storageKey, type]);
+        if (updated.rowCount === 0) fail(503, '媒体状态已变化，请稍后重试。');
+        file.properties = { ...file.properties, [privacyKey]: { ...(isRecord(privacy) ? privacy : {}), [storageKey]: 1 } };
+        if (role === 'original') file.type = type;
+        else if (role === 'webpublic') file.webpublicType = type;
+      } catch (error) {
+        if (isRecord(error) && error.statusCode === 503) throw error;
+        fail(503, '媒体暂时无法安全提供，请稍后重试。');
+      }
+    }
+    return { path, metadata, type, role, storageKey };
+  };
+  let { path, metadata, type, role, storageKey } = await loadMedia(preferred);
   let exported: Buffer | null = null;
-  if (format === 'jpeg' && type && imageExtensions[type]) {
+  if (variant === 'cover' && type && imageExtensions[type]) {
+    let staticImage = false;
+    try { exported = await coverImage(path, metadata); staticImage = exported === null; }
+    catch { /* A busy or failed encoder must retain the safe original's animation. */ }
+    if (exported) type = 'image/webp';
+    else if (staticImage && role !== 'thumbnail' && file.thumbnailAccessKey) ({ path, metadata, type, role, storageKey } = await loadMedia('thumbnail'));
+  }
+  const renderedCover = variant === 'cover' && Boolean(exported);
+  if (!exported && format === 'jpeg' && type && imageExtensions[type]) {
     try { exported = await jpegImage(path, metadata); }
     catch { fail(503, 'JPG 图片暂时无法提供，请稍后重试。'); }
     if (exported) type = 'image/jpeg';
@@ -1100,8 +1117,8 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   ctx.reply.header('Content-Type', mime);
   ctx.reply.header('X-Content-Type-Options', 'nosniff');
   ctx.reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
-  const etag = file.publiclyVisible && role !== 'original' && type && imageExtensions[type]
-    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, role, storageKey, mime, format, size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
+  const etag = file.publiclyVisible && (role !== 'original' || renderedCover) && type && imageExtensions[type]
+    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, renderedCover ? 'cover-v1' : role, storageKey, mime, format, size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
     : null;
   ctx.reply.header('Cache-Control', etag ? 'private, no-cache' : 'private, no-store');
   if (etag) {
