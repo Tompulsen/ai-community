@@ -70,7 +70,7 @@ defineExpose({ close, open: () => panel.value?.showPopover() })
 <template>
   <button ref="trigger" type="button" class="studio-tool" :popovertarget="id" :title="label" :aria-label="triggerLabel || label" :disabled="disabled" aria-haspopup="dialog" :aria-expanded="opened"><slot name="trigger" /></button>
   <Teleport :to="portalTarget"><div :id="id" ref="panel" popover="auto" class="studio-popover" :class="panelClass" role="dialog" :aria-label="label" :style="{ '--studio-popover-width': `${props.width}px` }" @beforetoggle="beforeToggle" @toggle="toggle">
-    <header class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></header>
+    <div class="studio-popover-heading"><strong>{{ label }}</strong><button type="button" class="icon-button" :aria-label="`关闭${label}`" :title="`关闭${label}`" :popovertarget="id" popovertargetaction="hide"><X :size="16" /></button></div>
     <div class="studio-popover-content"><slot /></div>
   </div></Teleport>
 </template>

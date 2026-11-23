@@ -15,6 +15,7 @@ import { CHAT_API_FORMATS } from '../shared/studio/chat-api-format.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
 import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
 import { imageConversationPrompt, MAX_IMAGE_CONTEXT_IMAGES, MAX_IMAGE_CONTEXT_TEXT, MAX_IMAGE_CONTEXT_TURNS, type ImageConversationContext } from '../shared/studio/image-conversation.ts'
+import { maxSelectedSkills, type SkillReference } from '../shared/community-skills.ts'
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationProtocol = 'auto' | 'openai' | 'sync' | 'async'
 export type CreationTaskProtocol = Exclude<CreationProtocol, 'auto'> | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
@@ -22,6 +23,7 @@ export interface CreationInput {
   kind: CreationKind
   model: string
   prompt: string
+  skills?: SkillReference[]
   size?: string
   exactSize?: boolean
   aspect_ratio?: string
@@ -107,6 +109,13 @@ export function validateCreationInput(value: unknown): CreationInput {
   if (!boundedText(value.model, 200) || !value.model.trim() || /[\r\n]/.test(value.model)) invalid('请选择有效的模型。')
   if (!boundedText(value.prompt, 100000) || !value.prompt.trim()) invalid('请填写提示词。')
   const result: CreationInput = { kind: value.kind as CreationKind, model: value.model.trim(), prompt: value.prompt }
+  if (value.skills !== undefined) {
+    if (result.kind === 'text' || !Array.isArray(value.skills) || value.skills.length > maxSelectedSkills
+      || value.skills.some(skill => !record(skill) || typeof skill.id !== 'string' || !/^community-[a-zA-Z0-9]{1,32}$/.test(skill.id)
+        || typeof skill.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(skill.sha256))
+      || new Set(value.skills.map(skill => skill.id)).size !== value.skills.length) invalid('所选技能无效，请重新选择。')
+    result.skills = value.skills.map(skill => ({ id: skill.id, sha256: skill.sha256 }))
+  }
   if (value.size !== undefined) {
     if (typeof value.size !== 'string' || !/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|(?:1|2|4)K)$/.test(value.size)) invalid('图片或视频尺寸无效。')
     result.size = value.size

@@ -148,7 +148,8 @@ function fixture(t, options = {}) {
     const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: options.isAdmin === true }
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
-      db: { async query(sql) {
+      db: { async query(sql, params) {
+        if (options.skillRows && sql.includes('FROM community_skill')) return { rows: await options.skillRows(sql, params) }
         assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
         if (options.modelReadError) throw options.modelReadError
         return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
@@ -168,6 +169,52 @@ function fixture(t, options = {}) {
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
+
+test('typed media skills reach the actual model request; accepted results survive withdrawal', async t => {
+  for (const kind of ['image', 'video']) await t.test(kind, async t => {
+    const body = '---\nname: visual\ndescription: visual rules\n---\nUse soft light and a wide composition.'
+    const sha256 = createHash('sha256').update(body).digest('hex')
+    let available = true, reads = 0
+    const { app, calls } = fixture(t, { skillRows(sql, params) {
+      reads++; assert.match(sql, /s.status='published'/); assert.match(sql, /NOT u."isSuspended"/)
+      assert.deepEqual(params, [['visual']])
+      return available ? [{ id: 'visual', kind, body, sha256 }] : []
+    }, fetch(url, init) {
+      const prompt = init.body instanceof FormData ? init.body.get('prompt') : JSON.parse(init.body).prompt
+      assert.match(prompt, /Use soft light/); assert.match(prompt, /My original prompt/); assert.doesNotMatch(prompt, /description: visual/)
+      return kind === 'image' ? Response.json({ data: [{ url: 'https://media.example/result.png' }] }) : Response.json({ id: 'video-1', status: 'completed', url: 'https://media.example/result.mp4' })
+    } })
+    const request = { ...imageRequest, kind, duration: 8, model: kind === 'image' ? 'gpt-image-2' : 'sora-2', prompt: 'My original prompt', skills: [{ id: 'community-visual', sha256 }] }
+    const response = await submit(app, request)
+    assert.equal(response.statusCode, 200, response.payload); assert.equal(calls.length, 1)
+    available = false
+    assert.deepEqual((await submit(app, request)).json(), response.json())
+    assert.equal(calls.length, 1); assert.equal(reads, 1)
+    const rejected = await submit(app, { ...request, requestId: 'new-attempt' })
+    assert.equal(rejected.statusCode, 400); assert.equal(calls.length, 1)
+  })
+})
+
+test('wrong type, stale hash, invalid references and excessive skill prompts never send a paid request', async t => {
+  const body = '---\nname: rules\ndescription: test\n---\nShort rules'
+  const sha256 = createHash('sha256').update(body).digest('hex')
+  let row = { id: 'rules', kind: 'image', body, sha256 }
+  const { app, calls, credentialCalls } = fixture(t, { skillRows: () => [row] })
+  const input = { ...imageRequest, skills: [{ id: 'community-rules', sha256 }] }
+  for (const override of [{ kind: 'video' }, { sha256: '0'.repeat(64) }, { body: body + 'changed' }]) {
+    row = { id: 'rules', kind: 'image', body, sha256, ...override }
+    assert.equal((await submit(app, input)).statusCode, 400)
+  }
+  for (const skills of [null, [{}], [{ id: 'builtin', sha256 }], [...input.skills, ...input.skills], Array(11).fill(input.skills[0])])
+    assert.equal((await submit(app, { ...input, skills })).statusCode, 400)
+  for (const length of [33000, 100001]) {
+    const longBody = 'x'.repeat(length)
+    row = { id: 'rules', kind: 'image', body: longBody, sha256: createHash('sha256').update(longBody).digest('hex') }
+    const response = await submit(app, { ...input, skills: [{ id: 'community-rules', sha256: row.sha256 }] })
+    assert.equal(response.statusCode, 400, response.payload)
+  }
+  assert.equal(calls.length, 0); assert.equal(credentialCalls.length, 0)
+})
 
 test('image previews are small WebP responses while original downloads retain every byte', async t => {
   const original = await sharp({ create: { width: 2160, height: 3840, channels: 4, background: '#3488bb80' } }).png().toBuffer()

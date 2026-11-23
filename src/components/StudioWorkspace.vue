@@ -5,13 +5,15 @@ import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square,
 import type { Work, WorkFile } from '../data'
 import { errorMessage, session } from '../state'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
-import { chats, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
+import { chats, createEmptyChat, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
 import { createDeferredWriteQueue } from '../../shared/studio/latest-write-queue'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
 import StudioMediaParameters from './StudioMediaParameters.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
+import StudioSkillPicker from './StudioSkillPicker.vue'
+import { resolveMediaSkills, setSelectedSkillIds } from '../community-skill'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioVideoPrompt from './StudioVideoPrompt.vue'
@@ -56,6 +58,9 @@ const skipAutomaticReference = ref(false), restoringTask = ref(false), parameter
 const submitting = computed(() => Boolean(props.entryPending || submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
 const currentConversation = computed(() => props.entryOnly ? undefined : chats.sessions.find(chat => chat.id === chats.activeId))
+const entryChat = ref(createEmptyChat())
+const skillChat = computed(() => currentConversation.value || entryChat.value)
+watch(() => session.user?.id, () => { entryChat.value = createEmptyChat() })
 const composerReady = computed(() => props.entryOnly || chats.ready && !!currentConversation.value && !chats.initialSaving[currentConversation.value.id])
 const currentTasks = computed(() => currentConversation.value ? mediaTasksForConversation(currentConversation.value) : [])
 const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
@@ -284,7 +289,7 @@ function generate() { return submit() }
 async function sendEntry() {
   const scope = draftScope(), owner = session.user?.id, kind = props.kind, preparation = new AbortController()
   materialSubmission = preparation; submissions.value[kind] = true; waitingForMaterials.value = true; error.value = ''
-  const parameters = JSON.parse(JSON.stringify({ model: model.value, group: creation.selectedGroup, tokenId: creation.modelTokenId, ratio: ratio.value, manualSize: manualSize.value, count: count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, imageOptions, videoOptions }))
+  const parameters = JSON.parse(JSON.stringify({ skills: skillChat.value.mediaSkills?.[kind] || [], model: model.value, group: creation.selectedGroup, tokenId: creation.modelTokenId, ratio: ratio.value, manualSize: manualSize.value, count: count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, imageOptions, videoOptions }))
   try {
     await materials.wait(preparation.signal)
     if (!live || preparation.signal.aborted || scope !== draftScope() || owner !== session.user?.id || kind !== props.kind) return
@@ -305,6 +310,7 @@ async function submit(onRegistered?: () => void) {
   const kind = props.kind, owner = session.user?.id
   const chat = currentConversation.value || ensureMediaConversation(props.kind)
   const scope = draftScope()
+  const selectedSkills = (chat.mediaSkills?.[kind] || []).map(skill => ({ ...skill }))
   const conversationId = chat.mediaConversationId || chat.id
   let submittedPrompt = prompt.value
   const branchId = branchTaskId.value, imageEditId = imageEditTaskId.value, initialReferenceUrls = references.value.map(file => file.url)
@@ -338,6 +344,9 @@ async function submit(onRegistered?: () => void) {
       if (limits?.durations.length && !limits.durations.includes(input.duration) || input.videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(input.videoOptions.resolution))
         throw new Error('当前参考图模式不支持所选时长或分辨率，请在高级参数中调整。')
     }
+    const skills = await resolveMediaSkills(selectedSkills, kind, owner)
+    if (skills.length) input.skills = skills
+    if (!live || scope !== draftScope() || owner !== session.user?.id) return
     await saveChats(true)
     if (owner !== session.user?.id || !chats.sessions.includes(chat)) return
     let registered = false
@@ -395,6 +404,7 @@ async function useTask(task: CreationTask, generatedImages?: string[]) {
   blank.value = false
   branchTaskId.value = undefined; editing.value = false; imageEditTaskId.value = generatedImages ? task.id : undefined
   creation.selectedId = task.id; model.value = task.model; prompt.value = task.prompt
+  setSelectedSkillIds(skillChat.value, kind, (task.request.skills || []).map(skill => skill.id), task.request.skills)
   parameterModel.value = task.model
   manualSize.value = task.request.exactSize ? task.request.size : ''; finishRestore()
   sourceWorkId.value = task.sourceWorkId
@@ -475,7 +485,7 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
 
 <template>
   <section class="native-studio" aria-label="创作工作台">
-    <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></div>
+    <div class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="skillChat" :kind="kind" :transient="entryOnly" :disabled="!composerReady || submitting || !!busy" /></div>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />

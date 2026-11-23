@@ -3,16 +3,16 @@ import { z } from 'zod'
 import { httpError } from './auth.ts'
 import { readPublicIdentities } from './public-identity.ts'
 import { readSkillPackage } from './skill-package.ts'
-import { skillLimits, type CommunitySkill } from '../shared/community-skills.ts'
+import { skillLimits, maxSelectedSkills, skillInstructions, type SkillKind, type SkillReference, type CommunitySkill } from '../shared/community-skills.ts'
 import type { Database, Queryable, RequestContext } from './types.ts'
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9]{1,32}$/)
 const plain = (max: number) => z.string().trim().min(1).max(max).refine(value => !/[\u0000-\u001f\u007f]/.test(value))
 const uploadSchema = z.object({ filename: z.string().max(160), data: z.string().max(Math.ceil(skillLimits.archiveBytes / 3) * 4) }).strict()
-const saveSchema = z.object({ name: plain(100), description: plain(1000), body: z.string().max(skillLimits.bodyBytes),
+const saveSchema = z.object({ kind: z.enum(['text', 'image', 'video']), name: plain(100), description: plain(1000), body: z.string().max(skillLimits.bodyBytes),
   upload: uploadSchema.optional(), version: z.number().int().positive().optional(),
   requestId: z.string().regex(/^[a-zA-Z0-9_-]{16,80}$/).optional(), publish: z.boolean().optional() }).strict()
-const columns = 's.id,s."authorId",s.name,s.description,s.status,s.official,s.version,s.sha256,s.filename,s.size,s.files,s."createdAt",s."updatedAt"'
+const columns = 's.id,s."authorId",s.name,s.kind,s.description,s.status,s.official,s.version,s.sha256,s.filename,s.size,s.files,s."createdAt",s."updatedAt"'
 interface SkillRow extends CommunitySkill { archive?: Buffer; requestId: string; requestHash: string }
 function invalid(message = '技能参数无效，请重新核对。', status = 400): never { throw httpError(status, message) }
 function parsed<T>(schema: z.ZodType<T>, value: unknown): T { const result = schema.safeParse(value); return result.success ? result.data : invalid() }
@@ -41,8 +41,26 @@ async function present(ctx: RequestContext, rows: SkillRow[], detail = false) {
   })
 }
 export async function approvedCommunitySkills(db: Queryable) {
-  const { rows } = await db.query('SELECT s.id,s.name,s.description,s.sha256 FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
+  const { rows } = await db.query('SELECT s.id,s.name,s.kind,s.description,s.sha256 FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
   return rows.map(row => ({ ...row, id: `community-${row.id}`, body: '' }))
+}
+
+export async function mediaSkillPrompt(db: Queryable, kind: SkillKind, prompt: string, skills?: SkillReference[]) {
+  if (!skills?.length) return prompt
+  if (kind === 'text' || skills.length > maxSelectedSkills) invalid('当前创作类型或技能数量无效。')
+  const { rows } = await db.query<{ id: string; kind: SkillKind; body: string; sha256: string }>(
+    `SELECT s.id,s.kind,s.body,s.sha256 FROM community_skill s JOIN "user" u ON u.id=s."authorId"
+     WHERE s.id=ANY($1::varchar[]) AND s.status='published' AND NOT u."isDeleted" AND NOT u."isSuspended"`,
+    [skills.map(skill => skill.id.slice('community-'.length))])
+  const instructions = skills.map(reference => {
+    const skill = rows.find(row => `community-${row.id}` === reference.id)
+    if (!skill || skill.kind !== kind || skill.sha256 !== reference.sha256 || createHash('sha256').update(skill.body).digest('hex') !== reference.sha256)
+      invalid('技能已更新、下架或不适用于当前创作类型，请刷新技能列表后重新选择。')
+    return skillInstructions(skill.body)
+  })
+  const combined = [...instructions, `本次创作要求：\n${prompt}`].join('\n\n')
+  if (combined.length > 100000) invalid('技能指令与提示词合计过长，请减少所选技能或缩短提示词。')
+  return combined
 }
 
 export async function handleCommunitySkills(ctx: RequestContext): Promise<boolean> {
@@ -58,13 +76,14 @@ export async function handleCommunitySkills(ctx: RequestContext): Promise<boolea
   if (ctx.req.method === 'GET' && path === prefix) {
     if (new Set(ctx.url.searchParams.keys()).size !== [...ctx.url.searchParams].length) invalid()
     const input = parsed(z.object({ scope: z.enum(['public', 'mine']).default('public'), status: z.enum(['all', 'pending', 'published', 'rejected', 'removed']).optional(),
-      query: z.string().trim().max(120).default(''), cursor: idSchema.optional() }).strict(), Object.fromEntries(ctx.url.searchParams))
+      kind: z.enum(['text', 'image', 'video']).optional(), query: z.string().trim().max(120).default(''), cursor: idSchema.optional() }).strict(), Object.fromEntries(ctx.url.searchParams))
     if (input.scope === 'mine') ctx.requireUser()
     if (!admin && input.status) invalid()
     const values: unknown[] = [], where: string[] = []
     if (!admin && input.scope === 'public') where.push("s.status='published'", 'NOT u."isDeleted"', 'NOT u."isSuspended"')
     if (!admin && input.scope === 'mine') { values.push(actor!.id); where.push(`s."authorId"=$${values.length}`) }
     if (admin && input.status && input.status !== 'all') { values.push(input.status); where.push(`s.status=$${values.length}`) }
+    if (input.kind) { values.push(input.kind); where.push(`s.kind=$${values.length}`) }
     if (input.cursor) { values.push(input.cursor); where.push(`s.id<$${values.length}`) }
     if (input.query) { values.push('%' + input.query.replace(/[\\%_]/g, '\\$&') + '%'); where.push(`(s.name ILIKE $${values.length} OR s.description ILIKE $${values.length})`) }
     const { rows } = await ctx.db.query<SkillRow>(`SELECT ${columns},u.name AS "authorName",s."reviewNote" FROM community_skill s JOIN "user" u ON u.id=s."authorId" ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.id DESC LIMIT 31`, values)
@@ -113,7 +132,7 @@ export async function handleCommunitySkills(ctx: RequestContext): Promise<boolea
     const uploaded = input.upload ? unpack(input.upload) : { filename: initial!.filename, source: initial!.archive! }
     const pack = await readSkillPackage(uploaded.filename, uploaded.source, input.body)
     const status = admin && input.publish ? 'published' : 'pending'
-    const hash = createHash('sha256').update(JSON.stringify([input.name, input.description, pack.sha256, createHash('sha256').update(pack.archive).digest('hex'), status])).digest('hex')
+    const hash = createHash('sha256').update(JSON.stringify([input.name, input.kind, input.description, pack.sha256, createHash('sha256').update(pack.archive).digest('hex'), status])).digest('hex')
     const savedId = await transaction(ctx.db, async db => {
       // Serialize the author's quota checks as well as updates to this skill.
       const authorId = initial?.authorId || user.id
@@ -128,9 +147,9 @@ export async function handleCommunitySkills(ctx: RequestContext): Promise<boolea
       const usage = (await db.query('SELECT COUNT(*)::int AS count,COALESCE(SUM(size),0)::bigint AS bytes FROM community_skill WHERE "authorId"=$1 AND id<>$2', [authorId, id || ''])).rows[0]
       if (usage.count >= skillLimits.accountCount || Number(usage.bytes) + pack.size > skillLimits.accountBytes) invalid('技能空间已满：每个账号最多 100 个技能、合计 100 MB。', 413)
       const savedId = id || ctx.newId()
-      const values = [savedId, input.name, input.description, pack.body, pack.sha256, pack.filename, pack.archive, pack.size, JSON.stringify(pack.files), status, admin ? user.id : null]
-      if (id) await db.query('UPDATE community_skill SET name=$2,description=$3,body=$4,sha256=$5,filename=$6,archive=$7,size=$8,files=$9::jsonb,status=$10,"reviewedBy"=$11,"reviewNote"=\'\',version=version+1,"updatedAt"=now() WHERE id=$1', values)
-      else await db.query('INSERT INTO community_skill (id,name,description,body,sha256,filename,archive,size,files,status,"reviewedBy","authorId",official,"requestId","requestHash") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15)', [...values, user.id, admin, input.requestId, hash])
+      const values = [savedId, input.name, input.description, pack.body, pack.sha256, pack.filename, pack.archive, pack.size, JSON.stringify(pack.files), status, admin ? user.id : null, input.kind]
+      if (id) await db.query('UPDATE community_skill SET kind=$12,name=$2,description=$3,body=$4,sha256=$5,filename=$6,archive=$7,size=$8,files=$9::jsonb,status=$10,"reviewedBy"=$11,"reviewNote"=\'\',version=version+1,"updatedAt"=now() WHERE id=$1', values)
+      else await db.query('INSERT INTO community_skill (id,name,description,body,sha256,filename,archive,size,files,status,"reviewedBy",kind,"authorId",official,"requestId","requestHash") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16)', [...values, user.id, admin, input.requestId, hash])
       await audit(ctx, db, id ? 'communitySkillEdit' : 'communitySkillCreate', { id: savedId, status, version: (row?.version || 0) + 1 })
       return savedId
     })

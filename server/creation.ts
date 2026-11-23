@@ -4,6 +4,7 @@
  *
  * Reuses the Studio account relay, media import and generation protocol rules.
  */
+import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
@@ -378,6 +379,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return cachedResult(ctx, cached, key)
   }
+  input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills)
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
   input = resolveCreationModelSettings(input, setting)

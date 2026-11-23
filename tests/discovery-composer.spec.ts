@@ -80,7 +80,7 @@ test('homepage reuses text controls and carries configuration and files into Stu
   await composer.getByLabel('添加附件', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('首页附件内容') })
   await composer.getByRole('button', { name: '联网搜索：联网', exact: true }).click()
   await page.getByRole('button', { name: '快速搜索', exact: true }).click()
-  await composer.getByRole('button', { name: '技能与工具', exact: true }).click()
+  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
   await page.getByRole('checkbox', { name: /简短回答/ }).check()
   await page.keyboard.press('Escape')
   await composer.getByRole('button', { name: '对话参数', exact: true }).click()

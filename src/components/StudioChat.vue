@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, Puzzle, Quote, RefreshCw, Settings2, Square, Trash2, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, Quote, RefreshCw, Settings2, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
 import { creation, downloadCreation, initializeCreation, loadCreationGroups, loadCreationModels, mediaSource, selectCreationGroup, stopCreation, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
@@ -8,7 +8,7 @@ import { chats, createEmptyChat, newChat, loadChats, saveChats as persistChats, 
 import { answerBranches } from '../../shared/studio/chat-branches'
 import { getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
 import { prepareStudioImage } from '../studio-image-upload'
-import StudioSkills from './StudioSkills.vue'
+import StudioSkillPicker from './StudioSkillPicker.vue'
 import StudioChatParameters from './StudioChatParameters.vue'
 import StudioResponseMetrics from './StudioResponseMetrics.vue'
 import { confirmStudioDelete } from '../studio-confirm'
@@ -113,7 +113,6 @@ const mediaGallery = ref<InstanceType<typeof StudioGallery>>()
 const transcriptObserver = new ResizeObserver(() => followOutput())
 watch(messagesContent, element => { transcriptObserver.disconnect(); if (element) transcriptObserver.observe(element) }, { flush: 'post' })
 onBeforeUnmount(() => transcriptObserver.disconnect())
-const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
 const busy = computed(() => props.entryPending || restoringTask.value || !props.entryOnly && current.value && (isConversationBusy(current.value) || chats.initialSaving[current.value.id]))
@@ -492,16 +491,16 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
-      <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker /><button type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button></div>
+      <div v-if="mode === 'text'" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="current" :transient="entryOnly" :disabled="busy" /></div>
       <form v-if="mode === 'text'" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
         <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
         <label class="field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '消息' }}</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>
         <StudioMaterialStatus :items="materialItems" :disabled="busy" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
         <div class="studio-composer-tools">
-          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" /><span class="chat-skills-desktop"><StudioPopover label="技能与工具" :width="480" @toggle="desktopSkillsLoaded ||= $event"><template #trigger><Puzzle :size="20" /><span>技能{{ current.skillIds.length ? ` ${current.skillIds.length}` : '' }}</span></template><StudioSkills v-if="desktopSkillsLoaded" :chat="current" :transient="entryOnly" embedded /></StudioPopover></span>
+          <div class="studio-composer-actions"><label class="studio-tool composer-attachment attachment-button" title="添加附件"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加附件" multiple :accept="`${getFileAccept()},image/*,.heic,.heif`" :disabled="busy || uploading" @change="addFiles" /></label><StudioSearchPicker v-model="current.search" class="search-mode" :disabled="busy" @update:model-value="saveChats()" />
             <StudioPopover label="对话参数" :width="480"><template #trigger><Settings2 :size="20" /></template>
-              <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div><details @toggle="mobileSkillsLoaded ||= ($event.target as HTMLDetailsElement).open"><summary>技能与工具</summary><StudioSkills v-if="mobileSkillsLoaded" :chat="current" :transient="entryOnly" embedded /></details></div>
+              <div class="mobile-chat-tools"><div class="field"><span>联网搜索</span><StudioSearchPicker v-model="current.search" :disabled="busy" @update:model-value="saveChats()" /></div></div>
               <StudioChatParameters :key="current.id" :chat="current" :format="currentFormat" :transient="entryOnly" @format="changeFormat" />
             </StudioPopover>
           </div>

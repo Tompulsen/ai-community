@@ -6,7 +6,7 @@ import type { CommunitySkill } from '../shared/community-skills'
 
 const body = '---\nname: composition\ndescription: 分析画面并提供构图建议\n---\n先分析主体与光线，再提供可执行的构图建议。'
 const checksum = createHash('sha256').update(body).digest('hex')
-const fixtureSkill: CommunitySkill = { id: 'skill01', authorId: 'anotherAuthor', authorName: '创作者小雨', name: '画面构图助手', description: '从主体、光线和层次出发，为照片与 AI 作品提供具体的构图建议。', status: 'published', official: false, version: 1, sha256: checksum, filename: 'composition.zip', size: 2680,
+const fixtureSkill: CommunitySkill = { id: 'skill01', kind: 'text', authorId: 'anotherAuthor', authorName: '创作者小雨', name: '画面构图助手', description: '从主体、光线和层次出发，为照片与 AI 作品提供具体的构图建议。', status: 'published', official: false, version: 1, sha256: checksum, filename: 'composition.zip', size: 2680,
   files: [{ path: 'composition/SKILL.md', bytes: 210 }, { path: 'composition/references/guide.md', bytes: 2048 }, { path: 'composition/scripts/example.py', bytes: 422 }], body, createdAt: '2026-11-23T00:00:00Z', updatedAt: '2026-11-23T00:00:00Z' }
 async function fixture(page: Page, loggedIn = true, admin = false) {
   const account = await mockUnifiedAccount(page, loggedIn)
@@ -25,6 +25,7 @@ async function fixture(page: Page, loggedIn = true, admin = false) {
     }
     if (method === 'GET' && id === 'skills') {
       let skills = state.skills.filter(skill => management ? url.searchParams.get('status') === 'all' || skill.status === url.searchParams.get('status') : url.searchParams.get('scope') === 'mine' ? skill.authorId === account.state.user.id : skill.status === 'published')
+      if (url.searchParams.get('kind')) skills = skills.filter(skill => skill.kind === url.searchParams.get('kind'))
       const query = url.searchParams.get('query') || ''
       skills = skills.filter(skill => `${skill.name} ${skill.description}`.includes(query))
       return route.fulfill({ json: { items: skills, nextCursor: null } })
@@ -45,7 +46,10 @@ async function fixture(page: Page, loggedIn = true, admin = false) {
   return { account, state, calls }
 }
 const dialog = (page: Page) => page.getByRole('dialog', { name: /上传技能|编辑技能|画面构图助手|composition/ })
-const upload = (page: Page, name = 'SKILL.md') => page.getByLabel('技能文件', { exact: true }).setInputFiles({ name, mimeType: name.endsWith('.zip') ? 'application/zip' : 'text/markdown', buffer: Buffer.from(body) })
+const upload = async (page: Page, name = 'SKILL.md') => {
+  await page.getByRole('combobox', { name: '技能类型', exact: true }).selectOption('text')
+  await page.getByLabel('技能文件', { exact: true }).setInputFiles({ name, mimeType: name.endsWith('.zip') ? 'application/zip' : 'text/markdown', buffer: Buffer.from(body) })
+}
 
 test('community tools open the public square and guests return after login', async ({ page }) => {
   await fixture(page, false)
@@ -71,7 +75,7 @@ for (const filename of ['SKILL.md', 'composition.zip']) test(`user uploads ${fil
   await expect(dialog(page)).toBeHidden()
   await expect(page.locator('.skill-card')).toContainText('待审核')
   const saved = calls.find(call => call.path === '/api/skills')!
-  expect(saved.body.upload.filename).toBe(filename); expect(saved.body.publish).toBeUndefined()
+  expect(saved.body.kind).toBe('text'); expect(saved.body.upload.filename).toBe(filename); expect(saved.body.publish).toBeUndefined()
   expect(saved.body.requestId).toMatch(/^[0-9a-f-]{36}$/)
   await page.getByRole('button', { name: '发现技能', exact: true }).click()
   await expect(page.locator('.skill-card')).not.toContainText('我的构图技能')
@@ -205,6 +209,137 @@ test('community skills are revalidated before every send and withdrawal blocks s
   await expect.poll(() => generated.length).toBe(2)
   expect(generated[1].chatOptions.messages.some((message: any) => message.role === 'system' && message.content.includes('先分析主体与光线'))).toBe(false)
 })
+async function typedStudio(page: Page) {
+  const fixtureState = await fixture(page)
+  fixtureState.state.skills = (['text', 'image', 'video'] as const).map(kind => ({ ...structuredClone(fixtureSkill), id: kind + 'Skill', kind, name: kind + '技能' }))
+  const generated: any[] = []
+  await page.route('**/api/creation/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/models')) return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-2', kinds: ['video'] }] } })
+    if (path.endsWith('/skills/catalog')) return route.fulfill({ json: { items: fixtureState.state.skills.filter(skill => skill.status === 'published').map(skill => ({ ...skill, id: `community-${skill.id}`, body: '' })) } })
+    if (path.endsWith('/mcp/status')) return route.fulfill({ json: { enabled: false, items: [] } })
+    if (path.endsWith('/generate')) {
+      generated.push(route.request().postDataJSON())
+      return route.fulfill({ json: { status: 'succeeded', outputs: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aLVkAAAAASUVORK5CYII=' }], tokenId: 41, protocol: 'sync' } })
+    }
+    return route.fallback()
+  })
+  return { ...fixtureState, generated }
+}
+const picker = (page: Page) => page.getByRole('button', { name: '技能与工具', exact: true })
+
+for (const [kind, width] of [['text', 320], ['image', 390], ['video', 1440]] as const) test(`typed ${kind} picker is visible above the composer at ${width}px and survives refresh`, async ({ page }, info) => {
+  await typedStudio(page); await page.setViewportSize({ width, height: 900 }); await page.goto(`/create/${kind}`)
+  await expect(picker(page)).toBeVisible()
+  await expect(page.locator('.studio-context-tools').getByRole('button', { name: '技能与工具', exact: true })).toHaveCount(1)
+  const control = await picker(page).boundingBox(), composer = await page.locator(kind === 'text' ? '.chat-composer' : '.creation-controls').boundingBox()
+  expect(control!.y + control!.height).toBeLessThanOrEqual(composer!.y + 1)
+  await page.screenshot({ path: info.outputPath(`toolbar-${kind}-${width}.png`), fullPage: true })
+  await picker(page).click()
+  await expect(page.locator('.skill-row')).toHaveCount(1)
+  await page.getByLabel(`${kind}技能`, { exact: true }).check()
+  await expect(picker(page)).toContainText('技能 1')
+  if (kind !== 'text') await expect(page.locator('.mcp-section')).toHaveCount(0)
+  expect((await new AxeBuilder({ page }).include('.studio-popover:popover-open').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`picker-${kind}-${width}.png`), fullPage: true })
+  await page.keyboard.press('Escape'); await page.reload(); await picker(page).click()
+  await expect(page.getByLabel(`${kind}技能`, { exact: true })).toBeChecked()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('switching modules keeps independent skills and image regeneration preserves the selected version', async ({ page }) => {
+  const { state, generated } = await typedStudio(page)
+  await page.goto('/create/image'); await picker(page).click(); await page.getByLabel('image技能', { exact: true }).check()
+  await expect(picker(page)).toContainText('技能 1'); await page.keyboard.press('Escape')
+  for (const [kind, label] of [['video', '视频生成'], ['text', '对话'], ['image', '图片生成']] as const) {
+    await page.getByRole('button', { name: /^创作模式：/ }).click()
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: label, exact: true }).click()
+    await picker(page).click()
+    if (kind === 'image') await expect(page.getByLabel('image技能', { exact: true })).toBeChecked()
+    else { await expect(page.getByLabel(`${kind}技能`, { exact: true })).not.toBeChecked(); await page.getByLabel(`${kind}技能`, { exact: true }).check() }
+    await expect(picker(page)).toContainText('技能 1'); await page.keyboard.press('Escape')
+  }
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一幅海边日落')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => generated.length).toBe(1)
+  expect(generated[0].prompt).toBe('一幅海边日落')
+  expect(generated[0].skills).toEqual([{ id: 'community-imageSkill', sha256: checksum }])
+  const regenerate = page.getByRole('button', { name: '重新生成此轮', exact: true }).first()
+  await expect(regenerate).toBeEnabled()
+  await regenerate.click(); await expect.poll(() => generated.length).toBe(2)
+  expect(generated[1].skills).toEqual(generated[0].skills)
+  const updated = state.skills.find(skill => skill.kind === 'image')!
+  updated.body += '\n新规则'; updated.sha256 = createHash('sha256').update(updated.body!).digest('hex')
+  await expect(regenerate).toBeEnabled(); await regenerate.click()
+  await expect(page.locator('.native-studio').getByRole('alert')).toContainText('所选技能已更新')
+  expect(generated).toHaveLength(2)
+})
+
+test('video generation sends only its chosen skill and blocks changed types before submission', async ({ page }) => {
+  const { state, generated } = await typedStudio(page)
+  await page.goto('/create/video'); await picker(page).click(); await page.getByLabel('video技能', { exact: true }).check()
+  await expect(picker(page)).toContainText('技能 1'); await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('缓慢推进的海边镜头')
+  const skill = state.skills.find(skill => skill.kind === 'video')!
+  skill.kind = 'image'
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.native-studio').getByRole('alert')).toContainText('技能类型已变化')
+  expect(generated).toHaveLength(0)
+  skill.kind = 'video'
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => generated.length).toBe(1)
+  expect(generated[0].kind).toBe('video'); expect(generated[0].prompt).toBe('缓慢推进的海边镜头')
+  expect(generated[0].skills).toEqual([{ id: 'community-videoSkill', sha256: checksum }])
+})
+
+for (const kind of ['image', 'video'] as const) test(`homepage ${kind} entry carries its selected skill to the first request`, async ({ page }) => {
+  const { generated } = await typedStudio(page)
+  await page.goto('/discover')
+  if (kind === 'video') await page.getByRole('button', { name: '视频生成', exact: true }).click()
+  await picker(page).click(); await page.getByLabel(`${kind}技能`, { exact: true }).check()
+  await expect(picker(page)).toContainText('技能 1'); await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '创作描述', exact: true }).fill('首页输入的创作描述')
+  await page.getByRole('button', { name: '发送到创作台', exact: true }).click()
+  await expect.poll(() => generated.length).toBe(1)
+  expect(generated[0].skills).toEqual([{ id: `community-${kind}Skill`, sha256: checksum }])
+  expect(generated[0].prompt).toBe('首页输入的创作描述')
+  await page.reload(); await expect(picker(page)).toContainText('技能 1')
+  expect(generated).toHaveLength(1)
+})
+
+test('a delayed skill selection cannot cross an account switch', async ({ page }) => {
+  const { state, account } = await typedStudio(page)
+  let requested = false
+  await page.route('**/api/skills/imageSkill', async route => {
+    requested = true; await new Promise(resolve => setTimeout(resolve, 800))
+    return route.fulfill({ json: { skill: state.skills.find(skill => skill.kind === 'image') } })
+  })
+  await page.goto('/create/image'); await picker(page).click(); await page.getByLabel('image技能', { exact: true }).check()
+  await expect.poll(() => requested).toBe(true)
+  account.state.user = { ...account.state.user, id: 'changedUser', accountId: '18' }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(picker(page)).toHaveText('技能')
+  await page.waitForTimeout(900)
+  await expect(picker(page)).toHaveText('技能')
+})
+
+test('new uploads require a type and the published detail opens that module', async ({ page }) => {
+  const { state, calls } = await fixture(page)
+  state.skills[0]!.kind = 'image'
+  await page.goto('/skills'); await page.getByRole('button', { name: '查看技能', exact: true }).click()
+  await expect(page.getByRole('link', { name: '去创作台选择技能' })).toHaveAttribute('href', '/create/image')
+  await page.getByRole('button', { name: '关闭技能窗口' }).click()
+  await page.getByRole('button', { name: '上传技能', exact: true }).click()
+  await page.getByLabel('技能文件', { exact: true }).setInputFiles({ name: 'SKILL.md', mimeType: 'text/markdown', buffer: Buffer.from(body) })
+  await expect(dialog(page).getByLabel('展示名称')).toHaveValue('composition')
+  await dialog(page).getByRole('button', { name: '提交审核', exact: true }).click()
+  expect(calls.some(call => call.path === '/api/skills')).toBe(false)
+  await page.getByRole('combobox', { name: '技能类型', exact: true }).selectOption('video')
+  await dialog(page).getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(dialog(page)).toBeHidden()
+  expect(calls.find(call => call.path === '/api/skills')!.body.kind).toBe('video')
+})
+
 for (const [width, theme] of [[320, 'light'], [390, 'dark'], [1440, 'light']] as const) test(`square, detail and editor are accessible at ${width} ${theme}`, async ({ page }, info) => {
   await fixture(page)
   await page.setViewportSize({ width, height: 900 }); await page.goto('/skills')

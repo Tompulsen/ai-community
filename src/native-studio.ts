@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { SkillReference } from '../shared/community-skills'
 import { reactive, watch } from 'vue'
 import { accountApi, api, errorMessage, notify, session, uploadFile } from './state'
 import type { Work } from './data'
@@ -60,7 +61,7 @@ export interface CreationTask {
   publicationFiles?: string[]
   publicationReferences?: string[]
   publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; details?: PublicationDetails; files?: string[]; work?: Work }>>
-  request: { size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
+  request: { skills?: SkillReference[]; size: string; exactSize?: boolean; aspect_ratio: string; n: number; duration: number; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; imageOptions?: ImageOptions; videoOptions?: VideoOptions; chatOptions?: ChatOptions }
   customApiBase?: string
   legacy?: boolean
 }
@@ -73,6 +74,7 @@ export interface CreationInput {
   kind: CreationKind
   model: string
   prompt: string
+  skills?: SkillReference[]
   size: string
   exactSize?: boolean
   aspect_ratio: string
@@ -700,7 +702,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     ...(input.mediaBranch ? { mediaBranch: input.mediaBranch } : {}),
     ...(input.kind !== 'text' && !mediaSettings.autoSaveGallery ? { galleryHidden: true } : {}),
     ...(input.kind !== 'text' && onUpdate ? { conversationPending: true } : {}),
-    request: { size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
+    request: { ...(input.skills?.length ? { skills: input.skills.map(skill => ({ ...skill })) } : {}), size: input.size, ...(input.exactSize ? { exactSize: true } : {}), aspect_ratio: input.aspect_ratio, n: input.n, duration: input.duration,
       protocol: input.protocol === 'auto' || input.protocol === 'sync' || input.protocol === 'async' ? input.protocol : 'openai',
       ...(input.apiFormat ? { apiFormat: input.apiFormat } : {}),
       ...(input.imageOptions ? { imageOptions: JSON.parse(JSON.stringify(input.imageOptions)) } : {}),

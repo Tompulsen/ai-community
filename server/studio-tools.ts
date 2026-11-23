@@ -30,7 +30,7 @@ async function catalog() {
   return Promise.all(directories.filter(item => item.isDirectory() && /^[a-z0-9-]{1,64}$/.test(item.name) && item.name !== 'document-workspace').map(async item => {
     const body = await readFile(path.join(skillRoot, item.name, 'SKILL.md'), 'utf8')
     const metadata = parse(/^---\r?\n([\s\S]*?)\r?\n---/.exec(body)?.[1] || '') || {}
-    return { id: item.name, name: String(metadata.name || item.name), description: String(metadata.description || '').slice(0, 500), body, sha256: sha(body) }
+    return { id: item.name, kind: 'text' as const, name: String(metadata.name || item.name), description: String(metadata.description || '').slice(0, 500), body, sha256: sha(body) }
   }))
 }
 async function authorizeMcp(ctx: RequestContext, req: AccountRequest) {

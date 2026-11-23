@@ -49,7 +49,7 @@
 .studio-composer-tools, .studio-composer-actions, .studio-composer-models { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .studio-composer-tools { flex-wrap: wrap; padding-top: 8px; }
 .studio-composer-models { margin-left: auto; }
-.studio-context-tools { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.studio-context-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
 .create-page .studio-composer-tools > .studio-billing { margin: 0; margin-inline-start: auto; }
 .create-page .studio-composer-tools > .studio-billing + .composer-submit { margin-left: 0; }
 .studio-select { display: inline-flex; align-items: center; gap: 4px; min-width: 0; border-radius: 6px; color: var(--muted); }
@@ -101,7 +101,7 @@
   .studio-composer .studio-model-trigger :is(input, .model-trigger-width) { min-height: 44px; padding-block: 12px; }
   .studio-composer-actions { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: 0; }
   .studio-composer-actions > .studio-tool { width: 44px; min-width: 44px; height: 44px; padding: 8px; }
-  .studio-composer-actions > .studio-tool > span, .studio-composer-actions > .search-mode, .chat-skills-desktop { display: none; }
+  .studio-composer-actions > .studio-tool > span, .studio-composer-actions > .search-mode { display: none; }
   .studio-composer-actions > [aria-label="清除上下文"] { display: none; }
   .studio-composer .composer-submit { grid-column: 3; grid-row: 1; align-self: center; width: 44px; height: 44px; min-height: 44px; margin: 0; border-radius: 50%; }
   .studio-composer > .reference-list, .studio-composer > .composer-files { margin: 4px 0; }

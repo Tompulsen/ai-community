@@ -250,7 +250,10 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
     if (entry.kind === 'text') {
       const { model, apiFormat, settings, system, skillIds, search, compressionThreshold, sendMemory, toolContext, files } = entry.parameters
       Object.assign(next, { textModel: model, settings, formatOverride: apiFormat === 'auto' ? undefined : settings.format, formatAutomatic: apiFormat === 'auto', system, skillIds, search, compressionThreshold, sendMemory, toolContext, draft: entry.prompt, draftFiles: files })
-    } else next.mediaDrafts = { [entry.kind]: { ...entry.parameters, prompt: entry.prompt, references: entry.references } }
+    } else {
+      next.mediaSkills = { [entry.kind]: entry.parameters?.skills || [] }
+      next.mediaDrafts = { [entry.kind]: { ...entry.parameters, prompt: entry.prompt, references: entry.references } }
+    }
     await saveChats(true)
     if (cancelled || !entryLive || owner !== session.user?.id || route.query.entry !== id || kind.value !== entry.kind) return
     armStudioEntryStart(next.id, owner)

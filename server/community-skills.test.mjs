@@ -5,7 +5,7 @@ import test from 'node:test'
 import pg from 'pg'
 import { ZipFile } from 'yazl'
 import { readSkillPackage, skillDocument } from './skill-package.ts'
-import { approvedCommunitySkills, handleCommunitySkills } from './community-skills.ts'
+import { approvedCommunitySkills, handleCommunitySkills, mediaSkillPrompt } from './community-skills.ts'
 
 const document = '---\nname: image-composition\ndescription: 构图建议\n---\n先分析主体，再给出构图建议。\n'
 async function zip(entries) {
@@ -57,6 +57,12 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     INSERT INTO "user" (id,name) VALUES ('alice','Alice'),('bob','Bob'),('admin','Admin');`)
   const migration = await readFile(new URL('../migration/20261123-community-skills.up.sql', import.meta.url), 'utf8')
   await db.query(migration)
+  const typeMigration = await readFile(new URL('../migration/20261124-community-skill-types.up.sql', import.meta.url), 'utf8')
+  await db.query(`INSERT INTO community_skill (id,"authorId",name,description,body,sha256,filename,archive,size,files,status,"requestId","requestHash") VALUES ('legacy','alice','legacy','legacy',$1,'hash','SKILL.md',$2,$3,'[]','pending','legacy-request','hash')`, [document, Buffer.from(document), Buffer.byteLength(document)])
+  await db.query(typeMigration)
+  await db.query(typeMigration)
+  assert.equal((await db.query("SELECT kind FROM community_skill WHERE id='legacy'")).rows[0].kind, 'text')
+  await db.query("DELETE FROM community_skill WHERE id='legacy'")
   const alice = { id: 'alice', accountId: '17' }, bob = { id: 'bob', accountId: '18' }, admin = { id: 'admin', isAdmin: true }
   let rate = 1
   async function request(method, path, user, body = {}, headers = {}) {
@@ -71,7 +77,7 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     assert.equal(await handleCommunitySkills(ctx), true)
     return result
   }
-  const payload = () => ({ name: '构图技能', description: '作品构图分析', body: document, requestId: randomUUID(), upload: { filename: 'SKILL.md', data: Buffer.from(document).toString('base64') } })
+  const payload = () => ({ kind: 'text', name: '构图技能', description: '作品构图分析', body: document, requestId: randomUUID(), upload: { filename: 'SKILL.md', data: Buffer.from(document).toString('base64') } })
   const fails = (promise, code) => assert.rejects(promise, error => error.statusCode === code)
   const detail = async (id, user = alice, manage = false) => (await request('GET', `/api/${manage ? 'admin/' : ''}skills/${id}`, user)).data.skill
   const create = payload(), saved = (await request('POST', '/api/skills', alice, create)).data
@@ -85,7 +91,7 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     await fails(request('POST', '/api/skills', undefined, payload()), 401)
     await fails(request('GET', '/api/admin/skills', alice), 403)
     await fails(request('POST', '/api/skills', alice, { ...payload(), publish: true }), 400)
-    await fails(request('PATCH', `/api/skills/${id}`, bob, { name: 'x', description: 'y', body: document, version: 1 }), 404)
+    await fails(request('PATCH', `/api/skills/${id}`, bob, { kind: 'text', name: 'x', description: 'y', body: document, version: 1 }), 404)
     await fails(request('GET', '/api/skills?scope=mine', alice, {}, { 'x-new-api-user': '18' }), 409)
   })
   await t.test('concurrent retries create only one skill and the additive migration preserves it', async () => {
@@ -106,7 +112,7 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     assert.match(download.headers['Content-Disposition'], /^attachment/)
     assert.match(download.headers['Cache-Control'], /no-store/)
     await fails(request('POST', `/api/admin/skills/${id}/review`, admin, { action: 'reject', reason: 'old', version: 1 }), 409)
-    await request('PATCH', `/api/skills/${id}`, alice, { name: 'new', description: 'new', body: document + '新增规则', version: 2 })
+    await request('PATCH', `/api/skills/${id}`, alice, { kind: 'text', name: 'new', description: 'new', body: document + '新增规则', version: 2 })
     assert.equal((await detail(id)).status, 'pending')
     assert.equal((await approvedCommunitySkills(db)).length, 0)
     await fails(request('GET', `/api/skills/${id}`), 404)
@@ -119,7 +125,7 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     const item = (await request('POST', '/api/admin/skills', admin, { ...payload(), publish: true, upload: { filename: 'tool.zip', data: archive.toString('base64') } })).data
     let skill = await detail(item.id, undefined)
     assert.equal(skill.official, true); assert.equal(skill.files.length, 2)
-    await request('PATCH', `/api/admin/skills/${item.id}`, admin, { name: 'edited', description: 'edited', body: document + 'edited', publish: true, version: 1 })
+    await request('PATCH', `/api/admin/skills/${item.id}`, admin, { kind: 'text', name: 'edited', description: 'edited', body: document + 'edited', publish: true, version: 1 })
     skill = await detail(item.id, undefined)
     assert.equal(skill.version, 2); assert.equal(skill.files.length, 2)
     const pack = await request('GET', `/api/skills/${item.id}/download`)
@@ -134,8 +140,34 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     await request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 3 })
     await fails(request('GET', `/api/admin/skills/${item.id}`, admin), 404)
   })
+  await t.test('type is mandatory, editable, filterable, and part of upload idempotency', async () => {
+    for (const kind of [undefined, '', 'audio']) await fails(request('POST', '/api/skills', bob, { ...payload(), kind }), 400)
+    for (const kind of ['text', 'image', 'video']) {
+      const create = { ...payload(), kind, publish: true }
+      const item = (await request('POST', '/api/admin/skills', admin, create)).data
+      let skill = await detail(item.id)
+      assert.equal(skill.kind, kind)
+      assert.equal((await approvedCommunitySkills(db)).find(value => value.id === `community-${item.id}`).kind, kind)
+      assert((await request('GET', `/api/skills?kind=${kind}`)).data.items.some(value => value.id === item.id))
+      assert(!(await request('GET', `/api/skills?kind=${kind === 'image' ? 'video' : 'image'}`)).data.items.some(value => value.id === item.id))
+      await fails(request('POST', '/api/admin/skills', admin, { ...create, kind: kind === 'text' ? 'image' : 'text' }), 409)
+      if (kind !== 'text') {
+        const refs = [{ id: `community-${item.id}`, sha256: skill.sha256 }]
+        assert.match(await mediaSkillPrompt(db, kind, '我的描述', refs), /先分析主体/)
+        await db.query('UPDATE "user" SET "isSuspended"=true WHERE id=$1', ['admin'])
+        await fails(mediaSkillPrompt(db, kind, 'test', refs), 400)
+        await db.query('UPDATE "user" SET "isSuspended"=false WHERE id=$1', ['admin'])
+      }
+      await request('PATCH', `/api/admin/skills/${item.id}`, admin, { kind: kind === 'text' ? 'image' : 'text', name: skill.name, description: skill.description, body: skill.body, version: skill.version, publish: false })
+      skill = await detail(item.id, admin, true)
+      assert.equal(skill.status, 'pending'); assert.equal(skill.version, 2)
+      assert.equal(skill.kind, kind === 'text' ? 'image' : 'text')
+      await request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: skill.version })
+    }
+    await fails(request('GET', '/api/skills?kind=audio'), 400)
+  })
   await t.test('quota and rate limits are enforced without extra writes', async () => {
-    await db.query(`INSERT INTO community_skill SELECT 'quota'||n,"authorId",name,description,body,sha256,filename,archive,size,files,status,official,'quota-request-'||n,"requestHash",version,"reviewNote","reviewedBy","createdAt","updatedAt" FROM community_skill CROSS JOIN generate_series(1,99) n WHERE id=$1`, [id])
+    await db.query(`INSERT INTO community_skill SELECT 'quota'||n,"authorId",name,description,body,sha256,filename,archive,size,files,status,official,'quota-request-'||n,"requestHash",version,"reviewNote","reviewedBy","createdAt","updatedAt",kind FROM community_skill CROSS JOIN generate_series(1,99) n WHERE id=$1`, [id])
     await fails(request('POST', '/api/skills', alice, payload()), 413)
     rate = 61
     await fails(request('POST', '/api/skills/inspect', alice, create.upload), 429)
