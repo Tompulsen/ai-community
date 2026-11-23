@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, X } from '@lucide/vue'
 import { copyMediaImage, mediaSource, readableMedia } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
+import { jpegDownload, jpegMediaUrl } from '../../image-download'
 import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
 const props = withDefaults(defineProps<{
@@ -29,7 +30,7 @@ const source = computed(() => {
     const url = new URL(value, location.href)
     if (url.protocol === 'blob:') return value
     if (url.protocol === 'data:') return value.startsWith(`data:${item.kind}/`) ? value : undefined
-    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? url.href : mediaSource(url.href, false, item.kind)
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? (item.kind === 'image' ? jpegMediaUrl(url.href) : url.href) : mediaSource(url.href, false, item.kind)
   } catch { /* Invalid references are never fetched or rendered. */ }
 })
 let acceptedOwner: string | undefined, operation = 0, pending: AbortController | undefined
@@ -213,10 +214,11 @@ async function defaultDownload(item: NonNullable<typeof current.value>, controll
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
   const response = await fetch(readable, { credentials: 'same-origin', signal: controller.signal })
   if (!response.ok) throw new Error('文件下载失败，请重试。')
-  const blob = await response.blob()
+  let blob = await response.blob()
   if (!blob.size || !blob.type.startsWith(`${item.kind}/`)) throw new Error('文件格式无效，请重新加载。')
+  if (item.kind === 'image') blob = await jpegDownload(blob, controller.signal)
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
-  const extension = blob.type.split('/')[1]!.split(';')[0]!.replace(/[^a-z0-9]/g, '') || (item.kind === 'image' ? 'png' : 'mp4')
+  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]!.split(';')[0]!.replace(/[^a-z0-9]/g, '') || (item.kind === 'image' ? 'png' : 'mp4')
   const link = document.createElement('a'), objectUrl = URL.createObjectURL(blob)
   link.href = objectUrl; link.download = `media-${index.value + 1}.${extension}`
   link.click(); setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
@@ -241,7 +243,7 @@ async function run(kind: 'download' | 'copy') {
     <dialog ref="dialog" class="media-lightbox" :class="{ 'has-sequence': items.length > 1 }" :aria-label="label" @cancel.prevent="close" @close="closed" @keydown="keys" @click.self="close">
       <template v-if="opened">
         <div class="lightbox-actions" role="group" aria-label="媒体操作">
-          <button class="viewer-button" type="button" aria-label="下载原文件" title="下载原文件" :disabled="!source || !!action" @click="run('download')"><LoaderCircle v-if="action === 'download'" :size="20" /><Download v-else :size="20" /></button>
+          <button class="viewer-button" type="button" :aria-label="current?.kind === 'image' ? '下载图片' : '下载原文件'" :title="current?.kind === 'image' ? '下载图片（静态图片为 JPG）' : '下载原文件'" :disabled="!source || !!action" @click="run('download')"><LoaderCircle v-if="action === 'download'" :size="20" /><Download v-else :size="20" /></button>
           <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="复制图片" title="复制图片" :disabled="!source || !!action" @click="run('copy')"><LoaderCircle v-if="action === 'copy'" :size="20" /><Copy v-else :size="20" /></button>
           <button class="viewer-button" type="button" :aria-label="closeLabel" :title="closeLabel" autofocus @click="close"><X :size="22" /></button>
         </div>

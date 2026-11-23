@@ -167,7 +167,7 @@ test('shared gallery viewer preserves original pixels, zooms, pans, changes item
   await viewer.getByRole('button', { name: '复制图片', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedImageTypes)).toEqual([['image/png']])
   const downloadPromise = page.waitForEvent('download')
-  await viewer.getByRole('button', { name: '下载原文件', exact: true }).click()
+  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
   const download = await downloadPromise
   const downloaded = await readFile((await download.path())!)
   expect(downloaded.equals(image)).toBe(true)
@@ -227,7 +227,7 @@ test('viewer resolves delayed stored assets, rejects unsafe sources and closes o
   await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
   await page.evaluate(() => { (window as any).previewHarness.items.value = [{ src: 'javascript:alert(1)', kind: 'image' }] })
   await expect(viewer.locator('img')).toHaveCount(0)
-  await expect(viewer.getByRole('button', { name: '下载原文件', exact: true })).toBeDisabled()
+  await expect(viewer.getByRole('button', { name: '下载图片', exact: true })).toBeDisabled()
   await page.evaluate(async () => {
     const statePath = '/src/state.ts', { session } = await import(statePath)
     session.user = { ...session.user, id: 'other-owner' }

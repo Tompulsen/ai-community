@@ -155,14 +155,14 @@ test('video covers skip a black intro, show actual duration and reuse the cached
 test('automatic original download preference is persisted per account without re-downloading old records', async ({ page }) => {
   const { library, generationCalls } = await fixture(page, 1)
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
-  const preference = library.getByRole('switch', { name: '自动下载原文件', exact: true })
+  const preference = library.getByRole('switch', { name: '自动下载作品', exact: true })
   await expect(preference).not.toBeChecked()
   await preference.check()
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-media-settings') || '{}').autoDownload)).toBe(true)
   await page.reload()
   await openLibrary(page)
   await page.getByRole('button', { name: '作品库设置', exact: true }).click()
-  await expect(page.getByRole('switch', { name: '自动下载原文件', exact: true })).toBeChecked()
+  await expect(page.getByRole('switch', { name: '自动下载作品', exact: true })).toBeChecked()
   expect(generationCalls).toHaveLength(0)
 })
 

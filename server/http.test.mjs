@@ -98,6 +98,57 @@ async function fixture(t) {
   return { app, filesRoot, ...stores }
 }
 
+test('JPEG exports preserve dimensions and stored bytes with correct filenames, ranges and private access', async t => {
+  const f = await fixture(t)
+  const original = await sharp({ create: { width: 127, height: 83, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .withExif({ IFD0: { Artist: 'PRIVATE' } }).webp().toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', publiclyVisible: true, webpublicAccessKey: 'original-key', webpublicType: 'image/webp',
+    properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const url = '/legacy-files/file1?format=jpeg&variant=webpublic'
+  const full = await f.app.inject({ method: 'GET', url })
+  assert.equal(full.statusCode, 200)
+  assert.equal(full.headers['content-type'], 'image/jpeg')
+  assert.match(full.headers['content-disposition'], /zhangyu-file1\.jpg/)
+  assert.equal(full.rawPayload.subarray(0, 3).toString('hex'), 'ffd8ff')
+  const details = await sharp(full.rawPayload).metadata()
+  assert.equal(details.width, 127); assert.equal(details.height, 83); assert.equal(details.exif, undefined)
+  const pixels = await sharp(full.rawPayload).raw().toBuffer()
+  assert(pixels.every(channel => channel >= 254), 'transparent areas should be white')
+  assert.deepEqual(await readFile(path.join(f.filesRoot, 'original-key')), original)
+  const head = await f.app.inject({ method: 'HEAD', url })
+  assert.equal(head.headers['content-length'], String(full.rawPayload.length)); assert.equal(head.rawPayload.length, 0)
+  const partial = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-7' } })
+  assert.equal(partial.statusCode, 206); assert.deepEqual(partial.rawPayload, full.rawPayload.subarray(0, 8))
+  assert.equal(partial.headers['content-range'], `bytes 0-7/${full.rawPayload.length}`)
+  const invalid = await f.app.inject({ method: 'HEAD', url, headers: { range: `bytes=${full.rawPayload.length}-` } })
+  assert.equal(invalid.statusCode, 416)
+  assert.equal((await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': full.headers.etag } })).statusCode, 304)
+  const webp = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=webpublic', headers: { 'if-none-match': full.headers.etag } })
+  assert.equal(webp.statusCode, 200); assert.equal(webp.headers['content-type'], 'image/webp'); assert.notEqual(webp.headers.etag, full.headers.etag)
+  const originalDownload = await f.app.inject({ method: 'GET', url: '/files/original-key?format=jpeg' })
+  assert.equal(originalDownload.headers['content-type'], 'image/jpeg')
+  f.denyMedia()
+  assertJsonError(await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': full.headers.etag } }), 404)
+})
+
+test('JPEG export keeps animations and videos intact and rejects damaged image bytes', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.concat([Buffer.alloc(48 * 48 * 3), Buffer.alloc(48 * 48 * 3, 255)])
+  const animated = await sharp(pixels, { raw: { width: 48, height: 96, channels: 3, pageHeight: 48 } })
+    .webp({ delay: [100, 200], loop: 0 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), animated)
+  Object.assign(f.media, { type: 'image/webp', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const response = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?format=jpeg' })
+  assert.equal(response.headers['content-type'], 'image/webp'); assert.deepEqual(response.rawPayload, animated)
+  assert.equal((await sharp(response.rawPayload, { animated: true }).metadata()).pages, 2)
+  await writeFile(path.join(f.filesRoot, 'original-key'), 'damaged')
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1?format=jpeg' }), 503)
+  Object.assign(f.media, { type: 'video/mp4', properties: { communityVideoPrivacy: { 'original-key': 1 } } })
+  const video = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?format=jpeg' })
+  assert.equal(video.headers['content-type'], 'video/mp4'); assert.equal(video.payload, 'damaged')
+})
+
 test('public image downloads hide upload names and metadata on every original route', async t => {
   const { app, media, filesRoot, denyMedia, queries } = await fixture(t)
   Object.assign(media, { name: 'ComfyUI-private-customer-prompt.png', type: 'image/png', thumbnailAccessKey: null })

@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import AxeBuilder from '@axe-core/playwright'
+import sharp from 'sharp'
+const originalImage = await sharp({ create: { width: 96, height: 64, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer()
 
 async function fixture(page: Page) {
   await page.route('**/__media-actions', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head></head><body><main></main></body></html>' }))
@@ -24,7 +26,7 @@ for (const action of ['delete', 'switch', 'disable']) test(`automatic browser sa
   await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/held.png' }] } }))
   await page.route('**/api/creation/media**', async route => {
     entered = true; await blocked
-    await route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }).catch(() => {})
+    await route.fulfill({ contentType: 'image/png', body: originalImage }).catch(() => {})
   })
   await page.evaluate(async () => {
     const studio = window.mediaTest
@@ -57,7 +59,7 @@ for (const action of ['delete', 'switch', 'disable']) test(`automatic browser sa
 
 test('concurrent automatic caching and download preserve every local image pointer', async ({ page }) => {
   await fixture(page)
-  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: originalImage }))
   const downloaded = page.waitForEvent('download')
   await page.evaluate(async () => {
     const studio = window.mediaTest
@@ -67,12 +69,16 @@ test('concurrent automatic caching and download preserve every local image point
     await studio.prepareCreationHistory()
     await Promise.all([studio.cacheCreationImages(task), studio.downloadCreation(task, 1), studio.cacheCreationImages(task)])
   })
-  await downloaded
+  const file = await downloaded
+  expect(file.suggestedFilename()).toMatch(/\.jpg$/)
+  const saved = await readFile((await file.path())!)
+  expect((await sharp(saved).metadata()).format).toBe('jpeg')
+  expect((await sharp(saved).metadata()).width).toBe(96)
   const result = await page.evaluate(async () => {
     const store = await import('/src/studio-task-store.ts'), tasks = await store.readTaskSnapshot('17')
-    return { urls: tasks[0].urls, originals: await Promise.all(tasks[0].urls.map(async url => (await store.readTaskAsset('17', url))?.text())) }
+    return { urls: tasks[0].urls, originals: await Promise.all(tasks[0].urls.map(async url => Array.from(new Uint8Array(await (await store.readTaskAsset('17', url)).arrayBuffer())))) }
   })
-  expect(result).toEqual({ urls: ['studio-asset:concurrent:0', 'studio-asset:concurrent:1'], originals: ['original bytes', 'original bytes'] })
+  expect(result).toEqual({ urls: ['studio-asset:concurrent:0', 'studio-asset:concurrent:1'], originals: [Array.from(originalImage), Array.from(originalImage)] })
 })
 
 test('browser-save reads are bounded and invalid or oversized originals never replace their source', async ({ page }) => {
@@ -110,7 +116,7 @@ test('a visible history record created in another tab is loaded safely and saved
     await studio.prepareCreationHistory()
     return task
   })
-  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: originalImage }))
   await page.evaluate(task => window.mediaTest.cacheCreationImages(task), task)
   expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].browserSave.state)).toBe('saved')
   await other.evaluate(() => window.mediaTest.removeCreationTasks(['other-tab']))
@@ -166,7 +172,7 @@ test('download retry reads only unfinished originals and never submits generatio
   await page.route('**/api/creation/media**', route => {
     reads++
     if (new URL(route.request().url()).searchParams.get('url')?.includes('second') && reads < 3) return route.fulfill({ status: 503 })
-    return route.fulfill({ contentType: 'image/png', body: Buffer.from('original-image') })
+    return route.fulfill({ contentType: 'image/png', body: originalImage })
   })
   const requests: string[] = [], downloaded: string[] = []
   page.on('request', request => requests.push(request.url()))
@@ -230,7 +236,7 @@ test('new accounts generate without downloading and can still download manually'
   let downloads = 0
   page.on('download', () => downloads++)
   await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/manual.png' }] } }))
-  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }))
+  await page.route('**/api/creation/media**', route => route.fulfill({ contentType: 'image/png', body: originalImage }))
   await page.evaluate(async () => {
     await window.mediaTest.submitCreation({ kind: 'image', model: 'fixture', prompt: 'manual download', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 })
   })
@@ -241,7 +247,7 @@ test('new accounts generate without downloading and can still download manually'
   expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].localSave)).toBeUndefined()
   const downloaded = page.waitForEvent('download')
   await page.evaluate(() => window.mediaTest.downloadCreation(window.mediaTest.creation.tasks[0]))
-  expect((await downloaded).suggestedFilename()).toMatch(/^creation-.*-1\.png$/)
+  expect((await downloaded).suggestedFilename()).toMatch(/^creation-.*-1\.jpg$/)
   expect(downloads).toBe(1)
 })
 
@@ -252,7 +258,7 @@ test('generations always cache originals while file downloads remain opt-in', as
     generations++
     return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/automatic.png' }] } })
   })
-  await page.route('**/api/creation/media**', route => { originals++; return route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }) })
+  await page.route('**/api/creation/media**', route => { originals++; return route.fulfill({ contentType: 'image/png', body: originalImage }) })
   page.on('download', () => downloads++)
   await page.evaluate(async () => {
     const studio = window.mediaTest
@@ -279,7 +285,7 @@ test('deleting a result cancels an in-flight download without restoring the dele
   const blocked = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/creation/media**', async route => {
     requested = true; await blocked
-    await route.fulfill({ contentType: 'image/png', body: Buffer.from('original bytes') }).catch(() => {})
+    await route.fulfill({ contentType: 'image/png', body: originalImage }).catch(() => {})
   })
   let downloads = 0
   page.on('download', () => downloads++)

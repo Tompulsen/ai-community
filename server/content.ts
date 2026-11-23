@@ -17,6 +17,7 @@ import { sniffType, uploadMedia, uploadLimitsFor, mediaState, fileDto } from './
 import { getUser } from './auth.ts';
 import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
 import { privateMetadataFreeVideo } from './video-privacy.ts';
+import { jpegImage } from './image-export.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
@@ -988,6 +989,8 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   const requestedVariant = ctx.url.searchParams.get('variant') ?? 'original';
   const variant = requestedVariant === 'web' ? 'webpublic' : requestedVariant;
   if (!['original', 'thumbnail', 'webpublic'].includes(variant)) fail(400, 'Invalid media variant');
+  const format = ctx.url.searchParams.get('format');
+  if (format !== null && format !== 'jpeg') fail(400, 'Invalid media format');
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
   const keyWhere = byKey ? '(f."accessKey"=$2 OR f."thumbnailAccessKey"=$2 OR f."webpublicAccessKey"=$2)' : 'f.id=$2';
   const result = await ctx.db.query<MediaRow>(`
@@ -1072,12 +1075,19 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
       fail(503, '媒体暂时无法安全提供，请稍后重试。');
     }
   }
+  let exported: Buffer | null = null;
+  if (format === 'jpeg' && type && imageExtensions[type]) {
+    try { exported = await jpegImage(path, metadata); }
+    catch { fail(503, 'JPG 图片暂时无法提供，请稍后重试。'); }
+    if (exported) type = 'image/jpeg';
+  }
+  const size = exported?.length ?? metadata.size;
   const mime = type && inlineTypes.has(type) ? type : 'application/octet-stream';
   ctx.reply.header('Content-Type', mime);
   ctx.reply.header('X-Content-Type-Options', 'nosniff');
   ctx.reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
   const etag = file.publiclyVisible && role !== 'original' && type && imageExtensions[type]
-    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, role, storageKey, mime, metadata.size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
+    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, role, storageKey, mime, format, size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
     : null;
   ctx.reply.header('Cache-Control', etag ? 'private, no-cache' : 'private, no-store');
   if (etag) {
@@ -1090,15 +1100,16 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   ctx.reply.header('Accept-Ranges', 'bytes');
   ctx.reply.header('Content-Disposition', `${type && inlineTypes.has(type) ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(publicImageName({ ...file, type: type || file.type })).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16)}`)}`);
   // Weak validators cannot establish that a cached byte range is still identical.
-  const range = byteRange(ctx.req.headers['if-range'] === undefined ? ctx.req.headers.range : undefined, metadata.size);
+  const range = byteRange(ctx.req.headers['if-range'] === undefined ? ctx.req.headers.range : undefined, size);
   if (range === false) {
-    ctx.reply.code(416).header('Content-Range', `bytes */${metadata.size}`).send();
+    ctx.reply.code(416).header('Content-Range', `bytes */${size}`).send();
     return true;
   }
-  if (range) ctx.reply.header('Content-Range', `bytes ${range.start}-${range.end}/${metadata.size}`);
-  ctx.reply.header('Content-Length', range ? range.end - range.start + 1 : metadata.size);
+  if (range) ctx.reply.header('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+  ctx.reply.header('Content-Length', range ? range.end - range.start + 1 : size);
   ctx.reply.code(range ? 206 : 200);
   if (ctx.req.method === 'HEAD') { ctx.reply.send(); return true; }
+  if (exported) { ctx.reply.send(range ? exported.subarray(range.start, range.end + 1) : exported); return true; }
   const stream = createReadStream(path, range || {});
   const cancel = () => { stream.destroy(); };
   ctx.res.once('close', cancel);

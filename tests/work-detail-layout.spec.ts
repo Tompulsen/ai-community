@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import sharp from 'sharp'
+import { readFile } from 'node:fs/promises'
 import type { Work, WorkComment } from '../src/data'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
@@ -166,6 +167,55 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
     await page.screenshot({ path: `test-results/work-detail-${width}.png`, fullPage: true })
   }
   expect(errors).toEqual([])
+})
+
+for (const width of [390, 1440]) test(`work images, references and downloads use real JPEG sources at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const file = { id: 'jpegwork', name: '作品.webp', type: 'image/webp', url: '/legacy-files/jpegwork', processing: 'ready' as const }
+  const reference = { ...file, id: 'jpegref', name: '参考图.webp', url: '/legacy-files/jpegref' }
+  const jpeg = await sharp({ create: { width: 900, height: 600, channels: 3, background: 'white' } }).jpeg().toBuffer()
+  await fixture(page, { ...work, files: [file], referenceFiles: [reference] })
+  await page.route('**/legacy-files/jpeg*', route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('format') !== 'jpeg') return route.fulfill({ status: 500 })
+    return route.fulfill({ contentType: 'image/jpeg', body: jpeg, headers: { 'content-disposition': 'inline; filename="photo.jpg"' } })
+  })
+  await page.goto('/work/detailwork')
+  const img = page.locator('.detail-media img')
+  await expect(img).toHaveAttribute('src', '/legacy-files/jpegwork?variant=webpublic&format=jpeg')
+  await img.evaluate((image: HTMLImageElement) => image.decode())
+  if (width > 640) {
+    await expect(page.getByRole('link', { name: '下载 作品.webp', exact: true })).toHaveAttribute('href', '/legacy-files/jpegwork?format=jpeg')
+  }
+  await img.click()
+  const dialog = page.getByRole('dialog', { name: '作品文件预览', exact: true })
+  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegwork?format=jpeg')
+  const pending = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: '下载图片', exact: true }).click()
+  const download = await pending
+  expect(download.suggestedFilename()).toMatch(/\.jpg$/)
+  expect((await sharp(await readFile((await download.path())!)).metadata()).width).toBe(900)
+  await dialog.getByRole('button', { name: '关闭预览', exact: true }).click()
+  await page.getByRole('button', { name: '预览 参考图.webp', exact: true }).click()
+  if (width > 640) await page.locator('.detail-media img').click()
+  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegref?format=jpeg')
+})
+
+test('JPEG variant and original failures terminate with a visible retry action', async ({ page }) => {
+  const file = { id: 'jpegfailed', name: '作品.webp', type: 'image/webp', url: '/legacy-files/jpegfailed', processing: 'ready' as const }
+  await page.route('**/__jpeg-failure', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><main></main>' }))
+  await page.route('**/api/**', route => route.fulfill({ json: {} }))
+  let reads = 0
+  await page.route('**/legacy-files/jpegfailed*', route => { reads++; return route.fulfill({ status: 503 }) })
+  await page.goto('/__jpeg-failure')
+  await page.evaluate(async file => {
+    const vuePath = '/node_modules/.vite/deps/vue.js', componentPath = '/src/components/WorkMedia.vue'
+    const { createApp } = await import(vuePath), { default: WorkMedia } = await import(componentPath)
+    createApp(WorkMedia, { files: [file], title: '失败重试' }).mount('main')
+  }, file)
+  await expect(page.locator('.detail-media')).toContainText('文件预览加载失败')
+  await expect(page.locator('.detail-media').getByRole('button', { name: '重新加载', exact: true })).toBeVisible()
+  expect(reads).toBe(2)
 })
 
 const scrollbarTest = test.extend({

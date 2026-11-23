@@ -12,6 +12,7 @@ import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/ima
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
 import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
 import { imageThumbnail } from './studio-media-previews'
+import { jpegDownload } from './image-download'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -1068,11 +1069,12 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
         const blob = await response.blob(); check()
         if (!blob.size || !blob.type.startsWith(`${task.kind}/`)) throw new Error('原文件格式无效，请重试保存。')
         urls[index] = await cacheDownloadedImage(task, index, urls[index]!, blob); check()
+        const exported = task.kind === 'image' ? await jpegDownload(blob, controller.signal) : blob; check()
         // Claim the file durably before handing it to the browser, which cannot confirm completion.
         task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
         try { await persist(true); check() }
         catch (cause) { task.localSave.completed = completed; throw cause }
-        try { requestDownload(blob, task, index) }
+        try { requestDownload(exported, task, index) }
         catch (cause) { task.localSave.completed = completed; throw cause }
         completed = index + 1
       }
@@ -1111,9 +1113,10 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()
+  const exported = task.kind === 'image' ? await jpegDownload(blob, signal) : blob
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
-  requestDownload(blob, task, index)
+  requestDownload(exported, task, index)
 }
 const sharing = new Set<string>()
 export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string, details?: PublicationDetails) {
