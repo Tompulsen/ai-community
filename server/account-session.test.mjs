@@ -243,7 +243,7 @@ test('PostgreSQL user permissions use one read and retain role expiry, condition
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
   const url = new URL(connectionString)
   assert.equal(url.pathname, '/community_follow_test')
-  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || process.env.CI === 'true' && url.hostname === 'postgres')
   const client = new pg.Client({ connectionString })
   t.after(() => client.end())
   await client.connect()

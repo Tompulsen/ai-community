@@ -71,7 +71,7 @@ test('PostgreSQL evaluates search matches and recommendation tag interests once 
 }, async t => {
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
   const url = new URL(connectionString)
-  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || process.env.CI === 'true' && url.hostname === 'postgres')
   assert.equal(url.pathname, '/community_follow_test')
   const db = new pg.Client({ connectionString })
   await db.connect()
@@ -105,7 +105,7 @@ test('PostgreSQL evaluates search matches and recommendation tag interests once 
     INSERT INTO community_submission (id,"authorId","approvedNoteId","tagIds","submittedAt")
       SELECT 'w'||lpad(i::text,5,'0'),'author'||(i%80+1),'n'||i,ARRAY['tag'||(i%64+1)],
         NOW()-i*INTERVAL '1 hour' FROM generate_series(1,2400) i;
-    ANALYZE`)
+    ANALYZE "user",meta,blocking,following,external_account,community_tag,note,note_reaction,note_favorite,community_submission`)
   const plans = []
   function nodes(node) { return [node, ...(node.Plans || []).flatMap(nodes)] }
   async function explain(path, body) {

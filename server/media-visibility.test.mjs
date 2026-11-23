@@ -13,7 +13,7 @@ test('PostgreSQL media visibility retains viewer permissions and identifies only
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
   const url = new URL(connectionString)
   assert.equal(url.pathname, '/community_follow_test')
-  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || process.env.CI === 'true' && url.hostname === 'postgres')
   const schema = `media_visibility_test_${randomBytes(6).toString('hex')}`
   const admin = new pg.Pool({ connectionString })
   await admin.query(`CREATE SCHEMA ${schema}`)

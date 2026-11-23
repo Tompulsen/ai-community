@@ -66,7 +66,7 @@ test('PostgreSQL status reads avoid global contention and retain atomic rewards,
   const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
   const url = new URL(connectionString)
   assert.equal(url.pathname, '/community_follow_test')
-  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || process.env.CI === 'true' && url.hostname === 'postgres')
   for (const [key, value] of Object.entries({ COMMUNITY_WALLET_ENABLED: 'true', COMMUNITY_WALLET_QUOTA_PER_CNY: '500000' })) {
     const previous = process.env[key]
     process.env[key] = value
