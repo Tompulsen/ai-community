@@ -56,6 +56,31 @@ async function fixture(page: Page, selected: Work = { ...work }, authenticated =
   return state
 }
 
+for (const width of [320, 390, 1440]) test(`skill detail exposes installation and downloads without a text-generation action at ${width}px`, async ({ page }) => {
+  const skill = { platform: 'ComfyUI', version: '0.3+', installation: '解压技能包\n导入 workflow.json\n<script>alert(1)</script>' }
+  const selected: Work = { ...work, kind: 'resource', isSkill: true, prompt: '', body: '上传参考图片后运行工作流。', sourceUrl: 'https://example.com/workflow',
+    files: [{ id: 'workflow1', name: 'workflow.json', type: 'application/json', url: '/legacy-files/workflow1' }], generation: { skill } }
+  await fixture(page, selected)
+  await page.setViewportSize({ width, height: 900 })
+  await page.goto('/work/detailwork')
+  if (width < 1000) await page.getByText('技能与安装信息', { exact: true }).click()
+  await expect(page.getByRole('button', { name: '制作同款', exact: true })).toHaveCount(0)
+  await expect(page.locator('.work-properties')).toContainText('ComfyUI')
+  await expect(page.locator('.work-properties')).toContainText('0.3+')
+  await expect(page.getByText(skill.installation, { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '打开资源链接' })).toHaveAttribute('href', selected.sourceUrl!)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.detail-focus').analyze()).violations).toEqual([])
+  await page.screenshot({ path: test.info().outputPath(`skill-detail-${width}.png`) })
+})
+
+test('manually supplied video parameters are visible on the work detail', async ({ page }) => {
+  await fixture(page, { ...work, kind: 'video', generation: { parameters: { version: 1, kind: 'video', size: '1920x1080', aspect_ratio: '16:9', duration: 8.001,
+    videoOptions: { resolution: '1080p', seed: '42', customParameters: '{"fps":23.976}' } } } })
+  await page.goto('/work/detailwork')
+  for (const value of ['1920x1080', '16:9', '8.001', '1080p', '42', '23.976']) await expect(page.locator('.work-properties')).toContainText(value)
+})
+
 for (const width of [390, 1440]) for (const format of ['gif', 'webp'] as const) {
   test(`existing ${format} source comments and replies animate inline at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 })

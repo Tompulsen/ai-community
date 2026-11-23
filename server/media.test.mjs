@@ -71,6 +71,27 @@ test('image upload stores only sanitized bytes and records their actual size, ty
   assert.equal(properties.communityImagePrivacy[key], 1);
 });
 
+test('skill ZIP and workflow text uploads work under default policy and obey explicit role restrictions', async t => {
+  for (const [name, type, bytes] of [
+    ['skill.zip', 'application/zip', Buffer.from('504b0506000000000000000000000000000000000000', 'hex')],
+    ['workflow.json', 'application/json', Buffer.from('{"nodes":[]}')],
+    ['SKILL.md', 'text/plain', Buffer.from('# Instructions\nUse the tool')],
+    ['workflow.yaml', 'application/yaml', Buffer.from('nodes: []')],
+  ]) await t.test(name, async t => {
+    const f = await uploadFixture(t);
+    f.ctx.body = { name, type, data: bytes.toString('base64') };
+    const dto = await uploadMedia(f.ctx);
+    assert.equal(dto.type, type); assert.equal(dto.name, name);
+    assert.deepEqual(await readFile(join(f.root, (await f.files())[0])), bytes);
+  });
+  const f = await uploadFixture(t);
+  const query = f.ctx.db.query;
+  f.ctx.db.query = async (sql, values) => sql.startsWith('SELECT policies') ? { rows: [{ policies: { uploadableFileTypes: ['image/*'] }, clientOptions: {} }] } : query(sql, values);
+  f.ctx.body = { name: 'skill.zip', type: 'application/zip', data: Buffer.from('504b0506000000000000000000000000000000000000', 'hex').toString('base64') };
+  await assert.rejects(uploadMedia(f.ctx), error => [400, 403, 415].includes(error.statusCode));
+  assert.equal(f.state.inserted, undefined);
+});
+
 test('upload capacity reservations reject before reading or writing and always release after an attempt', async t => {
   for (const result of [0, -1]) await t.test(String(result), async t => {
     const f = await uploadFixture(t);

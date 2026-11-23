@@ -3,7 +3,7 @@ import { ArrowDown, ArrowLeftRight, ArrowUp, FileText, Trash2 } from '@lucide/vu
 import type { UploadFile } from '../use-file-uploads'
 import FileUploadStatus from './FileUploadStatus.vue'
 
-defineProps<{ files: UploadFile[]; reference?: boolean; featured?: boolean }>()
+defineProps<{ files: UploadFile[]; reference?: boolean; featured?: boolean; hideRole?: boolean }>()
 const emit = defineEmits<{ move: [index: number, direction: number]; role: [index: number]; remove: [index: number]; retry: [index: number] }>()
 </script>
 
@@ -16,7 +16,7 @@ const emit = defineEmits<{ move: [index: number, direction: number]; role: [inde
       <div class="table-actions">
         <button type="button" class="icon-button" aria-label="向前移动" title="向前移动" :disabled="index === 0" @click="emit('move', index, -1)"><ArrowUp :size="16" /></button>
         <button type="button" class="icon-button" aria-label="向后移动" title="向后移动" :disabled="index === files.length - 1" @click="emit('move', index, 1)"><ArrowDown :size="16" /></button>
-        <button v-if="reference || file.type.startsWith('image/')" type="button" class="icon-button" :aria-label="reference ? '移至作品文件' : '移至参考图'" :title="reference ? '移至作品文件' : '移至参考图'" @click="emit('role', index)"><ArrowLeftRight :size="16" /></button>
+        <button v-if="!hideRole && (reference || file.type.startsWith('image/'))" type="button" class="icon-button" :aria-label="reference ? '移至作品文件' : '移至参考图'" :title="reference ? '移至作品文件' : '移至参考图'" @click="emit('role', index)"><ArrowLeftRight :size="16" /></button>
         <button type="button" class="icon-button" :aria-label="`移除 ${file.name}`" title="移除附件" @click="emit('remove', index)"><Trash2 :size="16" /></button>
       </div>
       <FileUploadStatus :file="file" @retry="emit('retry', index)" />

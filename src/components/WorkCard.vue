@@ -37,7 +37,7 @@ function measureCover(event: Event) {
   <article class="work-card" :class="{ 'work-card-managed': management, 'work-card-thumbnail': thumbnailOnly }" :data-work-id="work.id">
     <div class="work-card-content">
     <RouterLink :to="`/work/${work.id}`" class="work-cover" :class="{ 'resource-cover': work.kind === 'resource' }" :style="{ aspectRatio: coverRatio }" :aria-label="coverLabel">
-      <template v-if="work.kind === 'resource'"><div class="resource-top"><FileText :size="22" /><span>{{ work.tags.includes('Skill') ? 'SKILL' : '创作笔记' }}</span></div><strong class="resource-heading">{{ work.title }}</strong><p>{{ work.body?.split('\n').filter(Boolean).slice(0, 3).join(' ') }}</p><span v-if="!management" class="resource-bottom">阅读内容 <ArrowUpRight :size="16" /></span></template>
+      <template v-if="work.kind === 'resource'"><div class="resource-top"><FileText :size="22" /><span>{{ work.isSkill ? '技能 / 工作流' : work.tags.includes('Skill') ? 'SKILL' : '创作笔记' }}</span></div><strong class="resource-heading">{{ work.title }}</strong><p>{{ work.body?.split('\n').filter(Boolean).slice(0, 3).join(' ') }}</p><span v-if="!management" class="resource-bottom">{{ work.isSkill ? '查看技能' : '阅读内容' }} <ArrowUpRight :size="16" /></span></template>
       <img v-else-if="work.cover && !failed" :src="work.cover" :alt="work.title" :loading="eager ? 'eager' : 'lazy'" width="640" :height="Math.round(640 / coverRatio)" @load="measureCover" @error="failed = true" />
       <video v-else-if="work.video" :src="work.video" muted playsinline preload="metadata" :aria-label="work.title" @loadedmetadata="measureCover" />
       <div v-else class="media-placeholder"><Image :size="32" aria-hidden="true" /><span class="caption-5">{{ failed ? '封面加载失败' : '暂无封面' }}</span></div>
