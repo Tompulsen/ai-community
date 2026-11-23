@@ -6,7 +6,7 @@ export const modelApiFormatSchema = z.enum(['auto', 'chat-completions', 'respons
 export type ModelApiFormat = z.infer<typeof modelApiFormatSchema>
 export const modelApiFormats = {
   text: ['chat-completions', 'responses', 'gemini', 'claude'],
-  image: ['images', 'chat-completions'],
+  image: ['images', 'chat-completions', 'gemini'],
   video: ['openai'],
 } as const
 const automaticAspectRatio = z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/)

@@ -82,6 +82,37 @@ test('group selection refreshes its models, preserves drafts and survives reload
   }
 })
 
+test('image interface offers native Gemini and automatic follows the model configuration', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41,
+    items: [{ id: 'native-image', kinds: ['image'], configuredKind: 'image', apiFormat: 'gemini', protocol: 'sync',
+      image: { autoResolution: '2k', autoAspectRatio: '16:9' } }] } }))
+  await page.goto('/create/image')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('native-image')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  const settings = page.locator('.media-parameters')
+  await settings.locator('.parameter-advanced > summary').click()
+  const format = settings.getByRole('combobox', { name: '接口格式', exact: true })
+  await expect(format).toHaveValue('auto')
+  await expect(format.locator('option[value="gemini"]')).toHaveText('Gemini 原生')
+  await expect(settings.getByRole('combobox', { name: '输出格式', exact: true })).toHaveCount(0)
+  await format.selectOption('images')
+  await expect(settings.getByRole('combobox', { name: '输出格式', exact: true })).toBeVisible()
+  await format.selectOption('gemini')
+  await expect(settings.getByRole('combobox', { name: '输出格式', exact: true })).toHaveCount(0)
+  await format.selectOption('auto')
+  await page.reload()
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await settings.locator('.parameter-advanced > summary').click()
+  await expect(format).toHaveValue('auto')
+  await expect(settings.getByRole('combobox', { name: '输出格式', exact: true })).toHaveCount(0)
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: `test-results/gemini-image-${width}.png`, fullPage: true })
+  }
+})
+
 test('a cold group blocks generation and fails visibly without changing the shared account selection', async ({ page }) => {
   const fixtureState = await fixture(page)
   await page.goto('/create/image')

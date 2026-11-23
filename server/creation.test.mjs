@@ -575,6 +575,40 @@ test('configured image interfaces select the matching stream parser and history 
   }
 })
 
+test('native Gemini automatic image requests prepare private history and recover without another paid submission', async t => {
+  for (const stream of [false, true]) {
+    const modelTypes = [{ id: 'native-image', kind: 'image', apiFormat: 'gemini',
+      image: { autoResolution: '2k', autoAspectRatio: '16:9' } }]
+    const reads = []
+    const { app, calls } = fixture(t, { modelTypes,
+      publicMedia(url) { reads.push(url); return new Response('reference', { headers: { 'content-type': 'image/png' } }) },
+      fetch(url) {
+        assert.equal(new URL(url).search, stream ? '?alt=sse' : '')
+        const data = { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } }] }, finishReason: 'STOP' }] }
+        return stream ? new Response(`data: ${JSON.stringify(data)}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } }) : Response.json(data)
+      },
+    })
+    const input = { ...imageRequest, model: 'native-image', apiFormat: 'auto', protocol: 'auto', imageOptions: { imageStream: stream },
+      imageContext: { turns: [{ prompt: 'Previous', images: ['https://media.example/history.png'] }] } }
+    const response = await submit(app, input)
+    assert.equal(response.statusCode, 200)
+    const result = (await app.inject('/api/creation/requests/request-1')).json()
+    assert.equal(result.status, 'succeeded')
+    assert.equal(result.apiFormat, 'gemini')
+    assert.equal(result.protocol, 'sync')
+    assert.equal(result.outputs[0].url, 'data:image/png;base64,aW1hZ2U=')
+    assert.equal(reads.length, 1)
+    assert.equal(calls[0].path, `/v1beta/models/native-image:${stream ? 'streamGenerateContent' : 'generateContent'}`)
+    const body = JSON.parse(calls[0].init.body)
+    assert.deepEqual(body.generationConfig.imageConfig, { imageSize: '2K', aspectRatio: '16:9' })
+    assert(!JSON.stringify(body).includes('https://media.example'))
+    modelTypes[0].apiFormat = 'images'
+    await submit(app, input)
+    assert.equal((await app.inject('/api/creation/requests/request-1')).json().apiFormat, 'gemini')
+    assert.equal(calls.length, 1)
+  }
+})
+
 test('automatic text interfaces use the resolved response stream format', async t => {
   const { app, calls } = fixture(t, {
     modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses' }],

@@ -90,6 +90,65 @@ test('automatic text interface and reasoning use model settings without replacin
   assert.throws(() => validateCreationInput({ ...make('auto'), apiFormat: 'images' }), { statusCode: 400 })
 })
 
+test('Gemini native images follow model defaults, preserve explicit formats and send safe image history', () => {
+  const setting = modelTypesSchema.parse([{ id: 'native-image', kind: 'image', apiFormat: 'gemini',
+    image: { autoResolution: '2k', autoAspectRatio: '16:9' } }])[0]
+  const image = 'data:image/png;base64,aW1hZ2U='
+  const input = validateCreationInput({ kind: 'image', model: setting.id, prompt: 'Blue background',
+    apiFormat: 'auto', protocol: 'auto', imageOptions: {}, referenceUrls: [image],
+    imageContext: { turns: [{ prompt: 'A cat', images: [image], references: [image] }] } })
+  const original = structuredClone(input)
+  const resolved = resolveCreationModelSettings(input, setting)
+  const payload = buildCreationPayload(resolved), body = JSON.parse(payload.body)
+  assert.equal(payload.path, 'v1beta/models/native-image:generateContent')
+  assert.deepEqual(body.generationConfig, { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '16:9', imageSize: '2K' } })
+  assert.equal(body.contents.length, 1)
+  assert.equal(body.contents[0].role, 'user')
+  assert.match(body.contents[0].parts[0].text, /A cat[\s\S]*Blue background/)
+  assert.deepEqual(body.contents[0].parts[1], { inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } })
+  assert.equal(body.contents[0].parts.length, 2)
+  assert.deepEqual(input, original)
+  assert.equal(buildCreationPayload({ ...resolved, imageOptions: { ...resolved.imageOptions, imageStream: true } }).path,
+    'v1beta/models/native-image:streamGenerateContent?alt=sse')
+  const manual = resolveCreationModelSettings(validateCreationInput({ ...original, apiFormat: 'images' }), setting)
+  assert.equal(buildCreationPayload(manual).path, 'v1/images/edits')
+  const explicit = resolveCreationModelSettings(validateCreationInput({ ...original, aspect_ratio: '9:16', imageOptions: { resolution: '4k' } }), setting)
+  assert.deepEqual(JSON.parse(buildCreationPayload(explicit).body).generationConfig.imageConfig, { aspectRatio: '9:16', imageSize: '4K' })
+  assert.equal(buildCreationPayload({ kind: 'image', model: 'gemini-3-pro-image', prompt: 'old request' }).path, 'v1/chat/completions')
+  assert.equal(modelTypesSchema.safeParse([{ ...setting, protocol: 'async' }]).success, false)
+  for (const patch of [{ n: 2 }, { protocol: 'async' }, { model: '../escape' }, { referenceUrls: ['https://private.example/image'] }])
+    assert.throws(() => buildCreationPayload({ ...resolved, ...patch }), { statusCode: 400 })
+})
+
+test('Gemini image results ignore thought images and report safety blocks and unsupported results', () => {
+  const part = { inlineData: { mimeType: 'image/webp', data: 'aW1hZ2U=' } }
+  const response = { candidates: [{ content: { parts: [{ ...part, thought: true }, { text: 'Image' }, part] }, finishReason: 'STOP' }] }
+  assert.deepEqual(normalizeCreationTask('image', response), { status: 'succeeded', outputs: [{ url: 'data:image/webp;base64,aW1hZ2U=' }] })
+  assert.equal(normalizeCreationTask('image', { promptFeedback: { blockReason: 'SAFETY' } }).status, 'failed')
+  assert.equal(normalizeCreationTask('image', { candidates: [{ ...response.candidates[0], finishReason: 'IMAGE_SAFETY' }] }).status, 'failed')
+  assert.equal(normalizeCreationTask('image', { candidates: [{ content: { parts: [{ ...part, thought: true }] }, finishReason: 'STOP' }] }).status, 'indeterminate')
+  assert.equal(normalizeCreationTask('image', { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'text/html', data: 'aW1hZ2U=' } }] } }] }).status, 'indeterminate')
+})
+
+test('Gemini image streams handle fragmented native parts and require a terminal candidate', async () => {
+  const input = { kind: 'image', model: 'native-image', prompt: 'Image', apiFormat: 'gemini' }
+  const thought = { inlineData: { mimeType: 'image/png', data: 'dGhvdWdodA==' }, thought: true }
+  const image = { inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } }
+  const event = (parts, finishReason) => `data: ${JSON.stringify({ candidates: [{ content: { parts }, ...(finishReason ? { finishReason } : {}) }] })}\r\n\r\n`
+  const wire = new TextEncoder().encode(event([thought]) + event([image]) + event([], 'STOP'))
+  const response = new Response(new ReadableStream({ start(controller) {
+    for (let index = 0; index < wire.length; index += 7) controller.enqueue(wire.slice(index, index + 7))
+    controller.close()
+  } }))
+  const previews = [], result = await readGenerationStream(response, input, event => previews.push(event.url))
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.outputs, [{ url: 'data:image/png;base64,aW1hZ2U=' }])
+  assert.deepEqual(previews, ['data:image/png;base64,aW1hZ2U='])
+  await assert.rejects(readGenerationStream(new Response(event([image]) + 'data: [DONE]\n\n'), input, () => {}), /中断/)
+  const blocked = await readGenerationStream(new Response(event([], 'IMAGE_SAFETY')), input, () => {})
+  assert.equal(blocked.status, 'failed')
+})
+
 test('automatic video configuration selects parameter families without changing the task interface', () => {
   for (const parameterFormat of ['openai', 'xai', 'seedance', 'gemini']) {
     const setting = { id: 'custom-video', kind: 'video', apiFormat: 'openai', protocol: 'async',

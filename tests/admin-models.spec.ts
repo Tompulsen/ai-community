@@ -387,6 +387,26 @@ test('changing model kinds clears incompatible options while image chat preserve
   await expect.poll(() => fixture.state.items).toEqual([{ id: 'custom/image', kind: 'image', remark: '保留备注' }])
 })
 
+test('native Gemini image format saves with editable automatic resolution and aspect ratio', async ({ page }) => {
+  const fixture = await modelsFixture(page)
+  fixture.state.catalog.push({ id: 'native-image', kinds: ['image'], groups: ['生图'] })
+  await page.goto('/admin?tab=models')
+  await configure(page, 'native-image').click()
+  await combo(page, '接口格式').selectOption('gemini')
+  await expect(combo(page, '任务协议').locator('option[value="async"]')).toBeDisabled()
+  await expect(combo(page, '自动画质')).toBeDisabled()
+  await expect(combo(page, '自动背景')).toBeDisabled()
+  await combo(page, '自动分辨率').selectOption('2k')
+  await page.getByLabel('自动画面比例', { exact: true }).fill('16:9')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'native-image')).toEqual({ id: 'native-image', kind: 'image', apiFormat: 'gemini',
+    image: { autoResolution: '2k', autoAspectRatio: '16:9' } })
+  await page.reload()
+  await configure(page, 'native-image').click()
+  await expect(combo(page, '接口格式')).toHaveValue('gemini')
+  await expect(combo(page, '自动分辨率')).toHaveValue('2k')
+})
+
 for (const role of ['moderator', 'ordinary']) test(`${role} accounts cannot see model management or issue its privileged reads`, async ({ page }) => {
   const fixture = await modelsFixture(page)
   fixture.account.state.user.isAdmin = false

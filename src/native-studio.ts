@@ -1192,7 +1192,7 @@ async function preparePublication(task: CreationTask, title: string, destination
     ...(publication.details ? { sourceUrl: publication.details.sourceUrl, license: publication.details.license } : {}),
     model: task.model, generation: { prompt: publication.details?.prompt ?? task.prompt, model: task.model, sourceWorkId: task.sourceWorkId, referenceFileIds: destination === 'community' ? task.publicationReferences || [] : [],
       parameters: task.legacy ? undefined : readRemixParameters({ version: 1, kind: task.kind, group: task.group,
-        ...(task.kind === 'image' && usesGeminiImageChat(task.model, task.apiFormat ?? (task.request.apiFormat === 'auto' ? undefined : task.request.apiFormat)) ? { protocol: task.request.protocol, apiFormat: task.request.apiFormat, n: task.request.n } : task.request) }) },
+        ...(task.kind === 'image' && (task.apiFormat ?? task.request.apiFormat) !== 'gemini' && usesGeminiImageChat(task.model, task.apiFormat ?? (task.request.apiFormat === 'auto' ? undefined : task.request.apiFormat)) ? { protocol: task.request.protocol, apiFormat: task.request.apiFormat, n: task.request.n } : task.request) }) },
     fileIds: files, ...(publication.details ? { tagIds: publication.details.tagIds } : { tags: [] }), status: 'pending', destination,
     requestId: task.id, idempotencyKey: task.id, resultId: task.id,
   } })

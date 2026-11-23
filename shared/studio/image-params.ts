@@ -2,7 +2,7 @@ import type { DalleQuality } from "./types.ts";
 import type { ModelConfig } from "./types.ts";
 export function usesGeminiImageChat(model: string, apiFormat?: string) {
   if (apiFormat === "images") return false;
-  if (apiFormat === "chat-completions") return true;
+  if (apiFormat === "chat-completions" || apiFormat === "gemini") return true;
   return /^gemini-(?:.*-)?(?:image|nano-banana)(?:-|$)/.test(model.toLowerCase().split("/").pop() ?? "");
 }
 

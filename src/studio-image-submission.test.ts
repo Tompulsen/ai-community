@@ -156,6 +156,28 @@ it('rejects malformed inline publication media without falling back to fetch', a
   expect(uploadFile).not.toHaveBeenCalled()
   expect(api).not.toHaveBeenCalled()
 })
+it.each(['auto', 'gemini'] as const)('preserves native Gemini image parameters on publication when selected as %s', async apiFormat => {
+  const p = await fixture(), { api, uploadFile } = await import('./state')
+  const source = `data:image/png;base64,${btoa('image')}`
+  p.input.model = 'native-image'
+  p.input.apiFormat = apiFormat
+  p.input.aspect_ratio = '16:9'
+  p.input.imageOptions = { resolution: '2k' } as any
+  p.input.references = []
+  p.send.mockResolvedValueOnce(Response.json({ status: 'succeeded', apiFormat: 'gemini', protocol: 'sync', outputs: [{ url: source }] }))
+  const task = await p.submitCreation(p.input)
+  vi.mocked(uploadFile).mockResolvedValue({ id: 'native-file' } as any)
+  vi.mocked(api).mockResolvedValue({ work: { id: 'native-work' } })
+  await p.publishCreation(task, 'Native image', 'community', undefined, undefined, {
+    tagIds: ['image-tag'], prompt: task.prompt, sourceUrl: '', license: '', referenceIndices: [],
+  })
+  expect(api).toHaveBeenCalledWith('/api/works', expect.objectContaining({ body: expect.objectContaining({
+    generation: expect.objectContaining({ parameters: expect.objectContaining({
+      apiFormat, aspect_ratio: '16:9', imageOptions: expect.objectContaining({ resolution: '2k' }),
+    }) }),
+  }) }))
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
 it('keeps a registration failure unsubmitted and excluded from automatic conversation synchronization', async () => {
   const p = await fixture()
   await expect(p.submitCreation(p.input, async () => { throw new Error('disk full') })).rejects.toThrow('disk full')

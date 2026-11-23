@@ -258,6 +258,8 @@ test('model interfaces, automatic parameters and private remarks round-trip thro
     { id: 'chat-model', name: '对话模型', tags: ['推理', '文本'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private chat routing note' },
     { id: 'image-model', kind: 'image', apiFormat: 'images', protocol: 'async',
       image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' }, remark: 'private image routing note' },
+    { id: 'native-image', kind: 'image', apiFormat: 'gemini', protocol: 'sync',
+      image: { autoResolution: '2k', autoAspectRatio: '16:9' } },
     { id: 'video-model', kind: 'video', apiFormat: 'openai', protocol: 'sync',
       video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai' }, remark: 'private video routing note' },
   ]

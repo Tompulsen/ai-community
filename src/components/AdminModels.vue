@@ -23,7 +23,7 @@ const owner = session.user?.id, account = session.user?.accountId || owner
 let active = true
 const controller = new AbortController()
 const current = () => active && session.user?.id === owner && session.user?.isAdmin
-const apiFormatNames: Record<ModelApiFormat, string> = { auto: '自动识别', 'chat-completions': 'Chat Completions', responses: 'Responses', gemini: 'Gemini', claude: 'Claude', images: 'Images', openai: 'OpenAI 视频' }
+const apiFormatNames: Record<ModelApiFormat, string> = { auto: '自动识别', 'chat-completions': 'Chat Completions', responses: 'Responses', gemini: 'Gemini 原生', claude: 'Claude', images: 'Images', openai: 'OpenAI 视频' }
 const imageResolutions = imageModelSettingSchema.shape.autoResolution.unwrap().options
 const imageQualities = imageModelSettingSchema.shape.autoQuality.unwrap().options
 const imageBackgrounds = imageModelSettingSchema.shape.autoBackground.unwrap().options
@@ -261,14 +261,14 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
               <div v-if="draft.kind === 'text' && draft.text" class="model-field-pair">
                 <label class="field"><span>自动推理强度</span><select :value="draft.text.autoReasoningEffort || 'auto'" class="control" @change="setOption(draft.text, 'autoReasoningEffort', $event)"><option v-for="effort in reasoningEfforts" :key="effort" :value="effort">{{ levelNames[effort] }}{{ effort === 'auto' ? '' : ' · ' + effort }}</option></select></label>
               </div>
-              <fieldset v-if="draft.kind === 'image' && draft.image" class="fieldset model-field-pair" :disabled="geminiImage">
+              <fieldset v-if="draft.kind === 'image' && draft.image" class="fieldset model-field-pair" :disabled="geminiImage && draft.apiFormat !== 'gemini'">
                 <legend class="sr-only">图片自动参数</legend>
                 <label class="field"><span>自动分辨率</span><select :value="draft.image.autoResolution || 'auto'" class="control" @change="setOption(draft.image, 'autoResolution', $event)"><option v-for="resolution in imageResolutions" :key="resolution" :value="resolution">{{ resolution === 'auto' ? '沿用上游' : resolution.toUpperCase() }}</option></select></label>
-                <label class="field"><span>自动画质</span><select :value="draft.image.autoQuality || 'auto'" class="control" @change="setOption(draft.image, 'autoQuality', $event)"><option v-for="quality in imageQualities" :key="quality" :value="quality">{{ levelNames[quality] }}{{ quality === 'auto' ? '' : ' · ' + quality }}</option></select></label>
+                <label class="field"><span>自动画质</span><select :value="draft.image.autoQuality || 'auto'" class="control" :disabled="draft.apiFormat === 'gemini'" @change="setOption(draft.image, 'autoQuality', $event)"><option v-for="quality in imageQualities" :key="quality" :value="quality">{{ levelNames[quality] }}{{ quality === 'auto' ? '' : ' · ' + quality }}</option></select></label>
                 <label class="field"><span>自动画面比例</span><input v-model="draft.image.autoAspectRatio" class="control" maxlength="7" placeholder="auto 或 16:9" /></label>
-                <label class="field"><span>自动背景</span><select :value="draft.image.autoBackground || 'auto'" class="control" @change="setOption(draft.image, 'autoBackground', $event)"><option v-for="background in imageBackgrounds" :key="background" :value="background">{{ backgroundNames[background] }}</option></select></label>
+                <label class="field"><span>自动背景</span><select :value="draft.image.autoBackground || 'auto'" class="control" :disabled="draft.apiFormat === 'gemini'" @change="setOption(draft.image, 'autoBackground', $event)"><option v-for="background in imageBackgrounds" :key="background" :value="background">{{ backgroundNames[background] }}</option></select></label>
               </fieldset>
-              <p v-if="geminiImage" class="form-note">图片对话接口的尺寸、画质和背景由上游决定。</p>
+              <p v-if="geminiImage && draft.apiFormat !== 'gemini'" class="form-note">图片对话接口的尺寸、画质和背景由上游决定。</p>
               <template v-if="draft.kind === 'video' && draft.video">
                 <div class="model-field-pair">
                   <label class="field"><span>自动分辨率</span><input v-model="draft.video.autoResolution" class="control" maxlength="16" placeholder="auto 或 720p" /></label>

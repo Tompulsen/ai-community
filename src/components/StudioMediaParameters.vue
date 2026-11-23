@@ -50,7 +50,7 @@ function revealInvalid(event: Event) {
     </section>
     <template v-if="kind === 'image'">
       <section class="parameter-section" aria-label="图片分辨率"><h3>分辨率</h3><StudioChoiceGroup v-model="image.resolution" label="分辨率" :options="options(IMAGE_RESOLUTIONS)" /></section>
-      <section class="parameter-section" aria-label="图片画质"><h3>画质</h3><StudioChoiceGroup v-model="image.quality" label="画质" :columns="3" :options="IMAGE_QUALITIES.map(value => ({ value, label: qualityLabel[value] || value }))" /></section>
+      <section v-if="effectiveApiFormat !== 'gemini'" class="parameter-section" aria-label="图片画质"><h3>画质</h3><StudioChoiceGroup v-model="image.quality" label="画质" :columns="3" :options="IMAGE_QUALITIES.map(value => ({ value, label: qualityLabel[value] || value }))" /></section>
       <label class="parameter-inline"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" :max="geminiImage ? 1 : 10" :readonly="geminiImage" step="1" required aria-label="图片数量" /></label>
     </template>
     <template v-else>

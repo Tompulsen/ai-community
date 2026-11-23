@@ -13,6 +13,7 @@ const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string; mod
 const capabilities = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
 const resolutions = computed(() => (capabilities.value?.resolutions.length ? capabilities.value.resolutions : VIDEO_RESOLUTIONS).filter(value => value !== 'auto'))
 const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model, apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value))
+const nativeImage = computed(() => props.kind === 'image' && (apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value) === 'gemini')
 const modes = { 'text-to-video': '文生视频', 'image-to-video': '图生视频', 'first-last-frame': '首尾帧', 'reference-to-video': '多图参考' }
 function compression(event: Event) {
   const input = event.target as HTMLInputElement, value = input.valueAsNumber
@@ -24,20 +25,20 @@ function compression(event: Event) {
   <details class="advanced-options" :class="{ embedded }" :open="embedded">
     <summary v-show="!embedded">高级参数</summary>
     <div class="advanced-fields">
-      <label v-if="kind === 'image'" class="field"><span>接口格式</span><select v-model="apiFormat" class="control"><option value="auto">自动</option><option value="images">Images</option><option value="chat-completions">Chat Completions</option></select></label>
+      <label v-if="kind === 'image'" class="field"><span>接口格式</span><select v-model="apiFormat" class="control"><option value="auto">自动</option><option value="images">Images</option><option value="chat-completions">Chat Completions</option><option value="gemini">Gemini 原生</option></select></label>
       <label class="field"><span>请求方式</span><select v-model="protocol" class="control" @change="image.imageStream = false"><option value="auto">自动</option><option v-if="protocol === 'sync'" value="sync">同步</option><option value="openai">同步</option><option value="async" :disabled="geminiImage">异步任务</option></select></label>
       <template v-if="kind === 'image'">
         <label v-if="!hidePrimary" class="field"><span>分辨率</span><select v-model="image.resolution" class="control"><option v-for="value in IMAGE_RESOLUTIONS" :key="value" :value="value">{{ value === 'auto' ? '自动' : value.toUpperCase() }}</option></select></label>
-        <label v-if="!hidePrimary" class="field"><span>画质</span><select v-model="image.quality" class="control"><option v-for="value in IMAGE_QUALITIES" :key="value" :value="value">{{ value }}</option></select></label>
-        <label class="field"><span>风格</span><select v-model="image.style" class="control"><option :value="undefined">默认</option><option value="natural">自然</option><option value="vivid">生动</option></select></label>
+        <label v-if="!hidePrimary && !nativeImage" class="field"><span>画质</span><select v-model="image.quality" class="control"><option v-for="value in IMAGE_QUALITIES" :key="value" :value="value">{{ value }}</option></select></label>
+        <label v-if="!nativeImage" class="field"><span>风格</span><select v-model="image.style" class="control"><option :value="undefined">默认</option><option value="natural">自然</option><option value="vivid">生动</option></select></label>
         <label v-if="!geminiImage" class="field"><span>随机种子</span><input v-model="image.seed" class="control" inputmode="numeric" pattern="[0-9]*" placeholder="随机（模型需支持 seed）" /></label>
-        <label class="field"><span>输出格式</span><select v-model="image.imageOutputFormat" class="control"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
-        <label class="field"><span>背景</span><select v-model="image.imageBackground" class="control"><option value="auto">自动</option><option value="opaque">不透明</option><option value="transparent">透明</option></select></label>
-        <div v-if="image.imageOutputFormat !== 'png'" class="field compression-field"><span>压缩质量</span><div class="compression-control"><input :value="image.imageOutputCompression" aria-label="压缩质量" type="range" min="0" max="100" step="1" @input="compression" /><label class="compression-number"><input :value="image.imageOutputCompression" aria-label="压缩质量数值" class="control" type="number" min="0" max="100" step="1" @change="compression" /><span aria-hidden="true">%</span></label></div></div>
-        <label class="field"><span>返回方式</span><select v-model="image.imageResponseFormat" class="control"><option value="url">图片链接</option><option value="b64_json">Base64</option></select></label>
+        <label v-if="!nativeImage" class="field"><span>输出格式</span><select v-model="image.imageOutputFormat" class="control"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
+        <label v-if="!nativeImage" class="field"><span>背景</span><select v-model="image.imageBackground" class="control"><option value="auto">自动</option><option value="opaque">不透明</option><option value="transparent">透明</option></select></label>
+        <div v-if="!nativeImage && image.imageOutputFormat !== 'png'" class="field compression-field"><span>压缩质量</span><div class="compression-control"><input :value="image.imageOutputCompression" aria-label="压缩质量" type="range" min="0" max="100" step="1" @input="compression" /><label class="compression-number"><input :value="image.imageOutputCompression" aria-label="压缩质量数值" class="control" type="number" min="0" max="100" step="1" @change="compression" /><span aria-hidden="true">%</span></label></div></div>
+        <label v-if="!nativeImage" class="field"><span>返回方式</span><select v-model="image.imageResponseFormat" class="control"><option value="url">图片链接</option><option value="b64_json">Base64</option></select></label>
         <label class="check-field"><input v-model="image.imageStream" type="checkbox" :disabled="protocol === 'async'" />流式预览</label>
-        <label v-if="image.imageStream" class="field"><span>中间预览次数</span><input v-model.number="image.imagePartialImages" class="control" type="number" min="0" max="3" /></label>
-        <p v-if="image.imageBackground === 'transparent' && image.imageOutputFormat === 'jpeg'" class="muted">透明背景将输出为 PNG。</p>
+        <label v-if="image.imageStream && !nativeImage" class="field"><span>中间预览次数</span><input v-model.number="image.imagePartialImages" class="control" type="number" min="0" max="3" /></label>
+        <p v-if="!nativeImage && image.imageBackground === 'transparent' && image.imageOutputFormat === 'jpeg'" class="muted">透明背景将输出为 PNG。</p>
       </template>
       <template v-if="kind === 'video'">
         <label v-if="!hidePrimary" class="field"><span>生成方式</span><select v-model="video.mode" class="control"><option v-for="(label, value) in modes" :key="value" :value="value">{{ label }}</option></select></label>

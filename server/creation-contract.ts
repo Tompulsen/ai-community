@@ -309,6 +309,24 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
     if (usesGeminiImageChat(input.model, input.apiFormat)) {
       if (input.protocol === 'async') invalid('此 Gemini 图片模型使用对话接口，不支持异步图片协议。')
       if ((input.n ?? 1) !== 1) invalid('此 Gemini 图片接口每次只能提交一张，不能隐式重复付费请求。')
+      if (input.apiFormat === 'gemini') {
+        if (!/^[A-Za-z0-9._-]+$/.test(input.model)) invalid('Gemini 原生接口需要不含路径分隔符的模型名称。')
+        const prompt = imageConversationPrompt(input.prompt, input.imageContext)
+        if (Array.from(prompt).length > 32000) invalid('生图提示词和历史合计不能超过 32,000 个字符，请清除上下文后继续。')
+        // shortcut: history lacks native thought signatures; send prior images as user references until signed turns are stored.
+        const images = [...new Set([...(input.imageContext?.turns.flatMap(turn => [...(turn.references ?? []), ...turn.images]) ?? []), ...references])]
+        if (images.some(url => !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+$/.test(url))) invalid('请先通过安全媒体接口载入参考图。')
+        const built = buildChatRequest('gemini', [{ role: 'user', content: [
+          { type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url' as const, image_url: { url } })),
+        ] }], { model: input.model, stream: input.imageOptions?.imageStream === true })
+        const imageConfig = {
+          ...(input.aspect_ratio && input.aspect_ratio !== 'auto' ? { aspectRatio: input.aspect_ratio } : {}),
+          ...(input.imageOptions?.resolution && input.imageOptions.resolution !== 'auto' ? { imageSize: input.imageOptions.resolution.toUpperCase() } : {}),
+        }
+        return json(built.endpoint, { ...built.body, generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'], ...(Object.keys(imageConfig).length ? { imageConfig } : {}),
+        } })
+      }
       const content = references.length ? [{ type: 'text', text: input.prompt },
         ...references.map(url => ({ type: 'image_url', image_url: { url } }))] : input.prompt
       const history = (input.imageContext?.turns ?? []).flatMap(turn => [
@@ -503,6 +521,22 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     result.status = 'failed'
     result.error = error || '生成失败。'
     return result
+  }
+  if (kind === 'image' && (Array.isArray(data.candidates) || record(data.promptFeedback))) {
+    const blocked = record(data.promptFeedback) ? data.promptFeedback.blockReason : undefined
+    const candidates = Array.isArray(data.candidates) ? data.candidates.filter(record) : []
+    const stopped = candidates.find(candidate => candidate.finishReason && candidate.finishReason !== 'STOP')
+    if (blocked || stopped) return { status: 'failed', outputs: [], error: `Gemini 未生成图片：${String(blocked || stopped?.finishReason)}` }
+    const parts = candidates.flatMap(candidate => record(candidate.content) && Array.isArray(candidate.content.parts) ? candidate.content.parts : [])
+    const images = parts.filter(record).filter(part => !part.thought).flatMap(part => {
+      const inline = record(part.inlineData) ? part.inlineData : record(part.inline_data) ? part.inline_data : undefined
+      if (!inline || typeof inline.data !== 'string') return []
+      const url = imageUrl(`data:${inline.mimeType ?? inline.mime_type};base64,${inline.data}`)
+      return url ? [{ url }] : []
+    })
+    if (images.length > 10) return { status: 'indeterminate', outputs: [], error: 'Gemini 返回图片数量超过安全上限，请核对原任务。' }
+    return images.length ? { status: 'succeeded', outputs: images }
+      : { status: 'indeterminate', outputs: [], error: 'Gemini 未返回可读取的图片，请核对原任务。' }
   }
   if (kind === 'video' && protocol === 'gemini') {
     if (data.done !== true) return result
