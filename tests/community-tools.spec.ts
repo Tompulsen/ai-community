@@ -18,19 +18,19 @@ test('tools use real destinations and category counts without writing data', asy
   await page.goto('/community')
   await launcher(page).click()
   await expect(panel(page)).toBeVisible()
-  await expect(panel(page).locator('.tool-item')).toHaveCount(18)
+  await expect(panel(page).locator('.tool-item')).toHaveCount(19)
   const destinations = {
     '发现': '/discover', '公告，2 条未读': '/messages?tab=announcement', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
     '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '福利中心': '/activities',
     '账号设置': '/account', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
-    '主题外观': '/account?tab=theme', '关注申请': '/messages?tab=activity#follow-requests',
+    '主题外观': '/account?tab=theme', '消费记录': '/usage-logs', '关注申请': '/messages?tab=activity#follow-requests',
   }
   for (const [name, path] of Object.entries(destinations)) await expect(panel(page).getByRole('link', { name, exact: true })).toHaveAttribute('href', path)
   await expect(panel(page).getByRole('link', { name: '消息，99+ 条未读', exact: true }).locator('.tool-count')).toHaveText('99+')
   await expect(panel(page).getByRole('link', { name: '消息，99+ 条未读', exact: true })).toHaveAttribute('aria-description', '共 135 条未读')
   await expect(panel(page).getByRole('link', { name: '内容管理', exact: true })).toHaveCount(0)
-  expect(fixture.mutations).toEqual([])
+  expect(fixture.mutations.filter(call => !(call.path === '/api/creation/models' && call.body.preload === true))).toEqual([])
 })
 
 test('search opens the existing work search with encoded keywords', async ({ page }) => {

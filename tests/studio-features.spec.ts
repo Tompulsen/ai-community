@@ -787,7 +787,7 @@ for (const display of [
   await page.goto('/create/image')
   await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '消费记录', exact: true }).click()
-  await expect(page.getByRole('cell', { name: display.log, exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '− ' + display.log, exact: true })).toBeVisible()
   await page.getByRole('button', { name: /^创作台菜单/ }).click()
   await page.getByRole('button', { name: '密钥', exact: true }).click()
   await page.getByRole('button', { name: '创建密钥', exact: true }).click()

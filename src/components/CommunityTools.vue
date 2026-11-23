@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
+import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, Receipt, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
 import { inbox, loadInbox, type InboxCategory } from '../inbox'
 import { lotteryCount, lotteryDescription, lotteryLabel, refreshLotteryBalance } from '../lottery-balance'
 import { session } from '../state'
@@ -32,6 +32,7 @@ const tools = computed<Tool[]>(() => [
   { label: '账户余额', icon: Wallet, to: '/account?tab=balance', member: true },
   { label: '主题外观', icon: Palette, to: '/account?tab=theme', member: true },
   { label: '关注申请', icon: UserPlus, to: '/messages?tab=activity#follow-requests', member: true, category: 'activity' },
+  { label: '消费记录', icon: Receipt, to: '/usage-logs', member: true },
   { label: '刷新', icon: RefreshCw, action: 'refresh' },
 ])
 function destination(tool: Tool) {

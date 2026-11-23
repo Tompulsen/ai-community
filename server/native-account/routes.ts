@@ -1,5 +1,6 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
 import { readModelPricing } from "./model-pricing.ts";
+import { readUsage } from "./usage.ts";
 import { readWallet, quoteWallet, createWalletPayment, redeemWallet } from "./wallet.ts";
 import { communityQuotaPerPoint, readCommunityWallet, readCommunityWalletLots } from "./community-wallet.ts";
 import { assertNormalRequest } from "./transport.ts";
@@ -818,30 +819,7 @@ export async function handle(
     }
 
     if (req.method === "GET" && route === "logs") {
-      const { page, size, query } = pagination(req);
-      const end = Math.floor(Date.now() / 1000);
-      const { data } = await accountRequest(
-        req,
-        `/api/log/self?${query}&type=2&start_timestamp=${
-          end - 7 * 86400
-        }&end_timestamp=${end}`,
-      );
-      return ok({
-        items: (data?.items || []).map((log: any) => ({
-          id: log.id,
-          created_at: log.created_at,
-          model_name: log.model_name,
-          token_name: log.token_name,
-          prompt_tokens: log.prompt_tokens,
-          completion_tokens: log.completion_tokens,
-          quota: log.quota,
-          type: log.type,
-          content: log.content,
-        })),
-        total: Number(data?.total || 0),
-        page,
-        size,
-      });
+      return ok(await readUsage(req));
     }
     throw new NewApiError("接口不存在", 404);
   } catch (error) {

@@ -42,6 +42,56 @@ function request(path, options = {}) {
 
 const envelope = (data, headers) => Response.json({ success: true, data }, { headers })
 
+test('usage records preserve whole-range statistics, literal models, refunds and account isolation', async t => {
+  configure(t)
+  const fixture = await session(t)
+  const end = Math.floor(Date.now() / 1000) - 1, start = end - 86400
+  const name = 'vendor/模型_%&+test'
+  let payload = { items: [{ id: 0, created_at: end, model_name: name, token_name: 'private-name', prompt_tokens: 0, completion_tokens: 0, quota: 50, type: 6, secret: 'must-not-leak' }],
+    models: [{ model_name: name, consume_quota: 100, refund_quota: 150, consume_records: 21, refund_records: 1, prompt_tokens: 5000, completion_tokens: 6000 },
+      { model_name: 'older-model', consume_quota: 200, refund_quota: 0, consume_records: 7, refund_records: 0, prompt_tokens: 10, completion_tokens: 20 }] }
+  let upstreamSuccess = true
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const target = new URL(url); requests.push(target)
+    assert.equal(target.pathname, '/api/log/self/usage')
+    assert.equal(options.headers.get('Authorization'), 'Bearer private-access')
+    assert.equal(target.searchParams.get('start_timestamp'), String(start))
+    assert.equal(target.searchParams.get('end_timestamp'), String(end))
+    return Response.json({ success: upstreamSuccess, data: payload })
+  })
+  const path = `/api/new-api/logs?start=${start}&end=${end}&page=2&size=20&model=${encodeURIComponent(name)}`
+  const response = await handleAccountRequest(fixture.request(path, { headers: { 'x-new-api-user': '7' } }))
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('cache-control'), /private, no-store/)
+  const result = await response.json()
+  assert.equal(result.data.total, 22)
+  assert.deepEqual(result.data.summary, { consumeQuota: 100, refundQuota: 150, netQuota: -50, consumeRecords: 21, refundRecords: 1, promptTokens: 5000, completionTokens: 6000 })
+  assert.equal(result.data.models.length, 2)
+  assert.equal(requests[0].searchParams.get('model_name'), name)
+  assert.equal(requests[0].searchParams.get('p'), '2')
+  assert(!JSON.stringify(result).includes('must-not-leak'))
+  const all = await handleAccountRequest(fixture.request(`/api/new-api/logs?start=${start}&end=${end}`))
+  assert.equal((await all.json()).data.summary.netQuota, 150)
+  const count = requests.length
+  for (const suffix of ['&user_id=2', '&page=0', '&size=101', '&model=a&model=b', '&model=%00', '&end=0']) {
+    assert.equal((await handleAccountRequest(fixture.request(`/api/new-api/logs?start=${start}&end=${end}${suffix}`))).status, 400)
+  }
+  assert.equal((await handleAccountRequest(fixture.request(path, { headers: { 'x-new-api-user': '8' } }))).status, 409)
+  assert.equal((await handleAccountRequest(request(path))).status, 401)
+  assert.equal((await handleAccountRequest(fixture.request(path, { headers: { 'sec-fetch-site': 'cross-site' } }))).status, 403)
+  assert.equal(requests.length, count)
+  payload.models[0].consume_quota = Number.MAX_SAFE_INTEGER + 1
+  assert.equal((await handleAccountRequest(fixture.request(path))).status, 502)
+  payload = { items: [], models: [] }
+  const empty = await handleAccountRequest(fixture.request(path))
+  assert.equal((await empty.json()).data.total, 0)
+  for (const [success, status] of [[false, 400], [undefined, 502]]) {
+    upstreamSuccess = success
+    assert.equal((await handleAccountRequest(fixture.request(path))).status, status)
+  }
+})
+
 test('community point balances are authenticated, sanitized and fail closed on malformed upstream money', async t => {
   configure(t)
   const previous = process.env.COMMUNITY_WALLET_ENABLED
