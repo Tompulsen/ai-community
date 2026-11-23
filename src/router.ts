@@ -14,6 +14,7 @@ export const router = createRouter({
     { path: '/create/:kind?', component: () => import('./views/CreateView.vue'), meta: { title: '创作台' } },
     { path: '/library', component: () => import('./views/LibraryView.vue'), meta: { title: '我的作品' } },
     { path: '/usage-logs', component: () => import('./views/UsageView.vue'), meta: { title: '消费记录' } },
+    { path: '/skills', component: () => import('./views/SkillsView.vue'), meta: { title: '技能广场' } },
     { path: '/activities', component: () => import('./views/ActivityView.vue'), meta: { title: '福利中心' } },
     { path: '/community', component: () => import('./views/CommunityView.vue'), meta: { title: '社区' } },
     { path: '/account', component: () => import('./views/AccountView.vue'), meta: { title: '账号设置' } },

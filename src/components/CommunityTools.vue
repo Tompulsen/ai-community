@@ -6,6 +6,7 @@ import { inbox, loadInbox, type InboxCategory } from '../inbox'
 import { lotteryCount, lotteryDescription, lotteryLabel, refreshLotteryBalance } from '../lottery-balance'
 import { session } from '../state'
 import { site } from '../site'
+import { Puzzle } from '@lucide/vue'
 
 defineProps<{ compact?: boolean }>()
 const emit = defineEmits<{ message: [category: InboxCategory] }>()
@@ -33,6 +34,7 @@ const tools = computed<Tool[]>(() => [
   { label: '主题外观', icon: Palette, to: '/account?tab=theme', member: true },
   { label: '关注申请', icon: UserPlus, to: '/messages?tab=activity#follow-requests', member: true, category: 'activity' },
   { label: '消费记录', icon: Receipt, to: '/usage-logs', member: true },
+  { label: '技能广场', icon: Puzzle, to: '/skills' },
   { label: '刷新', icon: RefreshCw, action: 'refresh' },
 ])
 function destination(tool: Tool) {

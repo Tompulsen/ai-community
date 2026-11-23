@@ -18,7 +18,7 @@ test('tools use real destinations and category counts without writing data', asy
   await page.goto('/community')
   await launcher(page).click()
   await expect(panel(page)).toBeVisible()
-  await expect(panel(page).locator('.tool-item')).toHaveCount(19)
+  await expect(panel(page).locator('.tool-item')).toHaveCount(20)
   const destinations = {
     '发现': '/discover', '公告，2 条未读': '/messages?tab=announcement', '通知，7 条未读': '/messages?tab=activity',
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',

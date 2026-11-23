@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronDown, Play, Plug, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats as persistChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
+import { resolveCommunitySkill } from '../community-skill'
 const props = defineProps<{ chat: NativeChat; embedded?: boolean; transient?: boolean }>()
 function saveChats(required = false) { if (!props.transient) return persistChats(required) }
 const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(false), servers = ref<{ id: string; status: string }[]>([])
 const server = ref(''), tool = ref(''), tools = ref<{ name: string; description?: string; inputSchema?: unknown }[]>([]), args = ref('{}'), result = ref(''), busy = ref(false), config = ref('{"mcpServers":{}}')
 let revision = 0
+const unavailable = computed(() => props.chat.skillIds.filter(id => !chats.skills.some(skill => skill.id === id)))
+async function removeUnavailable() {
+  props.chat.skillIds = props.chat.skillIds.filter(id => !unavailable.value.includes(id))
+  try { await saveChats(true); error.value = '' } catch (cause) { error.value = errorMessage(cause) }
+}
 onUnmounted(() => revision++)
 async function load() {
   const current = ++revision, owner = session.user?.id
@@ -24,13 +30,19 @@ watch(() => session.user?.id, () => { result.value = ''; server.value = ''; tool
 async function toggle(skill: Skill, event: Event) {
   const input = event.target as HTMLInputElement
   const chat = props.chat, owner = session.user?.id
+  const selected = input.checked
+  input.disabled = true
   try {
-    await verifySkillDocument(skill.body, skill.sha256)
+    if (selected) {
+      const document = await resolveCommunitySkill(skill, owner)
+      await verifySkillDocument(document.body, document.sha256)
+    }
     if (owner !== session.user?.id) return
-    if (input.checked) chat.skillIds.push(skill.id)
+    if (selected) { if (!chat.skillIds.includes(skill.id)) chat.skillIds.push(skill.id) }
     else chat.skillIds = chat.skillIds.filter(id => id !== skill.id)
     await saveChats(true)
-  } catch (cause) { error.value = errorMessage(cause); input.checked = false }
+  } catch (cause) { if (owner === session.user?.id) { error.value = errorMessage(cause); input.checked = chat.skillIds.includes(skill.id) } }
+  finally { input.disabled = false }
 }
 async function listTools() {
   tools.value = []; tool.value = ''; error.value = ''
@@ -62,7 +74,9 @@ async function saveConfig() {
 <template>
   <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="chat.skillIds.length"> · {{ chat.skillIds.length }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
+    <p class="skill-empty muted"><RouterLink to="/skills">浏览技能广场 / 上传技能</RouterLink></p>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="!loading && unavailable.length" class="skill-empty muted">{{ unavailable.length }} 个已选技能已下架或不可用。<button class="button subtle btn" @click="removeUnavailable">移除失效技能</button></p>
     <div class="skill-list"><label v-for="skill in chats.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" :key="skill.id" class="skill-row"><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="chat.skillIds.includes(skill.id)" @change="toggle(skill, $event)" /></label><p v-if="!loading && !chats.skills.some(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase()))" class="muted skill-empty">{{ query ? '没有匹配的技能' : '暂无可用技能' }}</p></div>
     <details class="mcp-section"><summary><Plug :size="18" /><span>MCP 工具</span><ChevronDown :size="15" /></summary><p v-if="!enabled" class="muted">当前账号未启用 MCP 工具。</p>
     <div class="model-tools" v-show="enabled"><label v-for="item in servers" :key="item.id" class="skill-row"><input v-model="chat.settings.mcpServers" type="checkbox" :value="item.id" :disabled="item.status === 'paused'" @change="saveChats()" /><span>允许模型使用 {{ item.id }}</span></label></div>

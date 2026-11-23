@@ -20,6 +20,7 @@ import { handleAccount } from './account.ts'
 import { handleSocial } from './social.ts'
 import { handleFollowing } from './following.ts'
 import { handleAdmin } from './admin.ts'
+import { handleCommunitySkills } from './community-skills.ts'
 import { handleSecurity } from './security.ts'
 import { startMediaWorker } from './media.ts'
 import { handleAccountRequest } from './native-account/index.ts'
@@ -134,6 +135,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     for (const [methods, urls] of groups) for (const method of Array.isArray(methods) ? methods : [methods]) for (const url of urls) {
       app.route({
         method, url, preHandler: authenticateRequest,
+        ...(url.startsWith('/api/skills') || url.startsWith('/api/admin/skills') ? { bodyLimit: 8 * 1024 * 1024 } : {}),
         ...(url === '/api/works/feed' ? { bodyLimit: 24576 } : {}),
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
@@ -162,6 +164,11 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   register(handleStudioTools, [
     ['GET', ['/api/creation/skills/catalog', '/api/creation/mcp/status', '/api/creation/mcp/tools']],
     ['POST', ['/api/creation/search', '/api/creation/mcp/config', '/api/creation/mcp/call']],
+  ])
+  register(handleCommunitySkills, [
+    ['GET', ['/api/skills', '/api/skills/:id', '/api/skills/:id/download', '/api/admin/skills', '/api/admin/skills/:id', '/api/admin/skills/:id/download']],
+    ['POST', ['/api/skills', '/api/skills/inspect', '/api/admin/skills', '/api/admin/skills/inspect', '/api/admin/skills/:id/review']],
+    [['PATCH', 'DELETE'], ['/api/skills/:id', '/api/admin/skills/:id']],
   ])
   register(auth.handleAuth, [
     ['GET', ['/api/session', '/api/registration']],

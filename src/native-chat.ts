@@ -10,6 +10,7 @@ import { prepareVideoMessages } from '../shared/studio/video-input'
 import { fileContentParts, type ParsedFile } from '../shared/studio/file-upload'
 import { buildWebSearchContext } from '../shared/studio/web-search-context'
 import { verifySkillDocument } from '../shared/studio/catalog'
+import { resolveCommunitySkill } from './community-skill'
 import { chatOptionsSchema, type ChatOptions, type ImageOptions, type VideoOptions } from '../shared/studio/options'
 import type { ChatMessage, ChatSession, RequestMessage } from '../shared/studio/types'
 import type { ChatApiFormat } from '../shared/studio/chat-api-format'
@@ -486,12 +487,12 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     if (chat.topic === '新对话' && !chat.renamed) chat.topic = (text || files[0]?.name || '附件对话').slice(0, 40)
     const prefix: RequestMessage[] = system.trim() ? [{ role: 'system', content: system }] : []
     prefix.push({ role: 'system', content: messageInteractionPrompt(answer.id) })
-    if (skillIds.some(id => !chats.skills.some(skill => skill.id === id))) {
+    if (skillIds.some(id => id.startsWith('community-') || !chats.skills.some(skill => skill.id === id))) {
       const catalog = await api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: acceptedAccount })
       if (!current()) return accepted
       chats.skills = catalog.items || []
     }
-    const selectedSkills = chats.skills.filter(skill => skillIds.includes(skill.id))
+    const selectedSkills = await Promise.all(chats.skills.filter(skill => skillIds.includes(skill.id)).map(skill => resolveCommunitySkill(skill, acceptedAccount)))
     if (selectedSkills.length !== skillIds.length) throw new Error('部分技能尚未读取，请刷新技能列表后重试。')
     await Promise.all(selectedSkills.map(skill => verifySkillDocument(skill.body, skill.sha256)))
     if (!current()) return accepted
