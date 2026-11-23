@@ -38,6 +38,54 @@ async function fixture(page: Page, authenticated = true) {
 }
 const ids = (page: Page) => page.locator('.discover-grid [data-work-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-work-id')))
 
+test('only typing is debounced; changing a filter or pressing Enter requests once immediately', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/discover')
+  await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  const time = new Date('2026-11-23T00:00:00+08:00')
+  await page.clock.install({ time })
+  await page.clock.pauseAt(new Date(time.getTime() + 1000))
+  const search = page.getByRole('searchbox', { name: '搜索作品', exact: true })
+  const before = state.requests.length
+  await search.fill('海报')
+  await page.clock.runFor(179)
+  expect(state.requests).toHaveLength(before)
+  await page.getByRole('group', { name: '浏览方式', exact: true }).getByRole('button', { name: '最新', exact: true }).click()
+  await expect.poll(() => state.requests.at(-1)).toMatchObject({ sort: 'latest', query: '海报' })
+  await page.clock.runFor(400)
+  expect(state.requests).toHaveLength(before + 1)
+  await search.fill('风景')
+  await search.press('Enter')
+  await expect.poll(() => state.requests.at(-1)?.query).toBe('风景')
+  await page.clock.runFor(400)
+  expect(state.requests).toHaveLength(before + 2)
+})
+
+test('mobile search uses one debounce and Enter bypasses its remaining wait', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 })
+  const state = await fixture(page)
+  await page.goto('/discover')
+  await expect(page.locator('[data-work-id]')).toHaveCount(12)
+  await page.getByRole('button', { name: '展开搜索作品', exact: true }).click()
+  const time = new Date('2026-11-23T00:00:00+08:00')
+  await page.clock.install({ time })
+  await page.clock.pauseAt(new Date(time.getTime() + 1000))
+  const search = page.getByRole('searchbox', { name: '搜索作品', exact: true })
+  const before = state.requests.length
+  await search.fill('海报')
+  await page.clock.runFor(179)
+  expect(state.requests).toHaveLength(before)
+  await page.clock.runFor(1)
+  await expect.poll(() => state.requests.at(-1)?.query).toBe('海报')
+  await page.clock.runFor(400)
+  expect(state.requests).toHaveLength(before + 1)
+  await search.fill('风景')
+  await search.press('Enter')
+  await expect.poll(() => state.requests.at(-1)?.query).toBe('风景')
+  await page.clock.runFor(400)
+  expect(state.requests).toHaveLength(before + 2)
+})
+
 for (const width of [320, 390, 1440, 2560]) test(`scrolling loads every visible work once at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   await fixture(page)
@@ -167,6 +215,13 @@ for (const width of [320, 390, 1440]) test(`four browse modes, filtering and ref
 })
 
 test('reload replaces works while pagination freezes the original preference snapshot and deduplicates', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeObserver = window.IntersectionObserver
+    // Automatic pagination is covered separately; this case exercises the manual control.
+    window.IntersectionObserver = class extends NativeObserver {
+      override observe(target: Element) { if (!target.classList.contains('feed-end')) super.observe(target) }
+    }
+  })
   const state = await fixture(page)
   await page.goto('/discover'); await expect(page.locator('[data-work-id]')).toHaveCount(12)
   const original = await ids(page), first = state.requests.at(-1)

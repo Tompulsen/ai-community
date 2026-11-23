@@ -49,6 +49,18 @@ const remixReady = computed(() => !sourceLoading.value && !creation.groupsLoadin
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
 const currentConversation = computed(() => chats.sessions.find(item => item.id === chats.activeId))
+const initialSaveIssue = computed(() => currentConversation.value && chats.initialSaving[currentConversation.value.id] ? chats.error : '')
+const retryingSave = ref(false)
+async function retryInitialSave() {
+  const id = currentConversation.value?.id, owner = session.user?.id, issue = chats.error
+  if (!id || !owner || !chats.initialSaving[id] || retryingSave.value) return
+  retryingSave.value = true
+  try {
+    await saveChats(true)
+    if (owner === session.user?.id && id === chats.activeId && !chats.initialSaving[id] && chats.error === issue) chats.error = ''
+  } catch {}
+  finally { retryingSave.value = false }
+}
 const mobileModel = computed(() => (kind.value === 'text' ? chat.value?.model : workspace.value?.model) || '')
 const accountHeading = computed(() => ({ prices: '模型广场', logs: '消费记录', keys: '密钥' })[accountTool.value || 'prices'])
 async function openSettings() { sidebar.value?.close(); await nextTick(); accountMenu.value?.open() }
@@ -291,6 +303,7 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
     <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
+      <p v-if="initialSaveIssue && !accountTool" class="form-error" role="alert">{{ initialSaveIssue }} <button type="button" class="text-link" :disabled="retryingSave" @click="retryInitialSave">重试保存</button></p>
       <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
       <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="(files, prompt) => importRemix(files, prompt, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />

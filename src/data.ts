@@ -60,6 +60,8 @@ export interface Work {
   generation?: { prompt?: string; model?: string; sourceWorkId?: string; parameters?: RemixParameters } | null
 }
 
+export type WorkSummary = Omit<Work, 'prompt' | 'model' | 'sourceUrl' | 'license' | 'generation' | 'referenceFiles' | 'fileIds' | 'files'>
+
 export interface SessionUser {
   id: string
   accountId?: string

@@ -8,13 +8,30 @@ const props = defineProps<{ files: WorkFile[]; references?: WorkFile[]; title: s
 const selected = ref(0)
 const viewingReference = ref(false)
 const failed = ref(new Set<string>())
+const originalImages = ref(new Set<string>())
 const preview = ref<InstanceType<typeof StudioMediaPreview>>()
 const activeFiles = computed(() => viewingReference.value ? props.references || [] : props.files)
 const file = computed(() => activeFiles.value[selected.value])
+const imageSource = computed(() => {
+  const item = file.value
+  if (!item || originalImages.value.has(item.id) || item.processing && item.processing !== 'ready') return item?.url
+  try {
+    const url = new URL(item.url, location.href)
+    if (url.origin !== location.origin || !/^\/legacy-files\/[a-zA-Z0-9]{1,32}$/.test(url.pathname)) return item.url
+    url.searchParams.set('variant', 'webpublic')
+    return url.pathname + url.search + url.hash
+  } catch { return item.url }
+})
+function imageFailed() {
+  const item = file.value
+  if (!item) return
+  if (imageSource.value !== item.url) originalImages.value.add(item.id)
+  else failed.value.add(item.id)
+}
 function previewable(item: WorkFile) { return item.type.startsWith('image/') || item.type.startsWith('video/') }
 const previewFiles = computed(() => activeFiles.value.filter(previewable))
 const previewItems = computed(() => previewFiles.value.map(item => ({ src: item.url, kind: item.type.startsWith('video/') ? 'video' as const : 'image' as const, alt: item.name })))
-watch(() => props.files, () => { preview.value?.close(); selected.value = 0; viewingReference.value = false; failed.value.clear() })
+watch(() => props.files, () => { preview.value?.close(); selected.value = 0; viewingReference.value = false; failed.value.clear(); originalImages.value.clear() })
 async function choose(index: number, reference = false) {
   pause(); selected.value = index; viewingReference.value = reference
   if (props.mobile) { await nextTick(); await openPreview() }
@@ -45,7 +62,7 @@ defineExpose({ pause })
       <div v-if="!file" class="empty-state"><ImageOff :size="28" /><p>暂无可预览的作品文件</p></div>
       <div v-else-if="failed.has(file.id)" class="empty-state" role="alert"><ImageOff :size="28" /><p>文件预览加载失败</p><button class="button btn" @click="failed.delete(file.id)">重新加载</button><a :href="file.url" class="text-link" target="_blank" rel="noopener noreferrer">打开原文件</a></div>
       <video v-else-if="file.type.startsWith('video/')" :key="file.id" :src="file.url" controls playsinline preload="metadata" :aria-label="file.name" @error="failed.add(file.id)" />
-      <button v-else-if="file.type.startsWith('image/')" class="media-image-preview" type="button" :aria-label="`完整预览 ${file.name || title}`" @click="openPreview"><img :key="file.id" :src="file.url" :alt="file.name || title" @error="failed.add(file.id)" /></button>
+      <button v-else-if="file.type.startsWith('image/')" class="media-image-preview" type="button" :aria-label="`完整预览 ${file.name || title}`" @click="openPreview"><img :key="imageSource" :src="imageSource" :alt="file.name || title" decoding="async" @error="imageFailed" /></button>
       <a v-else :href="file.url" class="button btn" download><FileText :size="20" />{{ file.name }}<Download :size="16" /></a>
     </div>
     <div v-if="file && !mobile" class="media-controls"><div class="media-page-controls"><button class="icon-button" aria-label="上一个文件" title="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="18" /></button><span class="caption-5">{{ selected + 1 }} / {{ activeFiles.length }}{{ viewingReference ? ' · 参考图' : ' · 作品' }}</span><button class="icon-button" aria-label="下一个文件" title="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="18" /></button></div><span class="media-file-name" :title="file.name">{{ file.name }}</span><div class="media-tools"><a :href="file.url" download :aria-label="`下载 ${file.name}`" class="icon-button" title="下载文件"><Download :size="18" /></a><button v-if="file.type.startsWith('image/') || file.type.startsWith('video/')" class="icon-button" aria-label="放大预览" title="放大预览" @click="openPreview"><Maximize2 :size="18" /></button></div></div>

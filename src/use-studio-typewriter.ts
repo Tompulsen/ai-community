@@ -45,3 +45,17 @@ export function useStudioTypewriter(content: Ref<string>, streaming: Ref<boolean
   onBeforeUnmount(() => { cancel(); document.removeEventListener('visibilitychange', flush) })
   return { displayed: computed(() => instant.value ? content.value : displayed.value), active: computed(() => streaming.value || displayed.value !== content.value) }
 }
+
+export function useStreamingContent(content: Readonly<Ref<string>>, streaming: Readonly<Ref<boolean | undefined>>, delay: number) {
+  const displayed = ref(content.value)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  function flush() { clearTimeout(timer); timer = undefined; displayed.value = content.value }
+  watch([content, streaming], () => {
+    if (!streaming.value || document.hidden || !content.value.startsWith(displayed.value)) flush()
+    else if (displayed.value !== content.value && timer === undefined) timer = setTimeout(flush, delay)
+  }, { flush: 'sync' })
+  const hidden = () => { if (document.hidden) flush() }
+  onMounted(() => document.addEventListener('visibilitychange', hidden))
+  onBeforeUnmount(() => { clearTimeout(timer); document.removeEventListener('visibilitychange', hidden) })
+  return { displayed, flush }
+}

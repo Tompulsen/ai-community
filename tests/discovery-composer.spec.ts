@@ -22,6 +22,46 @@ async function fixture(page: Page, authenticated = true, delayed = false) {
   return { ...account, calls }
 }
 
+test('homepage loads text controls on first use, keeps the chosen model and retains each draft', async ({ page }) => {
+  const { calls } = await fixture(page)
+  const modules: string[] = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.searchParams.get('type') !== 'style') modules.push(url.pathname)
+  })
+  let release!: () => void
+  const loading = new Promise<void>(resolve => { release = resolve })
+  await page.route(/\/(?:src\/components\/StudioChat\.vue|assets\/StudioChat-[^/]+\.js)(?:\?.*)?$/, async route => {
+    await loading
+    await route.continue().catch(() => {})
+  })
+  try {
+    await page.goto('/discover')
+    const composer = page.getByRole('form', { name: '快捷创作', exact: true })
+    await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+    expect(modules.some(path => /\/StudioChat(?:\.vue|-[^/]+\.js)$/.test(path))).toBe(false)
+    await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('保留图片草稿')
+    await composer.getByRole('combobox', { name: '模型', exact: true }).click()
+    await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'claude-opus', exact: true }).click()
+    await expect(page.getByText('正在加载文本创作…', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '图片生成', exact: true }).click()
+    await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留图片草稿')
+    await page.getByRole('button', { name: '文本对话', exact: true }).click()
+    await expect(page.getByText('正在加载文本创作…', { exact: true })).toBeVisible()
+    release()
+    await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('claude-opus')
+    await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('保留文本草稿')
+    await page.getByRole('button', { name: '图片生成', exact: true }).click()
+    await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留图片草稿')
+    await page.getByRole('button', { name: '文本对话', exact: true }).click()
+    await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留文本草稿')
+    await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('claude-opus')
+    expect(modules.filter(path => /\/StudioChat(?:\.vue|-[^/]+\.js)$/.test(path))).toHaveLength(1)
+    expect(modules.some(path => /\/(?:math|syntax)[-~]|\/(?:katex|highlight)[^/]*\.js/.test(path))).toBe(false)
+    expect(calls).toHaveLength(0)
+  } finally { release() }
+})
+
 test('homepage reuses text controls and carries configuration and files into Studio once', async ({ page }) => {
   const { calls } = await fixture(page)
   const body = '使用简短中文回答。'
@@ -34,7 +74,7 @@ test('homepage reuses text controls and carries configuration and files into Stu
   const composer = page.getByRole('form', { name: '快捷创作', exact: true })
   await composer.getByRole('combobox', { name: '模型', exact: true }).click()
   await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'claude-opus', exact: true }).click()
-  await expect(page).toHaveURL('http://localhost:18775/discover')
+  await expect(page).toHaveURL('/discover')
   await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('claude-opus')
   await composer.getByRole('textbox', { name: '创作描述', exact: true }).fill('请整理这份材料')
   await composer.getByLabel('添加附件', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('首页附件内容') })
@@ -93,7 +133,7 @@ test('homepage switches between text and media models without leaving the page o
     await composer.getByRole('combobox', { name: '模型', exact: true }).click()
     await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: model, exact: true }).click()
     await expect(composer.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(model)
-    await expect(page).toHaveURL('http://localhost:18775/discover')
+    await expect(page).toHaveURL('/discover')
   }
   await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留首页文本草稿')
   await composer.getByRole('button', { name: '对话参数', exact: true }).click()
@@ -260,12 +300,13 @@ test('inline video model preserves input and references and carries video parame
   await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
   await composer.getByRole('combobox', { name: '模型', exact: true }).click()
   await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'sora-2', exact: true }).click()
-  await expect(page).toHaveURL('http://localhost:18775/discover')
+  await expect(page).toHaveURL('/discover')
   await expect(composer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保持同一份描述和参考图')
   await expect(composer.getByRole('button', { name: '预览参考图 1', exact: true })).toBeVisible()
   await composer.getByRole('button', { name: '高级参数', exact: true }).click()
   const parameters = page.getByRole('dialog', { name: '高级参数', exact: true })
   await parameters.getByRole('radio', { name: '9:16', exact: true }).check()
+  await parameters.getByRole('radio', { name: '720P', exact: true }).check()
   await parameters.getByRole('radio', { name: '12 秒', exact: true }).check()
   await parameters.getByText('自定义参数', { exact: true }).click()
   await parameters.getByRole('textbox', { name: '尺寸', exact: true }).fill('720x1280')
@@ -356,7 +397,7 @@ test('composition does not send, and lower search remains independent', async ({
   await prompt.dispatchEvent('compositionstart')
   await prompt.dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 })
   await prompt.dispatchEvent('compositionend')
-  await expect(page).toHaveURL('http://localhost:18775/discover')
+  await expect(page).toHaveURL('/discover')
   expect(calls).toHaveLength(0)
   await page.getByRole('searchbox', { name: '搜索作品', exact: true }).fill('灯塔')
   await expect(page).toHaveURL(/q=/)

@@ -14,7 +14,7 @@ function context(db, body = {}, actor = 'reader') {
 test('feed validates bounds before querying and never writes preference or search history', async () => {
   const statements = [], db = { async query(sql, params = []) {
     statements.push(sql)
-    assert(sql.trim().startsWith('SELECT'))
+    assert(/^(SELECT|WITH feed_interests AS MATERIALIZED)/.test(sql.trim()))
     for (let i = 1; i <= params.length; i++) assert(new RegExp(`\\$${i}(?!\\d)`).test(sql), `unused parameter ${i}`)
     return { rows: [] }
   } }

@@ -49,6 +49,7 @@ export interface CreationTask {
   outputs: CreationOutput[]
   error?: string
   mediaPath?: string
+  poster?: string
   reasoning?: string
   usage?: import('../shared/studio/types.ts').ChatResponseUsage
   toolCalls?: import('../shared/studio/types.ts').StudioToolCall[]
@@ -531,6 +532,12 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     return result
   }
   result.status = 'succeeded'
+  if (kind === 'video') {
+    const nested = [data.video, data.output, data.result].filter(record)
+    const poster = [data.poster_url, data.thumbnail_url, data.cover_url,
+      ...nested.flatMap(item => [item.poster_url, item.thumbnail_url, item.cover_url])].map(publicUrl).find(Boolean)
+    if (poster) result.poster = poster
+  }
   result.outputs = text !== undefined ? [{ text }] : images.length ? images : video ? [{ url: video }] : direct ? [{ url: direct }] : []
   if (kind === 'video' && protocol === 'openai' && id) result.mediaPath = `videos/${id}/content`
   if (kind === 'video' && protocol === 'plugin' && id && taskIdPattern.test(id) && Array.isArray(data.artifacts)) {

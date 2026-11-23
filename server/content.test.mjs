@@ -353,6 +353,50 @@ test('work authors and comments use the current local nickname while retaining v
   }
 });
 
+test('comment pages batch media and visible sources without mixing owners, comments or pagination', async () => {
+  const base = { text: 'Comment', name: 'Reader', username: 'reader', replyId: 'note1', repliesCount: 0, likes: 0 };
+  const comments = [
+    { ...base, id: 'comment4', userId: 'reader1', fileIds: ['file2', 'file1', 'file3'], renoteId: 'source1' },
+    { ...base, id: 'comment3', userId: 'reader2', fileIds: ['file3'], renoteId: 'hiddenSource' },
+    { ...base, id: 'comment2', userId: 'reader1', fileIds: ['file4'], renoteId: 'source1' },
+    { ...base, id: 'comment1', userId: 'reader1', fileIds: [], renoteId: null },
+    { ...base, id: 'comment0', userId: 'reader1', fileIds: ['nextPageFile'], renoteId: 'nextPageSource' },
+  ];
+  const assets = [
+    { id: 'file1', userId: 'reader1' }, { id: 'file2', userId: 'reader1' },
+    { id: 'file3', userId: 'reader2' }, { id: 'file4', userId: 'reader1' },
+  ].map(file => ({ ...file, name: `${file.id}.png`, type: 'image/png', size: 10,
+    url: '', thumbnailAccessKey: null, properties: { communityMedia: { state: 'pending' } } }));
+  const statements = [];
+  const ctx = context({ path: '/api/works/work1/comments?limit=4', user: { id: 'reader1' }, query: async (sql, args) => {
+    statements.push(sql);
+    if (sql.includes('SELECT s.id')) {
+      assert(sql.includes(publicVisibilitySql));
+      const ids = Array.isArray(args[1]) ? args[1] : [args[1]];
+      assert(!ids.includes('nextPageSource'));
+      return { rows: ids.includes('source1') ? [{ id: 'remixed1', noteId: 'source1' }] : [] };
+    }
+    if (sql.includes('FROM community_submission s')) return { rows: [workRow] };
+    if (sql.includes('FROM note n JOIN "user"')) return { rows: comments };
+    if (sql.includes('FROM external_account')) return { rows: [] };
+    if (sql.includes('FROM drive_file')) {
+      assert(!args[0].includes('nextPageFile'));
+      const owners = Array.isArray(args[1]) ? args[1] : args[0].map(() => args[1]);
+      if (Array.isArray(args[1])) assert.match(sql, /\(id,"userId"\) IN \(SELECT \* FROM unnest/);
+      return { rows: assets.filter(file => args[0].some((id, index) => id === file.id && owners[index] === file.userId)) };
+    }
+    assert.fail('Unexpected query: ' + sql);
+  } });
+  await handleContent(ctx);
+  assert.equal(ctx.result.status, 200);
+  assert.deepEqual(ctx.result.payload.items.map(item => item.id), ['comment4', 'comment3', 'comment2', 'comment1']);
+  assert.deepEqual(ctx.result.payload.items.map(item => item.files.map(file => file.id)), [['file1', 'file2'], ['file3'], ['file4'], []]);
+  assert.deepEqual(ctx.result.payload.items.map(item => item.sourceWorkId), ['remixed1', undefined, 'remixed1', undefined]);
+  assert.equal(ctx.result.payload.items[0].files[0].processing, 'pending');
+  assert.equal(ctx.result.payload.nextCursor, 'comment1');
+  assert.equal(statements.length, 5, 'a comment page must not add database queries per comment');
+});
+
 test('comment attachment refresh enforces work/comment visibility and attachment ownership', async () => {
   const ctx = context({ path: '/api/works/work1/comments/comment1/files', query: async (sql, args) => {
     if (sql.includes('FROM community_submission s')) { assert(sql.includes('blocking')); return { rows: [workRow] }; }

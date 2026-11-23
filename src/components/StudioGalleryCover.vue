@@ -11,7 +11,10 @@ import { extractVideoPoster } from '../studio-video-poster'
 const props = withDefaults(defineProps<{ task: CreationTask; index?: number; selecting?: boolean; selected?: boolean }>(), { index: 0 })
 const emit = defineEmits<{ open: [] }>()
 const element = ref<HTMLElement>(), source = ref(''), duration = ref<number>(), loading = ref(false), error = ref(''), retry = ref(0)
-const identity = computed(() => mediaPreviewIdentity(props.task, props.index))
+const identity = computed(() => {
+  const base = mediaPreviewIdentity(props.task, props.index)
+  return props.task.kind === 'video' && props.task.poster ? JSON.stringify([base, props.task.poster]) : base
+})
 const previewLabel = computed(() => `预览 ${props.task.prompt}${props.index > 0 ? ` · ${props.index + 1}` : ''}`)
 const durationLabel = computed(() => duration.value === undefined ? '' : `${Math.floor(duration.value / 60)}:${String(Math.floor(duration.value % 60)).padStart(2, '0')}`)
 let dispose = () => {}
@@ -33,9 +36,18 @@ watch([() => session.user?.id, () => props.task.id, () => props.index, identity,
         const original = await readTaskAsset(owner, url)
         if (!current()) return
         if (task.kind === 'video') {
-          const temporary = original ? URL.createObjectURL(original) : undefined
-          try { cached = await extractVideoPoster(temporary || await readableMedia(url, 'video'), controller.signal) }
-          finally { if (temporary) URL.revokeObjectURL(temporary) }
+          if (task.poster) {
+            try {
+              const response = await fetch(await readableMedia(task.poster, 'image', true), { credentials: 'same-origin', signal: controller.signal })
+              if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) { await response.body?.cancel(); throw new Error('视频封面暂时无法读取。') }
+              cached = { blob: await imageThumbnail(await response.blob(), controller.signal) }
+            } catch (cause) { if (controller.signal.aborted) throw cause }
+          }
+          if (!cached) {
+            const temporary = original ? URL.createObjectURL(original) : undefined
+            try { cached = await extractVideoPoster(temporary || await readableMedia(url, 'video'), controller.signal) }
+            finally { if (temporary) URL.revokeObjectURL(temporary) }
+          }
         } else {
           let blob = original
           if (!blob) {

@@ -61,8 +61,9 @@ async function generate(files: StudioFile[], prompt?: string, backgroundTask = t
     if (!current(version)) return
     await nextTick()
     if (source.value.model && target.model !== source.value.model) throw new Error('原作模型未能恢复，请进入工作台确认。')
+    await saveChats(true)
+    if (!current(version)) return
     if (!backgroundTask) {
-      await nextTick(); await saveChats()
       if (current(version)) await router.push({ path: `/create/${source.value.kind}`, query: { remix: source.value.id, conversation: chats.activeId } })
       return
     }
@@ -82,7 +83,7 @@ async function cancel() {
     if (current(version)) {
       emit('close')
       await nextTick()
-      if (owner === session.user?.id && previousConversation && chats.sessions.some(item => item.id === previousConversation)) { chats.activeId = previousConversation; await saveChats() }
+      if (owner === session.user?.id && previousConversation && chats.sessions.some(item => item.id === previousConversation)) { chats.activeId = previousConversation; await saveChats(true) }
     }
   } catch (cause) { if (current(version)) issue.value = errorMessage(cause) }
   finally { if (current(version)) busy.value = false }

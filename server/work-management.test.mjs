@@ -28,10 +28,11 @@ function fixture(actor = owner, overrides = {}) {
     if (s.includes('FROM drive_file') && !s.includes('SUM(size)')) return { rows: files.filter(f => args[0].includes(f.id) && f.userId === args[1]) }
     if (s.includes('FROM community_tag')) return { rows: [{ id: 'tag1', name: '图片', category: 'image' }].filter(t => args[0].includes(t.id)) }
     if (s.includes('FROM external_account')) return { rows: [] }
+    if (s.startsWith('SELECT u.id')) return { rows: [{ ...owner, username: 'owner', token: 'fixture-only', createdAt: new Date(), isDeleted: false,
+      isSuspended: false, roles: [], assignedRoleIds: ['limited'], rootUserId: 'admin1' }] }
     if (s.includes('FROM meta')) return { rows: [{ rootUserId: 'admin1', clientOptions: { communityPublicationMode: state.mode }, policies: {} }] }
     if (s.includes('FROM role_assignment')) return { rows: args[0] === 'owner1' ? [{ roleId: 'limited' }] : [] }
     if (s.includes('FROM role')) return { rows: s.includes('policies') ? [{ id: 'limited', target: 'manual', policies: { maxFileSizeMb: { value: 5, priority: 2 }, driveCapacityMb: { value: 10, priority: 2 } } }] : [] }
-    if (s.startsWith('SELECT u.id')) return { rows: [{ ...owner, username: 'owner', token: 'fixture-only', createdAt: new Date(), isDeleted: false, isSuspended: false }] }
     if (s.startsWith('SELECT id,host')) return { rows: [owner] }
     if (s.startsWith('SELECT id FROM "user"')) return { rows: state.authorActive ? [{ id: 'owner1' }] : [] }
     if (s.startsWith('SELECT COALESCE(SUM(size)')) return { rows: [{ size: '0' }] }

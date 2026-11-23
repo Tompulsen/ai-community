@@ -39,6 +39,14 @@ interface MediaFile {
   properties: Values | null;
 }
 interface WorkerFile extends MediaFile { accessKey: string; lease: string }
+interface PrivacyFile extends MediaFile {
+  accessKey: string | null;
+  webpublicAccessKey: string | null;
+  webpublicType: string | null;
+  storedInternal: boolean;
+  isLink: boolean;
+}
+type ImageRole = 'original' | 'thumbnail' | 'webpublic';
 
 function record(value: unknown): value is Values {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -318,9 +326,11 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
       await image.rotate().resize({ width: 498, height: 422, fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temporary);
       await sharp(source, { animated: true, limitInputPixels: 100_000_000, failOn: 'warning' }).rotate()
         .resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).webp({ quality: 90 }).toFile(webTemporary);
+      const sanitized = await privateMetadataFreeImage(webTemporary);
       await rename(webTemporary, webpublic);
-      webType = 'image/webp';
+      webType = sanitized.type;
     } else await videoThumbnail(source, temporary);
+    await privateMetadataFreeImage(temporary);
     // A buffer avoids Sharp holding a file lock across rename on Windows.
     const preview = await sharp(await readFile(temporary)).metadata();
     if (preview.width && preview.height) extra.previewAspectRatio = preview.width / preview.height;
@@ -328,9 +338,12 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
     publishAttempted = true;
     const updated = await db.query(`UPDATE drive_file SET "thumbnailAccessKey"=$2,"thumbnailUrl"=$3,
       "webpublicAccessKey"=$4,"webpublicUrl"=$5,"webpublicType"=$6,
-      properties=jsonb_set(COALESCE(properties,'{}')||$7::jsonb,'{communityMedia}',(properties->'communityMedia')||jsonb_build_object('state','ready','updatedAt',$8::bigint))
+      properties=jsonb_set(jsonb_set(COALESCE(properties,'{}')||$7::jsonb,'{communityImagePrivacy}',
+        COALESCE(properties->'communityImagePrivacy','{}'::jsonb)||$10::jsonb),
+        '{communityMedia}',(properties->'communityMedia')||jsonb_build_object('state','ready','updatedAt',$8::bigint))
       WHERE id=$1 AND properties->'communityMedia'->>'lease'=$9 RETURNING id`,
-    [file.id, thumb, `${file.url}?variant=thumbnail`, webType ? web : null, webType ? `${file.url}?variant=webpublic` : null, webType, extra, Date.now(), file.lease]);
+    [file.id, thumb, `${file.url}?variant=thumbnail`, webType ? web : null, webType ? `${file.url}?variant=webpublic` : null, webType, extra, Date.now(), file.lease,
+      { [thumb]: 1, ...(webType ? { [web]: 1 } : {}) }]);
     if (!updated.rowCount) {
       publishAttempted = false;
       await unlink(thumbnail).catch(() => {});
@@ -343,14 +356,101 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
   }
 }
 
+function imagePrivacyKey(file: PrivacyFile, role: ImageRole): string | null {
+  if (role === 'original') return imageExtensions[file.type] ? file.accessKey : null;
+  if (role === 'thumbnail') return file.thumbnailAccessKey;
+  return imageExtensions[file.webpublicType || file.type] ? file.webpublicAccessKey : null;
+}
+
+const imageRoles: ImageRole[] = ['original', 'thumbnail', 'webpublic'];
+function needsImagePrivacy(file: PrivacyFile, now: number): boolean {
+  if (!file.storedInternal || file.isLink || mediaState(file.properties) !== 'ready') return false;
+  const job = record(file.properties?.communityImagePrivacyJob) ? file.properties.communityImagePrivacyJob : {};
+  if (Number(job.attempts || 0) >= 3 || Number(job.retryAt || 0) > now ||
+    job.state === 'processing' && Number(job.updatedAt || 0) >= now - 900000) return false;
+  const markers = record(file.properties?.communityImagePrivacy) ? file.properties.communityImagePrivacy : {};
+  return imageRoles.some(role => { const key = imagePrivacyKey(file, role); return key && markers[key] !== 1; });
+}
+
+async function processHistoricalImage(db: Database, root: string, file: PrivacyFile, lease: string): Promise<void> {
+  for (const role of imageRoles) {
+    const current = (await db.query<PrivacyFile>(`SELECT id,name,type,"accessKey","thumbnailAccessKey","webpublicAccessKey","webpublicType",properties
+      FROM drive_file WHERE id=$1 AND properties->'communityImagePrivacyJob'->>'lease'=$2
+      AND properties->'communityImagePrivacyJob'->>'state'='processing'`, [file.id, lease])).rows[0];
+    if (!current) return;
+    const key = imagePrivacyKey(current, role);
+    const markers = record(current.properties?.communityImagePrivacy) ? current.properties.communityImagePrivacy : {};
+    if (!key || markers[key] === 1) continue;
+    const sanitized = await privateMetadataFreeImage(await confinedFile(root, key));
+    const column = role === 'original' ? 'accessKey' : role === 'thumbnail' ? 'thumbnailAccessKey' : 'webpublicAccessKey';
+    const updated = await db.query(`UPDATE drive_file SET
+      size=CASE WHEN "accessKey"=$2 THEN $5::bigint ELSE size END,
+      md5=CASE WHEN "accessKey"=$2 THEN $6::varchar ELSE md5 END,
+      type=CASE WHEN "accessKey"=$2 THEN $4::varchar ELSE type END,
+      name=CASE WHEN "accessKey"=$2 THEN $7::varchar ELSE name END,
+      "webpublicType"=CASE WHEN "webpublicAccessKey"=$2 THEN $4::varchar ELSE "webpublicType" END,
+      properties=jsonb_set(COALESCE(properties,'{}'::jsonb),'{communityImagePrivacy}',
+        COALESCE(properties->'communityImagePrivacy','{}'::jsonb)||jsonb_build_object($2::text,1))
+      WHERE id=$1 AND "${column}"=$2 AND properties->'communityImagePrivacyJob'->>'lease'=$3
+      AND properties->'communityImagePrivacyJob'->>'state'='processing'`,
+    [file.id, key, lease, sanitized.type, sanitized.size, sanitized.md5, publicImageName({ ...current, type: sanitized.type })]);
+    if (!updated.rowCount) throw new Error('Media privacy lease or storage key changed');
+  }
+  await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityImagePrivacyJob}',
+    (properties->'communityImagePrivacyJob')||jsonb_build_object('state','ready','updatedAt',$3::bigint))
+    WHERE id=$1 AND properties->'communityImagePrivacyJob'->>'lease'=$2
+    AND properties->'communityImagePrivacyJob'->>'state'='processing'`, [file.id, lease, Date.now()]);
+}
+
 export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: string }): () => Promise<void> {
   let stopped = false, running: Promise<void> | null = null;
+  let privacyCursor = '', nextPrivacyAt = 0;
+  const backfillImagePrivacy = async (root: string) => {
+    if (Date.now() < nextPrivacyAt || stopped) return;
+    try {
+      // Bound the indexed scan itself, including pages whose files are already safe.
+      const page = await db.query<PrivacyFile>(`SELECT id,name,type,"accessKey","thumbnailAccessKey","webpublicAccessKey","webpublicType",
+        "storedInternal","isLink",properties FROM drive_file WHERE id>$1 ORDER BY id LIMIT 16`, [privacyCursor]);
+      const candidate = page.rows.find(file => needsImagePrivacy(file, Date.now()));
+      privacyCursor = candidate?.id ?? page.rows.at(-1)?.id ?? '';
+      if (!candidate || stopped) return;
+      const now = Date.now(), lease = randomBytes(16).toString('hex');
+      const claimed = await db.query<PrivacyFile>(`WITH privacy_candidate AS (
+        SELECT id FROM drive_file WHERE id=$1 AND "storedInternal" AND NOT "isLink"
+          AND COALESCE(properties->'communityMedia'->>'state','ready')='ready'
+          AND COALESCE((properties->'communityImagePrivacyJob'->>'attempts')::int,0)<3
+          AND COALESCE((properties->'communityImagePrivacyJob'->>'retryAt')::bigint,0)<=$2::bigint
+          AND (properties->'communityImagePrivacyJob'->>'state' IS DISTINCT FROM 'processing'
+            OR COALESCE((properties->'communityImagePrivacyJob'->>'updatedAt')::bigint,0)<$2::bigint-900000::bigint)
+        FOR UPDATE SKIP LOCKED)
+        UPDATE drive_file f SET properties=jsonb_set(COALESCE(f.properties,'{}'::jsonb),'{communityImagePrivacyJob}',
+          COALESCE(f.properties->'communityImagePrivacyJob','{}'::jsonb)||jsonb_build_object(
+            'version',1,'state','processing','lease',$3::text,'attempts',
+            COALESCE((f.properties->'communityImagePrivacyJob'->>'attempts')::int,0)+1,'updatedAt',$2::bigint))
+        FROM privacy_candidate WHERE f.id=privacy_candidate.id
+        RETURNING f.id,f.name,f.type,f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType",f.properties`,
+      [candidate.id, now, lease]);
+      const file = claimed.rows[0];
+      if (!file) return;
+      try { await processHistoricalImage(db, root, file, lease); } catch {
+        const job = record(file.properties?.communityImagePrivacyJob) ? file.properties.communityImagePrivacyJob : {};
+        const attempts = Number(job.attempts || 1);
+        await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityImagePrivacyJob}',
+          (properties->'communityImagePrivacyJob')||jsonb_build_object(
+            'state','failed','updatedAt',$3::bigint,'retryAt',$4::bigint,'error','Image privacy processing failed'))
+          WHERE id=$1 AND properties->'communityImagePrivacyJob'->>'lease'=$2
+          AND properties->'communityImagePrivacyJob'->>'state'='processing'`,
+        [file.id, lease, Date.now(), Date.now() + attempts * 30000]);
+      }
+    } finally { nextPrivacyAt = Date.now() + 30000; }
+  };
   const run = async () => {
     const root = await realpath(filesRoot);
     await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityMedia}',(properties->'communityMedia')||
       jsonb_build_object('state','failed','updatedAt',$1::bigint,'error','Media processing interrupted'))
       WHERE properties->'communityMedia'->>'version'='1' AND properties->'communityMedia'->>'state'='processing'
       AND (properties->'communityMedia'->>'attempts')::int>=3 AND (properties->'communityMedia'->>'updatedAt')::bigint<$1::bigint-900000::bigint`, [Date.now()]);
+    let idle = false;
     for (let index = 0; index < 2 && !stopped; index++) {
       const lease = randomBytes(16).toString('hex'), now = Date.now();
       const result = await db.query<WorkerFile>(`WITH candidate AS (
@@ -365,7 +465,7 @@ export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: s
         FROM candidate WHERE f.id=candidate.id
         RETURNING f.id,f.name,f.type,f.size,f.url,f."accessKey",f."thumbnailAccessKey",f.properties,$2::text AS lease`, [now, lease]);
       const file = result.rows[0];
-      if (!file) return;
+      if (!file) { idle = true; break; }
       try { await processFile(db, root, file); } catch {
         const attempts = record(file.properties?.communityMedia) ? Number(file.properties.communityMedia.attempts ?? 1) : 1;
         await db.query(`UPDATE drive_file SET properties=jsonb_set(properties,'{communityMedia}',(properties->'communityMedia')||jsonb_build_object(
@@ -374,6 +474,7 @@ export function startMediaWorker({ db, filesRoot }: { db: Database; filesRoot: s
         [file.id, Date.now(), Date.now() + attempts * 30000, lease]);
       }
     }
+    if (idle && !stopped) await backfillImagePrivacy(root);
   };
   const tick = () => {
     if (stopped || running) return;

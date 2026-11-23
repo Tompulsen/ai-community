@@ -131,8 +131,8 @@ it('undo removes an untouched automatic blank but keeps content typed into that 
   expect(p.chats.sessions).toHaveLength(4); expect(p.chats.sessions.some(chat => chat.draft === '不能丢失')).toBe(true)
 })
 it('expires undo after five seconds and clears it immediately on an account switch', async () => {
-  vi.useFakeTimers()
   const p = await seed()
+  vi.useFakeTimers()
   await p.removeChats(['text']); expect(p.chatDeletion.count).toBe(1)
   await vi.advanceTimersByTimeAsync(5000); await p.undoRemovedChats()
   expect(p.chats.sessions.some(chat => chat.id === 'text')).toBe(false); expect(p.chatDeletion.count).toBe(0)

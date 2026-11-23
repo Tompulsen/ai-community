@@ -1,30 +1,49 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Image, MessageSquare, Video, X } from '@lucide/vue'
 import { errorMessage, session } from '../state'
 import { clearStudioEntry, saveStudioEntry, type StudioEntry } from '../studio-entry'
 import StudioWorkspace from './StudioWorkspace.vue'
-import StudioChat from './StudioChat.vue'
+import type StudioChat from './StudioChat.vue'
 import '../studio-composer.css'
 
 const StudioAccountTools = defineAsyncComponent(() => import('./StudioAccountTools.vue'))
 const router = useRouter(), kind = ref<'text' | 'image' | 'video'>('image'), mediaKind = ref<'image' | 'video'>('image')
+const chatComponent = shallowRef<typeof StudioChat>(), chatLoading = ref(false)
 const chat = ref<InstanceType<typeof StudioChat>>()
 const busy = ref(false), error = ref(''), workspace = ref<InstanceType<typeof StudioWorkspace>>()
 const accountDialog = ref<HTMLDialogElement>(), accountTool = ref<'prices' | 'keys'>('prices')
 const accountOpen = ref(false)
 const accountHeading = computed(() => accountTool.value === 'prices' ? '模型广场' : '密钥')
+let kindChange = 0
+let pendingTextModel: string | undefined
 async function changeKind(value: 'text' | 'image' | 'video', model?: string) {
+  const accepted = ++kindChange
+  if (value === 'text' && model) pendingTextModel = model
   kind.value = value
   if (value !== 'text') mediaKind.value = value
+  if (value === 'text' && !chatComponent.value) {
+    chatLoading.value = true; error.value = ''
+    try {
+      const component = await import('./StudioChat.vue')
+      if (!live) return
+      chatComponent.value = component.default
+    } catch (cause) {
+      if (live && accepted === kindChange) error.value = errorMessage(cause)
+      return
+    } finally { chatLoading.value = false }
+  }
   await nextTick()
+  if (!live || accepted !== kindChange) return
   const target = value === 'text' ? chat.value : workspace.value
-  if (target && model) target.model = model
+  const selectedModel = value === 'text' ? pendingTextModel : model
+  if (target && selectedModel) target.model = selectedModel
+  if (value === 'text' && target) pendingTextModel = undefined
 }
 let live = true
 onBeforeUnmount(() => { live = false; accountDialog.value?.close() })
-watch(() => session.user?.id, () => { error.value = ''; accountDialog.value?.close() })
+watch(() => session.user?.id, () => { kindChange++; pendingTextModel = undefined; error.value = ''; accountDialog.value?.close() })
 async function openAccount(view: 'prices' | 'keys') {
   if (!session.user) { error.value = '请登录后查看模型价格和密钥。'; return }
   accountTool.value = view; accountOpen.value = true
@@ -50,7 +69,8 @@ async function send(value: StudioEntry) {
       <button type="button" :aria-pressed="kind === 'image'" :disabled="busy" @click="changeKind('image')"><Image :size="18" aria-hidden="true" />图片生成</button>
       <button type="button" :aria-pressed="kind === 'video'" :disabled="busy" @click="changeKind('video')"><Video :size="18" aria-hidden="true" />视频生成</button>
     </div>
-    <StudioChat v-show="kind === 'text'" ref="chat" class="discovery-workspace" :mode="kind" entry-only :entry-pending="busy" @kind="changeKind" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
+    <component :is="chatComponent" v-if="chatComponent" v-show="kind === 'text'" ref="chat" class="discovery-workspace" :mode="kind" entry-only :entry-pending="busy" @kind="changeKind" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
+    <div v-if="kind === 'text' && !chatComponent" class="discovery-workspace"><div class="studio-composer composer-loading" role="status" :aria-busy="chatLoading"><span>{{ chatLoading ? '正在加载文本创作…' : '文本创作暂时无法加载' }}</span><button v-if="!chatLoading" type="button" class="button btn" @click="changeKind('text')">重新加载</button></div></div>
     <StudioWorkspace v-show="kind !== 'text'" ref="workspace" class="discovery-workspace" :kind="mediaKind" entry-only :entry-pending="busy" @kind="changeKind" @entry="send" @prices="openAccount('prices')" @keys="openAccount('keys')" />
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <Teleport to="body">
@@ -78,6 +98,7 @@ h2 { margin: 0 0 20px; text-align: center; font-size: 28px; line-height: 40px; f
 .discovery-workspace :deep(.studio-tool), .discovery-workspace :deep(.composer-submit) { min-height: 44px; }
 .discovery-workspace :deep(.composer-submit) { width: 44px; height: 44px; margin-left: auto; }
 .discovery-workspace :deep(.composer-attachment input) { height: 100%; }
+.composer-loading { display: grid; place-content: center; gap: 12px; min-height: 182px; color: var(--muted); text-align: center; }
 .discovery-account-dialog { width: min(1000px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink); overflow-y: auto; overscroll-behavior: contain; }
 .discovery-account-dialog::backdrop { background: rgb(0 0 0 / 40%); }
 .discovery-account-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
@@ -89,6 +110,7 @@ h2 { margin: 0 0 20px; text-align: center; font-size: 28px; line-height: 40px; f
   .creation-modes button { min-width: 0; padding-inline: 12px; gap: 6px; }
   .discovery-workspace :deep(.studio-composer) { padding: 12px; }
   .discovery-workspace :deep(.composer-input) { min-height: 88px; }
+  .composer-loading { min-height: 210px; }
   .discovery-workspace :deep(.studio-composer-tools) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) 44px; }
   .discovery-workspace :deep(.studio-composer-actions) { grid-column: 1 / 4; grid-row: 1; justify-content: flex-start; }
   .discovery-workspace :deep(.studio-composer-models) { grid-column: 1; grid-row: 2; }

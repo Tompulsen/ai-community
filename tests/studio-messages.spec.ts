@@ -176,6 +176,12 @@ test('long code folds, highlights and copies the complete source', async ({ page
 })
 
 test('HTML and SVG previews remain isolated and support refresh, full screen and source view', async ({ page }) => {
+  await page.route('**/create/text', async route => {
+    const response = await route.fetch(), headers = { ...response.headers() }
+    // Exercise the iframe sandbox independently of the local preview's inline-script restriction.
+    delete headers['content-security-policy']
+    await route.fulfill({ response, headers })
+  })
   await fixture(page, [user, assistant(richAnswer)])
   const preview = page.locator('.studio-html-preview')
   await expect(preview.locator('iframe')).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-modals')
@@ -219,6 +225,13 @@ test('message attachments use native media controls and clicking an image opens 
   await expect(page.getByRole('dialog', { name: '图片附件预览', exact: true })).not.toBeVisible()
 })
 
+test('the latest typed draft survives an immediate reload before batched persistence', async ({ page }) => {
+  await fixture(page)
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('刷新前最后输入的草稿')
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: '消息', exact: true })).toHaveValue('刷新前最后输入的草稿')
+})
+
 test('selected-text quotes persist in the draft and are sent without changing the visible question', async ({ page }) => {
   const state = await fixture(page, [user, assistant('这段文字可以选中引用。')])
   const paragraph = page.locator('.chat-message.assistant .studio-markdown-body p')
@@ -238,7 +251,7 @@ test('selected-text quotes persist in the draft and are sent without changing th
   await expect(page.locator('.chat-message.assistant')).toHaveCount(2)
   await expect(page.locator('.chat-message.user').last().locator('.user-text')).toHaveText('请继续解释')
   await expect(page.locator('.chat-message.user').last().getByTestId('message-quote')).toContainText('这段文字可以选中引用。')
-  expect(JSON.stringify(state.calls.find(call => call.path === '/api/creation/generate')?.body.chatOptions.messages)).toContain('引用内容：')
+  await expect.poll(() => JSON.stringify(state.calls.find(call => call.path === '/api/creation/generate')?.body.chatOptions.messages || [])).toContain('引用内容：')
   await expect(page.getByTestId('composer-quote')).toHaveCount(0)
 })
 

@@ -285,7 +285,7 @@ export async function logout() {
 }
 
 export const pendingActions = reactive(new Set<string>())
-export async function toggleWork(work: Work, field: 'liked' | 'saved') {
+export async function toggleWork(work: Pick<Work, 'id' | 'kind' | 'tags' | 'status' | 'destination' | 'liked' | 'saved' | 'likes'>, field: 'liked' | 'saved') {
   if (!session.user) { notify('请先登录后再操作。'); return false }
   const key = `${field}:${work.id}`
   if (pendingActions.has(key)) return false

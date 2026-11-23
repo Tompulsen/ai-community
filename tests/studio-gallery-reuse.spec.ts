@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import sharp from 'sharp'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-async function fixture(page: Page, count = 3, multi = false, failures = false) {
+async function fixture(page: Page, count = 3, multi = false, failures = false, relativeDate = false) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const pictures = await Promise.all(['#41759b', '#955557', '#58806a'].map(background => sharp({
@@ -29,14 +29,17 @@ async function fixture(page: Page, count = 3, multi = false, failures = false) {
     }
     return route.fulfill({ json: {} })
   })
-  await page.addInitScript(({ count, multi, failures }) => {
+  await page.addInitScript(({ count, multi, failures, boundaryImage }) => {
     if (sessionStorage.getItem('gallery-reuse-fixture')) return
     sessionStorage.setItem('gallery-reuse-fixture', '1')
     const now = Date.now(), tasks = Array.from({ length: count }, (_, index) => ({
       id: `reuse-${index}`, conversationId: `reuse-${index}`, owner: '17', kind: 'image',
-      model: index % 2 ? 'flux' : 'gpt-image-2', prompt: `作品 ${index}`, createdAt: now - index * 1000, settledAt: now,
+      model: index % 2 ? 'flux' : 'gpt-image-2', prompt: `作品 ${index}`,
+      createdAt: boundaryImage && index === count - 1 ? now - 7 * 86400000 + 30000 : now - index * 1000, settledAt: now,
       phase: failures && index < 3 ? ['error', 'attention', 'paused'][index] : 'complete',
-      protocol: 'sync', references: [], text: '', urls: failures && index < 3 ? [] : Array.from({ length: multi && index === 0 ? 3 : 1 }, (_, output) => `https://media.example/${index}/output-${output}.jpg`),
+      ...(failures && index === 2 ? { legacy: true, tokenId: 41 } : {}),
+      protocol: 'sync', references: [], text: '', urls: boundaryImage ? [boundaryImage] : failures && index < 3 ? [] : Array.from({ length: multi && index === 0 ? 3 : 1 }, (_, output) => `https://media.example/${index}/output-${output}.jpg`),
+      ...(boundaryImage ? { browserSave: { state: 'saved' } } : {}),
       request: { size: '800x600', aspect_ratio: '4:3', n: multi && index === 0 ? 3 : 1, duration: 8 },
     }))
     localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify(tasks))
@@ -44,7 +47,7 @@ async function fixture(page: Page, count = 3, multi = false, failures = false) {
       _hasHydrated: true, activeId: 'gallery-text', mediaConversationsMigrated: true,
       sessions: [{ id: 'gallery-text', creationKind: 'text', topic: '作品库测试', model: 'gpt-5', settings: {}, skillIds: [], messages: [] }],
     } }))
-  }, { count, multi, failures })
+  }, { count, multi, failures, boundaryImage: relativeDate ? `data:image/jpeg;base64,${pictures[0]!.toString('base64')}` : '' })
   await page.goto('/create/text')
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '作品库', exact: true }).click()
@@ -146,6 +149,8 @@ test('automatic library collection is independent of original downloads and pres
   const downloads: string[] = []
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
+  await expect(library.getByRole('switch', { name: '自动下载原文件', exact: true })).not.toBeChecked()
+  await library.getByRole('switch', { name: '自动下载原文件', exact: true }).check()
   await library.getByRole('switch', { name: '自动收录作品', exact: true }).uncheck()
   await expect(library.getByRole('switch', { name: '自动下载原文件', exact: true })).toBeChecked()
   await library.getByRole('button', { name: '关闭作品库', exact: true }).click()
@@ -234,6 +239,100 @@ test('selected downloads keep nonadjacent output indexes and export-all follows 
   await expect.poll(() => downloads.length).toBe(4)
   expect(downloads.slice(2)).toEqual(['creation-reuse-1-1.jpg', 'creation-reuse-3-1.jpg'])
   expect(generation).toHaveLength(0)
+})
+
+test('export-all requests every matching download beyond the initially loaded page', async ({ page }) => {
+  const { library, generation } = await fixture(page, 65)
+  const downloads: string[] = []
+  page.on('download', download => downloads.push(download.suggestedFilename()))
+  await page.evaluate(() => {
+    const click = HTMLAnchorElement.prototype.click
+    ;(window as any).requestedGalleryDownloads = []
+    HTMLAnchorElement.prototype.click = function (...args) {
+      if (this.download.startsWith('creation-')) (window as any).requestedGalleryDownloads.push(this.download)
+      return Reflect.apply(click, this, args)
+    }
+  })
+  await expect(library.locator('.gallery-item')).toHaveCount(60)
+  await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).requestedGalleryDownloads.length)).toBe(65)
+  await expect(library.locator('.gallery-export')).toHaveCount(0)
+  const requested = await page.evaluate(() => (window as any).requestedGalleryDownloads as string[])
+  expect(new Set(requested).size).toBe(65)
+  expect(requested).toEqual(expect.arrayContaining(['creation-reuse-0-1.jpg', 'creation-reuse-64-1.jpg']))
+  expect(downloads.length).toBeGreaterThan(0)
+  expect(generation).toHaveLength(0)
+})
+
+test('a pending summary does not block filtered records or retain a previous filter count', async ({ page }) => {
+  const { library } = await fixture(page, 65)
+  await expect(library.locator('.gallery-stats')).toContainText('65 条')
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    let taskReads = 0
+    IDBDatabase.prototype.transaction = function (...args) {
+      const tx = Reflect.apply(transaction, this, args)
+      if (args[0] === 'tasks' && args[1] !== 'readwrite' && ++taskReads === 2) {
+        let handler: ((this: IDBTransaction, event: Event) => unknown) | null = null
+        Object.defineProperty(tx, 'oncomplete', { get: () => handler, set: value => { handler = value } })
+        tx.addEventListener('complete', event => {
+          ;(window as any).releaseGallerySummary = () => handler?.call(tx, event)
+        })
+      }
+      return tx
+    }
+    ;(window as any).restoreGalleryTransactions = () => { IDBDatabase.prototype.transaction = transaction }
+  })
+  try {
+    await library.getByRole('searchbox', { name: '搜索生成记录', exact: true }).fill('作品 6')
+    await expect(library.locator('.gallery-item')).toHaveCount(6)
+    await expect(library.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false')
+    await expect(library.locator('.gallery-stats')).toContainText('— 条')
+    await expect.poll(() => page.evaluate(() => Boolean((window as any).releaseGallerySummary))).toBe(true)
+    await page.evaluate(() => (window as any).releaseGallerySummary())
+    await expect(library.locator('.gallery-stats')).toContainText('6 条')
+  } finally {
+    await page.evaluate(() => { (window as any).releaseGallerySummary?.(); (window as any).restoreGalleryTransactions?.() })
+  }
+})
+
+test('relative-date pagination and select-all share one boundary while a new-day refresh updates today', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-23T04:00:00Z'))
+  const { library } = await fixture(page, 65, false, false, true)
+  await library.getByRole('combobox', { name: '按时间筛选', exact: true }).selectOption('week')
+  await expect(library.locator('.gallery-stats')).toContainText('65 条')
+  await page.evaluate(() => {
+    const open = IDBIndex.prototype.openCursor
+    ;(window as any).relativeDateSummaryReads = 0
+    IDBIndex.prototype.openCursor = function (...args) {
+      const range = args[0]
+      if (this.name === 'ownerCreatedAtId' && range instanceof IDBKeyRange && range.upper[1] === Number.MAX_SAFE_INTEGER)
+        (window as any).relativeDateSummaryReads++
+      return Reflect.apply(open, this, args)
+    }
+  })
+  await page.clock.setFixedTime(new Date('2026-11-23T04:01:00Z'))
+  await library.getByRole('button', { name: '加载更多', exact: true }).click()
+  await expect(library.locator('.gallery-item')).toHaveCount(65)
+  await expect(library.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false')
+  await expect(library.locator('.gallery-stats')).toContainText('65 条')
+  expect(await page.evaluate(() => (window as any).relativeDateSummaryReads)).toBe(0)
+  await library.getByRole('button', { name: '批量选择', exact: true }).click()
+  await library.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await expect(library.locator('.batch-toolbar')).toContainText('已选 65')
+  await library.getByRole('combobox', { name: '按时间筛选', exact: true }).selectOption('today')
+  await expect(library.locator('.gallery-stats')).toContainText('64 条')
+  const nextDay = await page.evaluate(() => {
+    const day = new Date()
+    day.setDate(day.getDate() + 1); day.setHours(0, 0, 1, 0)
+    return day.getTime()
+  })
+  await page.clock.setFixedTime(new Date(nextDay))
+  await library.getByRole('tab', { name: '任务', exact: true }).click()
+  await expect(library.locator('.gallery-stats')).toContainText('0 条')
+  await library.getByRole('tab', { name: '作品', exact: true }).click()
+  await expect(library.locator('.gallery-stats')).toContainText('0 条')
+  await expect(library.locator('.gallery-item')).toHaveCount(0)
 })
 
 test('settings escape the short-screen scroll container and Escape returns to the library', async ({ page }) => {

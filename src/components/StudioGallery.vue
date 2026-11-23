@@ -5,7 +5,7 @@ import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { CopyPlus, Download, ImagePlus, Images, LoaderCircle, RefreshCw, Search, SlidersHorizontal, SquareMousePointer, Trash2, Upload, X } from '@lucide/vue'
 import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
 import { errorMessage, session } from '../state'
-import { galleryOutputIndexes, getTaskPage, getTaskStorageSize, type TaskPageQuery } from '../studio-task-store'
+import { galleryOutputIndexes, getTaskPage, getTaskStorageSize, getTaskSummary, type TaskPageQuery } from '../studio-task-store'
 import StudioGalleryCover from './StudioGalleryCover.vue'
 import StudioBrowserSave from './StudioBrowserSave.vue'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
@@ -14,7 +14,7 @@ const props = defineProps<{ kind?: string; embedded?: boolean; previewOnly?: boo
 const emit = defineEmits<{ reuse: [task: CreationTask]; publish: [task: CreationTask, destination: CreationDestination]; create: [] }>()
 const view = ref('gallery'), filter = ref('all'), query = ref(''), modelFilter = ref(''), timeFilter = ref('')
 const batchMode = ref(false), selected = ref<string[]>([]), error = ref(''), busy = ref(false), loading = ref(false)
-const rows = ref<CreationTask[]>([]), total = ref(0), modelOptions = ref<string[]>([]), storageBytes = ref<number>()
+const rows = ref<CreationTask[]>([]), total = ref<number>(), modelOptions = ref<string[]>([]), storageBytes = ref<number>()
 const after = ref<{ createdAt: number; id: string }>(), pageSize = 60
 const exportProgress = ref<{ current: number; total: number }>()
 const settingsId = `gallery-settings-${useId()}`, settingsButton = ref<HTMLButtonElement>(), settingsOpen = ref(false)
@@ -23,8 +23,9 @@ const previewItems = computed(() => preview.value ? preview.value.indexes.map(in
   src: mediaSource(preview.value!.task.urls[index]!, false, preview.value!.task.kind),
   kind: preview.value!.task.kind === 'video' ? 'video' as const : 'image' as const, alt: preview.value!.task.prompt,
 })) : [])
-let previewRevision = 0, revision = 0, operation = 0, preparing = false, refreshTimer: ReturnType<typeof setTimeout> | undefined
+let previewRevision = 0, revision = 0, summaryRevision = 0, operation = 0, preparing = false, refreshTimer: ReturnType<typeof setTimeout> | undefined
 let downloadController: AbortController | undefined
+let currentFilters: TaskPageQuery | undefined
 const phases: Record<string, string> = { complete: '已完成', error: '失败', attention: '请求异常', submitting: '提交中', running: '进行中', paused: '已暂停' }
 const visible = computed(() => rows.value.map(task => creation.tasks.find(current => current.id === task.id && current.owner === session.user?.id) || task))
 type GalleryItem = { key: string; task: CreationTask; index: number }
@@ -55,23 +56,35 @@ function cancelOperation() {
 }
 watch(() => session.user?.id, () => {
   revision++; previewRevision++; cancelOperation(); previewer.value?.close(); preview.value = undefined
-  batchMode.value = false; selected.value = []; rows.value = []; total.value = 0; after.value = undefined; error.value = ''; storageBytes.value = undefined
+  currentFilters = undefined
+  batchMode.value = false; selected.value = []; rows.value = []; total.value = undefined; modelOptions.value = []; after.value = undefined; error.value = ''; storageBytes.value = undefined; loading.value = false
 })
+function loadSummary(owner: string, options: TaskPageQuery, accepted: number) {
+  const request = ++summaryRevision
+  const current = () => accepted === revision && request === summaryRevision && owner === session.user?.id
+  void getTaskSummary(owner, options).then(summary => {
+    if (current()) { total.value = options.gallery ? summary.mediaCount : summary.total; modelOptions.value = summary.models }
+  }).catch(cause => { if (current()) error.value = errorMessage(cause) })
+  void getTaskStorageSize(owner).then(bytes => { if (current()) storageBytes.value = bytes })
+    .catch(cause => { if (current()) error.value = errorMessage(cause) })
+}
 async function loadPage(append = false, prepare = false) {
   const owner = session.user?.id
   if (!owner || props.previewOnly || append && (loading.value || !after.value)) return
-  const accepted = append ? revision : ++revision, cursor = append ? after.value : undefined, options = filters()
+  const accepted = append ? revision : ++revision, cursor = append ? after.value : undefined
+  const options = append && currentFilters ? currentFilters : filters()
+  if (!append) currentFilters = options
   loading.value = true; error.value = ''
+  if (!append) total.value = undefined
   try {
     if (prepare) { preparing = true; try { await prepareCreationHistory() } finally { preparing = false } }
     if (accepted !== revision || owner !== session.user?.id) return
-    const page = await getTaskPage(owner, { ...options, after: cursor, limit: pageSize })
+    const page = await getTaskPage(owner, { ...options, after: cursor, limit: pageSize, summary: false })
     if (accepted !== revision || owner !== session.user?.id) return
     const current = append ? [...rows.value] : [], known = new Set(current.map(task => task.id))
     rows.value = [...current, ...page.tasks.filter(task => !known.has(task.id))]
-    after.value = page.after; total.value = options.gallery ? page.mediaCount : page.total; modelOptions.value = page.models
-    const bytes = await getTaskStorageSize(owner)
-    if (accepted === revision && owner === session.user?.id) storageBytes.value = bytes
+    after.value = page.after
+    loadSummary(owner, options, accepted)
   } catch (cause) { if (accepted === revision && owner === session.user?.id) error.value = errorMessage(cause) }
   finally { if (accepted === revision) loading.value = false }
 }
@@ -80,7 +93,7 @@ function scheduleRefresh(prepare = false) {
   refreshTimer = setTimeout(() => { void loadPage(false, prepare) }, 150)
 }
 watch([() => session.user?.id, () => props.kind, () => props.previewOnly], () => { void loadPage(false, true) }, { immediate: true })
-watch([view, filter, query, modelFilter, timeFilter], () => { revision++; cancelOperation(); selected.value = []; batchMode.value = false; scheduleRefresh(true) })
+watch([view, filter, query, modelFilter, timeFilter], () => { revision++; currentFilters = undefined; after.value = undefined; total.value = undefined; cancelOperation(); selected.value = []; batchMode.value = false; scheduleRefresh(true) })
 watch(() => creation.historyRevision, () => { if (!preparing) scheduleRefresh() })
 onBeforeUnmount(() => { revision++; cancelOperation(); clearTimeout(refreshTimer) })
 async function run(action: (current: () => boolean) => Promise<unknown>) {
@@ -93,11 +106,11 @@ async function run(action: (current: () => boolean) => Promise<unknown>) {
   finally { if (current()) { busy.value = false; downloadController = undefined; exportProgress.value = undefined } }
 }
 async function allMatching(current: () => boolean) {
-  const owner = session.user?.id, options = filters(), found: GalleryItem[] = []
+  const owner = session.user?.id, options = currentFilters || filters(), found: GalleryItem[] = []
   if (!owner) return found
   let cursor: TaskPageQuery['after']
   do {
-    const page = await getTaskPage(owner, { ...options, after: cursor, limit: 200 })
+    const page = await getTaskPage(owner, { ...options, after: cursor, limit: 200, summary: false })
     if (!current()) return []
     for (const task of page.tasks) {
       if (options.gallery) for (const index of galleryOutputIndexes(task)) found.push({ key: `${task.id}:${index}`, task, index })
@@ -113,8 +126,8 @@ async function toggleSettings(event: Event) {
   settingsOpen.value = (event as ToggleEvent).newState === 'open'
   if (!settingsOpen.value) return
   const panel = event.target as HTMLElement
-  const owner = session.user?.id
-  if (owner) void getTaskStorageSize(owner).then(bytes => { if (owner === session.user?.id) storageBytes.value = bytes }).catch(() => {})
+  const owner = session.user?.id, accepted = revision
+  if (owner) void getTaskStorageSize(owner).then(bytes => { if (owner === session.user?.id && accepted === revision) storageBytes.value = bytes }).catch(() => {})
   await nextTick()
   const anchor = settingsButton.value?.getBoundingClientRect()
   if (!anchor) return
@@ -197,7 +210,7 @@ function reuse(task: CreationTask) { emit('reuse', canonicalCreationTask(task)) 
         <select v-model="timeFilter" class="control" aria-label="按时间筛选"><option value="">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option><option value="month">最近 30 天</option><option value="year">最近一年</option></select>
       </div>
       <div class="gallery-info-bar batch-toolbar">
-        <div class="gallery-stats"><span>{{ total }} 条<span v-if="batchMode"> · 已选 {{ selected.length }}</span></span><span>本地缓存 {{ storageLabel }}</span></div>
+        <div class="gallery-stats"><span>{{ total ?? '—' }} 条<span v-if="batchMode"> · 已选 {{ selected.length }}</span></span><span>本地缓存 {{ storageLabel }}</span></div>
         <div class="gallery-actions">
           <template v-if="batchMode"><button class="gallery-action" type="button" :disabled="busy" aria-label="全选筛选结果" @click="selectAll"><SquareMousePointer :size="15" />全选</button><button class="gallery-action" type="button" :disabled="busy || !selected.length" aria-label="下载选中记录" @click="exportItems(true)"><Download :size="15" /><span>下载 {{ selected.length || '' }}</span></button><button class="gallery-action danger" type="button" :disabled="busy || !selected.length" aria-label="删除选中记录" @click="removeSelected"><Trash2 :size="15" /><span>{{ view === 'gallery' ? '移除' : '删除' }}</span></button><button class="gallery-action" type="button" :disabled="busy" aria-label="取消选择" @click="batchMode = false; selected = []"><X :size="15" />取消</button></template>
           <template v-else><button class="gallery-action" type="button" :disabled="busy || !total" @click="batchMode = true"><SquareMousePointer :size="15" />批量选择</button><button class="gallery-action" type="button" :disabled="busy || !total" aria-label="导出全部筛选结果" @click="exportItems()"><Download :size="15" />导出全部</button></template>

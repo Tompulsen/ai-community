@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Adapted from octopus_chat/app/components/markdown.tsx (MIT).
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, toRef, useId, watch } from 'vue'
 import { Check, ChevronDown, ChevronUp, Code2, Copy, Eye, X } from '@lucide/vue'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
 import { escapeMarkdownHtml, isPreviewableHtml } from '../../studio-markdown'
+import { useStreamingContent } from '../../use-studio-typewriter'
 import StudioHtmlPreview from './StudioHtmlPreview.vue'
 
 const props = defineProps<{ code: string; language?: string; streaming?: boolean }>()
@@ -28,11 +29,16 @@ const foldable = computed(() => lineCount.value > 14 || wrappedOverflow.value)
 const htmlPreview = computed(() => !props.streaming && isPreviewableHtml(props.code, language.value))
 const isMermaid = computed(() => language.value === 'mermaid')
 const wrap = computed(() => ['text', 'txt', 'plaintext', 'md', 'markdown', 'tex', 'latex'].includes(language.value))
+const { displayed: highlightContent, flush: flushHighlight } = useStreamingContent(toRef(props, 'code'), toRef(props, 'streaming'), 120)
+watch(language, flushHighlight, { flush: 'sync' })
 const highlighted = computed(() => {
-  if (!hljs.getLanguage(language.value)) return escapeMarkdownHtml(props.code)
-  try { return hljs.highlight(props.code, { language: language.value, ignoreIllegals: true }).value } catch { return escapeMarkdownHtml(props.code) }
+  if (!hljs.getLanguage(language.value)) return escapeMarkdownHtml(highlightContent.value)
+  try { return hljs.highlight(highlightContent.value, { language: language.value, ignoreIllegals: true }).value } catch { return escapeMarkdownHtml(highlightContent.value) }
 })
-const safeHighlight = computed(() => DOMPurify.sanitize(highlighted.value))
+const cleanHighlight = computed(() => DOMPurify.sanitize(highlighted.value))
+const safeHighlight = computed(() => props.code.startsWith(highlightContent.value)
+  ? cleanHighlight.value + escapeMarkdownHtml(props.code.slice(highlightContent.value.length))
+  : escapeMarkdownHtml(props.code))
 async function copy() {
   try {
     await navigator.clipboard.writeText(props.code)

@@ -47,6 +47,7 @@ export interface CreationTask {
   generationProgress?: ChatGenerationProgress
   responseMetrics?: ChatResponseMetrics
   preview?: string
+  poster?: string
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
   browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string }
   galleryHidden?: boolean
@@ -392,6 +393,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   const data = resultData(value)
   task.settledAt = Date.now()
   if (typeof data.reasoning === 'string') task.reasoning = data.reasoning
+  if (task.kind === 'video' && typeof data.poster === 'string') task.poster = safeResultUrl(data.poster)
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
   const status = String(data.status || data.state || '').toLowerCase()

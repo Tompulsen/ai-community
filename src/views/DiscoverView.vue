@@ -9,7 +9,7 @@ import ContentSkeleton from '../components/ContentSkeleton.vue'
 import DiscoveryComposer from '../components/DiscoveryComposer.vue'
 import GooeyInput from '../components/GooeyInput.vue'
 import { api, errorMessage, loadSession, notify, session } from '../state'
-import { kindLabels, type Work } from '../data'
+import { kindLabels, type WorkSummary } from '../data'
 import { clearFeedPreferences, feedSnapshot, readPreferences, rememberBatch, rememberExposure, rememberSearchTags } from '../feed-preferences'
 import { discoveryCache, saveDiscoveryCache } from '../discovery-cache'
 import type { FeedRequest } from '../../shared/recommendation'
@@ -29,8 +29,8 @@ const browseModes = [{ value: 'recommended', label: '发现' }, { value: 'latest
 const tagRail = ref<HTMLElement>()
 const canScrollBack = ref(false), canScrollForward = ref(false)
 let railObserver: ResizeObserver | undefined
-const works = ref<Work[]>([])
-const tags = ref<{ id: string; name: string; category: Work['kind'] }[]>([])
+const works = ref<WorkSummary[]>([])
+const tags = ref<{ id: string; name: string; category: WorkSummary['kind'] }[]>([])
 const loading = ref(false)
 const error = ref('')
 const nextCursor = ref<string | null>(null)
@@ -70,7 +70,7 @@ async function load(append = false, learnSearch = false) {
       kind: kind.value as FeedRequest['kind'], query: query.value.trim(), tag: tag.value, sort: order.value,
       seed: crypto.randomUUID(), ...feedSnapshot(expectedOwner),
     }
-    const result = await api<{ items: Work[]; nextCursor: string | null; replaced?: boolean | null }>('/api/works/feed', {
+    const result = await api<{ items: WorkSummary[]; nextCursor: string | null; replaced?: boolean | null }>('/api/works/feed', {
       method: 'POST', body: request, signal: active.signal,
     })
     if (active.signal.aborted || expectedOwner !== owner() || controller !== active || expectedConditions !== conditionsKey()) return
@@ -95,22 +95,27 @@ async function load(append = false, learnSearch = false) {
 }
 function conditionsKey() { return JSON.stringify([query.value.trim(), kind.value, tag.value, order.value]) }
 let lastConditions = conditionsKey()
-watch([query, kind, tag, order], () => {
+function applyConditions(refresh = false) {
   clearTimeout(searchTimer)
-  if (conditionsKey() !== lastConditions) controller?.abort()
-  searchTimer = setTimeout(() => {
-    const key = conditionsKey()
-    if (key === lastConditions && !controller?.signal.aborted) return
-    lastConditions = key
-    void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined, sort: order.value === 'recommended' ? undefined : order.value } })
-    void load(false, true)
-  }, 180)
+  const key = conditionsKey()
+  if (!refresh && key === lastConditions && !controller?.signal.aborted) return
+  lastConditions = key
+  void router.replace({ query: { ...route.query, q: query.value || undefined, kind: kind.value === 'all' ? undefined : kind.value, tag: tag.value || undefined, sort: order.value === 'recommended' ? undefined : order.value } })
+  void load(false, true)
+}
+watch([query, kind, tag, order], ([, nextKind, nextTag, nextOrder], [, previousKind, previousTag, previousOrder]) => {
+  clearTimeout(searchTimer)
+  if (conditionsKey() === lastConditions && !controller?.signal.aborted) return
+  controller?.abort()
+  if (nextKind !== previousKind || nextTag !== previousTag || nextOrder !== previousOrder) applyConditions()
+  else searchTimer = setTimeout(() => applyConditions(), 180)
 })
 watch(() => route.query, value => {
   query.value = typeof value.q === 'string' ? value.q : ''
   kind.value = typeof value.kind === 'string' ? value.kind : 'all'
   tag.value = typeof value.tag === 'string' ? value.tag : ''
   order.value = readOrder(value.sort)
+  applyConditions()
 })
 function observeCards() {
   exposureObserver?.disconnect()
@@ -166,8 +171,8 @@ watch(tags, async () => { await nextTick(); updateRail() })
 onBeforeUnmount(() => { clearTimeout(searchTimer); clearInterval(cleanupTimer); controller?.abort(); railObserver?.disconnect(); exposureObserver?.disconnect(); pageObserver?.disconnect() })
 const tagsRequest = api<{ items: typeof tags.value }>('/api/tags').then(result => { tags.value = result.items; return result.items }).catch(() => [])
 if (!restored) void load(false, Boolean(query.value || tag.value))
-function clearConditions() { query.value = ''; tag.value = '' }
-function reset() { clearConditions(); kind.value = 'all'; order.value = 'recommended' }
+function clearConditions() { query.value = ''; tag.value = ''; applyConditions() }
+function reset() { query.value = ''; tag.value = ''; kind.value = 'all'; order.value = 'recommended'; applyConditions() }
 </script>
 
 <template>
@@ -175,9 +180,9 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'recomme
     <h1 class="discover-heading-sr">首页</h1>
     <DiscoveryComposer />
     <Teleport to="#mobile-discovery-filters" :disabled="!mobile" defer>
-    <div v-if="mobile" class="mobile-filter-actions"><button type="button" class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" />刷新</button><button type="button" class="button btn subtle" :aria-expanded="filtersOpen" aria-controls="discovery-filters" @click="filtersOpen = !filtersOpen"><SlidersHorizontal :size="16" />筛选<span v-if="hasConditions" class="filter-dot" /></button><button type="button" class="text-link" :disabled="!hasConditions" @click="reset">清除条件</button></div>
+    <div v-if="mobile" class="mobile-filter-actions"><button type="button" class="button btn subtle" :disabled="loading" @click="applyConditions(true)"><RefreshCw :size="16" />刷新</button><button type="button" class="button btn subtle" :aria-expanded="filtersOpen" aria-controls="discovery-filters" @click="filtersOpen = !filtersOpen"><SlidersHorizontal :size="16" />筛选<span v-if="hasConditions" class="filter-dot" /></button><button type="button" class="text-link" :disabled="!hasConditions" @click="reset">清除条件</button></div>
     <div v-show="!mobile || filtersOpen" id="discovery-filters" class="discovery-toolbar">
-      <form v-if="!mobile" class="discovery-search header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="load()"><GooeyInput v-model="query" persistent placeholder="搜索作品、提示词或创作者" /></form>
+      <form v-if="!mobile" class="discovery-search header-search-slot" role="search" aria-label="作品搜索" @submit.prevent="applyConditions(true)"><GooeyInput v-model="query" persistent placeholder="搜索作品、提示词或创作者" /></form>
       <div v-if="!mobile" class="browse-modes" role="group" aria-label="浏览方式">
         <button v-for="mode in browseModes" :key="mode.value" class="browse-mode" :class="{ active: order === mode.value }" :aria-pressed="order === mode.value" @click="order = mode.value">{{ mode.label }}</button>
       </div>
@@ -199,7 +204,7 @@ function reset() { clearConditions(); kind.value = 'all'; order.value = 'recomme
       </div>
     </div>
     </Teleport>
-    <div class="feed-actions"><p class="form-note" role="status" aria-live="polite">{{ feedStatus }}</p><button class="text-link" @click="preferenceDialog?.showModal()">推荐偏好</button><button class="button btn subtle" :disabled="loading" @click="load()"><RefreshCw :size="16" aria-hidden="true" />{{ loading ? '加载中…' : order === 'recommended' ? '换一批' : '刷新' }}</button></div>
+    <div class="feed-actions"><p class="form-note" role="status" aria-live="polite">{{ feedStatus }}</p><button class="text-link" @click="preferenceDialog?.showModal()">推荐偏好</button><button class="button btn subtle" :disabled="loading" @click="applyConditions(true)"><RefreshCw :size="16" aria-hidden="true" />{{ loading ? '加载中…' : order === 'recommended' ? '换一批' : '刷新' }}</button></div>
     <div v-if="isFiltered" class="feed-scope form-note"><span>{{ order === 'following' ? '当前仅显示已关注作者的作品。' : '当前仅显示符合筛选条件的作品。' }}</span><button class="text-link" @click="reset">查看全部作品</button></div>
     <div v-if="query || tag || (!mobile && kind !== 'all')" class="search-result"><div class="active-conditions"><span v-if="kind !== 'all'">类型：{{ kind === 'resource' ? '资源' : kindLabels[kind as keyof typeof kindLabels] }}</span><span v-if="query">搜索：{{ query }}</span><span v-if="tag">标签：{{ tag }}</span></div><button v-if="query || tag" class="text-link" @click="clearConditions">清除条件 <X :size="13" /></button></div>
     <p v-if="error && !retryAppend" class="notice-inline" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>

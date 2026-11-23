@@ -125,7 +125,7 @@ for (const shape of ['portrait', 'square', 'landscape', 'multiple'] as const) {
       const actions = page.getByRole('group', { name: '生成结果操作', exact: true })
       for (const name of ['发布作品', '复用参数']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
       await expect(actions.getByRole('button', { name: '新的创作', exact: true })).toHaveCount(0)
-      await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
+      await expect(actions.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
       await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
       await expect(actions.getByRole('button', { name: /^下载/ })).toHaveCount(images.length)
       const mediaBounds = (await page.locator('.creation-media').boundingBox())!

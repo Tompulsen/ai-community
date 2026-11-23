@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eraser, History, LoaderCircle, Maximize, MoreHorizontal, Pencil, Plus, Puzzle, Quote, RefreshCw, Settings2, Square, Trash2, X } from '@lucide/vue'
 import { session, errorMessage, notify } from '../state'
 import type { Work, WorkFile } from '../data'
@@ -20,8 +20,6 @@ import StudioModelPicker from './StudioModelPicker.vue'
 import StudioConversations from './StudioConversations.vue'
 import StudioConversationTitle from './StudioConversationTitle.vue'
 import StudioGallery from './StudioGallery.vue'
-import StudioMarkdown from './studio-message/StudioMarkdown.vue'
-import StudioReasoningPanel from './studio-message/StudioReasoningPanel.vue'
 import StudioAiStatus from './studio-message/StudioAiStatus.vue'
 import StudioMessageSources from './studio-message/StudioMessageSources.vue'
 import StudioMessageQuote from './studio-message/StudioMessageQuote.vue'
@@ -48,6 +46,15 @@ import { configuredModelFormat, modelFormat, modelsForKind, setModelFormat, take
 import { CHAT_API_FORMATS, type ChatApiFormat } from '../../shared/studio/chat-api-format'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import type { StudioEntry } from '../studio-entry'
+const markdownRetry = ref<() => void>(), reasoningRetry = ref<() => void>()
+const StudioMarkdown = defineAsyncComponent({
+  loader: () => import('./studio-message/StudioMarkdown.vue'),
+  onError: (_error, retry) => { markdownRetry.value = () => { markdownRetry.value = undefined; retry() } },
+})
+const StudioReasoningPanel = defineAsyncComponent({
+  loader: () => import('./studio-message/StudioReasoningPanel.vue'),
+  onError: (_error, retry) => { reasoningRetry.value = () => { reasoningRetry.value = undefined; retry() } },
+})
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean; entryOnly?: boolean; entryPending?: boolean }>(), { mode: 'text', headerVisible: true })
 const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
@@ -71,7 +78,7 @@ function removeDraftImage(index: number) {
 }
 watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => materialSubmission?.abort())
 onBeforeUnmount(() => { live = false; materialSubmission?.abort() })
-const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats() } } })
+const draftQuote = computed({ get: () => current.value?.draftQuote, set: value => { if (current.value) { current.value.draftQuote = value; void saveChats(true)?.catch(() => {}) } } })
 const referenceUrls = computed(() => files.value.flatMap(file => file.sourceUrl ? [file.sourceUrl] : []))
 const historyMenu = ref<InstanceType<typeof StudioPopover>>(), nearBottom = ref(true)
 const messagesContent = ref<HTMLElement>()
@@ -109,7 +116,7 @@ onBeforeUnmount(() => transcriptObserver.disconnect())
 const mobileSkillsLoaded = ref(false), desktopSkillsLoaded = ref(false)
 const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
-const busy = computed(() => props.entryPending || restoringTask.value || !props.entryOnly && current.value && isConversationBusy(current.value))
+const busy = computed(() => props.entryPending || restoringTask.value || !props.entryOnly && current.value && (isConversationBusy(current.value) || chats.initialSaving[current.value.id]))
 const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
@@ -233,7 +240,7 @@ function applyRemix(source: Work, initialFiles: StudioFile[] = []) {
   void saveChats()
   return true
 }
-watch([prompt, files], () => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats() } }, { deep: true })
+watch([prompt, files], (_value, previous) => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats(files.value !== previous[1])?.catch(() => {}) } }, { deep: true })
 watch(model, () => { if (current.value && model.value) { current.value.textModel = model.value; void saveChats() } })
 watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.reasoning, message.streaming, message.tools?.map(tool => [tool.id, tool.status])]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
 function followOutput() { if (nearBottom.value) scrollToBottom() }
@@ -331,7 +338,7 @@ async function send() {
     if (owner !== session.user?.id || !chats.sessions.includes(chat) || chat.draft || chat.draftFiles?.length || chat.draftQuote) return
     chat.draft = text; chat.draftFiles = attached; chat.draftQuote = quote
     if (current.value?.id === chat.id) { prompt.value = text; files.value = attached }
-    void saveChats()
+    void saveChats(true)?.catch(() => {})
   }
   try {
     const submitted = await sendChat(chat, text, attached, acceptedModel, undefined, undefined, { quote })
@@ -455,14 +462,14 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <label v-if="selecting" class="creation-select-turn"><input v-model="selectedTurns" type="checkbox" :value="mediaTask(message)!.id" :aria-label="`选择消息：${mediaTask(message)!.prompt}`" /><span class="studio-sr-only">选择此轮</span></label>
           <StudioMediaTurn v-for="role in (['user', 'assistant'] as const)" :key="role" :role="role" :task="mediaTask(message)!" :conversation="current" @action="(action, task, index) => emit('mediaAction', action, task, index)" @publish="(task, destination) => emit('publish', task, destination)" @preview="(task, index) => mediaGallery?.open(task, index)" />
         </div>
-        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
+        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :class="{ 'history-deferred': current.messages.length > 80 && messageIndex < current.messages.length - 12 && !pending(message) && edited?.id !== message.id }" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
           <template #status><StudioAiStatus v-if="message.role === 'assistant' && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" /></template>
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
           <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
-          <StudioReasoningPanel v-if="message.reasoning" :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" />
+          <Suspense v-if="message.reasoning"><StudioReasoningPanel :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" /><template #fallback><div><p class="reasoning-loading">{{ message.reasoning }}</p><button v-if="reasoningRetry" type="button" class="icon-button" title="重新加载思考过程" aria-label="重新加载思考过程" @click="reasoningRetry?.()"><RefreshCw :size="16" /></button></div></template></Suspense>
           <button v-if="canStop && pending(message)" class="icon-button" type="button" title="停止本页等待" aria-label="停止等待" @click="stop(message)"><Square :size="16" /></button>
           <StudioMessageEditor v-if="edited?.id === message.id" :initial-value="messageText(message)" :disabled="sourceBlocked || busy" :save-label="message.role === 'assistant' ? '保存修改' : '保存并重新生成'" :on-save="text => saveEdit(message, text)" @cancel="edited = undefined" />
-          <StudioMarkdown v-else-if="message.role === 'assistant'" class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" @render="followOutput" /><p v-else class="user-text message-bubble">{{ messageText(message) }}</p>
+          <Suspense v-else-if="message.role === 'assistant'"><StudioMarkdown class="message-content" :content="messageText(message)" :streaming="pending(message)" :sources="message.sources" @render="followOutput" /><template #fallback><div class="message-content"><p class="markdown-loading">{{ messageText(message) }}</p><button v-if="markdownRetry" type="button" class="icon-button" title="重新加载正文" aria-label="重新加载正文" @click="markdownRetry?.()"><RefreshCw :size="16" /></button></div></template></Suspense><p v-else class="user-text message-bubble">{{ messageText(message) }}</p>
           <div v-if="Array.isArray(message.content)" class="message-attachments"><template v-for="(part, index) in message.content" :key="index">
             <button v-if="part.type === 'image_url' && mediaUrl(part.image_url?.url, 'image')" class="attachment-image" type="button" title="放大图片" aria-label="放大图片附件" @click="openAttachment(mediaUrl(part.image_url?.url, 'image'))"><img :src="mediaUrl(part.image_url?.url, 'image')" alt="图片附件" loading="lazy" /></button>
             <div v-else-if="part.type === 'video_url' && mediaUrl(part.video_url?.url, 'video')" class="attachment-video"><video :src="mediaUrl(part.video_url?.url, 'video')" controls playsinline preload="metadata" aria-label="视频附件" /><button class="icon-button attachment-expand" type="button" title="放大视频附件" aria-label="放大视频附件" @click="openAttachment(mediaUrl(part.video_url?.url, 'video'), 'video')"><Maximize :size="17" /></button></div>
@@ -503,7 +510,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <button v-if="waitingForMaterials" class="composer-submit" type="button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
           <button v-else class="composer-submit send-button" :title="entryOnly ? '发送到创作台' : '发送'" :aria-label="entryOnly ? '发送到创作台' : '发送'" :disabled="!canSend"><ArrowUp :size="21" /><span class="mobile-send-label">发送</span></button>
         </div>
-        <p v-if="error || chats.error" class="form-error" role="alert">{{ error || chats.error }}</p>
+        <p v-if="error || chats.error && (entryOnly || !chats.initialSaving[current.id])" class="form-error" role="alert">{{ error || chats.error }}</p>
       </form>
     </section>
     <section v-else class="chat-main">
@@ -520,6 +527,12 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
   </div>
 </template>
 <style scoped>
+.markdown-loading, .reasoning-loading { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-loading { min-height: 28px; }
+.reasoning-loading { max-height: 320px; overflow: auto; color: var(--muted); }
+.history-deferred { content-visibility: auto; contain-intrinsic-block-size: auto 24rem; }
+.history-deferred.user { contain-intrinsic-block-size: auto 9rem; }
+@media print { .history-deferred { content-visibility: visible; } }
 .native-chat { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .attachment-drop-hint { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; gap: 12px; pointer-events: none; border-radius: 8px; background: color-mix(in srgb, var(--surface) 94%, transparent); color: var(--ink); }
 .creation-selection, .creation-select-turn { display: flex; align-items: center; gap: 8px; }.creation-selection { flex: none; min-height: 44px; color: var(--muted); font-size: 13px; }.creation-selection label { display: flex; align-items: center; gap: 8px; }.creation-selection > span { margin-inline-end: auto; }.creation-turn { position: relative; }.creation-select-turn { position: absolute; inset-inline-start: 0; top: 0; min-height: 28px; }.creation-turn:has(> .creation-select-turn) { padding-inline-start: 32px; }

@@ -5,7 +5,8 @@ import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square,
 import type { Work, WorkFile } from '../data'
 import { errorMessage, session } from '../state'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
-import { chats, newChat, saveChats } from '../native-chat'
+import { chats, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
+import { createDeferredWriteQueue } from '../../shared/studio/latest-write-queue'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
 import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
 import StudioMediaParameters from './StudioMediaParameters.vue'
@@ -55,7 +56,7 @@ const skipAutomaticReference = ref(false), restoringTask = ref(false), parameter
 const submitting = computed(() => Boolean(props.entryPending || submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
 const currentConversation = computed(() => props.entryOnly ? undefined : chats.sessions.find(chat => chat.id === chats.activeId))
-const composerReady = computed(() => props.entryOnly || chats.ready && !!currentConversation.value)
+const composerReady = computed(() => props.entryOnly || chats.ready && !!currentConversation.value && !chats.initialSaving[currentConversation.value.id])
 const currentTasks = computed(() => currentConversation.value ? mediaTasksForConversation(currentConversation.value) : [])
 const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
 const automaticReferences = computed(() => props.kind === 'image' && currentConversation.value && !references.value.length && !skipAutomaticReference.value
@@ -76,7 +77,22 @@ const referenceLimitIssue = computed(() => references.value.length > (props.kind
 const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
-onUnmounted(() => { live = false; draftRevision++; materialSubmission?.abort() })
+function createDraftWrites() {
+  return createDeferredWriteQueue(async ({ key, owner, draft }: { key: string; owner: string; draft: NativeChat['mediaDraft'] }) => {
+    try { localStorage.setItem(key, JSON.stringify(draft)) }
+    catch { if (owner === session.user?.id) creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
+  }, 200)
+}
+let draftWrites = createDraftWrites()
+function flushDrafts() { void draftWrites.flush(); void flushChats() }
+function flushHiddenDrafts() { if (document.visibilityState === 'hidden') flushDrafts() }
+window.addEventListener('pagehide', flushDrafts)
+document.addEventListener('visibilitychange', flushHiddenDrafts)
+onUnmounted(() => {
+  flushDrafts(); live = false; draftRevision++; materialSubmission?.abort()
+  window.removeEventListener('pagehide', flushDrafts)
+  document.removeEventListener('visibilitychange', flushHiddenDrafts)
+})
 const draftScope = () => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}:${draftRevision}`
 const referenceFiles = computed<StudioFile[]>({
   get: () => references.value.map(file => ({
@@ -113,6 +129,8 @@ function legacyApiFormat(value: string): ModelApiFormat {
   return props.kind === 'image' ? usesGeminiImageChat(value) ? 'chat-completions' : 'images' : 'openai'
 }
 function loadDraft() {
+  void draftWrites.flush()
+  draftWrites = createDraftWrites()
   materialSubmission?.abort()
   if (props.entryOnly) {
     draftRevision++; model.value = ''; manualSize.value = ''; ratio.value = 'auto'
@@ -164,9 +182,10 @@ watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => 
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, skipAutomaticReference, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
-  const draft = JSON.parse(JSON.stringify({ prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value, imageOptions, videoOptions, protocol: protocol.value, apiFormat: apiFormat.value, sourceWorkId: sourceWorkId.value, references: references.value, skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }))
-  try { localStorage.setItem(draftKey(), JSON.stringify(draft)) }
-  catch { creation.storageError = '当前草稿无法保存到浏览器，请保留提示词。' }
+  const draft = { prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value,
+    imageOptions: { ...imageOptions }, videoOptions: { ...videoOptions }, protocol: protocol.value, apiFormat: apiFormat.value,
+    sourceWorkId: sourceWorkId.value, references: references.value.map(file => ({ ...file })), skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }
+  void draftWrites({ key: draftKey(), owner: session.user.id, draft })
   if (currentConversation.value) {
     currentConversation.value.mediaDrafts ||= {}
     currentConversation.value.mediaDrafts[props.kind] = draft
@@ -330,12 +349,12 @@ async function submit(onRegistered?: () => void) {
         if (prompt.value === submittedPrompt) prompt.value = ''
         if (JSON.stringify(references.value) === submittedReferences) references.value = []
         branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; skipAutomaticReference.value = false
-        await saveChats()
+        await saveChats(true)
       } else if (owner === session.user?.id) {
         const draft = chat.mediaDrafts?.[kind]
         if (draft?.prompt === submittedPrompt) { draft.prompt = ''; if (draft.imageEditTaskId === imageEditId) delete draft.imageEditTaskId }
         if (draft && JSON.stringify(draft.references) === submittedReferences) draft.references = []
-        await saveChats()
+        await saveChats(true)
       }
       if (owner === session.user?.id) chats.preparing[chat.id] = false
       preparing = false

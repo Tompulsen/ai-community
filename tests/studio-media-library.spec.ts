@@ -15,6 +15,7 @@ async function fixture(page: Page, count = 125, videoOnly = false, failImageOnce
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const image = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#287acc' } }).jpeg().toBuffer()
+  const poster = await sharp(image).resize(480).webp().toBuffer()
   const video = await readFile('tests/fixtures/poster-black-intro.mp4')
   const mediaReads: string[] = [], generationCalls: unknown[] = []
   await page.route('**/api/creation/**', route => {
@@ -25,6 +26,7 @@ async function fixture(page: Page, count = 125, videoOnly = false, failImageOnce
     if (path === '/api/creation/media') {
       mediaReads.push(url.searchParams.get('url') || '')
       if (failImageOnce && mediaReads.length === 1) return route.fulfill({ status: 503, json: { message: '模拟缩略图读取失败。' } })
+      if (url.searchParams.get('variant') === 'poster') return route.fulfill({ contentType: 'image/webp', body: poster, headers: { 'x-video-duration': '2.5' } })
       return route.fulfill({ contentType: url.searchParams.get('kind') === 'video' ? 'video/mp4' : 'image/jpeg', body: url.searchParams.get('kind') === 'video' ? video : image })
     }
     if (path === '/api/creation/generate') { generationCalls.push(route.request().postDataJSON()); return route.fulfill({ status: 405, json: { message: '本测试不提交生成。' } }) }
@@ -180,27 +182,22 @@ test('a failed remote thumbnail recovers from the saved original and fits both t
   expect(generationCalls).toHaveLength(0)
 })
 
-test('poster slots bound fetching and decoding, abort queued and active work, and reject oversized originals', async ({ page }) => {
+test('poster slots bound remote fetches, abort queued and active work, and reject oversized posters', async ({ page }) => {
   await fixture(page, 1)
-  const video = await readFile('tests/fixtures/poster-black-intro.mp4')
+  const poster = await sharp({ create: { width: 192, height: 128, channels: 3, background: 'red' } }).webp().toBuffer()
   await page.route('**/api/creation/media**', async route => {
     if (!new URL(route.request().url()).searchParams.has('captureQueue')) return route.fallback()
     await new Promise(resolve => setTimeout(resolve, 120))
-    await route.fulfill({ contentType: 'video/mp4', body: video }).catch(() => {})
+    await route.fulfill({ contentType: 'image/webp', body: poster, headers: { 'x-video-duration': '2.5' } }).catch(() => {})
   })
   const result = await page.evaluate(async () => {
     const modulePath = '/src/studio-video-poster.ts', { extractVideoPoster } = await import(modulePath)
-    const create = document.createElement.bind(document), load = HTMLMediaElement.prototype.load
-    const tracked = new WeakSet<HTMLMediaElement>()
+    const original = window.fetch.bind(window)
     let active = 0, maximum = 0
-    document.createElement = ((...args: Parameters<typeof document.createElement>) => {
-      const element = create(...args)
-      if (args[0] === 'video') { tracked.add(element as HTMLVideoElement); active++; maximum = Math.max(maximum, active) }
-      return element
-    }) as typeof document.createElement
-    HTMLMediaElement.prototype.load = function () {
-      if (tracked.has(this) && !this.hasAttribute('src')) { tracked.delete(this); active-- }
-      return load.call(this)
+    window.fetch = async (...args) => {
+      active++; maximum = Math.max(maximum, active)
+      try { return await original(...args) }
+      finally { active-- }
     }
     const controllers = Array.from({ length: 6 }, () => new AbortController())
     const work = controllers.map((controller, index) => extractVideoPoster(`/api/creation/media?url=https://media.example/${index}.mp4&kind=video&captureQueue=1`, controller.signal)
@@ -208,21 +205,19 @@ test('poster slots bound fetching and decoding, abort queued and active work, an
       .catch((error: Error) => ({ duration: 0, error: error.name })))
     setTimeout(() => { controllers[0]!.abort(); controllers[2]!.abort() }, 30)
     const values = await Promise.all(work)
-    const original = window.fetch.bind(window)
     let cancelled = false
     window.fetch = async (source, init) => String(source).includes('oversized')
-      ? new Response(new ReadableStream({ cancel() { cancelled = true } }), { headers: { 'content-type': 'video/mp4', 'content-length': String(64 * 1024 * 1024 + 1) } }) : original(source, init)
+      ? new Response(new ReadableStream({ cancel() { cancelled = true } }), { headers: { 'content-type': 'image/webp', 'content-length': String(1024 * 1024 + 1) } }) : original(source, init)
     let oversized = ''
     try { await extractVideoPoster('/api/creation/media?url=oversized&kind=video', new AbortController().signal) }
     catch (error) { oversized = (error as Error).message }
     finally { window.fetch = original }
-    document.createElement = create; HTMLMediaElement.prototype.load = load
     return { values, oversized, cancelled, maximum, active }
   })
   expect(result.maximum).toBe(2)
   expect(result.active).toBe(0)
   expect(result.values.filter(value => value.error === 'AbortError')).toHaveLength(2)
   expect(result.values.filter(value => Math.abs(value.duration - 2.5) < .1)).toHaveLength(4)
-  expect(result.oversized).toContain('视频较大')
+  expect(result.oversized).toContain('封面超过')
   expect(result.cancelled).toBe(true)
 })

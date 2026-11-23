@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import test, { after, beforeEach } from 'node:test'
 import pg from 'pg'
 import { accountSessionHash, readAccountSession, accountSessionVerifier } from './account-session.ts'
-import { authServices, publicUser, roleCondition } from './auth.ts'
+import { authServices, getUser, publicUser, roleCondition } from './auth.ts'
 import { handleAccount } from './account.ts'
 import { saveSession, removeSessionById, readSessionById } from './native-account/index.ts'
 
@@ -133,13 +133,16 @@ test('only successful account checks are cached and explicit session checks bypa
 })
 
 function authenticationFixture() {
-  const snapshots = []
+  const snapshots = [], statements = []
   const mapping = { valid: true }
-  const permissions = { admin: false }
+  const permissions = { admin: false, roles: [], assignedRoleIds: [], rootUserId: null }
   const user = { id: '7', username: 'creator', host: null, token: 'native-generation' }
   const sessionHash = accountSessionHash(request())
   const db = { async query(sql, values = []) {
-    if (sql.includes('FROM "user" u JOIN')) return { rows: [user] }
+    statements.push({ sql, values })
+    if (sql.includes('FROM "user" u JOIN')) return { rows: [{ ...user,
+      roles: permissions.admin ? [{ id: 'admin', target: 'conditional', condFormula: { type: 'isLocal' }, isAdministrator: true }] : permissions.roles,
+      assignedRoleIds: permissions.assignedRoleIds, rootUserId: permissions.rootUserId }] }
     if (sql.startsWith('SELECT 1 FROM external_account')) return { rows: mapping.valid ? [{}] : [] }
     if (sql.startsWith('UPDATE external_account')) { snapshots.push(values); return { rows: [] } }
     if (sql.startsWith('SELECT id,target')) return { rows: permissions.admin
@@ -148,7 +151,7 @@ function authenticationFixture() {
     assert.fail('Unexpected auth query: ' + sql)
   } }
   const redis = new Proxy({}, { get() { assert.fail('Community authentication must only use native session storage') } })
-  return { auth: authServices({ db, redis, config }), user, snapshots, mapping, permissions, sessionHash,
+  return { auth: authServices({ db, redis, config }), user, snapshots, statements, mapping, permissions, sessionHash,
     req: { url: '/api/session', headers: { cookie: `octopus_new_api_session=${opaque}` } } }
 }
 
@@ -219,6 +222,107 @@ test('cached native account checks still reload community administrator permissi
   assert.equal(calls, 1)
 })
 
+test('authenticated media requests keep fresh permissions within two local database reads', async t => {
+  t.mock.method(globalThis, 'fetch', async () => envelope())
+  const fixture = authenticationFixture()
+  fixture.req.method = 'GET'
+  fixture.req.url = '/legacy-files/file1'
+  const result = await fixture.auth.authenticate(fixture.req)
+  assert.equal(result.user.id, '7')
+  assert.equal(result.user.isAdmin, false)
+  assert.equal(fixture.statements.length, 2)
+  assert.deepEqual(fixture.statements[1], {
+    sql: 'SELECT 1 FROM external_account WHERE issuer=$1 AND subject=$2 AND "userId"=$3',
+    values: ['https://accounts.test', '7', '7'],
+  })
+  assert.deepEqual(fixture.snapshots, [])
+})
+
+test('PostgreSQL user permissions use one read and retain role expiry, conditional assignments and blocked-user guards',
+  { skip: !process.env.FOLLOWING_TEST_DATABASE_URL }, async t => {
+  const connectionString = process.env.FOLLOWING_TEST_DATABASE_URL
+  const url = new URL(connectionString)
+  assert.equal(url.pathname, '/community_follow_test')
+  assert(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  const client = new pg.Client({ connectionString })
+  t.after(() => client.end())
+  await client.connect()
+  await client.query(`CREATE TEMP TABLE "user" (
+    id text PRIMARY KEY, username text, name text, host text, token text, "createdAt" timestamptz,
+    "isSuspended" boolean DEFAULT false, "isDeleted" boolean DEFAULT false, "movedToUri" text,
+    "isLocked" boolean DEFAULT false, "isBot" boolean DEFAULT false, "isCat" boolean DEFAULT false,
+    "isExplorable" boolean DEFAULT true, "followersCount" integer DEFAULT 4,
+    "followingCount" integer DEFAULT 2, "notesCount" integer DEFAULT 10, "avatarId" text, "bannerId" text
+  );
+  CREATE TEMP TABLE user_profile ("userId" text PRIMARY KEY, description text);
+  CREATE TEMP TABLE role (
+    id text PRIMARY KEY, target text, "condFormula" jsonb, "isAdministrator" boolean, "isModerator" boolean
+  );
+  CREATE TEMP TABLE role_assignment ("userId" text, "roleId" text, "expiresAt" timestamptz);
+  CREATE TEMP TABLE meta ("rootUserId" text);
+  INSERT INTO "user" (id,username,name,token,"createdAt") VALUES ('7','creator','Creator','private-token',NOW());
+  INSERT INTO user_profile VALUES ('7','Profile')`)
+  let queries = 0
+  const db = { async query(...args) {
+    queries++
+    const result = await client.query(...args)
+    assert(result.rows.length <= 1, 'Role assignments must not duplicate the user row')
+    return result
+  } }
+  async function read(userId = '7') {
+    queries = 0
+    const user = await getUser(db, userId)
+    assert.equal(queries, 1)
+    return user
+  }
+  const first = await read()
+  assert.equal(first.isAdmin, false)
+  assert.equal(first.isModerator, false)
+  assert.equal(first.bio, 'Profile')
+  for (const key of ['roles', 'assignedRoleIds', 'rootUserId', 'token']) {
+    assert.equal(Object.hasOwn(first, key), false, `${key} is private permission metadata`)
+    assert.equal(Object.hasOwn(publicUser(first), key), false)
+  }
+  assert.equal(first.tokenHash.length, 64)
+  await client.query(`INSERT INTO role VALUES
+    ('manual-admin','manual',NULL,true,false),
+    ('ordinary','manual',NULL,false,false),
+    ('conditional-moderator','conditional',$1::jsonb,false,true)`, [JSON.stringify({ type: 'and', values: [
+        { type: 'isLocal' }, { type: 'followersMoreThanOrEq', value: 4 },
+        { type: 'roleAssignedTo', roleId: 'ordinary' },
+      ] })])
+  await client.query(`INSERT INTO role_assignment VALUES
+    ('7','manual-admin',NOW()-INTERVAL '1 second'),
+    ('7','ordinary',NOW()+INTERVAL '1 hour'),
+    ('7','ordinary',NOW()+INTERVAL '1 hour')`)
+  const conditional = await read()
+  assert.equal(conditional.isAdmin, false, 'Expired manual administrator assignments cannot grant privileges')
+  assert.equal(conditional.isModerator, true, 'Conditional roles can reference active nonprivileged assignments')
+  await client.query(`UPDATE role_assignment SET "expiresAt"=NOW()-INTERVAL '1 second' WHERE "roleId"='ordinary'`)
+  assert.equal((await read()).isModerator, false)
+  await client.query(`UPDATE role_assignment SET "expiresAt"=NULL WHERE "roleId"='manual-admin'`)
+  const manual = await read()
+  assert.equal(manual.isAdmin, true)
+  assert.equal(manual.isModerator, true)
+  await client.query(`DELETE FROM role_assignment WHERE "roleId"='manual-admin'`)
+  assert.equal((await read()).isAdmin, false)
+  await client.query(`INSERT INTO meta VALUES ('7')`)
+  const root = await read()
+  assert.equal(root.isAdmin, true)
+  assert.equal(root.isModerator, true)
+  for (const [field, value, original] of [
+    ['isSuspended', true, false], ['isDeleted', true, false], ['movedToUri', 'https://moved.test', null],
+    ['host', 'remote.test', null], ['token', null, 'private-token'], ['token', '', 'private-token'],
+  ]) {
+    await client.query(`UPDATE "user" SET "${field}"=$1 WHERE id='7'`, [value])
+    assert.equal(await read(), null, `${field} must prevent even root-user authentication`)
+    await client.query(`UPDATE "user" SET "${field}"=$1 WHERE id='7'`, [original])
+  }
+  await client.query(`DELETE FROM user_profile WHERE "userId"='7'`)
+  assert.equal(await read(), null)
+  assert.equal(await read('missing'), null)
+})
+
 test('session reads expire stale community cookies without minting a replacement or changing the native identity', async t => {
   t.mock.method(globalThis, 'fetch', async () => envelope())
   const fixture = authenticationFixture()
@@ -245,6 +349,18 @@ test('cached native identities stop immediately after native session revocation'
   assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '7')
   assert.equal(calls, 1)
   await removeSessionById(opaque)
+  assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
+  assert.equal(calls, 1)
+})
+
+test('cached native identities stop immediately after native session expiry', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return envelope() })
+  const fixture = authenticationFixture()
+  fixture.req.url = '/api/works'
+  assert.equal((await fixture.auth.authenticate(fixture.req)).user.id, '7')
+  const session = await readSessionById(opaque)
+  await saveSession(opaque, { ...session, expiresAt: Date.now() / 1000 - 1 })
   assert.deepEqual(await fixture.auth.authenticate(fixture.req), { user: null, sessionHash: null })
   assert.equal(calls, 1)
 })
@@ -300,9 +416,9 @@ function synchronizationFixture(existing = true) {
   async function query(sql, values = []) {
     queries.push(sql)
     if (sql.startsWith('SELECT "rootUserId"')) return { rows: [{ rootUserId: 'admin123' }] }
+    if (sql.includes('FROM "user" u JOIN user_profile')) return { rows: [{ ...user, roles: [], assignedRoleIds: [], rootUserId: 'admin123' }] }
     if (sql.includes('FROM role')) return { rows: [] }
     if (sql.startsWith('SELECT "userId" FROM external_account')) return { rows: existing ? [{ userId: state.mappedUserId }] : [] }
-    if (sql.includes('FROM "user" u JOIN user_profile')) return { rows: [user] }
     if (sql.startsWith('SELECT id FROM "user" WHERE id=')) return { rows: state.numericIdOccupied ? [{ id: '7' }] : [] }
     if (sql.startsWith('SELECT 1 FROM "user" WHERE "usernameLower"')) return { rows: state.usernameOccupied ? [{}] : [] }
     if (sql.startsWith('UPDATE external_account')) { snapshots.push(values); return { rows: [] } }

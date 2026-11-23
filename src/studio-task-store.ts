@@ -7,6 +7,9 @@ const loadedForUpdate = new Map<string, Map<string, string>>()
 const mediaIdentities = new Map<string, Map<string, string>>()
 const deletedTaskIds = new Map<string, Set<string>>()
 const writes = new Map<string, Promise<void>>()
+interface CachedReads { revision: string; values: Map<string, Promise<unknown>> }
+const cachedReads = new Map<string, CachedReads>()
+const cachedStorageReads = new Map<string, CachedReads>()
 let opening: Promise<IDBDatabase> | undefined
 interface TaskRecord {
   owner: string
@@ -17,6 +20,8 @@ interface TaskRecord {
 }
 interface AssetRecord { owner: string; key: string; taskId: string; blob: Blob; identity: string }
 interface PreviewRecord { owner: string; id: string; identity: string; blob: Blob; duration?: number }
+interface TaskMetadata { owner: string; initialized?: boolean; revision?: string; storageRevision?: string }
+export interface TaskSummary { total: number; mediaCount: number; models: string[] }
 export interface TaskPageCursor { createdAt: number; id: string }
 export interface TaskPageQuery {
   kind?: string
@@ -27,6 +32,7 @@ export interface TaskPageQuery {
   since?: number
   after?: TaskPageCursor
   limit?: number
+  summary?: boolean
 }
 function checkOwner(owner: string) {
   if (!owner || owner.length > 200 || /[\u0000-\u001f]/.test(owner)) throw new Error('账号数据空间无效。')
@@ -48,7 +54,7 @@ function database() {
     request.onblocked = () => { opening = undefined; reject(new Error('媒体数据库正在更新，请关闭其它旧页面后重试。')) }
     request.onsuccess = () => {
       const db = request.result
-      db.onversionchange = () => { db.close(); opening = undefined }
+      db.onversionchange = () => { db.close(); opening = undefined; cachedReads.clear(); cachedStorageReads.clear() }
       resolve(db)
     }
   })
@@ -66,6 +72,43 @@ function read<T>(store: IDBObjectStore, key: IDBValidKey) {
     request.onsuccess = () => resolve(request.result as T | undefined)
     request.onerror = () => reject(request.error)
   })
+}
+function updateMetadata(transaction: IDBTransaction, owner: string, changed: boolean, options: { initialized?: boolean; storageOnly?: boolean } = {}) {
+  const meta = transaction.objectStore('meta'), request = meta.get(owner)
+  request.onsuccess = () => {
+    const revision = changed ? crypto.randomUUID() : undefined
+    meta.put({ ...(request.result as TaskMetadata | undefined), owner, ...(options.initialized ? { initialized: true } : {}),
+      ...(revision ? { storageRevision: revision, ...(!options.storageOnly ? { revision } : {}) } : {}) } satisfies TaskMetadata)
+  }
+}
+async function dataRevision(owner: string, storage: boolean) {
+  const db = await database(), transaction = db.transaction('meta'), done = completed(transaction)
+  const metadata = await read<TaskMetadata>(transaction.objectStore('meta'), owner)
+  await done
+  return (storage ? metadata?.storageRevision || metadata?.revision : metadata?.revision) || ''
+}
+async function cachedTaskRead<T>(owner: string, key: string, load: () => Promise<T>, storage = false): Promise<T> {
+  checkOwner(owner)
+  await writes.get(owner)?.catch(() => {})
+  const revision = await dataRevision(owner, storage), caches = storage ? cachedStorageReads : cachedReads
+  // Older tabs can still write metadata without a revision.
+  if (!revision) return load()
+  let cache = caches.get(owner)
+  if (!cache || cache.revision !== revision) {
+    cache = { revision, values: new Map() }; caches.set(owner, cache)
+  }
+  let pending = cache.values.get(key) as Promise<T> | undefined
+  if (!pending) {
+    const accepted = cache
+    pending = load().then(async value => {
+      if (revision !== await dataRevision(owner, storage)) return cachedTaskRead(owner, key, load, storage)
+      return value
+    }).catch(cause => { if (accepted.values.get(key) === pending) accepted.values.delete(key); throw cause })
+    // Keep search text from accumulating an unbounded set of summaries.
+    if (cache.values.size >= 20) cache.values.delete(cache.values.keys().next().value!)
+    cache.values.set(key, pending)
+  }
+  return pending
 }
 function ownerRange(owner: string) {
   return IDBKeyRange.bound([owner, 0, ''], [owner, Number.MAX_SAFE_INTEGER, '\uffff'])
@@ -216,8 +259,10 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
         for (const asset of assets) originals.put(asset)
       }
     }
-    transaction.objectStore('meta').put({ owner, initialized: true })
+    const changedRecords = removed.length > 0 || prepared.length > 0
+    updateMetadata(transaction, owner, changedRecords, { initialized: true })
     await done
+    if (changedRecords) { cachedReads.delete(owner); cachedStorageReads.delete(owner) }
     initialized.set(owner, values)
     for (const id of values.keys()) loadedForUpdate.get(owner)?.delete(id)
     const identities = new Map(mediaIdentities.get(owner))
@@ -234,7 +279,7 @@ export function deleteTaskRecords(owner: string, ids: readonly string[]): Promis
   const selected = [...new Set(ids)]
   if (!selected.length) return Promise.resolve()
   const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
-    const db = await database(), transaction = db.transaction(['tasks', 'previews'], 'readwrite'), done = completed(transaction)
+    const db = await database(), transaction = db.transaction(['tasks', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
     const records = transaction.objectStore('tasks'), previews = transaction.objectStore('previews')
     let failure: Error | undefined
     for (const id of selected) {
@@ -247,10 +292,11 @@ export function deleteTaskRecords(owner: string, ids: readonly string[]): Promis
           transaction.abort()
           return
         }
-        records.delete([owner, id]); clearTaskPreviews(previews, owner, id)
+        records.delete([owner, id]); clearTaskPreviews(previews, owner, id); updateMetadata(transaction, owner, true)
       }
     }
     try { await done } catch (cause) { throw failure || cause }
+    cachedReads.delete(owner); cachedStorageReads.delete(owner)
     const deleted = deletedTaskIds.get(owner) || new Set<string>()
     for (const id of selected) { deleted.add(id); initialized.get(owner)?.delete(id); loadedForUpdate.get(owner)?.delete(id); mediaIdentities.get(owner)?.delete(id) }
     deletedTaskIds.set(owner, deleted)
@@ -264,45 +310,61 @@ export function galleryOutputIndexes(task: CreationTask) {
   return task.urls.map((_, index) => index).filter(index => !hidden.has(index))
 }
 export async function getTaskStorageSize(owner: string) {
-  checkOwner(owner)
-  const db = await database(), transaction = db.transaction(['originals', 'previews']), done = completed(transaction)
-  let bytes = 0
-  for (const name of ['originals', 'previews']) {
-    const request = transaction.objectStore(name).openCursor(IDBKeyRange.bound([owner, ''], [owner, '\uffff']))
+  return cachedTaskRead(owner, 'storage', async () => {
+    const db = await database(), transaction = db.transaction(['originals', 'previews']), done = completed(transaction)
+    let bytes = 0
+    for (const name of ['originals', 'previews']) {
+      const request = transaction.objectStore(name).openCursor(IDBKeyRange.bound([owner, ''], [owner, '\uffff']))
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        bytes += (cursor.value as AssetRecord | PreviewRecord).blob.size
+        cursor.continue()
+      }
+    }
+    await done
+    return bytes
+  }, true)
+}
+function taskFilters(options: TaskPageQuery) {
+  const query = options.query?.trim().toLowerCase() || ''
+  const base = (task: CreationTask) => (!options.kind || task.kind === options.kind) && (!options.gallery || galleryOutputIndexes(task).length > 0)
+  const matches = (task: CreationTask) => base(task) && (!options.phase || task.phase === options.phase) && (!options.model || task.model === options.model)
+    && (!options.since || task.createdAt >= options.since) && (!query || `${task.prompt} ${task.model}`.toLowerCase().includes(query))
+  return { base, matches }
+}
+export async function getTaskSummary(owner: string, options: TaskPageQuery = {}): Promise<TaskSummary> {
+  const accepted = { ...options, query: options.query?.trim().toLowerCase() || '' }, { base, matches } = taskFilters(accepted)
+  const key = JSON.stringify([accepted.kind || '', Boolean(accepted.gallery), accepted.phase || '', accepted.model || '', accepted.since || 0, accepted.query])
+  const summary = await cachedTaskRead(owner, key, async () => {
+    const db = await database(), transaction = db.transaction('tasks'), done = completed(transaction)
+    const models = new Set<string>()
+    let total = 0, mediaCount = 0
+    const request = transaction.objectStore('tasks').index('ownerCreatedAtId').openCursor(ownerRange(owner), 'prev')
     request.onsuccess = () => {
       const cursor = request.result
       if (!cursor) return
-      bytes += (cursor.value as AssetRecord | PreviewRecord).blob.size
+      const task = (cursor.value as TaskRecord).value
+      if (base(task)) models.add(task.model)
+      if (matches(task)) { total++; mediaCount += galleryOutputIndexes(task).length }
       cursor.continue()
     }
-  }
-  await done
-  return bytes
+    await done
+    return { total, mediaCount, models: [...models].sort() }
+  })
+  return { ...summary, models: [...summary.models] }
 }
 export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   checkOwner(owner)
   await writes.get(owner)?.catch(() => {})
   const db = await database(), transaction = db.transaction('tasks'), done = completed(transaction)
-  const limit = Math.min(200, Math.max(1, Math.floor(options.limit || 60))), query = options.query?.trim().toLowerCase() || ''
-  const tasks: CreationTask[] = [], models = new Set<string>()
-  let total = 0, mediaCount = 0, more = false
-  const base = (task: CreationTask) => (!options.kind || task.kind === options.kind) && (!options.gallery || galleryOutputIndexes(task).length > 0)
-  const matches = (task: CreationTask) => base(task) && (!options.phase || task.phase === options.phase) && (!options.model || task.model === options.model)
-    && (!options.since || task.createdAt >= options.since) && (!query || `${task.prompt} ${task.model}`.toLowerCase().includes(query))
-  const index = transaction.objectStore('tasks').index('ownerCreatedAtId')
-  const summary = index.openCursor(ownerRange(owner), 'prev')
-  summary.onsuccess = () => {
-    const cursor = summary.result
-    if (!cursor) return
-    const task = (cursor.value as TaskRecord).value
-    if (base(task)) models.add(task.model)
-    if (matches(task)) { total++; mediaCount += galleryOutputIndexes(task).length }
-    cursor.continue()
-  }
+  const limit = Math.min(200, Math.max(1, Math.floor(options.limit || 60))), { matches } = taskFilters({ ...options })
+  const tasks: CreationTask[] = []
+  let more = false
   const range = options.after
     ? IDBKeyRange.bound([owner, 0, ''], [owner, options.after.createdAt, options.after.id], false, true)
     : ownerRange(owner)
-  const page = index.openCursor(range, 'prev')
+  const page = transaction.objectStore('tasks').index('ownerCreatedAtId').openCursor(range, 'prev')
   page.onsuccess = () => {
     const cursor = page.result
     if (!cursor) return
@@ -315,7 +377,8 @@ export async function getTaskPage(owner: string, options: TaskPageQuery = {}) {
   }
   await done
   const last = tasks.at(-1)
-  return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), total, mediaCount, models: [...models].sort() }
+  const summary = options.summary === false ? { total: 0, mediaCount: 0, models: [] } : await getTaskSummary(owner, options)
+  return { tasks, ...(more && last ? { after: { createdAt: last.createdAt, id: last.id } } : {}), ...summary }
 }
 export async function readTaskAsset(owner: string, url: string, preview = false): Promise<Blob | undefined> {
   checkOwner(owner)
@@ -336,7 +399,7 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
   const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
     const hash = await identity(blob), db = await database()
     signal?.throwIfAborted()
-    const transaction = db.transaction(['tasks', 'originals', 'previews'], 'readwrite'), done = completed(transaction)
+    const transaction = db.transaction(['tasks', 'originals', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
     const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), previews = transaction.objectStore('previews')
     const request = records.get([owner, id]), local = taskAssetUrl(id, index)
     request.onsuccess = () => {
@@ -352,7 +415,7 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
       originals.put({ owner, key: `${id}:${index}`, taskId: id, blob, identity: hash } satisfies AssetRecord)
       task.urls[index] = local
       record.mediaIdentity = JSON.stringify([task.kind, task.urls])
-      records.put(record)
+      records.put(record); updateMetadata(transaction, owner, true)
       const preview = previews.get([owner, index ? `${id}:${index}` : id])
       preview.onsuccess = () => {
         const cached = preview.result as PreviewRecord | undefined
@@ -361,6 +424,7 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
       saved = local
     }
     await done
+    if (saved) { cachedReads.delete(owner); cachedStorageReads.delete(owner) }
   })
   writes.set(owner, pending)
   await pending
@@ -370,15 +434,20 @@ export async function saveTaskPreview(owner: string, id: string, mediaIdentity: 
   checkOwner(owner)
   if (!Number.isInteger(index) || index < 0) throw new Error('作品序号无效。')
   if (!/^image\/(?:png|jpeg|webp|gif|avif)$/.test(blob.type) || !blob.size || blob.size > 4 * 1024 ** 2) throw new Error('作品缩略图无效或超过 4 MB。')
-  const db = await database(), transaction = db.transaction(['tasks', 'previews'], 'readwrite'), done = completed(transaction)
+  const db = await database(), transaction = db.transaction(['tasks', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
+  let changed = false
   const request = transaction.objectStore('tasks').get([owner, id])
   request.onsuccess = () => {
     const task = (request.result as TaskRecord | undefined)?.value
-    if (!task || JSON.stringify([task.kind, task.urls[index]]) !== mediaIdentity) return
+    if (!task) return
+    const base = JSON.stringify([task.kind, task.urls[index]])
+    if ((task.kind === 'video' && task.poster ? JSON.stringify([base, task.poster]) : base) !== mediaIdentity) return
     transaction.objectStore('previews').put({ owner, id: index ? `${id}:${index}` : id, identity: mediaIdentity, blob,
       ...(Number.isFinite(duration) && duration! > 0 ? { duration } : {}) } satisfies PreviewRecord)
+    updateMetadata(transaction, owner, true, { storageOnly: true }); changed = true
   }
   await done
+  if (changed) cachedStorageReads.delete(owner)
 }
 export async function readTaskPreview(owner: string, id: string, mediaIdentity: string, index = 0): Promise<{ blob: Blob; duration?: number } | undefined> {
   checkOwner(owner)

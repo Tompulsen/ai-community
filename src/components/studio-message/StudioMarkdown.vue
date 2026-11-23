@@ -6,7 +6,7 @@ import 'katex/dist/katex.min.css'
 import { renderStudioMarkdown, safeMarkdownUrl } from '../../studio-markdown'
 import type { StudioMessageSource } from '../../studio-message-types'
 import StudioCodeBlock from './StudioCodeBlock.vue'
-import { useStudioTypewriter } from '../../use-studio-typewriter'
+import { useStreamingContent, useStudioTypewriter } from '../../use-studio-typewriter'
 import StudioMediaPreview from './StudioMediaPreview.vue'
 
 const props = withDefaults(defineProps<{ content: string; streaming?: boolean; sources?: StudioMessageSource[] }>(), { streaming: false, sources: () => [] })
@@ -14,9 +14,11 @@ const emit = defineEmits<{ render: [] }>()
 // Keep code/media immediately inspectable and copyable while smoothing prose.
 const instant = computed(() => /```|~~~|!\[|<img\b|data:image\/|blob:/i.test(props.content))
 const { displayed, active } = useStudioTypewriter(toRef(props, 'content'), toRef(props, 'streaming'), instant)
+const renderContent = computed(() => props.streaming ? displayed.value : props.content)
+const { displayed: batchedContent } = useStreamingContent(renderContent, toRef(props, 'streaming'), 40)
 const marker = useId()
-const rendered = computed(() => renderStudioMarkdown(displayed.value, active.value, props.sources, marker))
-watch(displayed, async () => { await nextTick(); emit('render') })
+const rendered = computed(() => renderStudioMarkdown(batchedContent.value, props.streaming, props.sources, marker))
+watch(batchedContent, async () => { await nextTick(); emit('render') })
 const imageDialog = ref<InstanceType<typeof StudioMediaPreview>>()
 const imageUrl = ref('')
 const imageKind = ref<'image' | 'video'>('image')
@@ -32,7 +34,7 @@ function convertNode(node: Node, index: number): VNode | string {
   const codeId = node.getAttribute('data-studio-code')
   if (codeId?.startsWith(`${marker}:`)) {
     const code = rendered.value.codes[Number(codeId.slice(marker.length + 1))]
-    if (code) return h(StudioCodeBlock, { key: `code-${index}`, code: code.code, language: code.language, streaming: active.value })
+    if (code) return h(StudioCodeBlock, { key: `code-${index}`, code: code.code, language: code.language, streaming: props.streaming })
   }
   const attributes: Record<string, unknown> = { key: index }
   for (const attribute of Array.from(node.attributes)) {
@@ -55,9 +57,26 @@ function convertNode(node: Node, index: number): VNode | string {
   }
   return h(node.tagName.toLowerCase(), attributes, Array.from(node.childNodes).map(convertNode))
 }
+let blocks: { signature: string[]; node: VNode | string }[] = []
 const nodes = computed(() => {
   const document = new DOMParser().parseFromString(rendered.value.html, 'text/html')
-  return Array.from(document.body.childNodes).map(convertNode)
+  const previous = blocks
+  blocks = Array.from(document.body.childNodes).map((node, index) => {
+    const signature = [String(node.nodeType), node instanceof Element ? node.outerHTML : node.textContent || '']
+    if (node instanceof Element) {
+      const codes = [...(node.hasAttribute('data-studio-code') ? [node] : []), ...node.querySelectorAll('[data-studio-code]')]
+      for (const element of codes) {
+        const id = element.getAttribute('data-studio-code')!
+        if (!id.startsWith(`${marker}:`)) continue
+        const code = rendered.value.codes[Number(id.slice(marker.length + 1))]
+        if (code) signature.push(code.code, code.language, String(Boolean(props.streaming)))
+      }
+    }
+    const cached = previous[index]
+    return cached && signature.length === cached.signature.length && signature.every((value, position) => value === cached.signature[position])
+      ? cached : { signature, node: convertNode(node, index) }
+  })
+  return blocks.map(block => block.node)
 })
 function showSource(index: number, modal = true) {
   const source = props.sources[index]
@@ -94,7 +113,7 @@ function handleHover(event: MouseEvent) {
     sourceTimer = setTimeout(() => showSource(index, false), 350)
   }
 }
-function renderMarkdown() { return h('div', { class: 'studio-markdown-body', 'data-output-active': active.value, onClick: handleClick, onMouseover: handleHover }, nodes.value) }
+function renderMarkdown() { return h('div', { class: 'studio-markdown-body', 'data-output-active': props.streaming || active.value && batchedContent.value !== props.content, onClick: handleClick, onMouseover: handleHover }, nodes.value) }
 onBeforeUnmount(() => clearTimeout(sourceTimer))
 </script>
 

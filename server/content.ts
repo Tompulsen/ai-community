@@ -103,6 +103,7 @@ interface MediaRow extends AttachmentRow {
   thumbnailAccessKey: string | null;
   webpublicAccessKey: string | null;
   webpublicType: string | null;
+  publiclyVisible: boolean;
 }
 interface TagRow extends IdRow { name: string; category: WorkKind }
 interface PublicationRow extends IdRow {
@@ -347,6 +348,7 @@ function writeWorkCursor(cursor: WorkCursor): string {
 
 async function contentPage(ctx: RequestContext, { scope = 'public', workId, authorId, limit = 100, feed }: { scope?: ContentScope; workId?: string; authorId?: string; limit?: number; feed?: FeedRequest } = {}): Promise<{ rows: CommunityRow[]; nextCursor: string | null }> {
   const params: (string | number | null)[] = [viewer(ctx)];
+  let interestSource = '';
   const conditions = [scope === 'mine' ? 's."authorId" = $1' : scope === 'admin' ? 'TRUE' : `(${visibilitySql(ctx)})`];
   const add = (value: string | number | null) => { params.push(value); return `$${params.length}`; };
   if (scope === 'saved') conditions.push('EXISTS (SELECT 1 FROM note_favorite f WHERE f."noteId"=s."approvedNoteId" AND f."userId"=$1)');
@@ -383,9 +385,12 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
       const title = privateScope ? `COALESCE(s."pendingRevision"->>'title',s.title)` : 's.title';
       const body = privateScope ? `COALESCE(s."pendingRevision"->>'text',s.text)` : 's.text';
       const prompt = privateScope ? `CASE WHEN s."pendingRevision" ? 'generation' THEN s."pendingRevision"->'generation'->>'prompt' ELSE s.generation->>'prompt' END` : `s.generation->>'prompt'`;
+      const matchingTags = privateScope
+        ? `EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND NOT t."isDeleted" AND t.name ILIKE ${parameter})`
+        : `s."tagIds" && ARRAY(SELECT t.id FROM community_tag t WHERE NOT t."isDeleted" AND t.name ILIKE ${parameter})`;
       conditions.push(`(${title} ILIKE ${parameter} OR ${body} ILIKE ${parameter} OR (${prompt}) ILIKE ${parameter} OR u.name ILIKE ${parameter} OR u.username ILIKE ${parameter}
         OR EXISTS (SELECT 1 FROM external_account identity WHERE identity."userId"=u.id AND identity.issuer=${issuer} AND identity.username ILIKE ${parameter})
-        OR EXISTS (SELECT 1 FROM community_tag t WHERE ${tagMembership} AND NOT t."isDeleted" AND t.name ILIKE ${parameter}))`);
+        OR ${matchingTags})`);
     }
     const tags = ctx.url.searchParams.getAll('tag').filter(Boolean);
     if (tags.length > 3) fail(400, 'Choose at most three tags');
@@ -451,10 +456,14 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
         if (feed.sort === 'latest' || feed.sort === 'following' || options.communityFeedMode === 'latest') {
           rank = `((${prefix})||lpad((9999999999999999-extract(epoch FROM s."submittedAt")*1000)::bigint::text,16,'0')||${hash}) COLLATE "C"`;
         } else {
-          const interests = add(JSON.stringify(feed.interests)), maximum = add(Math.max(1, ...feed.interests.map(item => item.score)));
-          const affinity = `COALESCE((SELECT MAX((p->>'score')::numeric) FROM jsonb_array_elements(${interests}::jsonb) p
-            WHERE p->>'kind'=s.category AND EXISTS (SELECT 1 FROM community_tag t WHERE t.id=ANY(s."tagIds")
-              AND NOT t."isDeleted" AND t.name=p->>'name')),0)/${maximum}`;
+          let affinity = '0';
+          if (weights.interest && feed.interests.length) {
+            const interests = add(JSON.stringify(feed.interests)), maximum = add(Math.max(1, ...feed.interests.map(item => item.score)));
+            interestSource = `WITH feed_interests AS MATERIALIZED (
+              SELECT t.id,p.kind,MAX(p.score) AS score FROM jsonb_to_recordset(${interests}::jsonb) AS p(kind text,name text,score numeric)
+              JOIN community_tag t ON t.name=p.name WHERE NOT t."isDeleted" GROUP BY t.id,p.kind)`;
+            affinity = `COALESCE((SELECT MAX(p.score) FROM feed_interests p WHERE p.kind=s.category AND p.id=ANY(s."tagIds")),0)/${maximum}`;
+          }
           const fresh = `exp(-GREATEST(0,${add(anchor)}/1000.0-extract(epoch FROM s."submittedAt"))/604800.0)`;
           const exploration = `(('x'||substr(${hash},1,8))::bit(32)::bigint/4294967295.0)`;
           const score = `LEAST(100000,GREATEST(0,FLOOR(1000*(${add(weights.interest)}*(${affinity})+${add(weights.fresh)}*${fresh}+${add(weights.explore)}*${exploration}))))::int`;
@@ -492,7 +501,7 @@ async function contentPage(ctx: RequestContext, { scope = 'public', workId, auth
     } else conditions.push(`s.id<${add(cursor.id)}`);
   }
   params.push(order === 'hot' && !cursor ? 120 : pageLimit + 1);
-  const result = await ctx.db.query<CommunityRow>(`
+  const result = await ctx.db.query<CommunityRow>(`${interestSource}
     SELECT s.*, u.name AS "authorName", u.username AS "authorUsername", u."avatarId" AS "authorAvatarId",
       n.visibility AS "noteVisibility", n."repliesCount", n."renoteCount" AS "renotesCount",${heat} AS heat,${rank} AS rank,
       (SELECT COUNT(*)::int FROM note_reaction r WHERE r."noteId" = n.id AND r.reaction IN ('${heart}', '${heart}\ufe0f')) AS likes,
@@ -525,10 +534,10 @@ async function contentRows(ctx: RequestContext, options: Parameters<typeof conte
   return (await contentPage(ctx, options)).rows;
 }
 
-async function packWorks(ctx: RequestContext, rows: CommunityRow[], includeRevision = (_row: CommunityRow) => false) {
+async function packWorks(ctx: RequestContext, rows: CommunityRow[], includeRevision = (_row: CommunityRow) => false, cardOnly = false) {
   const contents = rows.map(row => includeRevision(row) && row.pendingRevision ? { ...row, ...row.pendingRevision } : row);
   const requests = new Map<string, [string, string]>();
-  for (const [index, content] of contents.entries()) for (const id of [...(content.fileIds ?? []), ...(content.generation?.referenceFileIds ?? [])]) {
+  for (const [index, content] of contents.entries()) for (const id of [...(content.fileIds ?? []), ...(cardOnly ? [] : content.generation?.referenceFileIds ?? [])]) {
     const authorId = rows[index]!.authorId;
     requests.set(JSON.stringify([id, authorId]), [id, authorId]);
   }
@@ -540,10 +549,15 @@ async function packWorks(ctx: RequestContext, rows: CommunityRow[], includeRevis
     tagIds.length ? ctx.db.query<TagRow>('SELECT id,name,category FROM community_tag WHERE id=ANY($1::varchar[]) AND NOT "isDeleted" ORDER BY id',
       [tagIds]).then(result => result.rows) : [],
   ]);
-  return Promise.all(rows.map((row, index) => packWork(ctx, row, includeRevision(row), {
-    files: files.filter(file => file.userId === row.authorId),
-    tags: tags.filter(tag => contents[index]!.tagIds?.includes(tag.id)),
-  })));
+  return Promise.all(rows.map(async (row, index) => {
+    const work = await packWork(ctx, row, includeRevision(row), {
+      files: files.filter(file => file.userId === row.authorId),
+      tags: tags.filter(tag => contents[index]!.tagIds?.includes(tag.id)),
+    });
+    if (!cardOnly) return work;
+    const { prompt, model, body, sourceUrl, license, generation, referenceFiles, fileIds, files: attachments, ...summary } = work;
+    return { ...summary, ...(work.kind === 'resource' ? { body: (body || '').split('\n').filter(Boolean).slice(0, 3).join(' ').slice(0, 320) } : {}) };
+  }));
 }
 
 async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision = false, assets?: { files: DriveFileRow[]; tags: TagRow[] }) {
@@ -977,10 +991,9 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
   const keyWhere = byKey ? '(f."accessKey"=$2 OR f."thumbnailAccessKey"=$2 OR f."webpublicAccessKey"=$2)' : 'f.id=$2';
   const result = await ctx.db.query<MediaRow>(`
-    SELECT f.id,f.name,f.type,f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType",f.properties
-    FROM drive_file f WHERE ${keyWhere} AND f."storedInternal" AND NOT f."isLink"
-    AND (f."userId"=$1 OR $3::boolean
-      OR (NOT f."isSensitive" AND f.type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif')
+    WITH visible_file AS MATERIALIZED (
+    SELECT f.id,f.name,f.type,f."userId",f."accessKey",f."thumbnailAccessKey",f."webpublicAccessKey",f."webpublicType",f.properties,
+      ((NOT f."isSensitive" AND f.type IN ('image/jpeg','image/png','image/webp','image/gif','image/avif')
         AND EXISTS (SELECT 1 FROM meta m WHERE m."clientOptions"->>'communityLogoFileId'=f.id
           OR (NOT (COALESCE(m."clientOptions",'{}'::jsonb) ? 'communityLogoFileId')
             AND regexp_replace(COALESCE(m."clientOptions"->>'communityLogoUrl',m."iconUrl",''),
@@ -998,7 +1011,9 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
         WHERE (${visibilitySql(ctx)}) AND (${commentVisibilitySql(ctx, 'ca', 'comment')})
         AND f."userId"=comment."userId" AND f.id=ANY(comment."fileIds"))
       OR EXISTS (SELECT 1 FROM "user" profile WHERE f."userId"=profile.id
-        AND (profile."avatarId"=f.id OR profile."bannerId"=f.id) AND ${visibleAccountSql('profile')})
+        AND (profile."avatarId"=f.id OR profile."bannerId"=f.id) AND ${visibleAccountSql('profile')})) AS "publiclyVisible"
+    FROM drive_file f WHERE ${keyWhere} AND f."storedInternal" AND NOT f."isLink")
+    SELECT f.* FROM visible_file f WHERE (f."userId"=$1 OR $3::boolean OR f."publiclyVisible"
       OR EXISTS (SELECT 1 FROM chat_message dm JOIN "user" sender ON sender.id=dm."fromUserId"
         JOIN "user" recipient ON recipient.id=dm."toUserId"
         WHERE dm."fileId"=f.id AND dm."toRoomId" IS NULL AND f."userId"=dm."fromUserId"
@@ -1061,10 +1076,21 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   ctx.reply.header('Content-Type', mime);
   ctx.reply.header('X-Content-Type-Options', 'nosniff');
   ctx.reply.header('Content-Security-Policy', "default-src 'none'; sandbox");
-  ctx.reply.header('Cache-Control', 'private, no-store');
+  const etag = file.publiclyVisible && role !== 'original' && type && imageExtensions[type]
+    ? `W/"${createHash('sha256').update(JSON.stringify([file.id, role, storageKey, mime, metadata.size, metadata.mtimeMs, metadata.ctimeMs])).digest('base64url')}"`
+    : null;
+  ctx.reply.header('Cache-Control', etag ? 'private, no-cache' : 'private, no-store');
+  if (etag) {
+    ctx.reply.header('ETag', etag).header('Vary', 'Cookie, Authorization');
+    if (ctx.req.headers['if-none-match']?.split(',').some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === etag.slice(2))) {
+      ctx.reply.code(304).send();
+      return true;
+    }
+  }
   ctx.reply.header('Accept-Ranges', 'bytes');
   ctx.reply.header('Content-Disposition', `${type && inlineTypes.has(type) ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(publicImageName({ ...file, type: type || file.type })).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16)}`)}`);
-  const range = byteRange(ctx.req.headers.range, metadata.size);
+  // Weak validators cannot establish that a cached byte range is still identical.
+  const range = byteRange(ctx.req.headers['if-range'] === undefined ? ctx.req.headers.range : undefined, metadata.size);
   if (range === false) {
     ctx.reply.code(416).header('Content-Range', `bytes */${metadata.size}`).send();
     return true;
@@ -1097,13 +1123,23 @@ async function comments(ctx: RequestContext, workId: string): Promise<true> {
       WHERE n."replyId"=$3 AND (n."replyId"=$2 OR n."threadId"=$2) AND (${commentVisibilitySql(ctx)})
       AND ($4::varchar IS NULL OR n.id<$4) ORDER BY n.id DESC LIMIT $5`,
     [viewer(ctx), work.approvedNoteId, parent || work.approvedNoteId, cursor || null, limit + 1]);
-    const items = [];
-    const identities = await readPublicIdentities(ctx, result.rows.slice(0, limit).map(row => row.userId));
-    for (const row of result.rows.slice(0, limit)) {
+    const items = [], page = result.rows.slice(0, limit);
+    const requestedFiles = page.flatMap(row => (row.fileIds ?? []).map(id => ({ id, owner: row.userId })));
+    const sourceIds = [...new Set(page.flatMap(row => row.renoteId ? [row.renoteId] : []))];
+    const [identities, attachments, sources] = await Promise.all([
+      readPublicIdentities(ctx, page.map(row => row.userId)),
+      requestedFiles.length ? ctx.db.query<Parameters<typeof fileDto>[0] & { userId: string }>(
+        `SELECT id,name,type,size,url,"userId","thumbnailAccessKey",properties FROM drive_file
+        WHERE (id,"userId") IN (SELECT * FROM unnest($1::varchar[],$2::varchar[])) ORDER BY id`,
+        [requestedFiles.map(file => file.id), requestedFiles.map(file => file.owner)]).then(result => result.rows) : [],
+      sourceIds.length ? ctx.db.query<IdRow & { noteId: string }>(`SELECT s.id,n.id AS "noteId" FROM community_submission s JOIN "user" u ON u.id=s."authorId"
+        JOIN note n ON n.id=s."approvedNoteId" WHERE n.id=ANY($2::varchar[]) AND (${visibilitySql(ctx)})`,
+        [viewer(ctx), sourceIds]).then(result => result.rows) : [],
+    ]);
+    for (const row of page) {
       const identity = identities.get(row.userId);
-      const files = await commentAttachments(ctx.db, row.fileIds || [], row.userId);
-      const remixed = row.renoteId ? (await ctx.db.query<IdRow>(`SELECT s.id FROM community_submission s JOIN "user" u ON u.id=s."authorId"
-        JOIN note n ON n.id=s."approvedNoteId" WHERE n.id=$2 AND (${visibilitySql(ctx)})`, [viewer(ctx), row.renoteId])).rows[0] : null;
+      const files = attachments.filter(file => file.userId === row.userId && row.fileIds?.includes(file.id)).map(fileDto);
+      const remixed = sources.find(source => source.noteId === row.renoteId);
       items.push({ id: row.id, text: row.text, userId: row.userId, author: row.name || identity?.username || (identity ? '章鱼用户' : row.username),
         authorUsername: identity?.username ?? row.username, ...(identity ? { authorAccountId: identity.accountId } : {}),
         parentId: row.replyId !== work.approvedNoteId ? row.replyId : null,
@@ -1367,7 +1403,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
   }
   if ((path === '/api/works' || path === '/api/community/works') && method === 'GET') {
     const { rows, nextCursor } = await contentPage(ctx, { authorId: ctx.url.searchParams.get('authorId') || undefined });
-    return send(ctx, 200, { items: await packWorks(ctx, rows), nextCursor });
+    return send(ctx, 200, { items: await packWorks(ctx, rows, undefined, ctx.url.searchParams.get('view') === 'card'), nextCursor });
   }
   if (path === '/api/works/feed' && method === 'POST') {
     const parsed = feedRequestSchema.safeParse(ctx.body);
@@ -1375,7 +1411,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
     const feed = parsed.data, url = new URL('/api/works', ctx.url);
     for (const key of ['sort', 'kind', 'query', 'tag', 'cursor'] as const) if (feed[key]) url.searchParams.set(key, feed[key]!);
     const { rows, nextCursor } = await contentPage({ ...ctx, url }, { feed, limit: feedLimits.page });
-    return send(ctx, 200, { items: await packWorks(ctx, rows), nextCursor,
+    return send(ctx, 200, { items: await packWorks(ctx, rows, undefined, true), nextCursor,
       replaced: !feed.cursor && feed.previous.length > 0 ? rows.some(row => !feed.previous.includes(row.id)) : null });
   }
   if (path === '/api/works' && method === 'POST') return createWork(ctx);

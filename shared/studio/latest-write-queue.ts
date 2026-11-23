@@ -45,7 +45,6 @@ export function createDeferredWriteQueue<T>(
     timer = undefined;
     if (running || !pending) return;
     running = true;
-    urgent = false;
     const next = pending;
     pending = undefined;
     let error: unknown;
@@ -60,6 +59,7 @@ export function createDeferredWriteQueue<T>(
       else timer = setTimeout(drain, delay);
       return;
     }
+    urgent = false;
     const finish = error ? () => reject?.(error) : resolve;
     completion = undefined;
     finish?.();
@@ -83,6 +83,7 @@ export function createDeferredWriteQueue<T>(
     return promise;
   };
   save.flush = () => {
+    if (!completion) return Promise.resolve();
     urgent = true;
     void drain();
     return completion ?? Promise.resolve();

@@ -51,7 +51,7 @@ function fakeStores() {
         return { rows: [], rowCount: 1 }
       }
       if (sql.includes('FROM drive_file f WHERE')) {
-        return { rows: allowMedia && ['file1', 'original-key', 'thumbnail-key'].includes(parameters[1]) ? [media] : [], rowCount: 0 }
+        return { rows: allowMedia && ['file1', media.accessKey, media.thumbnailAccessKey, media.webpublicAccessKey].includes(parameters[1]) ? [{ ...media }] : [], rowCount: 0 }
       }
       return { rows: [], rowCount: 0 }
     },
@@ -367,6 +367,115 @@ test('temporary media keeps original, HEAD, range and thumbnail permission seman
   denyMedia()
   for (const url of ['/legacy-files/file1', '/legacy-files/file1?variant=thumbnail', '/files/thumbnail-key']) {
     assertJsonError(await app.inject({ method: 'GET', url }), 404)
+  }
+})
+
+test('visible image variants revalidate without retransmitting bytes and still check access on every request', async t => {
+  const f = await fixture(t)
+  Object.assign(f.media, { publiclyVisible: true, webpublicAccessKey: 'web-key', webpublicType: 'image/png' })
+  await sharp({ create: { width: 3, height: 2, channels: 3, background: 'blue' } }).png().toFile(path.join(f.filesRoot, 'web-key'))
+  for (const url of ['/legacy-files/file1?variant=thumbnail', '/files/thumbnail-key',
+    '/legacy-files/file1?variant=web', '/legacy-files/file1?variant=webpublic', '/files/web-key']) {
+    const full = await f.app.inject({ method: 'GET', url })
+    assert.equal(full.statusCode, 200)
+    assert.equal(full.headers['cache-control'], 'private, no-cache')
+    assert.equal(full.headers.vary, 'Cookie, Authorization')
+    const etag = full.headers.etag
+    assert.match(etag, /^W\/"[A-Za-z0-9_-]+"$/)
+    for (const method of ['GET', 'HEAD']) {
+      for (const value of [etag, etag.slice(2), `"other", ${etag}`, '*']) {
+        const before = f.queries.length
+        const cached = await f.app.inject({ method, url, headers: { 'if-none-match': value, range: 'bytes=0-1' } })
+        assert.equal(cached.statusCode, 304, `${method} ${url} ${value}`)
+        assert.equal(cached.payload, '')
+        assert.equal(cached.headers.etag, etag)
+        assert.equal(cached.headers['content-length'], undefined)
+        assert.equal(cached.headers['content-range'], undefined)
+        assert.equal(f.queries.length, before + 1, 'each conditional request must query current file visibility')
+      }
+    }
+    const changed = await f.app.inject({ method: 'GET', url, headers: { 'if-none-match': '"other"' } })
+    assert.equal(changed.statusCode, 200)
+    assert.deepEqual(changed.rawPayload, full.rawPayload)
+    const partial = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-1' } })
+    assert.equal(partial.statusCode, 206)
+    assert.deepEqual(partial.rawPayload, full.rawPayload.subarray(0, 2))
+    for (const ifRange of [etag, etag.slice(2), 'Mon, 23 Nov 2026 00:00:00 GMT']) {
+      const staleRange = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-1', 'if-range': ifRange } })
+      assert.equal(staleRange.statusCode, 200, 'weak validators and unverified dates cannot validate a partial response')
+      assert.deepEqual(staleRange.rawPayload, full.rawPayload)
+    }
+  }
+  const updates = f.queries.filter(query => query.sql.startsWith('UPDATE drive_file SET'))
+  assert.equal(updates.length, 2, 'successful synchronous sanitization can issue validators before its snapshot is refreshed')
+  f.denyMedia()
+  assertJsonError(await f.app.inject({
+    method: 'GET', url: '/files/thumbnail-key', headers: { 'if-none-match': '*' },
+  }), 404)
+})
+
+test('private variants, originals and missing-variant fallbacks never reuse conditional cache entries', async t => {
+  const f = await fixture(t)
+  const url = '/legacy-files/file1?variant=thumbnail'
+  f.media.publiclyVisible = true
+  const publicResponse = await f.app.inject({ method: 'GET', url })
+  assert.equal(publicResponse.statusCode, 200)
+  assert(publicResponse.headers.etag)
+  f.media.publiclyVisible = false
+  for (const requestUrl of [url, '/files/thumbnail-key', '/legacy-files/file1', '/files/original-key']) {
+    const response = await f.app.inject({ method: 'GET', url: requestUrl, headers: { 'if-none-match': publicResponse.headers.etag } })
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.headers['cache-control'], 'private, no-store')
+    assert.equal(response.headers.etag, undefined)
+  }
+  f.media.publiclyVisible = true
+  f.media.thumbnailAccessKey = 'missing-key'
+  for (const requestUrl of ['/legacy-files/file1', '/files/original-key', url, '/files/missing-key']) {
+    const response = await f.app.inject({ method: 'GET', url: requestUrl, headers: { 'if-none-match': '*' } })
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.payload, '0123456789abcdefghij')
+    assert.equal(response.headers['cache-control'], 'private, no-store')
+    assert.equal(response.headers.etag, undefined)
+  }
+})
+
+test('image validators change with actual storage and bytes, and safe ready variants skip metadata writes', async t => {
+  const f = await fixture(t)
+  f.media.publiclyVisible = true
+  Object.assign(f.media.properties, { communityImagePrivacy: { 'thumbnail-key': 1, 'next-key': 1 } })
+  const first = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?variant=thumbnail' })
+  assert.equal(first.statusCode, 200)
+  assert(first.headers.etag)
+  assert.equal(f.queries.filter(query => query.sql.startsWith('UPDATE drive_file SET')).length, 0)
+  const original = await readFile(path.join(f.filesRoot, 'thumbnail-key'))
+  await writeFile(path.join(f.filesRoot, 'thumbnail-key'), Buffer.concat([original, Buffer.from('changed-bytes')]))
+  const changed = await f.app.inject({
+    method: 'GET', url: '/legacy-files/file1?variant=thumbnail', headers: { 'if-none-match': first.headers.etag },
+  })
+  assert.equal(changed.statusCode, 200)
+  assert.notEqual(changed.headers.etag, first.headers.etag)
+  await writeFile(path.join(f.filesRoot, 'next-key'), changed.rawPayload)
+  f.media.thumbnailAccessKey = 'next-key'
+  const moved = await f.app.inject({
+    method: 'GET', url: '/legacy-files/file1?variant=thumbnail', headers: { 'if-none-match': changed.headers.etag },
+  })
+  assert.equal(moved.statusCode, 200)
+  assert.notEqual(moved.headers.etag, changed.headers.etag)
+  assert.deepEqual(moved.rawPayload, changed.rawPayload)
+})
+
+test('conditional requests cannot bypass failed image sanitization or marker persistence', async t => {
+  for (const failMarker of [true, false]) {
+    const f = await fixture(t)
+    f.media.publiclyVisible = true
+    if (failMarker) f.failMediaUpdate()
+    else await writeFile(path.join(f.filesRoot, 'thumbnail-key'), Buffer.from([0xff, 0xd8, 0xff]))
+    const response = await f.app.inject({
+      method: 'GET', url: '/legacy-files/file1?variant=thumbnail', headers: { 'if-none-match': '*' },
+    })
+    assertJsonError(response, 503)
+    assert.equal(response.headers.etag, undefined)
+    assert.equal(response.headers['cache-control'], 'private, no-store')
   }
 })
 

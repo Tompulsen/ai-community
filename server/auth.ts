@@ -46,6 +46,12 @@ interface RoleRow {
   isModerator: boolean
 }
 
+interface UserPermissionsRow extends UserRow {
+  roles: RoleRow[]
+  assignedRoleIds: string[]
+  rootUserId: string | null
+}
+
 const legacySessionCookie = 'community_session'
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const newId = () => Math.max(0, Date.now() - 946684800000).toString(36).padStart(8, '0') + randomBytes(8).toString('hex')
@@ -111,21 +117,22 @@ export function roleCondition(formula: unknown, user: Partial<RoleUser>, assigne
 }
 
 export async function getUser(db: Queryable, userId: string): Promise<SessionUser | null> {
-  const { rows } = await db.query<UserRow>(`SELECT u.id,u.username,u.name,u.host,u.token,u."createdAt",u."isSuspended",u."isDeleted",
+  const { rows } = await db.query<UserPermissionsRow>(`SELECT u.id,u.username,u.name,u.host,u.token,u."createdAt",u."isSuspended",u."isDeleted",
     u."movedToUri",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",
-    u."notesCount",u."avatarId",u."bannerId",p.description AS bio FROM "user" u JOIN user_profile p ON p."userId"=u.id WHERE u.id=$1`, [userId])
+    u."notesCount",u."avatarId",u."bannerId",p.description AS bio,
+    (SELECT COALESCE(jsonb_agg(granted),'[]'::jsonb) FROM
+      (SELECT id,target,"condFormula","isAdministrator","isModerator" FROM role WHERE "isAdministrator" OR "isModerator") granted) AS roles,
+    (SELECT COALESCE(jsonb_agg(a."roleId"),'[]'::jsonb) FROM role_assignment a
+      WHERE a."userId"=u.id AND (a."expiresAt" IS NULL OR a."expiresAt">NOW())) AS "assignedRoleIds",
+    (SELECT "rootUserId" FROM meta LIMIT 1) AS "rootUserId"
+    FROM "user" u JOIN user_profile p ON p."userId"=u.id WHERE u.id=$1`, [userId])
   const user = rows[0]
   if (!user || user.host !== null || user.isSuspended || user.isDeleted || user.movedToUri || !user.token) return null
-  const [roles, assignments, meta] = await Promise.all([
-    db.query<RoleRow>('SELECT id,target,"condFormula","isAdministrator","isModerator" FROM role WHERE "isAdministrator" OR "isModerator"'),
-    db.query<{ roleId: string }>('SELECT "roleId" FROM role_assignment WHERE "userId"=$1 AND ("expiresAt" IS NULL OR "expiresAt">NOW())', [userId]),
-    db.query<{ rootUserId: string | null }>('SELECT "rootUserId" FROM meta LIMIT 1'),
-  ])
-  const assigned = new Set(assignments.rows.map(row => row.roleId))
-  const applicable = roles.rows.filter(role => role.target === 'manual' ? assigned.has(role.id) : roleCondition(role.condFormula, user, assigned))
-  const isAdmin = meta.rows[0]?.rootUserId === user.id || applicable.some(role => role.isAdministrator)
+  const { roles, assignedRoleIds, rootUserId, token, ...profile } = user
+  const assigned = new Set(assignedRoleIds)
+  const applicable = roles.filter(role => role.target === 'manual' ? assigned.has(role.id) : roleCondition(role.condFormula, user, assigned))
+  const isAdmin = rootUserId === user.id || applicable.some(role => role.isAdministrator)
   const isModerator = isAdmin || applicable.some(role => role.isModerator)
-  const { token, ...profile } = user
   return { ...profile, isAdmin, isModerator, tokenHash: hash(token) }
 }
 

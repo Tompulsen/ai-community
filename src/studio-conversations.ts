@@ -92,7 +92,7 @@ export async function syncMediaConversations() {
     chats.sessions.sort((left, right) => right.lastUpdate - left.lastUpdate)
     chats.mediaConversationsMigrated = true; changed = true
   }
-  if (changed) await saveChats()
+  if (changed) await saveChats(true)
 }
 
 export function activateConversation(id: string) {
@@ -101,7 +101,7 @@ export function activateConversation(id: string) {
   if (!chat) return
   chats.activeId = id
   if (conversationKind(chat) !== 'text') creation.selectedId = mediaTasksForConversation(chat)[0]?.id || ''
-  void saveChats()
+  void saveChats(true).catch(() => {})
   return chat
 }
 export function ensureMediaConversation(kind: 'image' | 'video', existingTask?: CreationTask): NativeChat {

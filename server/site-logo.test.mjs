@@ -27,7 +27,8 @@ test('anonymous visitors can read only the configured, nonsensitive raster logo 
           if (sql.startsWith('UPDATE drive_file SET')) return { rows: [], rowCount: 1 }
           assert.deepEqual(values, [null, item.id, false, 'https://community.example'])
           assert.match(sql, /AND f\."storedInternal" AND NOT f\."isLink"/)
-          assert.match(sql, /OR \(NOT f\."isSensitive" AND f\.type IN \('image\/jpeg','image\/png','image\/webp','image\/gif','image\/avif'\)\s+AND EXISTS \(SELECT 1 FROM meta m WHERE m\."clientOptions"->>'communityLogoFileId'=f\.id/)
+          assert.match(sql, /\(NOT f\."isSensitive" AND f\.type IN \('image\/jpeg','image\/png','image\/webp','image\/gif','image\/avif'\)\s+AND EXISTS \(SELECT 1 FROM meta m WHERE m\."clientOptions"->>'communityLogoFileId'=f\.id/)
+          assert(sql.includes('AS "publiclyVisible"') && sql.includes('OR f."publiclyVisible"'))
           assert(sql.includes("NOT (COALESCE(m.\"clientOptions\",'{}'::jsonb) ? 'communityLogoFileId')"))
           assert(sql.includes('COALESCE(m."clientOptions"->>\'communityLogoUrl\',m."iconUrl",\'\')'))
           assert(sql.includes("$4||'/legacy-files/'||f.id") && sql.includes("$4||'/files/'||f.\"accessKey\""))

@@ -317,6 +317,38 @@ it('reruns only the original enabled tool with confirmation and updates future m
   expect(source.toolRounds?.[0]?.tool_calls?.[0]?.function.arguments).toBe('{"x":2}')
   expect(source.toolRounds?.[1]?.content).toBe('{"ok":true}')
 })
+it('persists a completed answer before the draft batching timer runs', async () => {
+  const p = await fixture()
+  vi.useFakeTimers()
+  const sending = p.sendChat(p.chat, '保存最终回答', [], 'model')
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mocks.write.mock.calls.at(-1)![1]).toMatchObject({ state: { sessions: [{
+      messages: [{ content: '保存最终回答' }, { content: '回答', streaming: false }],
+    }] } })
+  } finally {
+    await vi.advanceTimersByTimeAsync(200)
+    await sending
+    vi.useRealTimers()
+  }
+})
+it('persists a tool failure before the draft batching timer runs', async () => {
+  const p = await fixture(); p.chat.settings.mcpServers = ['original']; p.chat.messages.push(toolSource())
+  const source = p.chat.messages[0]!, tool = source.tools![0]!
+  mocks.api.mockRejectedValueOnce(new Error('unknown remote result'))
+  vi.useFakeTimers()
+  const failed = expect(p.rerunMessageTool(p.chat, source, tool, { x: 2 })).rejects.toThrow('unknown remote result')
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mocks.write.mock.calls.at(-1)![1]).toMatchObject({ state: { sessions: [{
+      messages: [{ tools: [{ status: 'error', error: 'unknown remote result', result: { old: true } }] }],
+    }] } })
+  } finally {
+    await vi.advanceTimersByTimeAsync(200)
+    await failed
+    vi.useRealTimers()
+  }
+})
 it('never executes unregistered, disabled or unconfirmed tools and preserves the result on failure', async () => {
   const p = await fixture(); p.chat.settings.mcpServers = ['original']; p.chat.messages.push(toolSource())
   const source = p.chat.messages[0]!, tool = source.tools![0]!
@@ -340,6 +372,9 @@ it('stops waiting for a rerun and ignores its late response', async () => {
   await vi.waitFor(() => expect(mocks.api).toHaveBeenCalledTimes(1))
   p.stopChat(p.chat)
   expect(tool.status).toBe('stopped')
+  expect(mocks.write.mock.calls.at(-1)![1]).toMatchObject({ state: { sessions: [{
+    messages: [{ tools: [{ status: 'stopped', result: { old: true } }] }],
+  }] } })
   expect(mocks.api.mock.calls[0]![1].signal.aborted).toBe(true)
   resolve({ late: true }); await rerunning
   expect(tool).toMatchObject({ status: 'stopped', result: { old: true } })

@@ -3,6 +3,7 @@ import { api, errorMessage, session } from './state'
 import { creation, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
 import { configuredModelFormat, modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
+import { createDeferredWriteQueue } from '../shared/studio/latest-write-queue'
 import { initializeBranches, createAnswerBranch, createEditedMessageBranch, selectAnswerBranch, deleteBranchMessage, cloneBranchMessages, branchMessages } from '../shared/studio/chat-branches'
 import { prepareContext } from '../shared/studio/context-budget'
 import { prepareVideoMessages } from '../shared/studio/video-input'
@@ -59,6 +60,8 @@ export interface NativeChat extends ChatSession {
   draft?: string
   draftFiles?: ParsedFile[]
   draftQuote?: MessageQuote
+  draftUpdatedAt?: number
+  draftFilesUpdatedAt?: number
   sourceWorkId?: string
   formatOverride?: ChatApiFormat
   formatAutomatic?: boolean
@@ -70,6 +73,7 @@ const defaults = () => {
 export const chats = reactive({
   sessions: [] as NativeChat[], activeId: '', ready: false, error: '', busy: {} as Record<string, boolean>, skills: [] as Skill[],
   preparing: {} as Record<string, boolean>,
+  initialSaving: {} as Record<string, boolean>,
   projects: [] as ChatProject[], deletedMediaConversationIds: [] as string[], mediaConversationsMigrated: false,
 })
 export const chatDeletion = reactive({ count: 0, expiresAt: 0 })
@@ -80,7 +84,114 @@ function clearDeletedChats() {
   chatDeletion.count = 0; chatDeletion.expiresAt = 0
 }
 let epoch = 0, loading: Promise<void> | undefined
-let writes: Promise<unknown> = Promise.resolve()
+const draftStates = new WeakMap<NativeChat, { draft: string; files: NativeChat['draftFiles']; quote: NativeChat['draftQuote']; image: NativeChat['mediaDraft']; video: NativeChat['mediaDraft'] }>()
+const dirtyDrafts = new Map<NativeChat, string>()
+function rememberDraft(chat: NativeChat) {
+  const next = { draft: chat.draft || '', files: chat.draftFiles, quote: chat.draftQuote, image: chat.mediaDrafts?.image, video: chat.mediaDrafts?.video }, previous = draftStates.get(chat)
+  if (!previous || previous.draft !== next.draft || previous.files !== next.files || previous.quote !== next.quote || previous.image !== next.image || previous.video !== next.video) {
+    chat.draftUpdatedAt = Math.max(Date.now(), (chat.draftUpdatedAt || 0) + 1)
+    if (!previous || previous.files !== next.files) chat.draftFilesUpdatedAt = chat.draftUpdatedAt
+    dirtyDrafts.set(chat, owner())
+  }
+  draftStates.set(chat, next)
+}
+function readDraftCheckpoint(key: string) {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(`${key}:draft-checkpoint`)
+    return raw ? { raw, value: JSON.parse(raw) } : undefined
+  } catch { return undefined }
+}
+function clearDraftCheckpoint(key: string, raw: string) {
+  try { if (localStorage.getItem(`${key}:draft-checkpoint`) === raw) localStorage.removeItem(`${key}:draft-checkpoint`) } catch {}
+}
+function mediaDraftCheckpoint(drafts: NativeChat['mediaDrafts']) {
+  return drafts ? Object.fromEntries(Object.entries(drafts).flatMap(([kind, draft]) => {
+    if (!draft) return []
+    const { references: _, ...parameters } = draft
+    return [[kind, parameters]]
+  })) : null
+}
+function checkpointDraft() {
+  const chat = chats.sessions.find(item => item.id === chats.activeId)
+  if (!owner() || !chats.ready || !chat || typeof localStorage === 'undefined') return
+  rememberDraft(chat)
+  // A closing document cannot wait for IndexedDB to open or commit.
+  try {
+    const drafts = [...dirtyDrafts].filter(([item, accepted]) => accepted === owner() && chats.sessions.includes(item)).map(([item]) => ({
+      conversationId: item.id, updatedAt: item.draftUpdatedAt, lastMessageId: item.messages.at(-1)?.id || '',
+      draft: item.draft || '', quote: item.draftQuote || null,
+      mediaDrafts: mediaDraftCheckpoint(item.mediaDrafts),
+      filesUpdatedAt: item.draftFilesUpdatedAt || 0, fileCount: item.draftFiles?.length || 0,
+    }))
+    if (!drafts.length) return
+    const previous = readDraftCheckpoint(store())?.value
+    const merged = new Map<string, typeof drafts[number]>(previous?.owner === owner() && Array.isArray(previous.drafts)
+      ? previous.drafts.filter((item: any) => item && typeof item.conversationId === 'string').map((item: typeof drafts[number]) => [item.conversationId, item]) : [])
+    for (const draft of drafts) if (!merged.has(draft.conversationId) || (merged.get(draft.conversationId)!.updatedAt || 0) <= (draft.updatedAt || 0)) merged.set(draft.conversationId, draft)
+    localStorage.setItem(`${store()}:draft-checkpoint`, JSON.stringify({
+      owner: owner(), revision: crypto.randomUUID(), activeId: chats.activeId, drafts: [...merged.values()],
+    }))
+  } catch { chats.error = '关闭前的草稿未能保存到浏览器，请保留当前内容。' }
+}
+function restoreDraftCheckpoint(key: string, acceptedOwner: string) {
+  const checkpoint = readDraftCheckpoint(key)
+  if (!checkpoint) return false
+  if (checkpoint.value?.owner !== acceptedOwner || !Array.isArray(checkpoint.value.drafts)) {
+    clearDraftCheckpoint(key, checkpoint.raw); return false
+  }
+  let recovered = false
+  const recoveredIds = new Set<string>()
+  for (const value of checkpoint.value.drafts) {
+    const chat = chats.sessions.find(item => item.id === value?.conversationId)
+    if (!chat || typeof value.draft !== 'string' || value.draft.length > 1_000_000 ||
+      !Number.isSafeInteger(value.updatedAt) || value.updatedAt <= (chat.draftUpdatedAt || 0) ||
+      !Number.isSafeInteger(value.filesUpdatedAt) || value.filesUpdatedAt < 0 ||
+      !Number.isSafeInteger(value.fileCount) || value.fileCount < 0 ||
+      value.lastMessageId !== (chat.messages.at(-1)?.id || '')) continue
+    chat.draft = value.draft; chat.draftQuote = readMessageQuote(value.quote); chat.draftUpdatedAt = value.updatedAt
+    if (value.mediaDrafts === null) chat.mediaDrafts = undefined
+    else if (value.mediaDrafts && typeof value.mediaDrafts === 'object' && !Array.isArray(value.mediaDrafts)) {
+      const drafts: NativeChat['mediaDrafts'] = {}
+      for (const kind of ['image', 'video'] as const) {
+        const draft = value.mediaDrafts[kind]
+        if (draft && typeof draft === 'object' && !Array.isArray(draft)) drafts[kind] = { ...draft, references: chat.mediaDrafts?.[kind]?.references || [] }
+      }
+      chat.mediaDrafts = drafts
+    }
+    if (value.filesUpdatedAt !== (chat.draftFilesUpdatedAt || 0)) {
+      chat.draftFiles = []
+      if (value.fileCount > 0) chats.error = '已恢复文字草稿，未保存完成的附件请重新选择。'
+    }
+    chat.draftFilesUpdatedAt = value.filesUpdatedAt
+    draftStates.set(chat, { draft: chat.draft || '', files: chat.draftFiles, quote: chat.draftQuote, image: chat.mediaDrafts?.image, video: chat.mediaDrafts?.video })
+    dirtyDrafts.set(chat, acceptedOwner); recoveredIds.add(chat.id); recovered = true
+  }
+  if (recoveredIds.has(checkpoint.value.activeId)) chats.activeId = checkpoint.value.activeId
+  if (!recovered) clearDraftCheckpoint(key, checkpoint.raw)
+  return recovered
+}
+function createChatWrites() {
+  return createDeferredWriteQueue(async ({ key, snapshot }: { key: string; snapshot: Parameters<typeof writeChatSnapshot>[1] }) => {
+    const checkpoint = readDraftCheckpoint(key)
+    const changed = [...dirtyDrafts].filter(([, accepted]) => `octopus:user-${accepted}:native-chat` === key).map(([chat]) => [chat, chat.draftUpdatedAt] as const)
+    const frozen = JSON.parse(JSON.stringify(snapshot))
+    await writeChatSnapshot(key, frozen)
+    const saved = new Map<string, NativeChat>(frozen.state.sessions.map((chat: NativeChat) => [chat.id, chat]))
+    if (checkpoint?.value?.owner && key === `octopus:user-${checkpoint.value.owner}:native-chat` && Array.isArray(checkpoint.value.drafts) &&
+      checkpoint.value.drafts.every((value: any) => {
+        const chat = saved.get(value?.conversationId)
+        return chat && (chat.draftUpdatedAt || 0) >= value.updatedAt &&
+          ((chat.draftUpdatedAt || 0) > value.updatedAt || (chat.draft || '') === value.draft &&
+            JSON.stringify(chat.draftQuote || null) === JSON.stringify(value.quote) &&
+            (value.mediaDrafts === undefined || JSON.stringify(mediaDraftCheckpoint(chat.mediaDrafts)) === JSON.stringify(value.mediaDrafts)) &&
+            (chat.draftFilesUpdatedAt || 0) === value.filesUpdatedAt && (chat.draftFiles?.length || 0) === value.fileCount)
+      })) clearDraftCheckpoint(key, checkpoint.raw)
+    for (const [chat, updatedAt] of changed) if (chat.draftUpdatedAt === updatedAt) dirtyDrafts.delete(chat)
+    if (key === store()) for (const id of Object.keys(chats.initialSaving)) if (saved.has(id)) delete chats.initialSaving[id]
+  }, 200)
+}
+let writes = createChatWrites()
+let retiredWrites: Promise<void> = Promise.resolve()
 const runs = new Map<string, { chatId: string; messageId: string }>()
 const chatRunning = (id: string) => [...runs.values()].some(run => run.chatId === id)
 const toolControllers = new Map<string, AbortController>()
@@ -121,18 +232,27 @@ export function createEmptyChat(kind: 'text' | 'image' | 'video' = 'text'): Nati
 }
 export function newChat(kind: 'text' | 'image' | 'video' = 'text') {
   const next = createEmptyChat(kind)
-  chats.sessions.unshift(next); chats.activeId = next.id; void saveChats()
+  chats.sessions.unshift(next); chats.activeId = next.id; chats.initialSaving[next.id] = true
+  void saveChats(true).catch(() => {})
   return chats.sessions[0]!
 }
 export async function saveChats(required = false) {
   if (!owner() || !chats.ready) return
-  const key = store(), accepted = owner(), snapshot = JSON.parse(JSON.stringify({ state: {
+  const current = chats.sessions.find(chat => chat.id === chats.activeId)
+  if (current) rememberDraft(current)
+  if (required) checkpointDraft()
+  const accepted = owner(), version = epoch, snapshot = { state: {
     sessions: chats.sessions, activeId: chats.activeId, projects: chats.projects, deletedMediaConversationIds: chats.deletedMediaConversationIds,
     mediaConversationsMigrated: chats.mediaConversationsMigrated, _hasHydrated: true,
-  }, version: 1 }))
-  writes = writes.catch(() => {}).then(async () => { if (owner() === accepted) await writeChatSnapshot(key, snapshot) })
-  try { await writes } catch (error) { if (owner() === accepted) chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
+  }, version: 1 }
+  try { await writes({ key: store(), snapshot }, required) }
+  catch (error) { if (version === epoch && owner() === accepted) chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
 }
+export function flushChats() { return writes.flush().catch(() => {}) }
+function flushClosingChats() { checkpointDraft(); void flushChats() }
+function flushHiddenChats() { if (document.visibilityState === 'hidden') flushClosingChats() }
+if (typeof window !== 'undefined') window.addEventListener?.('pagehide', flushClosingChats)
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', flushHiddenChats)
 export function loadChats() {
   if (chats.ready) return Promise.resolve()
   if (loading) return loading
@@ -140,6 +260,8 @@ export function loadChats() {
   if (!accepted) return Promise.resolve()
   loading = (async () => {
     try {
+      await retiredWrites
+      if (version !== epoch) return
       const native = await readChatSnapshot(key)
       const stored = native || (/^[1-9]\d*$/.test(accepted) ? await readChatSnapshot(`octopus:user-${accepted}:chat-next-web-store`) : null)
       if (version !== epoch) return
@@ -163,7 +285,10 @@ export function loadChats() {
         return next
       }), chats.projects)
       chats.activeId = chats.sessions.some(chat => chat.id === stored?.state.activeId) ? stored!.state.activeId : chats.sessions[0]?.id || ''
+      for (const chat of chats.sessions) draftStates.set(chat, { draft: chat.draft || '', files: chat.draftFiles, quote: chat.draftQuote, image: chat.mediaDrafts?.image, video: chat.mediaDrafts?.video })
+      const recoveredDraft = restoreDraftCheckpoint(key, accepted)
       chats.ready = true
+      if (recoveredDraft) void saveChats()
       if (!stored) {
         for (const task of creation.tasks.filter(task => task.kind === 'text')) {
           const chat = newChat()
@@ -264,7 +389,7 @@ export function removeMessage(chat: NativeChat, message: NativeMessage) {
   const remaining = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
   chat.deletedMediaTaskIds = [...new Set([...(chat.deletedMediaTaskIds || []),
     ...creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' && before.has(task.id) && !remaining.has(task.id)).map(task => task.id)])]
-  void saveChats()
+  void saveChats(true).catch(() => {})
 }
 export function stopChat(chat: NativeChat, selected?: NativeMessage) {
   for (const [id, run] of runs) if (run.chatId === chat.id && (!selected || run.messageId === selected.id)) {
@@ -282,7 +407,7 @@ export function stopChat(chat: NativeChat, selected?: NativeMessage) {
     }
   }
   chats.busy[chat.id] = chatRunning(chat.id)
-  void saveChats()
+  void saveChats(true).catch(() => {})
 }
 export async function recoverMessage(message: NativeMessage) {
   const task = creation.tasks.find(task => task.id === message.taskId)
@@ -293,7 +418,7 @@ export async function recoverMessage(message: NativeMessage) {
   applyAnswer(message, task.text, task.phase === 'complete' && !task.toolCalls?.length ? 'finish' : 'interrupted')
   message.reasoning = task.reasoning ?? message.reasoning; message.error = task.error
   message.interrupted = task.phase !== 'complete'; message.usage = task.usage ?? message.usage
-  await saveChats()
+  await saveChats(true).catch(() => {})
 }
 watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as NativeMessage[]).map(message => [message.id, message.taskId, message.interrupted])]),
   creation.tasks.map(task => [task.id, task.phase, task.text, task.error])], () => {
@@ -492,7 +617,9 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     result.contextCompressing = false
     if (version === epoch && runs.has(runId)) {
       runs.delete(runId); toolControllers.get(runId)?.abort(); toolControllers.delete(runId)
-      result.streaming = false; chats.busy[chat.id] = chatRunning(chat.id); await saveChats()
+      result.streaming = false; chats.busy[chat.id] = chatRunning(chat.id)
+      // The paid result cannot be rolled back if local persistence fails.
+      await saveChats(true).catch(() => {})
     }
   }
   return accepted
@@ -561,15 +688,18 @@ export async function rerunMessageTool(chat: NativeChat, message: NativeMessage,
     }
     throw error
   } finally {
-    if (current()) { runs.delete(runId); chats.busy[chat.id] = chatRunning(chat.id); await saveChats() }
+    if (current()) { runs.delete(runId); chats.busy[chat.id] = chatRunning(chat.id); await saveChats(true).catch(() => {}) }
     if (toolControllers.get(runId) === controller) toolControllers.delete(runId)
   }
 }
 watch(owner, () => {
+  retiredWrites = Promise.all([retiredWrites, flushChats()]).then(() => {})
+  writes = createChatWrites()
+  dirtyDrafts.clear()
   epoch++; runs.clear()
   for (const controller of toolControllers.values()) controller.abort()
   toolControllers.clear()
   clearDeletedChats()
-  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}; chats.preparing = {}
+  chats.ready = false; chats.sessions = []; chats.activeId = ''; chats.error = ''; chats.skills = []; chats.busy = {}; chats.preparing = {}; chats.initialSaving = {}
   chats.projects = []; chats.deletedMediaConversationIds = []; chats.mediaConversationsMigrated = false; loading = undefined
 }, { flush: 'sync' })

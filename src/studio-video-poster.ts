@@ -54,13 +54,25 @@ function waitForFrame(video: HTMLVideoElement, ready: () => boolean, signal: Abo
     try { start(); check() } catch { failed() }
   })
 }
-const posterSourceLimit = 64 * 1024 * 1024
-async function posterSource(source: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(source, { credentials: 'same-origin', signal })
-  if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('video/')) throw new Error('视频封面无法读取，可直接播放原视频。')
-  if (Number(response.headers.get('content-length')) > posterSourceLimit) {
+async function remotePoster(source: URL, signal: AbortSignal): Promise<{ blob: Blob; duration?: number }> {
+  const url = new URL('/api/creation/media', location.href)
+  if (source.origin === url.origin && source.pathname === url.pathname) url.search = source.search
+  else if (source.origin === url.origin && source.pathname.startsWith('/legacy-files/')) {
+    url.pathname = source.pathname; url.search = source.search
+    url.searchParams.set('variant', 'thumbnail')
+  } else url.searchParams.set('url', source.href)
+  if (!url.pathname.startsWith('/legacy-files/')) {
+    url.searchParams.set('kind', 'video'); url.searchParams.set('variant', 'poster')
+  }
+  const response = await fetch(url.href, { credentials: 'same-origin', signal })
+  if (!response.ok || !response.body || !/^image\/(?:webp|png|jpeg)(?:;|$)/i.test(response.headers.get('content-type') || '')) {
+    await response.body?.cancel()
+    throw new Error('视频封面暂时无法读取，可重试或直接播放原视频。')
+  }
+  const maximum = 1024 * 1024
+  if (Number(response.headers.get('content-length')) > maximum) {
     await response.body.cancel()
-    throw new Error('视频较大，请直接播放原视频。')
+    throw new Error('视频封面超过读取限额，可直接播放原视频。')
   }
   const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = []
   let total = 0
@@ -70,10 +82,12 @@ async function posterSource(source: string, signal: AbortSignal): Promise<string
       if (part.done) break
       signal.throwIfAborted()
       total += part.value.byteLength
-      if (total > posterSourceLimit) throw new Error('视频较大，请直接播放原视频。')
+      if (total > maximum) throw new Error('视频封面超过读取限额，可直接播放原视频。')
       chunks.push(new Uint8Array(part.value))
     }
-    return URL.createObjectURL(new Blob(chunks, { type: response.headers.get('content-type')!.split(';')[0] }))
+    const duration = Number(response.headers.get('x-video-duration'))
+    return { blob: new Blob(chunks, { type: response.headers.get('content-type')!.split(';')[0] }),
+      ...(Number.isFinite(duration) && duration > 0 ? { duration } : {}) }
   } catch (error) { await reader.cancel().catch(() => {}); throw error }
   finally { reader.releaseLock() }
 }
@@ -83,13 +97,9 @@ async function capturePoster(source: string, signal: AbortSignal): Promise<{ blo
   if (!['http:', 'https:', 'blob:', 'data:'].includes(url.protocol) || url.protocol === 'data:' && !source.startsWith('data:video/')) throw new Error('视频地址无效。')
   const video = document.createElement('video'), deadline = Date.now() + 12000
   const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(12000)])
-  let originalUrl = ''
   video.preload = 'metadata'; video.muted = true; video.playsInline = true; video.crossOrigin = 'anonymous'
   try {
-    // The existing safe public-media proxy does not forward Range. A bounded,
-    // temporary Blob keeps seeking reliable without changing its trust boundary.
-    if (['http:', 'https:'].includes(url.protocol)) originalUrl = await posterSource(url.href, boundedSignal)
-    await waitForFrame(video, () => video.readyState >= 1, boundedSignal, deadline, () => { video.src = originalUrl || url.href; video.load() })
+    await waitForFrame(video, () => video.readyState >= 1, boundedSignal, deadline, () => { video.src = url.href; video.load() })
     const duration = video.duration
     if (!Number.isFinite(duration) || duration <= 0 || !video.videoWidth || !video.videoHeight) throw new Error('视频元数据无效，可直接播放原视频。')
     const last = Math.max(0, duration - Math.min(.05, duration / 100))
@@ -106,10 +116,15 @@ async function capturePoster(source: string, signal: AbortSignal): Promise<{ blo
   } catch (error) {
     if (!signal.aborted && boundedSignal.aborted) throw new Error('视频封面生成超时，请重试或直接播放原视频。')
     throw error
-  } finally { video.pause(); video.removeAttribute('src'); video.load(); if (originalUrl) URL.revokeObjectURL(originalUrl) }
+  } finally { video.pause(); video.removeAttribute('src'); video.load() }
 }
-export async function extractVideoPoster(source: string, signal: AbortSignal): Promise<{ blob: Blob; duration: number }> {
+export async function extractVideoPoster(source: string, signal: AbortSignal): Promise<{ blob: Blob; duration?: number }> {
   const release = await captureSlot(signal)
-  try { return await capturePoster(source, signal) }
+  try {
+    const url = new URL(source, location.href)
+    return ['http:', 'https:'].includes(url.protocol)
+      ? await remotePoster(url, AbortSignal.any([signal, AbortSignal.timeout(35000)]))
+      : await capturePoster(source, signal)
+  }
   finally { release() }
 }

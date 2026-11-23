@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronRight } from '@lucide/vue'
-import type { Work } from '../data'
+import type { Work, WorkSummary } from '../data'
 import { api } from '../state'
 import BentoGrid from './BentoGrid.vue'
 import WorkCard from './WorkCard.vue'
 
 const props = defineProps<{ work: Work }>()
 const tags = computed(() => [...new Set(props.work.tags)])
-const items = ref<Work[]>([]), nextCursor = ref<string | null>(null)
+const items = ref<WorkSummary[]>([]), nextCursor = ref<string | null>(null)
 const loading = ref(false), failed = ref(false)
 const content = ref<HTMLElement>(), moreButton = ref<HTMLButtonElement>()
 let controller: AbortController | undefined
@@ -17,12 +17,12 @@ async function loadMore() {
   if (loading.value || !tags.value.length || !controller) return
   if (document.activeElement === moreButton.value) content.value?.focus({ preventScroll: true })
   const active = controller, selected = props.work, cursor = nextCursor.value
-  const params = new URLSearchParams({ kind: selected.kind, sort: 'latest', limit: '20' })
+  const params = new URLSearchParams({ kind: selected.kind, sort: 'latest', limit: '20', view: 'card' })
   for (const tag of tags.value) params.append('tag', tag)
   if (cursor) params.set('cursor', cursor)
   loading.value = true; failed.value = false
   try {
-    const page = await api<{ items: Work[]; nextCursor?: string | null }>(`/api/works?${params}`, { signal: AbortSignal.any([active.signal, AbortSignal.timeout(15000)]) })
+    const page = await api<{ items: WorkSummary[]; nextCursor?: string | null }>(`/api/works?${params}`, { signal: AbortSignal.any([active.signal, AbortSignal.timeout(15000)]) })
     if (active !== controller) return
     const known = new Set([selected.id, ...items.value.map(item => item.id)])
     items.value.push(...page.items.filter(item => {

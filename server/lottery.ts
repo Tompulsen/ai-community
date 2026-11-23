@@ -447,9 +447,12 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
   }
 
   async function configuration(client: Queryable, lock = false) {
-    await client.query('INSERT INTO community_lottery_config (id, version, settings) VALUES ($1,0,$2::jsonb) ON CONFLICT (id) DO NOTHING', ['default', JSON.stringify(defaultLotterySettings())])
-    const { rows } = await client.query<LotteryConfigRow>(`SELECT * FROM community_lottery_config WHERE id=$1${lock ? ' FOR UPDATE' : ''}`, ['default'])
-    const row = rows[0]
+    const select = `SELECT * FROM community_lottery_config WHERE id=$1${lock ? ' FOR UPDATE' : ''}`
+    let row = (await client.query<LotteryConfigRow>(select, ['default'])).rows[0]
+    if (!row) {
+      await client.query('INSERT INTO community_lottery_config (id, version, settings) VALUES ($1,0,$2::jsonb) ON CONFLICT (id) DO NOTHING', ['default', JSON.stringify(defaultLotterySettings())])
+      row = (await client.query<LotteryConfigRow>(select, ['default'])).rows[0]
+    }
     if (!row) fail('LOTTERY_UNAVAILABLE', 500)
     row.settings = normalizeLotterySettings(row.settings)
     row.settings.invites.enabled = false
@@ -474,16 +477,20 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
   }
 
   async function sync(client: Queryable, userId: string | null, settings: LotterySettings) {
-    await client.query('INSERT INTO community_lottery_account ("userId",balance,progress) VALUES ($1,0,$2::jsonb) ON CONFLICT ("userId") DO NOTHING', [userId, JSON.stringify(emptyLotteryProgress())])
-    const { rows } = await client.query<LotteryAccountRow>('SELECT * FROM community_lottery_account WHERE "userId"=$1 FOR UPDATE', [userId])
-    const account = rows[0]
+    const select = 'SELECT * FROM community_lottery_account WHERE "userId"=$1 FOR UPDATE'
+    let account = (await client.query<LotteryAccountRow>(select, [userId])).rows[0]
+    if (!account) {
+      await client.query('INSERT INTO community_lottery_account ("userId",balance,progress) VALUES ($1,0,$2::jsonb) ON CONFLICT ("userId") DO NOTHING', [userId, JSON.stringify(emptyLotteryProgress())])
+      account = (await client.query<LotteryAccountRow>(select, [userId])).rows[0]
+    }
     if (!account) fail('LOTTERY_UNAVAILABLE', 500)
     const counts = await statistics(client, userId)
     const credit = lotteryCredits(account.progress, counts, settings)
-    if (account.balance + credit.added <= MAX) {
+    const progress = JSON.stringify(credit.progress)
+    if (account.balance + credit.added <= MAX && (credit.added || progress !== JSON.stringify(account.progress))) {
       account.balance += credit.added
       account.progress = credit.progress
-      await client.query('UPDATE community_lottery_account SET balance=$2,progress=$3::jsonb WHERE "userId"=$1', [userId, account.balance, JSON.stringify(account.progress)])
+      await client.query('UPDATE community_lottery_account SET balance=$2,progress=$3::jsonb WHERE "userId"=$1', [userId, account.balance, progress])
     }
     return { account, counts }
   }
@@ -546,7 +553,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     const credit = creditConfig()
     const { subject, ...result } = await transaction(db, async client => {
       if (userId) await actor(client, userId)
-      const { settings } = await configuration(client, Boolean(userId))
+      const { settings } = await configuration(client)
       const daily = settings.dailyLimit ? await dailyPool(client, settings, userId, now()) : null
       const result = userId ? await sync(client, userId, settings) : null
       const progress = result?.account.progress ?? emptyLotteryProgress()

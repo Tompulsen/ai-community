@@ -20,6 +20,7 @@ import {
 import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
 import { imagePreview } from './creation/image-preview.ts'
+import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
 import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
@@ -487,9 +488,10 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
   const path = ctx.url.searchParams.get('path')
   const kind = ctx.url.searchParams.get('kind') === 'video' ? 'video' : 'image'
   const variant = ctx.url.searchParams.get('variant')
-  if (variant !== null && (variant !== 'preview' || ctx.url.searchParams.getAll('variant').length !== 1
-    || ctx.url.searchParams.has('path') || ctx.url.searchParams.has('kind') && ctx.url.searchParams.get('kind') !== 'image'))
-    throw httpError(400, '图片预览地址无效。')
+  if (variant !== null && (ctx.url.searchParams.getAll('variant').length !== 1 ||
+    !(variant === 'poster' && ctx.url.searchParams.get('kind') === 'video' ||
+      variant === 'preview' && !ctx.url.searchParams.has('path') && (!ctx.url.searchParams.has('kind') || ctx.url.searchParams.get('kind') === 'image'))))
+    throw httpError(400, '媒体预览地址无效。')
   let response: Response
   if (path) {
     const normalized = mediaPath(path)
@@ -502,8 +504,9 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
     if (requested && requested !== String(owner.tokenId)) throw httpError(403, '生成文件密钥与原始记录不一致。')
     req.headers.set('x-new-api-token', String(owner.tokenId))
     const credentials = await svc.credentials(req, normalized)
-    const lifecycle = createProxyLifecycle(req.signal, 120000)
-    try {
+    const load = async (signal: AbortSignal) => {
+      const lifecycle = createProxyLifecycle(signal, 120000)
+      try {
       const upstream = await svc.fetch(new URL(`/${normalized}`, credentials.baseUrl), {
         headers: relayHeaders(req, credentials.apiKey, true), signal: lifecycle.signal,
         redirect: 'manual', cache: 'no-store',
@@ -513,7 +516,7 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
         lifecycle.dispose()
         const target = upstream.headers.get('location')
         if (!target) throw httpError(502, '生成文件地址暂时不可用。')
-        response = await svc.publicMedia(new URL(target, credentials.baseUrl).href, 'video', 512 * MiB, req.signal)
+        return await svc.publicMedia(new URL(target, credentials.baseUrl).href, 'video', variant === 'poster' ? videoPosterSourceLimit : 512 * MiB, signal)
       } else {
         const type = upstream.headers.get('content-type')?.split(';')[0] || ''
         if (![200, 206].includes(upstream.status) || !/^video\/(?:mp4|webm|quicktime|x-matroska)$/.test(type)) {
@@ -521,22 +524,29 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
           throw httpError(upstream.status === 404 ? 404 : 502, '生成文件暂时无法读取。')
         }
         const headers = new Headers({ 'Content-Type': type })
-        for (const name of ['content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        for (const name of ['content-range', 'accept-ranges', 'etag', 'last-modified', 'content-length']) {
           const value = upstream.headers.get(name)
           if (value) headers.set(name, value)
         }
-        response = new Response(lifecycle.stream(upstream.body), { status: upstream.status, headers })
+        return new Response(lifecycle.stream(upstream.body), { status: upstream.status, headers })
       }
-    } catch (error) { lifecycle.dispose(); throw error }
+      } catch (error) { lifecycle.dispose(); throw error }
+    }
+    response = variant === 'poster'
+      ? await videoPoster(hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${credentials.tokenId}:${normalized}`), load, req.signal)
+      : await load(req.signal)
   } else {
     const url = ctx.url.searchParams.get('url')
     if (!url || url.length > 8192) throw httpError(400, '生成文件地址无效。')
     response = variant === 'preview' ? await imagePreview(url, svc.publicMedia, req.signal)
-      : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal)
+      : variant === 'poster' ? await videoPoster(
+        hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${ctx.sessionHash || ''}:${req.headers.get('x-new-api-token') || ''}:${url}`),
+        signal => svc.publicMedia(url, 'video', videoPosterSourceLimit, signal), req.signal)
+        : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal)
   }
   response.headers.set('Cache-Control', 'private, no-store')
   response.headers.set('X-Content-Type-Options', 'nosniff')
-  if (variant === 'preview') ctx.reply.header('Content-Length', response.headers.get('content-length')!)
+  if (variant === 'preview' || variant === 'poster') ctx.reply.header('Content-Length', response.headers.get('content-length')!)
   await sendWebResponse(ctx.reply, response)
 }
 

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Bookmark, Heart, Play, FileText, ArrowUpRight, Image } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
-import type { Work } from '../data'
+import type { WorkSummary } from '../data'
 import { statusLabels } from '../data'
 import { pendingActions, toggleWork } from '../state'
-const props = defineProps<{ work: Work; management?: boolean; eager?: boolean; thumbnailOnly?: boolean }>()
+const props = defineProps<{ work: WorkSummary; management?: boolean; eager?: boolean; thumbnailOnly?: boolean }>()
 const failed = ref(false)
 const measuredRatio = ref<number>()
 const coverRatio = computed(() => {
