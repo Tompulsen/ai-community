@@ -11,6 +11,7 @@ import WorkCommentItem from '../components/WorkCommentItem.vue'
 import CommentAttachments from '../components/CommentAttachments.vue'
 import { useCommentComposer } from '../use-comment-composer'
 import { rememberInterest } from '../feed-preferences'
+import { publicationFields } from '../publication-parameters'
 const WorkRemixDialog = defineAsyncComponent(() => import('../components/WorkRemixDialog.vue'))
 const remixOpen = ref(false), remixButton = ref<HTMLButtonElement>()
 function openRemix() { if (work.value) rememberInterest(session.user?.id || 'guest', work.value, 'remix'); mediaBrowser.value?.pause(); remixOpen.value = true }
@@ -23,6 +24,13 @@ const commentsDialog = ref<HTMLDialogElement>(), relatedDialog = ref<HTMLDialogE
 watch(mobile, () => { commentsDialog.value?.close(); relatedDialog.value?.close() })
 const route = useRoute()
 const work = ref<Work | null>(null)
+const skill = computed(() => work.value?.generation?.skill)
+const parameterRows = computed(() => {
+  if (!work.value?.generation?.parameters || work.value.kind === 'resource') return []
+  const fields = publicationFields(work.value.generation.parameters)
+  const labels = { size: '画面尺寸', aspectRatio: '画面比例', seed: '随机种子', duration: '视频时长（秒）', resolution: '分辨率', fps: '帧率（FPS）' }
+  return Object.entries(fields).filter(([, value]) => value !== '').map(([key, value]) => ({ label: labels[key as keyof typeof labels], value }))
+})
 const promptExpanded = ref(false)
 const longPrompt = computed(() => (work.value?.prompt?.length || 0) > 180 || (work.value?.prompt?.split('\n').length || 0) > 4)
 const files = computed<WorkFile[]>(() => work.value?.files?.length ? work.value.files : work.value?.video ? [{ id: 'video', name: work.value.title, type: 'video/mp4', url: work.value.video }] : work.value?.cover ? [{ id: 'cover', name: work.value.title, type: 'image/jpeg', url: work.value.cover }] : [])
@@ -154,7 +162,7 @@ async function share() {
   <div v-if="loading" class="empty-state" role="status">正在加载作品…</div>
   <div v-else-if="work" class="page-container detail-page">
     <WorkRemixDialog v-if="remixOpen" :key="work.id" :source="work" @close="closeRemix" />
-    <header v-if="!mobile" class="detail-toolbar"><RouterLink to="/discover" class="detail-return"><ArrowLeft :size="20" aria-hidden="true" /><span>返回发现</span></RouterLink><div class="detail-context"><span>{{ kindLabels[work.kind] }}作品</span><span v-if="work.viewsCount !== undefined"><Eye :size="16" aria-hidden="true" />{{ work.viewsCount.toLocaleString('zh-CN') }} 次浏览</span></div></header>
+    <header v-if="!mobile" class="detail-toolbar"><RouterLink to="/discover" class="detail-return"><ArrowLeft :size="20" aria-hidden="true" /><span>返回发现</span></RouterLink><div class="detail-context"><span>{{ skill ? '技能' : kindLabels[work.kind] }}作品</span><span v-if="work.viewsCount !== undefined"><Eye :size="16" aria-hidden="true" />{{ work.viewsCount.toLocaleString('zh-CN') }} 次浏览</span></div></header>
     <div class="detail-layout">
       <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" /></Teleport>
       <article class="detail-focus" :key="work.id" aria-label="作品详情">
@@ -171,14 +179,15 @@ async function share() {
             </div>
             <h1>{{ work.title }}</h1>
             <section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
-            <div class="detail-create">
+            <div v-if="!skill" class="detail-create">
               <button ref="remixButton" type="button" class="button btn primary remix-button" aria-haspopup="dialog" @click="openRemix"><WandSparkles :size="20" aria-hidden="true" /><span>制作同款</span><ChevronRight :size="18" aria-hidden="true" /></button>
               <span v-if="!mobile && work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
             </div>
             <details class="detail-metadata" :open="!mobile">
-              <summary>提示词与作品信息</summary>
-              <section class="prompt-section"><div class="section-heading"><h2>提示词</h2><button class="icon-button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" /></button></div><p id="work-prompt" :class="{ 'prompt-collapsed': longPrompt && !promptExpanded }">{{ work.prompt || '作者未公开提示词。' }}</p><button v-if="longPrompt" class="text-link prompt-expand" :aria-expanded="promptExpanded" aria-controls="work-prompt" @click="promptExpanded = !promptExpanded">{{ promptExpanded ? '收起提示词' : '展开全部提示词' }}</button></section>
-              <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ kindLabels[work.kind] }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>来源</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">查看原始来源</a></dd></div></dl>
+              <summary>{{ skill ? '技能与安装信息' : '提示词与作品信息' }}</summary>
+              <section v-if="!skill" class="prompt-section"><div class="section-heading"><h2>提示词</h2><button class="icon-button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" /></button></div><p id="work-prompt" :class="{ 'prompt-collapsed': longPrompt && !promptExpanded }">{{ work.prompt || '作者未公开提示词。' }}</p><button v-if="longPrompt" class="text-link prompt-expand" :aria-expanded="promptExpanded" aria-controls="work-prompt" @click="promptExpanded = !promptExpanded">{{ promptExpanded ? '收起提示词' : '展开全部提示词' }}</button></section>
+              <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ skill ? 'AI Skill / 工作流资源' : kindLabels[work.kind] }}</dd></div><div v-if="skill"><dt>适用工具</dt><dd>{{ skill.platform }}</dd></div><div v-if="skill?.version"><dt>适用版本</dt><dd>{{ skill.version }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-for="row in parameterRows" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>{{ skill ? '仓库 / 资源' : '来源' }}</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">{{ skill ? '打开资源链接' : '查看原始来源' }}</a></dd></div></dl>
+              <section v-if="skill?.installation" class="prompt-section"><h2>安装方式</h2><p class="work-body">{{ skill.installation }}</p></section>
               <div v-if="work.tags.length" class="work-tags"><RouterLink v-for="tag in work.tags" :key="tag" :to="{ path: '/discover', query: { tag } }" class="tag-button">{{ tag }}</RouterLink></div>
             </details>
             <Teleport to="#mobile-work-comments" :disabled="!mobile" defer>

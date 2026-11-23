@@ -21,6 +21,7 @@ import { jpegImage } from './image-export.ts';
 import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
+import { skillDetailsSchema, skillFileType, skillFileName, type SkillDetails } from '../shared/publication.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
@@ -39,6 +40,7 @@ interface Generation {
   sourceWorkId?: string;
   shareToSource?: boolean;
   parameters?: RemixParameters;
+  skill?: SkillDetails;
 }
 
 interface CommunityRevision {
@@ -83,7 +85,7 @@ interface CommunityRow extends CommunityRevision {
 }
 
 interface IdRow { id: string }
-interface AttachmentRow extends IdRow { type: string }
+interface AttachmentRow extends IdRow { type: string; name: string }
 async function commentAttachments(db: Queryable, ids: string[], owner: string, lock = false) {
   if (!ids.length) return [];
   const result = await db.query<{ id: string; name: string; type: string; size: number; url: string; thumbnailAccessKey: string | null; properties: Record<string, unknown> | null }>(
@@ -576,12 +578,14 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   const tags = assets ? assets.tags : tagIds.length ? (await ctx.db.query<TagRow>('SELECT id, name, category FROM community_tag WHERE id = ANY($1::varchar[]) AND NOT "isDeleted" ORDER BY id', [tagIds])).rows : [];
   const publicStatus = ['published', 'approved'].includes(row.status) && row.approvedNoteId;
   const publicParameters = readRemixParameters(content.generation?.parameters);
+  const skill = content.category === 'resource' ? skillDetailsSchema.safeParse(content.generation?.skill) : null;
   return {
     id: row.id, title: content.title, author: row.authorName || row.authorUsername || '',
     avatar: (row.authorName || row.authorUsername || '?').slice(0, 1), authorId: row.authorId, authorUsername: row.authorUsername,
     ...(row.authorAccountId ? { authorAccountId: row.authorAccountId } : {}),
     avatarUrl: row.authorAvatarId ? `/legacy-files/${row.authorAvatarId}?variant=thumbnail` : null,
     kind: content.category, cover: image?.thumbnailAccessKey ? `${mediaUrl(image)}?variant=thumbnail` : mediaUrl(image) || (video?.thumbnailAccessKey ? `${mediaUrl(video)}?variant=thumbnail` : ''),
+    ...(skill?.success ? { isSkill: true } : {}),
     ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
     tags: tags.map(tag => tag.name), tagIds: tags.map(tag => tag.id),
     prompt: content.generation?.prompt ?? '', model: content.model, body: content.text,
@@ -589,6 +593,7 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
       prompt: content.generation.prompt, model: content.generation.model, referenceFileIds: referenceIds,
       ...(content.generation.sourceWorkId ? { sourceWorkId: content.generation.sourceWorkId } : {}),
       ...(publicParameters ? { parameters: publicParameters } : {}),
+      ...(skill?.success ? { skill: skill.data } : {}),
     } : null,
     referenceFiles: referenceIds.flatMap(id => references.filter(file => file.id === id && file.storedInternal && file.type.startsWith('image/')).map(file => ({ id: file.id, name: publicImageName(file), type: file.type, url: new URL(`/legacy-files/${file.id}`, ctx.config.url).href }))),
     fileIds: ids, files: ordered.map(file => ({ id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
@@ -648,23 +653,32 @@ export function normalizeRevision(body: Body, previous: Partial<CommunityRevisio
   if (!Array.isArray(rawReferences) || rawReferences.length > 16 || new Set(rawReferences).size !== rawReferences.length) fail(400, 'Invalid reference files');
   const references = rawReferences.map(identifier);
   const sourceWorkId = generation?.sourceWorkId ? identifier(generation.sourceWorkId) : undefined;
-  const parameters = generation?.parameters === undefined ? undefined : readRemixParameters(generation.parameters);
-  if (generation?.parameters !== undefined && (!parameters || parameters.kind !== (category === 'resource' ? 'text' : category))) fail(400, 'Invalid generation parameters');
+  const rawParameters = body.parameters === null ? undefined : body.parameters ?? generation?.parameters;
+  const parameters = rawParameters === undefined ? undefined : readRemixParameters(rawParameters);
+  if (rawParameters !== undefined && (!parameters || parameters.kind !== (category === 'resource' ? 'text' : category))) fail(400, 'Invalid generation parameters');
+  const rawSkill = body.skill === null ? undefined : body.skill ?? generation?.skill;
+  const skill = rawSkill === undefined ? undefined : skillDetailsSchema.safeParse(rawSkill);
+  if (skill && (!skill.success || category !== 'resource' || parameters || sourceWorkId)) fail(400, '技能信息与作品类型不匹配或格式无效。');
   return {
     category, title, text: text(body.body ?? body.text, 20000, previous.text ?? ''), model, sourceUrl,
     license: text(body.license, 200, previous.license ?? ''), fileIds,
-    generation: body.generation === null ? null : prompt || references.length || sourceWorkId ? {
-      prompt, model, referenceFileIds: references, ...(parameters ? { parameters } : {}), ...(sourceWorkId ? { sourceWorkId, ...(generation?.shareToSource === true ? { shareToSource: true } : {}) } : {}),
+    generation: body.generation === null ? null : prompt || references.length || sourceWorkId || parameters || skill ? {
+      prompt, model, referenceFileIds: references, ...(parameters ? { parameters } : {}), ...(skill?.success ? { skill: skill.data } : {}), ...(sourceWorkId ? { sourceWorkId, ...(generation?.shareToSource === true ? { shareToSource: true } : {}) } : {}),
     } : null,
   };
 }
 
 async function validateRevision(db: Queryable, actorId: string, revision: CommunityRevision, body: Body, draft = false, noteId?: string | null): Promise<AttachmentRow[]> {
   const fileIds = [...new Set([...revision.fileIds, ...(revision.generation?.referenceFileIds ?? [])])];
-  const files = fileIds.length ? (await db.query<AttachmentRow>('SELECT id, type FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2 ORDER BY id FOR KEY SHARE', [fileIds, actorId])).rows : [];
+  const files = fileIds.length ? (await db.query<AttachmentRow>('SELECT id, type, name FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2 ORDER BY id FOR KEY SHARE', [fileIds, actorId])).rows : [];
   if (files.length !== fileIds.length) fail(400, 'An attachment is missing or belongs to another account');
   if (revision.generation?.referenceFileIds.some(id => !files.find(file => file.id === id)?.type.startsWith('image/'))) fail(400, 'References must be images');
   const attachments = files.filter(file => revision.fileIds.includes(file.id));
+  if (revision.generation?.skill) {
+    if (attachments.some(file => !skillFileType(file.type) || !skillFileName(file.name))) fail(400, '技能文件请选择 ZIP、JSON、Markdown、TXT 或 YAML；示例图片请放入参考图。');
+    if (!draft && (!revision.text.trim() || !revision.generation.skill.platform || !attachments.length && !revision.sourceUrl))
+      fail(400, '请填写适用工具和使用说明，并上传技能文件或提供仓库链接。');
+  }
   if (!draft && (!revision.text && !revision.fileIds.length ||
     revision.category === 'image' && !attachments.some(file => file.type.startsWith('image/')) ||
     revision.category === 'video' && !attachments.some(file => file.type.startsWith('video/')))) fail(400, 'The work needs valid content and attachments');

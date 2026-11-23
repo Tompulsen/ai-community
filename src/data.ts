@@ -1,4 +1,5 @@
 import type { RemixParameters } from '../shared/studio/remix-parameters'
+import type { SkillDetails } from '../shared/publication'
 export type WorkKind = 'image' | 'video' | 'resource'
 export interface WorkTag { id: string; category: WorkKind; name: string }
 export type WorkStatus = 'draft' | 'pending' | 'approved' | 'published' | 'rejected'
@@ -32,6 +33,7 @@ export interface Work {
   avatar: string
   avatarUrl?: string
   kind: WorkKind
+  isSkill?: boolean
   cover: string
   coverAspectRatio?: number
   tags: string[]
@@ -57,7 +59,7 @@ export interface Work {
   sourceUrl?: string
   license?: string
   referenceFiles?: WorkFile[]
-  generation?: { prompt?: string; model?: string; sourceWorkId?: string; parameters?: RemixParameters } | null
+  generation?: { prompt?: string; model?: string; sourceWorkId?: string; parameters?: RemixParameters; skill?: SkillDetails } | null
 }
 
 export type WorkSummary = Omit<Work, 'prompt' | 'model' | 'sourceUrl' | 'license' | 'generation' | 'referenceFiles' | 'fileIds' | 'files'>

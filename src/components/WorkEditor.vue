@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ChevronDown, ImagePlus, PenLine, Plus, Save, SlidersHorizontal, Upload, X } from '@lucide/vue'
+import { ChevronDown, FileCode, ImagePlus, Plus, Save, SlidersHorizontal, Upload, Video, X } from '@lucide/vue'
 import WorkAttachments from './WorkAttachments.vue'
 import PublicationTagPicker from './PublicationTagPicker.vue'
+import PublicationParameters from './PublicationParameters.vue'
+import { publicationFields, publicationParameters } from '../publication-parameters'
+import { skillFileAccept, skillFileName, type SkillDetails } from '../../shared/publication'
+import type { RemixParameters } from '../../shared/studio/remix-parameters'
 import { kindLabels, type Work, type WorkKind, type WorkTag } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session } from '../state'
 import { useFileUploads, type UploadFile } from '../use-file-uploads'
@@ -17,7 +21,21 @@ const leaveDialog = ref<HTMLDialogElement>()
 const router = useRouter()
 const draft = reactive({ title: '', kind: 'image' as WorkKind, body: '', prompt: '', tags: [] as string[], tagIds: undefined as string[] | undefined, model: '', sourceUrl: '', license: '' })
 const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), referenceInput = ref<HTMLInputElement>()
-const writing = ref(false), autoKind = ref(true), tagOptions = ref<WorkTag[]>([]), tagsLoading = ref(false), tagsError = ref('')
+const tagOptions = ref<WorkTag[]>([]), tagsLoading = ref(false), tagsError = ref('')
+const legacyResource = ref(false)
+const isSkill = computed(() => draft.kind === 'resource' && !legacyResource.value)
+const kindLocked = computed(() => Boolean(props.work && (props.work.status !== 'draft' || props.work.generation?.sourceWorkId || legacyResource.value)))
+const originalParameters = ref<RemixParameters>()
+const parameters = ref(publicationFields())
+const skill = ref<SkillDetails>({ platform: '', version: '', installation: '' })
+const publicationTypes = [
+  { kind: 'image' as const, label: '图片', icon: ImagePlus },
+  { kind: 'video' as const, label: '视频', icon: Video },
+  { kind: 'resource' as const, label: '技能', icon: FileCode },
+]
+const fileAccept = computed(() => isSkill.value ? skillFileAccept : legacyResource.value || props.work ? undefined : `${draft.kind}/*`)
+const uploadLabel = computed(() => isSkill.value ? '上传技能 / 工作流' : legacyResource.value ? '添加资源文件' : `添加${kindLabels[draft.kind]}`)
+const uploadHint = computed(() => isSkill.value ? 'ZIP、JSON、MD、TXT、YAML' : legacyResource.value ? '支持资源附件' : draft.kind === 'video' ? '上传视频成品，示例图片放入参考图' : '上传图片成品，支持多图')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const sourceComment = ref(false)
 const selectedTagIds = computed({
@@ -44,15 +62,23 @@ const requestId = ref(crypto.randomUUID())
 let loadId = 0
 let resolveLeave: ((leave: boolean) => void) | undefined
 const baseline = ref('')
-const snapshot = () => JSON.stringify({ ...draft, files: files.value.map(file => file.id), references: references.value.map(file => file.id) })
+function typeState() { return { body: draft.body, prompt: draft.prompt, model: draft.model, sourceUrl: draft.sourceUrl, license: draft.license, parameters: { ...parameters.value }, skill: { ...skill.value }, files: [...files.value], references: [...references.value] } }
+const typeDrafts = reactive<Partial<Record<WorkKind, ReturnType<typeof typeState>>>>({})
+const snapshot = () => JSON.stringify({ ...draft, types: publicationTypes.map(({ kind }) => {
+  const state = kind === draft.kind ? typeState() : typeDrafts[kind]
+  return state ? { ...state, files: state.files.map(file => file.id), references: state.references.map(file => file.id) } : null
+}) })
 const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
 function fill(work?: Work | null) {
   uploads.reset()
   sourceComment.value = work?.destination === 'source-comment'
   Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], tagIds: work?.tagIds ? [...work.tagIds] : undefined, model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
-  writing.value = work?.kind === 'resource'
-  autoKind.value = !work || work.status === 'draft' && work.kind !== 'resource' && !work.generation?.parameters && !(work.files || []).some(file => file.type.startsWith(`${work.kind}/`))
+  legacyResource.value = work?.kind === 'resource' && !work.generation?.skill
+  originalParameters.value = work?.generation?.parameters
+  parameters.value = publicationFields(work?.generation?.parameters)
+  skill.value = { platform: '', version: '', installation: '', ...work?.generation?.skill }
+  for (const { kind } of publicationTypes) delete typeDrafts[kind]
   tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
   if (extra.value) extra.value.open = false
   files.value = [...(work?.files || [])]
@@ -91,15 +117,16 @@ async function loadTags() {
   finally { if (current === tagLoadId) tagsLoading.value = false }
 }
 watch([() => props.open, () => draft.kind], ([open]) => { if (open && !sourceComment.value) void loadTags() }, { immediate: true })
-function inferKind() {
-  if (!autoKind.value) return
-  const kind: WorkKind = writing.value || files.value.some(file => !/^(image|video)\//.test(file.type)) ? 'resource'
-    : files.value.some(file => file.type.startsWith('video/')) ? 'video' : 'image'
-  if (draft.kind !== kind) { draft.kind = kind; tagValidation.value = '' }
+function selectKind(kind: WorkKind) {
+  if (kind === draft.kind || kindLocked.value || saving.value || uploading.value || loading.value) return
+  typeDrafts[draft.kind] = typeState()
+  const saved = typeDrafts[kind]
+  Object.assign(draft, { kind, body: saved?.body || '', prompt: saved?.prompt || '', model: saved?.model || '', sourceUrl: saved?.sourceUrl || '', license: saved?.license || '' })
+  files.value = [...(saved?.files || [])]; references.value = [...(saved?.references || [])]
+  parameters.value = saved ? { ...saved.parameters } : publicationFields()
+  skill.value = saved ? { ...saved.skill } : { platform: '', version: '', installation: '' }
+  error.value = ''; tagValidation.value = ''
 }
-watch(() => files.value.map(file => file.type), inferKind)
-function writeContent() { writing.value = true; inferKind() }
-function useFiles() { writing.value = false; inferKind() }
 function showUpload() { fileInput.value?.click() }
 function invalidField(event: Event) {
   const input = event.target as HTMLInputElement
@@ -138,8 +165,9 @@ function choose(event: Event, reference = false) {
   const target = reference ? references : files
   if (target.value.length + selected.length > 16) { error.value = '作品文件和参考图各最多 16 个。'; return }
   if (reference && selected.some(file => !file.type.startsWith('image/'))) { error.value = '参考素材请选择图片。'; return }
+  if (!reference && isSkill.value && selected.some(file => !skillFileName(file.name))) { error.value = '技能文件请选择 ZIP、JSON、Markdown、TXT 或 YAML。'; return }
+  if (!reference && !props.work && draft.kind !== 'resource' && selected.some(file => !file.type.startsWith(`${draft.kind}/`))) { error.value = `请选择${kindLabels[draft.kind]}文件，其他类型请切换发布类型。`; return }
   error.value = ''; target.value.push(...uploads.add(selected))
-  if (!reference) inferKind()
 }
 function move(index: number, reference: boolean, direction: number) {
   const target = reference ? references.value : files.value
@@ -153,22 +181,22 @@ function changeRole(index: number, reference: boolean) {
   const to = reference ? files.value : references.value
   const file = from[index]
   if (!file || to.length >= 16 || (!reference && !file.type.startsWith('image/'))) return
+  if (reference && (isSkill.value || draft.kind === 'video')) return
   from.splice(index, 1); to.push(file)
-  inferKind()
   if (!reference && extra.value) extra.value.open = true
 }
 function removeFile(index: number, reference = false) {
   const target = reference ? references.value : files.value
   const [removed] = target.splice(index, 1)
   if (removed) uploads.remove(removed)
-  if (!reference) inferKind()
 }
 async function save(status: 'draft' | 'pending') {
   if (saving.value || loading.value || loadFailed.value) return
   if (!draft.title.trim()) { error.value = '请填写作品标题。'; return }
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
-  if (status !== 'draft' && draft.kind === 'resource' && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
+  if (status !== 'draft' && legacyResource.value && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
+  if (status !== 'draft' && isSkill.value && (!skill.value.platform.trim() || !draft.body.trim() || !files.value.length && !draft.sourceUrl.trim())) { error.value = '请填写适用工具和使用说明，并上传技能文件或提供仓库链接。'; return }
   tagValidation.value = ''
   if (status !== 'draft' && !sourceComment.value) {
     tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
@@ -185,10 +213,14 @@ async function save(status: 'draft' | 'pending') {
   saving.value = true; error.value = ''
   const current = loadId, owner = session.user?.id
   try {
+    const metadata = {
+      parameters: draft.kind !== 'resource' ? publicationParameters(draft.kind, parameters.value, originalParameters.value) : isSkill.value ? null : undefined,
+      skill: isSkill.value ? { ...skill.value } : legacyResource.value ? undefined : null,
+    }
     await uploads.wait([...files.value, ...references.value])
     if (current !== loadId || session.user?.id !== owner) return
     const body = {
-      ...draft, title: draft.title.trim(), tags: [...draft.tags],
+      ...draft, ...metadata, title: draft.title.trim(), tags: [...draft.tags],
       tagIds: draft.tagIds ?? (!tagsLoading.value && !tagsError.value && draft.tags.length === selectedTagIds.value.length ? [...selectedTagIds.value] : undefined),
       fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
@@ -217,12 +249,16 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
         <fieldset :disabled="loading || saving || loadFailed" class="editor-fields editor-layout">
           <legend class="editor-sr-only">作品信息</legend>
           <section class="attachment-section editor-media" aria-label="作品文件">
-            <input ref="fileInput" type="file" multiple hidden aria-label="添加作品文件" @change="choose($event)" />
-            <button v-if="!files.length && !writing" type="button" class="upload-area" @click="showUpload"><ImagePlus :size="40" :stroke-width="1.8" aria-hidden="true" /><span>添加作品</span></button>
-            <div v-else class="section-heading"><span class="form-note">{{ draft.kind === 'resource' ? '资源' : kindLabels[draft.kind] }} · {{ files.length }}/16</span><button type="button" class="button subtle btn" @click="showUpload"><Plus :size="16" aria-hidden="true" />添加文件</button></div>
+            <input ref="fileInput" type="file" multiple :accept="fileAccept" hidden aria-label="添加作品文件" @change="choose($event)" />
+            <button v-if="!files.length" type="button" class="upload-area" @click="showUpload"><component :is="isSkill ? FileCode : draft.kind === 'video' ? Video : ImagePlus" :size="40" :stroke-width="1.8" aria-hidden="true" /><span>{{ uploadLabel }}</span><small>{{ uploadHint }}</small></button>
+            <div v-else class="section-heading"><span class="form-note">{{ isSkill ? '技能' : legacyResource ? '资源' : kindLabels[draft.kind] }} · {{ files.length }}/16</span><button type="button" class="button subtle btn" @click="showUpload"><Plus :size="16" aria-hidden="true" />添加文件</button></div>
             <WorkAttachments :files="files" featured @retry="index => uploads.retry(files[index]!)" @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
-            <label v-if="draft.kind === 'resource'" class="field resource-content"><span>资源内容</span><textarea v-model="draft.body" class="control" rows="7" maxlength="20000" /></label>
-            <button v-if="autoKind && (writing || !files.length)" type="button" class="write-content" @click="writing ? useFiles() : writeContent()"><ImagePlus v-if="writing" :size="16" aria-hidden="true" /><PenLine v-else :size="16" aria-hidden="true" />{{ writing ? '使用文件投稿' : '填写内容' }}</button>
+            <label v-if="legacyResource" class="field resource-content"><span>资源内容</span><textarea v-model="draft.body" class="control" rows="7" maxlength="20000" /></label>
+            <fieldset class="publication-types" :disabled="kindLocked || uploading || saving">
+              <legend>作品类型</legend>
+              <div class="type-options"><label v-for="option in publicationTypes" :key="option.kind" :class="{ selected: draft.kind === option.kind }"><input type="radio" name="publication-type" :value="option.kind" :checked="draft.kind === option.kind" @change="selectKind(option.kind)" /><component :is="option.icon" :size="18" aria-hidden="true" /><span>{{ option.kind === 'resource' && legacyResource ? '资源' : option.label }}</span></label></div>
+              <p class="form-note">{{ kindLocked ? '编辑时保留原作品类型' : '按类型上传作品，填写对应信息' }}</p>
+            </fieldset>
           </section>
           <div class="editor-content">
           <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
@@ -235,17 +271,25 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
             <template v-else-if="!tagsLoading && !tagsError"><p class="form-note">暂无可用标签，请联系管理员添加；也可以先存为草稿。</p><button type="button" class="button subtle btn" @click="loadTags">重新加载标签</button></template>
             <p v-if="tagValidation" id="editor-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
+          <section v-if="isSkill" class="skill-fields" aria-label="技能信息">
+            <label class="field"><span>适用工具（必填）</span><input v-model="skill.platform" class="control" maxlength="100" placeholder="例如 Claude Code、ComfyUI、n8n" /></label>
+            <label class="field"><span>使用说明（必填）</span><textarea v-model="draft.body" class="control" rows="4" maxlength="20000" placeholder="介绍技能用途、使用步骤和运行条件" /></label>
+            <label class="field"><span>仓库 / 资源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" placeholder="https://…" /><small class="form-note">上传技能文件或提供链接，至少填写一项。</small></label>
+            <label class="field"><span>适用版本（选填）</span><input v-model="skill.version" class="control" maxlength="80" placeholder="例如 ComfyUI 0.3+" /></label>
+            <label class="field"><span>安装方式（选填）</span><textarea v-model="skill.installation" class="control" rows="3" maxlength="10000" placeholder="说明安装目录、依赖和导入步骤" /></label>
+          </section>
           <details ref="extra" class="editor-extras publication-extras">
             <summary><SlidersHorizontal :size="16" aria-hidden="true" /><span><span>补充信息（选填）</span><small v-if="draft.prompt.trim() || references.length">{{ draft.prompt.trim() ? '含提示词' : '' }}{{ draft.prompt.trim() && references.length ? ' · ' : '' }}{{ references.length ? `${references.length} 张公开参考图` : '' }}</small></span><ChevronDown :size="16" aria-hidden="true" /></summary>
             <div class="editor-fields">
               <label v-if="draft.kind !== 'resource'" class="field"><span>作品简介</span><textarea v-model="draft.body" class="control" rows="2" maxlength="20000" /></label>
-              <label class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="3" maxlength="100000" /></label>
-              <div class="editor-columns"><label class="field"><span>模型</span><input v-model="draft.model" class="control" maxlength="100" /></label><label class="field"><span>来源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" /></label></div>
+              <label v-if="!isSkill" class="field"><span>生成提示词</span><textarea v-model="draft.prompt" class="control" rows="3" maxlength="100000" /></label>
+              <div v-if="!isSkill" class="editor-columns"><label class="field"><span>模型</span><input v-model="draft.model" class="control" maxlength="100" /></label><label class="field"><span>来源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" /></label></div>
+              <PublicationParameters v-if="draft.kind !== 'resource'" v-model="parameters" :kind="draft.kind" />
               <label class="field"><span>授权许可</span><input v-model="draft.license" class="control" maxlength="200" /></label>
               <section class="attachment-section" aria-label="参考图">
                 <div class="section-heading"><h3 class="title-4">参考图 · {{ references.length }}/16</h3><button type="button" class="button subtle btn" @click="referenceInput?.click()"><ImagePlus :size="16" aria-hidden="true" />添加参考图</button></div>
                 <input ref="referenceInput" type="file" multiple accept="image/*" hidden aria-label="添加参考图" @change="choose($event, true)" />
-                <WorkAttachments :files="references" reference @retry="index => uploads.retry(references[index]!)" @move="(index, direction) => move(index, true, direction)" @role="index => changeRole(index, true)" @remove="index => removeFile(index, true)" />
+                <WorkAttachments :files="references" reference :hide-role="isSkill || draft.kind === 'video'" @retry="index => uploads.retry(references[index]!)" @move="(index, direction) => move(index, true, direction)" @role="index => changeRole(index, true)" @remove="index => removeFile(index, true)" />
               </section>
             </div>
           </details>
@@ -272,7 +316,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .editor-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
 .editor-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 0; }
-.editor-media { padding: 24px; background: var(--canvas); }
+.editor-media { padding: 24px; background: var(--canvas); display: flex; flex-direction: column; gap: 16px; align-self: start; }
 .editor-content { min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
 .editor-title small { color: var(--muted); font-size: 12px; line-height: 16px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .editor-title .control { min-height: 48px; font-size: 16px; }
@@ -282,8 +326,17 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .upload-area > span { font-size: 16px; line-height: 24px; font-weight: 500; color: var(--ink); }
 .upload-area:hover:not(:disabled) { color: var(--ink); background: var(--state-hover); }
 .upload-area:active:not(:disabled) { transform: translateY(1px); }
-.write-content { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; width: 100%; margin-top: 8px; color: var(--muted); font-size: 14px; border-radius: 6px; }
-.write-content:hover { color: var(--ink); }
+.upload-area small { padding-inline: 12px; font-size: 12px; line-height: 20px; }
+.publication-types { border: 0; padding: 16px 0 0; margin: auto 0 0; min-width: 0; }
+.publication-types legend { font-size: 13px; color: var(--muted); }
+.type-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.type-options label { position: relative; display: flex; justify-content: center; align-items: center; gap: 6px; min-height: 44px; border-radius: 6px; font-size: 14px; color: var(--muted); cursor: pointer; }
+.type-options input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: inherit; margin: 0; }
+.type-options label.selected { color: var(--ink); background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--control-border); font-weight: 600; }
+.type-options label:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+.publication-types:disabled .type-options label { cursor: default; }
+.publication-types > .form-note { margin-top: 8px; }
+.skill-fields { display: grid; gap: 16px; }
 .resource-content { margin-block-start: 16px; }
 .editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
 .editor-tags legend { margin-bottom: 8px; font-size: 14px; }
@@ -303,6 +356,7 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
   .editor-dialog > .dialog-heading { padding: 12px 16px; }
   .editor-layout { grid-template-columns: minmax(0, 1fr); }
   .editor-media, .editor-content { padding: 16px; }
+  .publication-types { order: -1; margin: 0; padding: 0; }
   .editor-content { gap: 16px; }
   .upload-area { min-height: 180px; gap: 12px; }
   .upload-area > svg:first-child { width: 32px; height: 32px; }

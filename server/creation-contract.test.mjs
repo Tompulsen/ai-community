@@ -149,6 +149,40 @@ test('Gemini image streams handle fragmented native parts and require a terminal
   assert.equal(blocked.status, 'failed')
 })
 
+test('Gemini converted image responses retain Markdown images across text parts without exposing thoughts', () => {
+  const image = `data:${'image/png'};base64,${Buffer.from('image').toString('base64')}`
+  const remote = 'https://media.example/converted.png'
+  const parts = [{ text: '![Image](https://media.example/thought.png)', thought: true },
+    { text: `![Image](${remote})\n![Generated ` }, { text: `Image](${image})` },
+    { inlineData: { mimeType: 'image/png', data: Buffer.from('image').toString('base64') } }]
+  const response = { candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }] }
+  const result = normalizeCreationTask('image', response)
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(new Set(result.outputs.map(output => output.url)), new Set([remote, image]))
+  assert.equal(result.outputs.length, 2)
+  assert.equal(normalizeCreationTask('image', { candidates: [{ content: { parts }, finishReason: 'IMAGE_SAFETY' }] }).status, 'failed')
+  for (const text of ['No image was generated.', '![Image](javascript:alert)', '![Image](data:text/html;base64,aGk=)']) {
+    assert.equal(normalizeCreationTask('image', { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }] }).status, 'indeterminate')
+  }
+  const tooMany = Array.from({ length: 11 }, (_, index) => `![Image](https://media.example/${index}.png)`).join('\n')
+  assert.equal(normalizeCreationTask('image', { candidates: [{ content: { parts: [{ text: tooMany }] }, finishReason: 'STOP' }] }).status, 'indeterminate')
+})
+
+test('Gemini converted image streams join long Markdown across events and keep block and truncation checks', async () => {
+  const input = { kind: 'image', model: 'native-image', prompt: 'Image', apiFormat: 'gemini' }
+  const image = `data:${'image/png'};base64,${Buffer.alloc(192, 1).toString('base64')}`
+  const markdown = `![Generated Image](${image})`
+  const frame = (parts, finishReason) => `data: ${JSON.stringify({ candidates: [{ content: { parts }, ...(finishReason ? { finishReason } : {}) }] })}\r\n\r\n`
+  const thoughts = frame([{ text: '![Image](https://media.example/thought.png)', thought: true }])
+  const wire = thoughts + [...markdown].map(text => frame([{ text }])).join('')
+  const previews = [], result = await readGenerationStream(new Response(wire + frame([], 'STOP')), input, event => previews.push(event.url))
+  assert.deepEqual(result.outputs, [{ url: image }])
+  assert.deepEqual(previews, [image])
+  await assert.rejects(readGenerationStream(new Response(wire + 'data: [DONE]\n\n'), input, () => {}), /中断/)
+  assert.equal((await readGenerationStream(new Response(wire + frame([], 'IMAGE_SAFETY')), input, () => {})).status, 'failed')
+  await assert.rejects(readGenerationStream(new Response(frame(Array(65).fill({ inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } }), 'STOP')), input, () => {}), /超过限制/)
+})
+
 test('automatic video configuration selects parameter families without changing the task interface', () => {
   for (const parameterFormat of ['openai', 'xai', 'seedance', 'gemini']) {
     const setting = { id: 'custom-video', kind: 'video', apiFormat: 'openai', protocol: 'async',

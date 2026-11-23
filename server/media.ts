@@ -73,7 +73,7 @@ async function uploadPolicy(ctx: RequestContext): Promise<UploadPolicy> {
   const meta = (await ctx.db.query<{ policies: Values | null; clientOptions: Values | null }>('SELECT policies,"clientOptions" FROM meta LIMIT 1')).rows[0];
   const defaults: Values = {
     driveCapacityMb: 100, maxFileSizeMb: 30,
-    uploadableFileTypes: ['text/*', 'application/json', 'image/*', 'video/*', 'audio/*'],
+    uploadableFileTypes: ['text/*', 'application/json', 'application/zip', 'application/yaml', 'application/x-yaml', 'image/*', 'video/*', 'audio/*'],
     ...meta?.policies,
   };
   let applicable: UploadRole[] = [];
@@ -125,7 +125,7 @@ export function sniffType(buffer: Buffer, requested = 'application/octet-stream'
   if (buffer.subarray(0, 4).toString() === 'fLaC') return 'audio/flac';
   if (buffer.subarray(0, 3).toString() === 'ID3' || buffer[0] === 255 && (buffer[1]! & 0xe0) === 0xe0) return 'audio/mpeg';
   if (buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WAVE') return 'audio/wav';
-  if (buffer.subarray(0, 4).equals(Buffer.from([80, 75, 3, 4]))) {
+  if (buffer.subarray(0, 4).equals(Buffer.from([80, 75, 3, 4])) || buffer.subarray(0, 4).equals(Buffer.from([80, 75, 5, 6]))) {
     return /^(application\/(zip|epub\+zip|vnd\.openxmlformats-officedocument\.[a-z.-]+|vnd\.oasis\.opendocument\.[a-z.-]+))$/.test(requested) ? requested : 'application/zip';
   }
   return 'application/octet-stream';
@@ -135,7 +135,7 @@ function uploadKind(type: string): UploadKind {
   if (type.startsWith('image/')) return 'image';
   if (type.startsWith('video/') || type === 'application/ogg') return 'video';
   if (type.startsWith('audio/')) return 'audio';
-  if (type.startsWith('text/') || /^application\/(pdf|json|ld\+json|xml|javascript|yaml|rtf|msword|vnd\.|epub\+zip)/.test(type)) return 'document';
+  if (type.startsWith('text/') || /^application\/(pdf|json|ld\+json|xml|javascript|yaml|x-yaml|zip|rtf|msword|vnd\.|epub\+zip)/.test(type)) return 'document';
   return 'other';
 }
 

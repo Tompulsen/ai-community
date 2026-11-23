@@ -146,12 +146,13 @@ const workRow = {
   approvedNoteId: 'note1', status: 'approved', version: 2,
 };
 
-function publicationContext(body, { row = { ...workRow, status: 'pending', approvedNoteId: null }, existing, path = '/api/works', method = 'POST', admin = false, mode = 'before', authorActive = true } = {}) {
+function publicationContext(body, { row = { ...workRow, status: 'pending', approvedNoteId: null }, existing, path = '/api/works', method = 'POST', admin = false, mode = 'before', authorActive = true, attachments = [] } = {}) {
   const statements = [];
   const tagOptions = [1, 2, 3].map(i => ({ id: `tag${i}`, name: `标签${i}`, category: 'resource' }));
   const ctx = context({ path, method, body: { kind: 'resource', title: row.title, body: row.text, idempotencyKey: 'once', ...body },
     user: { id: 'owner1', isAdmin: admin }, query: async (sql, parameters = []) => {
       statements.push({ sql, parameters });
+      if (sql.includes('FROM drive_file')) return { rows: attachments.filter(file => parameters[0].includes(file.id)) };
       if (sql.startsWith('SELECT * FROM community_submission')) return { rows: existing ? [existing] : [] };
       if (sql.includes('FROM community_submission s')) return { rows: [row] };
       if (sql.includes('FROM community_tag')) return { rows: tagOptions.filter(tag => parameters[0].includes(sql.includes('WHERE name') ? tag.name : tag.id) && (!parameters[1] || parameters[1] === tag.category)) };
@@ -173,6 +174,61 @@ test('new community publications require tags before any insert, including legac
     await assert.rejects(handleContent(ctx), error => error.statusCode === 400 && error.code === 'WORK_TAGS_REQUIRED');
     assert(!statements.some(({ sql }) => sql.startsWith('INSERT')));
     assert(statements.some(({ sql }) => sql === 'ROLLBACK'));
+  }
+});
+
+test('manual skill and media metadata survive without a prompt and preserve source-comment provenance on partial edits', () => {
+  const skill = { platform: ' ComfyUI ', version: '0.3+', installation: 'Import workflow.json', secret: 'private' };
+  const revision = normalizeRevision({ kind: 'resource', title: 'Workflow', skill });
+  assert.deepEqual(revision.generation.skill, { platform: 'ComfyUI', version: '0.3+', installation: 'Import workflow.json' });
+  const parameters = { version: 1, kind: 'image', size: '1024x1024' };
+  assert.deepEqual(normalizeRevision({ kind: 'image', title: 'Image', parameters }).generation.parameters, parameters);
+  const previous = { ...workRow, category: 'image', generation: { prompt: 'source', model: 'm', referenceFileIds: [], sourceWorkId: 'original1', shareToSource: true, parameters } };
+  const edited = normalizeRevision({ parameters: { ...parameters, size: '2048x2048' } }, previous);
+  assert.equal(edited.generation.shareToSource, true);
+  assert.equal(edited.generation.sourceWorkId, 'original1');
+  assert.equal(edited.generation.parameters.size, '2048x2048');
+  assert.equal(normalizeRevision({ parameters: null }, previous).generation.parameters, undefined);
+  for (const invalid of [{ kind: 'image', skill }, { skill: { platform: 'x'.repeat(101) } }, { skill, generation: { sourceWorkId: 'original1' } }, { skill, parameters: { version: 1, kind: 'text' } }]) {
+    assert.throws(() => normalizeRevision({ kind: 'resource', title: 'Skill', ...invalid }), error => error.statusCode === 400);
+  }
+});
+
+test('skill publication validates tool, instructions, owned supported files or a resource link and allows incomplete drafts', async () => {
+  const base = { skill: { platform: 'ComfyUI' }, body: 'Import the workflow', tagIds: ['tag1'] };
+  for (const [name, type] of [['skill.zip', 'application/zip'], ['workflow.json', 'application/json'], ['SKILL.md', 'text/plain'], ['workflow.yaml', 'text/plain'], ['workflow.yml', 'application/yaml'], ['guide.txt', 'text/plain']]) {
+    const entry = { id: 'skill1', name, type };
+    const f = publicationContext({ ...base, fileIds: [entry.id] }, { attachments: [entry] });
+    await handleContent(f.ctx);
+    assert.equal(f.ctx.result.status, 201);
+    assert.equal(f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters[12].skill.platform, 'ComfyUI');
+  }
+  const link = publicationContext({ ...base, sourceUrl: 'https://example.com/workflow' });
+  await handleContent(link.ctx); assert.equal(link.ctx.result.status, 201);
+  const draft = publicationContext({ skill: {}, body: '', status: 'draft' });
+  await handleContent(draft.ctx); assert.equal(draft.ctx.result.status, 201);
+  for (const body of [{}, { sourceUrl: 'https://example.com', body: '' }, { sourceUrl: 'https://example.com', skill: {} }, { fileIds: ['otheraccount'] }]) {
+    const f = publicationContext({ ...base, ...body });
+    await assert.rejects(handleContent(f.ctx), error => error.statusCode === 400);
+    assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT')));
+  }
+  for (const [name, type] of [['picture.png', 'image/png'], ['run.exe', 'text/plain'], ['workflow.json', 'application/octet-stream']]) {
+    const f = publicationContext({ ...base, fileIds: ['skill1'] }, { attachments: [{ id: 'skill1', name, type }] });
+    await assert.rejects(handleContent(f.ctx), error => error.statusCode === 400);
+  }
+});
+
+test('skill metadata round-trips through detail, pending review and compact card DTOs without exposing arbitrary fields', async () => {
+  const skill = { platform: 'ComfyUI', version: '0.3+', installation: 'Import workflow.json' };
+  const row = { ...workRow, generation: { prompt: '', model: '', referenceFileIds: [], skill: { ...skill, secret: 'hidden' } } };
+  for (const path of ['/api/works/work1', '/api/works?view=card', '/api/admin/submissions']) {
+    const ctx = context({ path, user: { id: 'owner1', isAdmin: true }, query: async sql => ({ rows: sql.includes('FROM community_submission s') ? [row] : [] }) });
+    await handleContent(ctx);
+    const packed = ctx.result.payload.work ?? ctx.result.payload.items[0];
+    assert.equal(packed.isSkill, true);
+    if (path.includes('view=card')) assert.equal(packed.generation, undefined);
+    if (packed.generation) assert.deepEqual(packed.generation.skill, skill);
+    assert(!JSON.stringify(packed).includes('hidden'));
   }
 });
 

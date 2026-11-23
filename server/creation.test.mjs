@@ -609,6 +609,29 @@ test('native Gemini automatic image requests prepare private history and recover
   }
 })
 
+test('converted Gemini Markdown images survive synchronous and streamed result recovery without another POST', async t => {
+  for (const stream of [false, true]) {
+    const image = 'https://media.example/converted.png'
+    const modelTypes = [{ id: 'native-image', kind: 'image', apiFormat: 'gemini' }]
+    const { app, calls } = fixture(t, { modelTypes, fetch() {
+      const candidate = { content: { role: 'model', parts: [{ text: `![Generated Image](${image})` }] }, finishReason: 'STOP' }
+      return stream
+        ? new Response(`data: ${JSON.stringify({ candidates: [candidate] })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+        : Response.json({ candidates: [candidate] })
+    } })
+    const input = { ...imageRequest, model: 'native-image', apiFormat: 'gemini', imageOptions: { imageStream: stream } }
+    assert.equal((await submit(app, input)).statusCode, 200)
+    const result = (await app.inject('/api/creation/requests/request-1')).json()
+    assert.equal(result.status, 'succeeded')
+    assert.deepEqual(result.outputs, [{ url: image }])
+    assert.equal(result.apiFormat, 'gemini')
+    modelTypes[0].apiFormat = 'images'
+    await submit(app, input)
+    assert.deepEqual((await app.inject('/api/creation/requests/request-1')).json(), result)
+    assert.equal(calls.length, 1)
+  }
+})
+
 test('automatic text interfaces use the resolved response stream format', async t => {
   const { app, calls } = fixture(t, {
     modelTypes: [{ id: 'custom-chat', kind: 'text', apiFormat: 'responses' }],
