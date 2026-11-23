@@ -15,19 +15,24 @@ async function readChatImageStream(response: Response, emit: (event: CreationEve
   let text = '', complete = false, bytes = 0
   const parts: unknown[] = [], previews = new Set<string>()
   let failure: CreationTask | undefined
-  const result = () => normalizeCreationTask('image', native ? { candidates: [{ content: { parts } }] }
+  const result = () => normalizeCreationTask('image', native ? { candidates: [{ content: { parts: [{ text }, ...parts] } }] }
     : { choices: [{ message: { content: [{ type: 'text', text }, ...parts] } }] })
   const parser = getLines(getMessages(message => {
     if (!message.data) return
     if (message.data === '[DONE]') { if (!native) complete = true; return }
     const data = JSON.parse(message.data)
     if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || '生成失败。')
+    let nativePreview = false
     if (native) {
       const candidate = data.candidates?.[0]
       const parsed = normalizeCreationTask('image', data)
       if (parsed.status === 'failed') failure = parsed
       if (candidate?.finishReason || data.promptFeedback?.blockReason) complete = true
-      if (Array.isArray(candidate?.content?.parts)) parts.push(...candidate.content.parts)
+      if (Array.isArray(candidate?.content?.parts)) for (const part of candidate.content.parts) {
+        if (part?.thought) continue
+        if (typeof part?.text === 'string') { text += part.text; nativePreview ||= part.text.includes(')') }
+        else { parts.push(part); nativePreview = true }
+      }
     } else {
       const choice = data.choices?.[0], delta = choice?.delta ?? choice?.message
       if (choice?.finish_reason) complete = true
@@ -36,7 +41,7 @@ async function readChatImageStream(response: Response, emit: (event: CreationEve
       if (Array.isArray(delta?.images)) parts.push(...delta.images)
     }
     if (parts.length > 64) throw new Error('图片流式内容超过限制。')
-    if (!failure && (parts.length || text.includes(')'))) {
+    if (!failure && (native ? nativePreview : parts.length || text.includes(')'))) {
       for (const output of result().outputs) if (output.url && !previews.has(output.url)) {
         previews.add(output.url)
         emit({ type: 'preview', url: output.url })

@@ -528,12 +528,17 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     const stopped = candidates.find(candidate => candidate.finishReason && candidate.finishReason !== 'STOP')
     if (blocked || stopped) return { status: 'failed', outputs: [], error: `Gemini 未生成图片：${String(blocked || stopped?.finishReason)}` }
     const parts = candidates.flatMap(candidate => record(candidate.content) && Array.isArray(candidate.content.parts) ? candidate.content.parts : [])
-    const images = parts.filter(record).filter(part => !part.thought).flatMap(part => {
+      .filter(record).filter(part => !part.thought)
+    const inlineImages = parts.flatMap(part => {
       const inline = record(part.inlineData) ? part.inlineData : record(part.inline_data) ? part.inline_data : undefined
       if (!inline || typeof inline.data !== 'string') return []
       const url = imageUrl(`data:${inline.mimeType ?? inline.mime_type};base64,${inline.data}`)
       return url ? [{ url }] : []
     })
+    // Compatible relays can wrap Markdown image links in native text parts.
+    const text = parts.map(part => typeof part.text === 'string' ? part.text : '').join('')
+    const markdownImages = chatImageOutputs({ choices: [{ message: { content: text } }] })
+    const images = [...new Map([...inlineImages, ...markdownImages].map(image => [image.url, image])).values()]
     if (images.length > 10) return { status: 'indeterminate', outputs: [], error: 'Gemini 返回图片数量超过安全上限，请核对原任务。' }
     return images.length ? { status: 'succeeded', outputs: images }
       : { status: 'indeterminate', outputs: [], error: 'Gemini 未返回可读取的图片，请核对原任务。' }
