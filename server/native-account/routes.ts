@@ -311,14 +311,18 @@ async function selectAccountToken(
   await updateSelection(req, tokenId, key);
 }
 
-async function clearSelection(req: AccountRequest, tokenId: number) {
+async function clearSelection(req: AccountRequest, tokenId: number, clearSelected = true) {
   const id = getSessionId(req);
   if (!id) return;
   await withSessionLock(id, async () => {
     const session = await readSessionById(id);
-    if (session?.selectedTokenId === tokenId) {
-      delete session.selectedTokenId;
-      delete session.selectedKey;
+    if (session && (session.preparedKeys?.[String(tokenId)] ||
+      (clearSelected && session.selectedTokenId === tokenId))) {
+      if (clearSelected && session.selectedTokenId === tokenId) {
+        delete session.selectedTokenId;
+        delete session.selectedKey;
+      }
+      delete session.preparedKeys?.[String(tokenId)];
       session.version++;
       await saveSession(id, session);
     }
@@ -748,6 +752,7 @@ export async function handle(
       )
         throw new NewApiError("分组参数无效");
       const tokenId = await resolveModelGroup(req, group);
+      if (!tokenId) throw new NewApiError("该分组密钥暂不可用", 409);
       await selectAccountToken(req, tokenId, group);
       return ok({ selectedTokenId: tokenId, group });
     }
@@ -790,6 +795,7 @@ export async function handle(
           method: "PUT",
           body: updated,
         });
+        await clearSelection(req, tokenId, false);
         return ok();
       }
       if (!tokenMatch[2] && req.method === "PATCH") {
@@ -799,7 +805,7 @@ export async function handle(
           method: "PUT",
           body: { id: tokenId, status },
         });
-        if (status === 2) await clearSelection(req, tokenId);
+        await clearSelection(req, tokenId, status === 2);
         return ok();
       }
       if (!tokenMatch[2] && req.method === "DELETE") {

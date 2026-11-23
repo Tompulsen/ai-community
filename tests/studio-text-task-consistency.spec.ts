@@ -16,7 +16,7 @@ async function fixture(page: Page, reuseGroup?: 'available' | 'missing') {
   const records = new Map<string, { id: string; title: string; status: string }>()
   await page.route('**/*', route => {
     const url = new URL(route.request().url())
-    if (url.origin === 'http://localhost:18775') return route.continue()
+    if (url.origin === new URL(process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:18775').origin) return route.continue()
     external.push(url.href)
     return route.abort()
   })
@@ -34,11 +34,17 @@ async function fixture(page: Page, reuseGroup?: 'available' | 'missing') {
     selectedGroup = group
     return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'G' ? 52 : 41 } } })
   })
-  await page.route('**/api/creation/**', route => {
+  await page.route('**/api/creation/**', async route => {
     const path = new URL(route.request().url()).pathname
-    if (path.endsWith('/models')) return route.fulfill({ json: {
-      tokenId: selectedGroup === 'G' ? 52 : 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }],
-    } })
+    if (path.endsWith('/models')) {
+      const group = route.request().postDataJSON()?.group || selectedGroup
+      if (group !== selectedGroup) {
+        selections.push(group)
+        if (groupGate.enabled) { groupGate.entered++; await groupResponse }
+        selectedGroup = group
+      }
+      return route.fulfill({ json: { tokenId: selectedGroup === 'G' ? 52 : 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }] } })
+    }
     if (path.endsWith('/skills/catalog')) return route.fulfill({ json: { items: [] } })
     if (path.endsWith('/mcp/status')) return route.fulfill({ json: { enabled: false, items: [] } })
     if (path.endsWith('/generate')) {
@@ -143,10 +149,10 @@ test('an edited answer reopens as a fresh publication draft and uploads its visi
   await editAnswer(page)
   const dialog = page.getByRole('dialog', { name: '发布作品', exact: true })
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(editedAnswer)
+  await expect(dialog.getByRole('textbox', { name: '资源内容', exact: true })).toHaveValue(editedAnswer)
   await dialog.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(editedAnswer)
+  await expect(dialog.getByRole('textbox', { name: '资源内容', exact: true })).toHaveValue(editedAnswer)
   await completePublicationFields(page)
   await dialog.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(dialog.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()
@@ -168,8 +174,8 @@ test('a submitted text publication retains its original retry snapshot after a l
   await dialog.getByRole('button', { name: '关闭发布作品', exact: true }).click()
   await editAnswer(page)
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
-  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toHaveValue(originalAnswer)
-  await expect(dialog.getByRole('textbox', { name: '作品简介', exact: true })).toBeDisabled()
+  await expect(dialog.getByRole('textbox', { name: '资源内容', exact: true })).toHaveValue(originalAnswer)
+  await expect(dialog.getByRole('textbox', { name: '资源内容', exact: true })).toBeDisabled()
   await completePublicationFields(page)
   await dialog.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(dialog.getByRole('link', { name: '查看提交', exact: true })).toBeVisible()

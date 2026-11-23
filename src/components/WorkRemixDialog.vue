@@ -37,6 +37,7 @@ async function workbench() {
 async function prepare() {
   if (loading.value || busy.value || !mediaKind.value) return
   if (!session.user) { loginRequired.value = true; return }
+  const retry = Boolean(issue.value)
   dialog.value?.close(); background.value = true; loading.value = true; issue.value = ''
   const version = ++revision
   try {
@@ -47,7 +48,7 @@ async function prepare() {
     await initializeCreation(); await loadChats(); await waitCreationGroup()
     if (!current(version)) return
     previousConversation ??= chats.activeId
-    await restoreRemixModels(source.value, () => current(version), group => { previousGroup ??= group })
+    await restoreRemixModels(source.value, () => current(version), group => { previousGroup ??= group }, retry)
   } catch (cause) { if (current(version)) issue.value = errorMessage(cause) }
   finally { if (current(version)) loading.value = false }
 }

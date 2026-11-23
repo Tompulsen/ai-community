@@ -94,6 +94,35 @@ test('reuse an existing group token at capacity and skip later list reads', asyn
   assert.equal(f.writes().length, 0)
 })
 
+test('idle preloading skips unprepared groups without listing or creating keys', async t => {
+  const f = await fixture(t, [{ id: 30 }])
+  assert.equal(await resolveModelGroup(f.request, 'images', false), undefined)
+  assert.equal(f.lists().length, 0)
+  assert.equal(f.writes().length, 0)
+  assert.equal(await resolveModelGroup(f.request, 'images'), 30)
+  const lists = f.lists().length
+  assert.equal(await resolveModelGroup(f.request, 'images', false), 30)
+  assert.equal(f.lists().length, lists)
+  assert.equal(f.writes().length, 0)
+})
+
+test('idle preloading can reuse the current key', async t => {
+  const selected = await fixture(t, [{ id: 40 }], { selected: 40 })
+  assert.equal(await resolveModelGroup(selected.request, 'images', false), 40)
+  assert.equal(selected.writes().length, 0)
+})
+
+test('idle preloading never recovers pending provisioning', async t => {
+  const pending = await fixture(t, [], { respond(call) {
+    if (call.path === '/api/token/' && call.method === 'POST') throw new TypeError('fixture: timeout')
+  } })
+  await assert.rejects(resolveModelGroup(pending.request, 'images'), { code: 'NEW_API_GROUP_TOKEN_PENDING' })
+  const calls = pending.calls.length
+  assert.equal(await resolveModelGroup(pending.request, 'images', false), undefined)
+  assert.equal(pending.calls.length, calls + 1, 'preloading only verifies available groups')
+  assert.equal(pending.writes().length, 1)
+})
+
 test('duplicates use the oldest eligible system token regardless of list order', async t => {
   const f = await fixture(t, [{ id: 40 }, { id: 27, allow_ips: '127.0.0.1' }, { id: 30 }])
   assert.equal(await resolveModelGroup(f.request, 'images'), 30)

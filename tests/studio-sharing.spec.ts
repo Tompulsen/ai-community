@@ -26,7 +26,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'resource' = 'image
   await page.route('**/api/uploads', route => { uploads++; return route.fulfill({ json: { file: { id: `upload${uploads}`, name: 'uploaded.jpg', type: 'image/jpeg', url: `/legacy-files/upload${uploads}`, size: photo.length } } }) })
   await page.route('**/api/creation/**', route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/creation/models') return route.fulfill({ json: { items: ['image', 'video', 'text'].map(kind => ({ id: `fixture-${kind}`, kinds: [kind] })) } })
+    if (path === '/api/creation/models') return route.fulfill({ json: { tokenId: 41, items: ['image', 'video', 'text'].map(kind => ({ id: `fixture-${kind}`, kinds: [kind] })) } })
     if (path === '/api/creation/media') return route.fulfill({ body: photo, contentType: 'image/jpeg' })
     if (path === '/api/creation/generate') {
       const body = route.request().postDataJSON(); generated.push(body)
@@ -331,6 +331,7 @@ test('image remix restores model, group and full public settings, then republish
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图', ratio: 0.6 }] } } }))
   await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
   await page.route('**/api/creation/models', async route => {
+    group = route.request().postDataJSON()?.group || group
     const read = ++modelReads, tokenId = group === '生图' ? 52 : 41
     // Overlapping initialization reads must not finish source restoration before the selected group's models.
     if (read === 2 || read === 3) await new Promise(resolve => setTimeout(resolve, read === 2 ? 150 : 400))
@@ -453,7 +454,7 @@ for (const switchModel of [false, true]) test(`Gemini remix adapts inherited siz
   const state = await fixture(page)
   state.source.model = switchModel ? 'fixture-image' : 'gemini-3-pro-image'
   state.source.generation = { parameters: { version: 1, kind: 'image', protocol: 'async', size: '1200x900', aspect_ratio: '4:3', n: 3, imageOptions: { seed: '42' } } }
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { items: [{ id: 'gemini-3-pro-image', kinds: ['image'] }, { id: 'fixture-image', kinds: ['image'] }] } }))
+  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'gemini-3-pro-image', kinds: ['image'] }, { id: 'fixture-image', kinds: ['image'] }] } }))
   await page.goto('/create/image?remix=source42')
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue(state.source.prompt)
   if (switchModel) {
@@ -471,7 +472,7 @@ for (const switchModel of [false, true]) test(`Gemini remix adapts inherited siz
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
   expect(state.generated).toHaveLength(1)
-  expect(state.generated[0]).toMatchObject({ model: 'gemini-3-pro-image', size: 'auto', aspect_ratio: '4:3', n: 1, protocol: 'openai', imageOptions: { seed: '' } })
+  expect(state.generated[0]).toMatchObject({ model: 'gemini-3-pro-image', size: 'auto', aspect_ratio: '4:3', n: 1, apiFormat: switchModel ? 'auto' : 'chat-completions', imageOptions: { seed: '' } })
   expect(state.generated[0].exactSize).not.toBe(true)
 })
 
@@ -481,7 +482,10 @@ test('failed original group selection does not replay its POST or silently gener
   let attempts = 0
   await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: 41, items: [{ id: 'other-image', kinds: ['image'] }] } }))
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: 'auto', groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
-  await page.route('**/api/new-api/model-groups/select', route => { attempts++; return route.fulfill({ status: 409, json: { success: false, message: '原作分组不可用。' } }) })
+  await page.route('**/api/creation/models', route => {
+    if (route.request().postDataJSON()?.group !== 'original') return route.fallback()
+    attempts++; return route.fulfill({ status: 409, json: { success: false, message: '原作分组不可用。' } })
+  })
   await page.goto('/create/image?remix=source42')
   await expect(page.getByRole('alert').filter({ hasText: '原作分组不可用' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
@@ -524,13 +528,14 @@ test('switching source during a slow group restore leaves the newer source and g
   state.source.generation = { parameters: { version: 1, kind: 'image', group: 'original', aspect_ratio: '4:3', n: 3 } }
   let group = 'auto', release!: () => void, started = false
   const gate = new Promise<void>(resolve => { release = resolve })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === 'auto' ? 41 : 52, items: [{ id: group === 'auto' ? 'newer-image' : 'fixture-image', kinds: ['image'] }] } }))
+  await page.route('**/api/creation/models', async route => {
+    const requested = route.request().postDataJSON()?.group || group
+    if (requested === 'original') { started = true; await gate }
+    group = requested
+    return route.fulfill({ json: { tokenId: requested === 'auto' ? 41 : 52, items: [{ id: requested === 'auto' ? 'newer-image' : 'fixture-image', kinds: ['image'] }] } })
+  })
   await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: [{ model: 'fixture-image', group: 'original' }, { model: 'newer-image', group: 'auto' }] } } }))
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: 'original', name: '原作分组' }] } } }))
-  await page.route('**/api/new-api/model-groups/select', async route => {
-    started = true; await gate; group = route.request().postDataJSON().group
-    return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'auto' ? 41 : 52 } } })
-  })
   await page.route('**/api/works/sourceB', route => route.fulfill({ json: { work: { ...state.source, id: 'sourceB', title: '原作森林', prompt: '森林里的萤火虫', model: 'newer-image',
     generation: { parameters: { version: 1, kind: 'image', group: 'auto', aspect_ratio: '1:1', n: 1 } } } } }))
   await page.goto('/create/image?remix=source42')
@@ -685,7 +690,10 @@ test('legacy remix chooses the available image group before restoring its origin
   let group = 'auto'
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图' }] } } }))
   await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: 52 } } }) })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: group === '生图' ? [{ id: 'fixture-image', kinds: ['text'] }] : [{ id: 'fixture-text', kinds: ['text'] }] } }))
+  await page.route('**/api/creation/models', route => {
+    group = route.request().postDataJSON()?.group || group
+    return route.fulfill({ json: { tokenId: group === '生图' ? 52 : 41, items: group === '生图' ? [{ id: 'fixture-image', kinds: ['text'] }] : [{ id: 'fixture-text', kinds: ['text'] }] } })
+  })
   await page.goto('/create/image?remix=source42&prepare=1')
   await page.getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-image')
@@ -734,7 +742,10 @@ test('canceling a remix restores the group and preserves the previous model and 
   let group = 'auto'
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: group, groups: [{ id: 'auto', name: 'Auto' }, { id: '生图', name: '生图' }] } } }))
   await page.route('**/api/new-api/model-groups/select', route => { group = route.request().postDataJSON().group; return route.fulfill({ json: { success: true, data: { group, selectedTokenId: group === 'auto' ? 41 : 52 } } }) })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: group === 'auto' ? 41 : 52, items: [{ id: group === 'auto' ? 'original-image-model' : 'fixture-image', kinds: ['image'] }] } }))
+  await page.route('**/api/creation/models', route => {
+    group = route.request().postDataJSON()?.group || group
+    return route.fulfill({ json: { tokenId: group === 'auto' ? 41 : 52, items: [{ id: group === 'auto' ? 'original-image-model' : 'fixture-image', kinds: ['image'] }] } })
+  })
   await page.goto('/create/image')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('旧草稿不应被取消同款影响')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()
@@ -747,8 +758,10 @@ test('canceling a remix restores the group and preserves the previous model and 
   expect(group).toBe('生图')
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(page).toHaveURL(/work\/source42$/)
-  expect(group).toBe('auto')
   await page.goto('/create/image')
+  const groupPicker = await openGroupPicker(page)
+  await expect(groupPicker.getByRole('button', { name: '选择分组', exact: true })).toContainText('Auto')
+  await groupPicker.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('旧草稿不应被取消同款影响')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('original-image-model')
   await page.getByRole('button', { name: '高级参数', exact: true }).click()

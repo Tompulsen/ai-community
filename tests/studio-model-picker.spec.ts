@@ -19,7 +19,10 @@ async function fixture(page: Page) {
     state.group = route.request().postDataJSON().group; state.tokenId = state.group === 'auto' ? 41 : 52
     return route.fulfill({ json: { success: true, data: { group: state.group, selectedTokenId: state.tokenId } } })
   })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: state.tokenId, items: catalog } }))
+  await page.route('**/api/creation/models', route => {
+    state.group = route.request().postDataJSON()?.group || state.group; state.tokenId = state.group === 'auto' ? 41 : 52
+    return route.fulfill({ json: { tokenId: state.tokenId, items: catalog } })
+  })
   await page.route('**/api/creation/generate', route => {
     requests.push(route.request().postDataJSON())
     return route.fulfill({ json: { status: 'succeeded', tokenId: state.tokenId, protocol: 'sync', outputs: [{ text: '模拟回答' }] } })
@@ -151,7 +154,8 @@ test('full group selector shows every group and ratio, scrolls on phones and clo
 test('failed group selection reconciles state once and keeps the picker usable', async ({ page }) => {
   const state = await fixture(page); await page.goto('/create/image')
   let attempts = 0
-  await page.route('**/api/new-api/model-groups/select', async route => {
+  await page.route('**/api/creation/models', async route => {
+    if (route.request().postDataJSON()?.group !== 'other') return route.fallback()
     attempts++
     return route.fulfill({ status: 409, json: { success: false, message: '分组暂时不可用。' } })
   })
@@ -160,8 +164,8 @@ test('failed group selection reconciles state once and keeps the picker usable',
   await dialog.getByRole('button', { name: '其他分组 · 0.6×', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('分组暂时不可用')
   await expect(trigger).toBeEnabled()
-  await expect(trigger).toContainText('Auto')
-  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await expect(trigger).toContainText('其他分组')
+  await expect(dialog.locator('.model-option')).toHaveCount(0)
   expect(attempts).toBe(1)
   expect(state.requests).toEqual([])
 })

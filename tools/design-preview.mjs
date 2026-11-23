@@ -208,7 +208,7 @@ export function createPreviewMiddleware() {
         if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000) return fail('请输入有效金额。', 400)
         return reply(success({ userId: 17, amount, money: amount.toFixed(2) }))
       }
-      if (path === '/api/creation/models' && read) {
+      if (path === '/api/creation/models' && (read || method === 'POST')) {
         const management = url.searchParams.get('management') === '1'
         const models = [
           { id: 'preview-image', name: '图片模型', kinds: ['image'] },
@@ -216,7 +216,7 @@ export function createPreviewMiddleware() {
           { id: 'preview-text', name: '对话模型', kinds: ['text'] },
         ]
         return reply({ ...page(management ? models.map(item => ({ ...item, groups: ['auto'] })) : models),
-          ...(management ? { groups: [{ id: 'auto', name: 'Auto' }] } : {}) })
+          ...(management ? { groups: [{ id: 'auto', name: 'Auto' }] } : { tokenId: 41 }) })
       }
       if (path === '/api/notifications' && read) return reply({ ...page([]), unreadCounts: { announcement: 0, activity: 0 } })
       if (['/api/messages/threads', '/api/follow-requests', '/api/creation/tasks', '/api/new-api/logs'].includes(path) && read) return reply(path.includes('new-api') ? success(page([])) : { ...page([]), total: 0, unreadCount: 0 })

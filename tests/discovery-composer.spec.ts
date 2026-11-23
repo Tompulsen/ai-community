@@ -299,11 +299,12 @@ for (const succeeds of [true, false]) {
     await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: {
       selectedGroup, selectedTokenId: 41, groups: [{ id: 'auto', name: 'Auto', ratio: 1 }, { id: 'premium', name: 'Premium', ratio: 1 }],
     } } }))
-    await page.route('**/api/new-api/model-groups/select', route => {
+    await page.route('**/api/creation/models', async route => {
+      if (route.request().postDataJSON()?.group !== 'premium' || attempts > 0) return route.fallback()
       attempts++
       if (!succeeds) return route.fulfill({ status: 403, json: { success: false, message: '测试分组无权访问' } })
       selectedGroup = 'premium'
-      return route.fulfill({ json: { success: true, data: { group: selectedGroup, selectedTokenId: 41 } } })
+      return route.fulfill({ json: { tokenId: 41, items: ['gpt-image-1', 'gpt-image-2'].map(id => ({ id, kinds: ['image'] })) } })
     })
     await page.goto('/discover')
     await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
@@ -325,7 +326,6 @@ for (const succeeds of [true, false]) {
     } else {
       await expect(page.getByText('测试分组无权访问', { exact: true }).first()).toBeVisible()
       await page.getByRole('combobox', { name: '模型', exact: true }).click()
-      await page.getByRole('button', { name: '重新读取', exact: true }).click()
       await expect(page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'gpt-image-1', exact: true })).toBeEnabled()
       await page.keyboard.press('Escape')
       await expect(page.getByText('无法恢复首页所选模型分组，请返回首页重试。', { exact: true })).toBeVisible()

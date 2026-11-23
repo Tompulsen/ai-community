@@ -100,8 +100,14 @@ const localMedia = reactive<Record<string, string>>({})
 const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
 let modelRevision = 0
-let modelRead: Promise<void> | undefined, modelReadGroup: string | null = null
 let groupRead: Promise<void> | undefined, groupSelection: Promise<void> | undefined
+type ModelCatalogue = { items: CreationModel[]; tokenId: number; fetchedAt: number }
+const modelCatalogues = new Map<string, ModelCatalogue>()
+const modelReads = new Map<string, { promise: Promise<ModelCatalogue | undefined>; preload: boolean }>()
+const catalogueFreshFor = 60000, catalogueUsableFor = 5 * 60000
+let groupsReadAt = 0, catalogueVersion = 0
+const accountIdentity = () => JSON.stringify([session.user?.id, session.user?.accountId])
+const groupPreferenceKey = () => `octopus:user-${activeOwner()}:account-${session.user?.accountId || activeOwner()}:creation-group`
 let writes: Promise<unknown> = Promise.resolve()
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value)
 const validUpstreamId = (value: unknown): value is string => validId(value) || typeof value === 'string' && /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/.test(value)
@@ -514,16 +520,31 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
   }
   if (epoch === version && !controller.signal.aborted) { task.phase = 'paused'; task.settledAt = Date.now(); task.error = '等待时间较长，已停止等待，任务记录已保留。'; await persist() }
 }
-export function loadCreationModels(): Promise<void> {
+function applyCatalogue(catalogue: ModelCatalogue) {
+  creation.models = catalogue.items; creation.modelTokenId = catalogue.tokenId
+  creation.modelsLoaded = true; creation.modelsLoading = false; creation.groupSwitching = false
+}
+export function loadCreationModels(force = false, background = false, preload = false): Promise<void> {
   if (!session.user) return Promise.resolve()
-  if (modelRead && modelReadGroup === creation.selectedGroup) return modelRead
-  const version = epoch, revision = ++modelRevision, group = creation.selectedGroup
-  modelReadGroup = group
-  creation.modelsLoading = true; creation.modelsLoaded = false; creation.modelsError = ''
-  modelRead = (async () => { try {
-    const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number }>('/api/creation/models', { signal: AbortSignal.timeout(20000) })
-    if (version !== epoch || revision !== modelRevision || group !== creation.selectedGroup) return
-    creation.models = (result.items || result.data || []).filter(item => item && typeof item.id === 'string').map(item => {
+  const version = epoch, identity = accountIdentity(), revision = ++modelRevision, generation = catalogueVersion, group = creation.selectedGroup
+  const key = group || '', cached = modelCatalogues.get(key)
+  const current = () => version === epoch && identity === accountIdentity() && generation === catalogueVersion && revision === modelRevision && group === creation.selectedGroup
+  if (cached && Date.now() - cached.fetchedAt < catalogueUsableFor) applyCatalogue(cached)
+  else { creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false; creation.modelsLoading = !background }
+  creation.modelsError = ''
+  if (!force && cached && Date.now() - cached.fetchedAt < catalogueFreshFor) return Promise.resolve()
+  let pending = modelReads.get(key)
+  if (!pending) {
+    const account = session.user.accountId || session.user.id
+    let promise!: Promise<ModelCatalogue | undefined>
+    promise = (async () => {
+      const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number; prepared?: boolean }>('/api/creation/models', {
+        ...(group ? { method: 'POST' as const, body: { group, ...(preload ? { preload: true } : {}) } } : {}),
+        expectedAccount: account, signal: AbortSignal.timeout(20000), ...(background ? { priority: 'low' as const } : {}),
+      })
+      if (version !== epoch || identity !== accountIdentity() || generation !== catalogueVersion || modelReads.get(key)?.promise !== promise || result.prepared === false) return
+      if (!Number.isSafeInteger(result.tokenId) || result.tokenId! <= 0 || !Array.isArray(result.items || result.data)) throw new Error('模型分组尚未就绪，请重新读取。')
+      const items = (result.items || result.data || []).filter(item => item && typeof item.id === 'string').map(item => {
       const { id, name, tags, description, provider, kinds, configuredKind } = item
       const kind = configuredKind || kinds?.[0]
       const setting = modelTypesSchema.safeParse([{ id, kind, tags, apiFormat: item.apiFormat,
@@ -532,58 +553,87 @@ export function loadCreationModels(): Promise<void> {
       return { id, name, description, provider, kinds, configuredKind, ...(setting ? {
         tags: setting.tags, apiFormat: setting.apiFormat, protocol: setting.protocol, image: setting.image, text: setting.text, video: setting.video,
       } : {}) }
-    })
-    creation.modelTokenId = Number.isSafeInteger(result.tokenId) && result.tokenId! > 0 ? result.tokenId! : null
-  } catch (error) {
-    if (version === epoch && revision === modelRevision && group === creation.selectedGroup) {
-      creation.models = []; creation.modelTokenId = null; creation.modelsError = errorMessage(error)
-    }
-  } finally { if (version === epoch && revision === modelRevision) { modelRead = undefined; creation.modelsLoading = false; creation.modelsLoaded = group === creation.selectedGroup } }
+      })
+      const catalogue = { items, tokenId: result.tokenId!, fetchedAt: Date.now() }
+      modelCatalogues.delete(key); modelCatalogues.set(key, catalogue)
+      while (modelCatalogues.size > 8) modelCatalogues.delete(modelCatalogues.keys().next().value!)
+      return catalogue
+    })().catch(error => {
+      const status = record(error) ? error.status : undefined
+      if (version === epoch && identity === accountIdentity() && generation === catalogueVersion && modelReads.get(key)?.promise === promise && [401, 403, 409].includes(Number(status))) modelCatalogues.delete(key)
+      throw error
+    }).finally(() => { if (modelReads.get(key)?.promise === promise) modelReads.delete(key) })
+    pending = { promise, preload }; modelReads.set(key, pending)
+  }
+  const reading = pending
+  return (async () => {
+    try {
+      const catalogue = await reading.promise
+      if (!current()) return
+      if (catalogue) applyCatalogue(catalogue)
+      else if (!preload && reading.preload) return loadCreationModels(true, background)
+    } catch (error) {
+      const status = record(error) ? error.status : undefined
+      if (!current()) return
+      if (!cached || [401, 403, 409].includes(Number(status))) {
+        modelCatalogues.delete(key); creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false
+      }
+      if (!preload) creation.modelsError = errorMessage(error)
+    } finally { if (current()) { creation.modelsLoading = false; creation.groupSwitching = false } }
   })()
-  return modelRead
 }
-export function loadCreationGroups(): Promise<void> {
+export function loadCreationGroups(force = false, followSession = false): Promise<void> {
   if (!session.user) return Promise.resolve()
-  if (groupRead) return groupRead
-  const version = epoch, accountId = session.user.accountId || session.user.id
-  creation.groupsLoading = true; creation.groupsError = ''
+  if (groupRead) return force || followSession ? groupRead.then(() => loadCreationGroups(true, followSession)) : groupRead
+  if (!force && groupsReadAt && Date.now() - groupsReadAt < catalogueFreshFor) return Promise.resolve()
+  const version = epoch, identity = accountIdentity(), accountId = session.user.accountId || session.user.id
+  creation.groupsLoading = !creation.groups.length; creation.groupsError = ''
   groupRead = (async () => { try {
     const result = await accountApi<CreationGroups>('model-groups', undefined, accountId)
-    if (version !== epoch) return
+    if (version !== epoch || identity !== accountIdentity()) return
     if (!Array.isArray(result?.groups)) throw new Error('模型分组返回无效，请重试。')
     creation.groups = result.groups
-    creation.selectedGroup = result.selectedGroup
-  } catch (error) { if (version === epoch) creation.groupsError = errorMessage(error) }
+    groupsReadAt = Date.now()
+    if (followSession) { invalidateCreationModels(); creation.selectedGroup = result.selectedGroup }
+    else if (!creation.selectedGroup) {
+      let saved: string | null = null
+      try { saved = localStorage.getItem(groupPreferenceKey()) } catch { /* Preferences are optional. */ }
+      creation.selectedGroup = [saved, result.selectedGroup, 'auto', result.groups[0]?.id].find(id => id && result.groups.some(item => item.id === id)) || null
+    } else if (!result.groups.some(item => item.id === creation.selectedGroup)) {
+      invalidateCreationModels()
+      creation.selectedGroup = null; creation.groupsError = '当前分组已不可用，请重新选择。'
+    }
+  } catch (error) { if (version === epoch && identity === accountIdentity()) creation.groupsError = errorMessage(error) }
   finally { if (version === epoch) { creation.groupsLoading = false; groupRead = undefined } }
   })()
   return groupRead
 }
-export async function waitCreationGroup() { await groupSelection }
+export async function waitCreationGroup() { while (groupSelection) { const pending = groupSelection; await pending; if (pending === groupSelection) break } }
 export function selectCreationGroup(group: string): Promise<void> {
-  if (groupSelection) return groupSelection
-  if (!session.user || creation.groupsLoading || group === creation.selectedGroup) return Promise.resolve()
+  if (!session.user || creation.groupsLoading) return Promise.resolve()
   if (!creation.groups.some(item => item.id === group)) return Promise.resolve()
-  const version = epoch, accountId = session.user.accountId || session.user.id
-  creation.groupSwitching = true; creation.groupsError = ''; creation.modelsError = ''
-  ++modelRevision; modelRead = undefined
-  creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false
-  groupSelection = (async () => { try {
-    const result = await accountApi<{ group: string; selectedTokenId: number }>('model-groups/select', { group }, accountId)
-    if (version !== epoch) return
-    ++modelRevision; modelRead = undefined
-    creation.selectedGroup = result.group
-    await loadCreationModels()
-  } catch (error) {
-    if (version !== epoch) return
-    // A timed-out selection may have succeeded; read it back without repeating the mutation.
-    await loadCreationGroups()
-    if (version !== epoch) return
-    ++modelRevision; modelRead = undefined
-    await loadCreationModels()
-    if (version === epoch) creation.groupsError = errorMessage(error)
-  } finally { if (version === epoch) { creation.groupSwitching = false; groupSelection = undefined } }
-  })()
-  return groupSelection
+  creation.selectedGroup = group; creation.groupsError = ''
+  try { localStorage.setItem(groupPreferenceKey(), group) } catch { /* Preferences are optional. */ }
+  const selected = loadCreationModels()
+  creation.groupSwitching = creation.modelsLoading
+  groupSelection = creation.modelsLoaded ? undefined : selected
+  void selected.finally(() => { if (groupSelection === selected) groupSelection = undefined })
+  return creation.modelsLoaded ? Promise.resolve() : selected
+}
+export function invalidateCreationModels(group?: string) {
+  if (group === undefined) { catalogueVersion++; modelReads.clear(); modelCatalogues.clear() }
+  else { modelReads.delete(group); modelCatalogues.delete(group) }
+  if (group === undefined || group === creation.selectedGroup) {
+    modelRevision++; groupSelection = undefined
+    creation.models = []; creation.modelTokenId = null; creation.modelsLoaded = false
+    creation.modelsLoading = false; creation.groupSwitching = false
+  }
+}
+export async function preloadCreationModels() {
+  if (!session.user) return
+  const identity = accountIdentity()
+  await loadCreationGroups()
+  if (identity === accountIdentity() && creation.selectedGroup && !creation.groupsError) await loadCreationModels(false, true, true)
 }
 export async function resumeCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
@@ -680,13 +730,15 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
-        ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}) },
+        ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
+        ...(selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
       body: JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
       throw Object.assign(new Error((typeof data.error === 'string' ? data.error : data.error?.message) || data.message || `生成请求失败 (${response.status})`), {
-        notAccepted: [400, 401, 403, 413, 422, 429].includes(response.status),
+        notAccepted: data.notAccepted === true || [400, 401, 403, 413, 422, 429].includes(response.status),
+        code: data.error?.code || data.code,
       })
     }
     const tokenId = Number(response.headers.get('X-New-Api-Token'))
@@ -699,7 +751,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const parser = getLines(getMessages(message => {
         if (!message.data || epoch !== version || controller.signal.aborted) return
         const event = JSON.parse(message.data)
-        if (event.type === 'error') throw Object.assign(new Error(event.error || '生成失败。'), { notAccepted: event.notAccepted === true })
+        if (event.type === 'error') throw Object.assign(new Error(event.error || '生成失败。'), { notAccepted: event.notAccepted === true, code: event.code })
         if (event.type === 'preview' && safeResultUrl(event.url)) { task.preview = event.url; task.phase = 'running' }
         if (event.type === 'delta') {
           task.text = typeof event.text === 'string' ? event.text : task.text
@@ -731,6 +783,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   } catch (error) {
     if (epoch === version) {
       const notAccepted = record(error) && error.notAccepted === true
+      if (notAccepted && record(error) && ['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED'].includes(String(error.code)) && task.group) {
+        invalidateCreationModels(task.group)
+        if (task.group === creation.selectedGroup) creation.modelsError = errorMessage(error)
+      }
       task.phase = notAccepted ? 'error' : task.kind === 'text' && task.upstreamId ? 'paused' : 'attention'
       if (controller.signal.aborted && task.kind !== 'text') task.phase = 'paused'
       task.settledAt ??= Date.now()
@@ -1149,7 +1205,8 @@ async function preparePublication(task: CreationTask, title: string, destination
   checkOwner(); publication.work = result.work; await persist()
   return result
 }
-watch(() => activeOwner(), next => {
+watch(() => accountIdentity(), () => {
+  const next = activeOwner()
   epoch++
   for (const controller of controllers.values()) controller.abort()
   for (const download of downloads.values()) download.controller.abort()
@@ -1172,7 +1229,7 @@ watch(() => activeOwner(), next => {
     mediaSettings.loaded = true
   }
   creation.models = []; creation.modelsError = ''; creation.modelsLoading = false; creation.modelsLoaded = false; creation.storageError = ''
-  ++modelRevision; modelRead = undefined
+  ++modelRevision; ++catalogueVersion; modelReads.clear(); modelCatalogues.clear(); groupsReadAt = 0
   groupRead = undefined; groupSelection = undefined
   creation.groups = []; creation.selectedGroup = null; creation.modelTokenId = null
   creation.groupsLoading = false; creation.groupSwitching = false; creation.groupsError = ''

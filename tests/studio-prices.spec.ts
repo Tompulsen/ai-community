@@ -27,7 +27,7 @@ async function fixture(page: Page) {
     Object.defineProperty(navigator, 'clipboard', { value: { async writeText(text: string) { sessionStorage.setItem('pricing-copied-model', text) } } })
   })
   await page.route('**/api/creation/**', route => {
-    if (route.request().method() !== 'GET') state.writes++
+    if (route.request().method() !== 'GET' && !route.request().url().endsWith('/api/creation/models')) state.writes++
     return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image-2', kinds: ['image'] }] } })
   })
   await page.route('**/api/new-api/model-groups/select', route => {

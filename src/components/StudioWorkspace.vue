@@ -178,7 +178,10 @@ watch([model, selectedApiFormat, () => props.kind, restoringParameters], () => {
   if (restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value, selectedApiFormat.value)) return
   manualSize.value = ''; imageOptions.seed = ''; count.value = 1
 })
-function modelChanged() { error.value = ''; emit('model') }
+function modelChanged() {
+  if (props.source && model.value !== props.source.model) { apiFormat.value = 'auto'; protocol.value = 'auto' }
+  error.value = ''; emit('model')
+}
 watch([() => props.source?.id, () => chats.ready], async () => {
   if (!props.source || !chats.ready || sourceWorkId.value === props.source.id) return
   await applyRemix(props.source)
@@ -472,8 +475,8 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>
       <p v-if="creation.groupSwitching" class="group-description" role="status">正在切换模型分组…</p>
-      <p v-if="creation.groupsError" class="form-error" role="alert">{{ creation.groupsError }} <button type="button" class="text-link" :disabled="creation.groupSwitching" @click="loadCreationGroups">重试</button></p>
-      <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels">重试</button></p>
+      <p v-if="creation.groupsError" class="form-error" role="alert">{{ creation.groupsError }} <button type="button" class="text-link" :disabled="creation.groupSwitching" @click="loadCreationGroups(true)">重试</button></p>
+      <p v-if="creation.modelsError" class="form-error" role="alert">{{ creation.modelsError }} <button type="button" class="text-link" @click="loadCreationModels(true)">重试</button></p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="creation.storageError" class="form-error" role="alert">{{ creation.storageError }}</p>
       <p v-if="videoParameterIssue" class="form-error" role="alert">{{ videoParameterIssue }}</p>
       <p v-if="imageCountIssue" class="form-error" role="alert">{{ imageCountIssue }}</p>

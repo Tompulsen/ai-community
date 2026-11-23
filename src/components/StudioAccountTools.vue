@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Check, ChevronLeft, ChevronRight, KeyRound, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Trash2, X } from '@lucide/vue'
 import { session, errorMessage } from '../state'
 import { studioAccount } from '../studio-account'
-import { loadCreationGroups, loadCreationModels } from '../native-studio'
+import { invalidateCreationModels, loadCreationGroups, loadCreationModels } from '../native-studio'
 import StudioModelPrices from './StudioModelPrices.vue'
 import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
 import { confirmStudioDelete } from '../studio-confirm'
@@ -58,9 +58,13 @@ function edit(token?: Token) {
   Object.assign(form, { name: token?.name || '', group: token?.group || groups.value[0]?.id || 'auto', expired_time: token?.expired_time ?? -1, model_limits_enabled: token?.model_limits_enabled || false, model_limits: token?.model_limits || '', allow_ips: token?.allow_ips || '', cross_group_retry: token?.cross_group_retry || false, auto_groups: [...(token?.auto_groups || [])] })
   dialog.value?.showModal()
 }
-async function action(callback: () => Promise<unknown>) {
+async function action(callback: () => Promise<unknown>, followSelection = false) {
   if (busy.value) return; busy.value = true; error.value = ''
-  try { await callback(); await load() } catch (cause) { error.value = `${errorMessage(cause)} 请刷新核对结果后再操作。` } finally { busy.value = false }
+  try {
+    await callback(); invalidateCreationModels()
+    await Promise.all([load(), loadCreationGroups(true, followSelection)])
+    await loadCreationModels(true)
+  } catch (cause) { error.value = `${errorMessage(cause)} 请刷新核对结果后再操作。` } finally { busy.value = false }
 }
 async function save() {
   if (!unlimited.value && status.value.quotaPerUnit <= 0) { error.value = '额度比例尚未读取，请刷新后重试。'; return }
@@ -72,11 +76,11 @@ async function save() {
     dialog.value?.close()
   })
 }
-async function select(token: Token) { await action(async () => { await studioAccount(`tokens/${token.id}/select`, 'POST', {}); await loadCreationGroups(); await loadCreationModels() }) }
+async function select(token: Token) { await action(() => studioAccount(`tokens/${token.id}/select`, 'POST', {}), true) }
 async function remove(token: Token) {
   const accepted = revision
   if (!await confirmStudioDelete(`删除密钥“${token.name}”？使用此密钥的历史任务可能无法继续查询。`, () => accepted === revision && props.view === 'keys' && !busy.value && tokens.value.some(item => item.id === token.id))) return
-  await action(async () => { await studioAccount(`tokens/${token.id}`, 'DELETE'); await loadCreationGroups(); await loadCreationModels() })
+  await action(() => studioAccount(`tokens/${token.id}`, 'DELETE'))
 }
 function changePage(value: number) { page.value = value; void load() }
 </script>

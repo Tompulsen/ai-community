@@ -28,6 +28,7 @@ async function fixture(page: Page) {
   await page.route('**/api/creation/models*', route => {
     const req = route.request()
     if (req.method() === 'POST') {
+      if (req.postDataJSON().group === '生图') return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }, { id: 'sora-test', kinds: ['video'] }] } })
       resolutions.push(req.postDataJSON())
       return route.fulfill({ json: { tokenId: state.invalidToken ? null : req.postDataJSON().group === '文本B' ? 84 : 83, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'claude-test', configuredKind: 'text', kinds: ['text'] }] } })
     }

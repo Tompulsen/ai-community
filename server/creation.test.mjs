@@ -12,6 +12,7 @@ import Fastify from 'fastify'
 import sharp from 'sharp'
 import { handleCreation, processCreationTasks } from './creation.ts'
 import { httpError } from './auth.ts'
+import { NewApiError } from './native-account/config.ts'
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -115,10 +116,10 @@ function fixture(t, options = {}) {
     },
   }
   const services = {
-    async groupToken(req, group) {
+    async groupToken(req, group, create) {
       groupCalls.push({ group, userId: req.headers.get('x-new-api-user') })
       if (!options.groupToken) throw new Error('Unexpected group token resolution')
-      return options.groupToken(req, group)
+      return options.groupToken(req, group, create)
     },
     async modelCatalogue(req) {
       catalogueCalls.push(req)
@@ -126,6 +127,7 @@ function fixture(t, options = {}) {
       return options.modelCatalogue(req)
     },
     async credentials(req, path) {
+      if (options.credentials) return options.credentials(req, path)
       const tokenId = Number(req.headers.get('x-new-api-token') || options.selectedToken?.() || 71)
       const userId = Number(req.headers.get('x-new-api-user'))
       credentialCalls.push({ path, tokenId, userId })
@@ -1175,4 +1177,30 @@ test('unavailable or malformed group tokens never fall back to the active genera
     assert.equal(response.statusCode, 502)
     assert.equal(credentialCalls.length, 0)
   }
+})
+
+test('preloading an unprepared group returns immediately without reading model credentials', async t => {
+  const { app, credentialCalls, calls } = fixture(t, { groupToken(_req, group, create) {
+    assert.equal(group, 'text'); assert.equal(create, false)
+    return undefined
+  } })
+  const response = await app.inject({ method: 'POST', url: '/api/creation/models', headers: { ...headers, host: 'community.example' }, payload: { group: 'text', preload: true } })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.deepEqual(response.json(), { prepared: false, items: [] })
+  assert.equal(credentialCalls.length + calls.length, 0)
+  const invalid = await app.inject({ method: 'POST', url: '/api/creation/models', headers: { ...headers, host: 'community.example' }, payload: { group: 'text', preload: 'true' } })
+  assert.equal(invalid.statusCode, 400)
+})
+
+test('group preparation failures are explicitly unaccepted for JSON and streaming generation', async t => {
+  for (const stream of [false, true]) await t.test(stream ? 'SSE' : 'JSON', async t => {
+    const { app, calls } = fixture(t, { credentials() { throw new NewApiError('Group key changed', 409, 'NEW_API_GROUP_TOKEN_UNAVAILABLE') } })
+    const input = stream ? { ...imageRequest, kind: 'text', model: 'gpt-5', chatOptions: { stream: true, messages: [{ role: 'user', content: 'test' }] } } : imageRequest
+    const response = await submit(app, input)
+    assert.equal(response.statusCode, stream ? 200 : 409, response.payload)
+    assert.match(response.payload, /"notAccepted":true/)
+    assert.match(response.payload, /NEW_API_GROUP_TOKEN_UNAVAILABLE/)
+    assert.equal(calls.length, 0)
+    assert.equal((await app.inject(`/api/creation/requests/${input.requestId}`)).statusCode, 404)
+  })
 })

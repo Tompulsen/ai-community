@@ -42,6 +42,7 @@ export async function api<T>(path: string, options: {
   body?: unknown
   signal?: AbortSignal
   expectedAccount?: string
+  priority?: RequestPriority
   onUploadProgress?: (percent: number) => void
 } = {}): Promise<T> {
   if (!path.startsWith('/api/')) throw new Error('无效的接口地址。')
@@ -60,6 +61,7 @@ export async function api<T>(path: string, options: {
       method: options.method || 'GET',
       credentials: 'same-origin',
       headers,
+      ...(options.priority ? { priority: options.priority } : {}),
       ...(body !== undefined ? { body: multipart ? body as FormData : JSON.stringify(body) } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     })

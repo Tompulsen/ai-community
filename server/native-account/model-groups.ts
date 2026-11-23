@@ -190,9 +190,9 @@ async function recoverCreation(
 }
 
 /** Resolves a group key without exposing its secret or changing manual keys. */
-export async function resolveModelGroup(req: AccountRequest, group: string) {
-  const tokenId = await resolveGroup(req, group);
-  if (!tokenId) throw unavailable();
+export async function resolveModelGroup(req: AccountRequest, group: string, create = true) {
+  const tokenId = await resolveGroup(req, group, undefined, false, create);
+  if (!tokenId && create) throw unavailable();
   return tokenId;
 }
 
@@ -237,10 +237,11 @@ async function resolveGroup(
   group: string,
   login?: ReturnType<typeof authBundle>,
   systemAuto = false,
+  create = true,
 ) {
   const { session } = login
     ? { session: login }
-    : await getAuthenticatedSession(req);
+    : await getAuthenticatedSession(req, true);
   const userId = session.user!.id;
   const request: GroupRequest = login
     ? (path, options) =>
@@ -249,7 +250,7 @@ async function resolveGroup(
           accessToken: login.accessToken,
           ...upstreamRequestHints(req),
         })
-    : (path, options) => accountRequest(req, path, options);
+    : (path, options) => accountRequest(req, path, { ...options, reuseRequestSession: true });
   // Verify available groups even when a key was bound on a previous visit.
   const { data: groups } = await request("/api/user/self/groups");
   if (group && !Object.prototype.hasOwnProperty.call(groups || {}, group))
@@ -288,6 +289,8 @@ async function resolveGroup(
       }
     }
     let binding = await readBinding(key);
+    // Idle preloading only reads confirmed keys; provisioning is a foreground action.
+    if (!create && binding && "pendingName" in binding) return;
     if (binding && "pendingName" in binding) {
       replacedTokenId = binding.replacedTokenId;
     }
@@ -318,6 +321,7 @@ async function resolveGroup(
         !login,
       );
       if (existing) return rememberSystemToken(existing);
+      if (!create) return;
       // Explicit switching and system search may replace a confirmed deleted key.
       // Disabled, expired, edited and ambiguous keys keep their binding.
       replacedTokenId = binding.tokenId;
@@ -326,6 +330,7 @@ async function resolveGroup(
       binding = null;
     }
 
+    if (!create) return;
     if (!binding) {
       const tokens = await listTokens(request);
       const matches = tokens.filter(

@@ -6,17 +6,17 @@ import { session } from './state'
 import { studioAccount } from './studio-account'
 import type { ModelPricing } from '../server/native-account/pricing'
 
-export async function restoreRemixModels(source: Work, isCurrent: () => boolean, rememberGroup: (group: string | null) => void) {
+export async function restoreRemixModels(source: Work, isCurrent: () => boolean, rememberGroup: (group: string | null) => void, force = false) {
   const owner = session.user?.id, account = session.user?.accountId || owner
   const current = () => isCurrent() && owner === session.user?.id && account === (session.user?.accountId || session.user?.id)
   const kind = source.kind === 'resource' ? 'text' : source.kind
   const parameters = readRemixParameters(source.generation?.parameters)
   if (source.generation?.parameters !== undefined && (!parameters || parameters.kind !== kind)) throw new Error('原作生成参数无效，请使用当前配置。')
-  await loadCreationGroups()
+  await loadCreationGroups(force)
   if (!current()) return
   if (creation.groupsError) throw new Error(creation.groupsError)
   if (creation.selectedGroup) rememberGroup(creation.selectedGroup)
-  await loadCreationModels()
+  await loadCreationModels(force)
   if (!current()) return
   if (creation.modelsError) throw new Error(creation.modelsError)
   // The first model read can provision the account's automatic group.

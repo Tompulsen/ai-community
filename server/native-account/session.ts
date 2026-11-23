@@ -38,6 +38,7 @@ export interface AccountSession {
   identityCandidates?: { selection_id: string; username: string; account_label: string }[];
   selectedTokenId?: number;
   selectedKey?: string;
+  preparedKeys?: Record<string, { key: string; expiresAt: number }>;
   createdAt: number;
   expiresAt: number;
   version: number;
@@ -171,6 +172,38 @@ export async function saveSession(id: string, session: AccountSession) {
     }
     state.memory.set(id, { value, expires: Date.now() + ttl * 1000 });
   }
+}
+
+export function preparedModelKey(session: AccountSession, tokenId: number) {
+  if (session.selectedTokenId === tokenId && session.selectedKey)
+    return session.selectedKey;
+  const cached = session.preparedKeys?.[String(tokenId)];
+  return cached && cached.expiresAt > Date.now() ? cached.key : undefined;
+}
+
+export async function rememberModelKey(
+  req: AccountRequest,
+  snapshot: AccountSession,
+  tokenId: number,
+  key: string,
+) {
+  const id = getSessionId(req);
+  if (!id) throw new NewApiError("请先登录章鱼账号", 401);
+  await withSessionLock(id, async () => {
+    const current = await readSessionById(id);
+    if (!current?.user || current.user.id !== snapshot.user?.id)
+      throw new NewApiError("账号已变化，请重新登录", 401, "NEW_API_ACCOUNT_CHANGED");
+    const entries = Object.entries(current.preparedKeys || {})
+      .filter(([id, value]) => id !== String(tokenId) && value.expiresAt > Date.now())
+      .slice(-7);
+    current.preparedKeys = Object.fromEntries([
+      ...entries,
+      [String(tokenId), { key, expiresAt: Date.now() + 60000 }],
+    ]);
+    current.version++;
+    await saveSession(id, current);
+    snapshot.preparedKeys = current.preparedKeys;
+  });
 }
 
 export async function removeSessionById(id: string) {

@@ -38,6 +38,7 @@ const requestTtl = 30 * 86400
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。' }
+const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED'])
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
 type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string }
 interface TrackedRequest {
@@ -563,8 +564,9 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         catch (error) {
           const statusCode = record(error) ? Number(error.statusCode ?? error.status) : 0
           const notAccepted = [400, 401, 403, 413, 422, 429].includes(statusCode)
-            || record(error) && error.code === 'COMMUNITY_WALLET_CONFIG'
+            || record(error) && (error.code === 'COMMUNITY_WALLET_CONFIG' || preparationErrors.has(String(error.code)))
           emit({ type: 'error', error: message(error),
+            ...(error instanceof NewApiError ? { code: error.code } : {}),
             ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
         finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
@@ -584,11 +586,15 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         // Resolving a group can provision its token; validate origin before any mutation.
         assertSameOrigin(req)
         const group = record(ctx.body) ? ctx.body.group : undefined
+        const preload = record(ctx.body) ? ctx.body.preload : undefined
         if (management || allGroups || typeof group !== 'string' || !group.trim() || group !== group.trim() || group.length > 200 || /[\u0000-\u001f\u007f]/u.test(group))
           throw httpError(400, '请选择有效的模型分组。')
-        const tokenId = await svc.groupToken(req, group)
-        if (!Number.isSafeInteger(tokenId) || tokenId < 1) throw httpError(502, '模型分组暂不可用，请重试。')
+        if (preload !== undefined && typeof preload !== 'boolean') throw httpError(400, '模型预加载参数无效。')
+        const tokenId = await svc.groupToken(req, group, preload !== true)
+        if (preload === true && tokenId === undefined) { ctx.json(200, { prepared: false, items: [] }); return true }
+        if (!Number.isSafeInteger(tokenId) || !tokenId || tokenId < 1) throw httpError(502, '模型分组暂不可用，请重试。')
         req.headers.set('x-new-api-token', String(tokenId))
+        req.headers.set('x-new-api-group', encodeURIComponent(group))
       }
       const catalogue = management || allGroups ? await svc.modelCatalogue(req) : undefined
       const credentials = catalogue ? undefined : await svc.credentials(req, 'v1/models')
@@ -625,6 +631,10 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     }
     return true
   } catch (error) {
+    if (ctx.url.pathname === '/api/creation/generate' && error instanceof NewApiError && preparationErrors.has(error.code)) {
+      ctx.json(error.status, { error: { code: error.code, message: error.message }, notAccepted: true })
+      return true
+    }
     if (error instanceof NewApiError || error instanceof PublicImageError)
       throw httpError(error.status, message(error), error instanceof NewApiError ? error.code : 'MEDIA_UNAVAILABLE')
     throw error

@@ -13,7 +13,7 @@ import {
   NewApiError,
 } from "./config.ts";
 import { resolveSystemAutoToken } from "./model-groups.ts";
-import { getSessionId, readSessionById, saveSession, withSessionLock } from "./session.ts";
+import { getSessionId, preparedModelKey, readSessionById, rememberModelKey, saveSession, withSessionLock, type AccountSession } from "./session.ts";
 
 const IMAGE_RELAY_PATHS = new Set([
   "images/generations",
@@ -41,9 +41,41 @@ async function authenticatedRelaySession(req: AccountRequest) {
     throw new NewApiError("请求来源无效", 403, "NEW_API_CSRF");
   }
   const { session } = await getAuthenticatedSession(req, true);
-  // A saved model key must not outlive a revoked dashboard login session.
-  await verifyAccount(req);
   return session;
+}
+
+function requestedGroup(req: AccountRequest) {
+  const value = req.headers.get("x-new-api-group");
+  if (value === null) return;
+  let group: string;
+  try { group = decodeURIComponent(value); }
+  catch { throw new NewApiError("请求分组无效", 400); }
+  if (!group || group !== group.trim() || group.length > 200 || /[\u0000-\u001f\u007f]/u.test(group))
+    throw new NewApiError("请求分组无效", 400);
+  return group;
+}
+
+async function relayTokenKey(req: AccountRequest, session: AccountSession, tokenId: number, group?: string) {
+  if (group !== undefined || tokenId !== session.selectedTokenId || !session.selectedKey) {
+    const { data: token } = await accountRequest(req, `/api/token/${tokenId}`, { reuseRequestSession: true });
+    if (!session.user || token?.id !== tokenId || token?.user_id !== session.user.id)
+      throw new NewApiError("无法读取此请求的密钥", 403);
+    // Secrets may be cached; the actual billing group must be checked on every new send.
+    if (group !== undefined && (token.group !== group || token.status !== 1 ||
+      !(token.expired_time === -1 || token.expired_time > Date.now() / 1000) ||
+      !(token.unlimited_quota === true || token.remain_quota > 0)))
+      throw new NewApiError("分组密钥已改变或不可用，请重新选择分组", 409, "NEW_API_GROUP_TOKEN_UNAVAILABLE");
+  }
+  const cached = preparedModelKey(session, tokenId);
+  if (cached) return cached;
+  const { data } = await accountRequest(req, `/api/token/${tokenId}/key`, {
+    method: "POST", reuseRequestSession: true,
+  });
+  if (typeof data?.key !== "string" || !data.key.trim())
+    throw new NewApiError("此请求的密钥已不可用", 409);
+  const key = data.key.trim().startsWith("sk-") ? data.key.trim() : `sk-${data.key.trim()}`;
+  await rememberModelKey(req, session, tokenId, key);
+  return key;
 }
 
 export async function resolveRelayCredentials(
@@ -59,47 +91,28 @@ export async function resolveRelayCredentials(
         ? getNewApiImageBaseUrl()
         : undefined) || getNewApiConfig().baseUrl;
     const expectedToken = req.headers.get("x-new-api-token");
-    if (
-      expectedToken !== null &&
-      (expectedToken !== String(session.selectedTokenId) ||
-        !session.selectedKey)
-    ) {
-      if (
-        !/^[1-9]\d*$/.test(expectedToken) ||
-        !Number.isSafeInteger(Number(expectedToken))
-      )
-        throw new NewApiError("请求密钥标识无效", 400);
-      // Read an owned historical key without changing the current model selection.
-      const { data: token } = await accountRequest(
-        req,
-        `/api/token/${expectedToken}`,
-      );
-      if (
-        !session.user ||
-        token?.id !== Number(expectedToken) ||
-        token?.user_id !== session.user.id
-      )
-        throw new NewApiError("无法读取此请求的密钥", 403);
-      const { data } = await accountRequest(
-        req,
-        `/api/token/${expectedToken}/key`,
-        {
-          method: "POST",
-        },
-      );
-      if (typeof data?.key !== "string" || !data.key.trim())
-        throw new NewApiError("此请求的密钥已不可用", 409);
-      const key = data.key.trim();
+    if (expectedToken !== null && (!/^[1-9]\d*$/.test(expectedToken) || !Number.isSafeInteger(Number(expectedToken))))
+      throw new NewApiError("请求密钥标识无效", 400);
+    const group = requestedGroup(req);
+    const tokenId = expectedToken !== null ? Number(expectedToken) : session.selectedTokenId;
+    if (group !== undefined && !tokenId)
+      throw new NewApiError("分组密钥尚未准备，请重新选择分组", 409, "NEW_API_TOKEN_REQUIRED");
+    if (tokenId) {
+      const [, key] = await Promise.all([
+        verifyAccount(req), relayTokenKey(req, session, tokenId, group),
+      ]);
       return {
         baseUrl,
-        apiKey: key.startsWith("sk-") ? key : `sk-${key}`,
-        tokenId: Number(expectedToken),
-        userId: session.user.id,
+        apiKey: key,
+        tokenId,
+        userId: session.user!.id,
       };
     }
+    // A saved model key must not outlive a revoked dashboard login session.
+    await verifyAccount(req);
     if (!session.selectedKey || !session.selectedTokenId) {
       const tokenId = await resolveSystemAutoToken(req);
-      const { data: result } = await accountRequest(req, `/api/token/${tokenId}/key`, { method: "POST" });
+      const { data: result } = await accountRequest(req, `/api/token/${tokenId}/key`, { method: "POST", reuseRequestSession: true });
       if (typeof result?.key !== "string" || !result.key.trim())
         throw new NewApiError("此账号的创作密钥暂时不可用", 409, "NEW_API_TOKEN_REQUIRED");
       const key = result.key.trim();
@@ -134,17 +147,9 @@ export async function resolveWebSearchCredentials(req: AccountRequest) {
     throw new NewApiError("联网搜索需要登录账号", 503);
   }
   const session = await authenticatedRelaySession(req);
+  await verifyAccount(req);
   const tokenId = await resolveSystemAutoToken(req);
-  const { data } = await accountRequest(req, `/api/token/${tokenId}/key`, {
-    method: "POST",
-  });
-  if (typeof data?.key !== "string" || !data.key.trim()) {
-    throw new NewApiError(
-      "无法读取 Auto 系统密钥，请在“账号与密钥”中检查",
-      409,
-    );
-  }
-  const key = data.key.trim();
+  const key = await relayTokenKey(req, session, tokenId, "auto");
   return {
     baseUrl: getNewApiConfig().baseUrl,
     apiKey: key.startsWith("sk-") ? key : `sk-${key}`,

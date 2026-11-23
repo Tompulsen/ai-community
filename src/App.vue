@@ -138,6 +138,25 @@ async function refreshActiveIdentity() {
 }
 function refreshVisibleLottery() { if (document.visibilityState !== 'hidden') void refreshLotteryBalance() }
 watch([() => session.user?.id, () => session.user?.accountId, () => route.path], refreshVisibleLottery, { immediate: true })
+watch([() => session.user?.id, () => session.user?.accountId], ([id], _previous, onCleanup) => {
+  if (!id) return
+  let cancelled = false, idle: number | undefined
+  const warm = async () => {
+    if (cancelled || document.hidden) return
+    try {
+      const studio = await import('./native-studio')
+      if (!cancelled) await studio.preloadCreationModels()
+    } catch { /* Preloading must not interrupt the current page. */ }
+  }
+  const timer = setTimeout(() => {
+    if (typeof window.requestIdleCallback === 'function') idle = window.requestIdleCallback(() => { void warm() }, { timeout: 2500 })
+    else void warm()
+  }, 800)
+  onCleanup(() => {
+    cancelled = true; clearTimeout(timer)
+    if (idle !== undefined) window.cancelIdleCallback(idle)
+  })
+}, { immediate: true })
 watch(() => route.query.invite, value => { rememberLotteryInvite(value) }, { immediate: true })
 watch(() => route.query.aff, value => { rememberReferralInvite(value) }, { immediate: true })
 onMounted(() => {

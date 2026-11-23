@@ -7,7 +7,7 @@ export default defineConfig({
   reporter: 'list',
   timeout: 30_000,
   use: {
-    baseURL: 'http://localhost:18775',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:18775',
     browserName: 'chromium',
     headless: true,
     viewport: { width: 1440, height: 1000 },

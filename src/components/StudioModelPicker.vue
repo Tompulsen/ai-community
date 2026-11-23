@@ -56,7 +56,7 @@ function groupKeys(event: KeyboardEvent) {
   }
 }
 async function chooseGroup(group: string) {
-  if (busy.value) return
+  if (creation.groupsLoading) return
   groupsOpen.value = false
   await selectCreationGroup(group)
   if (open.value) groupTrigger.value?.focus()
@@ -86,7 +86,7 @@ async function choose(item: CreationModel) {
 }
 function update(action: () => void) { try { action(); error.value = '' } catch (cause) { error.value = errorMessage(cause) } }
 function formatName(format: string) { return ({ 'chat-completions': 'Chat Completions', responses: 'Responses', gemini: 'Gemini 原生', claude: 'Claude Messages' } as Record<string, string>)[format] || format }
-async function refresh() { if (busy.value) return; await loadCreationGroups(); await loadCreationModels() }
+async function refresh() { if (busy.value) return; await loadCreationGroups(true); await loadCreationModels(true) }
 function cancel() {
   if (groupsOpen.value) { groupsOpen.value = false; groupTrigger.value?.focus() }
   else if (expanded.value) expanded.value = ''
@@ -105,13 +105,13 @@ onBeforeUnmount(() => dialog.value?.close())
     <header class="model-dialog-header"><h2>选择模型</h2><button type="button" class="icon-button" aria-label="关闭选择模型" @click="close"><X :size="20" /></button></header>
     <div class="model-source">
       <div ref="sourceSelector" class="source-selector">
-        <button ref="groupTrigger" type="button" class="source-trigger" aria-label="选择分组" :aria-expanded="groupsOpen" :aria-controls="`${id}-groups`" :disabled="busy || !groups.length" @click="toggleGroups()" @keydown.down.prevent="!groupsOpen && toggleGroups()">
+        <button ref="groupTrigger" type="button" class="source-trigger" aria-label="选择分组" :aria-expanded="groupsOpen" :aria-controls="`${id}-groups`" :disabled="creation.groupsLoading || !groups.length" @click="toggleGroups()" @keydown.down.prevent="!groupsOpen && toggleGroups()">
           <Layers :size="18" aria-hidden="true" /><span>分组</span>
           <span class="source-name">{{ creation.groupSwitching ? '正在切换…' : creation.groupsLoading ? '正在读取…' : selectedGroup ? groupLabel(selectedGroup) : '选择分组' }}</span>
           <span v-if="selectedGroup?.id === 'auto'" class="source-type">系统</span><ChevronDown :size="16" aria-hidden="true" />
         </button>
         <div v-if="groupsOpen" :id="`${id}-groups`" class="source-options" role="group" aria-label="可选分组" @keydown="groupKeys">
-          <button v-for="group in groups" :key="group.id" type="button" class="source-option" :aria-label="group.id === 'auto' ? 'Auto 系统' : groupLabel(group)" :aria-pressed="group.id === creation.selectedGroup" :title="group.description" :disabled="busy" @click="chooseGroup(group.id)">
+          <button v-for="group in groups" :key="group.id" type="button" class="source-option" :aria-label="group.id === 'auto' ? 'Auto 系统' : groupLabel(group)" :aria-pressed="group.id === creation.selectedGroup" :title="group.description" :disabled="creation.groupsLoading" @click="chooseGroup(group.id)">
             <span>{{ groupLabel(group) }}</span><span v-if="group.id === 'auto'" class="source-type">系统</span><Check v-if="group.id === creation.selectedGroup" :size="16" aria-hidden="true" />
           </button>
         </div>

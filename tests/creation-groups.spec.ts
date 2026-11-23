@@ -30,17 +30,20 @@ async function fixture(page: Page) {
     : [{ id: state.group === '生图' ? 'image-alias' : 'video-alias', kinds: ['text'] }]
   await page.route('**/api/new-api/model-groups', route => {
     expect(route.request().headers()['x-new-api-user']).toBe('17')
-    return route.fulfill({ json: { success: true, data: { groups, selectedGroup: state.group, selectedTokenId: state.tokenId } } })
+    return route.fulfill({ json: { success: true, data: { groups, selectedGroup: 'auto', selectedTokenId: 41 } } })
   })
   await page.route('**/api/new-api/model-groups/select', route => {
+    throw new Error('Ordinary group selection must not mutate the shared account session')
+  })
+  await page.route('**/api/creation/models', route => {
     expect(route.request().headers()['x-new-api-user']).toBe('17')
+    expect(route.request().method()).toBe('POST')
     const group = route.request().postDataJSON().group
     selections.push(group)
     if (state.fail) return route.fulfill({ status: 409, json: { success: false, message: '分组密钥暂时不可用。' } })
     state.group = group; state.tokenId = group === '生图' ? 52 : group === '视频' ? 63 : 41
-    return route.fulfill({ json: { success: true, data: { group, selectedTokenId: state.tokenId } } })
+    return route.fulfill({ json: { tokenId: state.tokenId, items: models() } })
   })
-  await page.route('**/api/creation/models', route => route.fulfill({ json: { tokenId: state.tokenId, items: models() } }))
   await page.route('**/api/creation/generate', route => {
     generationTokens.push(route.request().headers()['x-new-api-token'] || '')
     return route.fulfill({ json: { status: 'pending', upstreamId: 'job-1', tokenId: 63, protocol: 'openai', outputs: [] } })
@@ -71,7 +74,7 @@ test('group selection refreshes its models, preserves drafts and survives reload
   await expect(dialog.getByRole('button', { name: '生图 · 0.8×', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await dialog.getByRole('button', { name: '关闭选择模型', exact: true }).click()
   await expect(page.locator('iframe, .auth-login-form')).toHaveCount(0)
-  expect(fixtureState.selections).toEqual(['生图'])
+  expect(fixtureState.selections).toEqual(['auto', '生图', '生图'])
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -79,7 +82,7 @@ test('group selection refreshes its models, preserves drafts and survives reload
   }
 })
 
-test('switching groups blocks generation and a failed selection restores authoritative state without retrying POST', async ({ page }) => {
+test('a cold group blocks generation and fails visibly without changing the shared account selection', async ({ page }) => {
   const fixtureState = await fixture(page)
   await page.goto('/create/image')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
@@ -87,7 +90,7 @@ test('switching groups blocks generation and a failed selection restores authori
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  await page.route('**/api/new-api/model-groups/select', async route => {
+  await page.route('**/api/creation/models', async route => {
     await gate
     await route.fallback()
   })
@@ -95,15 +98,15 @@ test('switching groups blocks generation and a failed selection restores authori
   const { dialog, trigger } = await openGroups(page)
   await trigger.click()
   await dialog.getByRole('button', { name: '生图 · 0.8×', exact: true }).click()
-  await expect(trigger).toBeDisabled()
+  await expect(trigger).toBeEnabled()
   await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
   release()
   await expect(dialog.getByRole('alert')).toContainText('分组密钥暂时不可用')
-  await expect(trigger).toContainText('Auto')
+  await expect(trigger).toContainText('生图')
   await expect(trigger).toBeEnabled()
   await dialog.getByRole('button', { name: '关闭选择模型', exact: true }).click()
-  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
-  expect(fixtureState.selections).toEqual(['生图'])
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  expect(fixtureState.selections).toEqual(['auto', '生图'])
   expect(fixtureState.generationTokens).toEqual([])
 })
 
@@ -116,14 +119,14 @@ test('video group aliases work and existing task polling retains its original to
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => fixtureState.taskTokens.length).toBeGreaterThan(0)
   await selectGroup(page, 'Auto 系统')
-  expect(fixtureState.state.group).toBe('auto')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('')
   await expect.poll(() => fixtureState.taskTokens.length, { timeout: 10000 }).toBeGreaterThan(1)
   expect(fixtureState.generationTokens).toEqual(['63'])
   expect(fixtureState.taskTokens.every(token => token === '63')).toBe(true)
   await page.getByRole('button', { name: '停止等待', exact: true }).click()
 })
 
-test('model loading blocks group switching until the catalog is ready', async ({ page }) => {
+test('switching groups during an older model load ignores its late response', async ({ page }) => {
   await fixture(page)
   let release!: () => void
   let delayed = false
@@ -140,12 +143,37 @@ test('model loading blocks group switching until the catalog is ready', async ({
   const model = page.getByRole('combobox', { name: '模型', exact: true })
   await expect.poll(() => delayed).toBe(true)
   const { dialog, trigger } = await openGroups(page)
-  await expect(trigger).toBeDisabled()
-  release()
   await expect(trigger).toBeEnabled()
   await trigger.click()
   await dialog.getByRole('button', { name: '生图 · 0.8×', exact: true }).click()
   await expect(trigger).toContainText('生图 · 0.8×')
   await expect(model).toHaveValue('image-alias')
+  release()
   await expect(dialog.getByRole('button', { name: 'stale-model', exact: true })).toHaveCount(0)
+})
+
+test('returning to a prepared group reuses its models without another preparation request', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/create/image')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  await selectGroup(page, '生图 · 0.8×')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('image-alias')
+  await selectGroup(page, '视频 · 1.5×')
+  await selectGroup(page, '生图 · 0.8×')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('image-alias')
+  expect(state.selections).toEqual(['auto', '生图', '视频'])
+})
+
+test('logging in warms one known group before entering Studio', async ({ page }) => {
+  const state = await fixture(page), preloads: boolean[] = []
+  await page.route('**/api/creation/models', async route => {
+    preloads.push(route.request().postDataJSON().preload === true)
+    await route.fallback()
+  })
+  await page.goto('/account?tab=privacy')
+  await expect.poll(() => preloads.length).toBe(1)
+  expect(preloads).toEqual([true])
+  await page.getByRole('link', { name: '创作台', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('gpt-image-2')
+  expect(state.selections).toEqual(['auto'])
 })

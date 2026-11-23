@@ -18,7 +18,11 @@ async function fixture(page: Page) {
   await page.route('**/api/new-api/model-groups', route => route.fulfill({ json: { success: true, data: { selectedGroup: state.group, groups: Object.keys(state.models).map(id => ({ id, name: id })) } } }))
   await page.route('**/api/new-api/model-groups/select', route => { state.group = route.request().postDataJSON().group; selections.push(state.group); return route.fulfill({ json: { success: true, data: { group: state.group, selectedTokenId: token() } } }) })
   await page.route('**/api/new-api/model-pricing', route => state.failPricing ? route.fulfill({ status: 503, json: { success: false, message: '目录读取失败，请重试。' } }) : route.fulfill({ json: { success: true, data: { userId: 17, currency: '积分', autoGroups: ['default'], rows: ['default', '生图'].map(group => ({ model: 'gpt-image-2', group, price: `${group === 'default' ? 130 : 500} 积分`, requestPrice: group === 'default' ? 130 : 500, billing: '每次请求', imageCountMultiplier: true })) } } }))
-  await page.route('**/api/creation/models', route => state.failModels ? route.fulfill({ status: 503, json: { message: '模型目录读取失败，请重试。' } }) : route.fulfill({ json: { tokenId: token(), items: (state.models[state.group] || []).map(id => ({ id, kinds: ['image'] })) } }))
+  await page.route('**/api/creation/models', route => {
+    const group = route.request().postDataJSON()?.group || state.group
+    if (group !== state.group) { state.group = group; selections.push(group) }
+    return state.failModels ? route.fulfill({ status: 503, json: { message: '模型目录读取失败，请重试。' } }) : route.fulfill({ json: { tokenId: token(), items: (state.models[state.group] || []).map(id => ({ id, kinds: ['image'] })) } })
+  })
   await page.route('**/api/creation/generate', route => { requests.push({ body: route.request().postDataJSON(), token: route.request().headers()['x-new-api-token'] || '' }); return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: '/legacy-files/result' }] } }) })
   return { account, source, state, selections, requests }
 }
@@ -90,7 +94,7 @@ for (const entry of ['workbench', 'background'] as const) {
     await expect(dialog.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     await expect(dialog).toHaveCount(0)
-    expect(state.selections).toEqual(['default', 'auto'])
+    expect(state.selections).toEqual(['default'])
     expect(state.requests).toHaveLength(0)
   })
 }
@@ -169,7 +173,7 @@ for (const entry of ['workbench', 'background'] as const) test(`${entry} cancels
   await expect(dialog.getByRole('button', { name: '后台生成同款', exact: true })).toBeEnabled()
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  expect(state.selections).toEqual(['default', 'auto'])
+  expect(state.selections).toEqual(['default'])
 })
 
 test('cancel waits for an in-flight group selection before restoring the previous group', async ({ page }) => {
@@ -177,7 +181,7 @@ test('cancel waits for an in-flight group selection before restoring the previou
   state.state.models.auto = []
   let release!: () => void, started = false
   const gate = new Promise<void>(resolve => { release = resolve })
-  await page.route('**/api/new-api/model-groups/select', async route => {
+  await page.route('**/api/creation/models', async route => {
     if (route.request().postDataJSON().group === 'default') { started = true; await gate }
     await route.fallback()
   })
@@ -186,7 +190,7 @@ test('cancel waits for an in-flight group selection before restoring the previou
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   release()
   await expect(dialog).toHaveCount(0)
-  expect(state.selections).toEqual(['default', 'auto']); expect(state.requests).toHaveLength(0)
+  expect(state.selections).toEqual(['default']); expect(state.requests).toHaveLength(0)
 })
 
 test('a stalled model request ends with a retryable error', async ({ page }) => {

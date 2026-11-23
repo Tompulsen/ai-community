@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import test, { after } from "node:test"
 import { readAccountModelCatalogue } from "./model-catalogue.ts"
+import { preparedModelKey, rememberModelKey, withSessionLock } from "./session.ts"
 import {
   AccountRequest, handleAccountRequest, readNativeAccount, resolveRelayCredentials, relayHeaders,
   readSessionById, saveSession, removeSessionById,
@@ -374,6 +375,86 @@ test("historical generation keys must belong to the current account", async t =>
   await assert.rejects(resolveRelayCredentials(fixture.request("/api/studio/tasks/old", {
     headers: { "x-new-api-token": "12" },
   })), { status: 403 })
+})
+
+test('prepared secrets reduce reveals while every new send checks the actual account and group', async t => {
+  configure(t)
+  const fixture = await session(t)
+  const token = { id: 12, user_id: user.id, group: 'images', status: 1, expired_time: -1, unlimited_quota: true }
+  let reveals = 0, details = 0, accounts = 0
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url).pathname
+    if (path === '/api/user/self') { accounts++; return envelope(user) }
+    if (path === '/api/token/12') { details++; return envelope(token) }
+    assert.equal(path, '/api/token/12/key')
+    reveals++; return envelope({ key: 'prepared-private-key' })
+  })
+  const send = () => resolveRelayCredentials(fixture.request('/api/creation/generate', { method: 'POST', body: '{}',
+    headers: { 'x-new-api-token': '12', 'x-new-api-group': 'images' } }), 'v1/images/generations')
+  assert.equal((await send()).apiKey, 'sk-prepared-private-key')
+  assert.equal((await send()).tokenId, 12)
+  assert.deepEqual([reveals, details, accounts], [1, 2, 2])
+  const publicData = await (await handleAccountRequest(fixture.request())).json()
+  assert.doesNotMatch(JSON.stringify(publicData), /preparedKeys|prepared-private-key/)
+  token.group = 'video'
+  await assert.rejects(send(), { status: 409, code: 'NEW_API_GROUP_TOKEN_UNAVAILABLE' })
+  assert.equal(reveals, 1)
+  const historical = await resolveRelayCredentials(fixture.request('/api/creation/tasks/image/old', { headers: { 'x-new-api-token': '12' } }))
+  assert.equal(historical.tokenId, 12)
+  assert.equal(historical.apiKey, 'sk-prepared-private-key')
+  token.user_id = 8
+  await assert.rejects(send(), { status: 403 })
+  token.user_id = user.id; token.group = 'images'; token.status = 2
+  await assert.rejects(send(), { status: 409 })
+  token.status = 1
+  const stored = await readSessionById(fixture.id)
+  stored.preparedKeys['12'].expiresAt = Date.now() - 1
+  await saveSession(fixture.id, stored)
+  await send()
+  assert.equal(reveals, 2, 'expired secrets must be revealed again')
+  assert.equal((await readSessionById(fixture.id)).selectedTokenId, 9)
+})
+
+test('parallel prepared keys merge into the latest session without overwriting refreshed login credentials', async t => {
+  configure(t)
+  const fixture = await session(t), snapshot = await readSessionById(fixture.id)
+  await withSessionLock(fixture.id, async () => {
+    const current = await readSessionById(fixture.id)
+    current.accessToken = 'fresh-access'; current.refreshToken = 'fresh-refresh'; current.version++
+    await saveSession(fixture.id, current)
+  })
+  await Promise.all([12, 13].map(id => rememberModelKey(fixture.request(), snapshot, id, `sk-prepared-${id}`)))
+  const stored = await readSessionById(fixture.id)
+  assert.equal(stored.accessToken, 'fresh-access')
+  assert.equal(stored.refreshToken, 'fresh-refresh')
+  assert.equal(stored.selectedTokenId, 9)
+  assert.equal(preparedModelKey(stored, 12), 'sk-prepared-12')
+  assert.equal(preparedModelKey(stored, 13), 'sk-prepared-13')
+  for (let id = 14; id < 24; id++) await rememberModelKey(fixture.request(), snapshot, id, `sk-prepared-${id}`)
+  assert.equal(Object.keys((await readSessionById(fixture.id)).preparedKeys).length, 8)
+  await removeSessionById(fixture.id)
+  await assert.rejects(rememberModelKey(fixture.request(), snapshot, 24, 'sk-revoked'), { status: 401 })
+  assert.equal(await readSessionById(fixture.id), null)
+})
+
+test('manual token mutations invalidate prepared secrets without changing another selected key', async t => {
+  for (const method of ['PUT', 'PATCH', 'DELETE']) await t.test(method, async t => {
+    configure(t)
+    const fixture = await session(t, { preparedKeys: { '12': { key: 'sk-mutation-private', expiresAt: Date.now() + 60000 } } })
+    t.mock.method(globalThis, 'fetch', async url => {
+      const path = new URL(url).pathname
+      if (path === '/api/user/self') return envelope(user)
+      if (path === '/api/token/12') return envelope({ id: 12, user_id: user.id, name: 'manual', group: '', status: 1, expired_time: -1, unlimited_quota: true })
+      assert.equal(path, '/api/token/')
+      return envelope(null)
+    })
+    const response = await handleAccountRequest(fixture.request('/api/new-api/tokens/12', { method,
+      ...(method === 'DELETE' ? {} : { body: JSON.stringify(method === 'PATCH' ? { status: 2 } : { name: 'renamed' }) }) }))
+    assert.equal(response.status, 200, await response.text())
+    const stored = await readSessionById(fixture.id)
+    assert.equal(stored.preparedKeys['12'], undefined)
+    assert.equal(stored.selectedTokenId, 9)
+  })
 })
 
 test("native account and relay reject a mismatching upstream identity and revoke its session", async t => {
