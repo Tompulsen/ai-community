@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
 const shots = '.taste-skill/admin-complete-20261114/shots'
-interface Announcement { id: string; title: string; text: string; isActive: boolean; updatedAt: string; version: string }
+interface Announcement { id: string; title: string; text: string; isActive: boolean; popupEnabled?: boolean; updatedAt: string; version: string }
 interface RoleUser { id: string; accountId?: string; username: string; name: string; roleIds: string[]; version: string; isRoot: boolean; isSelf: boolean; isProtected: boolean; canEdit: boolean }
 type Mutation = { path: string; body: Record<string, unknown>; csrf?: string; account?: string }
 const version = (index: number) => index.toString(16).padStart(64, '0')
@@ -50,7 +50,7 @@ async function fixture(page: Page) {
     }
     if (path === '/api/admin/announcements' && request.method() === 'POST') {
       const body = request.postDataJSON()
-      const announcement = { id: `announcement${++state.serial}`, title: body.title, text: body.text, isActive: true, updatedAt: '2026-11-14T08:00:00Z', version: version(state.serial) }
+      const announcement = { id: `announcement${++state.serial}`, title: body.title, text: body.text, isActive: true, popupEnabled: body.popupEnabled, updatedAt: '2026-11-14T08:00:00Z', version: version(state.serial) }
       state.announcements.unshift(announcement)
       return route.fulfill({ json: { id: announcement.id, announcement } })
     }
@@ -119,7 +119,7 @@ test('announcements support filters, pagination, creation, editing and confirmed
   await editor.getByRole('textbox', { name: '公告正文', exact: true }).fill('请查看新的创作安排。')
   await editor.getByRole('button', { name: '确认发布', exact: true }).click()
   await expect(editor).not.toBeVisible()
-  expect(fixtureState.mutations.find(item => item.path === '/api/admin/announcements')?.body).toEqual({ title: '新的社区公告', text: '请查看新的创作安排。' })
+  expect(fixtureState.mutations.find(item => item.path === '/api/admin/announcements')?.body).toEqual({ title: '新的社区公告', text: '请查看新的创作安排。', popupEnabled: false })
   await page.getByRole('combobox', { name: '公告状态', exact: true }).selectOption('all')
   await section.getByRole('button', { name: '编辑公告：新的社区公告', exact: true }).click()
   const edit = page.getByRole('dialog', { name: '编辑公告', exact: true })
@@ -303,4 +303,31 @@ test('ordinary members and moderators do not expose operations pages, and missin
   await page.reload()
   await expect(page.getByRole('heading', { name: '需要审核员权限', exact: true })).toBeVisible()
   expect(fixtureState.mutations).toHaveLength(0)
+})
+
+test('administrators select popup announcements, retain conflicts, and stop popups with announcement status', async ({ page }) => {
+  const f = await fixture(page)
+  await openView(page, '公告管理')
+  await page.getByRole('button', { name: '编辑公告：社区创作维护安排', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '编辑公告', exact: true })
+  await expect(dialog.getByRole('checkbox', { name: '打开网站时弹出', exact: true })).not.toBeChecked()
+  await dialog.getByRole('checkbox', { name: '打开网站时弹出', exact: true }).check()
+  f.state.failAnnouncement = 409
+  await dialog.getByRole('button', { name: '保存公告', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('已经更新')
+  await expect(dialog.getByRole('checkbox', { name: '打开网站时弹出', exact: true })).toBeChecked()
+  await dialog.getByRole('button', { name: '关闭公告编辑', exact: true }).click()
+  f.state.failAnnouncement = 0
+  await page.getByRole('button', { name: '编辑公告：社区创作维护安排', exact: true }).click()
+  await dialog.getByRole('checkbox', { name: '打开网站时弹出', exact: true }).check()
+  await dialog.getByRole('button', { name: '保存公告', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  expect(f.mutations.at(-1)?.body).toMatchObject({ popupEnabled: true, isActive: true, version: version(1) })
+  await expect(page.locator('.announcement-table').getByText('打开网站时弹出', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '编辑公告：社区创作维护安排', exact: true }).click()
+  await dialog.getByRole('checkbox', { name: '启用公告', exact: true }).uncheck()
+  await expect(dialog.getByRole('checkbox', { name: '打开网站时弹出', exact: true })).toBeDisabled()
+  await dialog.getByRole('button', { name: '保存公告', exact: true }).click()
+  await expect(page.locator('.announcement-table').getByText('弹窗随公告停用')).toBeVisible()
+  expect(f.state.announcements[0]).toMatchObject({ popupEnabled: true, isActive: false })
 })

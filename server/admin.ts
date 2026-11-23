@@ -32,7 +32,7 @@ interface ManagedUser {
 interface RoleRow { id: string; target: string; condFormula: unknown; isAdministrator: boolean; isModerator: boolean }
 interface ManagementRole extends RoleRow { name: string }
 interface RoleAssignment { id: string; userId: string; roleId: string; expiresAt: Date | string | null }
-interface AnnouncementRow { id: string; title: string; text: string; isActive: boolean; updatedAt: Date | string | null }
+interface AnnouncementRow { id: string; title: string; text: string; isActive: boolean; display: string; updatedAt: Date | string | null }
 interface AuditRow { id: string; userId: string; type: string; info: unknown; actorId: string | null; actorUsername: string | null; actorName: string | null }
 interface ReportRow {
   id: string; targetUserId: string; reporterId: string; assigneeId: string | null
@@ -474,7 +474,7 @@ async function legacySettings(ctx: RequestContext) {
 async function announcements(ctx: RequestContext, announcementId?: string) {
   if (ctx.req.method === 'GET') {
     const status = enumValue(ctx.url.searchParams.get('status') || 'all', ['all', 'active', 'inactive'])
-    const rows = (await ctx.db.query<AnnouncementRow>(`SELECT id,title,text,"isActive","updatedAt" FROM announcement
+    const rows = (await ctx.db.query<AnnouncementRow>(`SELECT id,title,text,"isActive",display,"updatedAt" FROM announcement
       WHERE "userId" IS NULL AND ($1='' OR title ILIKE $2 OR text ILIKE $2)
       AND ($3='all' OR "isActive"=($3='active')) AND ($4::varchar IS NULL OR id<$4)
       ORDER BY id DESC LIMIT 31`, [query(ctx), search(query(ctx)), status, cursor(ctx)])).rows
@@ -482,38 +482,41 @@ async function announcements(ctx: RequestContext, announcementId?: string) {
     return { ...page, items: page.items.map(packAnnouncement) }
   }
   const method = ctx.req.method
-  if (method === 'POST') keys(ctx.body, ['title', 'text'])
+  if (method === 'POST') keys(ctx.body, ['title', 'text', 'popupEnabled'])
   else if (method === 'DELETE') {
     if (Object.keys(ctx.body).length) keys(ctx.body, ['version', 'updatedAt'])
   }
   else {
-    keys(ctx.body, ['title', 'text', 'isActive', 'version', 'updatedAt'])
-    if (method === 'PATCH' && !['title', 'text', 'isActive'].some(key => Object.hasOwn(ctx.body, key))) fail('请选择需要修改的公告字段。')
+    keys(ctx.body, ['title', 'text', 'isActive', 'popupEnabled', 'version', 'updatedAt'])
+    if (method === 'PATCH' && !['title', 'text', 'isActive', 'popupEnabled'].some(key => Object.hasOwn(ctx.body, key))) fail('请选择需要修改的公告字段。')
   }
   if (method === 'PATCH' && !Object.hasOwn(ctx.body, 'version') && !Object.hasOwn(ctx.body, 'updatedAt')) fail('缺少公告版本，请刷新后重试。')
   const title = ctx.body.title === undefined ? undefined : text(ctx.body.title, 100)
   const content = ctx.body.text === undefined ? undefined : text(ctx.body.text, 8192)
   const active = ctx.body.isActive === undefined ? undefined : boolean(ctx.body.isActive)
+  const popup = ctx.body.popupEnabled === undefined ? undefined : boolean(ctx.body.popupEnabled)
   if (title === '' || content === '' || method === 'POST' && (!title || !content)) fail('公告标题和正文不能为空。')
   return transaction(ctx.db, async db => {
     if (method !== 'POST') {
       const id = identifier(announcementId)
-      const previous = (await db.query<AnnouncementRow>('SELECT id,title,text,"isActive","updatedAt" FROM announcement WHERE id=$1 AND "userId" IS NULL FOR UPDATE', [id])).rows[0]
+      const previous = (await db.query<AnnouncementRow>('SELECT id,title,text,"isActive",display,"updatedAt" FROM announcement WHERE id=$1 AND "userId" IS NULL FOR UPDATE', [id])).rows[0]
       if (!previous) fail('公告不存在。', 404)
       const packed = packAnnouncement(previous)
       if (Object.hasOwn(ctx.body, 'version') && ctx.body.version !== packed.version
         || Object.hasOwn(ctx.body, 'updatedAt') && ctx.body.updatedAt !== packed.updatedAt) fail('公告已变化，请刷新后重新编辑。', 409)
-      const next = { title: title ?? previous.title, text: content ?? previous.text, isActive: method === 'DELETE' ? false : active ?? previous.isActive }
+      const next = { title: title ?? previous.title, text: content ?? previous.text, isActive: method === 'DELETE' ? false : active ?? previous.isActive,
+        display: popup === undefined ? previous.display : popup ? 'dialog' : previous.display === 'dialog' ? 'normal' : previous.display }
       const fields = (['title', 'text', 'isActive'] as const).filter(key => next[key] !== previous[key])
-      if (!fields.length) return method === 'DELETE' ? { ok: true, announcement: packed } : { announcement: packed }
-      const updated = (await db.query<AnnouncementRow>(`UPDATE announcement SET title=$2,text=$3,"isActive"=$4,"updatedAt"=NOW()
-        WHERE id=$1 AND "userId" IS NULL RETURNING id,title,text,"isActive","updatedAt"`, [id, next.title, next.text, next.isActive])).rows[0]!
-      await audit(ctx, db, method === 'DELETE' ? 'deleteAnnouncement' : 'updateAnnouncement', { announcementId: id, fields })
+      const changedFields: string[] = [...fields, ...(next.display !== previous.display ? ['popupEnabled'] : [])]
+      if (!changedFields.length) return method === 'DELETE' ? { ok: true, announcement: packed } : { announcement: packed }
+      const updated = (await db.query<AnnouncementRow>(`UPDATE announcement SET title=$2,text=$3,"isActive"=$4,display=$5,"updatedAt"=NOW()
+        WHERE id=$1 AND "userId" IS NULL RETURNING id,title,text,"isActive",display,"updatedAt"`, [id, next.title, next.text, next.isActive, next.display])).rows[0]!
+      await audit(ctx, db, method === 'DELETE' ? 'deleteAnnouncement' : 'updateAnnouncement', { announcementId: id, fields: changedFields })
       return method === 'DELETE' ? { ok: true, announcement: packAnnouncement(updated) } : { announcement: packAnnouncement(updated) }
     }
     const id = ctx.newId()
-    const row = (await db.query<AnnouncementRow>(`INSERT INTO announcement(id,title,text,"updatedAt") VALUES($1,$2,$3,NOW())
-      RETURNING id,title,text,"isActive","updatedAt"`, [id, title, content])).rows[0]!
+    const row = (await db.query<AnnouncementRow>(`INSERT INTO announcement(id,title,text,display,"updatedAt") VALUES($1,$2,$3,$4,NOW())
+      RETURNING id,title,text,"isActive",display,"updatedAt"`, [id, title, content, popup ? 'dialog' : 'normal'])).rows[0]!
     await audit(ctx, db, 'createAnnouncement', { announcementId: id })
     return { id, announcement: packAnnouncement(row) }
   })
@@ -521,8 +524,8 @@ async function announcements(ctx: RequestContext, announcementId?: string) {
 
 function packAnnouncement(row: AnnouncementRow) {
   const updatedAt = row.updatedAt ? new Date(row.updatedAt).toISOString() : null
-  return { id: row.id, title: row.title, text: row.text, isActive: row.isActive, updatedAt,
-    version: fingerprint([row.id, row.title, row.text, row.isActive, updatedAt]) }
+  return { id: row.id, title: row.title, text: row.text, isActive: row.isActive, popupEnabled: row.display === 'dialog', updatedAt,
+    version: fingerprint([row.id, row.title, row.text, row.isActive, updatedAt, row.display]) }
 }
 
 const auditLabels: Record<string, string> = {
@@ -543,7 +546,7 @@ function safeAuditDetails(type: string, input: unknown): Body {
     if (Array.isArray(input[key])) result[key] = input[key].filter((value): value is string => typeof value === 'string' && (allowed ? allowed.includes(value) : /^[a-zA-Z0-9]{1,32}$/.test(value))).slice(0, 100)
   }
   if (['createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement'].includes(type)) {
-    copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive'])
+    copyId('announcementId'); copyList('fields', ['title', 'text', 'isActive', 'popupEnabled'])
   } else if (type === 'communityWorkEdit' || type === 'communityWorkDelete') {
     copyId('submissionId'); copyId('userId'); copyNumber('version')
   } else if (type === 'communityReview') {

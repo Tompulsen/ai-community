@@ -23,6 +23,20 @@ function context({ method = 'GET', path = '/api/works', body, user, query = asyn
   };
 }
 
+test('popup announcements filter before the limit and retain public visibility and expiry restrictions', async () => {
+  for (const popup of [false, true]) {
+    let statement, values
+    const ctx = context({ path: '/api/announcements' + (popup ? '?popup=1' : ''), query: async (sql, args) => { statement = sql; values = args; return { rows: [] } } })
+    assert.equal(await handleContent(ctx), true)
+    assert.deepEqual(values, [null, popup])
+    assert.match(statement, /WHERE "isActive"/)
+    assert.match(statement, /"autoArchiveAt">NOW\(\)/)
+    assert.match(statement, /NOT "forExistingUsers"/)
+    assert.match(statement, /NOT \$2::boolean OR \("userId" IS NULL AND display='dialog'\)/)
+    assert(statement.indexOf("display='dialog'") < statement.indexOf('LIMIT 100'))
+  }
+})
+
 test('public content query preserves visitor, visibility, account and blocking constraints', async () => {
   let statement, values;
   const ctx = context({ query: async (sql, parameters) => { statement = sql; values = parameters; return { rows: [] }; } });

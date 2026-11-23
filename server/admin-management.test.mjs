@@ -19,7 +19,7 @@ function person(id, username = `internal${id}`) {
 }
 function assignment(id, userId, roleId, expiresAt = null) { return { id, userId, roleId, expiresAt } }
 function announcement(id, overrides = {}) {
-  return { id, title: `Announcement ${id}`, text: 'Public text', userId: null, isActive: true,
+  return { id, title: `Announcement ${id}`, text: 'Public text', userId: null, isActive: true, display: 'normal',
     updatedAt: '2026-11-13T00:00:00.000Z', ...overrides }
 }
 function fixture(options = {}) {
@@ -74,14 +74,14 @@ function fixture(options = {}) {
           && (!parameters[3] || row.id < parameters[3]))).slice(0, 31)) }
     }
     if (statement.startsWith('INSERT INTO announcement')) {
-      const row = announcement(parameters[0], { title: parameters[1], text: parameters[2], updatedAt: new Date(++clock).toISOString() })
+      const row = announcement(parameters[0], { title: parameters[1], text: parameters[2], display: parameters[3], updatedAt: new Date(++clock).toISOString() })
       state.announcements.push(row)
       return { rows: [structuredClone(row)], rowCount: 1 }
     }
     if (statement.startsWith('UPDATE announcement')) {
       const row = state.announcements.find(item => item.id === parameters[0] && item.userId === null)
       if (!row) return { rows: [], rowCount: 0 }
-      Object.assign(row, { title: parameters[1], text: parameters[2], isActive: parameters[3], updatedAt: new Date(++clock).toISOString() })
+      Object.assign(row, { title: parameters[1], text: parameters[2], isActive: parameters[3], display: parameters[4], updatedAt: new Date(++clock).toISOString() })
       return { rows: [structuredClone(row)], rowCount: 1 }
     }
     if (statement.startsWith('INSERT INTO moderation_log')) {
@@ -194,6 +194,33 @@ test('announcement updates require optimistic versions, lock rows, reject stale 
   const latest = await f.request('/api/admin/announcements/a1', 'PATCH', { title: 'Latest', updatedAt: changed.announcement.updatedAt })
   assert.equal(latest.announcement.title, 'Latest')
   assert(f.statements.some(item => item.sql.includes('FROM announcement') && item.sql.includes('FOR UPDATE')))
+})
+
+test('announcement popup settings reuse display, preserve versions and audit atomically', async () => {
+  const f = fixture({ state: { announcements: [announcement('a1'), announcement('private1', { userId: '17' }), announcement('banner1', { display: 'banner' })] } })
+  const old = (await f.request('/api/admin/announcements')).items.find(item => item.id === 'a1')
+  assert.equal(old.popupEnabled, false)
+  const enabled = (await f.request('/api/admin/announcements/a1', 'PATCH', { popupEnabled: true, version: old.version })).announcement
+  assert.equal(enabled.popupEnabled, true)
+  assert.equal(f.state.announcements[0].display, 'dialog')
+  assert.deepEqual(f.state.audits.at(-1).info.fields, ['popupEnabled'])
+  await assert.rejects(f.request('/api/admin/announcements/a1', 'PATCH', { popupEnabled: false, version: old.version }), { statusCode: 409 })
+  for (const popupEnabled of ['true', 1, null]) await assert.rejects(f.request('/api/admin/announcements/a1', 'PATCH', { popupEnabled, version: enabled.version }), { statusCode: 400 })
+  await assert.rejects(f.request('/api/admin/announcements/private1', 'PATCH', { popupEnabled: true, version: enabled.version }), { statusCode: 404 })
+  const disabled = (await f.request('/api/admin/announcements/a1', 'PATCH', { isActive: false, version: enabled.version })).announcement
+  assert.equal(disabled.popupEnabled, true)
+  assert.equal(disabled.isActive, false)
+  const normal = (await f.request('/api/admin/announcements/a1', 'PATCH', { popupEnabled: false, version: disabled.version })).announcement
+  assert.equal(normal.popupEnabled, false)
+  assert.equal(f.state.announcements[0].display, 'normal')
+  const banner = (await f.request('/api/admin/announcements')).items.find(item => item.id === 'banner1')
+  await f.request('/api/admin/announcements/banner1', 'PATCH', { title: 'Changed', popupEnabled: false, version: banner.version })
+  assert.equal(f.state.announcements[2].display, 'banner')
+  const created = (await f.request('/api/admin/announcements', 'POST', { title: 'Popup', text: 'Hello', popupEnabled: true })).announcement
+  assert.equal(created.popupEnabled, true)
+  f.state.failAudit = true
+  await assert.rejects(f.request(`/api/admin/announcements/${created.id}`, 'PATCH', { popupEnabled: false, version: created.version }), /audit insert failed/)
+  assert.equal(f.state.announcements.find(item => item.id === created.id).display, 'dialog')
 })
 
 test('announcement DELETE remains an idempotent deactivation and never edits private notifications', async () => {

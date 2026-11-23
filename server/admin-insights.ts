@@ -61,7 +61,7 @@ function logSummary(type: string, value: unknown) {
   else if (type === 'updateAnnouncement') {
     if (validId(info.announcementId)) add('公告编号', info.announcementId)
     const fields = Array.isArray(info.fields) ? info.fields : []
-    add('变更项', Object.entries({ title: '标题', text: '正文', isActive: '启用状态' })
+    add('变更项', Object.entries({ title: '标题', text: '正文', isActive: '启用状态', popupEnabled: '打开网站时弹出' })
       .filter(([key]) => fields.includes(key)).map(([, label]) => label).join('、'))
     target = { label: '公告管理', to: '/admin?tab=announcements' }
   } else if (type === 'updateCommunityRoles') {

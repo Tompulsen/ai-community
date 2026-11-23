@@ -1514,9 +1514,11 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
       avatar: (row.name || row.username).slice(0, 1), avatarUrl: row.avatarId ? `/legacy-files/${row.avatarId}?variant=thumbnail` : null, count: row.count, followed: row.followed, requested: Boolean(row.requested), followsYou: Boolean(row.followsYou), isLocked: Boolean(row.isLocked), bio: row.bio || '' })) });
   }
   if (path === '/api/announcements' && method === 'GET') {
+    const popup = ctx.url.searchParams.get('popup') === '1';
     const result = await ctx.db.query<AnnouncementRow>(`SELECT id,title,text,icon,display,"updatedAt" FROM announcement
       WHERE "isActive" AND ("userId" IS NULL OR "userId"=$1) AND ("autoArchiveAt" IS NULL OR "autoArchiveAt">NOW())
-      AND (NOT "forExistingUsers" OR "userId"=$1) ORDER BY id DESC LIMIT 100`, [viewer(ctx)]);
+      AND (NOT "forExistingUsers" OR "userId"=$1)
+      AND (NOT $2::boolean OR ("userId" IS NULL AND display='dialog')) ORDER BY id DESC LIMIT 100`, [viewer(ctx), popup]);
     return send(ctx, 200, { items: result.rows });
   }
   return false;
