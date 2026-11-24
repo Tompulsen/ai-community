@@ -2,7 +2,7 @@ import { open, realpath } from 'node:fs/promises'
 import { confinedFile } from './media.ts'
 import { readSkillPackage } from './skill-package.ts'
 import { httpError } from './auth.ts'
-import { skillLimits } from '../shared/community-skills.ts'
+import { skillLimits, skillKinds, type SkillKind } from '../shared/community-skills.ts'
 import type { Queryable, RequestContext } from './types.ts'
 import { AccountRequest } from './native-account/index.ts'
 import { applicationRequest } from './web-request.ts'
@@ -10,15 +10,15 @@ import { readAccountModelCatalogue, classifyModel } from './native-account/model
 import { readModelTypes } from '../shared/studio/model-types.ts'
 
 export type SkillModelCatalogue = typeof readAccountModelCatalogue
-export async function validateWorkSkillModel(ctx: RequestContext, group: string, model: string, catalogue = readAccountModelCatalogue) {
-  if (!ctx.user?.accountId) throw httpError(401, '请登录章鱼账号后选择文本分组。')
+export async function validateWorkSkillModel(ctx: RequestContext, group: string, model: string, catalogue = readAccountModelCatalogue, expectedKind: SkillKind = 'text') {
+  if (!ctx.user?.accountId) throw httpError(401, '请登录章鱼账号后选择模型分组。')
   const req = new AccountRequest(applicationRequest(ctx.request, ctx.reply, ctx.config.url))
   req.headers.set('x-new-api-user', ctx.user.accountId)
   const available = await catalogue(req)
   const found = available.items.find(item => item.id === model && item.groups.includes(group))
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const kind = readModelTypes(options?.communityModelTypes).find(item => item.id === model)?.kind ?? classifyModel(model)
-  if (!found || kind !== 'text') throw httpError(400, '请选择当前分组中可用的文本模型。')
+  if (!found || kind !== expectedKind) throw httpError(400, `请选择当前分组中可用的${skillKinds[expectedKind]}模型。`)
 }
 
 // Keep the source in its existing drive file; approval remains owned by the work.

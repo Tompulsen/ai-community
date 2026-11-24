@@ -10,7 +10,7 @@ const mediaEntrySchema = z.object({
     ratio: z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/),
     manualSize: z.union([z.literal(''), z.string().regex(/^(?:auto|[1-9]\d{0,4}x[1-9]\d{0,4}|[124]K)$/)]),
     count: z.number().int().min(1).max(16), duration: z.number().int().min(1).max(3600),
-    skills: z.array(z.object({ id: z.string().regex(/^community-[a-zA-Z0-9]{1,32}$/), sha256: z.string().regex(/^[a-f0-9]{64}$/) })).max(10).optional(),
+    skills: z.array(z.object({ id: z.string().regex(/^(?:community|work)-[a-zA-Z0-9]{1,32}$/), sha256: z.string().regex(/^[a-f0-9]{64}$/) })).max(10).optional(),
     apiFormat: modelApiFormatSchema.optional(),
     protocol: z.enum(['auto', 'openai', 'sync', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
   }).optional(),

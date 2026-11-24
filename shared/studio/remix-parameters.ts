@@ -44,8 +44,6 @@ export const remixParametersSchema = z.object({
   videoOptions: publicOptions(videoOptionsSchema.omit({ openaiReferenceSource: true, openaiImageUrl: true, openaiLastImageUrl: true, openaiFileId: true, customParameters: true })).extend({ customParameters: customParameters.optional() }).optional(),
   chatOptions: publicOptions(chatOptionsSchema.omit({ messages: true, mcpServers: true })).optional(),
 }).superRefine((value, ctx) => {
-  if (value.kind !== 'text' && value.skills?.some(skill => skill.id.startsWith('work-')))
-    ctx.addIssue({ code: 'custom', message: '技能与作品类型不匹配。' })
   if (value.kind !== 'image' && value.imageOptions || value.kind !== 'video' && value.videoOptions || value.kind !== 'text' && value.chatOptions)
     ctx.addIssue({ code: 'custom', message: '生成参数与作品类型不匹配。' })
   if (value.apiFormat && value.apiFormat !== 'auto' && !(modelApiFormats[value.kind] as readonly string[]).includes(value.apiFormat))

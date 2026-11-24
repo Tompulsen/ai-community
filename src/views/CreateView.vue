@@ -92,18 +92,19 @@ watch([() => route.query.conversation, workspace, () => chats.ready, () => creat
   await nextTick()
   if (chats.activeId === id && !entryStart) workspace.value?.openConversation()
 }, { flush: 'post' })
-let revision = 0
-let skillDraft: { owner: string; work: string; chat: string } | undefined
+let revision = 0, skillImportNavigation = 0
+let skillDraft: { owner: string; work: string; chat: string; sha256: string; kind: string; model: string; group: string } | undefined
 watch([() => route.query.skill, () => session.user?.id, () => chats.ready, () => creation.loaded, kind, skillImportRetry], async ([id, owner], _previous, onCleanup) => {
   let cancelled = false
+  const navigation = skillImportNavigation
   onCleanup(() => { cancelled = true })
   const requestedKind = kind.value
-  const current = () => !cancelled && entryLive && owner === session.user?.id && route.query.skill === id && kind.value === requestedKind
+  const current = () => !cancelled && entryLive && owner === session.user?.id && route.query.skill === id && kind.value === requestedKind && navigation === skillImportNavigation
   skillImportLoading.value = false; skillImportError.value = ''
   if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded) return
   skillImportLoading.value = true
   try {
-    if (kind.value !== 'text' || !/^[a-zA-Z0-9]{1,32}$/.test(id)) throw new Error('技能调用入口无效，请返回作品后重试。')
+    if (!/^[a-zA-Z0-9]{1,32}$/.test(id)) throw new Error('技能调用入口无效，请返回作品后重试。')
     const [{ work }, catalog] = await Promise.all([
       api<{ work: Work }>(`/api/works/${id}`, { expectedAccount: owner, signal: AbortSignal.timeout(20000) }),
       api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: session.user?.accountId || owner, signal: AbortSignal.timeout(20000) }),
@@ -112,6 +113,9 @@ watch([() => route.query.skill, () => session.user?.id, () => chats.ready, () =>
     const skill = catalog.items.find(item => item.id === work.skillReference?.id && item.sha256 === work.skillReference.sha256)
     const group = work.generation?.skill?.group
     if (!skill || !group || !work.model) throw new Error('技能已更新、下架或尚未完成调用配置，请返回作品重新确认。')
+    const skillKind = work.generation?.skill?.kind || 'text'
+    if ((skill.kind || 'text') !== skillKind) throw new Error('技能类型已变化，请返回作品重新确认。')
+    if (requestedKind !== skillKind) { await router.replace({ path: `/create/${skillKind}`, query: { skill: id } }); return }
     await loadCreationGroups(skillImportRetry.value > 0)
     if (!current()) return
     await waitCreationGroup()
@@ -121,12 +125,17 @@ watch([() => route.query.skill, () => session.user?.id, () => chats.ready, () =>
     if (!current()) return
     if (skillImportRetry.value > 0) await loadCreationModels(true)
     if (!current()) return
-    if (creation.groupsError || creation.modelsError || creation.selectedGroup !== group || !modelsForKind('text').some(item => item.id === work.model)) throw new Error('该技能的文本模型暂不可用，请稍后重试。')
-    chats.skills = catalog.items; modelChoices.text = ''
-    let next = skillDraft?.owner === owner && skillDraft.work === id ? chats.sessions.find(item => item.id === skillDraft!.chat) : undefined
+    if (creation.groupsError || creation.modelsError || creation.selectedGroup !== group || !modelsForKind(requestedKind).some(item => item.id === work.model)) throw new Error('该技能的模型暂不可用，请稍后重试。')
+    chats.skills = catalog.items; modelChoices[requestedKind] = ''
+    let next = skillDraft?.owner === owner && skillDraft.work === id && skillDraft.sha256 === skill.sha256 && skillDraft.kind === requestedKind && skillDraft.model === work.model && skillDraft.group === group ? chats.sessions.find(item => item.id === skillDraft!.chat) : undefined
     if (!next) {
-      next = newChat('text'); skillDraft = { owner, work: id, chat: next.id }
-      Object.assign(next, { topic: work.title, renamed: true, textModel: work.model, skillIds: [skill.id], draft: '', formatAutomatic: true })
+      next = newChat(requestedKind); skillDraft = { owner, work: id, chat: next.id, sha256: skill.sha256, kind: requestedKind, model: work.model, group }
+      Object.assign(next, { topic: work.title, renamed: true, draft: '' })
+      if (requestedKind === 'text') Object.assign(next, { textModel: work.model, skillIds: [skill.id], formatAutomatic: true })
+      else {
+        next.mediaSkills = { [requestedKind]: [{ id: skill.id, sha256: skill.sha256 }] }
+        next.mediaDrafts = { [requestedKind]: { model: work.model, prompt: '', references: [], protocol: 'auto', apiFormat: 'auto' } }
+      }
     }
     activateConversation(next.id)
     await nextTick(); await saveChats(true)
@@ -204,11 +213,16 @@ async function cancelRemix() {
 function switchKind(value: StudioKind) {
   sidebar.value?.close(); accountTool.value = ''
   const query = { ...route.query }
-  if (value !== 'text') delete query.skill
+  if (value !== kind.value) delete query.skill
   void router.replace({ path: `/create/${value}`, query })
 }
 function openAccount(value: 'prices' | 'logs' | 'keys') { accountTool.value = value; accountMenu.value?.close() }
-function newCreation() { sidebar.value?.close(); accountMenu.value?.close(); accountTool.value = ''; pendingNew.value = true }
+async function newCreation() {
+  skillImportNavigation++
+  sidebar.value?.close(); accountMenu.value?.close(); accountTool.value = ''
+  if (route.query.skill) await router.replace({ query: {} })
+  pendingNew.value = true
+}
 function clearContext() {
   accountMenu.value?.close()
   if (kind.value === 'text') void chat.value?.clearContext()
@@ -233,6 +247,7 @@ function reuse(task: CreationTask) {
 }
 function createImage() { mobileGallery.value?.close(); switchKind('image'); pendingNew.value = true }
 function openConversation(id: string) {
+  skillImportNavigation++
   const selected = activateConversation(id)
   if (!selected) return
   const mode = selected.composerKind || conversationKind(selected)
@@ -354,13 +369,13 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <div v-if="sessionStatus === 'guest'" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink><RouterLink to="/discover" class="text-link"><ArrowLeft :size="16" />返回社区</RouterLink></div>
     <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
-      <p v-if="skillImportLoading" role="status">正在选择技能与文本模型…</p>
+      <p v-if="skillImportLoading" role="status">正在选择技能与对应模型…</p>
       <p v-if="skillImportError" class="form-error" role="alert">{{ skillImportError }} <button type="button" class="text-link" @click="skillImportRetry++">重新读取技能</button><RouterLink :to="'/work/' + route.query.skill" class="text-link">返回技能作品</RouterLink></p>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <p v-if="initialSaveIssue && !accountTool" class="form-error" role="alert">{{ initialSaveIssue }} <button type="button" class="text-link" :disabled="retryingSave" @click="retryInitialSave">重试保存</button></p>
       <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
+      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="(files, prompt) => importRemix(files, prompt, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>

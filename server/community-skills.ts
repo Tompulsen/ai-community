@@ -45,14 +45,16 @@ export async function approvedCommunitySkills(db: Queryable) {
   return rows.map(row => ({ ...row, id: `community-${row.id}`, body: '' }))
 }
 
-export async function mediaSkillPrompt(db: Queryable, kind: SkillKind, prompt: string, skills?: SkillReference[]) {
+export async function mediaSkillPrompt(db: Queryable, kind: SkillKind, prompt: string, skills?: SkillReference[], workInstructions: ReadonlyMap<string, string> = new Map()) {
   if (!skills?.length) return prompt
   if (kind === 'text' || skills.length > maxSelectedSkills) invalid('当前创作类型或技能数量无效。')
-  const { rows } = await db.query<{ id: string; kind: SkillKind; body: string; sha256: string }>(
+  const community = skills.filter(skill => skill.id.startsWith('community-'))
+  const { rows } = community.length ? await db.query<{ id: string; kind: SkillKind; body: string; sha256: string }>(
     `SELECT s.id,s.kind,s.body,s.sha256 FROM community_skill s JOIN "user" u ON u.id=s."authorId"
      WHERE s.id=ANY($1::varchar[]) AND s.status='published' AND NOT u."isDeleted" AND NOT u."isSuspended"`,
-    [skills.map(skill => skill.id.slice('community-'.length))])
+    [community.map(skill => skill.id.slice('community-'.length))]) : { rows: [] }
   const instructions = skills.map(reference => {
+    if (reference.id.startsWith('work-') && workInstructions.has(reference.id)) return workInstructions.get(reference.id)!
     const skill = rows.find(row => `community-${row.id}` === reference.id)
     if (!skill || skill.kind !== kind || skill.sha256 !== reference.sha256 || createHash('sha256').update(skill.body).digest('hex') !== reference.sha256)
       invalid('技能已更新、下架或不适用于当前创作类型，请刷新技能列表后重新选择。')

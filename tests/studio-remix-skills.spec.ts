@@ -19,7 +19,7 @@ async function fixture(page: Page, kind: Kind = 'image', model = { image: 'gpt-i
   const state = { failCatalog: false, delayCatalog: 0, catalogReads: 0, skills: ['A', 'B'].map(letter => ({
     id: `community-skill${letter}`, name: `技能${letter}`, description: '测试生成技能', kind, sha256, body, status: 'published',
   })) }
-  if (kind === 'text') state.skills.push({ ...state.skills[0]!, ...privateReference, name: '私密技能' })
+  state.skills.push({ ...state.skills[0]!, ...privateReference, name: '私密技能' })
   const source: any = { id: 'skillsource', title: '原作技能测试', authorId: '26', author: '原作者', avatar: '原',
     kind: kind === 'text' ? 'resource' : kind, prompt: '海边日落', model, version: 1, tags: [], status: 'published', date: '2026-11-24',
     likes: 0, owned: false, saved: false, liked: false, fileIds: ['cover'], cover: '/legacy-files/cover',
@@ -38,7 +38,7 @@ async function fixture(page: Page, kind: Kind = 'image', model = { image: 'gpt-i
       const data = route.request().postDataJSON(); published.push(data)
       return route.fulfill({ json: { work: { id: 'published1', title: data.title, status: 'pending' } } })
     }
-    return route.fulfill({ json: path === '/api/works/privateSkill' ? { work: { skillReference: privateReference } }
+    return route.fulfill({ json: path === '/api/works/privateSkill' ? { work: { skillReference: privateReference, generation: { skill: { kind } } } }
       : path === '/api/works/skillsource' ? { work: source } : { items: [], viewsCount: 1 } })
   })
   await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, currency: '积分', autoGroups: ['auto'], rows: [{ model, group: 'auto', price: '130 积分', requestPrice: 130, billing: '每次请求' }] } } }))
@@ -237,3 +237,19 @@ for (const kind of ['image', 'text'] as const) {
     expect(result.generated).toHaveLength(0)
   })
 }
+
+
+for (const kind of ['image', 'video'] as const) test(`${kind} private and community skills persist through publication and remix`, async ({ page }) => {
+  const result = await fixture(page, kind)
+  await page.goto(`/create/${kind}`); await select(page, ['技能A', '私密技能']); await send(page, kind)
+  await expect.poll(() => result.generated.length).toBe(1)
+  expect(result.generated[0].skills).toEqual([reference, privateReference])
+  expect(result.generated[0].prompt).toBe('海边日落')
+  await expect(page.getByRole('button', { name: '发布作品', exact: true }).first()).toBeEnabled()
+  await publish(page)
+  expect(result.published[0].generation.parameters.skills).toEqual([reference, privateReference])
+  result.source.generation.parameters.skills = result.published[0].generation.parameters.skills
+  await importRemix(page); await send(page, kind)
+  await expect.poll(() => result.generated.length).toBe(2)
+  expect(result.generated[1].skills).toEqual([reference, privateReference])
+})

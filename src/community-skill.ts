@@ -6,9 +6,9 @@ import type { CommunitySkill } from '../shared/community-skills'
 export async function resolveCommunitySkill(skill: Skill, expectedAccount?: string, kind: SkillKind = 'text'): Promise<Skill> {
   if ((skill.kind || 'text') !== kind) throw new Error('技能类型已变化，请重新选择适合当前创作类型的技能。')
   if (skill.id.startsWith('work-')) {
-    if (kind !== 'text' || !/^work-[a-zA-Z0-9]{1,32}$/.test(skill.id)) throw new Error('技能作品编号或创作类型无效。')
+    if (!/^work-[a-zA-Z0-9]{1,32}$/.test(skill.id)) throw new Error('技能作品编号或创作类型无效。')
     const { work } = await api<{ work: import('./data').Work }>(`/api/works/${skill.id.slice(5)}`, { expectedAccount })
-    if (work.skillReference?.sha256 !== skill.sha256) throw new Error('技能已更新、下架或尚未通过审核，请重新选择。')
+    if (work.skillReference?.sha256 !== skill.sha256 || (work.generation?.skill?.kind || 'text') !== kind) throw new Error('技能已更新、下架或尚未通过审核，请重新选择。')
     return { ...skill, body: '' }
   }
   if (!skill.id.startsWith('community-')) return skill
@@ -52,7 +52,7 @@ export async function resolveMediaSkills(selected: SkillReference[], kind: 'imag
     if (!skill) throw new Error('技能已下架或不可用，请刷新技能列表后重新选择。')
     if (skill.sha256 !== sha256) throw new Error('所选技能已更新，请刷新技能列表并重新勾选后生成。')
     const document = await resolveCommunitySkill(skill, expectedAccount, kind)
-    await verifySkillDocument(document.body, document.sha256)
+    if (!id.startsWith('work-')) await verifySkillDocument(document.body, document.sha256)
     return { id, sha256: document.sha256 }
   }))
 }

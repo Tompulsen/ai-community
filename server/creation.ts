@@ -43,11 +43,13 @@ const requestTtl = 30 * 86400
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。' }
+const workSkillError = '生成服务未能完成本次技能调用，请核对任务与使用记录。'
 const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED'])
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
 type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string }
 interface TrackedRequest {
   fingerprint: string
+  hasWorkSkills?: boolean
   kind: CreationKind
   result: Result
   deadline?: number
@@ -63,7 +65,7 @@ interface PollCredentials {
   filesRoot?: string
 }
 const pendingTasks = 'community-next:creation:pending'
-interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol }
+interface TaskOwner { tokenId: number; protocol: CreationTaskProtocol; hasWorkSkills?: boolean }
 interface CreationServices {
   credentials: typeof resolveRelayCredentials
   modelCatalogue: typeof readAccountModelCatalogue
@@ -133,7 +135,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
           return
         }
         const result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
-          cached.result.protocol, cached.result.upstreamId)
+          cached.result.protocol, cached.result.upstreamId, cached.hasWorkSkills)
         cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
         if (result.status !== 'pending') delete cached.tracking
         if (result.mediaPath) {
@@ -208,8 +210,8 @@ function mediaKey(ctx: RequestContext, path: string) {
 function mediaPath(value: string) {
   return /^(?:videos|tasks)\//.test(value) ? `v1/${value}` : value
 }
-async function remember(ctx: RequestContext, kind: CreationKind, result: Result) {
-  const owner: TaskOwner = { tokenId: result.tokenId, protocol: result.protocol }
+async function remember(ctx: RequestContext, kind: CreationKind, result: Result, hasWorkSkills = false) {
+  const owner: TaskOwner = { tokenId: result.tokenId, protocol: result.protocol, ...(hasWorkSkills ? { hasWorkSkills: true } : {}) }
   if (result.upstreamId) await ctx.redis.set(taskKey(ctx, kind, result.upstreamId, result.protocol), JSON.stringify(owner), 'EX', taskTtl)
   if (result.mediaPath) await ctx.redis.set(mediaKey(ctx, mediaPath(result.mediaPath)), JSON.stringify(owner), 'EX', taskTtl)
 }
@@ -222,10 +224,10 @@ function ownedResponse(value: unknown, credentials: Credentials, requireOwner = 
   if (userId !== undefined && String(userId) !== String(credentials.userId))
     throw httpError(403, '此任务不属于当前章鱼账号。')
 }
-function responseResult(kind: CreationKind, value: unknown, credentials: Credentials, protocol: CreationTaskProtocol, id?: string): Result {
+function responseResult(kind: CreationKind, value: unknown, credentials: Credentials, protocol: CreationTaskProtocol, id?: string, hasWorkSkills = false): Result {
   ownedResponse(value, credentials)
   const result = normalizeCreationTask(kind, value, id, protocol)
-  if (result.error) result.error = message(result.error, credentials.apiKey)
+  if (result.error) result.error = hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey)
   return { ...result, tokenId: credentials.tokenId, protocol }
 }
 
@@ -253,8 +255,8 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
   const path = creationTaskPath(kind, id, protocol)
   const saved = await ctx.redis.get(taskKey(ctx, kind, id, protocol))
   const requestedToken = ctx.url.searchParams.get('tokenId')
-  if (saved) {
-    const owner = JSON.parse(saved) as TaskOwner
+  const owner: TaskOwner | null = saved ? JSON.parse(saved) as TaskOwner : null
+  if (owner) {
     if (requestedToken && requestedToken !== String(owner.tokenId)) throw httpError(403, '任务密钥与原始记录不一致。')
     req.headers.set('x-new-api-token', String(owner.tokenId))
   } else if (!requestedToken) throw httpError(409, '旧任务缺少原始密钥编号，请保留记录并核对。')
@@ -269,8 +271,9 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
     const rows = Array.isArray(artifacts) ? artifacts : record(artifacts) ? artifacts.data ?? artifacts.artifacts : []
     data = { ...details, artifacts: Array.isArray(rows) ? rows : [] }
   }
-  const result = responseResult(kind, data, credentials, protocol, id)
-  await remember(ctx, kind, result)
+  const hasWorkSkills = owner?.hasWorkSkills ?? !saved
+  const result = responseResult(kind, data, credentials, protocol, id, hasWorkSkills)
+  await remember(ctx, kind, result, hasWorkSkills)
   return result
 }
 
@@ -367,7 +370,7 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
   if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline)
     result = { ...result, ...uncertain }
   if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
-    await remember(ctx, cached.kind, result).catch(() => {})
+    await remember(ctx, cached.kind, result, cached.hasWorkSkills === true).catch(() => {})
   }
   return result
 }
@@ -382,11 +385,13 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return cachedResult(ctx, cached, key)
   }
-  if (input.kind === 'text' && input.skills?.length) {
-    const instructions = await workSkillInstructions(ctx, input.skills)
+  const workSkills = input.skills?.filter(skill => skill.id.startsWith('work-')) || []
+  const instructions = await workSkillInstructions(ctx, workSkills, input.kind)
+  const hasWorkSkills = workSkills.length > 0
+  if (input.kind === 'text' && instructions.length) {
     const options = input.chatOptions || chatOptionsSchema.parse({ messages: [{ role: 'user', content: input.prompt }] })
     input.chatOptions = { ...options, messages: [...instructions.map(content => ({ role: 'system' as const, content })), ...options.messages] }
-  } else input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills)
+  } else input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills, new Map(workSkills.map((skill, index) => [skill.id, instructions[index]!])))
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
   input = resolveCreationModelSettings(input, setting)
@@ -409,7 +414,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
   if (background && getNewApiConfig().secret.length < 32) throw httpError(503, '任务服务配置不完整，请联系管理员。')
-  const pending: TrackedRequest = { fingerprint, kind: input.kind, result: { status: 'pending', outputs: [], requestId: input.requestId,
+  const pending: TrackedRequest = { fingerprint, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
     deadline: Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : 195000),
     ...(background ? { background: true, filesRoot: ctx.filesRoot } : {}) }
@@ -445,7 +450,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
         ]).get(data.detail) : undefined
       const rejected = admission?.status === response.status ? admission.error : undefined
       result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: message(rejected || (!input.skills?.some(skill => skill.id.startsWith('work-')) && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`), credentials.apiKey),
+        error: message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`), credentials.apiKey),
         tokenId: credentials.tokenId, protocol }
       } else {
         result = input.kind === 'text' && input.chatOptions
@@ -465,10 +470,11 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   } catch {
     result = { ...uncertain, tokenId: credentials.tokenId, protocol }
   }
+  if (hasWorkSkills && result.error) result.error = workSkillError
   if (apiFormat) result.apiFormat = apiFormat
   if (background) result.requestId = input.requestId
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
-  await remember(ctx, input.kind, result).catch(() => {})
+  await remember(ctx, input.kind, result, hasWorkSkills).catch(() => {})
   const tracked = { ...pending, result }
   if (background && result.status === 'pending' && result.upstreamId) {
     tracked.deadline = Date.now() + (input.kind === 'video' ? 7200000 : 1800000)

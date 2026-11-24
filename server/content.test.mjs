@@ -11,7 +11,7 @@ import { mkdtemp, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { byteRange, handleContent, hiddenByTime, legacyIdTime, normalizeRevision, publicVisibilitySql, readWorkCursor } from './content.ts';
+import { approvedWorkSkills, byteRange, handleContent, hiddenByTime, legacyIdTime, normalizeRevision, publicVisibilitySql, readWorkCursor } from './content.ts';
 import { mediaState, sniffType, uploadLimitsFor } from './media.ts';
 
 function context({ method = 'GET', path = '/api/works', body, user, query = async () => ({ rows: [] }) } = {}) {
@@ -182,7 +182,7 @@ test('new community publications require tags before any insert, including legac
 test('manual skill and media metadata survive without a prompt and preserve source-comment provenance on partial edits', () => {
   const skill = { platform: ' ComfyUI ', version: '0.3+', installation: 'Import workflow.json', secret: 'private' };
   const revision = normalizeRevision({ kind: 'resource', title: 'Workflow', skill });
-  assert.deepEqual(revision.generation.skill, { platform: 'ComfyUI', version: '0.3+', installation: 'Import workflow.json' });
+  assert.deepEqual(revision.generation.skill, { kind: 'text', platform: 'ComfyUI', version: '0.3+', installation: 'Import workflow.json' });
   const parameters = { version: 1, kind: 'image', size: '1024x1024' };
   assert.deepEqual(normalizeRevision({ kind: 'image', title: 'Image', parameters }).generation.parameters, parameters);
   const previous = { ...workRow, category: 'image', generation: { prompt: 'source', model: 'm', referenceFileIds: [], sourceWorkId: 'original1', shareToSource: true, parameters } };
@@ -299,7 +299,7 @@ test('skill metadata round-trips through detail, pending review and compact card
     const packed = ctx.result.payload.work ?? ctx.result.payload.items[0];
     assert.equal(packed.isSkill, true);
     if (path.includes('view=card')) assert.equal(packed.generation, undefined);
-    if (packed.generation) assert.deepEqual(packed.generation.skill, skill);
+    if (packed.generation) assert.deepEqual(packed.generation.skill, { kind: 'text', ...skill });
     assert(!JSON.stringify(packed).includes('hidden'));
   }
 });
@@ -613,9 +613,9 @@ test('published recipes retain bounded skill versions without disclosing skill c
   assert.deepEqual(normalize([{ ...reference, body: 'private instructions', files: ['private.zip'], apiKey: 'private' }]).skills, [reference]);
   assert.deepEqual(normalize([]).skills, []);
   assert.equal(normalize(undefined).skills, undefined);
-  assert.deepEqual(normalize([{ ...reference, id: 'work-resource1' }], 'text').skills, [{ ...reference, id: 'work-resource1' }]);
+  for (const kind of ['text', 'image', 'video']) assert.deepEqual(normalize([{ ...reference, id: 'work-resource1', body: 'private' }], kind).skills, [{ ...reference, id: 'work-resource1' }]);
   for (const skills of [[reference, reference], [{ ...reference, sha256: 'invalid' }], [{ ...reference, id: '../private' }],
-    [{ ...reference, id: 'work-resource1' }], Array.from({ length: 11 }, (_, i) => ({ ...reference, id: `community-skill${i}` }))]) {
+    Array.from({ length: 11 }, (_, i) => ({ ...reference, id: `community-skill${i}` }))]) {
     assert.throws(() => normalize(skills), error => error.statusCode === 400);
   }
 });
@@ -936,4 +936,35 @@ test('work search and tag filters retain work kind and visibility while matching
   assert.match(statement, /t.id =/);
   assert.doesNotMatch(statement, /t.category=/);
   assert(statement.includes(publicVisibilitySql));
+});
+
+
+test('published skills accept matching image and video model types and retain moderation', async t => {
+  for (const [kind, model] of [['image', 'gpt-image-2'], ['video', 'sora-2']]) {
+    const catalogue = async () => ({ items: [{ id: model, groups: ['media'] }] });
+    const f = await skillPublication(t);
+    f.ctx.body.skill = { ...f.skill, kind, group: 'media' };
+    f.ctx.body.model = model;
+    await handleContent(f.ctx, { modelCatalogue: catalogue });
+    const saved = f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters;
+    assert.equal(saved[12].skill.kind, kind);
+    assert.equal(saved[13], 'pending');
+    assert.equal(saved[14], 'before');
+    assert.equal(saved[12].skill.sourceSha256, f.pack.sha256);
+    const invalid = await skillPublication(t);
+    invalid.ctx.body.skill = { ...invalid.skill, kind: kind === 'image' ? 'video' : 'image', group: 'media' };
+    invalid.ctx.body.model = model;
+    await assert.rejects(handleContent(invalid.ctx, { modelCatalogue: catalogue }), { statusCode: 400 });
+    assert(!invalid.statements.some(({ sql }) => sql.startsWith('INSERT')));
+  }
+});
+
+
+test('approved work skill catalog keeps the published model kind and defaults legacy skills to text', async () => {
+  const rows = [undefined, 'text', 'image', 'video'].map((kind, index) => ({ id: String(index), title: 'Skill', text: 'Guide', model: 'model', generation: { skill: { kind, group: 'group', sourceSha256: 'a'.repeat(64) } } }));
+  const ctx = context({ user: { id: 'reader' }, query: async () => ({ rows }) });
+  const items = await approvedWorkSkills(ctx);
+  assert.deepEqual(items.map(item => item.kind), ['text', 'text', 'image', 'video']);
+  assert(items.every(item => item.body === '' && item.group === 'group'));
+  assert.throws(() => normalizeRevision({ kind: 'resource', title: 'Skill', skill: { kind: 'audio' } }), { statusCode: 400 });
 });

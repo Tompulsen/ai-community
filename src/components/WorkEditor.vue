@@ -6,6 +6,7 @@ import WorkAttachments from './WorkAttachments.vue'
 import PublicationTagPicker from './PublicationTagPicker.vue'
 import PublicationParameters from './PublicationParameters.vue'
 import { publicationFields, publicationParameters } from '../publication-parameters'
+import { skillKinds } from '../../shared/community-skills'
 import { type SkillDetails } from '../../shared/publication'
 import type { RemixParameters } from '../../shared/studio/remix-parameters'
 import { kindLabels, type Work, type WorkKind, type WorkTag } from '../data'
@@ -28,13 +29,13 @@ const isSkill = computed(() => draft.kind === 'resource' && !legacyResource.valu
 const kindLocked = computed(() => Boolean(props.work && (props.work.status !== 'draft' || props.work.generation?.skill || props.work.generation?.sourceWorkId || legacyResource.value)))
 const originalParameters = ref<RemixParameters>()
 const parameters = ref(publicationFields())
-const skill = ref<SkillDetails>({ platform: '', version: '', installation: '', sourcePublic: true })
+const skill = ref<SkillDetails>({ kind: 'text', platform: '', version: '', installation: '', sourcePublic: true })
 const cover = ref<UploadFile>(), coverInput = ref<HTMLInputElement>()
 const skillCatalog = ref<{ groups: CreationGroup[]; items: CreationModel[] }>({ groups: [], items: [] })
 const skillModelsLoading = ref(false), skillModelsError = ref('')
-const textModels = computed(() => skillCatalog.value.items.filter(item => item.configuredKind ? item.configuredKind === 'text' : item.kinds?.includes('text')))
-const skillGroups = computed(() => skillCatalog.value.groups.filter(group => textModels.value.some(model => model.groups?.includes(group.id))))
-const skillModels = computed(() => textModels.value.filter(model => model.groups?.includes(skill.value.group || '')))
+const typedModels = computed(() => skillCatalog.value.items.filter(item => item.configuredKind ? item.configuredKind === skill.value.kind : item.kinds?.includes(skill.value.kind)))
+const skillGroups = computed(() => skillCatalog.value.groups.filter(group => typedModels.value.some(model => model.groups?.includes(group.id))))
+const skillModels = computed(() => typedModels.value.filter(model => model.groups?.includes(skill.value.group || '')))
 let skillLoad = 0
 async function loadSkillModels() {
   const current = ++skillLoad, owner = session.user?.id
@@ -98,7 +99,7 @@ function fill(work?: Work | null) {
   legacyResource.value = work?.kind === 'resource' && !work.generation?.skill
   originalParameters.value = work?.generation?.parameters
   parameters.value = publicationFields(work?.generation?.parameters)
-  skill.value = { platform: '', version: '', installation: '', sourcePublic: true, ...work?.generation?.skill }
+  skill.value = { kind: 'text', platform: '', version: '', installation: '', sourcePublic: true, ...work?.generation?.skill }
   for (const { kind } of publicationTypes) delete typeDrafts[kind]
   tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
   if (extra.value) extra.value.open = false
@@ -147,7 +148,7 @@ function selectKind(kind: WorkKind) {
   cover.value = saved?.cover
   files.value = [...(saved?.files || [])]; references.value = [...(saved?.references || [])]
   parameters.value = saved ? { ...saved.parameters } : publicationFields()
-  skill.value = saved ? { ...saved.skill } : { platform: '', version: '', installation: '', sourcePublic: true }
+  skill.value = saved ? { ...saved.skill } : { kind: 'text', platform: '', version: '', installation: '', sourcePublic: true }
   error.value = ''; tagValidation.value = ''
 }
 function showUpload() { fileInput.value?.click() }
@@ -230,7 +231,7 @@ async function save(status: 'draft' | 'pending') {
   if (status !== 'draft' && isSkill.value) {
     if (!cover.value) { error.value = '请上传技能作品封面。'; return }
     if (files.value.length !== 1 || !/\.(md|zip)$/i.test(files.value[0]!.name)) { error.value = '请上传一个 SKILL.md 或 ZIP 技能包。'; return }
-    if (skillModelsLoading.value || skillModelsError.value || !skillGroups.value.some(group => group.id === skill.value.group) || !skillModels.value.some(model => model.id === draft.model)) { error.value = '请选择可用分组和组内文本模型。'; return }
+    if (skillModelsLoading.value || skillModelsError.value || !skillGroups.value.some(group => group.id === skill.value.group) || !skillModels.value.some(model => model.id === draft.model)) { error.value = '请选择可用分组和对应类型的模型。'; return }
     if (!draft.body.trim()) { error.value = '请填写技能使用说明。'; return }
   }
   tagValidation.value = ''
@@ -315,12 +316,13 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
             <p v-if="tagValidation" id="editor-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
           <section v-if="isSkill" class="skill-fields" aria-label="技能信息">
+            <label class="field"><span>适用模型类型（必选）</span><select v-model="skill.kind" class="control" @change="skill.group = undefined; draft.model = ''"><option v-for="(label, kind) in skillKinds" :key="kind" :value="kind">{{ label }}</option></select></label>
             <div class="editor-columns">
               <label class="field"><span>模型分组（必选）</span><select v-model="skill.group" class="control" :disabled="skillModelsLoading || !skillGroups.length" @change="draft.model = ''"><option :value="undefined">选择分组</option><option v-for="group in skillGroups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
-              <label class="field"><span>文本模型（必选）</span><select v-model="draft.model" class="control" :disabled="skillModelsLoading || !skillModels.length"><option value="">选择文本模型</option><option v-if="draft.model && !skillModels.some(item => item.id === draft.model)" :value="draft.model" disabled>原模型不可用，请重新选择</option><option v-for="model in skillModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option></select></label>
+              <label class="field"><span>{{ skillKinds[skill.kind] }}模型（必选）</span><select v-model="draft.model" class="control" :disabled="skillModelsLoading || !skillModels.length"><option value="">选择{{ skillKinds[skill.kind] }}模型</option><option v-if="draft.model && !skillModels.some(item => item.id === draft.model)" :value="draft.model" disabled>原模型不可用，请重新选择</option><option v-for="model in skillModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option></select></label>
             </div>
-            <p v-if="skillModelsLoading" class="form-note" role="status">正在读取可用文本模型…</p>
-            <p v-else-if="skillModelsError || !skillGroups.length" class="form-error" role="alert">{{ skillModelsError || '暂无可用文本分组，请确认账号模型权限。' }} <button type="button" class="text-link" @click="loadSkillModels">重新读取</button></p>
+            <p v-if="skillModelsLoading" class="form-note" role="status">正在读取可用模型…</p>
+            <p v-else-if="skillModelsError || !skillGroups.length" class="form-error" role="alert">{{ skillModelsError || `暂无可用${skillKinds[skill.kind]}分组，请确认账号模型权限。` }} <button type="button" class="text-link" @click="loadSkillModels">重新读取</button></p>
             <fieldset class="skill-sharing"><legend>技能源文件</legend><label><input v-model="skill.sourcePublic" type="radio" :value="true" /><span><strong>公开技能</strong><small>审核通过后，其他用户可以下载技能包并调用。</small></span></label><label><input v-model="skill.sourcePublic" type="radio" :value="false" /><span><strong>不公开技能</strong><small>其他用户可在工作台调用，不能查看或下载源文件。</small></span></label></fieldset>
             <p class="form-note">技能作品须经管理员审核后展示；修改后也需要重新审核。</p>
             <label class="field"><span>使用说明（必填）</span><textarea v-model="draft.body" class="control" rows="4" maxlength="20000" placeholder="介绍技能用途、使用步骤和运行条件" /></label>

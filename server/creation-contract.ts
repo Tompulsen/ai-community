@@ -113,7 +113,7 @@ export function validateCreationInput(value: unknown): CreationInput {
   const result: CreationInput = { kind: value.kind as CreationKind, model: value.model.trim(), prompt: value.prompt }
   if (value.skills !== undefined) {
     if (!Array.isArray(value.skills) || value.skills.length > maxSelectedSkills
-      || value.skills.some(skill => !record(skill) || typeof skill.id !== 'string' || !(result.kind === 'text' ? /^work-[a-zA-Z0-9]{1,32}$/ : /^community-[a-zA-Z0-9]{1,32}$/).test(skill.id)
+      || value.skills.some(skill => !record(skill) || typeof skill.id !== 'string' || !(result.kind === 'text' ? /^work-[a-zA-Z0-9]{1,32}$/ : /^(?:community|work)-[a-zA-Z0-9]{1,32}$/).test(skill.id)
         || typeof skill.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(skill.sha256))
       || new Set(value.skills.map(skill => skill.id)).size !== value.skills.length) invalid('所选技能无效，请重新选择。')
     result.skills = value.skills.map(skill => ({ id: skill.id, sha256: skill.sha256 }))

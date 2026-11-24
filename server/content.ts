@@ -24,7 +24,7 @@ import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
 import { skillDetailsSchema, skillFileType, skillFileName, type SkillDetails } from '../shared/publication.ts';
 import { readWorkSkillPackage, validateWorkSkillModel, type SkillModelCatalogue } from './skill-publication.ts';
-import { skillInstructions, type SkillReference } from '../shared/community-skills.ts';
+import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
@@ -637,16 +637,16 @@ export async function approvedWorkSkills(ctx: RequestContext) {
     `SELECT s.id,s.title,s.text,s.model,s.generation FROM community_submission s JOIN "user" u ON u.id=s."authorId"
      JOIN note n ON n.id=s."approvedNoteId" WHERE (${visibilitySql(ctx)}) AND s.status='approved'
      AND s.generation->'skill'->>'sourceSha256' ~ '^[a-f0-9]{64}$' AND s.generation->'skill'->>'sourceFileId' IS NOT NULL ORDER BY s.id DESC`, [viewer(ctx)]);
-  return rows.map(row => ({ id: 'work-' + row.id, name: row.title, kind: 'text' as const, description: row.text.slice(0, 1000), body: '',
+  return rows.map(row => ({ id: 'work-' + row.id, name: row.title, kind: row.generation.skill!.kind || 'text', description: row.text.slice(0, 1000), body: '',
     sha256: row.generation.skill!.sourceSha256!, group: row.generation.skill!.group, model: row.model }));
 }
 
-export async function workSkillInstructions(ctx: RequestContext, skills: SkillReference[] = []) {
+export async function workSkillInstructions(ctx: RequestContext, skills: SkillReference[] = [], kind: SkillKind = 'text') {
   const instructions: string[] = [];
   for (const reference of skills) {
     const row = await accessibleWork(ctx, reference.id.slice('work-'.length), { publicOnly: true });
     const skill = row.generation?.skill;
-    if (row.status !== 'approved' || !skill?.sourceFileId || !row.fileIds.includes(skill.sourceFileId) || skill.sourceSha256 !== reference.sha256) fail(409, '技能已更新、下架或尚未通过审核，请重新选择。');
+    if (row.status !== 'approved' || (skill?.kind || 'text') !== kind || !skill?.sourceFileId || !row.fileIds.includes(skill.sourceFileId) || skill.sourceSha256 !== reference.sha256) fail(409, '技能已更新、下架或尚未通过审核，请重新选择。');
     const pack = await readWorkSkillPackage(ctx, ctx.db, row.authorId, skill.sourceFileId);
     if (pack.sha256 !== reference.sha256) fail(409, '技能源文件已变化，请等待重新审核。');
     instructions.push(skillInstructions(pack.body));
@@ -711,7 +711,7 @@ async function validateRevision(ctx: RequestContext, db: Queryable, actorId: str
     const sources = attachments.filter(file => !file.type.startsWith('image/'));
     if (attachments.some(file => !file.type.startsWith('image/') && (!skillFileType(file.type) || !/\.(?:md|zip)$/i.test(file.name)))) fail(400, '请上传 SKILL.md 或包含 SKILL.md 的 ZIP 技能包。');
     if (!draft && (!revision.text.trim() || !skill.group || !revision.model || !skill.coverFileId || !attachments.some(file => file.id === skill.coverFileId && file.type.startsWith('image/')) || sources.length !== 1))
-      fail(400, '请选择分组和文本模型、上传一张封面及一个 SKILL.md / ZIP 技能包，并填写使用说明。');
+      fail(400, '请选择分组和对应类型的模型、上传一张封面及一个 SKILL.md / ZIP 技能包，并填写使用说明。');
     if (sources.length > 1) fail(400, '每件技能作品只能关联一个技能包。');
     if (skill.coverFileId && !attachments.some(file => file.id === skill.coverFileId && file.type.startsWith('image/'))) fail(400, '请上传当前作品的有效封面图片。');
     if (sources.length) {
@@ -838,7 +838,7 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
   if (body.status !== undefined && (typeof body.status !== 'string' || !['draft', 'pending', 'published'].includes(body.status))) fail(400, 'Invalid publication state');
   const draft = body.status === 'draft';
   const revision = normalizeRevision(body);
-  if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue);
+  if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue, revision.generation.skill.kind);
   const notifications: Parameters<typeof notifyUser>[1][] = [];
   if (destination === 'source-comment') {
     if (draft || revision.category === 'video' || !revision.generation?.sourceWorkId || !revision.generation.model || typeof body.resultId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.resultId)) fail(400, 'Invalid source comment');
@@ -904,7 +904,7 @@ async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: 
     revision.tagIds = previous.tagIds ?? row.tagIds;
     const isPublished = ['approved', 'published'].includes(row.status) && row.approvedNoteId;
     const draft = !isPublished && body.status === 'draft';
-    if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue);
+    if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue, revision.generation.skill.kind);
     const attachments = await validateRevision(ctx, db, row.authorId, revision, body, draft, row.approvedNoteId);
     if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
     const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';

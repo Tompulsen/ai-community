@@ -12,8 +12,8 @@ async function fixture(page: Page, type = 'image/jpeg') {
   await page.route('**/simple-preview.jpg', route => route.fulfill({ body: image, contentType: 'image/jpeg' }))
   await page.route('**/api/tags**', route => route.fulfill({ json: { items: ['image', 'video', 'resource'].flatMap(category => ['摄影', '插画', '角色', '海报'].map((name, index) => ({ id: `${category}tag${index}`, name, category }))) } }))
   await page.route('**/api/creation/models**', route => route.fulfill({ json: {
-    groups: [{ id: 'text', name: '文本分组' }, { id: 'vip', name: '高级文本' }, { id: 'images', name: '图片分组' }],
-    items: [{ id: 'chat-test', kinds: ['text'], groups: ['text'] }, { id: 'chat-vip', kinds: ['text'], groups: ['vip'] }, { id: 'gpt-image-2', kinds: ['image'], groups: ['text', 'images'] }],
+    groups: [{ id: 'text', name: '文本分组' }, { id: 'vip', name: '高级文本' }, { id: 'images', name: '图片分组' }, { id: 'videos', name: '视频分组' }],
+    items: [{ id: 'chat-test', kinds: ['text'], groups: ['text'] }, { id: 'chat-vip', kinds: ['text'], groups: ['vip'] }, { id: 'gpt-image-2', kinds: ['image'], groups: ['text', 'images'] }, { id: 'sora-2', kinds: ['video'], groups: ['videos'] }, { id: 'custom-model', kinds: ['text'], configuredKind: 'image', groups: ['images'] }],
   } }))
   await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 100, imagesMb: 20, videosMb: 100, filesMb: 20 } }))
   await page.route('**/api/uploads', route => {
@@ -384,3 +384,34 @@ test('editing a published skill restores its metadata and saves a partial revisi
   expect(state.writes[0]).toMatchObject({ title: '更新技能标题', kind: 'resource', skill, fileIds: ['cover1', 'workflow1'], body: '加载后运行', version: 3 })
   expect(state.writes[0]).not.toHaveProperty('generation')
 })
+
+
+for (const [kind, label, group, model, width] of [['image', '图片', 'images', 'gpt-image-2', 320], ['video', '视频', 'videos', 'sora-2', 1440]] as const) {
+  test(`skill publication selects ${kind} groups and models at ${width}px`, async ({ page }, info) => {
+    const state = await fixture(page)
+    await page.setViewportSize({ width, height: 900 }); await page.goto('/discover?publish=1')
+    const form = editor(page)
+    await form.getByRole('radio', { name: '技能', exact: true }).check()
+    await configureSkill(form, state.image)
+    await form.getByLabel('作品标题', { exact: true }).fill('视觉创作技能')
+    await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+    await form.getByLabel('使用说明（必填）').fill('根据要求生成画面。')
+    await form.getByLabel('适用模型类型（必选）').selectOption(kind)
+    await expect(form.getByLabel(`${label}模型（必选）`)).toHaveValue('')
+    await expect(form.getByLabel('模型分组（必选）').locator('option[value="vip"]')).toHaveCount(0)
+    await form.getByLabel('模型分组（必选）').selectOption(group)
+    await expect(form.getByLabel(`${label}模型（必选）`).locator('option[value="chat-test"]')).toHaveCount(0)
+    if (kind === 'image') await expect(form.getByLabel(`${label}模型（必选）`).locator('option[value="custom-model"]')).toHaveCount(1)
+    await form.getByLabel(`${label}模型（必选）`).selectOption(model)
+    await form.getByRole('radio', { name: '图片', exact: true }).check()
+    await form.getByRole('radio', { name: '技能', exact: true }).check()
+    await expect(form.getByLabel('适用模型类型（必选）')).toHaveValue(kind)
+    await expect(form.getByLabel(`${label}模型（必选）`)).toHaveValue(model)
+    expect((await new AxeBuilder({ page }).include('.editor-dialog[open]').analyze()).violations).toEqual([])
+    expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await form.getByLabel('适用模型类型（必选）').scrollIntoViewIfNeeded()
+    await page.screenshot({ path: info.outputPath(`skill-${kind}-${width}.png`) })
+    await form.getByRole('button', { name: '提交审核', exact: true }).click()
+    expect(state.writes[0]).toMatchObject({ model, skill: { kind, group, sourcePublic: true }, status: 'pending' })
+  })
+}

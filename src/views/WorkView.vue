@@ -26,7 +26,7 @@ const route = useRoute()
 const work = ref<Work | null>(null)
 const skill = computed(() => work.value?.generation?.skill)
 const skillDownload = computed(() => skill.value && work.value?.files?.find(file => !file.type.startsWith('image/') && (!skill.value?.sourceFileId || skill.value.sourceFileId === file.id)))
-const skillTarget = computed(() => '/create/text?skill=' + encodeURIComponent(work.value?.id || ''))
+const skillTarget = computed(() => `/create/${work.value?.generation?.skill?.kind || 'text'}?skill=` + encodeURIComponent(work.value?.id || ''))
 const parameterRows = computed(() => {
   if (!work.value?.generation?.parameters || work.value.kind === 'resource') return []
   const fields = publicationFields(work.value.generation.parameters)

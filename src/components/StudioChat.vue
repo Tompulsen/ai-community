@@ -254,7 +254,8 @@ function followOutput() { if (nearBottom.value) scrollToBottom() }
 function scrollToBottom() { if (messagesElement.value) messagesElement.value.scrollTop = messagesElement.value.scrollHeight; nearBottom.value = true }
 function trackScroll() { const el = messagesElement.value; if (el) nearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
 function selectChat(id: string) { historyMenu.value?.close(); emit('conversation', id) }
-function createChat() { newChat(); historyMenu.value?.close(); emit('source') }
+function createChat() { const next = newChat(props.mode); historyMenu.value?.close(); emit('conversation', next.id) }
+function duplicate() { if (current.value) { cloneChat(current.value); emit('conversation', chats.activeId) } }
 function handleEnter(event: KeyboardEvent) {
   if (ime.blocks(event)) { if (event.key === 'Enter' && !ime.isComposing(event)) event.preventDefault(); return }
   if (!shouldSubmit(event, studioPreferences.submitKey, window.matchMedia('(hover: hover) and (pointer: fine)').matches)) return
@@ -479,14 +480,14 @@ async function useTask(task: CreationTask) {
 }
 function toggleSelection() { selecting.value = !selecting.value; selectedTurns.value = [] }
 const hasMedia = computed(() => mediaTasks.value.length > 0)
-defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, canSend, send, hasMedia, clearContext, remove, toggleSelection, duplicate: () => current.value && cloneChat(current.value) })
+defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, busy, canSend, send, hasMedia, clearContext, remove, toggleSelection, duplicate })
 </script>
 <template>
   <div class="native-chat" aria-label="对话工作台" @dragenter="dragEnter" @dragover="dragOver" @dragleave="dragLeave" @drop="dropFiles">
     <div v-if="dragging" class="attachment-drop-hint" role="status"><Plus :size="24" />添加附件</div>
     <section v-if="current" class="chat-main">
       <Teleport v-if="!entryOnly" defer to="#studio-header-conversation">
-        <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="20" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="20" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" :disabled="busy" @click="cloneChat(current)"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+        <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="20" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="20" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" :disabled="busy" @click="duplicate"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
       </Teleport>
       <div v-if="selecting" class="creation-selection" role="group" aria-label="消息多选操作"><label><input type="checkbox" aria-label="全选当前消息" :checked="!!mediaTasks.length && selectedTurns.length === mediaTasks.length" @change="selectedTurns = ($event.target as HTMLInputElement).checked ? mediaTasks.map(task => task.id) : []" />全选</label><span role="status">已选 {{ selectedTurns.length }} 轮</span><button class="icon-button" type="button" :disabled="!selectedTurns.length || busy" aria-label="删除所选消息" title="删除所选消息" @click="removeTurns"><Trash2 :size="17" /></button><button class="icon-button" type="button" aria-label="退出消息多选" title="退出多选" @click="selecting = false; selectedTurns = []"><X :size="17" /></button></div>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>

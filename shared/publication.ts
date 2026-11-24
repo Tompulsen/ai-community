@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 export const skillDetailsSchema = z.object({
+  kind: z.enum(['text', 'image', 'video']).default('text'),
   platform: z.string().trim().max(100).default(''),
   group: z.string().trim().max(128).optional(),
   coverFileId: z.string().regex(/^[a-zA-Z0-9]{1,32}$/).optional(),

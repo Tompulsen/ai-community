@@ -1488,3 +1488,91 @@ test('group preparation failures are explicitly unaccepted for JSON and streamin
     assert.equal((await app.inject(`/api/creation/requests/${input.requestId}`)).statusCode, 404)
   })
 })
+
+
+test('private image and video work skills combine with community skills in order without leaking source', async t => {
+  for (const kind of ['image', 'video']) await t.test(kind, async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-media-work-skill-'));
+    t.after(() => rm(filesRoot, { recursive: true, force: true }));
+    const secret = 'Private media instruction sentinel.';
+    const source = Buffer.from('---\nname: visual-helper\ndescription: visual rules\n---\n' + secret);
+    await writeFile(path.join(filesRoot, 'source-key'), source);
+    const pack = await readSkillPackage('SKILL.md', source);
+    const body = 'Use a pastel palette.', sha256 = createHash('sha256').update(body).digest('hex');
+    const row = { id: 'work1', authorId: 'author1', status: 'approved', fileIds: ['source1'], generation: { skill: { kind, sourceFileId: 'source1', sourceSha256: pack.sha256, sourcePublic: false } } };
+    let visible = true, failed = false;
+    const f = fixture(t, { filesRoot, workQuery(sql) {
+      if (sql.includes('FROM community_submission s')) return visible ? [row] : [];
+      return [{ name: 'SKILL.md', accessKey: 'source-key', storedInternal: true, isLink: false }];
+    }, skillRows(sql, params) { assert.deepEqual(params, [['visual']]); return [{ id: 'visual', kind, body, sha256 }]; }, fetch(_url, init) {
+      const prompt = init.body instanceof FormData ? init.body.get('prompt') : JSON.parse(init.body).prompt;
+      assert.equal(prompt, `${body}\n\n${secret}\n\n本次创作要求：\nA scene`);
+      if (failed) return Response.json({ status: 'failed', error: { message: secret } });
+      return kind === 'image' ? Response.json({ data: [{ url: 'https://media.example/result.png' }] }) : Response.json({ id: 'video-1', status: 'completed', url: 'https://media.example/result.mp4' });
+    } });
+    const input = { kind, model: kind === 'image' ? 'gpt-image-2' : 'sora-2', prompt: 'A scene', duration: 8, requestId: 'private-media-1', skills: [{ id: 'community-visual', sha256 }, { id: 'work-work1', sha256: pack.sha256 }] };
+    const accepted = await submit(f.app, input);
+    assert.equal(accepted.statusCode, 200, accepted.payload);
+    assert.equal(accepted.json().status, 'succeeded');
+    assert(!accepted.payload.includes(secret));
+    assert(!JSON.stringify([...f.values.values()]).includes(secret));
+    visible = false;
+    assert.deepEqual((await submit(f.app, input)).json(), accepted.json());
+    assert.equal(f.calls.length, 1);
+    assert.equal((await submit(f.app, { ...input, requestId: 'withdrawn' })).statusCode, 404);
+    visible = true; row.generation.skill.kind = kind === 'image' ? 'video' : 'image';
+    assert.equal((await submit(f.app, { ...input, requestId: 'wrong-kind' })).statusCode, 409);
+    assert.equal(f.calls.length, 1);
+    row.generation.skill.kind = kind; failed = true;
+    const failure = await submit(f.app, { ...input, requestId: 'upstream-error' });
+    assert.equal(failure.statusCode, 200, failure.payload);
+    assert.equal(failure.json().status, 'failed');
+    assert(!failure.payload.includes(secret));
+    assert(!JSON.stringify([...f.values.values()]).includes(secret));
+    await writeFile(path.join(filesRoot, 'source-key'), Buffer.concat([source, Buffer.from('Changed.')]));
+    assert.equal((await submit(f.app, { ...input, requestId: 'changed-source' })).statusCode, 409);
+    assert.equal(f.calls.length, 2);
+  });
+});
+
+
+test('private media errors stay redacted through background polling, cached recovery and lost task ownership', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET;
+  process.env.NEW_API_SESSION_SECRET = 'fixture-work-media-secret-'.repeat(3);
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous; });
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'private-media-poll-'));
+  t.after(() => rm(filesRoot, { recursive: true, force: true }));
+  const secret = 'Private background skill instruction sentinel.';
+  const source = Buffer.from('---\nname: visual\ndescription: rules\n---\n' + secret);
+  await writeFile(path.join(filesRoot, 'source-key'), source);
+  const pack = await readSkillPackage('SKILL.md', source), ready = deferred();
+  const row = { id: 'work1', authorId: 'author1', status: 'approved', fileIds: ['source1'], generation: { skill: { kind: 'video', sourceFileId: 'source1', sourceSha256: pack.sha256 } } };
+  const f = fixture(t, { filesRoot,
+    workQuery: sql => sql.includes('FROM community_submission s') ? [row] : [{ name: 'SKILL.md', accessKey: 'source-key', storedInternal: true, isLink: false }],
+    afterRedisSet(key, value) { if (key.endsWith(':private-background') && JSON.parse(value).tracking) ready.resolve(); },
+    fetch(_url, init) {
+      return Response.json(init.method === 'POST' ? { id: 'private-video', status: 'queued' }
+        : { id: 'private-video', user_id: 17, status: 'failed', error: { message: secret } });
+    },
+  });
+  const input = { kind: 'video', model: 'sora-2', prompt: 'A scene', duration: 8, requestId: 'private-background', skills: [{ id: 'work-work1', sha256: pack.sha256 }] };
+  const initial = await submit(f.app, input, { Prefer: 'respond-async' });
+  assert.equal(initial.statusCode, 202, initial.payload);
+  await ready.promise;
+  const taskKey = [...f.values.keys()].find(key => key.startsWith('community-next:creation:task:'));
+  assert.equal(JSON.parse(f.values.get(taskKey)).hasWorkSkills, true);
+  const assertSafe = response => {
+    assert.equal(response.statusCode, 200, response.payload);
+    assert.equal(response.json().status, 'failed');
+    assert(!response.payload.includes(secret));
+  };
+  assertSafe(await f.app.inject('/api/creation/tasks/video/private-video?protocol=openai'));
+  await processCreationTasks(f.redis, f.services);
+  assertSafe(await f.app.inject('/api/creation/requests/private-background'));
+  assertSafe(await submit(f.app, input));
+  f.values.delete(taskKey);
+  assertSafe(await f.app.inject('/api/creation/tasks/video/private-video?protocol=openai&tokenId=71'));
+  assert.equal(JSON.parse(f.values.get(taskKey)).hasWorkSkills, true);
+  assert(!JSON.stringify([...f.values.values()]).includes(secret));
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1);
+});
