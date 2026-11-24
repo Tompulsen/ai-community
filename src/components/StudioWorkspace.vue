@@ -47,6 +47,10 @@ const selectedModel = computed(() => creation.models.find(item => item.id === mo
 const selectedApiFormat = computed(() => apiFormat.value === 'auto' ? selectedModel.value?.apiFormat : apiFormat.value)
 const videoSetting = computed(() => selectedModel.value?.video)
 const videoLimits = computed(() => videoCapabilities(model.value, videoOptions.mode, videoSetting.value))
+const upscale = computed(() => props.kind === 'video' && videoSetting.value?.operation === 'upscale')
+const referenceLimit = computed(() => upscale.value ? 1 : props.kind === 'video' ? 10 : 16)
+const sourceVideo = computed(() => references.value.length === 1 && references.value[0]?.type?.startsWith('video/') ? references.value[0] : undefined)
+const billingDuration = computed(() => upscale.value ? sourceVideo.value?.duration ? Math.ceil(sourceVideo.value.duration) : undefined : props.kind === 'video' ? duration.value : undefined)
 const references = ref<CreationTask['references']>([])
 const sourceWorkId = ref<string>()
 const submissions = ref<Record<string, boolean>>({}), error = ref(''), waitingForMaterials = ref(false)
@@ -69,6 +73,11 @@ const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
 const videoParameterIssue = computed(() => {
   if (props.kind !== 'video' || !model.value) return ''
+  if (upscale.value) {
+    if (!sourceVideo.value || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(sourceVideo.value.url)) return '视频超分需要上传一个 MP4 源视频。'
+    return videoOptions.resolution !== 'auto' && videoLimits.value?.resolutions.length && !videoLimits.value.resolutions.includes(videoOptions.resolution) ? '当前模型不支持所选分辨率。' : ''
+  }
+  if (references.value.some(file => file.type?.startsWith('video/'))) return '当前视频生成模型仅支持图片参考，请移除源视频。'
   if (!Number.isInteger(duration.value) || duration.value < 1 || duration.value > 3600) return '视频时长需为 1 到 3600 的整数秒。'
   const limits = videoLimits.value
   if (limits?.durations.length && !limits.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(videoOptions.resolution)) return '原作时长或分辨率不受当前模型支持，请在高级参数中调整。'
@@ -78,8 +87,8 @@ const videoParameterIssue = computed(() => {
 })
 const imageCountIssue = computed(() => props.kind === 'image' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 10) ? '图片数量需为 1 到 10 的整数。' : '')
 const submissionIssue = computed(() => error.value || imageCountIssue.value || videoParameterIssue.value)
-const referenceLimitIssue = computed(() => references.value.length > (props.kind === 'video' ? 10 : 16) ? '参考图数量超过当前创作类型上限，请减少所选图片。' : '')
-const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
+const referenceLimitIssue = computed(() => references.value.length > referenceLimit.value ? upscale.value ? '视频超分每次仅支持一个源视频。' : '参考图数量超过当前创作类型上限，请减少所选图片。' : '')
+const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && (upscale.value ? !!sourceVideo.value : Boolean(prompt.value.trim())))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 function createDraftWrites() {
@@ -101,18 +110,18 @@ onUnmounted(() => {
 const draftScope = () => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}:${draftRevision}`
 const referenceFiles = computed<StudioFile[]>({
   get: () => references.value.map(file => ({
-    name: file.name, content: file.url, type: /^data:([^;,]+)/.exec(file.url)?.[1] || 'image/png', size: 0, isText: false,
-    referenceId: file.id, fromWorkId: file.fromWorkId,
+    name: file.name, content: file.url, type: file.type || /^data:([^;,]+)/.exec(file.url)?.[1] || 'image/png', size: 0, isText: false,
+    referenceId: file.id, fromWorkId: file.fromWorkId, duration: file.duration,
   })),
   set: files => {
-    const next = files.map(file => ({ name: file.name, url: file.content, id: file.referenceId, fromWorkId: file.fromWorkId }))
-    if (props.kind === 'video') prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
+    const next = files.map(file => ({ name: file.name, url: file.content, id: file.referenceId, fromWorkId: file.fromWorkId, type: file.type, duration: file.duration }))
+    if (props.kind === 'video' && !upscale.value) prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
     references.value = next
-    if (props.kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, next.length)
+    if (props.kind === 'video' && !upscale.value) videoOptions.mode = remixVideoMode(videoOptions.mode, next.length)
   },
 })
 const materials = useStudioMaterials(referenceFiles, computed(() => `${session.user?.id}:${currentConversation.value?.id}:${props.kind}`), {
-  limit: computed(() => props.kind === 'video' ? 10 : 16), imagesOnly: true,
+  limit: referenceLimit, imagesOnly: true, videoOnly: upscale,
 })
 const uploading = materials.pending
 const materialIssues = computed(() => materials.snapshot.value.items.filter(item => item.status !== 'ready'))
@@ -120,12 +129,17 @@ function finishRestore() {
   const scope = draftScope(), revision = ++restoreRevision
   void nextTick(() => { if (live && scope === draftScope() && revision === restoreRevision) restoringParameters.value = false })
 }
-const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }, videoSetting.value) : imageRequestSize(ratio.value, imageOptions.resolution, model.value, selectedApiFormat.value))
+const automaticSize = computed(() => props.kind === 'video' ? upscale.value || videoSetting.value?.sendSize === false ? 'auto' : selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }, videoSetting.value) : imageRequestSize(ratio.value, imageOptions.resolution, model.value, selectedApiFormat.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
-const requestSize = computed(() => props.kind === 'image' && (!manualSize.value || manualSize.value === 'auto') && (imageOptions.resolution === 'auto' || ratio.value === 'auto') ? 'auto' : size.value)
+const requestSize = computed(() => props.kind === 'video' && (upscale.value || videoSetting.value?.sendSize === false) ? 'auto' : props.kind === 'image' && (!manualSize.value || manualSize.value === 'auto') && (imageOptions.resolution === 'auto' || ratio.value === 'auto') ? 'auto' : size.value)
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
 function adaptVideoParameters() {
   if (props.kind !== 'video' || !model.value) return
+  if (upscale.value) {
+    manualSize.value = ''; ratio.value = 'auto'
+    if (videoOptions.resolution === 'auto' || !videoLimits.value?.resolutions.includes(videoOptions.resolution)) videoOptions.resolution = videoLimits.value?.autoResolution || videoLimits.value?.resolutions[0] || 'auto'
+    return
+  }
   const next = normalizeVideoParameters({ model: model.value, mode: videoOptions.mode, resolution: videoOptions.resolution,
     duration: duration.value, aspectRatio: ratio.value, size: size.value }, videoSetting.value)
   if (next.resolution !== videoOptions.resolution || next.aspectRatio !== ratio.value || next.size !== size.value) manualSize.value = ''
@@ -242,7 +256,7 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
   remixApplied.value = true
   sourceWorkId.value = source.id
   blank.value = true; prompt.value = source.prompt
-  references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId }))
+  references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId, type: file.type, duration: file.duration }))
   if (kind === 'video') prompt.value = remapVideoMentions(prompt.value, (source.referenceFiles || []).map(file => file.url), references.value.map(file => file.url), true)
   setSelectedSkillIds(conversation, kind, skills.map(skill => skill.id), skills)
   if (skills.length < selected.length) notify('原作部分技能已下架、更新或不可用，本次已跳过。')
@@ -264,11 +278,11 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
 function applySourceReferences(files: WorkFile[]) {
   if (!props.source) return
   const own = references.value.filter(file => file.fromWorkId !== props.source!.id)
-  if (own.length + files.length > (props.kind === 'video' ? 10 : 16)) { error.value = '参考图数量超过当前创作类型上限，请减少所选图片。'; return }
-  const next = [...files.map(file => ({ name: file.name, url: file.url, fromWorkId: props.source!.id })), ...own]
-  if (props.kind === 'video') prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
+  if (own.length + files.length > referenceLimit.value) { error.value = upscale.value ? '视频超分每次仅支持一个源视频。' : '参考图数量超过当前创作类型上限，请减少所选图片。'; return }
+  const next = [...files.map(file => ({ name: file.name, url: file.url, fromWorkId: props.source!.id, type: file.type })), ...own]
+  if (props.kind === 'video' && !upscale.value) prompt.value = remapVideoMentions(prompt.value, references.value.map(file => file.url), next.map(file => file.url))
   references.value = next
-  if (props.kind === 'video') videoOptions.mode = remixVideoMode(videoOptions.mode, references.value.length)
+  if (props.kind === 'video' && !upscale.value) videoOptions.mode = remixVideoMode(videoOptions.mode, references.value.length)
   error.value = ''
 }
 watch(() => session.user?.id, async () => {
@@ -288,6 +302,7 @@ async function addReferenceFiles(files: File[]) {
   error.value = ''
   const scope = draftScope()
   try {
+    if (upscale.value && files.length + materials.snapshot.value.items.length > 1) throw new Error('视频超分每次仅支持一个源视频。')
     await materials.add(files)
   } catch (cause) { if (live && scope === draftScope()) error.value = errorMessage(cause) }
 }
@@ -302,6 +317,12 @@ function dropReferences(event: DragEvent) {
 }
 function removeReference(index: number) {
   materials.removeAt(index)
+}
+function sourceDuration(index: number, value: number) {
+  const file = references.value[index]
+  if (!file?.type?.startsWith('video/')) return
+  file.duration = value
+  if (upscale.value) duration.value = Math.ceil(value)
 }
 function generate() { return submit() }
 async function sendEntry() {
@@ -356,7 +377,7 @@ async function submit(onRegistered?: () => void) {
       if (input.references.length > 16) throw new Error('固定图片和本次参考图合计不能超过 16 张，请先取消部分固定。')
     }
     if (kind === 'image' && (!Number.isInteger(input.n) || input.n < 1 || input.n > 10)) throw new Error('图片数量需为 1 到 10 的整数。')
-    if (input.videoOptions) {
+    if (input.videoOptions && !upscale.value) {
       submittedPrompt = remapVideoMentions(submittedPrompt, initialReferenceUrls, references.value.map(file => file.url))
       input.prompt = submittedPrompt
       input.videoOptions.mode = videoOptions.mode
@@ -509,19 +530,19 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
     <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="skillChat" :kind="kind" :transient="entryOnly" :disabled="!composerReady || submitting || !!busy" /></div>
     <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
-      <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" />
+      <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" @duration="sourceDuration" />
       <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />
-      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video'" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="!composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="!composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" required @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
+      <label class="field prompt-field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '提示词' }}</span><StudioVideoPrompt v-if="kind === 'video' && !upscale" ref="promptInput" v-model="prompt" :label="entryOnly ? '创作描述' : '提示词'" :references="references" :disabled="!composerReady" @submit="generate" @paste="pasteReferences" /><textarea v-else ref="promptInput" v-model="prompt" :disabled="!composerReady" class="composer-input creation-prompt" rows="1" maxlength="100000" :placeholder="upscale ? '视频处理说明（可选）' : entryOnly ? '描述你想生成的图片…' : '发消息，描述你的想法…'" :required="!upscale" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteReferences" /></label>
       <div class="studio-composer-tools">
-        <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" title="添加参考图"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" aria-label="添加参考图" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple :disabled="submitting || busy || materials.snapshot.value.items.length >= (kind === 'video' ? 10 : 16)" @change="addReferences" /></label>
+        <div class="studio-composer-actions"><label class="reference-upload studio-tool composer-attachment" :title="upscale ? '添加源视频' : '添加参考图'"><LoaderCircle v-if="uploading" :size="18" /><Plus v-else :size="20" /><input type="file" :aria-label="upscale ? '添加源视频' : '添加参考图'" :accept="upscale ? 'video/mp4,.mp4' : 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif'" :multiple="!upscale" :disabled="submitting || busy || materials.snapshot.value.items.length >= referenceLimit" @change="addReferences" /></label>
           <StudioPopover label="高级参数" :width="380"><template #trigger><SlidersHorizontal :size="20" /><span>高级参数</span></template>
             <StudioMediaParameters :image="imageOptions" :video="videoOptions" v-model:protocol="protocol" v-model:api-format="apiFormat" v-model:ratio="ratio" v-model:count="count" v-model:duration="duration" v-model:size="size" :kind="kind" :model="model" :model-api-format="selectedModel?.apiFormat" :video-setting="videoSetting" @update:image="Object.assign(imageOptions, $event)" @update:video="Object.assign(videoOptions, $event)" />
           </StudioPopover>
         </div>
         <div class="studio-composer-models"><StudioModelPicker v-model="model" :kind="kind" :inline-selection="entryOnly" @kind="(kind, model) => emit('kind', kind, model)" @update:model-value="modelChanged" @keys="emit('keys')" /></div>
-        <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="kind === 'video' ? duration : undefined" :resolution="videoOptions.resolution" :custom-parameters="videoOptions.customParameters" :size="requestSize" :protocol="protocol" :api-format="apiFormat" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
+        <StudioBilling :compact="entryOnly" :model="model" :kind="kind" :quantity="kind === 'image' ? count : undefined" :duration="billingDuration" :resolution="videoOptions.resolution" :custom-parameters="videoOptions.customParameters" :size="requestSize" :protocol="protocol" :api-format="apiFormat" :refresh-key="selected?.settledAt" @prices="emit('prices')" />
         <button v-if="waitingForMaterials" type="button" class="composer-submit generation-button" title="取消发送，保留草稿" aria-label="取消发送" @click="materialSubmission?.abort()"><Square :size="17" /></button>
-        <button v-else class="composer-submit generation-button" :title="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :aria-label="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">生成</span></button>
+        <button v-else class="composer-submit generation-button" :title="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : upscale ? '开始超分' : '开始生成'" :aria-label="entryOnly ? '发送到创作台' : submitting ? '正在准备…' : upscale ? '开始超分' : '开始生成'" :disabled="!canGenerate"><LoaderCircle v-if="submitting" :size="18" /><ArrowUp v-else :size="21" /><span class="mobile-send-label">{{ upscale ? '超分' : '生成' }}</span></button>
       </div>
       <p v-if="selectedGroup?.description && selectedGroup.description !== selectedGroup.name" class="group-description">{{ selectedGroup.description }}</p>
       <p v-if="creation.groupSwitching" class="group-description" role="status">正在切换模型分组…</p>

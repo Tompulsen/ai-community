@@ -58,7 +58,7 @@ export function normalizeVideoParameters<T extends Pick<VideoDraft, "model" | "m
     resolution,
     duration,
     aspectRatio,
-    ...(resolution !== draft.resolution || aspectRatio !== draft.aspectRatio || limits.sizes && draft.size !== "auto"
+    ...(resolution !== draft.resolution || aspectRatio !== draft.aspectRatio || (limits.sizes || limits.sendSize === false) && draft.size !== "auto"
       ? { size: selectedVideoSize({ resolution, aspectRatio }, limits) }
       : {}),
   };
@@ -106,7 +106,10 @@ export function validateVideoRequestParameters(
   const effectiveRatio = sources.flatMap(source => [source.aspect_ratio, source.aspectRatio, source.ratio])
     .find(value => value != null && value !== "auto");
   for (const source of sources) {
+    if (limits?.sendSize === false && source.size != null) throw new Error("当前模型不支持参数 size，请移除后重试");
     for (const key of limits?.unsupportedParameters ?? []) {
+      // Source duration is retained only for the gateway's independently verified reservation.
+      if (limits?.operation === "upscale" && source === sent && key === "seconds") continue;
       if (Object.hasOwn(source, key)) throw new Error(`当前模型不支持参数 ${key}，请移除后重试`);
     }
     for (const key of ["resolution", "resolution_name"]) {

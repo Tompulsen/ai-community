@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse
 
 _current = ContextVar("community_wallet", default=None)
 _fields = ("client", "user", "timestamp", "nonce", "signature")
-MAX_BODY = 64 * 1024 * 1024
+MAX_BODY = 65 * 1024 * 1024
 
 
 def _config():

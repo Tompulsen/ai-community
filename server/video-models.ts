@@ -3,7 +3,7 @@ import type { VideoGenMode } from '../shared/studio/types.ts'
 import { VIDEO_RATIOS } from '../shared/studio/video-size.ts'
 
 type DurationValues = number[] | { min: number; max: number }
-type ParameterLimits = { resolutions: string[]; durations: DurationValues }
+type ParameterLimits = { resolutions: string[]; durations?: DurationValues }
 type VideoModelProfile = Omit<VideoModelSetting, 'durations' | 'modes'> & ParameterLimits & {
   models: string[]
   modes?: Partial<Record<VideoGenMode, Partial<ParameterLimits>>>
@@ -11,6 +11,23 @@ type VideoModelProfile = Omit<VideoModelSetting, 'durations' | 'modes'> & Parame
 
 // Model defaults stay on the server; the catalogue and submission use the same resolver.
 const videoModelProfiles: VideoModelProfile[] = [
+  ...[
+    { models: ['火山2.0 Fast官转', '火山2.0 Mini官转'], max: 15 },
+    { models: ['火山2.5官转'], max: 30 },
+  ].map(({ models, max }): VideoModelProfile => ({
+    models, resolutions: ['720p', '1080p', '2k'], autoResolution: '720p',
+    resolutionValues: { '720p': 'tier_720p', '1080p': 'tier_1080p', '2k': 'tier_2k' },
+    sendSize: false, durations: { min: 4, max }, autoDuration: 10,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'], autoAspectRatio: '16:9',
+    parameterFormat: 'openai', unsupportedParameters: ['size', 'frame_rate'],
+  })),
+  {
+    models: ['DMC 视频超分'], operation: 'upscale', parameterFormat: 'openai', sendSize: false,
+    resolutions: ['720p', '1080p', '2k', '4k'], autoResolution: '1080p',
+    unsupportedParameters: ['size', 'aspect_ratio', 'seconds', 'duration_seconds', 'duration',
+      'input_reference', 'input_images', 'input_audios', 'input_image_files', 'generate_audio',
+      'video_reference_frame_mode', 'generation_options'],
+  },
   {
     models: ['sd2.0-mini-720p'],
     resolutions: ['720p'],
@@ -153,6 +170,11 @@ export function resolveVideoModelSetting(model: string, stored?: VideoModelSetti
       && (!result.resolutions || result.resolutions.every(resolution => sizes[resolution]
         && (!result.aspectRatios || result.aspectRatios.every(ratio => sizes[resolution]![ratio]))))) result.sizes = sizes
     else delete result.sizes
+  }
+  if (result.resolutionValues && result.resolutions) {
+    result.resolutionValues = Object.fromEntries(Object.entries(result.resolutionValues)
+      .filter(([resolution]) => result.resolutions!.includes(resolution)))
+    if (!Object.keys(result.resolutionValues).length) delete result.resolutionValues
   }
   const modes: NonNullable<VideoModelSetting['modes']> = {}
   for (const mode of new Set([...Object.keys(profileModes ?? {}), ...Object.keys(stored?.modes ?? {})]) as Set<VideoGenMode>) {

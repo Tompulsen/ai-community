@@ -4,7 +4,7 @@ import { modelApiFormatSchema } from '../shared/studio/model-types'
 
 const mediaEntrySchema = z.object({
   owner: z.string().nullable(), kind: z.enum(['image', 'video']),
-  prompt: z.string().trim().min(1).max(100000),
+  prompt: z.string().trim().max(100000),
   parameters: z.object({
     model: z.string().max(200), group: z.string().min(1).max(200).nullable(), tokenId: z.number().int().positive().nullable(),
     ratio: z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/),
@@ -14,8 +14,9 @@ const mediaEntrySchema = z.object({
     apiFormat: modelApiFormatSchema.optional(),
     protocol: z.enum(['auto', 'openai', 'sync', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
   }).optional(),
-  references: z.array(z.object({ name: z.string(), url: z.string().startsWith('data:image/') })).max(16),
-})
+  references: z.array(z.object({ name: z.string(), type: z.string().optional(), duration: z.number().positive().optional(),
+    url: z.string().refine(value => value.startsWith('data:image/') || /^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(value)) })).max(16),
+}).refine(value => Boolean(value.prompt || value.kind === 'video' && value.references.length === 1 && value.references[0]?.type?.startsWith('video/')), '请输入提示词或添加源视频。')
 const textEntrySchema = z.object({
   owner: z.string().nullable(), kind: z.literal('text'), prompt: z.string().trim().max(100000),
   parameters: z.object({

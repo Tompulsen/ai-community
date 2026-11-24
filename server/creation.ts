@@ -37,6 +37,8 @@ import { readAccountModelCatalogue, classifyModel } from './native-account/model
 import { resolveModelGroup } from './native-account/model-groups.ts'
 import { assertSameOrigin } from './native-account/client.ts'
 import { resolveVideoModelSetting } from './video-models.ts'
+import { videoDurationSeconds } from './video-privacy.ts'
+import type { VideoModelSetting } from '../shared/studio/model-types.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -307,7 +309,37 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
   return result
 }
 
-async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices) {
+async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices, videoSetting?: VideoModelSetting) {
+  if (input.kind === 'video' && videoSetting?.operation === 'upscale') {
+    if (input.referenceUrls?.length !== 1) throw httpError(400, '视频超分需上传一个源视频。')
+    const source = new URL(input.referenceUrls[0]!, ctx.config.url)
+    const fileId = /^\/legacy-files\/([A-Za-z0-9]{1,32})$/.exec(source.pathname)?.[1]
+    if (source.origin !== new URL(ctx.config.url).origin || source.search || source.hash || source.username || source.password || !fileId)
+      throw httpError(400, '源视频须为当前账号上传的视频。')
+    const headers = { cookie: String(ctx.req.headers.cookie || '') }
+    const owned = await ctx.request.server.inject({ method: 'GET', url: `/api/uploads/${fileId}`, headers })
+    if (owned.statusCode !== 200) throw httpError(404, '源视频不存在或不属于当前账号。')
+    const file: unknown = owned.json().file
+    if (!record(file) || file.id !== fileId || file.type !== 'video/mp4'
+      || file.processing !== 'ready') throw httpError(400, '源视频尚未就绪或格式不受支持。')
+    const size = typeof file.size === 'string' && /^[1-9]\d*$/.test(file.size) ? Number(file.size) : file.size
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || size > videoPosterSourceLimit) throw httpError(413, '源视频须非空且不超过 64 MB。')
+    const head = await ctx.request.server.inject({ method: 'HEAD', url: `/legacy-files/${fileId}`, headers })
+    const type = String(head.headers['content-type'] || '').split(';')[0]!
+    if (head.statusCode !== 200 || type !== 'video/mp4') throw httpError(400, '源视频无法安全读取，请重新上传。')
+    const length = Number(head.headers['content-length'])
+    if (!Number.isSafeInteger(length) || length < 1 || length > videoPosterSourceLimit)
+      throw httpError(413, '源视频须非空且不超过 64 MB。')
+    const response = await ctx.request.server.inject({ method: 'GET', url: `/legacy-files/${fileId}`, headers })
+    if (response.statusCode !== 200 || String(response.headers['content-type'] || '').split(';')[0] !== type)
+      throw httpError(400, '源视频读取失败，请重新上传。')
+    const bytes = response.rawPayload
+    if (!bytes.length || bytes.length > videoPosterSourceLimit) throw httpError(413, '源视频须非空且不超过 64 MB。')
+    const durationSeconds = await videoDurationSeconds(bytes, type, req.signal)
+    input.duration = Math.ceil(durationSeconds)
+    return [{ blob: new Blob([new Uint8Array(bytes)], { type }), name: `source-${fileId}.mp4`,
+      mediaType: 'video' as const, durationSeconds }]
+  }
   let total = 0
   const prepared = new Map<string, { blob: Blob; url: string }>()
   async function prepare(source: string) {
@@ -441,7 +473,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     input.videoOptions.openaiReferenceSource = 'upload'
   }
   errorStage = '参考素材准备'
-  const files = await references(ctx, req, input, svc)
+  const files = await references(ctx, req, input, svc, input.kind === 'video' ? resolveVideoModelSetting(input.model, setting?.video) : undefined)
   errorStage = '工具准备'
   const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
   errorStage = '生成参数组装'

@@ -5,6 +5,7 @@ import type {
   VideoResolution,
 } from "./types.ts";
 import { videoCapabilities } from "./video-capabilities.ts";
+import type { VideoModelSetting } from "./model-types.ts";
 import type { LocalTask } from "./types.ts";
 import {
   VIDEO_RATIOS,
@@ -218,6 +219,7 @@ export function buildVideoRequest(
   draft: VideoDraft,
   model: string,
   parameterFormat?: VideoApiFormat,
+  setting?: VideoModelSetting,
 ): { path: string; body: string | FormData } {
   draft = {
     ...draft,
@@ -382,7 +384,7 @@ export function buildVideoRequest(
     };
   }
   let compatibleMetadata: unknown = customMetadata;
-  const compatibleSize = isVideoSizeAuto(draft)
+  const compatibleSize = setting?.sendSize === false || isVideoSizeAuto(draft)
     ? undefined
     : videoSizeParameters(draft, "openai").size;
   if (

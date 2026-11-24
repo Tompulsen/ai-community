@@ -143,7 +143,7 @@ async function remove() {
       </template>
     </template>
     <template v-if="role === 'user'">
-      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><img v-for="(file, index) in task.references" :key="file.url" :src="mediaSource(file.url, true)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></div></div>
+      <div class="creation-request-body message-bubble"><p>{{ task.prompt }}</p><div v-if="task.references.length" class="sent-references"><template v-for="(file, index) in task.references" :key="file.url"><video v-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`源视频：${file.name}`" width="240" height="135" controls playsinline preload="metadata" loading="lazy" /><img v-else :src="mediaSource(file.url, true)" :alt="`参考图 ${index + 1}：${file.name}`" loading="lazy" /></template></div></div>
       <StudioMessageActions class="creation-turn-tools message-actions" label="提问操作" :actions="actions" />
     </template>
     <template v-else>
@@ -166,7 +166,7 @@ async function remove() {
 
 <style scoped>
 .creation-request-body p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.sent-references { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }.sent-references img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; }
+.sent-references { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }.sent-references img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; }.sent-references video { width: 240px; max-width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; border-radius: 6px; }
 .creation-versions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .creation-turn-tools { justify-content: flex-end; }
 .creation-versions { margin-top: 8px; width: fit-content; }.creation-versions output, .task-elapsed { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }

@@ -6,7 +6,7 @@
  import hashlib
  import json
  import os
-@@ -7,7 +8,7 @@ import shutil
+@@ -7,14 +8,16 @@ import shutil
  import time
  import uuid
  from contextlib import asynccontextmanager
@@ -15,15 +15,16 @@
  
  import httpx
  from fastapi import FastAPI, HTTPException, Request
-@@ -15,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.middleware.cors import CORSMiddleware
  from fastapi.responses import FileResponse, JSONResponse
++from starlette.datastructures import UploadFile
  
  from .api import authorize
-+from .community_wallet import CommunityWalletMiddleware, current_wallet, wallet_digest, sign_request
++from .community_wallet import CommunityWalletMiddleware, MAX_BODY, current_wallet, wallet_digest, sign_request
  from .core import AdmissionError, DATA, PUBLIC, UPSTREAM, db, seal, unseal
  
  MAX_VIDEO = int(os.getenv("MAX_VIDEO_BYTES", str(512 * 1024**2)))
-@@ -58,6 +60,20 @@ def video_path(identifier):
+@@ -58,6 +61,20 @@ def video_path(identifier):
      return VIDEO_ROOT / identifier
  
  
@@ -44,7 +45,7 @@
  def video_row(identifier):
      with db() as c:
          row = c.execute("SELECT * FROM video_jobs WHERE id=?", (identifier,)).fetchone()
-@@ -79,12 +95,19 @@ def public_task(row):
+@@ -79,17 +96,31 @@ def public_task(row):
                             "size": row["size"], "content_type": row["media_type"]}]
      elif status in ("failed", "save_failed", "indeterminate"):
          result["error"] = {"code": row["error"]}
@@ -59,30 +60,41 @@
  
  
 -def submit_video(owner, idem, payload, token, origin):
-+def submit_video(owner, idem, payload, token, origin, wire=None):
++def submit_video(owner, idem, payload, token, origin, wire=None, upscale=False):
      payload = dict(payload)
 -    api_format = payload.pop("api_format", "generations")
 +    api_format = "videos" if wire else payload.pop("api_format", "generations")
      if api_format not in CREATE_PATHS:
          raise AdmissionError("unsupported_video_api_format", 422)
++    wallet = current_wallet(token)
++    if wire and not wallet:
++        raise AdmissionError("community_wallet_required", 403)
++    prompt = payload.get("prompt")
++    if upscale and wallet and wire and payload.get("model") == "DMC \u89c6\u9891\u8d85\u5206":
++        valid_prompt = prompt is None or isinstance(prompt, str) and len(prompt.encode("utf-8")) <= 24000
++    else:
++        valid_prompt = isinstance(prompt, str) and 1 <= len(prompt) <= 32000
      if (not isinstance(payload.get("model"), str) or not 1 <= len(payload["model"]) <= 256
-@@ -97,7 +120,14 @@ def submit_video(owner, idem, payload, token, origin):
+-            or not isinstance(payload.get("prompt"), str)
+-            or not 1 <= len(payload["prompt"]) <= 32000
++            or not valid_prompt
+             or type(payload.get("n", 1)) is not int or payload.get("n", 1) != 1):
+         raise AdmissionError("video_requires_model_prompt_and_n_1", 422)
+     if payload.get("stream"):
+@@ -97,7 +128,11 @@ def submit_video(owner, idem, payload, token, origin):
      normalized = json.dumps({"api_format": api_format, "request": payload},
                              sort_keys=True, separators=(",", ":"), allow_nan=False)
      digest = hashlib.sha256(normalized.encode()).hexdigest()
 -    reserve = MAX_VIDEO + 1024**2
 +    if wire:
 +        digest = hashlib.sha256((digest + "\n" + wire["body"]).encode()).hexdigest()
-+    wallet = current_wallet(token)
-+    if wire and not wallet:
-+        raise AdmissionError("community_wallet_required", 403)
 +    digest = wallet_digest(digest, wallet)
 +    encrypted = seal({"request": payload, "token": token, "origin": origin, "wallet": wallet, "wire": wire})
 +    reserve = video_reservation(encrypted)
      now = timestamp()
      with db() as c:
          c.execute("BEGIN IMMEDIATE")
-@@ -122,14 +152,114 @@ def submit_video(owner, idem, payload, token, origin):
+@@ -122,14 +157,114 @@ def submit_video(owner, idem, payload, token, origin):
              "payload,api_format,reserved) VALUES(?,?,?,?,'queued',?,?,?,?,?,?,?)",
              (identifier, owner, idem, digest, now, now, now + VIDEO_TTL,
               now + GENERATION_DEADLINE,
@@ -199,7 +211,7 @@
  
  
  def video_type(header):
-@@ -155,9 +285,11 @@ async def _read_json(client, method, path, **kwargs):
+@@ -155,9 +290,11 @@ async def _read_json(client, method, path, **kwargs):
      async with client.stream(method, UPSTREAM + path, **kwargs) as response:
          if response.status_code not in (200, 201, 202):
              rejected = method == "POST" and response.status_code in (
@@ -213,7 +225,7 @@
          body = bytearray()
          async for chunk in response.aiter_bytes(65536):
              body.extend(chunk)
-@@ -207,7 +339,10 @@ async def download_video(client, row, claim, payload):
+@@ -207,7 +344,10 @@ async def download_video(client, row, claim, payload):
          async with client.stream("GET", UPSTREAM + path, headers=token_headers(payload),
                                   timeout=httpx.Timeout(1800, connect=15, read=90)) as response:
              if response.status_code != 200:
@@ -225,7 +237,7 @@
              if response.headers.get("content-encoding", "identity").lower() != "identity":
                  raise VideoError("unsupported_video_encoding")
              declared = response.headers.get("content-length")
-@@ -273,13 +408,19 @@ async def process_video(client, row, claim):
+@@ -273,13 +413,19 @@ async def process_video(client, row, claim):
                        (identifier, claim))
          try:
              kwargs = {"headers": token_headers(payload)}
@@ -246,7 +258,7 @@
              result = await read_json(client, "POST", CREATE_PATHS[row["api_format"]], **kwargs)
              upstream_id = result.get("id") or result.get("task_id")
              if not isinstance(upstream_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", upstream_id):
-@@ -288,8 +429,9 @@ async def process_video(client, row, claim):
+@@ -288,8 +434,9 @@ async def process_video(client, row, claim):
                         next_attempt=timestamp() + POLL_SECONDS)
          except Exception as error:
              rejected = isinstance(error, VideoError) and error.code == "upstream_rejected"
@@ -257,7 +269,7 @@
                         payload=None, reserved=4096)
          return
      if row["status"] == "generating":
-@@ -301,7 +443,10 @@ async def process_video(client, row, claim):
+@@ -301,7 +448,10 @@ async def process_video(client, row, claim):
              if status in ("completed", "succeeded", "success", "succeed"):
                  transition(identifier, claim, "saving", progress=99, next_attempt=0)
              elif status in ("failed", "error", "cancelled", "canceled"):
@@ -269,7 +281,7 @@
                             payload=None, reserved=4096)
              else:
                  progress = result.get("progress", row["progress"])
-@@ -321,9 +466,12 @@ async def process_video(client, row, claim):
+@@ -321,9 +471,12 @@ async def process_video(client, row, claim):
      except Exception as error:
          attempts = row["attempts"] + 1
          code = error.code if isinstance(error, VideoError) else "video_download_failed"
@@ -285,7 +297,7 @@
  
  
  def claim_video():
-@@ -355,7 +503,7 @@ async def worker(client):
+@@ -355,7 +508,7 @@ async def worker(client):
          except Exception:
              # A broken record must not kill all background processing.
              transition(row["id"], claim, "indeterminate", error="video_processing_interrupted",
@@ -294,7 +306,7 @@
  
  
  def cleanup_videos():
-@@ -370,6 +518,11 @@ def cleanup_videos():
+@@ -370,6 +523,11 @@ def cleanup_videos():
              c.execute("UPDATE video_jobs SET status='expired',payload=NULL,reserved=4096 WHERE id=?",
                        (row["id"],))
          c.execute("DELETE FROM video_jobs WHERE status='expired' AND expires<?", (now - 7 * 86400,))
@@ -306,7 +318,7 @@
  
  
  async def maintenance():
-@@ -387,6 +540,7 @@ async def lifespan(app):
+@@ -387,6 +545,7 @@ async def lifespan(app):
          c.execute("UPDATE video_jobs SET claim=NULL")
      for partial in VIDEO_ROOT.glob("*.part"):
          partial.unlink()
@@ -314,7 +326,7 @@
      async with httpx.AsyncClient(
          trust_env=False, follow_redirects=False, timeout=httpx.Timeout(120, connect=15),
          limits=httpx.Limits(max_connections=WORKERS + 4),
-@@ -409,6 +563,9 @@ app.add_middleware(
+@@ -409,6 +568,9 @@ app.add_middleware(
  )
  
  
@@ -324,17 +336,18 @@
  @app.get("/healthz")
  async def health():
      background = getattr(app.state, "background", [])
-@@ -425,13 +582,28 @@ async def create_video(request: Request):
+@@ -425,13 +587,54 @@ async def create_video(request: Request):
      body = bytearray()
      async for chunk in request.stream():
          body.extend(chunk)
 -        if len(body) > 1024**2:
-+        if len(body) > (64 * 1024**2 if request.headers.get("x-community-signature") else 1024**2):
++        if len(body) > (MAX_BODY if request.headers.get("x-community-signature") else 1024**2):
              raise HTTPException(413, "request_too_large")
      try:
 -        payload = json.loads(body)
 +        wallet = current_wallet(token)
 +        content_type = request.headers.get("content-type", "application/json")
++        upscale = False
 +        if wallet and content_type.lower().startswith("multipart/form-data"):
 +            async def replay():
 +                return {"type": "http.request", "body": bytes(body), "more_body": False}
@@ -346,17 +359,42 @@
 +                payload = {"model": form.get("model"), "prompt": form.get("prompt")}
 +                if form.get("n") not in (None, "1") or form.get("stream") not in (None, "false"):
 +                    raise ValueError()
++                if payload["model"] == "DMC \u89c6\u9891\u8d85\u5206":
++                    if len(form.getlist("metadata")) != 1:
++                        raise ValueError()
++                    metadata = json.loads(form.get("metadata"))
++                    if isinstance(metadata, dict) and metadata.get("operation") == "upscale":
++                        videos = form.getlist("input_videos")
++                        reference_fields = {
++                            "input_video", "input_videos", "reference_videos", "input_references",
++                            "first_frame", "first_frame_image", "last_frame", "last_frame_image",
++                            "image", "images", "input_reference", "reference_images", "input_images",
++                            "input_image_files", "reference_audios", "input_audios", "content",
++                        }
++                        if (len(videos) != 1 or not isinstance(videos[0], UploadFile)
++                                or not videos[0].filename or videos[0].content_type != "video/mp4"
++                                or videos[0].size is None or not 0 < videos[0].size <= 64 * 1024**2
++                                or any(key.removesuffix("[]") in reference_fields for key in metadata)
++                                or any(key != "input_videos" and (isinstance(value, UploadFile)
++                                       or key.removesuffix("[]") in reference_fields)
++                                       for key, value in form.multi_items())):
++                            raise ValueError()
++                        header = await videos[0].read(12)
++                        if len(header) < 12 or header[4:8] != b"ftyp":
++                            raise ValueError()
++                        upscale = True
 +        else:
 +            payload = json.loads(body)
          if not isinstance(payload, dict):
              raise ValueError()
 -        row = await asyncio.to_thread(submit_video, owner, idem, payload, token, origin)
 +        wire = {"body": base64.b64encode(body).decode("ascii"), "content_type": content_type} if wallet else None
-+        row = await asyncio.to_thread(submit_video, owner, idem, payload, token, origin, wire=wire)
++        row = await asyncio.to_thread(submit_video, owner, idem, payload, token, origin,
++                                      wire=wire, upscale=upscale)
      except AdmissionError as error:
          raise HTTPException(error.status, error.code) from None
      except (ValueError, UnicodeError, TypeError):
-@@ -462,12 +634,21 @@ async def retry_video(identifier: str, request: Request):
+@@ -462,12 +665,21 @@ async def retry_video(identifier: str, request: Request):
      row = await owned_video(identifier, request)
      with db() as c:
          c.execute("BEGIN IMMEDIATE")

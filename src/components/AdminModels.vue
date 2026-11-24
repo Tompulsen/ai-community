@@ -9,7 +9,7 @@ import { kindLabels, searchModels } from '../../shared/studio/model-catalog'
 import ContentSkeleton from './ContentSkeleton.vue'
 
 const props = defineProps<{ confirmLeave: () => boolean | Promise<boolean> }>()
-type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string; durationInput: string; defaultDurationInput: string | number; ratioInput: string; sizesInput: string; unsupportedInput: string }
+type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string; durationInput: string; defaultDurationInput: string | number; ratioInput: string; sizesInput: string; unsupportedInput: string; resolutionValuesInput: string }
 type Row = CreationModel & { available: boolean; setting?: ModelTypeSetting }
 const models = ref<CreationModel[]>([]), settings = ref<ModelTypeSetting[]>([])
 const groups = ref<CreationGroup[]>([]), groupFilter = ref('')
@@ -58,6 +58,7 @@ function edit(item: Row) {
     durationInput: video?.durations?.join(', ') || '', defaultDurationInput: video?.autoDuration?.toString() || '',
     ratioInput: video?.aspectRatios?.join(', ') || '', sizesInput: video?.sizes ? JSON.stringify(video.sizes, null, 2) : '',
     unsupportedInput: video?.unsupportedParameters?.join(', ') || '',
+    resolutionValuesInput: video?.resolutionValues ? JSON.stringify(video.resolutionValues, null, 2) : '',
     ...(setting.kind === 'image' ? { image: { ...setting.image } } : {}),
     ...(setting.kind === 'video' ? { video: video ? JSON.parse(JSON.stringify(video)) : {} } : {}),
     ...(setting.kind === 'text' ? { text: { ...setting.text } } : {}),
@@ -138,7 +139,7 @@ function changeKind() {
   if (item.kind === 'image') item.image ||= {}; else delete item.image
   if (item.kind === 'video') item.video ||= {}; else {
     delete item.video
-    item.resolutionInput = ''; item.durationInput = ''; item.defaultDurationInput = ''; item.ratioInput = ''; item.sizesInput = ''; item.unsupportedInput = ''
+    item.resolutionInput = ''; item.durationInput = ''; item.defaultDurationInput = ''; item.ratioInput = ''; item.sizesInput = ''; item.unsupportedInput = ''; item.resolutionValuesInput = ''
   }
   if (geminiImage.value && item.protocol === 'async') delete item.protocol
 }
@@ -176,6 +177,8 @@ function normalized(): ModelTypeSetting {
     else delete video.aspectRatios
     if (item.sizesInput.trim()) video.sizes = JSON.parse(item.sizesInput)
     else delete video.sizes
+    if (item.resolutionValuesInput.trim()) video.resolutionValues = JSON.parse(item.resolutionValuesInput)
+    else delete video.resolutionValues
     if (item.unsupportedInput.trim()) video.unsupportedParameters = item.unsupportedInput.split(/[\s,，]+/u).filter(Boolean)
     else delete video.unsupportedParameters
   }
@@ -212,7 +215,7 @@ async function save() {
   let item: ModelTypeSetting
   try { item = normalized() }
   catch {
-    error.value = '精确尺寸须为有效的 JSON 对象，按分辨率和画面比例填写宽高。'
+    error.value = '精确尺寸和分辨率映射须为有效的 JSON 对象。'
     await nextTick(); validationError.value?.focus()
     return
   }
@@ -224,7 +227,8 @@ async function save() {
     error.value = issue.path.includes('tags') ? '模型标签最多 12 个，每个最多 32 字符，不能重复。'
       : issue.path.includes('durations') || issue.path.includes('autoDuration') ? '请检查视频时长：使用 1 到 3600 的整数秒，可选值不能重复，默认值须包含在可选值中。'
       : issue.path.includes('aspectRatios') ? '请检查可选画面比例：使用 16:9 等有效比例，不能重复。'
-      : issue.path.includes('sizes') ? '精确尺寸须按可选分辨率和画面比例完整配置，宽高短边须匹配分辨率。'
+      : issue.path.includes('sizes') ? issue.message.includes('不发送') ? issue.message : '精确尺寸须按可选分辨率和画面比例完整配置，宽高短边须匹配分辨率。'
+      : issue.path.includes('resolutionValues') ? '分辨率映射须使用可选分辨率作为键，值为有效的上游参数。'
       : issue.path.includes('unsupportedParameters') ? '不支持的参数须为字母开头的字段名，只能包含字母、数字和下划线，不能重复。'
       : issue.path.includes('autoAspectRatio') ? '请检查自动画面比例：使用 auto 或 16:9 等有效比例。'
         : issue.path.includes('video') ? '请检查视频分辨率：使用 480p、720p、4k 等档位；自动值须包含在可选值中，且可选值不能重复。'
@@ -310,6 +314,8 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
               <p v-if="geminiImage && draft.apiFormat !== 'gemini'" class="form-note">图片对话接口的尺寸、画质和背景由上游决定。</p>
               <template v-if="draft.kind === 'video' && draft.video">
                 <div class="model-field-pair">
+                  <label class="field"><span>视频处理</span><select :value="draft.video.operation || 'generate'" class="control" @change="draft.video.operation = ($event.target as HTMLSelectElement).value as 'generate' | 'upscale'"><option value="generate">视频生成</option><option value="upscale">视频超分</option></select></label>
+                  <label class="check-field"><input :checked="draft.video.sendSize !== false" type="checkbox" @change="draft.video.sendSize = ($event.target as HTMLInputElement).checked" />发送尺寸</label>
                   <label class="field"><span>自动分辨率</span><input v-model="draft.video.autoResolution" class="control" maxlength="16" placeholder="auto 或 720p" /></label>
                   <label class="field"><span>可选分辨率</span><input v-model="draft.resolutionInput" class="control" maxlength="256" placeholder="480p, 720p, 1080p" /></label>
                   <label class="field"><span>默认时长（秒）</span><input v-model="draft.defaultDurationInput" class="control" type="number" min="1" max="3600" step="1" /></label>
@@ -322,6 +328,8 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
                 <p class="form-note">可选值以逗号分隔；留空时使用默认配置。</p>
                 <label class="field"><span>精确尺寸 JSON</span><textarea v-model="draft.sizesInput" class="control" rows="6" maxlength="20000" spellcheck="false" aria-describedby="model-video-sizes-help" /></label>
                 <p id="model-video-sizes-help" class="form-note">按分辨率和比例填写，例如 {"720p":{"16:9":"1280x720"}}；留空时使用后台默认尺寸规则。</p>
+                <label class="field"><span>分辨率映射 JSON</span><textarea v-model="draft.resolutionValuesInput" class="control" rows="3" maxlength="2000" spellcheck="false" aria-describedby="model-video-resolution-values-help" /></label>
+                <p id="model-video-resolution-values-help" class="form-note">例如 {"720p":"tier_720p"}；留空时发送可选分辨率原值。</p>
               </template>
             </section>
             <label class="field"><span>备注</span><textarea v-model="draft.remark" class="control" rows="3" maxlength="2000" aria-describedby="model-remark-help" /></label>
@@ -390,6 +398,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 .model-fields { display: grid; gap: 16px; }
 .model-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .model-field-pair > *, .model-fields > * { min-width: 0; }
+.check-field { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
 .model-parameters { display: grid; gap: 16px; padding-top: 20px; border-top: 1px solid var(--border); }
 .model-parameters h4 { font-size: 14px; font-weight: 500; }
 .model-parameters .form-note { margin: 0; }

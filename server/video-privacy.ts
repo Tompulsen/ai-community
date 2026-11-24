@@ -1,13 +1,54 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, rename, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdtemp, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { httpError } from './auth.ts';
 
 interface SanitizedVideo { path: string; type: string; size: number; md5: string }
 const processing = new Map<string, Promise<SanitizedVideo>>();
 const queues: Promise<unknown>[] = [Promise.resolve(), Promise.resolve()];
 let queueIndex = 0;
+
+export async function videoDurationSeconds(bytes: Uint8Array, type: string, signal: AbortSignal): Promise<number> {
+  if (type !== 'video/mp4') throw httpError(400, '源视频须为 MP4。');
+  signal.throwIfAborted();
+  const directory = await mkdtemp(join(tmpdir(), 'community-video-duration-'));
+  try {
+    const source = join(directory, 'source');
+    await writeFile(source, bytes, { mode: 0o600 });
+    const output = await new Promise<string>((accept, reject) => {
+      const child = spawn('ffprobe', ['-v', 'error', '-threads', '2', '-protocol_whitelist', 'file,pipe',
+        '-f', 'mov', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type,duration:format=duration',
+        '-of', 'json', source], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      let result = '';
+      const stop = () => { child.kill('SIGKILL'); };
+      const timeout = setTimeout(stop, 15000);
+      timeout.unref();
+      signal.addEventListener('abort', stop, { once: true });
+      if (signal.aborted) stop();
+      child.stdout.on('data', (chunk: Buffer) => {
+        result += chunk.toString();
+        if (result.length > 65536) stop();
+      });
+      child.once('error', error => { clearTimeout(timeout); signal.removeEventListener('abort', stop); reject(error); });
+      child.once('close', code => {
+        clearTimeout(timeout); signal.removeEventListener('abort', stop);
+        if (signal.aborted) reject(signal.reason);
+        else if (code !== 0 || result.length > 65536) reject(httpError(400, '无法读取源视频，请重新上传有效视频。'));
+        else accept(result);
+      });
+    });
+    let info: { streams?: { codec_type?: string; duration?: string }[]; format?: { duration?: string } };
+    try { info = JSON.parse(output); } catch { throw httpError(400, '无法读取源视频时长，请重新上传。'); }
+    if (!info.streams?.some(stream => stream.codec_type === 'video')) throw httpError(400, '源文件必须包含视频画面。');
+    const duration = Math.max(...[info.format?.duration, ...info.streams.map(stream => stream.duration)]
+      .map(Number).filter(Number.isFinite));
+    if (!Number.isFinite(duration) || duration <= 0 || duration > 3600) throw httpError(400, '源视频时长须大于 0 且不超过 3600 秒。');
+    return duration;
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
 
 export async function privateMetadataFreeVideo(source: string, type: string, maximumSize = Number.MAX_SAFE_INTEGER): Promise<SanitizedVideo> {
   const format = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogg', 'audio/ogg': 'ogg', 'application/ogg': 'ogg' }[type];

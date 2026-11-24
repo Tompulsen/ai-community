@@ -62,7 +62,7 @@ export interface CreationTask {
   errorStatus?: number
   submissionError?: string
   sourceWorkId?: string
-  references: { name: string; url: string; id?: string; fromWorkId?: string }[]
+  references: { name: string; url: string; id?: string; fromWorkId?: string; type?: string; duration?: number }[]
   publicationFiles?: string[]
   publicationReferences?: string[]
   publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; details?: PublicationDetails; files?: string[]; work?: Work }>>
@@ -783,7 +783,9 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   const version = epoch, acceptedOwner = activeOwner(), acceptedAccount = /^[1-9]\d*$/.test(acceptedOwner) ? acceptedOwner : session.user?.accountId
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
-  if (!owner || owner !== activeOwner() || !input.model.trim() || !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
+  const upscale = input.kind === 'video' && configuredModel?.video?.operation === 'upscale'
+  if (!owner || owner !== activeOwner() || !input.model.trim() || !upscale && !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
+  if (upscale && (input.references?.length !== 1 || !input.references[0]?.type?.startsWith('video/') || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(input.references[0].url))) throw new Error('视频超分需要上传一个源视频。')
   input = JSON.parse(JSON.stringify(input)) as CreationInput
   if (input.apiFormat !== 'auto') normalizeImageRequest(input, input.apiFormat)
   if (input.mediaBranch) {
@@ -808,7 +810,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     input.references = [...references.values()]
     input.imageContext = { turns: input.imageContext.turns.map(turn => ({ prompt: turn.prompt, images: [] })) }
   }
-  for (const file of input.references || []) file.url = await prepareImage(file.url)
+  for (const file of input.references || []) {
+    if (upscale && file.type?.startsWith('video/')) continue
+    file.url = await prepareImage(file.url)
+  }
   if (compactImageContext) input.references = [...new Map((input.references || []).map(file => [file.url, file])).values()]
   for (const turn of input.imageContext?.turns || []) {
     turn.images = await Promise.all(turn.images.map(prepareImage))
@@ -1326,7 +1331,7 @@ async function preparePublication(task: CreationTask, title: string, destination
   }
   if (destination === 'community') {
     task.publicationReferences ??= []
-    const references = publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references
+    const references = (publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references).filter(file => !file.type?.startsWith('video/'))
     for (let index = task.publicationReferences.length; index < references.length; index++) {
       task.publicationReferences.push(await uploadMedia(references[index]!.url, 'image', `reference-${index + 1}`))
       await persist(true); checkOwner()

@@ -26,6 +26,7 @@ export function evenVideoDimension(value: number) {
 }
 
 export function calculateVideoSize(resolution: string, ratio: string) {
+  if (resolution === "2k") throw new Error("2k 是上游分辨率档位，不能换算为像素尺寸");
   const short =
     resolution === "4k"
       ? 2160
@@ -50,12 +51,14 @@ export function selectedVideoSize(
   config: Pick<SizeConfig, "resolution" | "aspectRatio">,
   setting?: VideoModelSetting,
 ) {
+  if (setting?.sendSize === false || config.resolution === "2k") return "auto";
   if (config.resolution === "auto" || ["auto", "adaptive"].includes(config.aspectRatio)) return "auto";
   if (setting?.sizes) return setting.sizes[config.resolution]?.[config.aspectRatio] ?? "auto";
   return calculateVideoSize(config.resolution, config.aspectRatio);
 }
 
 export function videoSizePreview(config: SizeConfig) {
+  if (config.resolution === "2k") return "auto";
   return isVideoSizeAuto(config)
     ? calculateVideoSize(config.resolution, "16:9")
     : config.size;

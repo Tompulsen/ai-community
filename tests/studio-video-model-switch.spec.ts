@@ -3,6 +3,7 @@ import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import { buildCreationPayload, validateCreationInput } from '../server/creation-contract'
 import type { CreationModel } from '../src/native-studio'
+import { readFile } from 'node:fs/promises'
 
 async function fixture(page: Page) {
   await mockUnifiedAccount(page, true)
@@ -204,4 +205,93 @@ test('homepage video switches use supported settings and retain the adjusted dra
   await page.reload()
   await parameters(page)
   await expect(resolution(page, '720P')).toBeChecked()
+})
+
+test('official video tiers are selectable while size fields stay disabled by backend configuration', async ({ page }) => {
+  const { models, calls } = await fixture(page)
+  models.unshift({ id: '火山2.5官转', kinds: ['video'], video: { parameterFormat: 'openai', sendSize: false,
+    resolutions: ['720p', '1080p', '2k'], autoResolution: '720p', durations: [4, 10, 30], autoDuration: 10,
+    aspectRatios: ['16:9', '9:16'], resolutionValues: { '720p': 'tier_720p', '1080p': 'tier_1080p', '2k': 'tier_2k' } } })
+  await page.addInitScript(() => localStorage.setItem('octopus:user-17:native-creation-draft:video', JSON.stringify({
+    model: '火山2.5官转', prompt: '保存的官转草稿', manualSize: '1920x1080', ratio: '16:9', duration: 10,
+    videoOptions: { mode: 'text-to-video', resolution: '720p' }, references: [],
+  })))
+  await page.goto('/create/video')
+  await parameters(page)
+  await resolution(page, '2K').check()
+  await page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '9:16', exact: true }).check()
+  await page.getByText('自定义参数', { exact: true }).click()
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('官转视频')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ model: '火山2.5官转', size: 'auto', aspect_ratio: '9:16', duration: 10, videoOptions: { resolution: '2k' } })
+})
+
+test('video upscale requires one owned MP4, previews source metadata and submits without a prompt', async ({ page }, info) => {
+  const { models, calls } = await fixture(page)
+  models.unshift({ id: 'DMC-video-upscale', kinds: ['video'], video: { operation: 'upscale', parameterFormat: 'openai', sendSize: false,
+    resolutions: ['720p', '1080p', '2k', '4k'], autoResolution: '1080p' } })
+  const video = await readFile('tests/fixtures/poster-black-intro.mp4')
+  let uploads = 0, processingReads = 0
+  let ready!: () => void
+  const processing = new Promise<void>(resolve => { ready = resolve })
+  const uploaded = { id: 'ownedupscalevideo', name: 'source.mp4', type: 'video/mp4', size: video.length, url: '/legacy-files/ownedupscalevideo' }
+  await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 64, imagesMb: 20, videosMb: 64, filesMb: 20 } }))
+  await page.route('**/api/uploads', route => {
+    uploads++
+    return route.fulfill({ json: { file: { ...uploaded, processing: 'pending' } } })
+  })
+  await page.route('**/api/uploads/ownedupscalevideo', async route => {
+    processingReads++
+    if (processingReads > 1) await processing
+    return route.fulfill({ json: { file: { ...uploaded, processing: processingReads === 1 ? 'processing' : 'ready' } } })
+  })
+  await page.route('**/legacy-files/ownedupscalevideo', route => route.fulfill({ body: video, contentType: 'video/mp4' }))
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/create/video')
+  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeDisabled()
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).not.toHaveAttribute('required')
+  await parameters(page)
+  await expect(page.getByRole('radiogroup', { name: '生成方式', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('slider', { name: '视频时长', exact: true })).toHaveCount(0)
+  await expect(resolution(page, '1080P')).toBeChecked()
+  await resolution(page, '2K').check()
+  await page.getByText('自定义参数', { exact: true }).click()
+  await expect(page.getByLabel('尺寸', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('参考图来源', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  const picker = page.getByLabel('添加源视频', { exact: true })
+  await expect(picker).toHaveAttribute('accept', 'video/mp4,.mp4')
+  await picker.setInputFiles({ name: 'source.webm', mimeType: 'video/webm', buffer: Buffer.from('invalid') })
+  await expect(page.getByRole('alert').filter({ hasText: '请选择 MP4 视频' })).toBeVisible()
+  expect(uploads).toBe(0)
+  await page.getByRole('button', { name: '移除附件 source.webm', exact: true }).click()
+  await picker.setInputFiles({ name: 'source.mp4', mimeType: 'video/mp4', buffer: video })
+  await expect.poll(() => uploads).toBe(1)
+  await expect.poll(() => processingReads).toBeGreaterThan(0)
+  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeDisabled()
+  expect(calls).toHaveLength(0)
+  ready()
+  const source = page.getByLabel('源视频：source.mp4', { exact: true })
+  await expect(source).toHaveAttribute('controls', '')
+  await expect.poll(() => source.evaluate((element: HTMLVideoElement) => element.duration)).toBe(2.5)
+  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeEnabled()
+  expect(calls).toHaveLength(0)
+  await page.getByRole('button', { name: '模型价格', exact: true }).click()
+  await expect(page.locator('.billing-cost')).toContainText('本次 3 秒视频')
+  await page.keyboard.press('Escape')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`video-upscale-${width}.png`) })
+  }
+  await page.getByRole('button', { name: '开始超分', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ model: 'DMC-video-upscale', prompt: '', size: 'auto', referenceUrls: ['/legacy-files/ownedupscalevideo'], videoOptions: { resolution: '2k' } })
+  await expect(page.locator('.sent-references video')).toHaveCount(1)
+  await expect(page.locator('.sent-references img')).toHaveCount(0)
+  expect(errors).toEqual([])
 })

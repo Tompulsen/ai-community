@@ -42,7 +42,7 @@ export interface CreationInput {
 }
 export interface CreationOutput { url?: string; b64_json?: string; text?: string }
 export interface CreationPayload { path: string; body: string | FormData; contentType?: 'application/json' }
-export interface CreationReference { blob: Blob; name?: string }
+export interface CreationReference { blob: Blob; name?: string; mediaType?: 'image' | 'video'; durationSeconds?: number }
 export interface CreationTask {
   id?: string
   upstreamId?: string
@@ -117,7 +117,9 @@ function referenceUrl(value: unknown): value is string {
 export function validateCreationInput(value: unknown): CreationInput {
   if (!record(value) || !['image', 'video', 'text'].includes(String(value.kind))) invalid('请选择有效的创作类型。')
   if (!boundedText(value.model, 200) || !value.model.trim() || /[\r\n]/.test(value.model)) invalid('请选择有效的模型。')
-  if (!boundedText(value.prompt, 100000) || !value.prompt.trim()) invalid('请填写提示词。')
+  // Video operations are checked against the authoritative model setting before submission.
+  if (!boundedText(value.prompt, 100000) && !(value.kind === 'video' && value.prompt === '')) invalid('请填写提示词。')
+  if (value.kind !== 'video' && !value.prompt.trim()) invalid('请填写提示词。')
   const result: CreationInput = { kind: value.kind as CreationKind, model: value.model.trim(), prompt: value.prompt }
   if (value.skills !== undefined) {
     if (!Array.isArray(value.skills) || value.skills.length > maxSelectedSkills
@@ -247,6 +249,7 @@ export function resolveCreationModelSettings(input: CreationInput, modelSetting?
     const references = result.referenceUrls?.length ?? 0
     const mode = result.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
     const video = videoCapabilities(result.model, mode, resolveVideoModelSetting(result.model, setting?.video))
+    if (video?.operation !== 'upscale' && !result.prompt.trim()) invalid('请填写提示词。')
     if (result.duration === undefined && video?.autoDuration !== undefined) result.duration = video.autoDuration
     if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && video?.autoAspectRatio) {
       result.aspect_ratio = video.autoAspectRatio
@@ -308,8 +311,21 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
       ...(input.duration === undefined && videoSetting?.autoDuration !== undefined ? { duration: videoSetting.autoDuration } : {}),
       ...((!input.aspect_ratio || input.aspect_ratio === 'auto') && videoSetting?.autoAspectRatio ? { aspect_ratio: videoSetting.autoAspectRatio } : {}),
     }
-    const payload = creationPayload(automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
+    if (videoSetting?.operation !== 'upscale' && !input.prompt.trim()) invalid('请填写提示词。')
+    const payload = creationPayload(videoSetting?.operation === 'upscale' ? input : automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
     validateVideoRequestParameters(payload.body, mode, videoSetting)
+    if (videoSetting?.resolutionValues) {
+      const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+      const metadata = typeof sent.metadata === 'string' ? JSON.parse(sent.metadata) : sent.metadata
+      for (const source of [sent, metadata]) if (record(source)) for (const key of ['resolution', 'resolution_name']) {
+        if (typeof source[key] === 'string') source[key] = videoSetting.resolutionValues[source[key]] ?? source[key]
+      }
+      if (typeof payload.body === 'string') payload.body = JSON.stringify({ ...sent, ...(metadata !== undefined ? { metadata } : {}) })
+      else {
+        for (const key of ['resolution', 'resolution_name']) if (typeof sent[key] === 'string') payload.body.set(key, sent[key])
+        if (metadata !== undefined) payload.body.set('metadata', JSON.stringify(metadata))
+      }
+    }
     return payload
   } catch (error) {
     if (error instanceof SyntaxError) invalid('视频参数格式无效，请检查自定义参数。')
@@ -386,6 +402,28 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
     return { path: input.protocol === 'async' ? 'async-images/v1/edits' : 'v1/images/edits', body }
   }
   if ((input.n ?? 1) !== 1) invalid('视频任务需逐个提交，不能隐式重复付费请求。')
+  if (videoSetting?.operation === 'upscale') {
+    const source = preparedReferences[0]
+    if (references.length !== 1 || preparedReferences.length !== 1 || source?.mediaType !== 'video'
+      || source.blob.type !== 'video/mp4' || !source.blob.size || source.blob.size > 64 * 1024 * 1024
+      || !Number.isFinite(source.durationSeconds) || source.durationSeconds! <= 0 || source.durationSeconds! > 3600)
+      invalid('请上传一段有效的 MP4 源视频。')
+    const custom = input.videoOptions?.customParameters.trim() ? JSON.parse(input.videoOptions.customParameters) : {}
+    if (!record(custom) || Object.keys(custom).length) invalid('视频超分请通过分辨率控件设置参数，清空自定义参数后重试。')
+    if (Buffer.byteLength(input.prompt, 'utf8') > 24000) invalid('视频超分提示词不能超过 24,000 字节。')
+    const resolution = input.videoOptions?.resolution && input.videoOptions.resolution !== 'auto'
+      ? input.videoOptions.resolution : videoSetting.autoResolution
+    if (!resolution || resolution === 'auto') invalid('请选择视频超分的输出分辨率。')
+    const body = new FormData()
+    body.set('model', input.model)
+    if (input.prompt.trim()) body.set('prompt', input.prompt)
+    body.set('seconds', String(Math.ceil(source.durationSeconds!)))
+    body.set('resolution', resolution)
+    body.set('frame_rate', '0')
+    body.set('metadata', JSON.stringify({ operation: 'upscale' }))
+    body.set('input_videos', source.blob, source.name ?? 'source.mp4')
+    return { path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', body }
+  }
   if (input.videoOptions) {
     const options = input.videoOptions
     if (options.openaiReferenceSource === 'file_id' && options.mode !== 'image-to-video') invalid('文件 ID 参考请使用图生视频，首尾帧请上传两张图片。')
@@ -407,7 +445,7 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
       materials: references.map((url, index) => ({ id: String(index), name: `参考图 ${index + 1}`, type: 'image', url })),
       customParams: { openai: options.customParameters },
       protocolOptions: { openai: { seed: options.seed, generateAudio: options.generateAudio, personGeneration: options.personGeneration } },
-    }, input.model, videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto' ? videoSetting.parameterFormat : undefined)
+    }, input.model, videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto' ? videoSetting.parameterFormat : undefined, videoSetting)
     const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
     if (sent.model !== input.model || sent.prompt !== input.prompt) invalid('自定义参数不能覆盖模型或提示词。')
     return { ...payload, path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', ...(typeof payload.body === 'string' ? { contentType: 'application/json' } as const : {}) }
@@ -415,7 +453,7 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
   const path = input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos'
   const seconds = String(input.duration ?? 5)
   const ratio = input.aspect_ratio === 'auto' ? '16:9' : input.aspect_ratio ?? '16:9'
-  const size = input.size && input.size !== 'auto' ? input.size : undefined
+  const size = videoSetting?.sendSize !== false && input.size && input.size !== 'auto' ? input.size : undefined
   const base = { model: input.model, prompt: input.prompt, seconds }
   const parameterFormat = videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto'
     ? videoSetting.parameterFormat : videoParameterFormat('openai', input.model)

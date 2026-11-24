@@ -5,7 +5,8 @@
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import { get as httpGet } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -16,6 +17,7 @@ import { readSkillPackage } from './skill-package.ts'
 import { httpError } from './auth.ts'
 import { NewApiError } from './native-account/config.ts'
 import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
+import { handleContent } from './content.ts'
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -148,12 +150,20 @@ function fixture(t, options = {}) {
   app.setErrorHandler((error, _request, reply) => {
     reply.code(error.statusCode || error.status || 500).send({ error: { message: error.message } })
   })
-  app.all('/api/creation/*', async (request, reply) => {
-    const accountId = String(request.headers['x-test-account'] || '17')
+  const route = async (request, reply) => {
+    const accountId = String(request.headers['x-test-account'] || /(?:^|;\s*)fixture-account=(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || '17')
     const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: options.isAdmin === true }
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
       db: { async query(sql, params) {
+        if (options.mediaFiles && sql.includes('FROM drive_file')) {
+          if (sql.includes('WITH visible_file')) {
+            const file = options.mediaFiles.find(file => file.id === params[1] && file.userId === params[0])
+            return { rows: file ? [{ ...file, publiclyVisible: false }] : [] }
+          }
+          assert.match(sql, /WHERE id=\$1 AND "userId"=\$2 AND "storedInternal" AND NOT "isLink"/)
+          return { rows: options.mediaFiles.filter(file => file.id === params[0] && file.userId === params[1] && file.storedInternal && !file.isLink) }
+        }
         if (options.workQuery && (sql.includes('FROM community_submission s') || sql.includes('FROM drive_file'))) return { rows: await options.workQuery(sql, params) }
         if (options.skillRows && sql.includes('FROM community_skill')) return { rows: await options.skillRows(sql, params) }
         assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
@@ -166,9 +176,14 @@ function fixture(t, options = {}) {
       requireAdmin() { if (!user.isAdmin) throw httpError(403, '需要管理员权限。'); return user },
       json(status, value) { reply.code(status).send(value) },
     }
-    if (!await handleCreation(ctx, services)) reply.code(404).send({ error: { message: 'Missing route' } })
+    if (!await handleCreation(ctx, services) && !(options.mediaFiles && await handleContent(ctx))) reply.code(404).send({ error: { message: 'Missing route' } })
     return reply
-  })
+  }
+  app.all('/api/creation/*', route)
+  if (options.mediaFiles) {
+    app.get('/api/uploads/:id', route)
+    app.route({ method: ['GET', 'HEAD'], url: '/legacy-files/:id', handler: route })
+  }
   return { app, values, calls, credentialCalls, catalogueCalls, groupCalls, redis, services }
 }
 
@@ -1000,6 +1015,78 @@ test('administrator video resolution choices still reject unsupported explicit v
   assert.equal(credentialCalls.length, 0)
 })
 
+for (const [label, video] of [
+  ['built-in defaults', undefined],
+  ['partial administrator settings', { resolutions: ['1080p'], autoResolution: '1080p' }],
+  ['explicit operation', { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }],
+]) test(`video upscaling with ${label} reads an owned MP4 and reserves its measured duration`, async t => {
+  if (spawnSync('ffprobe', ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0) return t.skip('FFprobe is unavailable')
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-upscale-source-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  const bytes = await readFile(new URL('../tests/fixtures/poster-black-intro.mp4', import.meta.url))
+  await writeFile(path.join(filesRoot, 'source-video'), bytes)
+  const source = { id: 'source1', userId: 'local-17', name: 'private.mp4', type: 'video/mp4', size: String(bytes.length),
+    accessKey: 'source-video', storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'source-video': 1 } } }
+  const model = 'DMC 视频超分'
+  const f = fixture(t, { filesRoot, mediaFiles: [source], modelTypes: video ? [{ id: model, kind: 'video', video }] : [], fetch(_url, init) {
+    assert(init.body instanceof FormData)
+    assert.equal(init.body.get('seconds'), '3')
+    const metadata = JSON.parse(init.body.get('metadata'))
+    assert.equal(metadata.operation, 'upscale')
+    const file = init.body.get('input_videos')
+    assert(file instanceof Blob)
+    assert.equal(file.type, 'video/mp4')
+    assert.equal(file.size, bytes.length)
+    return Response.json({ id: 'upscale-job', status: 'queued' })
+  } })
+  const input = { kind: 'video', model, prompt: '', requestId: 'upscale-source', duration: 1,
+    referenceUrls: ['/legacy-files/source1'], videoOptions: { mode: 'reference-to-video', resolution: '1080p' } }
+  const response = await submit(f.app, input, { cookie: 'fixture-account=17' })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.equal(f.calls.length, 1)
+  assert.equal(response.json().upstreamId, 'upscale-job')
+  assert.equal((await submit(f.app, input, { cookie: 'fixture-account=17' })).statusCode, 200)
+  assert.equal(f.calls.length, 1)
+  const other = await submit(f.app, { ...input, requestId: 'upscale-foreign' }, { 'x-test-account': '18', cookie: 'fixture-account=18' })
+  assert.equal(other.statusCode, 404, other.payload)
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.credentialCalls.length, 1)
+})
+
+test('video upscaling rejects unowned, external, oversized and invalid video sources before gateway credentials', async t => {
+  if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable')
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-upscale-invalid-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  await writeFile(path.join(filesRoot, 'invalid-video'), 'not a video')
+  const audioPath = path.join(filesRoot, 'audio-only')
+  const audio = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+    '-t', '0.5', '-c:a', 'aac', '-f', 'mp4', audioPath], { windowsHide: true, encoding: 'utf8' })
+  assert.equal(audio.status, 0, audio.stderr)
+  const audioBytes = await readFile(audioPath)
+  const base = { userId: 'local-17', name: 'source.mp4', type: 'video/mp4', size: 11, accessKey: 'invalid-video',
+    storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'invalid-video': 1 } } }
+  const model = 'DMC 视频超分', video = { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }
+  const f = fixture(t, { filesRoot, modelTypes: [{ id: model, kind: 'video', video }], mediaFiles: [
+    { ...base, id: 'invalid1' }, { ...base, id: 'foreign1', userId: 'someone-else' },
+    { ...base, id: 'webm1', type: 'video/webm' }, { ...base, id: 'large1', size: 64 * 1024 * 1024 + 1 },
+    { ...base, id: 'audio1', size: audioBytes.length, accessKey: 'audio-only', properties: { communityVideoPrivacy: { 'audio-only': 1 } } },
+    { ...base, id: 'pending1', properties: { communityMedia: { state: 'processing' } } },
+  ] })
+  for (const [index, [references, expected]] of [
+    [[], 400], [['/legacy-files/invalid1', '/legacy-files/foreign1'], 400], [['/legacy-files/foreign1'], 404],
+    [['/legacy-files/invalid1'], 400], [['/legacy-files/webm1'], 400], [['/legacy-files/large1'], 413],
+    [['/legacy-files/pending1'], 400], [['/legacy-files/audio1'], 400], [['https://media.example/source.mp4'], 400],
+    [['/legacy-files/invalid1?variant=thumbnail'], 400], [['data:video/mp4;base64,YQ=='], 400],
+  ].entries()) {
+    const response = await submit(f.app, { kind: 'video', model, prompt: '', requestId: `upscale-invalid-${index}`,
+      referenceUrls: references, videoOptions: { mode: 'reference-to-video', resolution: '1080p' } }, { cookie: 'fixture-account=17' })
+    assert.equal(response.statusCode, expected, response.payload)
+  }
+  assert.equal(f.calls.length, 0)
+  assert.equal(f.credentialCalls.length, 0)
+  assert.equal(f.values.size, 0)
+})
+
 test('upstream read throttling preserves HTTP 429 and Retry-After without replaying requests', async t => {
   for (const retryAfter of ['7', 'Sun, 22 Nov 2026 12:00:00 GMT', undefined]) {
     const { app, calls } = fixture(t, { fetch(_url, init) {
@@ -1327,6 +1414,10 @@ test('model catalogs publish server video defaults and validated overrides witho
     { id: 'MiniMax H3视频生成', resolutions: ['768p', '1080p'] },
     { id: 'MiniMax H3视频生成', video: { resolutions: ['540p'], durations: [4, 8, 12] }, resolutions: ['540p'] },
     { id: 'sd2.0-fast-720p', resolutions: ['720p'] },
+    { id: '火山2.0 Fast官转', resolutions: ['720p', '1080p', '2k'] },
+    { id: '火山2.0 Mini官转', resolutions: ['720p', '1080p', '2k'] },
+    { id: '火山2.5官转', resolutions: ['720p', '1080p', '2k'] },
+    { id: 'DMC 视频超分', resolutions: ['720p', '1080p', '2k', '4k'] },
   ]) {
     const { app } = fixture(t, {
       modelTypes: video ? [{ id, kind: 'video', video }] : [],

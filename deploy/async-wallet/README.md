@@ -25,7 +25,8 @@ Images cover synchronous JSON, synchronous SSE, queued generation and multipart
 editing. Community video requests preserve their original JSON or multipart body
 and use New API's native `/v1/videos` plus its existing task-polling path. This
 also fixes the old wrapper's JSON-only/1 MB input mismatch for community uploads.
-Signed input/output is capped at 64 MiB. Ordinary video requests retain the
+Signed input/output is capped at 65 MiB, allowing a 64 MiB MP4 plus form overhead.
+Ordinary video requests retain the
 previous format and size limit. The video overlay adds `python-multipart==0.0.33`;
 it preserves the base image's command and runs as `10001:10001`.
 
@@ -93,6 +94,30 @@ already wallet-patched runtime, reverse its **previous exact** video patch in a
 separate copy and verify the original checksum before preparing the new overlay.
 Never reverse a patch in a live container. This repair cannot restore content
 that the upstream provider does not make available.
+
+DMC video upscaling (2026-11-25): an optional prompt is accepted only for a
+verified wallet multipart request with the exact DMC upscale model,
+`metadata.operation=upscale`, and exactly one uploaded MP4 in `input_videos`.
+Duplicate fields, input aliases and additional media are rejected. An optional
+prompt is limited to 24,000 UTF-8 bytes; ordinary generation still requires a
+nonempty prompt. The signed original request bytes, task idempotency, storage
+reservations and error redaction are preserved. New API independently validates
+the source video and duration before billing.
+
+Run the video regressions against complete matching patched video sources:
+
+```sh
+ASYNC_PROXY_SOURCE_ROOT=/private/patched-proxy-sources \
+  python -m pytest -q deploy/async-wallet/test_video_upscale.py \
+  deploy/async-wallet/test_community_wallet.py \
+  deploy/async-wallet/test_video_capacity.py \
+  deploy/async-wallet/test_proxy_integration.py -k 'not image'
+```
+
+This video subset passed 68 tests, including a complete 64 MiB upload with form
+overhead, the 65 MiB signed-body limit, the unchanged 1 MiB unsigned-body limit,
+UTF-8 prompt bounds, exact downstream bytes and signatures, and duplicate-input
+rejection. Image integration tests require their separate matching image source.
 
 Validation on 2026-11-16: all 22 proxy tests passed. Both overlay preparations
 verified the exported source hashes and applied successfully; every prepared
