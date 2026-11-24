@@ -19,9 +19,9 @@ import { extractMessageInteractions, formatOptionResponse, messageInteractionPro
 import { getToolArguments, isToolRecord, restoreInterruptedToolCalls } from '../shared/studio/tool-result'
 import type { StudioToolActivity } from './studio-message-types'
 import { normalizeChatProjects, normalizeChatProjectSessions, type ChatProject } from '../shared/studio/chat-projects'
-import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills'
+import { skillInstructions, resolveLegacySkillIds, type SkillKind, type SkillReference } from '../shared/community-skills'
 import { pinnedContext, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
-export interface Skill { kind: SkillKind; id: string; name: string; description: string; body: string; sha256: string }
+export interface Skill { kind: SkillKind; id: string; name: string; description: string; body: string; sha256: string; legacyId?: string | null }
 export interface NativeMessage extends ChatMessage {
   taskId?: string
   sources?: { title: string; url: string; snippet: string }[]
@@ -520,13 +520,14 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       prefix.push({ role: message.role, content: images.length ? [{ type: 'text', text }, ...images] : text })
     }
     prefix.push({ role: 'system', content: messageInteractionPrompt(answer.id) })
-    if (skillIds.some(id => id.startsWith('community-') || !chats.skills.some(skill => skill.id === id))) {
+    if (skillIds.length) {
       const catalog = await api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: acceptedAccount })
       if (!current()) return accepted
       chats.skills = catalog.items || []
     }
-    const selectedSkills = await Promise.all(chats.skills.filter(skill => skillIds.includes(skill.id)).map(skill => resolveCommunitySkill(skill, acceptedAccount, 'text')))
-    if (selectedSkills.length !== skillIds.length) throw new Error('部分技能尚未读取，请刷新技能列表后重试。')
+    const resolvedIds = resolveLegacySkillIds(skillIds, chats.skills)
+    const selectedSkills = await Promise.all(chats.skills.filter(skill => resolvedIds.includes(skill.id)).map(skill => resolveCommunitySkill(skill, acceptedAccount, 'text')))
+    if (selectedSkills.length !== resolvedIds.length) throw new Error('部分技能已下架或不可用，请刷新技能列表后重新选择。')
     await Promise.all(selectedSkills.map(skill => verifySkillDocument(skill.body, skill.sha256)))
     if (!current()) return accepted
     for (const skill of selectedSkills) prefix.push({ role: 'system', content: skillInstructions(skill.body) })

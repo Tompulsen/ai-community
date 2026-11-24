@@ -6,8 +6,29 @@ import pg from 'pg'
 import { ZipFile } from 'yazl'
 import { readSkillPackage, skillDocument } from './skill-package.ts'
 import { approvedCommunitySkills, handleCommunitySkills, mediaSkillPrompt } from './community-skills.ts'
+import { readLegacySkillPackages, importLegacySkills } from './legacy-skills.mjs'
+import { fileURLToPath } from 'node:url'
+import { resolveLegacySkillIds } from '../shared/community-skills.ts'
 
 const document = '---\nname: image-composition\ndescription: 构图建议\n---\n先分析主体，再给出构图建议。\n'
+const legacyPackages = () => readLegacySkillPackages(fileURLToPath(new URL('./skills/', import.meta.url)))
+
+test('early skills retain their instructions and license; historical selections resolve once', async () => {
+  const packages = await legacyPackages()
+  assert.equal(packages.length, 56)
+  assert(!packages.some(skill => skill.legacyId === 'document-workspace'))
+  for (const skill of packages) {
+    assert.equal(skill.body, await readFile(new URL(`./skills/${skill.legacyId}/SKILL.md`, import.meta.url), 'utf8'))
+    assert.match(skill.id, /^[a-zA-Z0-9]{1,32}$/)
+  }
+  const photo = packages.find(skill => skill.legacyId === 'photo-revival')
+  assert(photo.files.some(file => file.path === 'photo-revival/LICENSE'))
+  assert.equal((await readSkillPackage(photo.filename, photo.archive)).body, photo.body)
+  const catalog = packages.map(skill => ({ id: `community-${skill.id}`, legacyId: skill.legacyId }))
+  const current = catalog.find(skill => skill.legacyId === 'brainstorming').id
+  assert.deepEqual(resolveLegacySkillIds(['brainstorming', current, 'removed-skill'], catalog), [current, 'removed-skill'])
+  assert.deepEqual(resolveLegacySkillIds(['brainstorming'], []), ['brainstorming'])
+})
 async function zip(entries) {
   const writer = new ZipFile(), chunks = []
   for (const [name, value, options] of entries) writer.addBuffer(Buffer.from(value), name, options)
@@ -63,6 +84,9 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
   await db.query(typeMigration)
   assert.equal((await db.query("SELECT kind FROM community_skill WHERE id='legacy'")).rows[0].kind, 'text')
   await db.query("DELETE FROM community_skill WHERE id='legacy'")
+  const legacyMigration = await readFile(new URL('../migration/20261124-legacy-skills.up.sql', import.meta.url), 'utf8')
+  await db.query(legacyMigration)
+  await db.query(legacyMigration)
   const alice = { id: 'alice', accountId: '17' }, bob = { id: 'bob', accountId: '18' }, admin = { id: 'admin', isAdmin: true }
   let rate = 1
   async function request(method, path, user, body = {}, headers = {}) {
@@ -167,10 +191,36 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     await fails(request('GET', '/api/skills?kind=audio'), 400)
   })
   await t.test('quota and rate limits are enforced without extra writes', async () => {
-    await db.query(`INSERT INTO community_skill SELECT 'quota'||n,"authorId",name,description,body,sha256,filename,archive,size,files,status,official,'quota-request-'||n,"requestHash",version,"reviewNote","reviewedBy","createdAt","updatedAt",kind FROM community_skill CROSS JOIN generate_series(1,99) n WHERE id=$1`, [id])
+    await db.query(`INSERT INTO community_skill SELECT 'quota'||n,"authorId",name,description,body,sha256,filename,archive,size,files,status,official,'quota-request-'||n,"requestHash",version,"reviewNote","reviewedBy","createdAt","updatedAt",kind,"legacyId" FROM community_skill CROSS JOIN generate_series(1,99) n WHERE id=$1`, [id])
     await fails(request('POST', '/api/skills', alice, payload()), 413)
     rate = 61
     await fails(request('POST', '/api/skills/inspect', alice, create.upload), 429)
     assert((await db.query('SELECT count(*)::int AS n FROM moderation_log')).rows[0].n >= 7)
+  })
+  await t.test('legacy import is atomic and idempotent; existing edits, aliases and package attachments survive', async () => {
+    rate = 1
+    const packages = await legacyPackages()
+    await assert.rejects(importLegacySkills(db, 'missing', packages))
+    await assert.rejects(importLegacySkills(db, alice.id, packages), /quota/)
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM community_skill WHERE "legacyId" IS NOT NULL')).rows[0].n, 0)
+    const results = await Promise.all([importLegacySkills(db, admin.id, packages), importLegacySkills(db, admin.id, packages)])
+    assert.equal(results.reduce((sum, result) => sum + result.imported, 0), 56)
+    const old = packages.find(pack => pack.legacyId === 'photo-revival')
+    const before = await detail(old.id, admin, true)
+    assert.equal(before.legacyId, 'photo-revival'); assert.equal(before.status, 'published'); assert.equal(before.files.length, 2)
+    assert((await request('GET', '/api/skills?query=photo-revival')).data.items.some(skill => skill.id === old.id))
+    await fails(request('PATCH', `/api/skills/${old.id}`, bob, { kind: 'text', name: before.name, description: before.description, body: before.body, version: 1 }), 404)
+    await request('PATCH', `/api/admin/skills/${old.id}`, admin, { kind: 'image', name: '新版历史技能', description: before.description, body: before.body + '\n新增规则。', version: 1, publish: true })
+    await fails(request('PATCH', `/api/admin/skills/${old.id}`, admin, { kind: 'text', name: before.name, description: before.description, body: before.body, version: 1, publish: true }), 409)
+    assert.equal((await importLegacySkills(db, admin.id, packages)).imported, 0)
+    const current = await detail(old.id, admin, true)
+    assert.equal(current.version, 2); assert.equal(current.kind, 'image'); assert.equal(current.body, before.body + '\n新增规则。')
+    const catalog = (await approvedCommunitySkills(db)).filter(skill => skill.legacyId === 'photo-revival')
+    assert.equal(catalog.length, 1); assert.equal(catalog[0].id, `community-${old.id}`); assert.equal(catalog[0].kind, 'image')
+    const download = await request('GET', `/api/skills/${old.id}/download`)
+    assert.equal((await readSkillPackage('photo-revival.zip', download.data)).body, current.body)
+    await request('POST', `/api/admin/skills/${old.id}/review`, admin, { version: 2, action: 'remove', reason: '更新中' })
+    await importLegacySkills(db, admin.id, packages)
+    assert(!(await approvedCommunitySkills(db)).some(skill => skill.legacyId === 'photo-revival'))
   })
 })

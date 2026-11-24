@@ -51,6 +51,26 @@ const upload = async (page: Page, name = 'SKILL.md') => {
   await page.getByLabel('技能文件', { exact: true }).setInputFiles({ name, mimeType: name.endsWith('.zip') ? 'application/zip' : 'text/markdown', buffer: Buffer.from(body) })
 }
 
+for (const width of [390, 1440]) test(`an administrator edits an early skill from the square at ${width}`, async ({ page }, info) => {
+  const { state, calls } = await fixture(page, true, true)
+  Object.assign(state.skills[0]!, { legacyId: 'brainstorming', official: true })
+  await page.setViewportSize({ width, height: 900 })
+  await page.goto('/skills')
+  await page.getByRole('button', { name: '编辑技能：画面构图助手' }).click()
+  await expect(dialog(page).getByLabel('SKILL.md 内容', { exact: true })).toHaveValue(body)
+  await dialog(page).getByLabel('展示名称').fill('新版早期技能')
+  await dialog(page).getByLabel('SKILL.md 内容', { exact: true }).fill(body + '\n先询问使用目的。')
+  await expect(dialog(page).getByLabel('保存后直接发布至技能广场')).toBeChecked()
+  expect(await dialog(page).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath(`early-skill-editor-${width}.png`), fullPage: true })
+  await dialog(page).getByRole('button', { name: '保存技能', exact: true }).click()
+  await expect(dialog(page)).toBeHidden()
+  expect(calls.at(-1)?.path).toBe('/api/admin/skills/skill01')
+  expect(calls.at(-1)?.body.publish).toBe(true)
+  await page.reload()
+  await expect(page.locator('.skill-card')).toContainText('新版早期技能')
+})
+
 test('community tools open the public square and guests return after login', async ({ page }) => {
   await fixture(page, false)
   await page.goto('/community')
@@ -100,6 +120,7 @@ test('admin reviews actual detail version, requires reasons and preserves confli
   const { state, calls } = await fixture(page, true, true); state.skills[0]!.status = 'pending'
   await page.goto('/admin?tab=skills')
   await expect(page.getByRole('heading', { name: '技能管理', exact: true })).toBeVisible()
+  await page.getByLabel('审核状态').selectOption('pending')
   await page.getByRole('button', { name: '查看与审核', exact: true }).click()
   await dialog(page).getByRole('button', { name: '驳回投稿', exact: true }).click()
   await expect(dialog(page).getByRole('alert')).toContainText('请填写审核或下架原因')
@@ -199,7 +220,7 @@ test('community skills are revalidated before every send and withdrawal blocks s
   state.skills[0]!.status = 'removed'
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('再次分析')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.locator('.chat-message.assistant').last()).toContainText('部分技能尚未读取')
+  await expect(page.locator('.chat-message.assistant').last()).toContainText('部分技能已下架或不可用')
   expect(generated).toHaveLength(1); expect(catalogReads).toBeGreaterThanOrEqual(3)
   await page.getByRole('button', { name: '技能与工具', exact: true }).click()
   await page.getByRole('button', { name: '移除失效技能', exact: true }).click()
@@ -208,6 +229,66 @@ test('community skills are revalidated before every send and withdrawal blocks s
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect.poll(() => generated.length).toBe(2)
   expect(generated[1].chatOptions.messages.some((message: any) => message.role === 'system' && message.content.includes('先分析主体与光线'))).toBe(false)
+})
+async function legacyStudio(page: Page) {
+  const setup = await fixture(page)
+  setup.account.state.user.id = '17'
+  Object.assign(setup.state.skills[0]!, { legacyId: 'brainstorming', official: true })
+  const generated: any[] = []
+  await page.route('**/api/creation/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/models')) return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-5', kinds: ['text'] }] } })
+    if (path.endsWith('/skills/catalog')) return route.fulfill({ json: { items: setup.state.skills.filter(skill => skill.status === 'published').map(skill => ({ ...skill, id: `community-${skill.id}`, body: '' })) } })
+    if (path.endsWith('/mcp/status')) return route.fulfill({ json: { enabled: false, items: [] } })
+    if (path.endsWith('/generate')) generated.push(route.request().postDataJSON())
+    return route.fulfill({ json: { status: 'succeeded', outputs: [{ text: '历史技能调用完成' }], tokenId: 41, protocol: 'sync' } })
+  })
+  await page.goto('/community')
+  await page.evaluate(() => localStorage.setItem('octopus:user-17:native-chat', JSON.stringify({ version: 1, state: {
+    _hasHydrated: true, mediaConversationsMigrated: true, activeId: 'legacy-chat', sessions: [{ id: 'legacy-chat', creationKind: 'text',
+      topic: '已有技能的历史对话', messages: [], settings: {}, skillIds: ['brainstorming', 'community-skill01'], lastUpdate: Date.now() }],
+  } })))
+  await page.goto('/create/text')
+  return { ...setup, generated }
+}
+
+test('historical selections use edited instructions once and cannot bypass type changes or removal', async ({ page }) => {
+  const { state, generated } = await legacyStudio(page)
+  const send = async (text: string) => { await page.getByRole('textbox', { name: '消息', exact: true }).fill(text); await page.getByRole('button', { name: '发送', exact: true }).click() }
+  await send('继续历史对话')
+  await expect.poll(() => generated.length).toBe(1)
+  expect(generated[0].chatOptions.messages.filter((message: any) => message.role === 'system' && message.content.includes('先分析主体与光线'))).toHaveLength(1)
+  const skill = state.skills[0]!
+  skill.body = body + '\n编辑后的最新规则。'; skill.sha256 = createHash('sha256').update(skill.body).digest('hex')
+  await send('采用更新的技能')
+  await expect.poll(() => generated.length).toBe(2)
+  expect(generated[1].chatOptions.messages.filter((message: any) => message.role === 'system' && message.content.includes('编辑后的最新规则'))).toHaveLength(1)
+  skill.kind = 'image'
+  await send('类型修改后继续')
+  await expect(page.locator('.chat-message.assistant').last()).toContainText('技能类型已变化')
+  expect(generated).toHaveLength(2)
+  skill.kind = 'text'; skill.status = 'removed'
+  await send('下架后继续')
+  await expect(page.locator('.chat-message.assistant').last()).toContainText('部分技能已下架或不可用')
+  expect(generated).toHaveLength(2)
+})
+
+test('historical skills remain checked and can be unchecked and selected again without duplicates', async ({ page }) => {
+  const { generated } = await legacyStudio(page)
+  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
+  const choice = page.getByLabel('画面构图助手', { exact: true })
+  await expect(choice).toBeChecked()
+  await choice.uncheck(); await expect(choice).not.toBeChecked()
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('不使用旧技能')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(() => generated.length).toBe(1)
+  expect(generated[0].chatOptions.messages.some((message: any) => message.role === 'system' && message.content.includes('先分析主体与光线'))).toBe(false)
+  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
+  await choice.check(); await page.reload()
+  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
+  await expect(choice).toBeChecked()
+  await expect(page.locator('.skill-list .skill-row')).toHaveCount(1)
 })
 async function typedStudio(page: Page) {
   const fixtureState = await fixture(page)

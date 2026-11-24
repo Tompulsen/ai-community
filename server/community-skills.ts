@@ -12,7 +12,7 @@ const uploadSchema = z.object({ filename: z.string().max(160), data: z.string().
 const saveSchema = z.object({ kind: z.enum(['text', 'image', 'video']), name: plain(100), description: plain(1000), body: z.string().max(skillLimits.bodyBytes),
   upload: uploadSchema.optional(), version: z.number().int().positive().optional(),
   requestId: z.string().regex(/^[a-zA-Z0-9_-]{16,80}$/).optional(), publish: z.boolean().optional() }).strict()
-const columns = 's.id,s."authorId",s.name,s.kind,s.description,s.status,s.official,s.version,s.sha256,s.filename,s.size,s.files,s."createdAt",s."updatedAt"'
+const columns = 's.id,s."authorId",s.name,s.kind,s.description,s.status,s.official,s.version,s.sha256,s.filename,s.size,s.files,s."legacyId",s."createdAt",s."updatedAt"'
 interface SkillRow extends CommunitySkill { archive?: Buffer; requestId: string; requestHash: string }
 function invalid(message = '技能参数无效，请重新核对。', status = 400): never { throw httpError(status, message) }
 function parsed<T>(schema: z.ZodType<T>, value: unknown): T { const result = schema.safeParse(value); return result.success ? result.data : invalid() }
@@ -41,7 +41,7 @@ async function present(ctx: RequestContext, rows: SkillRow[], detail = false) {
   })
 }
 export async function approvedCommunitySkills(db: Queryable) {
-  const { rows } = await db.query('SELECT s.id,s.name,s.kind,s.description,s.sha256 FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
+  const { rows } = await db.query('SELECT s.id,s.name,s.kind,s.description,s.sha256,s."legacyId" FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
   return rows.map(row => ({ ...row, id: `community-${row.id}`, body: '' }))
 }
 

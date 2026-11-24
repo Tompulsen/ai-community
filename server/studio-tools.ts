@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto'
-import { readdir, readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { parse } from 'yaml'
 import { z } from 'zod'
 import { httpError } from './auth.ts'
 import { AccountRequest, accountRequest } from './native-account/index.ts'
@@ -14,7 +12,6 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { RequestContext } from './types.ts'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-const skillRoot = fileURLToPath(new URL('./skills/', import.meta.url))
 const mcpClients = new Map<string, Promise<Client>>()
 const configSchema = z.object({ mcpServers: z.record(z.string().regex(/^[\w-]{1,80}$/), z.object({
   command: z.string().min(1).max(300), args: z.array(z.string().max(4000)).max(100),
@@ -24,14 +21,6 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
 async function limited(ctx: RequestContext, name: string, limit: number) {
   const count = Number(await ctx.redis.eval('local n=redis.call("INCR",KEYS[1]); if n==1 then redis.call("EXPIRE",KEYS[1],60) end; return n', 1, `community-next:tools:rate:${name}:${sha(ctx.user!.id)}`))
   if (count > limit) throw httpError(429, '操作过于频繁，请稍后重试。')
-}
-async function catalog() {
-  const directories = await readdir(skillRoot, { withFileTypes: true })
-  return Promise.all(directories.filter(item => item.isDirectory() && /^[a-z0-9-]{1,64}$/.test(item.name) && item.name !== 'document-workspace').map(async item => {
-    const body = await readFile(path.join(skillRoot, item.name, 'SKILL.md'), 'utf8')
-    const metadata = parse(/^---\r?\n([\s\S]*?)\r?\n---/.exec(body)?.[1] || '') || {}
-    return { id: item.name, kind: 'text' as const, name: String(metadata.name || item.name), description: String(metadata.description || '').slice(0, 500), body, sha256: sha(body) }
-  }))
 }
 async function authorizeMcp(ctx: RequestContext, req: AccountRequest) {
   const allowed = (process.env.MCP_ADMIN_USER_IDS || '').split(',').map(value => value.trim())
@@ -83,8 +72,7 @@ export async function handleStudioTools(ctx: RequestContext, overrides: { retrie
   req.headers.set('x-new-api-user', user.accountId)
   if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/skills/catalog') {
     await limited(ctx, 'catalog', 20)
-    const [builtin, community] = await Promise.all([catalog(), approvedCommunitySkills(ctx.db)])
-    ctx.json(200, { items: [...builtin, ...community] })
+    ctx.json(200, { items: await approvedCommunitySkills(ctx.db) })
     return true
   }
   if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/search') {

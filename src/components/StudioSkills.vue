@@ -4,10 +4,10 @@ import { ChevronDown, Play, Plug, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats as persistChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
-import { skillKinds, maxSelectedSkills, type SkillKind } from '../../shared/community-skills'
+import { skillKinds, maxSelectedSkills, resolveLegacySkillIds, type SkillKind } from '../../shared/community-skills'
 import { resolveCommunitySkill, selectedSkillIds, setSelectedSkillIds } from '../community-skill'
 const props = withDefaults(defineProps<{ chat: NativeChat; kind?: SkillKind; embedded?: boolean; transient?: boolean; disabled?: boolean }>(), { kind: 'text' })
-const selectedIds = computed(() => selectedSkillIds(props.chat, props.kind))
+const selectedIds = computed(() => resolveLegacySkillIds(selectedSkillIds(props.chat, props.kind), chats.skills))
 const available = computed(() => chats.skills.filter(skill => (skill.kind || 'text') === props.kind))
 const filtered = computed(() => available.value.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.value.toLowerCase())))
 const selecting = ref(false)
@@ -48,7 +48,7 @@ async function toggle(skill: Skill, event: Event) {
       await verifySkillDocument(document.body, document.sha256)
     }
     if (!active()) return
-    const ids = selectedSkillIds(chat, kind)
+    const ids = resolveLegacySkillIds(selectedSkillIds(chat, kind), chats.skills)
     setSelectedSkillIds(chat, kind, selected ? [...new Set([...ids, skill.id])] : ids.filter(id => id !== skill.id), [{ id: skill.id, sha256: skill.sha256 }])
     await saveChats(true)
   } catch (cause) { if (active()) error.value = errorMessage(cause) }
@@ -85,7 +85,7 @@ async function saveConfig() {
   <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="selectedIds.length"> · {{ selectedIds.length }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
     <p class="skill-empty muted">{{ skillKinds[kind] }}技能 · 勾选后应用于本模块的生成指令</p>
-    <p class="skill-empty muted"><RouterLink to="/skills">浏览技能广场 / 上传技能</RouterLink></p>
+    <p class="skill-empty muted"><RouterLink to="/skills">浏览技能广场 / 上传技能</RouterLink><template v-if="session.user?.isAdmin"> · <RouterLink to="/admin?tab=skills">管理技能</RouterLink></template></p>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="!loading && unavailable.length" class="skill-empty muted">{{ unavailable.length }} 个已选技能已更新、下架或不适用于当前模块。<button class="button subtle btn" :disabled="disabled || selecting" @click="removeUnavailable">移除失效技能</button></p>
     <div class="skill-list"><label v-for="skill in filtered" :key="skill.id" class="skill-row"><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="selectedIds.includes(skill.id)" :disabled="disabled || selecting || loading" @change="toggle(skill, $event)" /></label><p v-if="!loading && !filtered.length" class="muted skill-empty">{{ query ? '没有匹配的技能' : `暂无${skillKinds[kind]}技能，可前往技能广场上传` }}</p></div>

@@ -8,7 +8,9 @@ import { skillLimits, skillStates, skillKinds, type SkillKind, type CommunitySki
 
 const props = defineProps<{ admin?: boolean; confirmLeave?: () => boolean | Promise<boolean> }>()
 const prefix = computed(() => props.admin ? '/api/admin/skills' : '/api/skills')
-const scope = ref('public'), status = ref<SkillStatus | 'all'>('pending'), query = ref(''), search = ref('')
+const manager = computed(() => Boolean(session.user?.isAdmin))
+const writePrefix = computed(() => manager.value ? '/api/admin/skills' : '/api/skills')
+const scope = ref('public'), status = ref<SkillStatus | 'all'>('all'), query = ref(''), search = ref('')
 const items = ref<CommunitySkill[]>([]), cursor = ref<string | null>(null), loading = ref(false), error = ref('')
 const dialog = ref<HTMLDialogElement>(), discard = ref<HTMLDialogElement>(), selected = ref<CommunitySkill | null>(null)
 const mode = ref<'view' | 'edit' | 'upload'>('view'), busy = ref(false), detailLoading = ref(false), formError = ref(''), reason = ref('')
@@ -22,7 +24,7 @@ defineExpose({ hasUnsavedChanges, busy })
 let epoch = 0, listVersion = 0, detailVersion = 0, controller: AbortController | undefined
 let resolveDiscard: ((value: boolean) => void) | undefined
 const identity = () => `${session.user?.id}:${session.user?.accountId}:${session.user?.isAdmin}`
-const canEdit = (skill: CommunitySkill) => Boolean(props.admin || skill.authorId === session.user?.id)
+const canEdit = (skill: CommunitySkill) => Boolean(manager.value || skill.authorId === session.user?.id)
 const size = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.ceil(bytes / 1024))} KB`
 const title = computed(() => mode.value === 'upload' ? '上传技能' : mode.value === 'edit' ? '编辑技能' : selected.value?.name || '技能详情')
 
@@ -70,7 +72,7 @@ async function openSkill(item: CommunitySkill, edit = false) {
   finally { if (version === detailVersion) detailLoading.value = false }
 }
 function startEdit() {
-  if (!selected.value) return
+  if (!selected.value || !canEdit(selected.value)) return
   kind.value = selected.value.kind; name.value = selected.value.name; description.value = selected.value.description; body.value = selected.value.body || ''
   files.value = selected.value.files; upload.value = undefined; publish.value = selected.value.status === 'published'
   initial.value = draft(); mode.value = 'edit'; formError.value = ''
@@ -87,7 +89,7 @@ async function inspect(event: Event) {
     for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))
     const source = { filename: file.name, data: btoa(binary) }
     if (current !== epoch || owner !== identity()) return
-    const parsed = await api<{ body: string; name: string; description: string; files: SkillFile[] }>(`${prefix.value}/inspect`, { method: 'POST', body: source, expectedAccount: session.user?.id })
+    const parsed = await api<{ body: string; name: string; description: string; files: SkillFile[] }>(`${writePrefix.value}/inspect`, { method: 'POST', body: source, expectedAccount: session.user?.id })
     if (current !== epoch || owner !== identity()) return
     upload.value = source; body.value = parsed.body; name.value = parsed.name; description.value = parsed.description; files.value = parsed.files
   } catch (cause) { if (current === epoch) formError.value = errorMessage(cause) }
@@ -99,13 +101,13 @@ async function save() {
   const current = epoch, owner = identity(), skill = selected.value, editing = mode.value === 'edit'
   busy.value = true; formError.value = ''
   try {
-    await api(`${prefix.value}${editing ? '/' + skill!.id : ''}`, { method: editing ? 'PATCH' : 'POST', expectedAccount: session.user?.id,
+    await api(`${writePrefix.value}${editing ? '/' + skill!.id : ''}`, { method: editing ? 'PATCH' : 'POST', expectedAccount: session.user?.id,
       body: { kind: kind.value, name: name.value, description: description.value, body: body.value, upload: upload.value,
-        ...(editing ? { version: skill!.version } : { requestId: requestId.value }), ...(props.admin ? { publish: publish.value } : {}) } })
+        ...(editing ? { version: skill!.version } : { requestId: requestId.value }), ...(manager.value ? { publish: publish.value } : {}) } })
     if (current !== epoch || owner !== identity()) return
     initial.value = draft(); mode.value = 'view'; dialog.value?.close(); upload.value = undefined
-    notify(props.admin && publish.value ? '技能已发布。' : '技能已提交审核，通过后会出现在技能广场。')
-    if (!props.admin) scope.value = 'mine'
+    notify(manager.value && publish.value ? '技能已发布。' : '技能已提交审核，通过后会出现在技能广场。')
+    if (!manager.value) scope.value = 'mine'
     await load()
   } catch (cause) { if (current === epoch) formError.value = errorMessage(cause) }
   finally { if (current === epoch) busy.value = false }
@@ -126,7 +128,7 @@ async function remove() {
   if (!skill || busy.value || !await confirmStudioDelete(`删除「${skill.name}」及其技能包？此操作无法撤销。`, () => current === epoch)) return
   busy.value = true; formError.value = ''
   try {
-    await api(`${prefix.value}/${skill.id}`, { method: 'DELETE', body: { version: skill.version }, expectedAccount: session.user?.id })
+    await api(`${writePrefix.value}/${skill.id}`, { method: 'DELETE', body: { version: skill.version }, expectedAccount: session.user?.id })
     if (current !== epoch) return
     dialog.value?.close(); notify('技能已删除。'); await load()
   } catch (cause) { if (current === epoch) formError.value = errorMessage(cause) }
@@ -151,7 +153,7 @@ onBeforeUnmount(() => { epoch++; detailVersion++; listVersion++; controller?.abo
     <p v-if="error" class="form-error" role="alert">{{ error }} <button class="text-link" @click="load()">重试</button></p>
     <p v-if="loading && !items.length" class="skills-empty" role="status">正在加载技能…</p>
     <div v-else-if="!items.length && !error" class="skills-empty"><Puzzle :size="32" aria-hidden="true" /><h2>{{ search ? '没有找到相关技能' : scope === 'mine' ? '还没有上传技能' : admin ? '当前没有待处理的技能' : '等待第一个好用的技能' }}</h2><p>{{ search ? '试试其他名称或用途关键词。' : '上传 SKILL.md 或 ZIP，与社区分享你的方法。' }}</p></div>
-    <div v-else class="skill-grid"><article v-for="skill in items" :key="skill.id" class="skill-card"><div class="skill-card-top"><span class="skill-symbol"><Puzzle :size="22" aria-hidden="true" /></span><span class="skill-badge">{{ skill.official ? '管理员发布' : '社区投稿' }}</span><span class="skill-badge">{{ skillKinds[skill.kind] }}技能</span><span v-if="admin || scope === 'mine'" class="skill-badge skill-state">{{ skillStates[skill.status] }}</span></div><component :is="admin ? 'h3' : 'h2'" class="skill-name"><button @click="openSkill(skill)">{{ skill.name }}</button></component><p class="skill-description">{{ skill.description }}</p><p v-if="skill.reviewNote && scope === 'mine'" class="skill-review-note">审核反馈：{{ skill.reviewNote }}</p><div class="skill-meta"><span>{{ skill.authorName }}</span><span>{{ skill.filename.toLowerCase().endsWith('.zip') ? 'ZIP 技能包' : 'SKILL.md' }} · {{ size(skill.size) }}</span></div><footer><button class="button subtle btn" @click="openSkill(skill)">{{ admin ? '查看与审核' : '查看技能' }}<ArrowUpRight :size="16" aria-hidden="true" /></button><button v-if="canEdit(skill)" class="icon-button" :aria-label="'编辑技能：' + skill.name" @click="openSkill(skill, true)"><Pencil :size="17" aria-hidden="true" /></button></footer></article></div>
+    <div v-else class="skill-grid"><article v-for="skill in items" :key="skill.id" class="skill-card"><div class="skill-card-top"><span class="skill-symbol"><Puzzle :size="22" aria-hidden="true" /></span><span class="skill-badge">{{ skill.legacyId ? '早期技能' : skill.official ? '管理员发布' : '社区投稿' }}</span><span class="skill-badge">{{ skillKinds[skill.kind] }}技能</span><span v-if="admin || scope === 'mine'" class="skill-badge skill-state">{{ skillStates[skill.status] }}</span></div><component :is="admin ? 'h3' : 'h2'" class="skill-name"><button @click="openSkill(skill)">{{ skill.name }}</button></component><p class="skill-description">{{ skill.description }}</p><p v-if="skill.reviewNote && scope === 'mine'" class="skill-review-note">审核反馈：{{ skill.reviewNote }}</p><div class="skill-meta"><span>{{ skill.authorName }}</span><span>{{ skill.filename.toLowerCase().endsWith('.zip') ? 'ZIP 技能包' : 'SKILL.md' }} · {{ size(skill.size) }}</span></div><footer><button class="button subtle btn" @click="openSkill(skill)">{{ admin ? '查看与审核' : '查看技能' }}<ArrowUpRight :size="16" aria-hidden="true" /></button><button v-if="canEdit(skill)" class="icon-button" :aria-label="'编辑技能：' + skill.name" @click="openSkill(skill, true)"><Pencil :size="17" aria-hidden="true" /></button></footer></article></div>
     <button v-if="cursor" class="button subtle btn skills-more" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多技能' }}</button>
 
     <dialog ref="dialog" class="skill-dialog" aria-labelledby="skill-dialog-title" @cancel.prevent="close"><header><h2 id="skill-dialog-title">{{ title }}</h2><button class="icon-button" :disabled="busy" aria-label="关闭技能窗口" @click="close"><X :size="20" aria-hidden="true" /></button></header>
@@ -161,9 +163,9 @@ onBeforeUnmount(() => { epoch++; detailVersion++; listVersion++; controller?.abo
         <label class="skill-upload"><Upload :size="22" aria-hidden="true" /><strong>{{ upload?.filename || (mode === 'edit' ? '替换技能文件（可选）' : '选择 SKILL.md 或 ZIP 技能包') }}</strong><span>最多 5 MB；ZIP 内须包含一个 SKILL.md，可附 references、scripts、assets。</span><input ref="fileInput" type="file" accept=".md,.zip" aria-label="技能文件" :disabled="busy" @change="inspect" /></label>
         <p v-if="busy" role="status">正在处理，请稍候…</p>
         <template v-if="upload || mode === 'edit'"><label class="field"><span>展示名称</span><input v-model="name" class="control" maxlength="100" required :disabled="busy" /></label><label class="field"><span>技能简介</span><textarea v-model="description" class="control" rows="3" maxlength="1000" required :disabled="busy" /></label><label class="field"><span>SKILL.md 内容</span><textarea v-model="body" class="control skill-source" rows="14" maxlength="65536" required spellcheck="false" :disabled="busy" /></label><p class="form-note">保留顶部 YAML 中的 name、description。ZIP 的其余配套文件会随技能包一起保存。</p><details class="skill-files"><summary>包内文件 · {{ files.length }} 个</summary><ul><li v-for="file in files" :key="file.path"><span>{{ file.path }}</span><small>{{ size(file.bytes) }}</small></li></ul></details></template>
-        <p class="skill-policy">{{ admin ? '上传前请确认技能内容和配套文件适合公开分享。' : mode === 'edit' ? '保存修改后将重新审核；已发布的技能会暂时从广场和创作台隐藏，审核通过后恢复。' : '请确认有权分享这些内容。提交后仅自己与管理员可见，审核通过后公开。' }}</p>
-        <label v-if="admin" class="skill-checkbox"><input v-model="publish" type="checkbox" :disabled="busy" />保存后直接发布至技能广场</label>
-        <footer><button type="button" class="button subtle btn" :disabled="busy" @click="close">取消</button><button class="button primary btn" :disabled="busy || !body || mode === 'upload' && !upload">{{ busy ? '正在保存…' : admin ? '保存技能' : '提交审核' }}</button></footer>
+        <p class="skill-policy">{{ manager ? '上传前请确认技能内容和配套文件适合公开分享。' : mode === 'edit' ? '保存修改后将重新审核；已发布的技能会暂时从广场和创作台隐藏，审核通过后恢复。' : '请确认有权分享这些内容。提交后仅自己与管理员可见，审核通过后公开。' }}</p>
+        <label v-if="manager" class="skill-checkbox"><input v-model="publish" type="checkbox" :disabled="busy" />保存后直接发布至技能广场</label>
+        <footer><button type="button" class="button subtle btn" :disabled="busy" @click="close">取消</button><button class="button primary btn" :disabled="busy || !body || mode === 'upload' && !upload">{{ busy ? '正在保存…' : manager ? '保存技能' : '提交审核' }}</button></footer>
       </form>
       <template v-else-if="selected"><div class="skill-detail-meta"><span class="skill-badge">{{ skillKinds[selected.kind] }}技能</span><span class="skill-badge">{{ skillStates[selected.status] }}</span><span>{{ selected.authorName }} · {{ size(selected.size) }}</span></div><p class="skill-detail-description">{{ selected.description }}</p><p v-if="selected.reviewNote" class="skill-review-note">审核反馈：{{ selected.reviewNote }}</p><div class="skill-detail-actions"><a class="button subtle btn" :href="`${prefix}/${selected.id}/download`" download><Download :size="17" aria-hidden="true" />下载{{ selected.filename.toLowerCase().endsWith('.zip') ? '技能包' : ' SKILL.md' }}</a><RouterLink v-if="selected.status === 'published'" class="button primary btn" :to="`/create/${selected.kind}`" @click="dialog?.close()">去创作台选择技能<ArrowUpRight :size="16" aria-hidden="true" /></RouterLink><button v-if="canEdit(selected)" class="button subtle btn" @click="startEdit"><Pencil :size="16" aria-hidden="true" />编辑</button></div><p class="form-note">创作台使用 SKILL.md 的文本指令；配套文件可下载使用，平台不会执行包内脚本。</p><details class="skill-files"><summary><FileArchive :size="17" aria-hidden="true" />包内文件 · {{ selected.files.length }} 个</summary><ul><li v-for="file in selected.files" :key="file.path"><span>{{ file.path }}</span><small>{{ size(file.bytes) }}</small></li></ul></details><h3 class="skill-source-title"><FileText :size="17" aria-hidden="true" />SKILL.md</h3><pre class="skill-preview" tabindex="0" aria-label="技能文本内容">{{ selected.body }}</pre>
         <section v-if="admin" class="skill-review"><h3>审核技能</h3><label class="field"><span>审核 / 下架原因（驳回、下架时必填）</span><textarea v-model="reason" class="control" rows="3" maxlength="1000" :disabled="busy" /></label><div class="skill-review-actions"><button v-if="selected.status !== 'published'" class="button primary btn" :disabled="busy" @click="review('approve')">通过并发布</button><button v-if="selected.status === 'pending'" class="button subtle btn" :disabled="busy" @click="review('reject')">驳回投稿</button><button v-if="selected.status === 'published'" class="button subtle btn" :disabled="busy" @click="review('remove')">下架技能</button></div></section><footer v-if="canEdit(selected)"><button class="button subtle btn skill-delete" :disabled="busy" @click="remove"><Trash2 :size="16" aria-hidden="true" />删除技能</button></footer>
