@@ -47,6 +47,7 @@ import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaT
 import { configuredModelFormat, modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { CHAT_API_FORMATS, type ChatApiFormat } from '../../shared/studio/chat-api-format'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
+import { resolveRemixSkills } from '../community-skill'
 import type { StudioEntry } from '../studio-entry'
 const markdownRetry = ref<() => void>(), reasoningRetry = ref<() => void>()
 const StudioMarkdown = defineAsyncComponent({
@@ -58,7 +59,7 @@ const StudioReasoningPanel = defineAsyncComponent({
   onError: (_error, retry) => { reasoningRetry.value = () => { reasoningRetry.value = undefined; retry() } },
 })
 const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; headerVisible?: boolean; entryOnly?: boolean; entryPending?: boolean }>(), { mode: 'text', headerVisible: true })
-const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
+const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; remixError: [message: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
 const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
 function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }
@@ -117,7 +118,7 @@ watch(messagesContent, element => { transcriptObserver.disconnect(); if (element
 onBeforeUnmount(() => transcriptObserver.disconnect())
 const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
-const busy = computed(() => props.entryPending || restoringTask.value || !props.entryOnly && current.value && (isConversationBusy(current.value) || chats.initialSaving[current.value.id]))
+const busy = computed(() => props.entryPending || restoringTask.value || props.source && sourceWorkId.value !== props.source.id || !props.entryOnly && current.value && (isConversationBusy(current.value) || chats.initialSaving[current.value.id]))
 const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
@@ -220,26 +221,31 @@ function changeFormat(event: Event) {
 }
 watch(() => current.value?.id, () => { chooseModel(); files.value = current.value?.draftFiles || []; prompt.value = current.value?.draft || ''; edited.value = undefined; selecting.value = false; selectedTurns.value = []; nearBottom.value = true; void nextTick(scrollToBottom) }, { immediate: true })
 let appliedSource = ''
-watch([() => props.source?.id, ready], () => {
+watch([() => props.source, ready], () => {
   if (!props.source) { appliedSource = ''; return }
   if (!ready.value || appliedSource === props.source.id) return
-  appliedSource = props.source.id
-  if (current.value?.sourceWorkId === props.source.id) return
-  applyRemix(props.source)
+  if (current.value?.sourceWorkId === props.source.id) { appliedSource = props.source.id; return }
+  const source = props.source, owner = session.user?.id, conversation = current.value
+  void applyRemix(source).then(applied => { if (applied && source === props.source) appliedSource = source.id })
+    .catch(cause => { if (live && owner === session.user?.id && source === props.source && conversation === current.value) emit('remixError', errorMessage(cause)) })
 }, { immediate: true })
-function applyRemix(source: Work, initialFiles: StudioFile[] = []) {
+async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh = false, isCurrent = () => true) {
   if (!session.user || !chats.ready || source.kind !== 'resource') return false
+  const owner = session.user.id, previous = current.value, parameters = readRemixParameters(source.generation?.parameters)
+  const selected = parameters?.skills || [], skills = await resolveRemixSkills(selected, 'text', owner)
+  if (!live || !isCurrent() || owner !== session.user?.id || previous !== current.value || props.mode !== 'text' || !fresh && source !== props.source) return false
   const next = newChat(); next.sourceWorkId = source.id; next.draft = source.prompt; next.draftFiles = initialFiles
+  next.skillIds = skills.map(skill => skill.id); next.remixSkills = skills
+  if (skills.length < selected.length) notify('原作部分技能已下架、更新或不可用，本次已跳过。')
   if (models.value.some(item => item.id === source.model)) { next.model = source.model; next.textModel = source.model; model.value = source.model }
-  const parameters = readRemixParameters(source.generation?.parameters)
   if (parameters?.kind === 'text' && parameters.chatOptions) {
     Object.assign(next.settings, parameters.chatOptions)
     next.formatOverride = parameters.apiFormat === 'auto' ? undefined : parameters.chatOptions.format
     next.formatAutomatic = parameters.apiFormat === 'auto'
   }
   prompt.value = source.prompt; files.value = initialFiles
-  void saveChats()
-  return true
+  await saveChats(true)
+  return live && isCurrent() && owner === session.user?.id && next === current.value && props.mode === 'text'
 }
 watch([prompt, files], (_value, previous) => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats(files.value !== previous[1])?.catch(() => {}) } }, { deep: true })
 watch(model, () => { if (current.value && model.value) { current.value.textModel = model.value; void saveChats() } })
@@ -437,7 +443,7 @@ async function useTask(task: CreationTask) {
   const currentScope = () => live && props.mode === 'text' && owner === session.user?.id && conversation === current.value?.id
   restoringTask.value = true; error.value = ''
   try {
-    const parameters = readRemixParameters({ version: 1, kind: 'text', group: task.group, apiFormat: task.request.apiFormat, chatOptions: task.request.chatOptions })
+    const parameters = readRemixParameters({ version: 1, kind: 'text', group: task.group, apiFormat: task.request.apiFormat, chatOptions: task.request.chatOptions, skills: task.request.skills })
     if (!parameters) throw new Error('原任务生成参数无效，请使用当前配置。')
     await waitCreationGroup(); await loadCreationGroups()
     if (!currentScope()) return false
@@ -451,9 +457,13 @@ async function useTask(task: CreationTask) {
     if (!currentScope()) return false
     if (creation.modelsError) throw new Error(creation.modelsError)
     if (!models.value.some(item => item.id === task.model)) throw new Error('原作模型在当前分组不可用，请选择可用配置。')
+    const skills = await resolveRemixSkills(parameters.skills || [], 'text', owner)
+    if (!currentScope()) return false
     const next = newChat()
     conversation = next.id
     next.model = task.model; next.textModel = task.model; next.draft = task.prompt; next.sourceWorkId = task.sourceWorkId
+    next.skillIds = skills.map(skill => skill.id); next.remixSkills = skills
+    if (skills.length < (parameters.skills?.length || 0)) notify('原作部分技能已下架、更新或不可用，本次已跳过。')
     if (parameters.chatOptions) {
       Object.assign(next.settings, parameters.chatOptions)
       next.formatOverride = parameters.apiFormat === 'auto' ? undefined : parameters.chatOptions.format

@@ -3,7 +3,7 @@
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowUp, Eraser, LoaderCircle, Pencil, Plus, SlidersHorizontal, Square, X } from '@lucide/vue'
 import type { Work, WorkFile } from '../data'
-import { errorMessage, session } from '../state'
+import { errorMessage, notify, session } from '../state'
 import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, submitCreation, type CreationTask, type CreationDestination, type CreationInput } from '../native-studio'
 import { chats, createEmptyChat, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
 import { createDeferredWriteQueue } from '../../shared/studio/latest-write-queue'
@@ -13,7 +13,7 @@ import StudioMediaParameters from './StudioMediaParameters.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioSkillPicker from './StudioSkillPicker.vue'
-import { resolveMediaSkills, setSelectedSkillIds } from '../community-skill'
+import { resolveMediaSkills, resolveRemixSkills, setSelectedSkillIds } from '../community-skill'
 import StudioBilling from './StudioBilling.vue'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioVideoPrompt from './StudioVideoPrompt.vue'
@@ -35,7 +35,7 @@ import { createImeGuard } from '../../shared/studio/ime-input'
 import type { StudioEntry } from '../studio-entry'
 
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; entryOnly?: boolean; entryPending?: boolean }>()
-const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; model: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string] }>()
+const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; remixError: [message: string]; model: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string] }>()
 const model = ref(''), prompt = ref(''), ratio = ref('auto'), count = ref(1), duration = ref(8)
 const ime = createImeGuard()
 const imageOptions = reactive(imageOptionsSchema.parse({}))
@@ -76,7 +76,7 @@ const videoParameterIssue = computed(() => {
 const imageCountIssue = computed(() => props.kind === 'image' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 10) ? '图片数量需为 1 到 10 的整数。' : '')
 const submissionIssue = computed(() => error.value || imageCountIssue.value || videoParameterIssue.value)
 const referenceLimitIssue = computed(() => references.value.length > (props.kind === 'video' ? 10 : 16) ? '参考图数量超过当前创作类型上限，请减少所选图片。' : '')
-const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
+const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && Boolean(prompt.value.trim()))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 function createDraftWrites() {
@@ -199,27 +199,34 @@ function modelChanged() {
   if (props.source && model.value !== props.source.model) { apiFormat.value = 'auto'; protocol.value = 'auto' }
   error.value = ''; emit('model')
 }
-watch([() => props.source?.id, () => chats.ready], async () => {
+watch([() => props.source, () => chats.ready], async () => {
   if (!props.source || !chats.ready || sourceWorkId.value === props.source.id) return
-  await applyRemix(props.source)
+  const owner = session.user?.id, source = props.source, conversation = currentConversation.value
+  try { await applyRemix(source) }
+  catch (cause) { if (live && owner === session.user?.id && source === props.source && conversation === currentConversation.value) emit('remixError', errorMessage(cause)) }
 }, { immediate: true })
-async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh = false) {
+async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh = false, isCurrent = () => true) {
   const owner = session.user?.id, kind = props.kind
   if (!owner || !chats.ready || source.kind !== kind) return false
+  const previous = currentConversation.value, parameters = readRemixParameters(source.generation?.parameters)
+  const selected = parameters?.skills || []
+  const skills = await resolveRemixSkills(selected, kind, owner)
+  if (!live || !isCurrent() || owner !== session.user?.id || kind !== props.kind || previous !== currentConversation.value || !fresh && source !== props.source) return false
   if (fresh || currentConversation.value?.sourceWorkId !== source.id) {
     const chat = newChat(kind); chat.sourceWorkId = source.id; chat.mediaDrafts = {}
   }
   const conversation = currentConversation.value
   // Let the new conversation load its draft before applying the original parameters.
   await nextTick()
-  if (!live || owner !== session.user?.id || !fresh && source !== props.source || kind !== props.kind || conversation !== currentConversation.value) return false
+  if (!live || !isCurrent() || owner !== session.user?.id || !fresh && source !== props.source || kind !== props.kind || !conversation || conversation !== currentConversation.value) return false
   restoringParameters.value = true
   remixApplied.value = true
   sourceWorkId.value = source.id
   blank.value = true; prompt.value = source.prompt
   references.value = initialFiles.map(file => ({ name: file.name, url: file.content, fromWorkId: file.fromWorkId }))
   if (kind === 'video') prompt.value = remapVideoMentions(prompt.value, (source.referenceFiles || []).map(file => file.url), references.value.map(file => file.url), true)
-  const parameters = readRemixParameters(source.generation?.parameters)
+  setSelectedSkillIds(conversation, kind, skills.map(skill => skill.id), skills)
+  if (skills.length < selected.length) notify('原作部分技能已下架、更新或不可用，本次已跳过。')
   if (models.value.some(item => item.id === source.model)) model.value = source.model
   if (parameters?.kind === props.kind) {
     if (parameters.aspect_ratio !== undefined) ratio.value = parameters.aspect_ratio

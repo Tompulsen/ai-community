@@ -23,7 +23,7 @@ beforeEach(() => {
   mocks.read.mockReset(); mocks.write.mockReset().mockResolvedValue(undefined)
   mocks.modelFormat.mockReset(); mocks.configuredModelFormat.mockReset()
   mocks.submit.mockReset().mockImplementation(async (_input, update) => {
-    const task = { id: 'task', owner: '17', phase: 'complete', text: '回答', toolCalls: [] }
+    const task = { id: 'task', owner: '17', phase: 'complete', text: '回答', toolCalls: [], request: { ..._input } }
     update?.(task)
     return task
   })
@@ -58,7 +58,7 @@ it('keeps concurrent replies in the same conversation and does not restore clear
   let release!: () => void
   mocks.submit.mockImplementationOnce(async (_input, update) => new Promise(resolve => {
     release = () => {
-      const task = { id: 'first-task', phase: 'complete', text: '第一条回答' }
+      const task = { id: 'first-task', phase: 'complete', text: '第一条回答', request: { ..._input } }
       update?.(task); resolve(task)
     }
   }))
@@ -95,7 +95,7 @@ it('stops only the selected answer while other replies in the conversation conti
   mocks.submit.mockImplementation(async (_input, update) => new Promise(resolve => {
     const index = finish.length
     finish.push(() => {
-      const task = { id: `task-${index}`, phase: 'complete', text: `回答 ${index}` }
+      const task = { id: `task-${index}`, phase: 'complete', text: `回答 ${index}`, request: { ..._input } }
       update?.(task); resolve(task)
     })
   }))
@@ -115,7 +115,7 @@ it('creates and switches reply branches while an older reply is still streaming'
   const p = await fixture()
   let release!: () => void
   mocks.submit.mockImplementationOnce(async (_input, update) => {
-    const task = { id: 'original', phase: 'running', text: '生成中' }
+    const task = { id: 'original', phase: 'running', text: '生成中', request: { ..._input } }
     update?.(task)
     await new Promise<void>(resolve => { release = resolve })
     return { ...task, phase: 'complete', text: '旧版本完成' }
@@ -246,7 +246,7 @@ it('binds final interactions to the actual assistant ID and hides the footer whi
   const p = await fixture()
   mocks.submit.mockImplementationOnce(async (_input, update) => {
     const id = p.chat.messages.at(-1)!.id
-    const task = { id: 'task', owner: '17', phase: 'complete', text: '正文\n```chat-ui\n' + JSON.stringify({ version: 1, messageId: id, suggestions: ['继续'] }) + '\n```' }
+    const task = { id: 'task', owner: '17', phase: 'complete', text: '正文\n```chat-ui\n' + JSON.stringify({ version: 1, messageId: id, suggestions: ['继续'] }) + '\n```', request: { ..._input } }
     update(task)
     expect(p.chat.messages.at(-1)).toMatchObject({ content: '正文', interactions: undefined, streaming: true })
     return task

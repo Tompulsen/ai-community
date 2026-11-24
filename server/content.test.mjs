@@ -606,14 +606,28 @@ test('generation recipes survive normalization with public options only and reje
   assert.throws(() => normalizeRevision({ kind: 'image', title: 'X', generation: { parameters } }), error => error.statusCode === 400);
 });
 
+test('published recipes retain bounded skill versions without disclosing skill contents', () => {
+  const reference = { id: 'community-image1', sha256: 'a'.repeat(64) };
+  const normalize = (skills, kind = 'image') => normalizeRevision({ kind: kind === 'text' ? 'resource' : kind, title: '同款',
+    generation: { parameters: { version: 1, kind, skills } } }).generation.parameters;
+  assert.deepEqual(normalize([{ ...reference, body: 'private instructions', files: ['private.zip'], apiKey: 'private' }]).skills, [reference]);
+  assert.deepEqual(normalize([]).skills, []);
+  assert.equal(normalize(undefined).skills, undefined);
+  assert.deepEqual(normalize([{ ...reference, id: 'work-resource1' }], 'text').skills, [{ ...reference, id: 'work-resource1' }]);
+  for (const skills of [[reference, reference], [{ ...reference, sha256: 'invalid' }], [{ ...reference, id: '../private' }],
+    [{ ...reference, id: 'work-resource1' }], Array.from({ length: 11 }, (_, i) => ({ ...reference, id: `community-skill${i}` }))]) {
+    assert.throws(() => normalize(skills), error => error.statusCode === 400);
+  }
+});
+
 test('public work recipes strip historical credentials and conversation contents on read', async () => {
   const ctx = context({ query: async sql => sql.includes('FROM community_submission s') ? { rows: [{ ...workRow, model: 'gpt-5', generation: {
     prompt: '公开提示词', model: 'gpt-5', referenceFileIds: [], tokenId: 71, apiKey: 'private',
-    parameters: { version: 1, kind: 'text', tokenId: 71, chatOptions: { temperature: 0.2, messages: [{ role: 'user', content: 'private' }], mcpServers: ['private-server'] } },
+    parameters: { version: 1, kind: 'text', tokenId: 71, skills: [{ id: 'work-resource1', sha256: 'a'.repeat(64), body: 'private instructions', files: ['private.zip'] }], chatOptions: { temperature: 0.2, messages: [{ role: 'user', content: 'private' }], mcpServers: ['private-server'] } },
   } }] } : { rows: [] } });
   await handleContent(ctx);
   assert.deepEqual(ctx.result.payload.items[0].generation, { prompt: '公开提示词', model: 'gpt-5', referenceFileIds: [],
-    parameters: { version: 1, kind: 'text', chatOptions: { temperature: 0.2 } } });
+    parameters: { version: 1, kind: 'text', skills: [{ id: 'work-resource1', sha256: 'a'.repeat(64) }], chatOptions: { temperature: 0.2 } } });
 });
 
 test('work covers expose only valid processed preview ratios', async () => {

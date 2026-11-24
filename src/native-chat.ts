@@ -56,6 +56,7 @@ export interface NativeChat extends ChatSession {
   settings: Omit<ChatOptions, 'messages'>
   system: string
   skillIds: string[]
+  remixSkills?: SkillReference[]
   mediaSkills?: Partial<Record<'image' | 'video', SkillReference[]>>
   search: 'off' | 'quick' | 'deep'
   compressionThreshold: number
@@ -494,6 +495,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   let accepted = false
   let searchMode = chat.search
   const settings = JSON.parse(JSON.stringify(chat.settings)), system = chat.system, skillIds = [...chat.skillIds]
+  const remixSkills = chat.remixSkills?.map(skill => ({ ...skill })) || []
   const apiFormat = chat.formatOverride || modelFormat(model) || (chat.formatAutomatic === true ? 'auto' : chat.settings.format)
   settings.format = apiFormat === 'auto' ? configuredModelFormat(model) || 'chat-completions' : apiFormat
   const sourceWorkId = chat.sourceWorkId
@@ -526,6 +528,8 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       chats.skills = catalog.items || []
     }
     const resolvedIds = resolveLegacySkillIds(skillIds, chats.skills)
+    if (remixSkills.some(reference => resolvedIds.includes(reference.id) && chats.skills.find(skill => skill.id === reference.id)?.sha256 !== reference.sha256))
+      throw new Error('原作技能已更新或下架，请移除失效技能或重新选择后生成。')
     const selectedSkills = await Promise.all(chats.skills.filter(skill => resolvedIds.includes(skill.id)).map(skill => resolveCommunitySkill(skill, acceptedAccount, 'text')))
     if (selectedSkills.length !== resolvedIds.length) throw new Error('部分技能已下架或不可用，请刷新技能列表后重新选择。')
     await Promise.all(selectedSkills.filter(skill => !skill.id.startsWith('work-')).map(skill => verifySkillDocument(skill.body, skill.sha256)))
@@ -575,6 +579,8 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       if (!current()) return accepted
       const task = await submitCreation({ kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, sourceWorkId, references, skills: selectedSkills.filter(skill => skill.id.startsWith('work-')).map(({ id, sha256 }) => ({ id, sha256 })), prompt: text || '理解附件', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [...messages, ...toolHistory] } }, task => {
         if (!current()) return
+        // Publication records the skills applied to this task, including client-side text skills.
+        task.request.skills = selectedSkills.map(({ id, sha256 }) => ({ id, sha256 }))
         result.taskId = task.id; applyAnswer(result, task.text, 'stream'); result.reasoning = task.reasoning; result.usage = task.usage; result.streaming = true
         result.generationProgress = task.generationProgress
         result.responseMetrics = task.responseMetrics

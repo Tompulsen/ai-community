@@ -164,11 +164,12 @@ watch([() => route.query.from, () => route.query.remix, () => session.user?.id, 
 }, { immediate: true })
 async function importRemix(files: StudioFile[], prompt?: string, background = false) {
   if (!source.value || !remixReady.value || sourceIssue.value || importingRemix.value || !preparingRemix.value) return
-  const current = revision, owner = session.user?.id, original = { ...source.value, prompt: prompt ?? source.value.prompt }
+  const current = revision, owner = session.user?.id, requestedKind = kind.value, target = source.value, original = { ...target, prompt: prompt ?? target.prompt }
+  const isCurrent = () => current === revision && owner === session.user?.id && requestedKind === kind.value && target === source.value
   importingRemix.value = true
   try {
-    const applied = kind.value === 'text' ? chat.value?.applyRemix(original, files) : await workspace.value?.applyRemix(original, files, true)
-    if (current !== revision || owner !== session.user?.id) return
+    const applied = await (kind.value === 'text' ? chat.value?.applyRemix(original, files, true, isCurrent) : workspace.value?.applyRemix(original, files, true, isCurrent))
+    if (!isCurrent()) return
     if (!applied) { sourceIssue.value = '工作台尚未就绪，请稍后重试。'; return }
     const { prepare: _, ...query } = route.query
     await router.replace({ query })
@@ -181,7 +182,8 @@ async function importRemix(files: StudioFile[], prompt?: string, background = fa
         if (owner === session.user?.id && current === revision) void router.replace('/work/' + original.id).catch(cause => { error.value = errorMessage(cause) })
       })
     }
-  } finally { importingRemix.value = false }
+  } catch (cause) { if (isCurrent()) sourceIssue.value = errorMessage(cause) }
+  finally { importingRemix.value = false }
 }
 function sourceFallback() {
   if (source.value?.generation) source.value = { ...source.value, generation: { ...source.value.generation, parameters: undefined } }
@@ -357,8 +359,8 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <p v-if="initialSaveIssue && !accountTool" class="form-error" role="alert">{{ initialSaveIssue }} <button type="button" class="text-link" :disabled="retryingSave" @click="retryInitialSave">重试保存</button></p>
-      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
-      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
+      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @conversation="openConversation" @media-action="mediaAction" />
+      <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @remix-error="sourceIssue = $event" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="(files, prompt) => importRemix(files, prompt, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />
   </div>

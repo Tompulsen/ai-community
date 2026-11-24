@@ -16,7 +16,8 @@ const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(fals
 const server = ref(''), tool = ref(''), tools = ref<{ name: string; description?: string; inputSchema?: unknown }[]>([]), args = ref('{}'), result = ref(''), busy = ref(false), config = ref('{"mcpServers":{}}')
 let revision = 0
 const unavailable = computed(() => selectedIds.value.filter(id => !available.value.some(skill => skill.id === id
-  && (props.kind === 'text' || props.chat.mediaSkills?.[props.kind]?.find(item => item.id === id)?.sha256 === skill.sha256))))
+  && (props.kind === 'text' ? !props.chat.remixSkills?.some(item => item.id === id && item.sha256 !== skill.sha256)
+    : props.chat.mediaSkills?.[props.kind]?.find(item => item.id === id)?.sha256 === skill.sha256))))
 async function removeUnavailable() {
   if (props.disabled || selecting.value) return
   setSelectedSkillIds(props.chat, props.kind, selectedIds.value.filter(id => !unavailable.value.includes(id)))

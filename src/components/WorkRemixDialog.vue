@@ -57,7 +57,7 @@ async function generate(files: StudioFile[], prompt?: string, backgroundTask = t
   busy.value = true
   const version = revision, target = workspace.value
   try {
-    if (!await target.applyRemix({ ...source.value, prompt: prompt ?? source.value.prompt }, files, true)) throw new Error('生成配置尚未就绪，请重试。')
+    if (!await target.applyRemix({ ...source.value, prompt: prompt ?? source.value.prompt }, files, true, () => current(version))) throw new Error('生成配置尚未就绪，请重试。')
     if (!current(version)) return
     await nextTick()
     if (source.value.model && target.model !== source.value.model) throw new Error('原作模型未能恢复，请进入工作台确认。')

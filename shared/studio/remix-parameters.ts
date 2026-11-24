@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema } from './options.ts'
 import { modelApiFormatSchema, modelApiFormats } from './model-types.ts'
+import { maxSelectedSkills } from '../community-skills.ts'
 
 // Public recipes never contain account credentials, chat history or private media references.
 type OptionalShape<S extends z.ZodRawShape> = { [K in keyof S]: z.ZodOptional<S[K] extends z.ZodDefault<infer T> ? T : S[K]> }
@@ -30,6 +31,8 @@ const customParameters = z.string().max(32000).transform((value, ctx) => {
 export const remixParametersSchema = z.object({
   version: z.literal(1),
   kind: z.enum(['image', 'video', 'text']),
+  skills: z.array(z.object({ id: z.string().regex(/^(?:community|work)-[a-zA-Z0-9]{1,32}$/), sha256: z.string().regex(/^[a-f0-9]{64}$/) }))
+    .max(maxSelectedSkills).refine(skills => new Set(skills.map(skill => skill.id)).size === skills.length).optional(),
   group: z.string().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/).optional(),
   protocol: z.enum(['auto', 'openai', 'sync', 'async']).optional(),
   apiFormat: modelApiFormatSchema.optional(),
@@ -41,6 +44,8 @@ export const remixParametersSchema = z.object({
   videoOptions: publicOptions(videoOptionsSchema.omit({ openaiReferenceSource: true, openaiImageUrl: true, openaiLastImageUrl: true, openaiFileId: true, customParameters: true })).extend({ customParameters: customParameters.optional() }).optional(),
   chatOptions: publicOptions(chatOptionsSchema.omit({ messages: true, mcpServers: true })).optional(),
 }).superRefine((value, ctx) => {
+  if (value.kind !== 'text' && value.skills?.some(skill => skill.id.startsWith('work-')))
+    ctx.addIssue({ code: 'custom', message: '技能与作品类型不匹配。' })
   if (value.kind !== 'image' && value.imageOptions || value.kind !== 'video' && value.videoOptions || value.kind !== 'text' && value.chatOptions)
     ctx.addIssue({ code: 'custom', message: '生成参数与作品类型不匹配。' })
   if (value.apiFormat && value.apiFormat !== 'auto' && !(modelApiFormats[value.kind] as readonly string[]).includes(value.apiFormat))

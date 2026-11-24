@@ -22,7 +22,10 @@ export function selectedSkillIds(chat: NativeChat, kind: SkillKind) {
   return kind === 'text' ? chat.skillIds : (chat.mediaSkills?.[kind] || []).map(skill => skill.id)
 }
 export function setSelectedSkillIds(chat: NativeChat, kind: SkillKind, ids: string[], references: SkillReference[] = []) {
-  if (kind === 'text') chat.skillIds = ids
+  if (kind === 'text') {
+    chat.skillIds = ids
+    if (chat.remixSkills) chat.remixSkills = chat.remixSkills.filter(skill => ids.includes(skill.id) && !references.some(reference => reference.id === skill.id))
+  }
   else {
     const available = [...references, ...(chat.mediaSkills?.[kind] || [])]
     const selected = ids.map(id => {
@@ -33,6 +36,12 @@ export function setSelectedSkillIds(chat: NativeChat, kind: SkillKind, ids: stri
     chat.mediaSkills ||= {}
     chat.mediaSkills[kind] = selected
   }
+}
+export async function resolveRemixSkills(selected: SkillReference[], kind: SkillKind, expectedAccount?: string): Promise<SkillReference[]> {
+  if (!selected.length) return []
+  const { items } = await api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount, signal: AbortSignal.timeout(20000) })
+  return selected.filter(reference => items.some(skill => skill.id === reference.id && skill.sha256 === reference.sha256 && (skill.kind || 'text') === kind))
+    .map(({ id, sha256 }) => ({ id, sha256 }))
 }
 export async function resolveMediaSkills(selected: SkillReference[], kind: 'image' | 'video', expectedAccount?: string): Promise<SkillReference[]> {
   if (!selected.length) return []
