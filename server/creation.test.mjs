@@ -474,6 +474,42 @@ test('background media returns its request ID before the upstream responds and a
   assert.equal((await f.app.inject({ url: '/api/creation/requests/background-video', headers: { 'x-test-account': '18' } })).statusCode, 404)
   assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
 })
+test('async video failure details survive polling, request reload and duplicate submission without replay', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-async-error-secret-'.repeat(3)
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
+  for (const [stage, expectedStage] of [['upstream_submission', '上游提交'], ['upstream_query', '任务查询'], ['result_download', '结果下载']]) await t.test(stage, async t => {
+    const ready = deferred()
+    const f = fixture(t, {
+      afterRedisSet(key, value) { if (key.endsWith(':async-failure') && JSON.parse(value).tracking) ready.resolve() },
+      fetch(url, init) {
+        if (init.method === 'POST') return Response.json({ id: 'upstream-video', status: 'queued' })
+        assert.equal(new URL(url).pathname, '/async-videos/v1/tasks/upstream-video')
+        return Response.json({ id: 'upstream-video', status: stage === 'result_download' ? 'save_failed' : 'failed', error: {
+          code: 'upstream_rejected', message: `body.resolution: unsupported value ${apiKey} https://provider.example/private?token=secret`,
+          status: 422, stage, upstream_code: 'validation_error',
+        } })
+      },
+    })
+    const input = { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', protocol: 'async', requestId: 'async-failure' }
+    assert.equal((await submit(f.app, input, { Prefer: 'respond-async' })).statusCode, 202)
+    await ready.promise
+    const queried = await f.app.inject('/api/creation/tasks/video/upstream-video?protocol=async')
+    const expected = queried.json()
+    assert.equal(expected.status, stage === 'result_download' ? 'save_failed' : 'failed')
+    assert.equal(expected.errorStage, expectedStage)
+    assert.equal(expected.errorStatus, 422)
+    assert.match(expected.error, /HTTP 422.*body\.resolution: unsupported value/)
+    assert(!queried.payload.includes(apiKey)); assert(!queried.payload.includes('provider.example')); assert(!queried.payload.includes('token=secret'))
+    await processCreationTasks(f.redis, f.services)
+    const reloaded = (await f.app.inject('/api/creation/requests/async-failure')).json()
+    assert.deepEqual(reloaded, { ...expected, requestId: input.requestId })
+    assert.deepEqual((await submit(f.app, input)).json(), reloaded)
+    assert(!JSON.stringify([...f.values.values()]).includes('provider.example'))
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+})
+
 test('an interrupted text client reads pending until the original request finishes without another paid POST', async t => {
   const started = deferred(), finished = deferred()
   const f = fixture(t, { fetch() { started.resolve(); return finished.promise } })
@@ -1666,7 +1702,7 @@ test('private media errors stay redacted through background polling, cached reco
     afterRedisSet(key, value) { if (key.endsWith(':private-background') && JSON.parse(value).tracking) ready.resolve(); },
     fetch(_url, init) {
       return Response.json(init.method === 'POST' ? { id: 'private-video', status: 'queued' }
-        : { id: 'private-video', user_id: 17, status: 'failed', error: { message: secret } });
+        : { id: 'private-video', user_id: 17, status: 'failed', error: { code: 'upstream_rejected', message: secret, status: 422, stage: 'upstream_submission' } });
     },
   });
   const input = { kind: 'video', model: 'sora-2', prompt: 'A scene', duration: 8, requestId: 'private-background', skills: [{ id: 'work-work1', sha256: pack.sha256 }] };
@@ -1678,6 +1714,9 @@ test('private media errors stay redacted through background polling, cached reco
   const assertSafe = response => {
     assert.equal(response.statusCode, 200, response.payload);
     assert.equal(response.json().status, 'failed');
+    assert.equal(response.json().errorStage, '上游提交');
+    assert.equal(response.json().errorStatus, 422);
+    assert.match(response.json().error, /HTTP 422/);
     assert(!response.payload.includes(secret));
   };
   assertSafe(await f.app.inject('/api/creation/tasks/video/private-video?protocol=openai'));

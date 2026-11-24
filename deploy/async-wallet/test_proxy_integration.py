@@ -208,3 +208,156 @@ def test_ordinary_queued_requests_keep_existing_path_and_never_acquire_wallet(mo
         asyncio.run(run_worker())
         assert api.video_row(job)['status'] == 'generating'
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(('status', 'body', 'message', 'upstream_code'), [
+    (400, {'error': {'message': 'Video submission failed (HTTP 400): resolution: unsupported value (unsupported_value)',
+                    'code': 'fail_to_fetch_task'}},
+     'Video submission failed (HTTP 400): resolution: unsupported value (unsupported_value)', 'fail_to_fetch_task'),
+    (422, {'error': {'message': 'Video submission failed (HTTP 422): resolution: invalid value (value_error); frame_rate: required field (missing)',
+                    'code': 'fail_to_fetch_task'}},
+     'Video submission failed (HTTP 422): resolution: invalid value (value_error); frame_rate: required field (missing)', 'fail_to_fetch_task'),
+    (422, {'detail': [{'loc': ['body', 'aspect_ratio'], 'msg': 'Field required',
+                      'type': 'missing', 'input': 'private reference', 'ctx': {'secret': TOKEN}}]},
+     'body.aspect_ratio: Field required', None),
+    (422, {'detail': [{'loc': ['body', 'AcmeVendor', 'resolution', TOKEN],
+                      'msg': 'AcmeVendor validation error at https://private-provider.example',
+                      'type': 'literal_error', 'input': 'private reference', 'ctx': {'secret': TOKEN}}]},
+     'body.resolution: Invalid value', None),
+    (503, {'detail': 'UnknownVendor is temporarily unavailable'}, None, None),
+])
+def test_video_http_errors_survive_worker_storage_and_public_task(monkeypatch, status, body, message, upstream_code):
+    api, core, _ = load_service(monkeypatch, 'video')
+    row = api.submit_video(core.owner_for(TOKEN), 'error-retention-01',
+                           {'model': 'video-fixture', 'prompt': 'private prompt'}, TOKEN, '127.0.0.1')
+    calls = []
+    def upstream(request):
+        calls.append(request.method)
+        return httpx.Response(status, json=body)
+    async def run():
+        async with RealAsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            claimed, claim = api.claim_video()
+            await api.process_video(client, claimed, claim)
+        async with RealAsyncClient(transport=httpx.ASGITransport(api.app), base_url='http://proxy') as client:
+            return await client.get('/async-videos/v1/tasks/' + row['id'],
+                                    headers={'Authorization': 'Bearer ' + TOKEN})
+    response = asyncio.run(run())
+    current = api.video_row(row['id'])
+    code = 'upstream_rejected' if status < 500 else 'generation_outcome_unknown'
+    expected = {'code': code, 'status': status, 'stage': 'upstream_submission'}
+    if message:
+        expected['message'] = message
+    if upstream_code:
+        expected['upstream_code'] = upstream_code
+    assert response.status_code == 200
+    assert response.json()['error'] == expected
+    assert json.loads(current['error']) == expected
+    assert current['status'] == ('failed' if status < 500 else 'indeterminate')
+    assert current['payload'] is None and current['reserved'] == 4096
+    assert api.claim_video() is None and calls == ['POST']
+    assert 'private' not in current['error'] and TOKEN not in current['error']
+    assert 'AcmeVendor' not in current['error']
+
+
+@pytest.mark.parametrize('body', [
+    b'<html>https://private-provider.example secret raw failure</html>',
+    b'{"input":"private prompt","ctx":{"token":"secret"}}',
+    b'{"error":{"message":"UnknownVendor rejected this request","code":"vendor_error"}}',
+    b'{"detail":[{"loc":["body","AcmeVendor"],"type":{"private":"secret"},"msg":"Vendor failure"}]}',
+    b'{"error":{"message":"' + b'a' * 20000 + b'"}}',
+])
+def test_video_unknown_or_oversized_error_bodies_fail_closed(monkeypatch, body):
+    api, core, _ = load_service(monkeypatch, 'video')
+    api.submit_video(core.owner_for(TOKEN), 'error-unknown-01',
+                     {'model': 'video-fixture', 'prompt': 'private prompt'}, TOKEN, '127.0.0.1')
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(422, content=body,
+                                                                      headers={'content-type': 'application/json'}))
+        async with RealAsyncClient(transport=transport) as client:
+            row, claim = api.claim_video()
+            await api.process_video(client, row, claim)
+            return api.video_row(row['id'])
+    row = asyncio.run(run())
+    assert api.public_task(row)['error'] == {'code': 'upstream_rejected', 'status': 422,
+                                           'stage': 'upstream_submission'}
+    assert len(row['error']) < 200
+
+
+def test_video_error_messages_redact_credentials_and_provider_identity(monkeypatch):
+    api, core, _ = load_service(monkeypatch, 'video')
+    api.submit_video(core.owner_for(TOKEN), 'error-private-01',
+                     {'model': 'video-fixture', 'prompt': 'private prompt'}, TOKEN, '127.0.0.1')
+    message = ('Video submission failed (HTTP 400): Invalid seconds for video-fixture at https://private-provider.example/v1/videos '
+               'OpenAI new-api ' + TOKEN + ' Bearer short-secret ' + 'A' * 80)
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(400, json={'error': {
+            'message': message, 'code': 'fail_to_fetch_task', 'input': 'private prompt', 'raw': 'private'}}))
+        async with RealAsyncClient(transport=transport) as client:
+            row, claim = api.claim_video()
+            await api.process_video(client, row, claim)
+            return api.video_row(row['id'])
+    row = asyncio.run(run())
+    error = api.public_task(row)['error']
+    assert error['message'].startswith('Video submission failed (HTTP 400): Invalid seconds for video-fixture')
+    for private in ('private-provider', 'https://', 'OpenAI', 'new-api', TOKEN, 'short-secret', 'A' * 80, 'private prompt'):
+        assert private not in row['error']
+    assert error['upstream_code'] == 'fail_to_fetch_task'
+    assert len(error['message']) <= 512
+
+
+def test_video_query_failure_keeps_polling_and_terminal_detail_does_not_repost(monkeypatch):
+    api, core, _ = load_service(monkeypatch, 'video')
+    row = api.submit_video(core.owner_for(TOKEN), 'error-query-01',
+                           {'model': 'video-fixture', 'prompt': 'a test'}, TOKEN, '127.0.0.1')
+    with core.db() as connection:
+        connection.execute("UPDATE video_jobs SET status='generating',upstream_id='existing-id' WHERE id=?", (row['id'],))
+    responses = iter([httpx.Response(503, json={'error': {'message': 'Temporary query failure'}}),
+                      httpx.Response(200, json={'status': 'failed', 'error': {'message': 'Invalid aspect_ratio',
+                                                                            'code': 'invalid_ratio'}})])
+    calls = []
+    def upstream(request):
+        calls.append(request.method)
+        return next(responses)
+    async def run():
+        async with RealAsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            for step in range(2):
+                with core.db() as connection:
+                    connection.execute('UPDATE video_jobs SET next_attempt=0 WHERE id=?', (row['id'],))
+                claimed, claim = api.claim_video()
+                await api.process_video(client, claimed, claim)
+                if step == 0:
+                    current = api.video_row(row['id'])
+                    assert current['status'] == 'generating' and current['payload']
+                    assert 'error' not in api.public_task(current)
+    asyncio.run(run())
+    current = api.video_row(row['id'])
+    assert current['status'] == 'failed' and current['payload'] is None
+    assert api.public_task(current)['error'] == {'code': 'upstream_video_failed'}
+    assert calls == ['GET', 'GET']
+    with core.db() as connection:
+        connection.execute('UPDATE video_jobs SET error=? WHERE id=?', ('upstream_rejected', row['id']))
+    assert api.public_task(api.video_row(row['id']))['error'] == {'code': 'upstream_rejected'}
+
+
+def test_video_download_error_retains_detail_without_repeating_generation(monkeypatch):
+    api, core, _ = load_service(monkeypatch, 'video')
+    row = api.submit_video(core.owner_for(TOKEN), 'error-download-01',
+                           {'model': 'video-fixture', 'prompt': 'a test'}, TOKEN, '127.0.0.1')
+    with core.db() as connection:
+        connection.execute("UPDATE video_jobs SET status='saving',upstream_id='existing-id' WHERE id=?", (row['id'],))
+    calls = []
+    def upstream(request):
+        calls.append(request.method)
+        assert request.url.path.endswith('/content')
+        return httpx.Response(410, json={'error': {'message': 'The video result has expired', 'code': 'artifact_expired'}})
+    async def run():
+        async with RealAsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            claimed, claim = api.claim_video()
+            await api.process_video(client, claimed, claim)
+    asyncio.run(run())
+    current = api.video_row(row['id'])
+    assert current['status'] == 'save_failed' and current['attempts'] == 1
+    assert current['payload'] == row['payload'] and current['upstream_id'] == 'existing-id'
+    assert current['reserved'] == 4096 + len(current['payload'])
+    assert api.public_task(current)['error'] == {'code': 'video_content_gone', 'status': 410, 'stage': 'result_download'}
+    assert calls == ['GET'] and api.claim_video() is None

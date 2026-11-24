@@ -6,7 +6,16 @@
  import hashlib
  import json
  import os
-@@ -15,6 +16,7 @@
+@@ -7,7 +8,7 @@ import shutil
+ import time
+ import uuid
+ from contextlib import asynccontextmanager
+-from urllib.parse import quote
++from urllib.parse import quote, urlsplit
+ 
+ import httpx
+ from fastapi import FastAPI, HTTPException, Request
+@@ -15,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
  from fastapi.responses import FileResponse, JSONResponse
  
  from .api import authorize
@@ -14,12 +23,10 @@
  from .core import AdmissionError, DATA, PUBLIC, UPSTREAM, db, seal, unseal
  
  MAX_VIDEO = int(os.getenv("MAX_VIDEO_BYTES", str(512 * 1024**2)))
-@@ -56,6 +58,20 @@
- 
- def video_path(identifier):
+@@ -58,6 +60,20 @@ def video_path(identifier):
      return VIDEO_ROOT / identifier
-+
-+
+ 
+ 
 +def video_reservation(payload):
 +    return MAX_VIDEO + max(1024**2, 4096 + len(payload or b""))
 +
@@ -32,10 +39,22 @@
 +        except FileNotFoundError:
 +            pass
 +    return size
- 
- 
++
++
  def video_row(identifier):
-@@ -82,9 +98,9 @@
+     with db() as c:
+         row = c.execute("SELECT * FROM video_jobs WHERE id=?", (identifier,)).fetchone()
+@@ -79,12 +95,19 @@ def public_task(row):
+                            "size": row["size"], "content_type": row["media_type"]}]
+     elif status in ("failed", "save_failed", "indeterminate"):
+         result["error"] = {"code": row["error"]}
++        try:
++            stored = json.loads(row["error"])
++        except (ValueError, TypeError):
++            stored = None
++        if isinstance(stored, dict) and isinstance(stored.get("code"), str):
++            result["error"] = {key: stored[key] for key in
++                               ("code", "message", "status", "stage", "upstream_code") if key in stored}
      return result
  
  
@@ -47,7 +66,7 @@
      if api_format not in CREATE_PATHS:
          raise AdmissionError("unsupported_video_api_format", 422)
      if (not isinstance(payload.get("model"), str) or not 1 <= len(payload["model"]) <= 256
-@@ -97,7 +113,14 @@
+@@ -97,7 +120,14 @@ def submit_video(owner, idem, payload, token, origin):
      normalized = json.dumps({"api_format": api_format, "request": payload},
                              sort_keys=True, separators=(",", ":"), allow_nan=False)
      digest = hashlib.sha256(normalized.encode()).hexdigest()
@@ -63,7 +82,7 @@
      now = timestamp()
      with db() as c:
          c.execute("BEGIN IMMEDIATE")
-@@ -122,7 +145,7 @@
+@@ -122,14 +152,114 @@ def submit_video(owner, idem, payload, token, origin):
              "payload,api_format,reserved) VALUES(?,?,?,?,'queued',?,?,?,?,?,?,?)",
              (identifier, owner, idem, digest, now, now, now + VIDEO_TTL,
               now + GENERATION_DEADLINE,
@@ -72,25 +91,141 @@
          )
          return dict(c.execute("SELECT * FROM video_jobs WHERE id=?", (identifier,)).fetchone())
  
-@@ -155,7 +178,7 @@
+ 
+ class VideoError(Exception):
+-    def __init__(self, code):
++    def __init__(self, code, details=None):
+         self.code = code
++        self.details = details
++
++    def stored(self, code=None):
++        code = code or self.code
++        return json.dumps({"code": code, **self.details}, ensure_ascii=False) if self.details else code
++
++
++def safe_video_message(value, token=""):
++    if not isinstance(value, str) or not value.strip() or len(value) > 4096:
++        return None
++    if re.search(r"<[^>]+>|[{}]", value):
++        return None
++    if token:
++        value = value.replace(token, "[redacted]")
++    hostname = urlsplit(UPSTREAM).hostname
++    if hostname:
++        value = re.sub(re.escape(hostname), "[redacted]", value, flags=re.I)
++    value = re.sub(r"https?://[^\s<>\"']+|data:[^\s]+", "[redacted]", value, flags=re.I)
++    value = re.sub(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|ai|cn|dev|app|cloud|example|internal|local)\b(?::\d+)?",
++                   "[redacted]", value, flags=re.I)
++    value = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\[[0-9a-f:]{3,}\]", "[redacted]", value, flags=re.I)
++    value = re.sub(r"\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\b(?:api[_ -]?key|access[_ -]?token|secret|password)\s*[:=]\s*\S+",
++                   "[redacted]", value, flags=re.I)
++    value = re.sub(r"\b[A-Za-z0-9_+/-]{40,}={0,2}", "[redacted]", value)
++    value = re.sub(r"\b(?:openai|anthropic|azure|volcengine|bytedance|replicate|siliconflow)\b",
++                   "[redacted]", value, flags=re.I)
++    value = re.sub(r"(?:provider|channel|upstream|供应商|渠道)\s*[:=]\s*[^,;\n]+", "[redacted]", value, flags=re.I)
++    return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split())[:512] or None
++
++
++def structured_video_error(result, token=""):
++    if not isinstance(result, dict):
++        return {}
++    source = result.get("error", result)
++    if not isinstance(source, dict):
++        return {}
++    details = {}
++    message = source.get("message")
++    if (source.get("code") == "fail_to_fetch_task" and isinstance(message, str)
++            and re.match(r"^Video submission failed \(HTTP [1-5]\d{2}\)(?:: |$)", message)):
++        message = safe_video_message(message, token)
++        if message:
++            details.update(message=message, upstream_code="fail_to_fetch_task")
++        return details
++    validation = source.get("detail")
++    if isinstance(validation, list):
++        reasons = {
++            "missing": "Field required", "extra_forbidden": "Extra inputs are not permitted",
++            "string_type": "Input should be a valid string", "int_type": "Input should be a valid integer",
++            "int_parsing": "Input should be a valid integer", "float_type": "Input should be a valid number",
++            "float_parsing": "Input should be a valid number", "bool_type": "Input should be a valid boolean",
++            "bool_parsing": "Input should be a valid boolean", "list_type": "Input should be a valid list",
++            "dict_type": "Input should be a valid dictionary", "literal_error": "Invalid value",
++            "enum": "Invalid value", "value_error": "Invalid value", "greater_than": "Out of range",
++            "greater_than_equal": "Out of range", "less_than": "Out of range", "less_than_equal": "Out of range",
++            "string_too_long": "Invalid length", "string_too_short": "Invalid length",
++        }
++        fields = {"body", "query", "path", "model", "prompt", "seconds", "duration", "duration_seconds", "size",
++                  "resolution", "resolution_name", "aspect_ratio", "aspectRatio", "ratio", "video_reference_frame_mode",
++                  "frame_rate", "generate_audio", "generation_options", "input_images", "input_videos", "input_audios",
++                  "reference_images", "reference_videos", "reference_audios", "input_reference", "first_frame",
++                  "last_frame", "image", "images", "content", "metadata"}
++        messages = []
++        for item in validation[:4]:
++            if not isinstance(item, dict):
++                continue
++            reason = reasons.get(item["type"]) if isinstance(item.get("type"), str) else None
++            if not reason and item.get("msg") in reasons.values():
++                reason = item["msg"]
++            if not reason:
++                continue
++            loc = item.get("loc", [])
++            if not isinstance(loc, list):
++                continue
++            location = ".".join(str(part) for part in loc[:8]
++                                if (isinstance(part, str) and part in fields)
++                                or (type(part) is int and 0 <= part <= 128))
++            messages.append((location + ": " if location else "") + reason)
++        message = safe_video_message("; ".join(messages), token)
++        if message:
++            details["message"] = message
++    return details
++
++
++async def response_video_error(response, code, stage):
++    details = {"status": response.status_code, "stage": stage}
++    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
++    if media_type == "application/json" or media_type.endswith("+json"):
++        try:
++            async with asyncio.timeout(5):
++                body = bytearray()
++                async for chunk in response.aiter_bytes(4096):
++                    body.extend(chunk)
++                    if len(body) > 16 * 1024:
++                        return VideoError(code, details)
++                token = response.request.headers.get("authorization", "").removeprefix("Bearer ")
++                details.update(structured_video_error(json.loads(body), token))
++        except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError):
++            pass
++    return VideoError(code, details)
+ 
+ 
+ def video_type(header):
+@@ -155,9 +285,11 @@ async def _read_json(client, method, path, **kwargs):
      async with client.stream(method, UPSTREAM + path, **kwargs) as response:
          if response.status_code not in (200, 201, 202):
              rejected = method == "POST" and response.status_code in (
 -                400, 401, 403, 404, 405, 413, 415, 422, 429,
 +                400, 401, 402, 403, 404, 405, 413, 415, 422, 429,
              )
-             raise VideoError("upstream_rejected" if rejected else "upstream_query_unavailable")
+-            raise VideoError("upstream_rejected" if rejected else "upstream_query_unavailable")
++            error = await response_video_error(response, "upstream_rejected" if rejected else "upstream_query_unavailable",
++                                               "upstream_submission" if method == "POST" else "upstream_query")
++            raise error
          body = bytearray()
-@@ -206,6 +229,8 @@
-         path = "/v1/videos/" + quote(row["upstream_id"], safe="") + "/content"
+         async for chunk in response.aiter_bytes(65536):
+             body.extend(chunk)
+@@ -207,7 +339,10 @@ async def download_video(client, row, claim, payload):
          async with client.stream("GET", UPSTREAM + path, headers=token_headers(payload),
                                   timeout=httpx.Timeout(1800, connect=15, read=90)) as response:
-+            if response.status_code in (404, 410):
-+                raise VideoError("video_content_gone")
              if response.status_code != 200:
-                 raise VideoError("video_content_unavailable")
+-                raise VideoError("video_content_unavailable")
++                error = await response_video_error(response,
++                                                   "video_content_gone" if response.status_code in (404, 410) else "video_content_unavailable",
++                                                   "result_download")
++                raise error
              if response.headers.get("content-encoding", "identity").lower() != "identity":
-@@ -273,13 +298,19 @@
+                 raise VideoError("unsupported_video_encoding")
+             declared = response.headers.get("content-length")
+@@ -273,13 +408,19 @@ async def process_video(client, row, claim):
                        (identifier, claim))
          try:
              kwargs = {"headers": token_headers(payload)}
@@ -111,7 +246,30 @@
              result = await read_json(client, "POST", CREATE_PATHS[row["api_format"]], **kwargs)
              upstream_id = result.get("id") or result.get("task_id")
              if not isinstance(upstream_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", upstream_id):
-@@ -321,9 +352,11 @@
+@@ -288,8 +429,9 @@ async def process_video(client, row, claim):
+                        next_attempt=timestamp() + POLL_SECONDS)
+         except Exception as error:
+             rejected = isinstance(error, VideoError) and error.code == "upstream_rejected"
++            code = "upstream_rejected" if rejected else "generation_outcome_unknown"
+             transition(identifier, claim, "failed" if rejected else "indeterminate",
+-                       error="upstream_rejected" if rejected else "generation_outcome_unknown",
++                       error=error.stored(code) if isinstance(error, VideoError) else code,
+                        payload=None, reserved=4096)
+         return
+     if row["status"] == "generating":
+@@ -301,7 +443,10 @@ async def process_video(client, row, claim):
+             if status in ("completed", "succeeded", "success", "succeed"):
+                 transition(identifier, claim, "saving", progress=99, next_attempt=0)
+             elif status in ("failed", "error", "cancelled", "canceled"):
+-                transition(identifier, claim, "failed", error="upstream_video_failed",
++                details = structured_video_error(result, payload["token"])
++                if details:
++                    details["stage"] = "upstream_query"
++                transition(identifier, claim, "failed", error=VideoError("upstream_video_failed", details).stored(),
+                            payload=None, reserved=4096)
+             else:
+                 progress = result.get("progress", row["progress"])
+@@ -321,9 +466,12 @@ async def process_video(client, row, claim):
      except Exception as error:
          attempts = row["attempts"] + 1
          code = error.code if isinstance(error, VideoError) else "video_download_failed"
@@ -121,12 +279,13 @@
 +        permanent = code in ("video_too_large", "unsupported_video_type", "unsupported_video_encoding", "video_content_gone")
 +        stopped = permanent or attempts >= 3
 +        transition(identifier, claim, "save_failed" if stopped else "saving",
-+                   attempts=attempts, error=code, next_attempt=timestamp() + 15 * attempts,
++                   attempts=attempts, error=error.stored() if isinstance(error, VideoError) else code,
++                   next_attempt=timestamp() + 15 * attempts,
 +                   reserved=retained_video_bytes(row) if stopped else row["reserved"])
  
  
  def claim_video():
-@@ -355,7 +388,7 @@
+@@ -355,7 +503,7 @@ async def worker(client):
          except Exception:
              # A broken record must not kill all background processing.
              transition(row["id"], claim, "indeterminate", error="video_processing_interrupted",
@@ -135,7 +294,7 @@
  
  
  def cleanup_videos():
-@@ -370,6 +403,11 @@
+@@ -370,6 +518,11 @@ def cleanup_videos():
              c.execute("UPDATE video_jobs SET status='expired',payload=NULL,reserved=4096 WHERE id=?",
                        (row["id"],))
          c.execute("DELETE FROM video_jobs WHERE status='expired' AND expires<?", (now - 7 * 86400,))
@@ -147,7 +306,7 @@
  
  
  async def maintenance():
-@@ -387,6 +425,7 @@
+@@ -387,6 +540,7 @@ async def lifespan(app):
          c.execute("UPDATE video_jobs SET claim=NULL")
      for partial in VIDEO_ROOT.glob("*.part"):
          partial.unlink()
@@ -155,7 +314,7 @@
      async with httpx.AsyncClient(
          trust_env=False, follow_redirects=False, timeout=httpx.Timeout(120, connect=15),
          limits=httpx.Limits(max_connections=WORKERS + 4),
-@@ -409,6 +448,9 @@
+@@ -409,6 +563,9 @@ app.add_middleware(
  )
  
  
@@ -165,7 +324,7 @@
  @app.get("/healthz")
  async def health():
      background = getattr(app.state, "background", [])
-@@ -425,13 +467,28 @@
+@@ -425,13 +582,28 @@ async def create_video(request: Request):
      body = bytearray()
      async for chunk in request.stream():
          body.extend(chunk)
@@ -197,7 +356,7 @@
      except AdmissionError as error:
          raise HTTPException(error.status, error.code) from None
      except (ValueError, UnicodeError, TypeError):
-@@ -462,12 +519,21 @@
+@@ -462,12 +634,21 @@ async def retry_video(identifier: str, request: Request):
      row = await owned_video(identifier, request)
      with db() as c:
          c.execute("BEGIN IMMEDIATE")

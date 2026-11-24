@@ -63,6 +63,11 @@ const taskIdPattern = /^[A-Za-z0-9_-]{1,200}$/
 const operationPattern = /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/
 const successStates = new Set(['completed', 'succeeded', 'success', 'done'])
 const failedStates = new Set(['failed', 'failure', 'error', 'cancelled', 'canceled'])
+const taskErrorStages: Record<string, string> = {
+  upstream_submission: '上游提交',
+  upstream_query: '任务查询',
+  result_download: '结果下载',
+}
 const taskErrorMessages: Record<string, string> = {
   generation_outcome_unknown: '上游未返回生成结果。',
   upstream_rejected: '上游拒绝了生成请求，请检查模型、参数或参考素材。',
@@ -524,6 +529,13 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
   const code = failures.map(value => record(value) && typeof value.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(value.code) ? value.code : undefined).find(value => value)
   const error = failureMessage || (typeof reason === 'string' ? reason : typeof detail === 'string' ? detail : undefined)
     || (code ? Object.hasOwn(taskErrorMessages, code) ? taskErrorMessages[code] : `上游返回错误：${code}` : undefined)
+  for (const failure of failures) {
+    if (!record(failure)) continue
+    if (!result.errorStage && typeof failure.stage === 'string' && Object.hasOwn(taskErrorStages, failure.stage))
+      result.errorStage = taskErrorStages[failure.stage]
+    if (!result.errorStatus && typeof failure.status === 'number' && Number.isInteger(failure.status) && failure.status >= 400 && failure.status <= 599)
+      result.errorStatus = failure.status
+  }
   if (['save_failed', 'indeterminate', 'expired'].includes(state)) {
     result.status = state as CreationTask['status']
     result.error = error || (state === 'save_failed' ? '生成已完成，但结果保存失败。'

@@ -595,6 +595,23 @@ test('task error codes supply safe fallback reasons without replacing provider m
     { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '上游未返回生成结果。' })
 })
 
+test('async failures retain only recognized failure stages and original HTTP error statuses', () => {
+  for (const [stage, expectedStage] of [['upstream_submission', '上游提交'], ['upstream_query', '任务查询'], ['result_download', '结果下载']]) {
+    const result = normalizeCreationTask('video', { data: { id: 'video_1', status: stage === 'result_download' ? 'save_failed' : 'failed',
+      error: { code: 'upstream_rejected', message: 'body.resolution: unsupported value', status: 422, stage, upstream_code: 'validation_error' } } }, undefined, 'async')
+    assert.equal(result.error, 'body.resolution: unsupported value')
+    assert.equal(result.errorStage, expectedStage)
+    assert.equal(result.errorStatus, 422)
+    assert.equal(result.upstream_code, undefined)
+  }
+  for (const [stage, status] of [['constructor', 200], ['https://private.example', 600], ['upstream_submission', '422'], [null, 422.5]]) {
+    const result = normalizeCreationTask('video', { id: 'video_1', status: 'failed', error: { code: 'upstream_rejected', stage, status } }, undefined, 'async')
+    assert.equal(result.errorStage, stage === 'upstream_submission' ? '上游提交' : undefined)
+    assert.equal(result.errorStatus, undefined)
+    assert.match(result.error, /上游拒绝/)
+  }
+})
+
 test('completed image/text results and protected OpenAI video media keep their actual outputs', () => {
   assert.deepEqual(normalizeCreationTask('image', { data: [{ url: 'https://media.example/image.png' }, { b64_json: 'aW1hZ2U=' }] }).outputs,
     [{ url: 'https://media.example/image.png' }, { b64_json: 'aW1hZ2U=' }])

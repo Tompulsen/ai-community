@@ -185,6 +185,7 @@ export function startCreationWorker(redis: RequestContext['redis']) {
 function message(error: unknown, secret = '') {
   const value = record(error) && typeof error.message === 'string' ? error.message : typeof error === 'string' ? error : '创作服务暂时不可用。'
   return (secret ? value.split(secret).join('[redacted]') : value)
+    .replace(/https?:\/\/[^\s<>"']+/gi, '[redacted]')
     .replace(/(?:Bearer\s+|sk-)[A-Za-z0-9_.-]{8,}/gi, '[redacted]').slice(0, 500)
 }
 function stageError(stage: string, detail: string, status?: number) {
@@ -253,8 +254,8 @@ function responseResult(kind: CreationKind, value: unknown, credentials: Credent
   ownedResponse(value, credentials)
   const result = normalizeCreationTask(kind, value, id, protocol)
   if (result.error) {
-    result.errorStage = result.status === 'save_failed' ? '结果保存' : result.status === 'indeterminate' ? '网关响应处理' : '生成任务'
-    result.error = stageError(result.errorStage, hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey))
+    result.errorStage ??= result.status === 'save_failed' ? '结果保存' : result.status === 'indeterminate' ? '网关响应处理' : '生成任务'
+    result.error = stageError(result.errorStage, hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey), result.errorStatus)
   }
   return { ...result, tokenId: credentials.tokenId, protocol }
 }

@@ -82,7 +82,7 @@ def test_missing_upstream_content_stops_download_and_releases_reservation(monkey
     asyncio.run(run())
     current = api.video_row(row['id'])
     assert current['status'] == 'save_failed' and current['attempts'] == 1
-    assert current['error'] == 'video_content_gone'
+    assert api.public_task(current)['error']['code'] == 'video_content_gone'
     assert current['reserved'] == 4096 + len(row['payload'])
     assert api.claim_video() is None
     assert calls == ['GET']
