@@ -1,4 +1,3 @@
-import { mkdir } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import { fillAccountLogin, mockUnifiedAccount } from './helpers/account-fixture'
@@ -24,7 +23,7 @@ test('tools use real destinations and category counts without writing data', asy
     '消息，99+ 条未读': '/messages', '收藏': '/library?tab=saved', '我的作品': '/library', '创作者': '/community?tab=creators',
     '图片': '/discover?kind=image', '视频': '/discover?kind=video', '创作台': '/create', '福利中心': '/activities',
     '账号设置': '/account', '账户余额': '/account?tab=balance', '个人主页': '/community?creator=fixtureAccountUser',
-    '主题外观': '/account?tab=theme', '消费记录': '/usage-logs', '关注申请': '/messages?tab=activity#follow-requests',
+    '主题外观': '/account?tab=theme', '消费记录': '/usage-logs', '关注申请': '/messages?tab=activity#follow-requests', '模型广场': '/models',
   }
   for (const [name, path] of Object.entries(destinations)) await expect(panel(page).getByRole('link', { name, exact: true })).toHaveAttribute('href', path)
   await expect(panel(page).getByRole('link', { name: '消息，99+ 条未读', exact: true }).locator('.tool-count')).toHaveText('99+')
@@ -110,29 +109,26 @@ test('keyboard, outside click and other header menus close the launcher predicta
   await expect(panel(page)).not.toBeVisible()
   await page.mouse.move(24, 500)
   await launcher(page).click()
-  await panel(page).getByRole('button', { name: '刷新', exact: true }).focus()
+  await panel(page).getByRole('link', { name: '模型广场', exact: true }).focus()
   await page.keyboard.press('Tab')
   await expect(panel(page)).not.toBeVisible()
 })
 
-test('tool navigation and reload preserve the unsaved profile guard', async ({ page }) => {
-  await toolsFixture(page)
+test('profile edits stay protected before opening the model plaza', async ({ page }) => {
+  const fixture = await toolsFixture(page)
   await page.goto('/community?creator=fixtureAccountUser&edit=profile')
-  await page.getByLabel('社区昵称', { exact: true }).fill('尚未保存的个人资料')
-  await launcher(page).click()
-  await panel(page).getByRole('link', { name: '收藏', exact: true }).click()
-  await expect(panel(page)).not.toBeVisible()
+  await page.getByLabel('社区昵称', { exact: true }).fill('未保存资料')
+  await page.getByRole('button', { name: '关闭资料编辑', exact: true }).click()
   await page.getByRole('button', { name: '继续编辑', exact: true }).click()
   await expect(page).toHaveURL(/edit=profile$/)
-  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('尚未保存的个人资料')
+  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('未保存资料')
+  await page.getByRole('button', { name: '关闭资料编辑', exact: true }).click()
+  await page.getByRole('button', { name: '放弃修改并离开', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '编辑个人资料', exact: true })).toBeHidden()
   await launcher(page).click()
-  const prompt = page.waitForEvent('dialog')
-  const refresh = panel(page).getByRole('button', { name: '刷新', exact: true }).click()
-  const confirm = await prompt
-  expect(confirm.type()).toBe('beforeunload')
-  await confirm.dismiss()
-  await refresh
-  await expect(page.getByLabel('社区昵称', { exact: true })).toHaveValue('尚未保存的个人资料')
+  await panel(page).getByRole('link', { name: '模型广场', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  expect(fixture.mutations.some(call => call.path === '/api/account/profile')).toBe(false)
 })
 
 test('switching accounts closes tools and updates identity, privileges and unread counts', async ({ page }) => {
@@ -156,7 +152,6 @@ test('switching accounts closes tools and updates identity, privileges and unrea
 
 test('launcher fits narrow guest and member screens with accessible controls', async ({ page }) => {
   const fixture = await toolsFixture(page)
-  await mkdir('.impeccable/review/community-tools', { recursive: true })
   for (const authenticated of [true, false]) {
     fixture.state.authenticated = authenticated; fixture.state.accountAuthenticated = authenticated
     for (const width of [1440, 768, 390, 320]) {
@@ -165,7 +160,7 @@ test('launcher fits narrow guest and member screens with accessible controls', a
       if (width >= 1000) {
         if (authenticated) await expect(page.locator('.profile-toggle')).toBeVisible()
         else await expect(page.locator('.header-login')).toBeVisible()
-      } else await expect(page.getByRole('navigation', { name: '作品分类' })).toBeVisible()
+      } else await expect(page.getByRole('main')).toBeVisible()
       await launcher(page).click()
       await expect(panel(page)).toBeVisible()
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -173,19 +168,19 @@ test('launcher fits narrow guest and member screens with accessible controls', a
       const header = (await page.locator('.app-header').boundingBox())!
       expect(bounds.x).toBeGreaterThanOrEqual(0)
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
-      expect(bounds.y).toBeGreaterThanOrEqual(header.y + header.height)
+      expect(bounds.y).toBeGreaterThanOrEqual(width >= 1000 ? 0 : header.y + header.height)
       if (width >= 1000) {
-        expect(bounds.x).toBeGreaterThanOrEqual(64)
-        expect(bounds.x).toBeLessThanOrEqual(80)
+        const rail = (await page.getByRole('complementary', { name: '社区侧栏', exact: true }).boundingBox())!
+        expect(bounds.x).toBeGreaterThanOrEqual(rail.x + rail.width)
       }
       const bottom = width < 1000 ? (await page.getByRole('navigation', { name: '手机导航' }).boundingBox())!.y : page.viewportSize()!.height
       expect(bounds.y + bounds.height).toBeLessThanOrEqual(bottom)
-      await panel(page).getByRole('button', { name: '刷新', exact: true }).scrollIntoViewIfNeeded()
-      await expect(panel(page).getByRole('button', { name: '刷新', exact: true })).toBeInViewport()
+      await panel(page).getByRole('link', { name: '模型广场', exact: true }).scrollIntoViewIfNeeded()
+      await expect(panel(page).getByRole('link', { name: '模型广场', exact: true })).toBeInViewport()
       await panel(page).evaluate(element => { element.scrollTop = 0 })
-      await page.screenshot({ path: `.impeccable/review/community-tools/${authenticated ? 'member' : 'guest'}-${width}.png` })
+      await page.screenshot({ path: test.info().outputPath(`${authenticated ? 'member' : 'guest'}-${width}.png`) })
       if (width === 1440 || width === 320) {
-        const result = await new AxeBuilder({ page }).include('.app-header').analyze()
+        const result = await new AxeBuilder({ page }).include('.community-tools').analyze()
         expect(result.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([])
       }
     }

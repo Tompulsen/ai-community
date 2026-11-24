@@ -6,7 +6,7 @@ describe('login return destinations agree with the OAuth backend', () => {
   it('preserves current pages and only their supported query values', () => {
     const accepted = [
       '/discover', '/work/old123', '/create', '/create/text', '/create/image', '/create/video',
-      '/library', '/activities', '/community', '/account', '/messages', '/messages/creator123',
+      '/library', '/models', '/activities', '/community', '/account', '/messages', '/messages/creator123',
       '/discover?kind=image&q=%E7%AB%A0%E9%B1%BC+AI&tag=Skill&sort=latest',
       '/discover?q=', '/create?from=old123', '/create/video?remix=old123',
       '/create/image?entry=5e22f8ac-82ea-4362-8b2f-595261334793',
@@ -30,7 +30,7 @@ describe('login return destinations agree with the OAuth backend', () => {
     const rejected = [
       undefined, null, {}, '', 'https://other.test/discover', '//other.test/discover',
       '/\\other.test', '/discover/../account', '/%64iscover', '/work/%2e%2e', '/work/old_123',
-      '/account/authorize', '/admin', '/community/lottery', '/discover#anchor',
+      '/account/authorize', '/admin', '/community/lottery', '/discover#anchor', '/models/unknown', '/models?returnTo=https://other.test',
       '/discover?redirect=https://other.test', '/discover?returnTo=%2Faccount',
       '/discover?kind=unknown', '/discover?sort=unknown', '/discover?kind=image&kind=video',
       '/discover?q=one&q=two', '/discover?invite=one&invite=two', '/discover?%71=one&q=two',

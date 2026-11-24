@@ -308,7 +308,7 @@ function restoreMessageTrigger() {
         <nav v-if="feedPage" class="mobile-discovery-nav" aria-label="作品浏览">
           <RouterLink v-for="link in discoveryLinks" :key="link.sort" :to="discoveryDestination(link.sort)" :aria-current="(route.query.sort || 'recommended') === link.sort ? 'page' : undefined">{{ link.label }}</RouterLink>
         </nav>
-        <component v-else :is="profilePage || workPage ? 'strong' : 'h1'" class="mobile-page-title">{{ mobilePageTitle }}</component>
+        <component v-else :is="profilePage || workPage || route.path === '/models' ? 'strong' : 'h1'" class="mobile-page-title">{{ mobilePageTitle }}</component>
         <div class="mobile-header-actions"><button v-if="!accountSettings" ref="mobileSearchButton" type="button" class="icon-button mobile-search-toggle" :aria-label="mobileSearchOpen ? '收起搜索作品' : '展开搜索作品'" :aria-expanded="mobileSearchOpen" aria-controls="mobile-community-search" @click="toggleMobileSearch"><X v-if="mobileSearchOpen" :size="22" aria-hidden="true" /><Search v-else :size="22" aria-hidden="true" /></button><RouterLink v-if="profilePage" to="/account" class="icon-button" aria-label="账号设置"><Settings :size="22" /></RouterLink></div>
       </div>
     </header>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, Receipt, RefreshCw, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
+import { ArrowRight, Bell, Bookmark, Compass, FolderOpen, Gift, Image, LayoutGrid, LockKeyhole, Megaphone, Menu, MessageSquare, Palette, PanelsTopLeft, Receipt, Search, Settings, ShieldCheck, UserPlus, UserRound, Users, Video, Wallet, X } from '@lucide/vue'
 import { inbox, loadInbox, type InboxCategory } from '../inbox'
 import { lotteryCount, lotteryDescription, lotteryLabel, refreshLotteryBalance } from '../lottery-balance'
 import { session } from '../state'
@@ -11,7 +11,7 @@ import { Puzzle } from '@lucide/vue'
 defineProps<{ compact?: boolean }>()
 const emit = defineEmits<{ message: [category: InboxCategory] }>()
 const unreadCount = computed(() => session.user ? inbox.counts.announcement + inbox.counts.messages + inbox.counts.activity : 0)
-interface Tool { label: string; icon: Component; to?: string; member?: boolean; count?: number; category?: InboxCategory; action?: 'search' | 'refresh' }
+interface Tool { label: string; icon: Component; to?: string; member?: boolean; count?: number; category?: InboxCategory; action?: 'search' }
 const router = useRouter()
 const menu = ref<HTMLDetailsElement>(), trigger = ref<HTMLElement>(), searchInput = ref<HTMLInputElement>()
 const query = ref('')
@@ -35,7 +35,7 @@ const tools = computed<Tool[]>(() => [
   { label: '关注申请', icon: UserPlus, to: '/messages?tab=activity#follow-requests', member: true, category: 'activity' },
   { label: '消费记录', icon: Receipt, to: '/usage-logs', member: true },
   { label: '技能广场', icon: Puzzle, to: '/skills' },
-  { label: '刷新', icon: RefreshCw, action: 'refresh' },
+  { label: '模型广场', icon: LayoutGrid, to: '/models', member: true },
 ])
 function destination(tool: Tool) {
   return tool.member && !session.user ? { path: '/account', query: { returnTo: tool.to } } : tool.to!
@@ -56,7 +56,6 @@ function searchWorks() {
 }
 function run(action: Tool['action']) {
   if (action === 'search') searchInput.value?.focus()
-  else if (action === 'refresh') { close(); window.location.reload() }
 }
 watch(() => session.user?.id, () => {
   query.value = ''

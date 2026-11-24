@@ -1,28 +1,49 @@
 <!-- Adapted from octopus_chat account-model-pricing.tsx / .module.scss (MIT). -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { RefreshCw, Search } from '@lucide/vue'
-import { errorMessage, session } from '../state'
+import { Image, LayoutGrid, MessageSquare, RefreshCw, Search, Video } from '@lucide/vue'
+import { api, errorMessage, session } from '../state'
 import { studioAccount } from '../studio-account'
+import type { CreationModel } from '../native-studio'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 import StudioModelPriceCard from './StudioModelPriceCard.vue'
 
-const props = withDefaults(defineProps<{ model?: string }>(), { model: '' })
+const props = withDefaults(defineProps<{ model?: string; standalone?: boolean }>(), { model: '' })
 const data = ref<ModelPricing>(), error = ref(''), query = ref(''), loading = ref(false)
+const catalogue = ref<CreationModel[]>(), catalogueError = ref(''), catalogueLoading = ref(false)
+const filters = [
+  { id: 'all', label: '全部', icon: LayoutGrid }, { id: 'text', label: '文本', icon: MessageSquare },
+  { id: 'image', label: '图片', icon: Image }, { id: 'video', label: '视频', icon: Video },
+] as const
+const kind = ref<typeof filters[number]['id']>('all')
 let revision = 0
+let request: AbortController | undefined
 async function load() {
   const current = ++revision, owner = session.user?.id, accountId = session.user?.accountId || owner
-  data.value = undefined; error.value = ''
-  if (!owner) { loading.value = false; return }
-  loading.value = true
-  try {
-    const result = await studioAccount<ModelPricing>('model-pricing')
-    if (current !== revision || owner !== session.user?.id || accountId !== (session.user?.accountId || session.user?.id)) return
-    if (result.userId !== Number(accountId)) throw new Error('账号已变化，请刷新价格。')
-    if (!Array.isArray(result.rows)) throw new Error('模型价格数据不可用。')
-    data.value = result
-  } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
-  finally { if (current === revision) loading.value = false }
+  request?.abort()
+  const controller = request = new AbortController()
+  data.value = undefined; catalogue.value = undefined; error.value = ''; catalogueError.value = ''
+  if (!owner) { loading.value = false; catalogueLoading.value = false; return }
+  const valid = () => current === revision && owner === session.user?.id && accountId === (session.user?.accountId || session.user?.id)
+  loading.value = true; catalogueLoading.value = true
+  await Promise.all([
+      studioAccount<ModelPricing>('model-pricing', 'GET', undefined, controller.signal).then(result => {
+        if (!valid()) return
+        if (result.userId !== Number(accountId)) throw new Error('账号已变化，请刷新价格。')
+        if (!Array.isArray(result.rows)) throw new Error('模型价格数据不可用。')
+        data.value = result
+      }).catch(cause => { if (valid()) error.value = errorMessage(cause) })
+        .finally(() => { if (valid()) loading.value = false }),
+      api<{ items: CreationModel[] }>('/api/creation/models?scope=all', {
+        expectedAccount: accountId, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]),
+      }).then(value => {
+        if (!valid()) return
+        if (!Array.isArray(value.items)) throw new Error('模型分类数据不可用。')
+        catalogue.value = value.items
+      }).catch(cause => {
+        if (valid()) { catalogueError.value = errorMessage(cause); kind.value = 'all' }
+      }).finally(() => { if (valid()) catalogueLoading.value = false }),
+  ])
 }
 const models = computed(() => {
   const grouped = new Map<string, ModelPriceRow[]>()
@@ -33,25 +54,41 @@ const models = computed(() => {
   }
   return [...grouped.entries()].sort(([a], [b]) => Number(b === props.model) - Number(a === props.model))
 })
-const rows = computed(() => models.value.filter(([name, prices]) => name === props.model || `${name} ${prices.map(row => row.group).join(' ')}`.toLowerCase().includes(query.value.trim().toLowerCase())))
+const modelKinds = computed(() => new Map(catalogue.value?.map(item => [item.id, item.configuredKind ? [item.configuredKind] : item.kinds || []])))
+const categories = computed(() => filters.map(filter => {
+  const id = filter.id
+  return { ...filter, count: id === 'all' ? models.value.length : models.value.filter(([name]) => modelKinds.value.get(name)?.includes(id)).length }
+}))
+const rows = computed(() => models.value.filter(([name, prices]) =>
+  (kind.value === 'all' || modelKinds.value.get(name)?.includes(kind.value)) &&
+  `${name} ${prices.map(row => row.group).join(' ')}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 const missingModel = computed(() => props.model && data.value && !models.value.some(([name]) => name === props.model))
-watch(() => [session.user?.id, session.user?.accountId], () => { query.value = ''; void load() }, { immediate: true })
-onBeforeUnmount(() => { revision++ })
+watch(() => [session.user?.id, session.user?.accountId], () => { query.value = ''; kind.value = 'all'; void load() }, { immediate: true })
+onBeforeUnmount(() => { revision++; request?.abort() })
 </script>
 
 <template>
   <section class="model-prices" aria-label="模型广场">
-    <header class="prices-heading"><h2>模型广场</h2><div class="prices-toolbar">
+    <header class="prices-heading"><div><component :is="standalone ? 'h1' : 'h2'" class="prices-title">模型广场</component><p class="prices-description">按创作类型查找模型，对比各分组价格。</p></div><div class="prices-toolbar">
       <label class="prices-search"><Search :size="15" aria-hidden="true" /><input v-model="query" type="search" aria-label="搜索模型价格" placeholder="搜索模型或分组" :disabled="!data" /></label>
-      <span v-if="data" class="prices-count" role="status">{{ query.trim() ? `${rows.length} / ` : '' }}{{ models.length }} 个模型</span>
-      <button type="button" class="studio-tool" aria-label="刷新价格" title="刷新价格" :disabled="loading" @click="load"><RefreshCw :size="15" aria-hidden="true" /></button>
+      <button type="button" class="studio-tool" aria-label="刷新价格" title="刷新价格" :disabled="loading || catalogueLoading" @click="load"><RefreshCw :size="15" aria-hidden="true" /></button>
     </div></header>
+    <div class="prices-filter-bar">
+      <div class="prices-filters" role="group" aria-label="模型类型">
+        <button v-for="filter in categories" :key="filter.id" type="button" class="prices-filter" :aria-label="`${filter.label}模型`" :aria-pressed="kind === filter.id" :disabled="!data || (filter.id !== 'all' && !catalogue)" @click="kind = filter.id">
+          <component :is="filter.icon" :size="16" aria-hidden="true" /><span>{{ filter.label }}</span><span class="filter-count" aria-hidden="true">{{ data && (filter.id === 'all' || catalogue) ? filter.count : '—' }}</span>
+        </button>
+      </div>
+      <span v-if="data" class="prices-count" role="status">{{ query.trim() || kind !== 'all' ? `${rows.length} / ` : '' }}{{ models.length }} 个模型</span>
+    </div>
     <p v-if="missingModel" class="prices-state" role="status">{{ model }}：模型广场暂未提供此模型的可用价格，请查看模型详情。</p>
     <p v-if="loading" class="prices-state" role="status">正在读取模型价格…</p>
     <div v-if="error" class="prices-state form-error" role="alert"><p>{{ error }}</p><button type="button" class="studio-tool" @click="load"><RefreshCw :size="15" />重新读取</button></div>
     <template v-if="data">
+      <p v-if="catalogueLoading" class="prices-state" role="status">正在读取模型分类…</p>
+      <div v-if="catalogueError" class="prices-state form-error" role="alert"><p>模型分类暂不可用，当前展示全部价格。{{ catalogueError }}</p><button type="button" class="studio-tool" @click="load">重试分类</button></div>
       <div v-if="rows.length" class="model-price-grid"><StudioModelPriceCard v-for="[name, prices] in rows" :key="name" :rows="prices" :featured="name === model" /></div>
-      <p v-else class="prices-state" role="status">{{ models.length ? '没有匹配的模型，试试其他名称。' : '模型广场暂未提供可用价格。' }}</p>
+      <div v-else-if="kind === 'all' || !catalogueLoading" class="prices-state" role="status"><p>{{ models.length ? '当前筛选下没有匹配的模型，试试其他类型、名称或分组。' : '模型广场暂未提供可用价格。' }}</p><button v-if="models.length" type="button" class="studio-tool" @click="kind = 'all'; query = ''">查看全部模型</button></div>
       <p class="prices-note">每次请求为单次调用价格；按量模型分别列出输入、输出价格。动态计费及图片、音频等附加费用以模型广场详情为准。</p>
     </template>
   </section>
@@ -60,7 +97,15 @@ onBeforeUnmount(() => { revision++ })
 <style scoped>
 .model-prices { container-type: inline-size; min-width: 0; padding-top: 24px; color: var(--ink); font-size: 13px; line-height: 1.5; }
 .prices-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 20px; }
-.prices-heading h2 { margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; }
+.prices-title { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
+.prices-description { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.prices-filter-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.prices-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.prices-filter { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); font: inherit; }
+.prices-filter:hover:not(:disabled) { background: var(--state-hover); color: var(--ink); }
+.prices-filter[aria-pressed="true"] { background: var(--state-selected); border-color: var(--state-selected-border); color: var(--ink); }
+.prices-filter:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.filter-count { font-size: 12px; font-variant-numeric: tabular-nums; }
 .prices-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; margin-left: auto; }
 .prices-search { display: flex; align-items: center; gap: 8px; width: 200px; min-width: 0; min-height: 36px; padding: 0 10px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
 .prices-search input { width: 100%; min-width: 0; padding: 6px 0; border: 0; border-radius: 0; outline: none; background: transparent; color: var(--ink); caret-color: var(--ink); font: inherit; }
@@ -71,6 +116,6 @@ onBeforeUnmount(() => { revision++ })
 .prices-state { margin: 0; padding: 20px 0; overflow-wrap: anywhere; }
 .prices-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; }
 @container (max-width: 800px) { .model-price-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@container (max-width: 520px) { .prices-heading { margin-bottom: 16px; }.prices-toolbar { width: 100%; gap: 8px; }.prices-search { flex: 1; width: auto; }.model-price-grid { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 520px) { .prices-heading { margin-bottom: 16px; }.prices-toolbar { width: 100%; gap: 8px; }.prices-search { flex: 1; width: auto; }.prices-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; gap: 4px; }.prices-filter { gap: 4px; padding: 8px 4px; }.prices-filter > svg { display: none; }.model-price-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 600px), (pointer: coarse) { .prices-toolbar > .studio-tool { min-width: 44px; min-height: 44px; }.prices-search { min-height: 44px; }.prices-search input { font-size: 16px; } }
 </style>

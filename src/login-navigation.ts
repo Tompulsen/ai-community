@@ -5,7 +5,7 @@ export const accountCompleteAck = 'octopus:account-ack'
 export function loginReturnPath(value: unknown, fallback = '/discover'): string {
   if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\#]/.test(value)) return fallback
   const path = value.split('?')[0]!
-  if (!/^\/(?:discover|work\/[a-zA-Z0-9]{1,32}|create(?:\/(?:text|image|video))?|library|skills|usage-logs|activities|community|account|messages(?:\/[a-zA-Z0-9]{1,32})?)$/.test(path)) return fallback
+  if (!/^\/(?:discover|work\/[a-zA-Z0-9]{1,32}|create(?:\/(?:text|image|video))?|library|skills|models|usage-logs|activities|community|account|messages(?:\/[a-zA-Z0-9]{1,32})?)$/.test(path)) return fallback
   const query = value.slice(path.length + 1)
   try { decodeURIComponent(query) } catch { return fallback }
   const id = /^[a-zA-Z0-9]{1,32}$/
