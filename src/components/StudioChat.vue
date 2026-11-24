@@ -119,7 +119,7 @@ onBeforeUnmount(() => transcriptObserver.disconnect())
 const restoringTask = ref(false)
 const models = computed(() => modelsForKind('text'))
 const busy = computed(() => props.entryPending || restoringTask.value || props.source && sourceWorkId.value !== props.source.id || !props.entryOnly && current.value && (isConversationBusy(current.value) || chats.initialSaving[current.value.id]))
-const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
+const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.modelLaunchPending && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
 const mediaByMessage = computed(() => {
@@ -201,13 +201,13 @@ watch(() => session.user?.id, async () => {
   if (!props.entryOnly) await loadChats()
 }, { immediate: true })
 function chooseModel() {
-  if (props.mode !== 'text' || props.remixPreparing || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (props.mode !== 'text' || props.remixPreparing || creation.modelLaunchPending || !current.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const saved = current.value.textModel || current.value.model
   const next = (!props.entryOnly && takeModelChoice('text', models.value)) || (models.value.some(item => item.id === saved) ? saved! : models.value[0]?.id || '')
   model.value = next
   if (next && current.value.textModel !== next) { current.value.textModel = next; void saveChats() }
 }
-watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing, () => props.mode], chooseModel)
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing, () => creation.modelLaunchPending, () => props.mode], chooseModel)
 function changeFormat(event: Event) {
   if (!current.value) return
   const format = (event.target as HTMLSelectElement).value
@@ -247,8 +247,8 @@ async function applyRemix(source: Work, initialFiles: StudioFile[] = [], fresh =
   await saveChats(true)
   return live && isCurrent() && owner === session.user?.id && next === current.value && props.mode === 'text'
 }
-watch([prompt, files], (_value, previous) => { if (current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats(files.value !== previous[1])?.catch(() => {}) } }, { deep: true })
-watch(model, () => { if (current.value && model.value) { current.value.textModel = model.value; void saveChats() } })
+watch([prompt, files], (_value, previous) => { if (!creation.modelLaunchPending && current.value) { current.value.draft = prompt.value; current.value.draftFiles = files.value; void saveChats(files.value !== previous[1])?.catch(() => {}) } }, { deep: true })
+watch(model, () => { if (!creation.modelLaunchPending && current.value && model.value) { current.value.textModel = model.value; void saveChats() } })
 watch(() => current.value?.messages.map(message => [message.id, messageText(message), message.reasoning, message.streaming, message.tools?.map(tool => [tool.id, tool.status])]), async () => { if (nearBottom.value) { await nextTick(); scrollToBottom() } }, { deep: true })
 function followOutput() { if (nearBottom.value) scrollToBottom() }
 function scrollToBottom() { if (messagesElement.value) messagesElement.value.scrollTop = messagesElement.value.scrollHeight; nearBottom.value = true }
@@ -529,7 +529,8 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
       <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="current" :transient="entryOnly" :disabled="busy" /></div>
-      <form v-if="mode === 'text'" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
+      <p v-if="mode === 'text' && creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
+      <form v-if="mode === 'text'" :inert="Boolean(creation.modelLaunchPending) || undefined" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
         <StudioReferenceAttachments :references="draftImages" :disabled="busy" @remove="removeDraftImage" />
         <label class="field"><span class="studio-sr-only">{{ entryOnly ? '创作描述' : '消息' }}</span><textarea ref="composerElement" v-model="prompt" class="composer-input" rows="1" maxlength="100000" placeholder="发消息，描述你的想法…" :disabled="busy" @keydown="handleEnter" @keyup="ime.release" @compositionstart="ime.start" @compositionend="ime.end" @paste="pasteFiles" /></label>

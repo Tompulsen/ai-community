@@ -10,6 +10,7 @@ import StudioContextMenu, { type StudioMenuAction } from './studio-message/Studi
 import { confirmStudioDelete } from '../studio-confirm'
 interface Token { id: number; name: string; status: number; group: string; expired_time: number; remain_quota: number; used_quota: number; unlimited_quota: boolean; model_limits_enabled: boolean; model_limits: string; allow_ips?: string; auto_groups?: string[]; cross_group_retry?: boolean }
 const props = defineProps<{ view: 'prices' | 'logs' | 'keys'; model?: string }>()
+const emit = defineEmits<{ launched: [] }>()
 const loading = ref(false), error = ref(''), busy = ref(false), page = ref(1), total = ref(0)
 const tokens = ref<Token[]>([])
 const groups = ref<{ id: string; name: string }[]>([]), autoGroups = ref({ supported: false, defaultGroups: [] as string[], maxCount: 0 })
@@ -84,7 +85,7 @@ async function remove(token: Token) {
 function changePage(value: number) { page.value = value; void load() }
 </script>
 <template>
-  <StudioModelPrices v-if="view === 'prices'" :model="model" />
+  <StudioModelPrices v-if="view === 'prices'" :model="model" @launched="emit('launched')" />
   <StudioUsageLogs v-else-if="view === 'logs'" />
   <section v-else class="account-tools" aria-label="密钥管理">
     <header><h2>密钥管理</h2><div><button v-if="view === 'keys'" class="button subtle btn" :disabled="loading || busy" @click="edit()"><Plus :size="16" />创建密钥</button><button class="icon-button" title="刷新" aria-label="刷新账号工具" :disabled="loading || busy" @click="load"><RefreshCw :size="18" /></button></div></header>

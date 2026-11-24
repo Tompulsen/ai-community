@@ -1,15 +1,18 @@
 <!-- Adapted from octopus_chat account-model-pricing.tsx / .module.scss (MIT). -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId } from 'vue'
-import { ChevronRight, Copy, X } from '@lucide/vue'
-import { creation } from '../native-studio'
+import { ArrowUpRight, ChevronRight, Copy, X } from '@lucide/vue'
+import { creation, type CreationModel } from '../native-studio'
 import { errorMessage, notify } from '../state'
 import type { ModelPriceRow } from '../../server/native-account/pricing'
 
-const props = defineProps<{ rows: ModelPriceRow[]; featured?: boolean }>()
+const props = defineProps<{ rows: ModelPriceRow[]; featured?: boolean; catalogueModel?: CreationModel; catalogueLoading?: boolean; busy?: boolean; launching?: boolean }>()
+const emit = defineEmits<{ launch: [row: ModelPriceRow] }>()
 type PriceTier = NonNullable<ModelPriceRow['details']>['tiers'][number]
 const group = ref(props.rows.some(row => row.group === creation.selectedGroup) ? creation.selectedGroup : props.rows[0]?.group || '')
 const row = computed(() => props.rows.find(entry => entry.group === group.value) || props.rows[0])
+const launchIssueId = `model-launch-${useId()}`
+const launchIssue = computed(() => props.catalogueLoading ? '正在确认模型调用方式…' : !props.catalogueModel ? '此模型暂不支持工作台调用' : !props.catalogueModel.groups?.includes(row.value?.group || '') ? '当前分组暂不可调用' : '')
 const tier = computed(() => row.value?.details?.tiers[0])
 const extraCount = computed(() => new Set(row.value?.details?.tiers.flatMap(entry => entry.extras?.map(charge => charge.label) || [])).size)
 const billing = computed(() => row.value?.details ? row.value.billing === '每次请求' ? '按次计费' : row.value.billing.split(' · ')[0] : row.value?.billing)
@@ -38,10 +41,13 @@ onBeforeUnmount(() => dialog.value?.close())
     <p v-else class="price-fallback">{{ row.price }}</p>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <footer class="price-card-footer">
-      <select v-if="rows.length > 1" v-model="group" class="price-group select-control" :aria-label="`${row.model} 计费分组`"><option v-for="entry in rows" :key="entry.group" :value="entry.group">{{ entry.group }}</option></select>
+      <select v-if="rows.length > 1" v-model="group" class="price-group select-control" :disabled="busy" :aria-label="`${row.model} 计费分组`"><option v-for="entry in rows" :key="entry.group" :value="entry.group">{{ entry.group }}</option></select>
       <span v-else class="price-single-group">{{ row.group }}</span>
-      <button type="button" class="studio-tool price-command" :aria-label="`查看 ${row.model} 价格详情`" @click="dialog?.showModal()">{{ row.details && row.details.tiers.length > 1 ? '分档详情' : '详情' }}<ChevronRight :size="14" aria-hidden="true" /></button>
+      <div class="price-card-actions"><button type="button" class="studio-tool price-command" :aria-label="`查看 ${row.model} 价格详情`" @click="dialog?.showModal()">{{ row.details && row.details.tiers.length > 1 ? '分档详情' : '详情' }}<ChevronRight :size="14" aria-hidden="true" /></button>
+        <button type="button" class="button primary btn price-launch" :aria-label="`调用 ${row.model}`" :aria-describedby="launchIssue ? launchIssueId : undefined" :aria-busy="launching" :disabled="busy || Boolean(launchIssue)" @click="emit('launch', row)">{{ launching ? '正在进入…' : '调用' }}<ArrowUpRight v-if="!launching" :size="15" aria-hidden="true" /></button>
+      </div>
     </footer>
+    <p v-if="launchIssue" :id="launchIssueId" class="price-launch-note">{{ launchIssue }}</p>
     <Teleport to="body"><dialog ref="dialog" class="compact-dialog model-price-dialog" :aria-labelledby="titleId" @click="($event.target === dialog) && dialog?.close()">
       <header class="dialog-heading"><h2 :id="titleId">模型计费详情</h2><button type="button" class="icon-button" aria-label="关闭模型计费详情" title="关闭" @click="dialog?.close()"><X :size="18" /></button></header>
       <div class="dialog-body price-details"><h3>{{ row.model }}</h3><p class="price-detail-note">{{ row.group }} · {{ row.billing }}</p>
@@ -74,7 +80,11 @@ onBeforeUnmount(() => dialog.value?.close())
 .price-context { flex-basis: 100%; overflow-wrap: anywhere; }
 .price-extras { padding: 0; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .price-fallback { padding-top: 8px; font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-line; }
-.price-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-top: auto; padding-top: 4px; color: var(--muted); font-size: 12px; }
+.price-card-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; margin-top: auto; padding-top: 4px; color: var(--muted); font-size: 12px; }
+.price-card-actions { display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+.price-launch { min-height: 44px; min-width: 76px; padding: 8px 12px; font-size: 12px; }
+.price-launch:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.price-launch-note { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .price-single-group { min-width: 0; overflow-wrap: anywhere; }
 .price-group { width: auto; min-width: 0; max-width: calc(100% - 72px); min-height: var(--control-size, var(--control-height)); padding: var(--control-padding, 8px 12px); border: 0; border-radius: 6px; font-family: inherit; font-size: var(--control-font-size, var(--font-size-input)); line-height: var(--control-line-height, 24px); color: var(--ink); text-overflow: ellipsis; }
 .model-price-dialog { width: min(480px, calc(100vw - 24px)); }

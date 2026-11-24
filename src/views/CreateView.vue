@@ -77,21 +77,22 @@ watch([kind, () => chats.ready, () => creation.loaded], async () => {
   if (!chats.ready || !creation.loaded) return
   const requestedKind = kind.value, owner = session.user?.id
   await syncMediaConversations()
-  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse || route.query.entry || route.query.skill) return
+  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse || route.query.entry || route.query.skill || route.query.conversation) return
   const active = chats.sessions.find(chat => chat.id === chats.activeId)
   const preferred = active || chats.sessions[0] || newChat(requestedKind)
   preferred.composerKind = requestedKind
   activateConversation(preferred.id)
 }, { immediate: true })
-watch([() => route.query.conversation, workspace, () => chats.ready, () => creation.loaded], async () => {
+watch([() => route.query.conversation, kind, workspace, () => chats.ready, () => creation.loaded], async () => {
   const id = route.query.conversation, entryStart = route.query.start === '1'
   if (typeof id !== 'string' || !chats.ready || !creation.loaded) return
   const selected = chats.sessions.find(chat => chat.id === id)
   if (!selected) return
+  selected.composerKind = kind.value
   activateConversation(id)
   await nextTick()
   if (chats.activeId === id && !entryStart) workspace.value?.openConversation()
-}, { flush: 'post' })
+}, { flush: 'post', immediate: true })
 let revision = 0, skillImportNavigation = 0
 let skillDraft: { owner: string; work: string; chat: string; sha256: string; kind: string; model: string; group: string } | undefined
 watch([() => route.query.skill, () => session.user?.id, () => chats.ready, () => creation.loaded, kind, skillImportRetry], async ([id, owner], _previous, onCleanup) => {
@@ -232,7 +233,7 @@ function syncSource(id?: string) {
   if (route.query.entry || route.query.start || route.query.skill) return
   if (id && (route.query.remix === id || route.query.from === id)) return
   source.value = null
-  void router.replace({ query: id ? { remix: id } : {} })
+  void router.replace({ query: { ...(route.query.conversation === chats.activeId ? { conversation: route.query.conversation } : {}), ...(id ? { remix: id } : {}) } })
 }
 watch([workspace, () => chat.value?.ready], () => {
   const active = chats.sessions.find(item => item.id === chats.activeId)
@@ -368,7 +369,7 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
     </header>
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <div v-if="sessionStatus === 'guest'" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink><RouterLink to="/discover" class="text-link"><ArrowLeft :size="16" />返回社区</RouterLink></div>
-    <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
+    <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" @launched="accountTool = ''" /></div>
       <p v-if="skillImportLoading" role="status">正在选择技能与对应模型…</p>
       <p v-if="skillImportError" class="form-error" role="alert">{{ skillImportError }} <button type="button" class="text-link" @click="skillImportRetry++">重新读取技能</button><RouterLink :to="'/work/' + route.query.skill" class="text-link">返回技能作品</RouterLink></p>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>

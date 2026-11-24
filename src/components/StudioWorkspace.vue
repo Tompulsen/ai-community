@@ -88,7 +88,7 @@ const videoParameterIssue = computed(() => {
 const imageCountIssue = computed(() => props.kind === 'image' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 10) ? '图片数量需为 1 到 10 的整数。' : '')
 const submissionIssue = computed(() => error.value || imageCountIssue.value || videoParameterIssue.value)
 const referenceLimitIssue = computed(() => references.value.length > referenceLimit.value ? upscale.value ? '视频超分每次仅支持一个源视频。' : '参考图数量超过当前创作类型上限，请减少所选图片。' : '')
-const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && (upscale.value ? !!sourceVideo.value : Boolean(prompt.value.trim())))
+const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.modelLaunchPending && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && (upscale.value ? !!sourceVideo.value : Boolean(prompt.value.trim())))
 let live = true, draftRevision = 0, restoreRevision = 0
 let materialSubmission: AbortController | undefined
 function createDraftWrites() {
@@ -146,7 +146,7 @@ function adaptVideoParameters() {
   videoOptions.resolution = next.resolution; duration.value = next.duration; ratio.value = next.aspectRatio
 }
 function chooseModel() {
-  if (props.remixPreparing || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  if (props.remixPreparing || creation.modelLaunchPending || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const initializing = !model.value
   const choice = takeModelChoice(props.kind, models.value)
   if (choice) {
@@ -206,12 +206,12 @@ watch(() => session.user?.id, () => {
   Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' }))
   protocol.value = 'auto'; apiFormat.value = 'auto'
 })
-watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
+watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing, () => creation.modelLaunchPending], chooseModel)
 // Only editable parameters adapt; saved requests and restored originals remain unchanged.
-watch([model, () => videoOptions.mode, videoSetting], () => { if (!restoringParameters.value) adaptVideoParameters() }, { deep: true, flush: 'sync' })
-watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
+watch([model, () => videoOptions.mode, videoSetting], () => { if (!creation.modelLaunchPending && !restoringParameters.value) adaptVideoParameters() }, { deep: true, flush: 'sync' })
+watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!creation.modelLaunchPending && !restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, imageEditTaskId, restoringParameters], () => {
-  if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
+  if (props.entryOnly || creation.modelLaunchPending || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
   const draft = { prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value,
     imageOptions: { ...imageOptions }, videoOptions: { ...videoOptions }, protocol: protocol.value, apiFormat: apiFormat.value,
     sourceWorkId: sourceWorkId.value, references: references.value.map(file => ({ ...file })), imageEditTaskId: imageEditTaskId.value }
@@ -224,7 +224,7 @@ watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOpt
 }, { deep: true, flush: 'sync' })
 watch(model, value => { if (!restoringTask.value && value !== parameterModel.value) parameterModel.value = '' })
 watch([model, selectedApiFormat, () => props.kind, restoringParameters], () => {
-  if (restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value, selectedApiFormat.value)) return
+  if (creation.modelLaunchPending || restoringParameters.value || props.kind !== 'image' || !usesGeminiImageChat(model.value, selectedApiFormat.value)) return
   manualSize.value = ''; imageOptions.seed = ''; count.value = 1
 })
 function modelChanged() {
@@ -528,7 +528,8 @@ defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseRefe
 <template>
   <section class="native-studio" aria-label="创作工作台">
     <div v-if="!entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="!currentConversation?.messages.length || busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="skillChat" :kind="kind" :transient="entryOnly" :disabled="!composerReady || submitting || !!busy" /></div>
-    <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
+    <p v-if="creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
+    <form class="creation-controls studio-composer" :aria-label="entryOnly ? '快捷创作' : '创作参数'" :inert="!composerReady || Boolean(creation.modelLaunchPending) || undefined" @submit.prevent="generate" @dragover.prevent @drop="dropReferences">
       <div v-if="branchTaskId || imageEditTaskId" class="creation-editing" role="status"><Pencil :size="14" aria-hidden="true" /><span>{{ imageEditTaskId ? '编辑图片 · 修改提示词后生成新图片' : editing ? '编辑原提问 · 生成后保留旧版本' : '重新生成此轮' }}</span><button class="icon-button" type="button" aria-label="取消编辑此轮" title="取消编辑" @click="cancelEditing"><X :size="16" aria-hidden="true" /></button></div>
       <StudioReferenceAttachments :references="references" :disabled="submitting" @remove="removeReference" @duration="sourceDuration" />
       <StudioMaterialStatus :items="materialIssues" :disabled="submitting" @remove="materials.remove" @retry="materials.retry" @cancel="materials.cancel" />

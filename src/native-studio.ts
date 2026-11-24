@@ -96,7 +96,7 @@ export interface CreationInput {
 export const creation = reactive({
   models: [] as CreationModel[], modelsLoading: false, modelsLoaded: false, modelsError: '',
   groups: [] as CreationGroup[], selectedGroup: null as string | null, modelTokenId: null as number | null,
-  groupsLoading: false, groupSwitching: false, groupsError: '',
+  groupsLoading: false, groupSwitching: false, groupsError: '', modelLaunchPending: undefined as Promise<void> | undefined,
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
 })
 export const mediaSettings = reactive({ autoDownload: false, autoSaveGallery: true, loaded: false })
