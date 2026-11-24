@@ -1020,11 +1020,14 @@ for (const [label, video] of [
   ['partial administrator settings', { resolutions: ['1080p'], autoResolution: '1080p' }],
   ['explicit operation', { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }],
 ]) test(`video upscaling with ${label} reads an owned MP4 and reserves its measured duration`, async t => {
-  if (spawnSync('ffprobe', ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0) return t.skip('FFprobe is unavailable')
+  if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable')
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-upscale-source-'))
   t.after(() => rm(filesRoot, { recursive: true, force: true }))
-  const bytes = await readFile(new URL('../tests/fixtures/poster-black-intro.mp4', import.meta.url))
-  await writeFile(path.join(filesRoot, 'source-video'), bytes)
+  const sourcePath = path.join(filesRoot, 'source-video')
+  const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=16x16:r=4:d=2.5',
+    '-c:v', 'mpeg4', '-f', 'mp4', sourcePath], { windowsHide: true, encoding: 'utf8' })
+  assert.equal(generated.status, 0, generated.stderr)
+  const bytes = await readFile(sourcePath)
   const source = { id: 'source1', userId: 'local-17', name: 'private.mp4', type: 'video/mp4', size: String(bytes.length),
     accessKey: 'source-video', storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'source-video': 1 } } }
   const model = 'DMC 视频超分'
