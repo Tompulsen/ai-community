@@ -3,7 +3,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, X } from '@lucide/vue'
-import { copyMediaImage, mediaSource, readableMedia } from '../../native-studio'
+import { copyMediaImage, mediaSource, readableMedia, readCreationImage } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
 import { imageDownload, imageDownloadUrl, jpegMediaUrl } from '../../image-download'
 import { chooseImageDownloadFormat } from '../../image-download-choice'
@@ -11,7 +11,7 @@ import type { ImageDownloadFormat } from '../../../shared/image-download'
 import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
 const props = withDefaults(defineProps<{
-  items: { id?: string; src?: string; kind: 'image' | 'video'; alt?: string }[]
+  items: { id?: string; src?: string; previewSrc?: string; kind: 'image' | 'video'; alt?: string }[]
   label?: string
   closeLabel?: string
   onDownload?: (index: number, format?: ImageDownloadFormat, signal?: AbortSignal) => Promise<unknown>
@@ -22,19 +22,26 @@ const dialog = ref<HTMLDialogElement>(), video = ref<HTMLVideoElement>()
 const stage = ref<HTMLElement>(), picture = ref<HTMLImageElement>()
 const opened = ref(false), index = ref(0), scale = ref(1), offset = ref({ x: 0, y: 0 })
 const loading = ref(true), failed = ref(false), attempt = ref(0), actionError = ref('')
+const imageSource = ref(''), previewReady = ref(false), previewFailed = ref(false)
 const action = ref<'download' | 'copy'>()
 const current = computed(() => props.items[index.value])
-const source = computed(() => {
-  const item = current.value, value = item?.src
+function safeSource(value: string | undefined, kind: 'image' | 'video') {
   if (!value) return
-  if (value.startsWith('studio-asset:') || value.startsWith('legacy-gallery:')) return mediaSource(value, false, item.kind)
+  if (value.startsWith('studio-asset:') || value.startsWith('legacy-gallery:')) return mediaSource(value, false, kind)
   try {
     const url = new URL(value, location.href)
     if (url.protocol === 'blob:') return value
-    if (url.protocol === 'data:') return value.startsWith(`data:${item.kind}/`) ? value : undefined
-    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? (item.kind === 'image' ? jpegMediaUrl(url.href) : url.href) : mediaSource(url.href, false, item.kind)
+    if (url.protocol === 'data:') return value.startsWith(`data:${kind}/`) ? value : undefined
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? (kind === 'image' ? jpegMediaUrl(url.href) : url.href) : mediaSource(url.href, false, kind)
   } catch { /* Invalid references are never fetched or rendered. */ }
+}
+const source = computed(() => safeSource(current.value?.src, current.value?.kind || 'image'))
+const previewSource = computed(() => {
+  const value = safeSource(current.value?.previewSrc, 'image')
+  return value !== source.value && !previewFailed.value ? value : undefined
 })
+const displayedImage = computed(() => imageSource.value || previewSource.value)
+let imageOperation = 0, imageController: AbortController | undefined, imageTimer: ReturnType<typeof setTimeout> | undefined
 let acceptedOwner: string | undefined, operation = 0, pending: AbortController | undefined
 let oldOverflow: string | undefined, notified = true
 const pointers = new Map<number, MediaPoint>()
@@ -42,7 +49,7 @@ let gesture: { center: MediaPoint; distance: number; scale: number; offset: Medi
 let tap: { id: number; point: MediaPoint; time: number; background: boolean } | undefined, lastTap: { point: MediaPoint; time: number } | undefined
 let suppressClickUntil = 0, lastTouchAt = -Infinity, observer: ResizeObserver | undefined
 const isDragging = ref(false)
-const canZoom = computed(() => current.value?.kind === 'image' && !loading.value && !failed.value && !!source.value)
+const canZoom = computed(() => current.value?.kind === 'image' && !!displayedImage.value && (previewReady.value || !loading.value && !failed.value))
 function stopVideo() {
   const element = video.value
   if (element) { element.pause(); element.removeAttribute('src'); element.load() }
@@ -144,9 +151,46 @@ function wheel(event: WheelEvent) {
   zoom(scale.value * Math.exp(Math.max(-4, Math.min(4, -delta * .002))), localPoint({ x: event.clientX, y: event.clientY }))
 }
 function resized() { endPan(); offset.value = contain(offset.value) }
-function loadedImage() { loading.value = false; offset.value = contain(offset.value) }
+function loadedImage() {
+  if (imageSource.value) { clearTimeout(imageTimer); loading.value = false; failed.value = false }
+  else previewReady.value = true
+  offset.value = contain(offset.value)
+}
+function imageFailed() {
+  if (!imageSource.value) { previewFailed.value = true; previewReady.value = false; return }
+  if (imageSource.value.startsWith('blob:')) URL.revokeObjectURL(imageSource.value)
+  imageSource.value = ''; failedMedia()
+}
 function retryMedia() { reset(); failed.value = false; loading.value = true; attempt.value++ }
-function failedMedia() { endPan(); loading.value = false; failed.value = true }
+function failedMedia() { clearTimeout(imageTimer); endPan(); loading.value = false; failed.value = true }
+function releaseImage() {
+  imageOperation++; imageController?.abort(); imageController = undefined; clearTimeout(imageTimer)
+  if (imageSource.value.startsWith('blob:')) URL.revokeObjectURL(imageSource.value)
+  imageSource.value = ''
+}
+async function loadImage() {
+  releaseImage(); previewReady.value = false; previewFailed.value = false
+  if (!opened.value || current.value?.kind !== 'image') return
+  const accepted = imageOperation
+  if (!source.value) { imageTimer = setTimeout(failedMedia, 15000); return }
+  const direct = new URL(source.value, location.href)
+  if (direct.origin === location.origin && ['/files/', '/legacy-files/', '/assets/'].some(path => direct.pathname.startsWith(path))) {
+    // Public uploads may exceed the studio's browser-storage limit.
+    imageSource.value = source.value
+    imageTimer = setTimeout(imageFailed, 300000)
+    return
+  }
+  const controller = new AbortController()
+  imageController = controller
+  try {
+    const blob = await readCreationImage(source.value, controller.signal)
+    if (controller.signal.aborted || accepted !== imageOperation) return
+    imageSource.value = URL.createObjectURL(blob)
+    imageTimer = setTimeout(imageFailed, 15000)
+  } catch {
+    if (!controller.signal.aborted && accepted === imageOperation) failedMedia()
+  }
+}
 function blur() { endPan() }
 function observeStage() {
   observer?.disconnect()
@@ -155,6 +199,7 @@ function observeStage() {
 }
 function release() {
   operation++; pending?.abort(); pending = undefined; action.value = undefined
+  releaseImage()
   endPan(); stopVideo()
   observer?.disconnect(); observer = undefined
   window.removeEventListener('blur', blur)
@@ -206,8 +251,9 @@ function keys(event: KeyboardEvent) {
 watch([index, () => current.value?.id || current.value?.src], () => {
   operation++; pending?.abort(); pending = undefined; action.value = undefined; actionError.value = ''
 })
-watch([index, source], () => {
+watch([opened, index, source, attempt], () => {
   stopVideo(); reset(); loading.value = true; failed.value = false
+  void loadImage()
 })
 watch(() => props.items.length, length => { if (!length) close(); else if (index.value >= length) choose(length - 1) })
 watch(() => session.user?.id, () => close())
@@ -256,14 +302,15 @@ async function run(kind: 'download' | 'copy') {
         </div>
         <div ref="stage" class="lightbox-stage" :class="{ 'is-image': current?.kind === 'image' }" @click="stageClick" @wheel="wheel" @pointerdown="startPan" @pointermove="pan" @pointerup="finishPan" @pointercancel="finishPan" @lostpointercapture="finishPan" @dblclick="doubleClick">
           <div class="lightbox-content" :class="{ 'is-image': current?.kind === 'image', 'is-dragging': isDragging, zoomed: scale > 1 }" @click.stop>
-            <div v-if="failed" class="lightbox-error" role="status"><p>{{ current?.kind === 'video' ? '视频加载失败' : '图片加载失败' }}</p><button type="button" class="viewer-retry" @click="retryMedia">重新加载</button></div>
+            <div v-if="failed && !displayedImage" class="lightbox-error" role="status"><p>{{ current?.kind === 'video' ? '视频加载失败' : '图片加载失败' }}</p><button type="button" class="viewer-retry" @click="retryMedia">重新加载</button></div>
             <template v-else>
-              <div v-if="loading || !source" class="lightbox-loading" role="status"><LoaderCircle :size="28" aria-hidden="true" /><span class="viewer-sr-only">正在加载原文件</span></div>
-              <img v-if="current?.kind === 'image' && source" :key="`${index}:${attempt}:${source}`" ref="picture" draggable="false" :src="source" :alt="current.alt || ''" :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }" @load="loadedImage" @error="failedMedia" />
+              <div v-if="loading && !previewReady" class="lightbox-loading" role="status"><LoaderCircle :size="28" aria-hidden="true" /><span class="viewer-sr-only">正在加载原文件</span></div>
+              <img v-if="current?.kind === 'image' && displayedImage" :key="`${index}:${attempt}:${displayedImage}`" ref="picture" draggable="false" :src="displayedImage" :alt="current.alt || ''" :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }" @load="loadedImage" @error="imageFailed" />
               <video v-else-if="current?.kind === 'video' && source" :key="`${index}:${attempt}:${source}`" ref="video" :src="source" :aria-label="current.alt || '视频预览'" controls playsinline preload="metadata" @loadeddata="loading = false" @error="loading = false; failed = true" @play="playVideo" @dblclick.stop />
             </template>
           </div>
         </div>
+        <div v-if="current?.kind === 'image' && previewSource && (loading || failed)" class="lightbox-original-status" role="status"><span>{{ failed ? '原图加载失败，当前显示预览图。' : '正在加载原图，先显示预览图。' }}</span><button v-if="failed" type="button" class="viewer-retry" @click="retryMedia">重新加载</button></div>
         <p v-if="actionError" class="lightbox-action-error" role="alert">{{ actionError }}</p>
         <div v-if="current?.kind === 'image' || items.length > 1" class="lightbox-controls">
           <div v-if="current?.kind === 'image'" class="lightbox-zoom" role="group" aria-label="图片缩放"><button class="viewer-button" type="button" aria-label="缩小" title="缩小 (-)" :disabled="!canZoom || scale <= MIN_MEDIA_SCALE" @click="zoom(scale / 1.2)"><Minus :size="18" /></button><output aria-label="缩放比例">{{ Math.round(scale * 100) }}%</output><button class="viewer-button" type="button" aria-label="放大" title="放大 (+)" :disabled="!canZoom || scale >= MAX_MEDIA_SCALE" @click="zoom(scale * 1.2)"><Plus :size="18" /></button><button class="viewer-button" type="button" aria-label="重置缩放" title="适应屏幕 (0)" :disabled="!canZoom" @click="reset"><RotateCcw :size="18" /></button></div>
@@ -295,6 +342,8 @@ async function run(kind: 'download' | 'copy') {
 .lightbox-error { min-width: min(240px, calc(100vw - 48px)); padding: 24px; text-align: center; }.lightbox-error p { margin: 0 0 16px; font-size: 14px; }
 .viewer-retry { border: 0; border-radius: 6px; padding: 10px 16px; font: inherit; font-size: 14px; color: #fff; background: #262626; cursor: pointer; }
 .lightbox-action-error { position: absolute; top: 64px; left: 24px; right: 24px; margin: 0; color: #fff; font-size: 14px; line-height: 24px; overflow-wrap: anywhere; pointer-events: none; }
+.lightbox-original-status { position: absolute; top: 64px; left: 16px; right: 16px; z-index: 1; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 8px; border-radius: 6px; background: rgb(24 24 24 / 94%); font-size: 14px; line-height: 1.5; }
+.lightbox-original-status .viewer-retry { min-height: 44px; }
 .viewer-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 639px) { .lightbox-controls { gap: 8px; }.lightbox-controls output { min-width: 44px; }.lightbox-sequence { gap: 8px; }.lightbox-content img, .lightbox-content video { border-radius: 4px; max-height: calc(100dvh - 184px); }.lightbox-stage { inset: 68px 12px 104px; } }

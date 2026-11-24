@@ -139,7 +139,7 @@ test('generated images save original bytes automatically and survive an expired 
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
   const nextGeneration = page.waitForRequest('**/api/creation/generate')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  expect((await nextGeneration).postDataJSON().referenceUrls).toEqual(Array(2).fill(`data:image/jpeg;base64,${image.toString('base64')}`))
+  expect((await nextGeneration).postDataJSON().referenceUrls).toEqual([`data:image/jpeg;base64,${image.toString('base64')}`])
 })
 
 for (const mode of ['inline', 'stream', 'async']) test(`${mode} completion automatically stores the original image`, async ({ page }) => {

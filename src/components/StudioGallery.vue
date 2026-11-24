@@ -23,7 +23,8 @@ const settingsId = `gallery-settings-${useId()}`, settingsButton = ref<HTMLButto
 const preview = ref<{ task: CreationTask; indexes: number[] }>(), previewer = ref<InstanceType<typeof StudioMediaPreview>>()
 const previewItems = computed(() => preview.value ? preview.value.indexes.map(index => ({
   id: `${preview.value!.task.owner}:${preview.value!.task.id}:${index}`,
-  src: mediaSource(preview.value!.task.urls[index]!, false, preview.value!.task.kind),
+  src: preview.value!.task.urls[index],
+  previewSrc: preview.value!.task.kind === 'image' ? mediaSource(preview.value!.task.urls[index]!, true, 'image') : undefined,
   kind: preview.value!.task.kind === 'video' ? 'video' as const : 'image' as const, alt: preview.value!.task.prompt,
 })) : [])
 let previewRevision = 0, revision = 0, summaryRevision = 0, operation = 0, preparing = false, refreshTimer: ReturnType<typeof setTimeout> | undefined

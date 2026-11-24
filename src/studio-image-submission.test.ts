@@ -52,6 +52,87 @@ it('display previews use the image proxy without changing original media, videos
   expect(p.mediaSource('/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fmovie.mp4&kind=video', true)).not.toContain('variant=')
   expect(p.input.references![0]!.url).toBe('https://media.example/original.png')
 })
+it('shared original reads retain their remaining reader and cancel together on account changes', async () => {
+  const p = await fixture()
+  vi.stubGlobal('location', new URL('https://community.example/create/image'))
+  let finish!: () => void, networkSignal!: AbortSignal
+  p.send.mockImplementation(async (_url, options) => {
+    networkSignal = options!.signal!
+    return new Response(new ReadableStream({ start(controller) {
+      finish = () => { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close() }
+      networkSignal.addEventListener('abort', () => controller.error(networkSignal.reason), { once: true })
+    } }), { headers: { 'Content-Type': 'image/png' } })
+  })
+  const preview = new AbortController()
+  const first = p.readCreationImage('https://media.example/shared.png', preview.signal)
+  const cancelled = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+  const save = p.readCreationImage('/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fshared.png&kind=image')
+  await vi.waitFor(() => expect(p.send).toHaveBeenCalledTimes(1))
+  preview.abort(); await cancelled
+  expect(networkSignal.aborted).toBe(false)
+  finish()
+  expect(new Uint8Array(await (await save).arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+  const later = p.readCreationImage('https://media.example/shared.png')
+  const switched = expect(later).rejects.toMatchObject({ name: 'AbortError' })
+  await vi.waitFor(() => expect(p.send).toHaveBeenCalledTimes(2))
+  p.session.user = { id: 'other-owner', accountId: '18' } as any
+  await switched
+  expect(networkSignal.aborted).toBe(true)
+})
+it('original reads enforce the actual streamed size without retrying oversized data', async () => {
+  const p = await fixture()
+  let cancelled = false
+  p.send.mockImplementation(async () => new Response(new ReadableStream({
+    pull(controller) { controller.enqueue(new Uint8Array(17 * 1024 ** 2)) },
+    cancel() { cancelled = true },
+  }), { headers: { 'Content-Type': 'image/png' } }))
+  await expect(p.readCreationImage('https://media.example/oversized.png')).rejects.toThrow('32 MB')
+  expect(p.send).toHaveBeenCalledTimes(1)
+  expect(cancelled).toBe(true)
+})
+it('a stalled original has finite retries and caller cancellation stops the current body', async () => {
+  const p = await fixture()
+  vi.useFakeTimers()
+  p.send.mockImplementation(async (_url, options) => new Response(new ReadableStream({ start(controller) {
+    options!.signal!.addEventListener('abort', () => controller.error(options!.signal!.reason), { once: true })
+  } }), { headers: { 'Content-Type': 'image/png' } }))
+  const failed = expect(p.readCreationImage('https://media.example/stalled.png')).rejects.toThrow('原图传输中断')
+  await vi.advanceTimersByTimeAsync(190000)
+  await failed
+  expect(p.send).toHaveBeenCalledTimes(3)
+  expect(vi.getTimerCount()).toBe(0)
+  const controller = new AbortController()
+  const cancelled = expect(p.readCreationImage('https://media.example/cancelled.png', controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  await vi.advanceTimersByTimeAsync(1)
+  controller.abort(); await cancelled
+  await vi.advanceTimersByTimeAsync(100000)
+  expect(p.send).toHaveBeenCalledTimes(4)
+  expect(vi.getTimerCount()).toBe(0)
+})
+it('an original cannot extend its overall deadline through progress or retries', async () => {
+  const p = await fixture()
+  vi.useFakeTimers()
+  let reads = 0, settled = false
+  p.send.mockImplementation(async (_url, options) => {
+    const first = ++reads === 1
+    return new Response(new ReadableStream({ start(controller) {
+      let chunks = 0
+      const timer = setInterval(() => {
+        if (first && ++chunks === 3) { clearInterval(timer); controller.error(new TypeError('Interrupted')); return }
+        controller.enqueue(new Uint8Array([1]))
+      }, 40000)
+      options!.signal!.addEventListener('abort', () => { clearInterval(timer); controller.error(options!.signal!.reason) }, { once: true })
+    } }), { headers: { 'Content-Type': 'image/png' } })
+  })
+  const pending = p.readCreationImage('https://media.example/endless.png').finally(() => { settled = true })
+  const failed = expect(pending).rejects.toThrow('原图传输中断')
+  await vi.advanceTimersByTimeAsync(299999)
+  expect(settled).toBe(false)
+  expect(reads).toBe(2)
+  await vi.advanceTimersByTimeAsync(1)
+  await failed
+  expect(vi.getTimerCount()).toBe(0)
+})
 it('awaits durable conversation registration before the paid POST and sends an immutable input snapshot', async () => {
   const p = await fixture()
   let release!: () => void, entered = false

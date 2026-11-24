@@ -256,6 +256,67 @@ test('viewer resolves delayed stored assets, rejects unsafe sources and closes o
   await expect(viewer).not.toBeVisible()
 })
 
+test('a missing local source and a stalled original decode both leave a retryable viewer', async ({ page }) => {
+  await fixture(page)
+  await page.keyboard.press('Escape')
+  await page.clock.install()
+  await page.evaluate(async () => {
+    const componentPath = '/src/components/studio-message/StudioMediaPreview.vue'
+    const source = await (await fetch(componentPath)).text()
+    const vuePath = source.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)![1]!
+    const { createApp, h, ref, nextTick } = await import(vuePath)
+    const { default: Preview } = await import(componentPath)
+    const handle = ref(), items = ref([{ src: 'studio-asset:missing:0', kind: 'image' }])
+    const host = document.createElement('div'); document.body.append(host)
+    const app = createApp({ render: () => h(Preview, { ref: handle, items: items.value, label: '独立预览' }) })
+    const suppressLoad = (event: Event) => {
+      if (event.target instanceof HTMLImageElement && event.target.closest('.media-lightbox') && event.target.src.startsWith('blob:')) event.stopImmediatePropagation()
+    }
+    document.addEventListener('load', suppressLoad, true)
+    app.mount(host); await nextTick(); await handle.value.open()
+    ;(window as any).previewHarness = { items, suppressLoad }
+  })
+  const viewer = page.getByRole('dialog', { name: '独立预览', exact: true })
+  await page.clock.runFor(15001)
+  await expect(viewer.getByText('图片加载失败', { exact: true })).toBeVisible()
+  await expect(viewer.getByRole('button', { name: '重新加载', exact: true })).toBeVisible()
+  await page.evaluate(() => { (window as any).previewHarness.items.value = [{ src: '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fdecode.jpg&kind=image', kind: 'image' }] })
+  await expect(viewer.locator('img')).toHaveAttribute('src', /^blob:/)
+  await expect(viewer.locator('.lightbox-loading')).toBeVisible()
+  await page.clock.runFor(15001)
+  await expect(viewer.locator('img')).toHaveCount(0)
+  await expect(viewer.getByText('图片加载失败', { exact: true })).toBeVisible()
+  await page.evaluate(() => document.removeEventListener('load', (window as any).previewHarness.suppressLoad, true))
+  await viewer.getByRole('button', { name: '重新加载', exact: true }).click()
+  await expect(viewer.locator('.lightbox-loading')).toHaveCount(0)
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+})
+
+test('public work originals above the studio storage limit still open in full screen', async ({ page }) => {
+  const { image } = await fixture(page)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '原始媒体预览', exact: true })).not.toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '作品库', exact: true })).not.toBeVisible()
+  await page.route('**/files/public-large.jpg*', route => route.fulfill({ contentType: 'image/jpeg', body: Buffer.concat([image, Buffer.alloc(33 * 1024 ** 2)]) }))
+  await page.evaluate(async () => {
+    const componentPath = '/src/components/WorkMedia.vue'
+    const source = await (await fetch(componentPath)).text()
+    const vuePath = source.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)![1]!
+    const { createApp, h } = await import(vuePath)
+    const { default: WorkMedia } = await import(componentPath)
+    const host = document.createElement('div'); document.body.append(host)
+    createApp({ render: () => h(WorkMedia, { files: [{ id: 'large-public', url: '/files/public-large.jpg', type: 'image/jpeg', name: '大体积作品' }], title: '大体积作品' }) }).mount(host)
+  })
+  await page.getByRole('button', { name: '完整预览 大体积作品', exact: true }).click()
+  const viewer = page.getByRole('dialog', { name: '作品文件预览', exact: true })
+  await expect(viewer).toBeVisible()
+  await expect(viewer.locator('img')).toHaveAttribute('src', /\/files\/public-large\.jpg/)
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
+  await expect(viewer.getByRole('button', { name: '放大', exact: true })).toBeEnabled()
+  await expect(viewer.locator('.lightbox-error')).toHaveCount(0)
+})
+
 test('full-screen viewer fits desktop and narrow mobile, honors reduced motion and retries failed media', async ({ page }) => {
   const { viewer } = await fixture(page)
   await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
@@ -285,8 +346,10 @@ test('full-screen viewer fits desktop and narrow mobile, honors reduced motion a
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await viewer.locator('img').evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s')
   await viewer.locator('img').dispatchEvent('error')
-  await expect(viewer.getByRole('status').filter({ hasText: '图片加载失败' })).toContainText('重新加载')
+  await expect(viewer.getByRole('status').filter({ hasText: '原图加载失败，当前显示预览图。' })).toContainText('重新加载')
+  await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0)
   await viewer.getByRole('button', { name: '重新加载', exact: true }).click()
+  await expect(viewer.locator('.lightbox-original-status')).toHaveCount(0)
   await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(1280)
   await viewer.locator('.lightbox-stage').click({ position: { x: 1, y: 1 } })
   await expect(viewer).not.toBeVisible()
