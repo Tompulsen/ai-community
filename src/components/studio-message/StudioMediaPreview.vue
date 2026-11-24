@@ -5,14 +5,16 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, X } from '@lucide/vue'
 import { copyMediaImage, mediaSource, readableMedia } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
-import { jpegDownload, jpegMediaUrl } from '../../image-download'
+import { imageDownload, imageDownloadUrl, jpegMediaUrl } from '../../image-download'
+import { chooseImageDownloadFormat } from '../../image-download-choice'
+import type { ImageDownloadFormat } from '../../../shared/image-download'
 import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
 const props = withDefaults(defineProps<{
-  items: { src?: string; kind: 'image' | 'video'; alt?: string }[]
+  items: { id?: string; src?: string; kind: 'image' | 'video'; alt?: string }[]
   label?: string
   closeLabel?: string
-  onDownload?: (index: number) => Promise<unknown>
+  onDownload?: (index: number, format?: ImageDownloadFormat, signal?: AbortSignal) => Promise<unknown>
   onCopy?: (index: number) => Promise<unknown>
 }>(), { label: '原始媒体预览', closeLabel: '关闭媒体预览' })
 const emit = defineEmits<{ close: [] }>()
@@ -186,7 +188,7 @@ async function open(position = 0) {
   if (!dialog.value?.open) dialog.value?.showModal()
   observeStage()
 }
-defineExpose({ open, close })
+defineExpose({ open, close, download: () => run('download') })
 function choose(position: number) {
   if (position < 0 || position >= props.items.length || position === index.value) return
   stopVideo(); index.value = position
@@ -201,22 +203,24 @@ function keys(event: KeyboardEvent) {
     else if (event.key === '0') { event.preventDefault(); reset() }
   }
 }
-watch([index, source], () => {
+watch([index, () => current.value?.id || current.value?.src], () => {
   operation++; pending?.abort(); pending = undefined; action.value = undefined; actionError.value = ''
+})
+watch([index, source], () => {
   stopVideo(); reset(); loading.value = true; failed.value = false
 })
 watch(() => props.items.length, length => { if (!length) close(); else if (index.value >= length) choose(length - 1) })
 watch(() => session.user?.id, () => close())
 onBeforeUnmount(() => { release(); dialog.value?.close() })
-async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number) {
+async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number, format?: ImageDownloadFormat) {
   if (!item.src) throw new Error('文件正在加载，请稍后重试。')
   const readable = item.src.startsWith('blob:') || item.src.startsWith('data:') ? item.src : await readableMedia(item.src, item.kind)
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
-  const response = await fetch(readable, { credentials: 'same-origin', signal: controller.signal })
+  const response = await fetch(format ? imageDownloadUrl(readable, format) : readable, { credentials: 'same-origin', signal: controller.signal })
   if (!response.ok) throw new Error('文件下载失败，请重试。')
   let blob = await response.blob()
   if (!blob.size || !blob.type.startsWith(`${item.kind}/`)) throw new Error('文件格式无效，请重新加载。')
-  if (item.kind === 'image') blob = await jpegDownload(blob, controller.signal)
+  if (item.kind === 'image' && format) blob = await imageDownload(blob, format, controller.signal)
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
   const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]!.split(';')[0]!.replace(/[^a-z0-9]/g, '') || (item.kind === 'image' ? 'png' : 'mp4')
   const link = document.createElement('a'), objectUrl = URL.createObjectURL(blob)
@@ -229,8 +233,11 @@ async function run(kind: 'download' | 'copy') {
   const controller = new AbortController()
   pending?.abort(); pending = controller; action.value = kind; actionError.value = ''
   try {
+    const format = kind === 'download' && item.kind === 'image'
+      ? await chooseImageDownloadFormat(controller.signal, () => accepted === operation && opened.value) : undefined
+    if (kind === 'download' && item.kind === 'image' && !format) return
     if (kind === 'copy') await (props.onCopy ? props.onCopy(selected) : copyMediaImage(item.src!))
-    else await (props.onDownload ? props.onDownload(selected) : defaultDownload(item, controller, accepted))
+    else await (props.onDownload ? props.onDownload(selected, format, controller.signal) : defaultDownload(item, controller, accepted, format))
     if (accepted === operation && acceptedOwner === session.user?.id && opened.value) notify(kind === 'copy' ? '图片已复制' : '已发起下载')
   } catch (error) {
     if (!controller.signal.aborted && accepted === operation && acceptedOwner === session.user?.id && opened.value) actionError.value = errorMessage(error)
@@ -243,7 +250,7 @@ async function run(kind: 'download' | 'copy') {
     <dialog ref="dialog" class="media-lightbox" :class="{ 'has-sequence': items.length > 1 }" :aria-label="label" @cancel.prevent="close" @close="closed" @keydown="keys" @click.self="close">
       <template v-if="opened">
         <div class="lightbox-actions" role="group" aria-label="媒体操作">
-          <button class="viewer-button" type="button" :aria-label="current?.kind === 'image' ? '下载图片' : '下载原文件'" :title="current?.kind === 'image' ? '下载图片（静态图片为 JPG）' : '下载原文件'" :disabled="!source || !!action" @click="run('download')"><LoaderCircle v-if="action === 'download'" :size="20" /><Download v-else :size="20" /></button>
+          <button class="viewer-button" type="button" :aria-label="current?.kind === 'image' ? '下载图片' : '下载原文件'" :title="current?.kind === 'image' ? '选择图片下载格式' : '下载原文件'" :disabled="!source || !!action" @click="run('download')"><LoaderCircle v-if="action === 'download'" :size="20" /><Download v-else :size="20" /></button>
           <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="复制图片" title="复制图片" :disabled="!source || !!action" @click="run('copy')"><LoaderCircle v-if="action === 'copy'" :size="20" /><Copy v-else :size="20" /></button>
           <button class="viewer-button" type="button" :aria-label="closeLabel" :title="closeLabel" autofocus @click="close"><X :size="22" /></button>
         </div>

@@ -1,3 +1,4 @@
+import { confirmImageDownload } from './helpers/image-download'
 import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import sharp from 'sharp'
@@ -202,7 +203,7 @@ for (const width of [390, 1440]) test(`work images, references and downloads use
   await fixture(page, { ...work, files: [file], referenceFiles: [reference] })
   await page.route('**/legacy-files/jpeg*', route => {
     const url = new URL(route.request().url())
-    if (url.searchParams.get('format') !== 'jpeg') return route.fulfill({ status: 500 })
+    if (url.searchParams.get('format') !== 'jpeg' && url.searchParams.get('download') !== 'jpeg') return route.fulfill({ status: 500 })
     return route.fulfill({ contentType: 'image/jpeg', body: jpeg, headers: { 'content-disposition': 'inline; filename="photo.jpg"' } })
   })
   await page.goto('/work/detailwork')
@@ -210,13 +211,14 @@ for (const width of [390, 1440]) test(`work images, references and downloads use
   await expect(img).toHaveAttribute('src', '/legacy-files/jpegwork?variant=webpublic&format=jpeg')
   await img.evaluate((image: HTMLImageElement) => image.decode())
   if (width > 640) {
-    await expect(page.getByRole('link', { name: '下载 作品.webp', exact: true })).toHaveAttribute('href', '/legacy-files/jpegwork?format=jpeg')
+    await expect(page.getByRole('button', { name: '下载 作品.webp', exact: true })).toBeVisible()
   }
   await img.click()
   const dialog = page.getByRole('dialog', { name: '作品文件预览', exact: true })
   await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegwork?format=jpeg')
   const pending = page.waitForEvent('download')
   await dialog.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   const download = await pending
   expect(download.suggestedFilename()).toMatch(/\.jpg$/)
   expect((await sharp(await readFile((await download.path())!)).metadata()).width).toBe(900)
@@ -224,6 +226,54 @@ for (const width of [390, 1440]) test(`work images, references and downloads use
   await page.getByRole('button', { name: '预览 参考图.webp', exact: true }).click()
   if (width > 640) await page.locator('.detail-media img').click()
   await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegref?format=jpeg')
+})
+
+for (const width of [320, 390, 1440]) test(`four selectable image formats export real full-size files at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const file = { id: 'formatswork', name: '作品.webp', type: 'image/webp', url: '/legacy-files/formatswork', processing: 'ready' as const }
+  const original = await sharp({ create: { width: 123, height: 79, channels: 4, background: { r: 30, g: 100, b: 200, alpha: 0 } } }).webp().toBuffer()
+  const jpeg = await sharp(original).flatten({ background: '#fff' }).jpeg().toBuffer()
+  const formats = { 'JPG / JPEG': 'jpeg', PNG: 'png', WebP: 'webp', GIF: 'gif' } as const
+  const requests: string[] = [], downloads: string[] = [], errors: string[] = []
+  page.on('download', item => downloads.push(item.suggestedFilename()))
+  page.on('pageerror', error => errors.push(error.message))
+  await fixture(page, { ...work, files: [file] }, false)
+  await page.route('**/legacy-files/formatswork*', async route => {
+    const url = new URL(route.request().url()), format = url.searchParams.get('download') as 'jpeg' | 'png' | 'webp' | 'gif' | null
+    if (!format) return route.fulfill({ contentType: 'image/jpeg', body: jpeg })
+    expect(url.searchParams.get('variant')).toBe('original'); expect(url.searchParams.has('format')).toBe(false)
+    requests.push(format)
+    const image = sharp(original)
+    return route.fulfill({ contentType: `image/${format}`, body: await (format === 'jpeg' ? image.flatten({ background: '#fff' }).jpeg() : image.toFormat(format)).toBuffer() })
+  })
+  await page.goto('/work/detailwork')
+  if (width > 640) await page.getByRole('button', { name: '下载 作品.webp', exact: true }).click()
+  else { await page.locator('.detail-media img').click(); await page.getByRole('button', { name: '下载图片', exact: true }).click() }
+  const chooser = page.getByRole('dialog', { name: '选择图片下载格式', exact: true })
+  const viewer = page.getByRole('dialog', { name: '作品文件预览', exact: true })
+  await expect(chooser.getByRole('radio')).toHaveCount(4)
+  await expect(chooser.getByRole('radio', { name: 'JPG / JPEG', exact: true })).toBeChecked()
+  const box = (await chooser.boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(width)
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    expect((await new AxeBuilder({ page }).include('.image-download-dialog').analyze()).violations).toEqual([])
+    await page.screenshot({ path: test.info().outputPath(`download-formats-${width}-${colorScheme}.png`) })
+  }
+  await page.keyboard.press('Escape')
+  await expect(chooser).not.toBeVisible(); await expect(viewer).toBeVisible()
+  expect(requests).toEqual([]); expect(downloads).toEqual([])
+  for (const [label, format] of Object.entries(formats)) {
+    await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+    const pending = page.waitForEvent('download')
+    await confirmImageDownload(page, label)
+    const file = await pending
+    expect(file.suggestedFilename()).toMatch(new RegExp(`\\.${format === 'jpeg' ? 'jpg' : format}$`))
+    const data = await readFile((await file.path())!), metadata = await sharp(data).metadata()
+    expect(metadata).toMatchObject({ format, width: 123, height: 79 })
+    expect((await sharp(data).ensureAlpha().raw().toBuffer())[3]).toBe(format === 'jpeg' ? 255 : 0)
+  }
+  expect(requests).toEqual(Object.values(formats)); expect(errors).toEqual([])
 })
 
 test('JPEG variant and original failures terminate with a visible retry action', async ({ page }) => {

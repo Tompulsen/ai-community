@@ -1,3 +1,4 @@
+import { confirmImageDownload } from './helpers/image-download'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile, mkdir } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
@@ -178,6 +179,7 @@ test('one download action saves every image in a group without adding duplicate 
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await expect(toolbar.getByRole('button')).toHaveCount(9)
   await toolbar.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   await expect.poll(() => downloads.length).toBe(2)
   expect(new Set(downloads).size).toBe(2)
   expect(downloads.every(name => name.endsWith('.jpg'))).toBe(true)
@@ -243,6 +245,7 @@ for (const width of [390, 1440]) test(`image results load lightweight previews a
   expect(reads.some(url => !url.searchParams.has('variant'))).toBe(true)
   const pending = page.waitForEvent('download')
   await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   const download = await pending
   const metadata = await sharp(await readFile((await download.path())!)).metadata()
   expect(metadata).toMatchObject({ format: 'jpeg', width: 2160, height: 3840 })

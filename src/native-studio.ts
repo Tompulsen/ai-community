@@ -13,7 +13,9 @@ import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/ima
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
 import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
 import { imageThumbnail } from './studio-media-previews'
-import { jpegDownload } from './image-download'
+import { imageDownload, jpegDownload } from './image-download'
+import { chooseImageDownloadFormat } from './image-download-choice'
+import type { ImageDownloadFormat } from '../shared/image-download'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -1103,19 +1105,24 @@ async function autoDownloadCreation(task: CreationTask) {
   }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
-export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string) {
+export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadFormat) {
   signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   task = creation.tasks.find(current => current.id === task.id && current.owner === task.owner) || task
   const version = epoch
-  const url = task.urls[index]
+  let url = task.urls[index]
+  if (task.kind === 'image' && url && !format) {
+    format = await chooseImageDownloadFormat(signal, () => version === epoch && (task.urls[index] === url || task.urls[index] === taskAssetUrl(task.id, index)))
+    if (!format) return
+    url = task.urls[index]
+  }
   const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
   const blob = response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' })
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()
-  const exported = task.kind === 'image' ? await jpegDownload(blob, signal) : blob
+  const exported = task.kind === 'image' && format ? await imageDownload(blob, format, signal) : blob
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   requestDownload(exported, task, index)

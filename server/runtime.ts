@@ -14,6 +14,7 @@ import pg from 'pg'
 import { Redis } from 'ioredis'
 import { authServices, httpError, newId } from './auth.ts'
 import { handleContent } from './content.ts'
+import { handleImageExport } from './image-export.ts'
 import { handleLottery, startPendingWorker } from './lottery.ts'
 import { handleReferral } from './referral.ts'
 import { handleAccount } from './account.ts'
@@ -137,6 +138,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
         method, url, preHandler: authenticateRequest,
         ...(url.startsWith('/api/skills') || url.startsWith('/api/admin/skills') ? { bodyLimit: 8 * 1024 * 1024 } : {}),
         ...(url === '/api/works/feed' ? { bodyLimit: 24576 } : {}),
+        ...(url === '/api/images/export' ? { bodyLimit: 44 * 1024 * 1024 } : {}),
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
           const ctx = contexts.get(request)
@@ -161,6 +163,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media', '/api/creation/requests/:id']],
     ['POST', ['/api/creation/generate', '/api/creation/models']],
   ])
+  register(handleImageExport, [['POST', ['/api/images/export']]])
   register(handleStudioTools, [
     ['GET', ['/api/creation/skills/catalog', '/api/creation/mcp/status', '/api/creation/mcp/tools']],
     ['POST', ['/api/creation/search', '/api/creation/mcp/config', '/api/creation/mcp/call']],

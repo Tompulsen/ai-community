@@ -1,3 +1,4 @@
+import { confirmImageDownload } from './helpers/image-download'
 import { expect, test, type Page } from '@playwright/test'
 import { mkdir, readFile } from 'node:fs/promises'
 import sharp from 'sharp'
@@ -168,6 +169,7 @@ test('shared gallery viewer preserves original pixels, zooms, pans, changes item
   await expect.poll(() => page.evaluate(() => (window as any).copiedImageTypes)).toEqual([['image/png']])
   const downloadPromise = page.waitForEvent('download')
   await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   const download = await downloadPromise
   const downloaded = await readFile((await download.path())!)
   expect(downloaded.equals(image)).toBe(true)
@@ -175,6 +177,25 @@ test('shared gallery viewer preserves original pixels, zooms, pans, changes item
   await expect(viewer).not.toBeVisible()
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+})
+
+test('preview download survives its original being cached during export', async ({ page }) => {
+  const { viewer } = await fixture(page)
+  const files: string[] = []
+  page.on('download', file => files.push(file.suggestedFilename()))
+  await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name))!
+    const studio = await import(/* @vite-ignore */ path), task = studio.creation.tasks.find((task: any) => task.id === 'preview-task')
+    await studio.cacheCreationImages(task, true)
+    task.urls[0] = 'https://media.example/not-yet-cached.jpg'
+    ;(window as any).previewTask = task
+  })
+  await viewer.locator('img').evaluate((image: HTMLImageElement) => image.decode())
+  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
+  await expect.poll(() => files.length, { timeout: 3000 }).toBe(1)
+  expect(await page.evaluate(() => (window as any).previewTask.urls[0])).toBe('studio-asset:preview-task:0')
+  await expect(viewer.getByRole('alert')).toHaveCount(0)
 })
 
 test('video viewer uses native controls and releases playback resources on close', async ({ page }) => {

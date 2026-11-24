@@ -84,7 +84,7 @@ test('manual gallery downloads adopt local originals and stale or foreign cache 
     const studio = await import(/* @vite-ignore */ path)
     await studio.initializeCreation()
     const snapshot = (await store.getTaskPage('17')).tasks.find(task => task.id === 'local-original')!
-    await studio.downloadCreation(snapshot, 0)
+    await studio.downloadCreation(snapshot, 0, undefined, undefined, 'jpeg')
   })
   await expect.poll(() => state.downloads.length).toBe(1)
   expect(await storedOriginals(page)).toMatchObject({ urls: ['studio-asset:local-original:0'] })
@@ -103,7 +103,7 @@ test('manual gallery downloads adopt local originals and stale or foreign cache 
     const repeated = await store.saveTaskOriginal('17', task.id, 0, 'https://media.example/original-1.jpg', blob)
     const mismatched = await store.saveTaskOriginal('17', task.id, 0, 'https://media.example/changed.jpg', new Blob(['stale original'], { type: blob.type }))
     const foreign = await store.saveTaskOriginal('18', task.id, 0, task.urls[0]!, blob)
-    await studio.downloadCreation(deleted)
+    await studio.downloadCreation(deleted, 0, undefined, undefined, 'jpeg')
     const removedInMemory = !studio.creation.tasks.some(task => task.id === deleted.id)
     await studio.prepareCreationHistory()
     const removedOnDisk = !(await store.readTaskSnapshot('17'))!.some(task => task.id === deleted.id)

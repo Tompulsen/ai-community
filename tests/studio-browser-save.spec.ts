@@ -1,3 +1,4 @@
+import { confirmImageDownload } from './helpers/image-download'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
@@ -132,6 +133,7 @@ test('generated images save original bytes automatically and survive an expired 
   expect(state.downloads).toBe(0)
   const download = page.waitForEvent('download', { timeout: 10000 })
   await page.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   const file = await download
   expect((await readFile((await file.path())!))).toEqual(image)
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
@@ -208,9 +210,31 @@ test('manual download corrects an earlier browser-save failure after the upstrea
   state.available = true
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   await download
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
   expect(state.generations).toBe(1)
+})
+
+test('format selection survives the original moving into the browser cache', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  await send(page)
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  state.available = false
+  await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name))!
+    const studio = await import(/* @vite-ignore */ path), task = studio.creation.tasks[0]
+    const saved = task.urls[0]
+    task.urls[0] = 'https://media.example/pending-cache.jpg'
+    ;(window as any).finishCache = () => { task.urls[0] = saved }
+    void studio.downloadCreation(task)
+  })
+  await expect(page.getByRole('dialog', { name: '选择图片下载格式', exact: true })).toBeVisible()
+  await page.evaluate(() => (window as any).finishCache())
+  const pending = page.waitForEvent('download')
+  await confirmImageDownload(page)
+  expect(await readFile((await (await pending).path())!)).toEqual(image)
+  expect(state.downloads).toBe(1)
 })
 
 test('an inline result remains downloadable when browser storage is full', async ({ page }) => {
@@ -230,6 +254,7 @@ test('an inline result remains downloadable when browser storage is full', async
   await expect(page.locator('.browser-save')).toContainText('浏览器空间不足')
   const download = page.waitForEvent('download', { timeout: 10000 })
   await page.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
   expect(await readFile((await (await download).path())!)).toEqual(image)
   expect((await storedImages(page)).sizes).toEqual([])
   expect(state.generations).toBe(1)

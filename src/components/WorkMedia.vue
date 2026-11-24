@@ -53,6 +53,7 @@ async function openPreview() {
   pause(); await nextTick()
   await preview.value?.open(previewFiles.value.findIndex(item => item.id === file.value?.id))
 }
+async function downloadImage() { await openPreview(); await preview.value?.download() }
 defineExpose({ pause })
 </script>
 
@@ -67,7 +68,7 @@ defineExpose({ pause })
       <button v-else-if="file.type.startsWith('image/')" class="media-image-preview" type="button" :aria-label="`完整预览 ${file.name || title}`" @click="openPreview"><img :key="imageSource" :src="imageSource" :alt="file.name || title" decoding="async" @error="imageFailed" /></button>
       <a v-else :href="file.url" class="button btn" download><FileText :size="20" />{{ file.name }}<Download :size="16" /></a>
     </div>
-    <div v-if="file && !mobile" class="media-controls"><div class="media-page-controls"><button class="icon-button" aria-label="上一个文件" title="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="18" /></button><span class="caption-5">{{ selected + 1 }} / {{ activeFiles.length }}{{ viewingReference ? ' · 参考图' : ' · 作品' }}</span><button class="icon-button" aria-label="下一个文件" title="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="18" /></button></div><span class="media-file-name" :title="file.name">{{ file.name }}</span><div class="media-tools"><a :href="downloadSource" download :aria-label="`下载 ${file.name}`" class="icon-button" title="下载文件"><Download :size="18" /></a><button v-if="file.type.startsWith('image/') || file.type.startsWith('video/')" class="icon-button" aria-label="放大预览" title="放大预览" @click="openPreview"><Maximize2 :size="18" /></button></div></div>
+    <div v-if="file && !mobile" class="media-controls"><div class="media-page-controls"><button class="icon-button" aria-label="上一个文件" title="上一个文件" :disabled="activeFiles.length < 2" @click="step(-1)"><ChevronLeft :size="18" /></button><span class="caption-5">{{ selected + 1 }} / {{ activeFiles.length }}{{ viewingReference ? ' · 参考图' : ' · 作品' }}</span><button class="icon-button" aria-label="下一个文件" title="下一个文件" :disabled="activeFiles.length < 2" @click="step(1)"><ChevronRight :size="18" /></button></div><span class="media-file-name" :title="file.name">{{ file.name }}</span><div class="media-tools"><button v-if="file.type.startsWith('image/')" type="button" :aria-label="`下载 ${file.name}`" class="icon-button" title="选择图片下载格式" @click="downloadImage"><Download :size="18" /></button><a v-else :href="downloadSource" download :aria-label="`下载 ${file.name}`" class="icon-button" title="下载文件"><Download :size="18" /></a><button v-if="file.type.startsWith('image/') || file.type.startsWith('video/')" class="icon-button" aria-label="放大预览" title="放大预览" @click="openPreview"><Maximize2 :size="18" /></button></div></div>
     <slot name="overlay" />
     </div>
     <div v-if="(mobile && files.length) || files.length > 1 || references?.length" class="material-tray">

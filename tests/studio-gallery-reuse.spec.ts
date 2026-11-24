@@ -1,3 +1,4 @@
+import { confirmImageDownload } from './helpers/image-download'
 import { expect, test, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import sharp from 'sharp'
@@ -137,6 +138,7 @@ test('removing a middle output keeps original indexes, task history, thumbnails 
   await expect(library).toBeVisible()
   const download = page.waitForEvent('download')
   await library.locator('.gallery-item').last().getByRole('button', { name: '下载此记录', exact: true }).click()
+  await confirmImageDownload(page)
   expect((await download).suggestedFilename()).toContain('3')
   await library.getByRole('button', { name: '关闭作品库', exact: true }).click()
   await page.locator('.studio-sidebar .studio-record[data-kind="image"]').filter({ hasText: '作品 0' }).click()
@@ -149,10 +151,10 @@ test('automatic library collection is independent of original downloads and pres
   const downloads: string[] = []
   page.on('download', download => downloads.push(download.suggestedFilename()))
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
-  await expect(library.getByRole('switch', { name: '自动下载原文件', exact: true })).not.toBeChecked()
-  await library.getByRole('switch', { name: '自动下载原文件', exact: true }).check()
+  await expect(library.getByRole('switch', { name: '自动下载作品', exact: true })).not.toBeChecked()
+  await library.getByRole('switch', { name: '自动下载作品', exact: true }).check()
   await library.getByRole('switch', { name: '自动收录作品', exact: true }).uncheck()
-  await expect(library.getByRole('switch', { name: '自动下载原文件', exact: true })).toBeChecked()
+  await expect(library.getByRole('switch', { name: '自动下载作品', exact: true })).toBeChecked()
   await library.getByRole('button', { name: '关闭作品库', exact: true }).click()
   await page.goto('/create/image')
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('仅下载的新作品')
@@ -163,7 +165,7 @@ test('automatic library collection is independent of original downloads and pres
   await expect(library.locator('.gallery-item')).toHaveCount(1)
   await library.getByRole('button', { name: '作品库设置', exact: true }).click()
   await library.getByRole('switch', { name: '自动收录作品', exact: true }).check()
-  await library.getByRole('switch', { name: '自动下载原文件', exact: true }).uncheck()
+  await library.getByRole('switch', { name: '自动下载作品', exact: true }).uncheck()
   await library.getByRole('button', { name: '关闭作品库', exact: true }).click()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('仅收录的新作品')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -197,6 +199,7 @@ test('switching A to B and back aborts a pending export without late files or pr
   })
   try {
     await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+    await confirmImageDownload(page)
     await expect.poll(() => page.evaluate(() => (window as any).exportEntered)).toBe(1)
     await expect(library.getByRole('progressbar', { name: '作品导出进度', exact: true })).toBeVisible()
     state.user.id = '18'; await setOwner(page, '18')
@@ -229,6 +232,7 @@ test('selected downloads keep nonadjacent output indexes and export-all follows 
   await library.getByRole('checkbox', { name: '选择 作品 0 · 1', exact: true }).check()
   await library.getByRole('checkbox', { name: '选择 作品 0 · 3', exact: true }).check()
   await library.getByRole('button', { name: '下载选中记录', exact: true }).click()
+  await confirmImageDownload(page)
   await expect.poll(() => downloads.length).toBe(2)
   await expect(library.locator('.gallery-export')).toHaveCount(0)
   expect(downloads).toEqual(['creation-reuse-0-1.jpg', 'creation-reuse-0-3.jpg'])
@@ -236,6 +240,7 @@ test('selected downloads keep nonadjacent output indexes and export-all follows 
   await library.getByRole('combobox', { name: '按模型筛选', exact: true }).selectOption('flux')
   await expect(library.locator('.gallery-item')).toHaveCount(2)
   await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+  await confirmImageDownload(page)
   await expect.poll(() => downloads.length).toBe(4)
   expect(downloads.slice(2)).toEqual(['creation-reuse-1-1.jpg', 'creation-reuse-3-1.jpg'])
   expect(generation).toHaveLength(0)
@@ -255,6 +260,7 @@ test('export-all requests every matching download beyond the initially loaded pa
   })
   await expect(library.locator('.gallery-item')).toHaveCount(60)
   await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+  await confirmImageDownload(page)
   await expect.poll(() => page.evaluate(() => (window as any).requestedGalleryDownloads.length)).toBe(65)
   await expect(library.locator('.gallery-export')).toHaveCount(0)
   const requested = await page.evaluate(() => (window as any).requestedGalleryDownloads as string[])
@@ -357,6 +363,7 @@ test('mixed task export skips unfinished outputs and deleting completed tasks pr
   await library.getByRole('tab', { name: '任务', exact: true }).click()
   await expect(library.locator('.gallery-item')).toHaveCount(4)
   await library.getByRole('button', { name: '导出全部筛选结果', exact: true }).click()
+  await confirmImageDownload(page)
   await expect.poll(() => downloads.length).toBe(1)
   await expect(library.locator('.gallery-export')).toHaveCount(0)
   expect(downloads).toEqual(['creation-reuse-3-1.jpg'])

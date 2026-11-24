@@ -1,3 +1,5 @@
+import type { ImageDownloadFormat } from '../shared/image-download'
+
 export function jpegMediaUrl(value: string): string {
   try {
     const url = new URL(value, location.href)
@@ -35,18 +37,55 @@ async function animated(blob: Blob): Promise<boolean> {
 export async function jpegDownload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted()
   if (!/^image\/(png|webp|avif)$/.test(blob.type) || await animated(blob)) return blob
+  return imageDownload(blob, 'jpeg', signal)
+}
+
+export async function imageDownload(blob: Blob, format: ImageDownloadFormat, signal?: AbortSignal): Promise<Blob> {
+  signal?.throwIfAborted()
+  if (!blob.size || !/^image\/(jpeg|png|webp|gif|avif)$/.test(blob.type)) throw new Error('图片格式无效，请重新加载。')
+  if (blob.size > 32 * 1024 ** 2) throw new Error('图片超过 32 MB，暂时无法转换下载。')
+  const moving = await animated(blob)
+  if (blob.type === `image/${format}` && !(format === 'png' && moving)) return blob
+  if (format === 'gif' || format === 'webp' && moving) {
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1]!)
+      reader.onerror = () => reject(new Error('图片读取失败，请重试。'))
+      reader.readAsDataURL(blob)
+    })
+    signal?.throwIfAborted()
+    const response = await fetch('/api/images/export', { method: 'POST', credentials: 'same-origin', signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format, data }) })
+    if (!response.ok) {
+      const error = await response.json().catch(() => undefined)
+      throw new Error(error?.error?.message || '图片转换失败，请稍后重试。')
+    }
+    const result = await response.blob()
+    signal?.throwIfAborted()
+    if (!result.size || result.type !== `image/${format}`) throw new Error('图片转换格式不正确，请重试。')
+    return result
+  }
   const bitmap = await createImageBitmap(blob)
   try {
     signal?.throwIfAborted()
     const canvas = document.createElement('canvas')
     canvas.width = bitmap.width; canvas.height = bitmap.height
     const context = canvas.getContext('2d')
-    if (!context) throw new Error('JPG 图片转换失败，请重试。')
-    context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height)
+    if (!context) throw new Error('图片转换失败，请重试。')
+    if (format === 'jpeg') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height) }
     context.drawImage(bitmap, 0, 0)
-    const result = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', .95))
+    const result = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, `image/${format}`, .95))
     signal?.throwIfAborted()
-    if (!result || result.type !== 'image/jpeg') throw new Error('JPG 图片转换失败，请重试。')
+    if (!result?.size || result.type !== `image/${format}`) throw new Error('浏览器不支持此格式，请尝试其他格式。')
     return result
   } finally { bitmap.close() }
+}
+export function imageDownloadUrl(value: string, format: ImageDownloadFormat): string {
+  try {
+    const url = new URL(value, location.href)
+    if (url.origin !== location.origin || !/^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return value
+    url.searchParams.delete('format'); url.searchParams.set('download', format)
+    url.searchParams.set('variant', 'original')
+    return url.pathname + url.search + url.hash
+  } catch { return value }
 }

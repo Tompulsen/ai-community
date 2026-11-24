@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process'
 import { AccountRequest, AccountResponse } from './native-account/http.ts'
 import { closeNewApiRedis, getNewApiRedis } from './native-account/session.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
-import { coverImage } from './image-export.ts'
+import { coverImage, downloadImage } from './image-export.ts'
 
 const origin = 'https://community.example'
 const jsonHeaders = { origin, 'content-type': 'application/json' }
@@ -98,6 +98,77 @@ async function fixture(t) {
   })
   return { app, filesRoot, ...stores }
 }
+
+for (const format of ['jpeg', 'png', 'webp', 'gif']) test(`explicit ${format} download uses full original, real encoding and media authorization`, async t => {
+  const f = await fixture(t)
+  const original = await sharp({ create: { width: 123, height: 79, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).webp().toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const url = `/files/thumbnail-key?variant=cover&format=jpeg&download=${format}`
+  const result = await f.app.inject({ method: 'GET', url })
+  assert.equal(result.statusCode, 200); assert.equal(result.headers['content-type'], `image/${format}`)
+  assert.match(result.headers['content-disposition'], new RegExp(`^attachment;.*zhangyu-file1\\.${format === 'jpeg' ? 'jpg' : format}`))
+  const metadata = await sharp(result.rawPayload).metadata()
+  assert.equal(metadata.format, format); assert.equal(metadata.width, 123); assert.equal(metadata.height, 79)
+  const pixels = await sharp(result.rawPayload).ensureAlpha().raw().toBuffer()
+  assert.equal(pixels[3], format === 'jpeg' ? 255 : 0)
+  if (format === 'jpeg') assert(pixels.every(value => value >= 254))
+  assert.deepEqual(await readFile(path.join(f.filesRoot, 'original-key')), original)
+  const partial = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-7' } })
+  assert.equal(partial.statusCode, 206); assert.deepEqual(partial.rawPayload, result.rawPayload.subarray(0, 8))
+  f.denyMedia()
+  assertJsonError(await f.app.inject({ method: 'GET', url }), 404)
+})
+
+test('selected GIF and WebP preserve animation; selected JPG and PNG export only the first frame', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.concat([Buffer.alloc(16 * 16 * 3), Buffer.alloc(16 * 16 * 3, 255)])
+  const original = await sharp(pixels, { raw: { width: 16, height: 32, channels: 3, pageHeight: 16 } }).webp({ delay: [120, 240], loop: 2 }).toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/webp', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  for (const format of ['gif', 'webp', 'jpeg', 'png']) {
+    const result = await f.app.inject({ method: 'GET', url: `/legacy-files/file1?download=${format}` })
+    assert.equal(result.statusCode, 200); assert.equal(result.headers['content-type'], `image/${format}`)
+    const metadata = await sharp(result.rawPayload, { animated: true }).metadata()
+    assert.equal(metadata.format, format)
+    assert.equal(metadata.pages ?? 1, ['gif', 'webp'].includes(format) ? 2 : 1)
+    if (['gif', 'webp'].includes(format)) { assert.deepEqual(metadata.delay, [120, 240]); assert.equal(metadata.loop, 2) }
+    else assert.equal(metadata.height, 16)
+  }
+})
+
+test('local image export is temporary, validates bytes and format, and enforces same origin and rate limits', async t => {
+  const f = await fixture(t), url = '/api/images/export'
+  const before = await readdir(f.filesRoot)
+  const data = (await sharp({ create: { width: 31, height: 27, channels: 4, background: 'red' } }).png().toBuffer()).toString('base64')
+  for (const format of ['jpeg', 'png', 'webp', 'gif']) {
+    const result = await f.app.inject({ method: 'POST', url, headers: jsonHeaders, payload: { data, format } })
+    assert.equal(result.statusCode, 200); assert.equal(result.headers['content-type'], `image/${format}`)
+    assert.equal(result.headers['cache-control'], 'private, no-store')
+    assert.equal((await sharp(result.rawPayload).metadata()).format, format)
+  }
+  assert.deepEqual(await readdir(f.filesRoot), before)
+  for (const body of [{ data, format: 'svg' }, { data: 'bad!', format: 'gif' }, { data: Buffer.from('<svg/>').toString('base64'), format: 'gif' }, { data: Buffer.from('broken').toString('base64'), format: 'png' }])
+    assertJsonError(await f.app.inject({ method: 'POST', url, headers: jsonHeaders, payload: body }), 400)
+  assertJsonError(await f.app.inject({ method: 'POST', url, headers: { ...jsonHeaders, origin: 'https://outside.example' }, payload: { data, format: 'gif' } }), 403)
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1?download=svg' }), 400)
+  assertJsonError(await f.app.inject({ method: 'GET', url: '/legacy-files/file1?download=png' }), 400)
+  f.redis.eval = async () => 31
+  assertJsonError(await f.app.inject({ method: 'POST', url, headers: jsonHeaders, payload: { data, format: 'gif' } }), 429)
+})
+
+test('image exports bound input size and refuse unsupported animation instead of silently dropping frames', async t => {
+  await assert.rejects(downloadImage('must-not-be-read', { size: 32 * 1024 ** 2 + 1 }, 'gif'), { statusCode: 413 })
+  const f = await fixture(t)
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer()
+  const control = Buffer.alloc(20)
+  control.writeUInt32BE(8); control.write('acTL', 4); control.writeUInt32BE(2, 8); control.writeUInt32BE(crc32(control.subarray(4, 16)), 16)
+  const apng = Buffer.concat([png.subarray(0, 33), control, png.subarray(33)])
+  for (const format of ['gif', 'webp']) {
+    const result = await f.app.inject({ method: 'POST', url: '/api/images/export', headers: jsonHeaders, payload: { format, data: apng.toString('base64') } })
+    assertJsonError(result, 400); assert.match(result.json().error.message, /首帧/)
+  }
+})
 
 test('JPEG exports preserve dimensions and stored bytes with correct filenames, ranges and private access', async t => {
   const f = await fixture(t)

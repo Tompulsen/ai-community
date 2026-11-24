@@ -67,7 +67,7 @@ test('concurrent automatic caching and download preserve every local image point
       urls: ['https://media.example/0.png', 'https://media.example/1.png'], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 2, duration: 8 } }
     studio.creation.tasks.push(task)
     await studio.prepareCreationHistory()
-    await Promise.all([studio.cacheCreationImages(task), studio.downloadCreation(task, 1), studio.cacheCreationImages(task)])
+    await Promise.all([studio.cacheCreationImages(task), studio.downloadCreation(task, 1, undefined, undefined, 'jpeg'), studio.cacheCreationImages(task)])
   })
   const file = await downloaded
   expect(file.suggestedFilename()).toMatch(/\.jpg$/)
@@ -246,7 +246,7 @@ test('new accounts generate without downloading and can still download manually'
   expect(downloads).toBe(0)
   expect(await page.evaluate(() => window.mediaTest.creation.tasks[0].localSave)).toBeUndefined()
   const downloaded = page.waitForEvent('download')
-  await page.evaluate(() => window.mediaTest.downloadCreation(window.mediaTest.creation.tasks[0]))
+  await page.evaluate(() => window.mediaTest.downloadCreation(window.mediaTest.creation.tasks[0], 0, undefined, undefined, 'jpeg'))
   expect((await downloaded).suggestedFilename()).toMatch(/^creation-.*-1\.jpg$/)
   expect(downloads).toBe(1)
 })

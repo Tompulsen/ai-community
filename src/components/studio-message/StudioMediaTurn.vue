@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximiz
 import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
 import { confirmStudioDelete } from '../../studio-confirm'
+import { chooseImageDownloadFormat } from '../../image-download-choice'
 import { isConversationBusy } from '../../studio-conversations'
 import { deleteMediaTurns, mediaVersion, selectMediaVersion } from '../../studio-image-conversation'
 import { errorMessage, notify, session } from '../../state'
@@ -23,6 +24,9 @@ const emit = defineEmits<{
 const error = ref(''), now = ref(Date.now())
 const busy = computed(() => isConversationBusy(props.conversation))
 const downloading = ref(false)
+let downloadController: AbortController | undefined
+onUnmounted(() => downloadController?.abort())
+watch(() => props.task.id, () => downloadController?.abort())
 const pinMessageId = computed(() => {
   const answer = props.conversation.messages.find(message => message.role === 'assistant' && message.taskId === props.task.id)
   return props.role === 'assistant' ? answer?.id : answer?.parentId
@@ -39,10 +43,16 @@ async function downloadAll() {
   if (downloading.value) return
   downloading.value = true
   await perform(async () => {
-    const results = await Promise.allSettled((props.task.urls.length ? props.task.urls.map((_, index) => index) : [0]).map(index => downloadCreation(props.task, index)))
-    const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-    if (failed.length) throw new Error(`${failed.length} 个文件下载失败：${errorMessage(failed[0]!.reason)}`)
+    const task = props.task, owner = session.user?.id, controller = new AbortController()
+    downloadController = controller
+    const hasImages = task.kind === 'image' && task.urls.length > 0
+    const format = hasImages ? await chooseImageDownloadFormat(controller.signal, () => props.task === task && owner === session.user?.id) : undefined
+    if (hasImages && !format || controller.signal.aborted) return
+    for (const index of task.urls.length ? task.urls.map((_, index) => index) : [0]) {
+      await downloadCreation(task, index, controller.signal, undefined, format)
+    }
   })
+  downloadController = undefined
   downloading.value = false
 }
 const actions = computed<MessageAction[]>(() => {

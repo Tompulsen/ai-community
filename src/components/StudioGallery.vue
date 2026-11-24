@@ -1,6 +1,8 @@
 <!-- Layout and library interactions adapted from octopus_chat gallery/gallery.tsx (MIT). -->
 <script setup lang="ts">
 import { confirmStudioDelete } from '../studio-confirm'
+import { chooseImageDownloadFormat } from '../image-download-choice'
+import type { ImageDownloadFormat } from '../../shared/image-download'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { CopyPlus, Download, ImagePlus, Images, LoaderCircle, RefreshCw, Search, SlidersHorizontal, SquareMousePointer, Trash2, Upload, X } from '@lucide/vue'
 import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
@@ -20,6 +22,7 @@ const exportProgress = ref<{ current: number; total: number }>()
 const settingsId = `gallery-settings-${useId()}`, settingsButton = ref<HTMLButtonElement>(), settingsOpen = ref(false)
 const preview = ref<{ task: CreationTask; indexes: number[] }>(), previewer = ref<InstanceType<typeof StudioMediaPreview>>()
 const previewItems = computed(() => preview.value ? preview.value.indexes.map(index => ({
+  id: `${preview.value!.task.owner}:${preview.value!.task.id}:${index}`,
   src: mediaSource(preview.value!.task.urls[index]!, false, preview.value!.task.kind),
   kind: preview.value!.task.kind === 'video' ? 'video' as const : 'image' as const, alt: preview.value!.task.prompt,
 })) : [])
@@ -161,10 +164,14 @@ async function exportItems(onlySelected = false) {
       ? item.task.urls.map((_, index) => ({ ...item, index })) : [item])
     if (!chosen.length) throw new Error('所选记录没有可下载的已完成结果。')
     const controller = new AbortController()
-    downloadController = controller; exportProgress.value = { current: 0, total: chosen.length }
+    downloadController = controller
+    const hasImages = chosen.some(item => item.task.kind === 'image' && item.task.urls.length)
+    const format = hasImages ? await chooseImageDownloadFormat(controller.signal, current) : undefined
+    if (!current() || hasImages && !format) return
+    exportProgress.value = { current: 0, total: chosen.length }
     for (const [position, item] of chosen.entries()) {
       if (!current()) return
-      await downloadCreation(canonicalCreationTask(item.task), item.index, controller.signal)
+      await downloadCreation(canonicalCreationTask(item.task), item.index, controller.signal, undefined, format)
       if (!current()) return
       exportProgress.value = { current: position + 1, total: chosen.length }
     }
@@ -188,7 +195,7 @@ async function open(task: CreationTask, index = 0, library = false) {
   if (owner === session.user?.id && accepted === previewRevision) await previewer.value?.open(indexes.indexOf(index))
 }
 defineExpose({ open, cancelOperation })
-async function downloadPreview(index: number) { if (preview.value) await downloadCreation(preview.value.task, preview.value.indexes[index]!) }
+async function downloadPreview(index: number, format?: ImageDownloadFormat, signal?: AbortSignal) { if (preview.value) await downloadCreation(preview.value.task, preview.value.indexes[index]!, signal, undefined, format) }
 async function copyPreview(index: number) { if (preview.value) await copyCreationImage(preview.value.task, preview.value.indexes[index]!) }
 function dimensions(task: CreationTask) {
   const size = task.request.size
