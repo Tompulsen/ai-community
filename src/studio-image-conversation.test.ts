@@ -36,7 +36,7 @@ it('registers image and video turns in a text conversation and reuses text gener
   await p.registerMediaTurn(mixed, image); await p.registerMediaTurn(mixed, video)
   await p.syncMediaConversations()
   expect(p.visibleMediaTasks(mixed).map(task => task.id)).toEqual(['mixed-image', 'mixed-video'])
-  expect(p.buildImageContext(mixed).turns.map(turn => turn.prompt)).toEqual(['mixed-image'])
+  expect(p.buildImageContext(mixed).turns).toEqual([])
   expect(p.chats.sessions.filter(chat => p.mediaTasksForConversation(chat).some(task => task.id === image.id))).toHaveLength(1)
   await p.deleteMediaTurns(mixed, [image.id])
   await p.syncMediaConversations()
@@ -44,21 +44,20 @@ it('registers image and video turns in a text conversation and reuses text gener
   expect(await p.sendChat(mixed, '继续对话', [], 'gpt-5')).toBe(true)
   expect(mixed.messages.some(message => message.role === 'user' && message.content === '继续对话')).toBe(true)
 })
-it('builds completed visible image context and the last original image without crossing owner or conversation', async () => {
+it('never carries unselected historical images, including other owners and conversations', async () => {
   const p = await fixture()
   p.creation.tasks.push(task('foreign', p.thread.id, 4, { owner: '18' }), task('other-chat', 'other', 5), task('waiting', p.thread.id, 6, { phase: 'attention', urls: ['https://example.test/preview.png'] }))
   await p.syncMediaConversations()
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three'])
-  expect(p.imageContinuationReferences(p.thread)).toEqual([{ name: '上一轮生成图片', url: 'https://example.test/three.png' }])
-  expect(p.buildImageContext(p.thread, 'two').turns.map(turn => turn.prompt)).toEqual(['one'])
-  expect(p.imageContinuationReferences(p.thread, 'one')).toEqual([])
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  expect(p.pinnedImageReferences(p.thread)).toEqual([])
 })
 it('keeps pinned media after clearing, deduplicates both sides, and removes pins with the source', async () => {
   const p = await fixture()
   await p.togglePinnedMessage(p.thread, 'media-user:one')
-  expect(p.buildImageContext(p.thread).turns[0]!.images).toEqual(['https://example.test/one.png'])
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'one', images: [] }])
+  expect(p.pinnedImageReferences(p.thread)).toEqual([])
   await p.togglePinnedMessage(p.thread, 'media-assistant:one')
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three'])
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one'])
   await p.clearMediaContext(p.thread)
   expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'one', images: ['https://example.test/one.png'] }])
   expect(p.pinnedImageReferences(p.thread)).toEqual([{ name: '固定参考图 1', url: 'https://example.test/one.png' }])
@@ -125,33 +124,33 @@ it('passes pinned media to text models as image content instead of just the old 
     { type: 'text', text: 'one' }, { type: 'image_url', image_url: { url: 'https://example.test/one.png' } },
   ] })
 })
-it('clears only outgoing context, keeps displayed records, and includes subsequent completed turns', async () => {
+it('keeps displayed records after clearing without implicitly attaching subsequent results', async () => {
   const p = await fixture()
   await p.clearMediaContext(p.thread)
   expect(p.visibleMediaTasks(p.thread)).toHaveLength(3)
   expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
-  expect(p.imageContinuationReferences(p.thread)).toEqual([])
   p.creation.tasks.push(task('four', p.thread.id, 4))
   await p.syncMediaConversations()
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['four'])
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  expect(p.visibleMediaTasks(p.thread)).toHaveLength(4)
 })
-it('restores cleared image context and automatic references without removing later turns', async () => {
+it('restores the clear boundary without adding image references or removing later turns', async () => {
   const p = await fixture()
   await p.clearMediaContext(p.thread)
-  p.thread.mediaDrafts = { image: { prompt: '继续创作', references: [], skipAutomaticReference: true } }
+  p.thread.mediaDrafts = { image: { prompt: '继续创作', references: [] } }
   p.creation.tasks.push(task('four', p.thread.id, 4))
   await p.syncMediaConversations()
   await p.restoreMediaContext(p.thread)
   expect(p.thread.clearContextIndex).toBeUndefined()
-  expect(p.thread.mediaDrafts!.image!.skipAutomaticReference).toBe(false)
+  expect(p.thread.mediaDrafts!.image!.references).toEqual([])
   expect(p.thread.mediaDrafts!.image!.prompt).toBe('继续创作')
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three', 'four'])
-  expect(p.imageContinuationReferences(p.thread)[0]?.url).toBe('https://example.test/four.png')
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three', 'four'])
 })
 it('keeps the clear boundary and excluded images when restoring cannot be saved', async () => {
   const p = await fixture()
   await p.clearMediaContext(p.thread)
-  const draft = { prompt: '保留草稿', references: [], skipAutomaticReference: true }
+  const draft = { prompt: '保留草稿', references: [] }
   p.thread.mediaDrafts = { image: draft }
   let failSave!: (cause: Error) => void
   storage.write.mockImplementationOnce(() => new Promise((_, reject) => { failSave = reject }))
@@ -161,7 +160,7 @@ it('keeps the clear boundary and excluded images when restoring cannot be saved'
   failSave(new Error('disk full'))
   await restoring
   expect(p.thread.clearContextIndex).toBe(p.thread.messages.length)
-  expect(p.thread.mediaDrafts!.image!.skipAutomaticReference).toBe(true)
+  expect(p.thread.mediaDrafts!.image!.references).toEqual([])
   expect(p.thread.mediaDrafts!.image!.prompt).toBe('保存期间的新输入')
   expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
 })
@@ -172,10 +171,10 @@ it('keeps clearing effective after switching to archived prompt and answer versi
   await p.clearMediaContext(p.thread)
   await p.selectMediaVersion(p.thread, 'two-v2', -1)
   expect(p.buildImageContext(p.thread)).toEqual({ turns: [] })
-  expect(p.imageContinuationReferences(p.thread)).toEqual([])
   p.creation.tasks.push(task('after-clear', p.thread.id, 5))
   await p.syncMediaConversations()
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['after-clear'])
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  expect(p.visibleMediaTasks(p.thread).at(-1)?.id).toBe('after-clear')
 })
 it('never activates a branch whose local registration failed before upstream submission', async () => {
   const p = await fixture()
@@ -189,9 +188,13 @@ it('never activates a branch whose local registration failed before upstream sub
   await p.syncMediaConversations()
   expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
 })
-it('retains original user reference images in the corresponding historical turn', async () => {
+it('includes only original attachments when a user pins the question, then its result when pinning the answer', async () => {
   const p = await fixture()
   p.creation.tasks[0]!.references = [{ name: '人物参考', url: '/legacy-files/reference1' }]
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  await p.togglePinnedMessage(p.thread, 'media-user:one')
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'one', images: [], references: ['/legacy-files/reference1'] }])
+  await p.togglePinnedMessage(p.thread, 'media-assistant:one')
   expect(p.buildImageContext(p.thread).turns[0]).toEqual({
     prompt: 'one', images: ['https://example.test/one.png'], references: ['/legacy-files/reference1'],
   })
@@ -207,9 +210,8 @@ it('reuses answer branches, switches with their later turns, and does not duplic
   expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
   await p.selectMediaVersion(p.thread, 'two-v2', -1)
   expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
-  expect(p.imageContinuationReferences(p.thread)[0]?.url).toContain('three.png')
   await p.selectMediaVersion(p.thread, 'two', 1)
-  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
 })
 it('edits a historical prompt as a separate version without overwriting the old prompt or branch', async () => {
   const p = await fixture()
@@ -280,14 +282,13 @@ it('cannot bind another owner task or restore old-account state after a rejected
   await expect(clearing).rejects.toThrow('disk full')
   expect(p.chats.sessions).toEqual([])
 })
-it('bounds recent history by whole turns and pictures without re-embedding previous request history', async () => {
+it('does not serialize a long image history into a new request', async () => {
   const p = await fixture()
   for (let index = 4; index <= 30; index++) p.creation.tasks.push(task(`round-${index}`, p.thread.id, index, { urls: [`https://example.test/${index}-a.png`, `https://example.test/${index}-b.png`] }))
   await p.syncMediaConversations()
   const context = p.buildImageContext(p.thread)
-  expect(context.turns).toHaveLength(8)
-  expect(context.turns[0]?.prompt).toBe('round-23')
-  expect(context.turns.flatMap(turn => turn.images)).toHaveLength(16)
+  expect(context.turns).toEqual([])
+  expect(p.visibleMediaTasks(p.thread)).toHaveLength(30)
 })
 for (const kind of ['image', 'video'] as const) {
   for (const edited of [false, true]) {

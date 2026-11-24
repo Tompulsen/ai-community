@@ -8,7 +8,7 @@ import { creation, initializeCreation, loadCreationGroups, loadCreationModels, s
 import { chats, createEmptyChat, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
 import { createDeferredWriteQueue } from '../../shared/studio/latest-write-queue'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
-import { buildImageContext, clearMediaContext, imageContinuationReferences, pinnedImageReferences, registerMediaTurn } from '../studio-image-conversation'
+import { buildImageContext, clearMediaContext, pinnedImageReferences, registerMediaTurn } from '../studio-image-conversation'
 import StudioMediaParameters from './StudioMediaParameters.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
@@ -54,7 +54,7 @@ const promptInput = ref<HTMLTextAreaElement | InstanceType<typeof StudioVideoPro
 const blank = ref(false)
 const branchTaskId = ref<string>(), editing = ref(false)
 const imageEditTaskId = ref<string>()
-const skipAutomaticReference = ref(false), restoringTask = ref(false), parameterModel = ref('')
+const restoringTask = ref(false), parameterModel = ref('')
 const submitting = computed(() => Boolean(props.entryPending || submissions.value[props.kind]))
 const referenceUrls = computed(() => references.value.map(file => file.url))
 const currentConversation = computed(() => props.entryOnly ? undefined : chats.sessions.find(chat => chat.id === chats.activeId))
@@ -64,9 +64,6 @@ watch(() => session.user?.id, () => { entryChat.value = createEmptyChat() })
 const composerReady = computed(() => props.entryOnly || chats.ready && !!currentConversation.value && !chats.initialSaving[currentConversation.value.id])
 const currentTasks = computed(() => currentConversation.value ? mediaTasksForConversation(currentConversation.value) : [])
 const selected = computed(() => blank.value ? undefined : currentTasks.value.find(task => task.id === creation.selectedId) || currentTasks.value[0])
-const automaticReferences = computed(() => props.kind === 'image' && currentConversation.value && !references.value.length && !skipAutomaticReference.value
-  ? imageContinuationReferences(currentConversation.value, branchTaskId.value) : [])
-const requestReferences = computed(() => references.value.length ? references.value : automaticReferences.value)
 const busy = computed(() => currentConversation.value && isConversationBusy(currentConversation.value))
 const models = computed(() => modelsForKind(props.kind))
 const selectedGroup = computed(() => creation.groups.find(group => group.id === creation.selectedGroup))
@@ -144,7 +141,7 @@ function loadDraft() {
   }
   restoringParameters.value = true
   draftRevision++
-  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; parameterModel.value = ''; skipAutomaticReference.value = false
+  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; parameterModel.value = ''
   finishRestore()
   blank.value = false
   sourceWorkId.value = undefined
@@ -166,7 +163,6 @@ function loadDraft() {
       protocol.value = ['auto', 'openai', 'sync', 'async'].includes(saved.protocol) ? saved.protocol : 'openai'
       apiFormat.value = modelApiFormatSchema.safeParse(saved.apiFormat).data ?? legacyApiFormat(model.value)
       if (typeof saved.sourceWorkId === 'string') sourceWorkId.value = saved.sourceWorkId
-      skipAutomaticReference.value = saved.skipAutomaticReference === true
       if (props.kind === 'image' && typeof saved.imageEditTaskId === 'string') imageEditTaskId.value = saved.imageEditTaskId
       if (Array.isArray(saved.references)) references.value = saved.references.filter((file: any) => file && typeof file.url === 'string' && typeof file.name === 'string').slice(0, props.kind === 'video' ? 10 : 16)
     }
@@ -180,16 +176,13 @@ watch(() => session.user?.id, () => {
   Object.assign(imageOptions, imageOptionsSchema.parse({})); Object.assign(videoOptions, videoOptionsSchema.parse({ mode: 'text-to-video' }))
   protocol.value = 'auto'; apiFormat.value = 'auto'
 })
-watch(() => [session.user?.id, currentConversation.value?.id, props.kind, currentConversation.value?.mediaDrafts?.[props.kind]?.skipAutomaticReference] as const, (value, before) => {
-  if (value[0] === before[0] && value[1] === before[1] && value[2] === before[2] && typeof value[3] === 'boolean' && value[3] !== before[3]) skipAutomaticReference.value = value[3]
-})
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
-watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, skipAutomaticReference, imageEditTaskId, restoringParameters], () => {
+watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
   const draft = { prompt: prompt.value, model: model.value, manualSize: manualSize.value, ratio: ratio.value, count: count.value, duration: duration.value,
     imageOptions: { ...imageOptions }, videoOptions: { ...videoOptions }, protocol: protocol.value, apiFormat: apiFormat.value,
-    sourceWorkId: sourceWorkId.value, references: references.value.map(file => ({ ...file })), skipAutomaticReference: skipAutomaticReference.value, imageEditTaskId: imageEditTaskId.value }
+    sourceWorkId: sourceWorkId.value, references: references.value.map(file => ({ ...file })), imageEditTaskId: imageEditTaskId.value }
   void draftWrites({ key: draftKey(), owner: session.user.id, draft })
   if (currentConversation.value) {
     currentConversation.value.mediaDrafts ||= {}
@@ -282,8 +275,7 @@ function dropReferences(event: DragEvent) {
   void addReferenceFiles([...event.dataTransfer.files])
 }
 function removeReference(index: number) {
-  if (!references.value.length) skipAutomaticReference.value = true
-  else materials.removeAt(index)
+  materials.removeAt(index)
 }
 function generate() { return submit() }
 async function sendEntry() {
@@ -325,16 +317,14 @@ async function submit(onRegistered?: () => void) {
     const fixedReferences = kind === 'image' && !usesGeminiImageChat(model.value, selectedApiFormat.value) ? pinnedImageReferences(chat) : []
     const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: requestSize.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, references: references.value, sourceWorkId: sourceWorkId.value,
       accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
-      ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value,
-        imageContext: imageEditId && !chat.messages.some(message => message.role === 'assistant' && message.taskId === imageEditId)
-          ? { turns: [] } : buildImageContext(chat, branchId || imageEditId) } : { videoOptions }),
+      ...(props.kind === 'image' ? { imageOptions, imageContext: buildImageContext(chat) } : { videoOptions }),
       ...(branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
     waitingForMaterials.value = true
     try { await materials.wait(preparation.signal) }
     finally { if (materialSubmission === preparation) waitingForMaterials.value = false }
     if (!live || scope !== draftScope() || owner !== session.user?.id) return
     submittedReferences = JSON.stringify(references.value)
-    input.references = JSON.parse(JSON.stringify(kind === 'image' ? requestReferences.value : references.value))
+    input.references = JSON.parse(JSON.stringify(references.value))
     if (fixedReferences.length) {
       input.references = [...new Map([...(input.references || []), ...fixedReferences].map(file => [file.url, file])).values()]
       if (input.references.length > 16) throw new Error('固定图片和本次参考图合计不能超过 16 张，请先取消部分固定。')
@@ -362,7 +352,7 @@ async function submit(onRegistered?: () => void) {
       if (owner === session.user?.id && live && scope === draftScope()) {
         if (prompt.value === submittedPrompt) prompt.value = ''
         if (JSON.stringify(references.value) === submittedReferences) references.value = []
-        branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; skipAutomaticReference.value = false
+        branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false
         await saveChats(true)
       } else if (owner === session.user?.id) {
         const draft = chat.mediaDrafts?.[kind]
@@ -420,7 +410,6 @@ async function useTask(task: CreationTask, generatedImages?: string[]) {
   protocol.value = task.request.protocol || (task.protocol === 'async' ? 'async' : 'openai')
   apiFormat.value = task.request.apiFormat || legacyApiFormat(task.model)
   references.value = generatedImages ? generatedImages.map((url, index) => ({ name: `生成图片 ${index + 1}`, url })) : task.references.map(file => ({ ...file }))
-  skipAutomaticReference.value = true
   emit('source', sourceWorkId.value)
   if (!models.value.some(item => item.id === task.model)) error.value = '原作模型在当前分组不可用，请选择可用模型后生成。'
   else error.value = ''
@@ -454,19 +443,18 @@ async function regenerate(task: CreationTask) {
   await generate()
 }
 function cancelEditing() {
-  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; skipAutomaticReference.value = false; error.value = ''
+  branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false; prompt.value = ''; references.value = []; error.value = ''
 }
 function chooseReference(task: CreationTask, index: number) {
   if (task.owner !== session.user?.id || task.kind !== 'image' || task.phase !== 'complete') return
   const url = task.urls[index]
   if (!url) return
   references.value = [{ name: `历史生成图 ${index + 1}`, url }]
-  skipAutomaticReference.value = true
   void nextTick(() => promptInput.value?.focus())
 }
 async function clearContext() {
   if (!currentConversation.value) return
-  try { await clearMediaContext(currentConversation.value); skipAutomaticReference.value = true; references.value = []; branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false }
+  try { await clearMediaContext(currentConversation.value); references.value = []; branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false }
   catch (cause) { error.value = errorMessage(cause) }
 }
 function newCreation() {

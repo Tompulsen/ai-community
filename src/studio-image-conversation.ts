@@ -48,45 +48,13 @@ export function visibleMediaTasks(chat: NativeChat): CreationTask[] {
     return task && !chat.deletedMediaTaskIds?.includes(task.id) ? [task] : []
   })
 }
-function contextTasks(chat: NativeChat, beforeTaskId?: string) {
-  const tasks = visibleMediaTasks(chat)
-  const end = beforeTaskId ? tasks.findIndex(task => task.id === beforeTaskId) : tasks.length
-  if (end < 0) throw new Error('原消息已不在当前版本，请重新选择。')
-  return tasks.slice(0, end).filter(task => task.kind === 'image' && task.phase === 'complete' && task.urls.length && !chat.mediaContextExcludedTaskIds?.includes(task.id) &&
-    chat.messages.findIndex(message => message.taskId === task.id && message.role === 'assistant') >= (chat.clearContextIndex || 0))
-}
-export function buildImageContext(chat: NativeChat, beforeTaskId?: string): ImageConversationContext {
+export function buildImageContext(chat: NativeChat): ImageConversationContext {
   const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, session.user?.id || ''))
-  const pinned = pinnedImageTurns(fixed)
-  const pinnedTasks = new Set(fixed.flatMap(entry => entry.task ? [entry.task.id] : []))
-  const turns: ImageConversationContext['turns'] = []
-  let images = pinned.reduce((total, turn) => total + turn.images.length + (turn.references?.length || 0), 0), characters = pinned.reduce((total, turn) => total + Array.from(turn.prompt).length, 0)
-  const recent = contextTasks(chat, beforeTaskId)
-  // A pinned question must not remove its completed answer from ordinary history.
-  const keys = [...new Set(fixed.map(entry => entry.task?.id || entry.message.id))]
-  for (const task of recent) {
-    const turn = pinned[keys.indexOf(task.id)]
-    if (turn && !turn.images.length && images + task.urls.length <= 16) {
-      turn.images = [...task.urls]; images += task.urls.length
-    }
-  }
-  // Keep whole recent turns; never split a turn or count base64 as prompt text.
-  for (const task of recent.reverse()) {
-    if (pinnedTasks.has(task.id)) continue
-    const references = [...new Set(task.references.map(file => file.url))]
-    if (turns.length + pinned.length >= 20 || images + task.urls.length + references.length > 16 || characters + Array.from(task.prompt).length > 32000) break
-    turns.unshift({ prompt: task.prompt, images: [...task.urls], ...(references.length ? { references } : {}) })
-    images += task.urls.length + references.length; characters += Array.from(task.prompt).length
-  }
-  return { turns: [...pinned, ...turns] }
+  // Only explicitly pinned messages carry over into a new image request.
+  return { turns: pinnedImageTurns(fixed) }
 }
 export function pinnedImageReferences(chat: NativeChat): CreationTask['references'] {
-  const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, session.user?.id || ''))
-  return [...new Set(pinnedImageTurns(fixed).flatMap(turn => [...(turn.references || []), ...turn.images]))].map((url, index) => ({ name: `固定参考图 ${index + 1}`, url }))
-}
-export function imageContinuationReferences(chat: NativeChat, beforeTaskId?: string): CreationTask['references'] {
-  const last = contextTasks(chat, beforeTaskId).at(-1)
-  return last?.urls[0] ? [{ name: '上一轮生成图片', url: last.urls[0] }] : []
+  return [...new Set(buildImageContext(chat).turns.flatMap(turn => [...(turn.references || []), ...turn.images]))].map((url, index) => ({ name: `固定参考图 ${index + 1}`, url }))
 }
 export async function registerMediaTurn(chat: NativeChat, task: CreationTask, branchTaskId?: string, edited?: boolean) {
   registered(chat)
@@ -137,23 +105,11 @@ export async function clearMediaContext(chat: NativeChat) {
 }
 export async function restoreMediaContext(chat: NativeChat) {
   ensureSettled(chat)
-  const owner = session.user?.id
-  const flags = Object.values(chat.mediaDrafts || {}).map(draft => ({ draft, flag: draft.skipAutomaticReference }))
-  try {
-    await savedMutation(chat, () => {
-      chat.clearContextIndex = undefined
-      chat.mediaContextExcludedTaskIds = []
-      chat.lastSummarizeIndex = 0
-      for (const draft of Object.values(chat.mediaDrafts || {})) draft.skipAutomaticReference = false
-    })
-  } catch (error) {
-    if (owner === session.user?.id && chats.sessions.includes(chat)) {
-      for (const { draft, flag } of flags) {
-        if (Object.values(chat.mediaDrafts || {}).includes(draft) && draft.skipAutomaticReference === false) draft.skipAutomaticReference = flag
-      }
-    }
-    throw error
-  }
+  await savedMutation(chat, () => {
+    chat.clearContextIndex = undefined
+    chat.mediaContextExcludedTaskIds = []
+    chat.lastSummarizeIndex = 0
+  })
 }
 export async function deleteMediaTurns(chat: NativeChat, ids: string[]) {
   registered(chat); ensureSettled(chat)
