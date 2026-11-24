@@ -5,6 +5,7 @@ export type ModelPriceRow = {
   price: string;
   requestPrice?: number;
   imageCountMultiplier?: boolean;
+  videoRates?: { providerKey: string; provider: string; resolution?: string; perSecond: number; perRequest: number }[];
   details?: {
     unit: "request" | "tokens";
     tiers: {
@@ -36,6 +37,7 @@ type CatalogModel = {
   model_price?: unknown;
   billing_mode?: unknown;
   billing_expr?: unknown;
+  billing_usage_schema?: unknown;
   billing_plugin_variants?: unknown;
 };
 const positive = (n: unknown): n is number =>
@@ -81,7 +83,7 @@ function expressionShape(expression: string) {
     quoted = false,
     escaped = false;
   let question = -1,
-    colon = -1;
+    colon = -1, conditionalDepth = 0;
   let wrapped = expression.startsWith("(") && expression.endsWith(")");
   for (let index = 0; index < expression.length; index++) {
     const char = expression[index];
@@ -97,14 +99,14 @@ function expressionShape(expression: string) {
       if (--depth < 0) return null;
       if (depth === 0 && index < expression.length - 1) wrapped = false;
     } else if (depth === 0 && char === "?") {
-      if (question !== -1) return null;
-      question = index;
+      if (question === -1) question = index;
+      conditionalDepth++;
     } else if (depth === 0 && char === ":") {
-      if (colon !== -1) return null;
-      colon = index;
+      if (--conditionalDepth < 0) return null;
+      if (colon === -1 && conditionalDepth === 0) colon = index;
     }
   }
-  return depth || quoted ? null : { question, colon, wrapped };
+  return depth || quoted || conditionalDepth ? null : { question, colon, wrapped };
 }
 
 function unwrapExpression(value: string): string | null {
@@ -168,6 +170,67 @@ function dynamicPriceTiers(expression: string): PriceTier[] | null {
   ];
 }
 
+type UsageSchema = Record<string, { type?: unknown; unit?: unknown; enum?: unknown }>;
+type VideoRate = Pick<NonNullable<ModelPriceRow["videoRates"]>[number], "perSecond" | "perRequest">;
+
+// Only recognize complete canonical task prices; never execute upstream expressions.
+function videoRate(expression: string, schema: UsageSchema, resolution?: string, depth = 0): VideoRate | null {
+  if (depth > 16) return null;
+  const value = unwrapExpression(expression);
+  if (!value) return null;
+  const shape = expressionShape(value)!;
+  if (shape.question >= 0) {
+    const condition = unwrapExpression(value.slice(0, shape.question));
+    const match = /^u\("resolution"\)\s*==\s*"([a-zA-Z0-9_-]+)"$/.exec(condition ?? "");
+    if (!match || !Array.isArray(schema.resolution?.enum) || !schema.resolution.enum.includes(match[1])) return null;
+    const yes = videoRate(value.slice(shape.question + 1, shape.colon), schema, resolution, depth + 1);
+    const no = videoRate(value.slice(shape.colon + 1), schema, resolution, depth + 1);
+    return yes && no ? resolution === match[1] ? yes : no : null;
+  }
+  const tier = /^tier\("(?:[^"\\]|\\.)*",\s*([\s\S]+)\)$/.exec(value);
+  if (!tier) return null;
+  const rate = { perSecond: 0, perRequest: 0 };
+  for (const term of tier[1].split("+")) {
+    const constant = /^\s*(\d+(?:\.\d+)?)\s*$/.exec(term);
+    if (constant) { rate.perRequest += Number(constant[1]); continue; }
+    const usage = /^\s*u\("([a-zA-Z0-9_]+)"\)\s*\*\s*(\d+(?:\.\d+)?)\s*$/.exec(term);
+    if (!usage || !Object.hasOwn(schema, usage[1]) || schema[usage[1]]?.type !== "number") return null;
+    const price = Number(usage[2]);
+    if (!positive(price)) return null;
+    if (usage[1] === "seconds" && schema.seconds.unit === "second") rate.perSecond += price;
+    // Paid reference images or other usage need provider-specific request facts.
+    else if (price !== 0) return null;
+  }
+  return positive(rate.perSecond) && positive(rate.perRequest) ? rate : null;
+}
+
+function videoPriceRates(model: CatalogModel, multiplier: number): ModelPriceRow["videoRates"] {
+  const variants = model.billing_plugin_variants;
+  const candidates = Array.isArray(variants) && variants.length ? variants : [model];
+  if (candidates.length > 32 || !positive(multiplier)) return;
+  const rates: NonNullable<ModelPriceRow["videoRates"]> = [];
+  for (const [index, candidate] of candidates.entries()) {
+    if (!candidate || candidate.billing_mode !== "tiered_expr" || typeof candidate.billing_expr !== "string" || candidate.billing_expr.length > 8192) return;
+    const schema = candidate.billing_usage_schema as UsageSchema | undefined;
+    if (!schema || schema.seconds?.type !== "number" || schema.seconds.unit !== "second") return;
+    const expression = candidate.billing_expr.replace(/^v1:/, "").trim();
+    const resolutions: (string | undefined)[] = Array.isArray(schema.resolution?.enum) ? schema.resolution.enum : [undefined];
+    if (!resolutions.length || resolutions.length > 16 || resolutions.some(value => value !== undefined && (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,20}$/.test(value)))) return;
+    const provider = typeof candidate.plugin_name === "string" ? candidate.plugin_name.slice(0, 80) : "视频任务";
+    const providerKey = String(index);
+    const parsed = resolutions.map(resolution => {
+      const rate = videoRate(expression, schema, resolution);
+      return rate ? { providerKey, provider, ...(resolution ? { resolution } : {}), perSecond: rate.perSecond * multiplier, perRequest: rate.perRequest * multiplier } : null;
+    });
+    if (parsed.some(rate => !rate || !positive(rate.perSecond) || !positive(rate.perRequest))) return;
+    const valid = parsed as NonNullable<ModelPriceRow["videoRates"]>;
+    if (valid.every(rate => rate.perSecond === valid[0].perSecond && rate.perRequest === valid[0].perRequest)) {
+      rates.push({ providerKey, provider, perSecond: valid[0].perSecond, perRequest: valid[0].perRequest });
+    } else rates.push(...valid);
+  }
+  return rates.length ? rates : undefined;
+}
+
 export function modelPriceRows(
   catalog: unknown,
   status: Record<string, unknown>,
@@ -208,6 +271,7 @@ export function modelPriceRows(
       let details: ModelPriceRow["details"];
       let requestPrice: number | undefined;
       let imageCountMultiplier = false;
+      const videoRates = videoPriceRates(model, ratio * display.rate);
       const dynamic =
         (Boolean(model.billing_mode) && model.billing_mode !== "ratio") ||
         Boolean(model.billing_expr) ||
@@ -271,6 +335,11 @@ export function modelPriceRows(
             })
             .join("\n");
         }
+        if (videoRates) {
+          billing = "视频任务 · 每秒";
+          const displayAmount = (value: number) => `${display.symbol} ${new Intl.NumberFormat("zh-CN", { maximumSignificantDigits: 6 }).format(value)}`;
+          price = videoRates.map(rate => `${rate.provider}${rate.resolution ? ` · ${rate.resolution}` : ""}：${displayAmount(rate.perSecond)}/秒${rate.perRequest ? ` + ${displayAmount(rate.perRequest)}/次` : ""}`).join("\n");
+        }
       } else if (model.quota_type === 1 && positive(model.model_price)) {
         requestPrice = model.model_price * ratio * display.rate;
         imageCountMultiplier = true;
@@ -303,6 +372,7 @@ export function modelPriceRows(
         billing,
         price,
         ...(details ? { details } : {}),
+        ...(videoRates ? { videoRates } : {}),
         ...(positive(requestPrice) ? { requestPrice, imageCountMultiplier } : {}),
       });
     }

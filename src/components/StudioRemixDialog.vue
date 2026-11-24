@@ -97,7 +97,7 @@ async function apply(withReferences: boolean, background = false) {
       <section v-if="source.kind !== 'resource'" class="remix-background" aria-label="后台制作同款">
         <p v-if="!source.model">原作品未提供生成模型，导入提示词后请在工作台选择模型。</p>
         <p>沿用模型 {{ source.model || '（未提供）' }} 和公开参数，使用当前账号可用分组。后台生成会消耗积分，提交后{{ backgroundOnly ? '留在当前作品页' : '返回作品' }}，你可以继续浏览并在小窗中查看进度。</p>
-        <StudioBilling v-if="ready && !issue" :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
+        <StudioBilling v-if="ready && !issue" :model="source.model" :kind="source.kind" :quantity="geminiImage ? 1 : parameters?.n ?? 1" :duration="parameters?.duration ?? 8" :resolution="parameters?.videoOptions?.resolution" :custom-parameters="parameters?.videoOptions?.customParameters" :size="parameters?.size" :protocol="geminiImage ? 'openai' : parameters?.protocol ?? 'openai'" hide-catalog />
       </section>
       <h3>本次使用的参考图</h3>
       <p class="form-note">选择作品参考图，或上传自己的图片。只有选中的参考图会用于本次生成。</p>

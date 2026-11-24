@@ -10,7 +10,7 @@ import { formatInvocationPoints, invocationPoints, selectedModelPrices } from '.
 import StudioPopover from './StudioPopover.vue'
 import type { ModelPriceRow, ModelPricing } from '../../server/native-account/pricing'
 
-const props = withDefaults(defineProps<{ model: string; group?: string | null; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; protocol?: string; apiFormat?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
+const props = withDefaults(defineProps<{ model: string; group?: string | null; kind?: 'text' | 'image' | 'video'; quantity?: number; duration?: number; resolution?: string; customParameters?: string; size?: string; protocol?: string; apiFormat?: string; refreshKey?: number; hideCatalog?: boolean; compact?: boolean }>(), { kind: 'text' })
 const emit = defineEmits<{ prices: [] }>()
 const menu = ref<InstanceType<typeof StudioPopover>>()
 const prices = ref<ModelPricing>(), loading = ref(false), error = ref('')
@@ -87,6 +87,7 @@ onBeforeUnmount(() => { version++; window.removeEventListener('focus', refreshVi
             </div>
           </div>
           <p class="billing-note">{{ usageBased ? '按实际输入、输出及缓存用量结算，调用前无法确定总消耗。' : quote ? kind === 'text' ? '按单次模型请求预估；历史摘要或工具调用产生的额外请求另计。' : '按当前定价预估，实际消耗以结算为准。' : '总消耗随生成参数及实际用量变化，完成后结算。' }}<template v-if="billingGroup === 'auto' && rows.length > 1"> 自动分组以实际使用的分组为准。</template></p>
+          <p v-if="kind === 'video'" class="billing-note">1 元 = 5,000 积分，已含当前分组倍率。<template v-if="customParameters?.trim()">自定义参数可能覆盖时长或分辨率，暂不预估总额。</template><template v-else-if="quote && quote.min !== quote.max">预计范围包含不同渠道或自动分辨率的价格。</template></p>
         </template>
         <p v-if="accountBalance.error" class="billing-error" role="alert">积分读取失败，请重试。</p>
         <div class="billing-detail-actions"><button type="button" class="studio-tool billing-refresh" :disabled="loading || accountBalance.loading" @click="load"><RefreshCw :size="15" aria-hidden="true" />{{ error || accountBalance.error ? '重试' : '刷新积分与价格' }}</button><button v-if="!hideCatalog" type="button" class="studio-tool" @click="showPrices">查看全部定价</button></div>

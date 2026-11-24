@@ -271,6 +271,8 @@ test('community status and model prices use the configured quota per point, inde
     return Response.json({ success: true, data: [
       { model_name: 'image', enable_groups: ['default'], quota_type: 1, model_price: 0.02 },
       { model_name: 'chat', enable_groups: ['default'], quota_type: 0, model_ratio: 0.2, completion_ratio: 2 },
+      { model_name: 'video', enable_groups: ['default'], billing_plugin_variants: [{ plugin_name: 'Sora', billing_mode: 'tiered_expr',
+        billing_expr: 'tier("base", u("seconds") * 0.15)', billing_usage_schema: { seconds: { type: 'number', unit: 'second' } } }] },
     ], group_ratio: { default: 1 }, auto_groups: ['default'] })
   })
   const status = await handleAccountRequest(request('/api/new-api/status'))
@@ -284,6 +286,7 @@ test('community status and model prices use the configured quota per point, inde
   assert.equal(pricing.rows[0].imageCountMultiplier, true)
   assert.deepEqual(pricing.autoGroups, ['default'])
   assert.equal(pricing.rows[1].price, '输入 积分 2,000 / 输出 积分 4,000')
+  assert.deepEqual(pricing.rows[2].videoRates, [{ providerKey: '0', provider: 'Sora', perSecond: 750, perRequest: 0 }])
   process.env.COMMUNITY_WALLET_QUOTA_PER_CNY = '700000'
   const scaled = await handleAccountRequest(request('/api/new-api/status'))
   assert.equal((await scaled.json()).data.quotaPerUnit, 140)

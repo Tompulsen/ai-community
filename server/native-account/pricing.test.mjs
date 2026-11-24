@@ -6,6 +6,51 @@ const status = { quota_display_type: 'CUSTOM', custom_currency_symbol: '积分',
 const fixed = { model_name: 'gpt-image-2', enable_groups: ['default', '生图'], quota_type: 1, model_price: 0.25 }
 const catalog = (model = fixed) => ({ data: [model], group_ratio: { default: 0.04, 生图: 0.6 }, auto_groups: ['default', '生图'] })
 
+const videoSchema = { seconds: { type: 'number', unit: 'second' }, resolution: { enum: ['480p', '720p', '1080p'] }, input_images: { type: 'number', unit: 'count' } }
+const provider = (billing_expr, plugin_name = 'Sora') => ({ plugin_name, billing_mode: 'tiered_expr', billing_expr, billing_usage_schema: videoSchema })
+const videoCatalog = variants => ({ data: [{ model_name: 'grok-imagine-video-1.5', enable_groups: ['视频'],
+  billing_mode: 'tiered_expr', billing_expr: 'tier("base", 0)', billing_usage_schema: videoSchema, billing_plugin_variants: variants }],
+  group_ratio: { 视频: 1 }, auto_groups: ['视频'] })
+
+test('video prices use every provider override in points instead of the zero model-level fallback', () => {
+  const result = modelPriceRows(videoCatalog([
+    provider('tier("base", u("input_images") * 0 + u("seconds") * 0.15)', 'xAI'),
+    provider('tier("base", u("seconds") * 0.15)'),
+  ]), status)
+  assert.deepEqual(result.rows[0].videoRates, [
+    { providerKey: '0', provider: 'xAI', perSecond: 750, perRequest: 0 }, { providerKey: '1', provider: 'Sora', perSecond: 750, perRequest: 0 },
+  ])
+  assert.match(result.rows[0].price, /750.*秒/)
+  assert.equal(result.rows[0].requestPrice, undefined)
+})
+
+test('video resolution tiers keep their group multiplier, zero prices and fixed task charges', () => {
+  const data = videoCatalog([provider('v1:u("resolution") == "480p" ? tier("low", u("seconds") * 0) : u("resolution") == "720p" ? tier("mid", 0.1 + u("seconds") * 0.32) : tier("high", u("seconds") * 0.65)')])
+  data.group_ratio.视频 = 0.5
+  assert.deepEqual(modelPriceRows(data, status).rows[0].videoRates, [
+    { providerKey: '0', provider: 'Sora', resolution: '480p', perSecond: 0, perRequest: 0 },
+    { providerKey: '0', provider: 'Sora', resolution: '720p', perSecond: 800, perRequest: 250 },
+    { providerKey: '0', provider: 'Sora', resolution: '1080p', perSecond: 1625, perRequest: 0 },
+  ])
+})
+
+test('unsupported or malformed provider charges never leave a partial video quote', () => {
+  for (const expression of [
+    'tier("base", u("seconds") * -1)', 'tier("base", u("seconds") * 0.15 + u("input_images") * 0.2)',
+    'tier("base", u("unknown") * 0 + u("seconds") * 0.15)', 'tier("base", fixed(0.15))',
+    'tier("base", u("seconds") * 0.15) ||| param("quality") == "high" => * 2',
+    'tier("base", u("seconds") * Infinity)', 'tier("base", u("seconds") * 0.15) + malicious()',
+    'u("resolution") == "720p" ? tier("x", u("seconds") * 0.15) : tier("x", u("tokens") * 2)',
+  ]) {
+    const row = modelPriceRows(videoCatalog([provider('tier("base", u("seconds") * 0.15)'), provider(expression, 'other')]), status).rows[0]
+    assert.equal(row.videoRates, undefined, expression)
+    assert.equal(row.requestPrice, undefined, expression)
+  }
+  const malformed = provider('tier("base", u("seconds") * 0.15)')
+  malformed.billing_usage_schema = { seconds: { type: 'number', unit: 'token' } }
+  assert.equal(modelPriceRows(videoCatalog([malformed]), status).rows[0].videoRates, undefined)
+})
+
 test('fixed prices preserve numeric points with each personalized group ratio and routing order', () => {
   const result = modelPriceRows(catalog(), status)
   assert.deepEqual(result.autoGroups, ['default', '生图'])

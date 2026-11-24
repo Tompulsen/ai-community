@@ -7,6 +7,32 @@ const input = { kind: 'image' as const, model: row.model, quantity: 3 }
 const prices: ModelPricing = { rows: [row], currency: '积分', autoGroups: ['image'], userId: 17, account: 'fixture', walletUrl: '', pricingUrl: '', fetchedAt: '' }
 
 describe('invocation points', () => {
+  const video = { kind: 'video' as const, model: 'grok-imagine-video-1.5', duration: 5, resolution: '480p' }
+  const videoRow: ModelPriceRow = { ...row, requestPrice: undefined, videoRates: [{ providerKey: '0', provider: 'xAI', perSecond: 750, perRequest: 0 }, { providerKey: '1', provider: 'Sora', perSecond: 750, perRequest: 0 }] }
+  it('quotes the complete video duration from every provider, including async video', () => {
+    expect(invocationPoints([videoRow], '积分', video)).toEqual({ min: 3750, max: 3750 })
+    expect(invocationPoints([videoRow], '积分', { ...video, duration: 8, protocol: 'async' })).toEqual({ min: 6000, max: 6000 })
+    expect(invocationPoints([videoRow, { ...videoRow, videoRates: [{ providerKey: '0', provider: 'other', perSecond: 1600, perRequest: 500 }] }], '积分', video)).toEqual({ min: 3750, max: 8500 })
+    expect(invocationPoints([videoRow, row], '积分', video)).toBeUndefined()
+  })
+  it('selects resolution rates and keeps a range when automatic resolution or manual size is uncertain', () => {
+    const priced = { ...videoRow, videoRates: [
+      { providerKey: '0', provider: 'Sora', resolution: '480p', perSecond: 750, perRequest: 0 },
+      { providerKey: '0', provider: 'Sora', resolution: '720p', perSecond: 1600, perRequest: 500 },
+    ] }
+    expect(invocationPoints([priced], '积分', video)).toEqual({ min: 3750, max: 3750 })
+    expect(invocationPoints([priced], '积分', { ...video, resolution: '720p', size: '1280x720' })).toEqual({ min: 8500, max: 8500 })
+    for (const options of [{ resolution: 'auto' }, { size: '1280x720' }]) expect(invocationPoints([priced], '积分', { ...video, ...options })).toEqual({ min: 3750, max: 8500 })
+    expect(invocationPoints([priced], '积分', { ...video, resolution: '4k' })).toBeUndefined()
+    const sameName = { ...priced, videoRates: priced.videoRates.map((rate, index) => ({ ...rate, providerKey: String(index) })) }
+    expect(invocationPoints([sameName], '积分', video)).toBeUndefined()
+  })
+  it('does not quote overridden video parameters or invalid durations and charges', () => {
+    for (const duration of [undefined, 0, -1, 3601, 1.5, NaN, Infinity]) expect(invocationPoints([videoRow], '积分', { ...video, duration })).toBeUndefined()
+    expect(invocationPoints([videoRow], '积分', { ...video, customParameters: '{"seconds":20}' })).toBeUndefined()
+    for (const perSecond of [-1, Infinity, Number.MAX_VALUE]) expect(invocationPoints([{ ...videoRow, videoRates: [{ providerKey: '0', provider: 'broken', perSecond, perRequest: 0 }] }], '积分', video)).toBeUndefined()
+    expect(invocationPoints([{ ...videoRow, videoRates: [{ providerKey: '0', provider: 'free', perSecond: 0, perRequest: 0 }] }], '积分', video)).toEqual({ min: 0, max: 0 })
+  })
   it('multiplies ordinary fixed image pricing by n and preserves zero and fractional charges', () => {
     expect(invocationPoints([row], '积分', input)).toEqual({ min: 450, max: 450 })
     expect(invocationPoints([{ ...row, requestPrice: 0 }], '积分', input)).toEqual({ min: 0, max: 0 })
