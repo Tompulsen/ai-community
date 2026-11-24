@@ -5,6 +5,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
+import { readSkillPackage } from './skill-package.ts';
 import { mkdtemp, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { tmpdir } from 'node:os';
@@ -117,7 +119,7 @@ test('unauthorized legacy media lookup remains a 404 without touching filesystem
   await assert.rejects(handleContent(ctx), error => error.statusCode === 404);
   assert(statement.includes('f."userId"=$1'));
   assert(statement.includes(publicVisibilitySql));
-  assert.deepEqual(parameters, [null, 'file1', false, 'https://community.example']);
+  assert.deepEqual(parameters, [null, 'file1', false, 'https://community.example', false]);
 });
 
 test('unknown API is not claimed by content handler', async () => {
@@ -194,28 +196,98 @@ test('manual skill and media metadata survive without a prompt and preserve sour
   }
 });
 
-test('skill publication validates tool, instructions, owned supported files or a resource link and allows incomplete drafts', async () => {
-  const base = { skill: { platform: 'ComfyUI' }, body: 'Import the workflow', tagIds: ['tag1'] };
-  for (const [name, type] of [['skill.zip', 'application/zip'], ['workflow.json', 'application/json'], ['SKILL.md', 'text/plain'], ['workflow.yaml', 'text/plain'], ['workflow.yml', 'application/yaml'], ['guide.txt', 'text/plain']]) {
-    const entry = { id: 'skill1', name, type };
-    const f = publicationContext({ ...base, fileIds: [entry.id] }, { attachments: [entry] });
-    await handleContent(f.ctx);
-    assert.equal(f.ctx.result.status, 201);
-    assert.equal(f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters[12].skill.platform, 'ComfyUI');
+const skillDocument = Buffer.from('---\nname: writing-helper\ndescription: Write useful text\n---\nKeep this private instruction inside the server.\n');
+const textCatalogue = async () => ({ items: [{ id: 'chat-test', groups: ['text'] }, { id: 'gpt-image-2', groups: ['images'] }] });
+async function skillPublication(t, patch = {}, options = {}) {
+  const filesRoot = await mkdtemp(join(tmpdir(), 'community-skill-publication-'));
+  t.after(() => rm(filesRoot, { recursive: true, force: true }));
+  await writeFile(join(filesRoot, 'source-key'), skillDocument);
+  const pack = await readSkillPackage('SKILL.md', skillDocument);
+  const attachments = [{ id: 'source1', name: 'SKILL.md', type: 'text/plain', accessKey: 'source-key', storedInternal: true, isLink: false },
+    { id: 'cover1', name: 'cover.png', type: 'image/png', storedInternal: true }];
+  const skill = { platform: 'chat-test', group: 'text', coverFileId: 'cover1', sourcePublic: false };
+  const f = publicationContext({ skill, model: 'chat-test', body: 'How to use it', fileIds: ['source1', 'cover1'], tagIds: ['tag1'], ...patch }, { attachments, ...options });
+  f.ctx.filesRoot = filesRoot; f.ctx.user.accountId = '17';
+  f.ctx.request = { raw: Object.assign(new EventEmitter(), f.ctx.req, { url: f.ctx.url.pathname }), body: f.ctx.body, ip: '127.0.0.1' };
+  f.ctx.reply = { raw: new EventEmitter() };
+  return { ...f, skill, pack, filesRoot, attachments };
+}
+
+test('skill publication requires a cover, an owned source package and a selectable text model even in after-review mode', async t => {
+  const f = await skillPublication(t, {}, { mode: 'after' });
+  await handleContent(f.ctx, { modelCatalogue: textCatalogue });
+  const saved = f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters;
+  assert.deepEqual(saved[10], ['cover1', 'source1']);
+  assert.equal(saved[12].skill.sourceSha256, f.pack.sha256);
+  assert.equal(saved[12].skill.sourceFileId, 'source1');
+  assert.equal(saved[13], 'pending'); assert.equal(saved[14], 'before');
+  assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
+  assert(f.statements.some(({ sql }) => sql.startsWith('UPDATE drive_file') && sql.includes('communitySkillPrivate')));
+  for (const patch of [
+    { fileIds: ['source1'] }, { fileIds: ['cover1'], sourceUrl: 'https://example.com/skill' },
+    { skill: { ...f.skill, group: 'other' } }, { model: 'gpt-image-2', skill: { ...f.skill, group: 'images' } },
+    { model: 'not-in-catalogue' }, { body: '' }, { skill: { ...f.skill, coverFileId: 'someoneelsesfile' } },
+  ]) {
+    const invalid = await skillPublication(t, patch);
+    await assert.rejects(handleContent(invalid.ctx, { modelCatalogue: textCatalogue }), error => error.statusCode === 400);
+    assert(!invalid.statements.some(({ sql }) => sql.startsWith('INSERT')));
   }
-  const link = publicationContext({ ...base, sourceUrl: 'https://example.com/workflow' });
-  await handleContent(link.ctx); assert.equal(link.ctx.result.status, 201);
   const draft = publicationContext({ skill: {}, body: '', status: 'draft' });
   await handleContent(draft.ctx); assert.equal(draft.ctx.result.status, 201);
-  for (const body of [{}, { sourceUrl: 'https://example.com', body: '' }, { sourceUrl: 'https://example.com', skill: {} }, { fileIds: ['otheraccount'] }]) {
-    const f = publicationContext({ ...base, ...body });
-    await assert.rejects(handleContent(f.ctx), error => error.statusCode === 400);
-    assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT')));
+});
+
+test('only an administrator can approve skill works, publishing the cover and keeping the package out of notes', async t => {
+  const f = await skillPublication(t);
+  const row = { ...workRow, status: 'pending', approvedNoteId: null, fileIds: ['cover1', 'source1'], tagIds: ['tag1'], model: 'chat-test',
+    generation: { prompt: '', model: 'chat-test', referenceFileIds: [], skill: { ...f.skill, sourceFileId: 'source1', sourceSha256: f.pack.sha256 } } };
+  for (const admin of [false, true]) {
+    const review = await skillPublication(t, { action: 'approve', version: 2 }, { row, path: '/api/admin/submissions/work1/review', admin });
+    review.ctx.user.isModerator = true;
+    if (!admin) { await assert.rejects(handleContent(review.ctx), { statusCode: 403 }); continue; }
+    await handleContent(review.ctx);
+    const published = review.statements.find(({ sql }) => sql.startsWith('INSERT INTO note'));
+    assert.deepEqual(published.parameters[3], ['cover1']);
+    assert.equal(review.statements.find(({ sql }) => sql.startsWith('UPDATE community_submission SET category')).parameters[11], 'approved');
   }
-  for (const [name, type] of [['picture.png', 'image/png'], ['run.exe', 'text/plain'], ['workflow.json', 'application/octet-stream']]) {
-    const f = publicationContext({ ...base, fileIds: ['skill1'] }, { attachments: [{ id: 'skill1', name, type }] });
-    await assert.rejects(handleContent(f.ctx), error => error.statusCode === 400);
+  const stale = await skillPublication(t, { action: 'approve', version: 2 }, { row, path: '/api/admin/submissions/work1/review', admin: true });
+  await writeFile(join(stale.filesRoot, 'source-key'), Buffer.concat([skillDocument, Buffer.from('Changed after submission.')]));
+  await assert.rejects(handleContent(stale.ctx), { statusCode: 409 });
+  assert(!stale.statements.some(({ sql }) => sql.startsWith('INSERT INTO note')));
+});
+
+test('approved skill edits cannot remove their approval or privacy requirements', async () => {
+  const row = { ...workRow, fileIds: ['source1'], tagIds: ['tag1'], generation: { prompt: '', model: 'chat-test', referenceFileIds: [], skill: { platform: 'chat-test', sourcePublic: false } } };
+  for (const patch of [{ generation: null }, { skill: null }, { kind: 'image', generation: null }]) {
+    const f = publicationContext({ version: 2, ...patch }, { row, mode: 'after', method: 'PATCH', path: '/api/works/work1' });
+    await assert.rejects(handleContent(f.ctx), { statusCode: 400 });
+    assert(!f.statements.some(({ sql }) => sql.startsWith('UPDATE') || sql.startsWith('INSERT')));
   }
+});
+
+test('private skill sources stay out of detail DTOs while approved skills remain callable', async () => {
+  for (const marker of [false, true]) for (const actor of [null, { id: 'reader' }, { id: 'moderator', isModerator: true }, { id: 'owner1' }, { id: 'admin', isAdmin: true }]) {
+    const skill = { platform: 'chat-test', group: 'text', sourcePublic: marker, sourceFileId: 'source1', sourceSha256: 'a'.repeat(64), coverFileId: 'cover1' };
+    const row = { ...workRow, fileIds: ['cover1','source1'], sourceUrl: 'https://example.com/source', generation: { prompt: '', model: 'chat-test', referenceFileIds: [], skill } };
+    const files = [{ id: 'cover1', name: 'cover.png', type: 'image/png', storedInternal: true }, { id: 'source1', name: 'SKILL.md', type: 'text/plain', storedInternal: true, properties: { communitySkillPrivate: marker } }];
+    const ctx = context({ path: '/api/works/work1', user: actor, query: async sql => ({ rows: sql.includes('FROM community_submission s') ? [row] : sql.includes('FROM drive_file') ? files : [] }) });
+    await handleContent(ctx);
+    const work = ctx.result.payload.work, permitted = actor?.id === 'owner1' || actor?.isAdmin;
+    assert.deepEqual(work.fileIds, permitted ? ['cover1', 'source1'] : ['cover1']);
+    assert.equal(work.sourceUrl, permitted ? row.sourceUrl : '');
+    assert.equal(work.generation.skill.sourceFileId, permitted ? 'source1' : undefined);
+    assert.deepEqual(work.skillReference, { id: 'work-work1', sha256: skill.sourceSha256 });
+    if (!permitted) assert.equal(work.generation.skill.sourcePublic, false);
+  }
+});
+
+test('a private skill in a batched feed does not hide another public skill by the same author', async () => {
+  const rows = ['private', 'public'].map(id => ({ ...workRow, id, fileIds: [id + 'source'], generation: { prompt: '', model: 'chat-test', referenceFileIds: [],
+    skill: { platform: 'chat-test', sourcePublic: true, sourceFileId: id + 'source' } } }));
+  const files = rows.map(row => ({ id: row.fileIds[0], userId: 'owner1', name: 'SKILL.md', type: 'text/plain', storedInternal: true, properties: { communitySkillPrivate: row.id === 'private' } }));
+  const ctx = context({ query: async sql => ({ rows: sql.includes('FROM community_submission s') ? rows : sql.includes('FROM drive_file') ? files : [] }) });
+  await handleContent(ctx);
+  assert.deepEqual(ctx.result.payload.items.find(work => work.id === 'private').fileIds, []);
+  assert.deepEqual(ctx.result.payload.items.find(work => work.id === 'public').fileIds, ['publicsource']);
 });
 
 test('skill metadata round-trips through detail, pending review and compact card DTOs without exposing arbitrary fields', async () => {

@@ -102,7 +102,7 @@ export function newApiReturnPath(value: unknown): string {
       Object.assign(allowed, { kind: /^(all|image|video|resource)$/, q: /^[^\u0000-\u001f\u007f\\]{0,500}$/,
         tag: /^[^\u0000-\u001f\u007f\\]{1,100}$/, sort: /^(featured|latest|following)$/ })
       break
-    case 'create': Object.assign(allowed, { from: id, remix: id, prepare: /^1$/, entry: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i }); break
+    case 'create': Object.assign(allowed, { from: id, remix: id, skill: id, prepare: /^1$/, entry: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i }); break
     case 'library': allowed.tab = /^(all|draft|pending|published|rejected|saved)$/; break
     case 'activities': Object.assign(allowed, { tab: /^tasks$/, aff: id }); break
     case 'community': Object.assign(allowed, { creator: id, tab: /^(creators|announcements)$/, edit: /^profile$/ }); break

@@ -2,6 +2,11 @@ import { z } from 'zod'
 
 export const skillDetailsSchema = z.object({
   platform: z.string().trim().max(100).default(''),
+  group: z.string().trim().max(128).optional(),
+  coverFileId: z.string().regex(/^[a-zA-Z0-9]{1,32}$/).optional(),
+  sourcePublic: z.boolean().optional(),
+  sourceFileId: z.string().regex(/^[a-zA-Z0-9]{1,32}$/).optional(),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   version: z.string().trim().max(80).default(''),
   installation: z.string().trim().max(10000).default(''),
 })

@@ -22,6 +22,8 @@ import { accountCenter } from './account-session.ts';
 import { readPublicIdentities } from './public-identity.ts';
 import { readRemixParameters, type RemixParameters } from '../shared/studio/remix-parameters.ts';
 import { skillDetailsSchema, skillFileType, skillFileName, type SkillDetails } from '../shared/publication.ts';
+import { readWorkSkillPackage, validateWorkSkillModel, type SkillModelCatalogue } from './skill-publication.ts';
+import { skillInstructions, type SkillReference } from '../shared/community-skills.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
@@ -569,7 +571,12 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
   const files = assets ? assets.files : ids.length ? (await ctx.db.query<DriveFileRow>('SELECT id, name, type, size, "thumbnailAccessKey", "storedInternal",properties FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2', [ids, row.authorId])).rows : [];
   const referenceIds = content.generation?.referenceFileIds ?? [];
   const references = assets ? assets.files : referenceIds.length ? (await ctx.db.query<Pick<DriveFileRow, 'id' | 'name' | 'type' | 'storedInternal'>>('SELECT id,name,type,"storedInternal" FROM drive_file WHERE id=ANY($1::varchar[]) AND "userId"=$2', [referenceIds, row.authorId])).rows : [];
-  const ordered = ids.flatMap(id => files.filter(file => file.id === id));
+  const skillSource = content.generation?.skill;
+  const canReadSource = viewer(ctx) === row.authorId || Boolean(ctx.user?.isAdmin);
+  const privateSource = skillSource?.sourcePublic === false || row.pendingRevision?.generation?.skill?.sourcePublic === false
+    || Boolean(skillSource && files.some(file => ids.includes(file.id) && !file.type.startsWith('image/') && file.properties?.communitySkillPrivate === true));
+  const visibleIds = skillSource && privateSource && !canReadSource ? ids.filter(id => files.some(file => file.id === id && file.type.startsWith('image/'))) : ids;
+  const ordered = visibleIds.flatMap(id => files.filter(file => file.id === id));
   const mediaUrl = (file: DriveFileRow | undefined) => file?.storedInternal ? `/legacy-files/${file.id}` : '';
   const image = ordered.find(file => file.type.startsWith('image/'));
   const video = ordered.find(file => file.type.startsWith('video/'));
@@ -589,14 +596,15 @@ async function packWork(ctx: RequestContext, row: CommunityRow, includeRevision 
     ...(typeof coverAspectRatio === 'number' && Number.isFinite(coverAspectRatio) && coverAspectRatio > 0 ? { coverAspectRatio } : {}),
     tags: tags.map(tag => tag.name), tagIds: tags.map(tag => tag.id),
     prompt: content.generation?.prompt ?? '', model: content.model, body: content.text,
-    sourceUrl: content.sourceUrl, license: content.license, generation: content.generation ? {
+    sourceUrl: privateSource && !canReadSource ? '' : content.sourceUrl, license: content.license, generation: content.generation ? {
       prompt: content.generation.prompt, model: content.generation.model, referenceFileIds: referenceIds,
       ...(content.generation.sourceWorkId ? { sourceWorkId: content.generation.sourceWorkId } : {}),
       ...(publicParameters ? { parameters: publicParameters } : {}),
-      ...(skill?.success ? { skill: skill.data } : {}),
+      ...(skill?.success ? { skill: privateSource && !canReadSource ? { ...skill.data, sourcePublic: false, sourceFileId: undefined } : skill.data } : {}),
     } : null,
     referenceFiles: referenceIds.flatMap(id => references.filter(file => file.id === id && file.storedInternal && file.type.startsWith('image/')).map(file => ({ id: file.id, name: publicImageName(file), type: file.type, url: new URL(`/legacy-files/${file.id}`, ctx.config.url).href }))),
-    fileIds: ids, files: ordered.map(file => ({ id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
+    ...(row.status === 'approved' && content === row && skillSource?.sourceSha256 && skillSource.sourceFileId ? { skillReference: { id: 'work-' + row.id, sha256: skillSource.sourceSha256 } } : {}),
+    fileIds: visibleIds, files: ordered.map(file => ({ id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: mediaUrl(file), thumbnailUrl: file.thumbnailAccessKey ? `${mediaUrl(file)}?variant=thumbnail` : '', processing: mediaState(file.properties) })),
     likes: Number(row.likes ?? 0), liked: Boolean(row.liked), saved: Boolean(row.saved),
     renoted: Boolean(row.renoted), renotes: Number(row.renoteCount ?? 0), views: Number(row.viewsCount ?? 0),
     viewsCount: Number(row.viewsCount ?? 0), repliesCount: Number(row.repliesCount ?? 0), renotesCount: Number(row.renotesCount ?? row.renoteCount ?? 0),
@@ -621,6 +629,29 @@ export async function accessibleWork(ctx: RequestContext, workId: unknown, { loc
     ${lock ? 'FOR UPDATE OF s' : ''}`, publicOnly ? [viewer(ctx), identifier(workId)] : [viewer(ctx), identifier(workId), Boolean(ctx.user?.isAdmin || ctx.user?.isModerator)]);
   if (!result.rows[0]) fail(404, 'Work not found');
   return result.rows[0];
+}
+
+export async function approvedWorkSkills(ctx: RequestContext) {
+  const { rows } = await ctx.db.query<{ id: string; title: string; text: string; model: string; generation: Generation }>(
+    `SELECT s.id,s.title,s.text,s.model,s.generation FROM community_submission s JOIN "user" u ON u.id=s."authorId"
+     JOIN note n ON n.id=s."approvedNoteId" WHERE (${visibilitySql(ctx)}) AND s.status='approved'
+     AND s.generation->'skill'->>'sourceSha256' ~ '^[a-f0-9]{64}$' AND s.generation->'skill'->>'sourceFileId' IS NOT NULL ORDER BY s.id DESC`, [viewer(ctx)]);
+  return rows.map(row => ({ id: 'work-' + row.id, name: row.title, kind: 'text' as const, description: row.text.slice(0, 1000), body: '',
+    sha256: row.generation.skill!.sourceSha256!, group: row.generation.skill!.group, model: row.model }));
+}
+
+export async function workSkillInstructions(ctx: RequestContext, skills: SkillReference[] = []) {
+  const instructions: string[] = [];
+  for (const reference of skills) {
+    const row = await accessibleWork(ctx, reference.id.slice('work-'.length), { publicOnly: true });
+    const skill = row.generation?.skill;
+    if (row.status !== 'approved' || !skill?.sourceFileId || !row.fileIds.includes(skill.sourceFileId) || skill.sourceSha256 !== reference.sha256) fail(409, '技能已更新、下架或尚未通过审核，请重新选择。');
+    const pack = await readWorkSkillPackage(ctx, ctx.db, row.authorId, skill.sourceFileId);
+    if (pack.sha256 !== reference.sha256) fail(409, '技能源文件已变化，请等待重新审核。');
+    instructions.push(skillInstructions(pack.body));
+  }
+  if (instructions.join('').length > 100000) fail(400, '所选技能合计过长，请减少技能数量。');
+  return instructions;
 }
 
 async function workResponse(ctx: RequestContext, id: string, includeRevision = true): Promise<{ work: PackedWork }> {
@@ -668,16 +699,29 @@ export function normalizeRevision(body: Body, previous: Partial<CommunityRevisio
   };
 }
 
-async function validateRevision(db: Queryable, actorId: string, revision: CommunityRevision, body: Body, draft = false, noteId?: string | null): Promise<AttachmentRow[]> {
+async function validateRevision(ctx: RequestContext, db: Queryable, actorId: string, revision: CommunityRevision, body: Body, draft = false, noteId?: string | null, reviewing = false): Promise<AttachmentRow[]> {
   const fileIds = [...new Set([...revision.fileIds, ...(revision.generation?.referenceFileIds ?? [])])];
   const files = fileIds.length ? (await db.query<AttachmentRow>('SELECT id, type, name FROM drive_file WHERE id = ANY($1::varchar[]) AND "userId" = $2 ORDER BY id FOR KEY SHARE', [fileIds, actorId])).rows : [];
   if (files.length !== fileIds.length) fail(400, 'An attachment is missing or belongs to another account');
   if (revision.generation?.referenceFileIds.some(id => !files.find(file => file.id === id)?.type.startsWith('image/'))) fail(400, 'References must be images');
   const attachments = files.filter(file => revision.fileIds.includes(file.id));
   if (revision.generation?.skill) {
-    if (attachments.some(file => !skillFileType(file.type) || !skillFileName(file.name))) fail(400, '技能文件请选择 ZIP、JSON、Markdown、TXT 或 YAML；示例图片请放入参考图。');
-    if (!draft && (!revision.text.trim() || !revision.generation.skill.platform || !attachments.length && !revision.sourceUrl))
-      fail(400, '请填写适用工具和使用说明，并上传技能文件或提供仓库链接。');
+    const skill = revision.generation.skill;
+    const sources = attachments.filter(file => !file.type.startsWith('image/'));
+    if (attachments.some(file => !file.type.startsWith('image/') && (!skillFileType(file.type) || !/\.(?:md|zip)$/i.test(file.name)))) fail(400, '请上传 SKILL.md 或包含 SKILL.md 的 ZIP 技能包。');
+    if (!draft && (!revision.text.trim() || !skill.group || !revision.model || !skill.coverFileId || !attachments.some(file => file.id === skill.coverFileId && file.type.startsWith('image/')) || sources.length !== 1))
+      fail(400, '请选择分组和文本模型、上传一张封面及一个 SKILL.md / ZIP 技能包，并填写使用说明。');
+    if (sources.length > 1) fail(400, '每件技能作品只能关联一个技能包。');
+    if (skill.coverFileId && !attachments.some(file => file.id === skill.coverFileId && file.type.startsWith('image/'))) fail(400, '请上传当前作品的有效封面图片。');
+    if (sources.length) {
+      // Serialize privacy changes for a source reused by several works.
+      await db.query('SELECT id FROM drive_file WHERE id=$1 FOR NO KEY UPDATE', [sources[0]!.id]);
+      const pack = await readWorkSkillPackage(ctx, db, actorId, sources[0]!.id);
+      if (reviewing && skill.sourceSha256 && pack.sha256 !== skill.sourceSha256) fail(409, '技能源文件已变化，请作者重新提交审核。');
+      skill.sourceFileId = sources[0]!.id; skill.sourceSha256 = pack.sha256;
+      if (skill.sourcePublic === false) await db.query(`UPDATE drive_file SET properties=COALESCE(properties,'{}'::jsonb) || '{"communitySkillPrivate":true}'::jsonb WHERE id=$1`, [skill.sourceFileId]);
+    } else { delete skill.sourceFileId; delete skill.sourceSha256; }
+    if (skill.coverFileId) revision.fileIds = [skill.coverFileId, ...revision.fileIds.filter(id => id !== skill.coverFileId)];
   }
   if (!draft && (!revision.text && !revision.fileIds.length ||
     revision.category === 'image' && !attachments.some(file => file.type.startsWith('image/')) ||
@@ -713,7 +757,7 @@ async function validateRevision(db: Queryable, actorId: string, revision: Commun
 }
 
 function noteText(revision: CommunityRevision): string {
-  return [revision.title, revision.text, revision.model && `Model: ${revision.model}`, revision.sourceUrl && `Source: ${revision.sourceUrl}`, revision.license && `License: ${revision.license}`].filter(Boolean).join('\n\n');
+  return [revision.title, revision.text, revision.model && `Model: ${revision.model}`, revision.generation?.skill?.sourcePublic !== false && revision.sourceUrl && `Source: ${revision.sourceUrl}`, revision.license && `License: ${revision.license}`].filter(Boolean).join('\n\n');
 }
 
 function samePayload(row: CommunityRow, revision: CommunityRevision): boolean {
@@ -725,15 +769,17 @@ function samePayload(row: CommunityRow, revision: CommunityRevision): boolean {
 async function publish(ctx: RequestContext, db: Queryable, row: PublicationRow, revision: CommunityRevision, attachments: AttachmentRow[], notifications: Parameters<typeof notifyUser>[1][] = []): Promise<string> {
   const author = (await db.query<IdRow>('SELECT id FROM "user" WHERE id=$1 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL', [row.authorId])).rows[0];
   if (!author) fail(409, 'The author is unavailable');
+  const publicAttachments = revision.generation?.skill ? attachments.filter(file => file.type.startsWith('image/')) : attachments;
+  const publicFileIds = revision.fileIds.filter(id => publicAttachments.some(file => file.id === id));
   if (row.approvedNoteId) {
     await db.query('SELECT id FROM note WHERE id = $1 FOR UPDATE', [row.approvedNoteId]);
-    await db.query('UPDATE note SET text = $2, "fileIds" = $3, "attachedFileTypes" = $4 WHERE id = $1', [row.approvedNoteId, noteText(revision), revision.fileIds, attachments.map(file => file.type)]);
+    await db.query('UPDATE note SET text = $2, "fileIds" = $3, "attachedFileTypes" = $4 WHERE id = $1', [row.approvedNoteId, noteText(revision), publicFileIds, publicAttachments.map(file => file.type)]);
     return row.approvedNoteId;
   }
   const id = newId(ctx);
   const authorContext: RequestContext = { ...ctx, user: { ...user(ctx), id: row.authorId } };
   const source = row.destination === 'source-comment' ? await sourceWork(authorContext, db, revision.generation?.sourceWorkId) : null;
-  await db.query('INSERT INTO note (id, "userId", text, visibility, "localOnly", "fileIds", "attachedFileTypes","replyId","threadId","replyUserId") VALUES ($1,$2,$3,\'public\',true,$4,$5,$6,$6,$7)', [id, row.authorId, noteText(revision), revision.fileIds, attachments.map(file => file.type), source?.approvedNoteId ?? null, source?.authorId ?? null]);
+  await db.query('INSERT INTO note (id, "userId", text, visibility, "localOnly", "fileIds", "attachedFileTypes","replyId","threadId","replyUserId") VALUES ($1,$2,$3,\'public\',true,$4,$5,$6,$6,$7)', [id, row.authorId, noteText(revision), publicFileIds, publicAttachments.map(file => file.type), source?.approvedNoteId ?? null, source?.authorId ?? null]);
   const activeAuthor = await db.query('UPDATE "user" SET "notesCount" = "notesCount" + 1 WHERE id = $1 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL RETURNING id', [row.authorId]);
   if (!activeAuthor.rows.length) fail(409, 'The author is unavailable');
   if (source) {
@@ -781,7 +827,7 @@ export async function removeNote(db: Queryable, noteId: string | null | undefine
   if (removed.rows[0]?.renoteId) await db.query('UPDATE note SET "renoteCount"=GREATEST(0,"renoteCount"-1) WHERE id=$1', [removed.rows[0].renoteId]);
 }
 
-async function createWork(ctx: RequestContext): Promise<true> {
+async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalogue): Promise<true> {
   const actor = user(ctx);
   const body = ctx.body ?? {};
   const destination = body.destination ?? 'community';
@@ -791,6 +837,7 @@ async function createWork(ctx: RequestContext): Promise<true> {
   if (body.status !== undefined && (typeof body.status !== 'string' || !['draft', 'pending', 'published'].includes(body.status))) fail(400, 'Invalid publication state');
   const draft = body.status === 'draft';
   const revision = normalizeRevision(body);
+  if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue);
   const notifications: Parameters<typeof notifyUser>[1][] = [];
   if (destination === 'source-comment') {
     if (draft || revision.category === 'video' || !revision.generation?.sourceWorkId || !revision.generation.model || typeof body.resultId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.resultId)) fail(400, 'Invalid source comment');
@@ -799,7 +846,7 @@ async function createWork(ctx: RequestContext): Promise<true> {
     requestId = `source-comment-${createHash('sha256').update(`${revision.generation.sourceWorkId}:${body.resultId}`).digest('hex').slice(0, 48)}`;
   }
   const id = await transaction(ctx.db, async db => {
-    const attachments = await validateRevision(db, actor.id, revision, body, draft);
+    const attachments = await validateRevision(ctx, db, actor.id, revision, body, draft);
     if (destination === 'source-comment') {
       if (attachments.some(file => file.type.startsWith('video/'))) fail(400, 'Video comments are unavailable');
       await sourceWork(ctx, db, revision.generation?.sourceWorkId);
@@ -811,7 +858,7 @@ async function createWork(ctx: RequestContext): Promise<true> {
       return existing.id;
     }
     if (!draft && destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
-    const mode = (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
+    const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     const workId = newId(ctx);
     const inserted = await db.query<IdRow>(`INSERT INTO community_submission
       (id,"authorId","idempotencyKey","payloadHash",destination,category,title,text,model,"sourceUrl",license,"fileIds","tagIds",generation,status,"publicationMode","submittedAt",version)
@@ -840,7 +887,7 @@ function workActor(ctx: RequestContext): SessionUser {
   return actor;
 }
 
-async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
+async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: SkillModelCatalogue): Promise<true> {
   const actor = workActor(ctx);
   const body = ctx.body ?? {};
   const version = integer(body.version, 0, 2147483647);
@@ -851,13 +898,15 @@ async function updateWork(ctx: RequestContext, workId: string): Promise<true> {
     if (row.destination === 'source-comment' && (row.sourceCommentId || row.status !== 'pending')) fail(409, 'A completed source comment cannot be reposted');
     const previous = row.pendingRevision ?? row;
     const revision = normalizeRevision(body, previous);
+    if ((row.generation?.skill || row.pendingRevision?.generation?.skill) && !revision.generation?.skill) fail(400, '已保存的技能作品不能移除技能信息或改为其他类型。');
     if (row.destination === 'source-comment' && (!revision.generation || revision.generation.sourceWorkId !== row.generation?.sourceWorkId || revision.generation.referenceFileIds.length || !revision.generation.model)) fail(400, 'Invalid source comment revision');
     revision.tagIds = previous.tagIds ?? row.tagIds;
     const isPublished = ['approved', 'published'].includes(row.status) && row.approvedNoteId;
     const draft = !isPublished && body.status === 'draft';
-    const attachments = await validateRevision(db, row.authorId, revision, body, draft, row.approvedNoteId);
+    if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue);
+    const attachments = await validateRevision(ctx, db, row.authorId, revision, body, draft, row.approvedNoteId);
     if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
-    const mode = (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
+    const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     if (isPublished && (row.pendingRevision || mode !== 'after')) {
       await db.query('UPDATE community_submission SET "pendingRevision"=$2,version=version+1,"rejectionReason"=NULL WHERE id=$1', [row.id, revision]);
     } else {
@@ -883,6 +932,7 @@ async function reviewWork(ctx: RequestContext, workId: string): Promise<true> {
   await transaction(ctx.db, async db => {
     const row = await accessibleWork(ctx, workId, { lock: true, db });
     if (row.version !== version || row.status === 'draft') fail(409, 'Work changed or is still a private draft');
+    if ((row.generation?.skill || row.pendingRevision?.generation?.skill) && !actor.isAdmin) fail(403, '技能作品必须由管理员审核。');
     const editing = Boolean(row.pendingRevision);
     const allowed = action === 'approve' ? ['pending', 'published'] : action === 'reject' ? ['pending'] : ['published', 'approved'];
     if (!allowed.includes(row.status) && !(editing && action !== 'remove')) fail(409, 'This work cannot receive that decision');
@@ -890,7 +940,7 @@ async function reviewWork(ctx: RequestContext, workId: string): Promise<true> {
     let noteId = row.approvedNoteId;
     if (action === 'approve') {
       revision = editing ? { ...row, ...row.pendingRevision } : row;
-      const attachments = await validateRevision(db, row.authorId, revision, { tagIds: revision.tagIds }, false, noteId);
+      const attachments = await validateRevision(ctx, db, row.authorId, revision, { tagIds: revision.tagIds }, false, noteId, true);
       noteId = await publish(ctx, db, row, revision, attachments, notifications);
     } else if (action === 'remove') {
       await removeNote(db, noteId);
@@ -898,6 +948,12 @@ async function reviewWork(ctx: RequestContext, workId: string): Promise<true> {
     }
     const status = action === 'approve' ? 'approved' : action === 'remove' ? 'removed' : editing ? row.status : 'rejected';
     await writeRevision(db, row.id, revision, { status, noteId, rejectionReason: reason || null });
+    if (action === 'approve' && revision.generation?.skill?.sourcePublic !== false && revision.generation?.skill?.sourceFileId) {
+      await db.query(`UPDATE drive_file f SET properties=COALESCE(f.properties,'{}'::jsonb)-'communitySkillPrivate'
+        WHERE f.id=$1 AND NOT EXISTS (SELECT 1 FROM community_submission s WHERE s."authorId"=f."userId" AND (
+          (s.generation->'skill'->>'sourcePublic'='false' AND f.id=ANY(s."fileIds"))
+          OR (s."pendingRevision"->'generation'->'skill'->>'sourcePublic'='false' AND (s."pendingRevision"->'fileIds') ? f.id)))`, [revision.generation.skill.sourceFileId]);
+    }
     await db.query('UPDATE community_submission SET "reviewedAt"=NOW(),"reviewedById"=$2 WHERE id=$1', [row.id, actor.id]);
     await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4)', [newId(ctx), actor.id, 'communityReview', { submissionId: row.id, action, reason, version }]);
     if (action === 'remove' || action === 'reject' && body.recordViolation === true) await recordViolation(ctx, db, row.authorId, `work:${row.id}`, reason);
@@ -1030,7 +1086,11 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
       OR EXISTS (SELECT 1 FROM "user" profile WHERE f."userId"=profile.id
         AND (profile."avatarId"=f.id OR profile."bannerId"=f.id) AND ${visibleAccountSql('profile')})) AS "publiclyVisible"
     FROM drive_file f WHERE ${keyWhere} AND f."storedInternal" AND NOT f."isLink")
-    SELECT f.* FROM visible_file f WHERE (f."userId"=$1 OR $3::boolean OR f."publiclyVisible"
+    SELECT f.* FROM visible_file f WHERE (f."userId"=$1 OR $5::boolean OR (COALESCE(f.properties->>'communitySkillPrivate','false') <> 'true' AND NOT EXISTS (
+      SELECT 1 FROM community_submission private_skill WHERE private_skill."authorId"=f."userId" AND (
+        (private_skill.generation->'skill'->>'sourcePublic'='false' AND f.id=ANY(private_skill."fileIds") AND f.type NOT LIKE 'image/%')
+        OR (private_skill."pendingRevision"->'generation'->'skill'->>'sourcePublic'='false' AND (private_skill."pendingRevision"->'fileIds') ? f.id AND f.type NOT LIKE 'image/%')))))
+      AND (f."userId"=$1 OR $3::boolean OR f."publiclyVisible"
       OR EXISTS (SELECT 1 FROM chat_message dm JOIN "user" sender ON sender.id=dm."fromUserId"
         JOIN "user" recipient ON recipient.id=dm."toUserId"
         WHERE dm."fileId"=f.id AND dm."toRoomId" IS NULL AND f."userId"=dm."fromUserId"
@@ -1038,7 +1098,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
         AND NOT sender."isDeleted" AND NOT sender."isSuspended" AND NOT recipient."isDeleted" AND NOT recipient."isSuspended"
         AND NOT EXISTS (SELECT 1 FROM blocking blocked WHERE
           (blocked."blockerId"=sender.id AND blocked."blockeeId"=recipient.id) OR (blocked."blockeeId"=sender.id AND blocked."blockerId"=recipient.id))))`,
-  [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin]);
+  [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin, Boolean(ctx.user?.isAdmin)]);
   const file = result.rows[0];
   if (!file) fail(404, 'File not found');
   const preferred = variant === 'cover' ? 'original' : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
@@ -1429,9 +1489,9 @@ function legacyAlias(ctx: RequestContext): RequestContext | null {
   };
 }
 
-export async function handleContent(ctx: RequestContext): Promise<boolean> {
+export async function handleContent(ctx: RequestContext, options: { modelCatalogue?: SkillModelCatalogue } = {}): Promise<boolean> {
   const alias = legacyAlias(ctx);
-  if (alias) return handleContent(alias);
+  if (alias) return handleContent(alias, options);
   const path = ctx.url.pathname, method = ctx.req.method;
   let match: RegExpExecArray | null;
   if ((match = /^\/(?:legacy-files|files)\/([^/]+)$/.exec(path)) && (method === 'GET' || method === 'HEAD')) return media(ctx, decodeURIComponent(match[1]), path.startsWith('/files/'));
@@ -1456,7 +1516,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
     return send(ctx, 200, { items: await packWorks(ctx, rows, undefined, true), nextCursor,
       replaced: !feed.cursor && feed.previous.length > 0 ? rows.some(row => !feed.previous.includes(row.id)) : null });
   }
-  if (path === '/api/works' && method === 'POST') return createWork(ctx);
+  if (path === '/api/works' && method === 'POST') return createWork(ctx, options.modelCatalogue);
   if (path === '/api/library' && method === 'GET') {
     user(ctx);
     const tab = ctx.url.searchParams.get('tab') ?? ctx.url.searchParams.get('status');
@@ -1508,7 +1568,7 @@ export async function handleContent(ctx: RequestContext): Promise<boolean> {
       const rows = await contentRows(ctx, { workId: id });
       return send(ctx, 200, { work: await packWork(ctx, rows[0]) });
     }
-    if (method === 'PATCH') return updateWork(ctx, id);
+    if (method === 'PATCH') return updateWork(ctx, id, options.modelCatalogue);
     if (method === 'DELETE') {
       const actor = workActor(ctx);
       const version = integer(ctx.body?.version, 0, 2147483647);

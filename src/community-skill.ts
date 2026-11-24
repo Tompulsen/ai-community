@@ -5,6 +5,12 @@ import type { NativeChat, Skill } from './native-chat'
 import type { CommunitySkill } from '../shared/community-skills'
 export async function resolveCommunitySkill(skill: Skill, expectedAccount?: string, kind: SkillKind = 'text'): Promise<Skill> {
   if ((skill.kind || 'text') !== kind) throw new Error('技能类型已变化，请重新选择适合当前创作类型的技能。')
+  if (skill.id.startsWith('work-')) {
+    if (kind !== 'text' || !/^work-[a-zA-Z0-9]{1,32}$/.test(skill.id)) throw new Error('技能作品编号或创作类型无效。')
+    const { work } = await api<{ work: import('./data').Work }>(`/api/works/${skill.id.slice(5)}`, { expectedAccount })
+    if (work.skillReference?.sha256 !== skill.sha256) throw new Error('技能已更新、下架或尚未通过审核，请重新选择。')
+    return { ...skill, body: '' }
+  }
   if (!skill.id.startsWith('community-')) return skill
   const id = skill.id.slice('community-'.length)
   if (!/^[a-zA-Z0-9]{1,32}$/.test(id)) throw new Error('技能编号无效。')

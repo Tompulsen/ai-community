@@ -26,3 +26,11 @@ export async function readAccountModelCatalogue(req: AccountRequest) {
   }
   return { groups, items: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)) };
 }
+
+export function classifyModel(id: string): 'text' | 'image' | 'video' | null {
+  const name = id.toLowerCase().split('/').pop()!
+  if (/seedance|^veo(?:[-_.]?\d|$)|t2v|i2v|s2v|video|sora|runway|pika|gen-[23]|luma|kling|hailuo/.test(name)) return 'video'
+  if (/gemini-(?:.*-)?(?:image|nano-banana)|grok-imagine-image|dall-?e|gpt-image|stable-diffusion|(?:^|-)sd-|sdxl|midjourney|flux|imagen|kandinsky|cogview|^agnes-image-|paint|draw|wanx/.test(name)) return 'image'
+  if (/embed|whisper|(?:^|-)asr|tts|voice|speech|rerank|^bge|^e[56]-|^gte|music/.test(name)) return null
+  return 'text'
+}

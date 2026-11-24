@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
-import { ArrowLeft, ChevronRight, Bookmark, Copy, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, RotateCw, Send, Trash2, WandSparkles, X } from '@lucide/vue'
+import { ArrowLeft, ChevronRight, Bookmark, Copy, Download, Eye, Flag, Heart, ImagePlus, MessageSquare, Repeat2, RotateCw, Send, Trash2, WandSparkles, X } from '@lucide/vue'
 import { api, errorMessage, notify, pendingActions, queryString, safeExternalUrl, session, toggleWork } from '../state'
 import { kindLabels, type Creator, type Work, type WorkComment, type WorkFile } from '../data'
 import RelatedWorks from '../components/RelatedWorks.vue'
@@ -25,6 +25,8 @@ watch(mobile, () => { commentsDialog.value?.close(); relatedDialog.value?.close(
 const route = useRoute()
 const work = ref<Work | null>(null)
 const skill = computed(() => work.value?.generation?.skill)
+const skillDownload = computed(() => skill.value && work.value?.files?.find(file => !file.type.startsWith('image/') && (!skill.value?.sourceFileId || skill.value.sourceFileId === file.id)))
+const skillTarget = computed(() => '/create/text?skill=' + encodeURIComponent(work.value?.id || ''))
 const parameterRows = computed(() => {
   if (!work.value?.generation?.parameters || work.value.kind === 'resource') return []
   const fields = publicationFields(work.value.generation.parameters)
@@ -34,6 +36,7 @@ const parameterRows = computed(() => {
 const promptExpanded = ref(false)
 const longPrompt = computed(() => (work.value?.prompt?.length || 0) > 180 || (work.value?.prompt?.split('\n').length || 0) > 4)
 const files = computed<WorkFile[]>(() => work.value?.files?.length ? work.value.files : work.value?.video ? [{ id: 'video', name: work.value.title, type: 'video/mp4', url: work.value.video }] : work.value?.cover ? [{ id: 'cover', name: work.value.title, type: 'image/jpeg', url: work.value.cover }] : [])
+const displayFiles = computed(() => skill.value ? files.value.filter(file => file.type.startsWith('image/')) : files.value)
 const loading = ref(true), error = ref('')
 const comments = ref<WorkComment[]>([]), commentsCursor = ref<string | null>(null)
 const commentsLoading = ref(false), commentError = ref('')
@@ -167,7 +170,7 @@ async function share() {
       <Teleport to="#mobile-related-content" :disabled="!mobile" defer><RelatedWorks :key="work.id" :work="work" /></Teleport>
       <article class="detail-focus" :key="work.id" aria-label="作品详情">
         <div class="detail-visual-column">
-          <WorkMedia ref="mediaBrowser" :mobile="mobile" class="detail-visual" :files="files" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource'">
+          <WorkMedia ref="mediaBrowser" :mobile="mobile" class="detail-visual" :files="displayFiles" :references="work.referenceFiles" :title="work.title" :body="work.body" :resource="work.kind === 'resource' && !skill">
             <template #overlay><button v-if="mobile" type="button" class="mobile-related-toggle icon-button" aria-label="更多作品" aria-haspopup="dialog" @click="openRelated"><ChevronRight :size="22" /></button></template>
           </WorkMedia>
         </div>
@@ -178,7 +181,7 @@ async function share() {
               <FollowButton v-if="!mobile" :user-id="work.authorId" author />
             </div>
             <h1>{{ work.title }}</h1>
-            <section v-if="work.body && work.kind !== 'resource' && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
+            <section v-if="work.body && (work.kind !== 'resource' || skill) && work.body.trim() !== (work.prompt || '').trim()" class="detail-description"><h2 class="sr-only">创作说明</h2><p class="work-body">{{ work.body }}</p></section>
             <div v-if="!skill" class="detail-create">
               <button ref="remixButton" type="button" class="button btn primary remix-button" aria-haspopup="dialog" @click="openRemix"><WandSparkles :size="20" aria-hidden="true" /><span>制作同款</span><ChevronRight :size="18" aria-hidden="true" /></button>
               <span v-if="!mobile && work.viewsCount !== undefined" class="muted view-count"><Eye :size="14" />{{ work.viewsCount }} 次浏览</span>
@@ -186,10 +189,16 @@ async function share() {
             <details class="detail-metadata" :open="!mobile">
               <summary>{{ skill ? '技能与安装信息' : '提示词与作品信息' }}</summary>
               <section v-if="!skill" class="prompt-section"><div class="section-heading"><h2>提示词</h2><button class="icon-button" aria-label="复制提示词" title="复制提示词" @click="copyPrompt"><Copy :size="16" /></button></div><p id="work-prompt" :class="{ 'prompt-collapsed': longPrompt && !promptExpanded }">{{ work.prompt || '作者未公开提示词。' }}</p><button v-if="longPrompt" class="text-link prompt-expand" :aria-expanded="promptExpanded" aria-controls="work-prompt" @click="promptExpanded = !promptExpanded">{{ promptExpanded ? '收起提示词' : '展开全部提示词' }}</button></section>
-              <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ skill ? 'AI Skill / 工作流资源' : kindLabels[work.kind] }}</dd></div><div v-if="skill"><dt>适用工具</dt><dd>{{ skill.platform }}</dd></div><div v-if="skill?.version"><dt>适用版本</dt><dd>{{ skill.version }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-for="row in parameterRows" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>{{ skill ? '仓库 / 资源' : '来源' }}</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">{{ skill ? '打开资源链接' : '查看原始来源' }}</a></dd></div></dl>
+              <dl class="work-properties"><div><dt>作品类型</dt><dd>{{ skill ? 'AI Skill / 工作流资源' : kindLabels[work.kind] }}</dd></div><div v-if="skill?.group"><dt>模型分组</dt><dd>{{ skill.group }}</dd></div><div v-else-if="skill"><dt>适用工具</dt><dd>{{ skill.platform }}</dd></div><div v-if="skill?.version"><dt>适用版本</dt><dd>{{ skill.version }}</dd></div><div v-if="work.model"><dt>模型</dt><dd>{{ work.model }}</dd></div><div v-for="row in parameterRows" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div><div v-if="work.license"><dt>授权许可</dt><dd>{{ work.license }}</dd></div><div v-if="safeExternalUrl(work.sourceUrl)"><dt>{{ skill ? '仓库 / 资源' : '来源' }}</dt><dd><a :href="safeExternalUrl(work.sourceUrl)" target="_blank" rel="noopener noreferrer" class="text-link">{{ skill ? '打开资源链接' : '查看原始来源' }}</a></dd></div></dl>
               <section v-if="skill?.installation" class="prompt-section"><h2>安装方式</h2><p class="work-body">{{ skill.installation }}</p></section>
               <div v-if="work.tags.length" class="work-tags"><RouterLink v-for="tag in work.tags" :key="tag" :to="{ path: '/discover', query: { tag } }" class="tag-button">{{ tag }}</RouterLink></div>
             </details>
+            <section v-if="skill" class="detail-skill-actions" aria-label="使用技能">
+              <RouterLink v-if="work.skillReference" :to="session.user ? skillTarget : { path: '/account', query: { returnTo: skillTarget } }" class="button primary btn remix-button"><WandSparkles :size="20" aria-hidden="true" />调用技能<ChevronRight :size="18" aria-hidden="true" /></RouterLink>
+              <p v-else class="form-note">{{ work.status === 'pending' || work.revisionPending ? '技能正在等待管理员审核。' : '该技能尚未配置在线调用，请作者补充封面、模型和技能包后提交审核。' }}</p>
+              <a v-if="skillDownload" :href="skillDownload.url" download class="button subtle btn"><Download :size="17" aria-hidden="true" />下载技能</a>
+              <p class="form-note">{{ skill.sourcePublic === false ? '作者未公开技能源文件，仅支持在线调用。' : '作者已公开技能源文件，可下载使用。' }}</p>
+            </section>
             <Teleport to="#mobile-work-comments" :disabled="!mobile" defer>
             <section v-if="['published', 'approved'].includes(work.status)" class="work-comments" aria-labelledby="comments-heading">
               <div class="section-heading"><h2 id="comments-heading">评论<span v-if="work.repliesCount"> · {{ work.repliesCount }}</span></h2></div>
@@ -309,6 +318,7 @@ async function share() {
 .work-comments :deep(.comment-text) { font-size: 14px; line-height: 22px; }
 .work-comments :deep(.comment-actions) { gap: 4px; margin-top: 4px; }
 .work-comments :deep(.comment-actions .button) { min-height: 32px; padding: 4px 8px; font-size: 12px; background: transparent; }
+.detail-skill-actions { display: grid; gap: 10px; padding-block: 16px; border-top: 1px solid var(--border); }.detail-skill-actions .btn { min-height: 44px; justify-content: center; }.detail-skill-actions p { margin: 0; }
 .detail-comment-entry { flex: none; padding-block: 12px; }
 .comment-composer { display: flex; flex-direction: column; gap: 8px; }
 .pending-comment { padding-block: 16px; min-width: 0; }.pending-comment-heading, .pending-comment-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.pending-comment-heading { justify-content: space-between; font-size: 13px; }.pending-comment-heading span, .pending-reply { font-size: 12px; color: var(--muted); }.pending-comment-text { margin-block: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }.pending-comment-actions { margin-top: 8px; }

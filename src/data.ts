@@ -34,6 +34,7 @@ export interface Work {
   avatarUrl?: string
   kind: WorkKind
   isSkill?: boolean
+  skillReference?: { id: string; sha256: string }
   cover: string
   coverAspectRatio?: number
   tags: string[]

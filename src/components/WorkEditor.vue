@@ -6,11 +6,12 @@ import WorkAttachments from './WorkAttachments.vue'
 import PublicationTagPicker from './PublicationTagPicker.vue'
 import PublicationParameters from './PublicationParameters.vue'
 import { publicationFields, publicationParameters } from '../publication-parameters'
-import { skillFileAccept, skillFileName, type SkillDetails } from '../../shared/publication'
+import { type SkillDetails } from '../../shared/publication'
 import type { RemixParameters } from '../../shared/studio/remix-parameters'
 import { kindLabels, type Work, type WorkKind, type WorkTag } from '../data'
 import { api, errorMessage, notify, safeExternalUrl, session } from '../state'
 import { useFileUploads, type UploadFile } from '../use-file-uploads'
+import type { CreationGroup, CreationModel } from '../native-studio'
 import { refreshLotteryBalance } from '../lottery-balance'
 import '../publication-controls.css'
 
@@ -24,18 +25,38 @@ const extra = ref<HTMLDetailsElement>(), fileInput = ref<HTMLInputElement>(), re
 const tagOptions = ref<WorkTag[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const legacyResource = ref(false)
 const isSkill = computed(() => draft.kind === 'resource' && !legacyResource.value)
-const kindLocked = computed(() => Boolean(props.work && (props.work.status !== 'draft' || props.work.generation?.sourceWorkId || legacyResource.value)))
+const kindLocked = computed(() => Boolean(props.work && (props.work.status !== 'draft' || props.work.generation?.skill || props.work.generation?.sourceWorkId || legacyResource.value)))
 const originalParameters = ref<RemixParameters>()
 const parameters = ref(publicationFields())
-const skill = ref<SkillDetails>({ platform: '', version: '', installation: '' })
+const skill = ref<SkillDetails>({ platform: '', version: '', installation: '', sourcePublic: true })
+const cover = ref<UploadFile>(), coverInput = ref<HTMLInputElement>()
+const skillCatalog = ref<{ groups: CreationGroup[]; items: CreationModel[] }>({ groups: [], items: [] })
+const skillModelsLoading = ref(false), skillModelsError = ref('')
+const textModels = computed(() => skillCatalog.value.items.filter(item => item.configuredKind ? item.configuredKind === 'text' : item.kinds?.includes('text')))
+const skillGroups = computed(() => skillCatalog.value.groups.filter(group => textModels.value.some(model => model.groups?.includes(group.id))))
+const skillModels = computed(() => textModels.value.filter(model => model.groups?.includes(skill.value.group || '')))
+let skillLoad = 0
+async function loadSkillModels() {
+  const current = ++skillLoad, owner = session.user?.id
+  skillModelsLoading.value = true; skillModelsError.value = ''
+  try {
+    const result = await api<typeof skillCatalog.value>('/api/creation/models?scope=all', { expectedAccount: session.user?.accountId || owner, signal: AbortSignal.timeout(20000) })
+    if (current === skillLoad && owner === session.user?.id && props.open) skillCatalog.value = result
+  } catch (cause) { if (current === skillLoad) skillModelsError.value = errorMessage(cause) }
+  finally { if (current === skillLoad) skillModelsLoading.value = false }
+}
+watch([() => props.open, isSkill], ([open, active]) => {
+  skillLoad++; skillCatalog.value = { groups: [], items: [] }; skillModelsError.value = ''; skillModelsLoading.value = false
+  if (open && active) void loadSkillModels()
+}, { immediate: true })
 const publicationTypes = [
   { kind: 'image' as const, label: '图片', icon: ImagePlus },
   { kind: 'video' as const, label: '视频', icon: Video },
   { kind: 'resource' as const, label: '技能', icon: FileCode },
 ]
-const fileAccept = computed(() => isSkill.value ? skillFileAccept : legacyResource.value || props.work ? undefined : `${draft.kind}/*`)
-const uploadLabel = computed(() => isSkill.value ? '上传技能 / 工作流' : legacyResource.value ? '添加资源文件' : `添加${kindLabels[draft.kind]}`)
-const uploadHint = computed(() => isSkill.value ? 'ZIP、JSON、MD、TXT、YAML' : legacyResource.value ? '支持资源附件' : draft.kind === 'video' ? '上传视频成品，示例图片放入参考图' : '上传图片成品，支持多图')
+const fileAccept = computed(() => isSkill.value ? '.md,.zip' : legacyResource.value || props.work ? undefined : `${draft.kind}/*`)
+const uploadLabel = computed(() => isSkill.value ? '上传技能文件' : legacyResource.value ? '添加资源文件' : `添加${kindLabels[draft.kind]}`)
+const uploadHint = computed(() => isSkill.value ? 'SKILL.md 或 ZIP 技能包 · 最多 5 MB' : legacyResource.value ? '支持资源附件' : draft.kind === 'video' ? '上传视频成品，示例图片放入参考图' : '上传图片成品，支持多图')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const sourceComment = ref(false)
 const selectedTagIds = computed({
@@ -62,11 +83,11 @@ const requestId = ref(crypto.randomUUID())
 let loadId = 0
 let resolveLeave: ((leave: boolean) => void) | undefined
 const baseline = ref('')
-function typeState() { return { body: draft.body, prompt: draft.prompt, model: draft.model, sourceUrl: draft.sourceUrl, license: draft.license, parameters: { ...parameters.value }, skill: { ...skill.value }, files: [...files.value], references: [...references.value] } }
+function typeState() { return { body: draft.body, prompt: draft.prompt, model: draft.model, sourceUrl: draft.sourceUrl, license: draft.license, parameters: { ...parameters.value }, skill: { ...skill.value }, cover: cover.value, files: [...files.value], references: [...references.value] } }
 const typeDrafts = reactive<Partial<Record<WorkKind, ReturnType<typeof typeState>>>>({})
 const snapshot = () => JSON.stringify({ ...draft, types: publicationTypes.map(({ kind }) => {
   const state = kind === draft.kind ? typeState() : typeDrafts[kind]
-  return state ? { ...state, files: state.files.map(file => file.id), references: state.references.map(file => file.id) } : null
+  return state ? { ...state, cover: state.cover?.id, files: state.files.map(file => file.id), references: state.references.map(file => file.id) } : null
 }) })
 const dirty = computed(() => props.open && snapshot() !== baseline.value)
 
@@ -77,11 +98,12 @@ function fill(work?: Work | null) {
   legacyResource.value = work?.kind === 'resource' && !work.generation?.skill
   originalParameters.value = work?.generation?.parameters
   parameters.value = publicationFields(work?.generation?.parameters)
-  skill.value = { platform: '', version: '', installation: '', ...work?.generation?.skill }
+  skill.value = { platform: '', version: '', installation: '', sourcePublic: true, ...work?.generation?.skill }
   for (const { kind } of publicationTypes) delete typeDrafts[kind]
   tagsError.value = ''; tagValidation.value = ''; tagOptions.value = []; tagsLoading.value = false; tagLoadId++
   if (extra.value) extra.value.open = false
-  files.value = [...(work?.files || [])]
+  cover.value = work?.files?.find(file => file.id === skill.value.coverFileId)
+  files.value = [...(work?.files || [])].filter(file => file.id !== cover.value?.id)
   references.value = [...(work?.referenceFiles || [])]
   version.value = work?.version || 0
   baseline.value = snapshot()
@@ -122,9 +144,10 @@ function selectKind(kind: WorkKind) {
   typeDrafts[draft.kind] = typeState()
   const saved = typeDrafts[kind]
   Object.assign(draft, { kind, body: saved?.body || '', prompt: saved?.prompt || '', model: saved?.model || '', sourceUrl: saved?.sourceUrl || '', license: saved?.license || '' })
+  cover.value = saved?.cover
   files.value = [...(saved?.files || [])]; references.value = [...(saved?.references || [])]
   parameters.value = saved ? { ...saved.parameters } : publicationFields()
-  skill.value = saved ? { ...saved.skill } : { platform: '', version: '', installation: '' }
+  skill.value = saved ? { ...saved.skill } : { platform: '', version: '', installation: '', sourcePublic: true }
   error.value = ''; tagValidation.value = ''
 }
 function showUpload() { fileInput.value?.click() }
@@ -165,10 +188,18 @@ function choose(event: Event, reference = false) {
   const target = reference ? references : files
   if (target.value.length + selected.length > 16) { error.value = '作品文件和参考图各最多 16 个。'; return }
   if (reference && selected.some(file => !file.type.startsWith('image/'))) { error.value = '参考素材请选择图片。'; return }
-  if (!reference && isSkill.value && selected.some(file => !skillFileName(file.name))) { error.value = '技能文件请选择 ZIP、JSON、Markdown、TXT 或 YAML。'; return }
+  if (!reference && isSkill.value && (selected.length + target.value.length > 1 || selected.some(file => !/\.(md|zip)$/i.test(file.name) || file.size > 5 * 1024 * 1024))) { error.value = '请上传一个不超过 5 MB 的 SKILL.md 或 ZIP 技能包。'; return }
   if (!reference && !props.work && draft.kind !== 'resource' && selected.some(file => !file.type.startsWith(`${draft.kind}/`))) { error.value = `请选择${kindLabels[draft.kind]}文件，其他类型请切换发布类型。`; return }
   error.value = ''; target.value.push(...uploads.add(selected))
 }
+function chooseCover(event: Event) {
+  const input = event.target as HTMLInputElement, selected = input.files?.[0]; input.value = ''
+  if (!selected || saving.value || loading.value) return
+  if (!selected.type.startsWith('image/')) { error.value = '技能封面请选择图片。'; return }
+  if (cover.value) uploads.remove(cover.value)
+  cover.value = uploads.add([selected])[0]; error.value = ''
+}
+function removeCover() { if (cover.value) uploads.remove(cover.value); cover.value = undefined }
 function move(index: number, reference: boolean, direction: number) {
   const target = reference ? references.value : files.value
   const next = index + direction
@@ -196,7 +227,12 @@ async function save(status: 'draft' | 'pending') {
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
   if (status !== 'draft' && legacyResource.value && !draft.body.trim() && !files.value.length) { error.value = '请填写资源内容或添加文件。'; return }
-  if (status !== 'draft' && isSkill.value && (!skill.value.platform.trim() || !draft.body.trim() || !files.value.length && !draft.sourceUrl.trim())) { error.value = '请填写适用工具和使用说明，并上传技能文件或提供仓库链接。'; return }
+  if (status !== 'draft' && isSkill.value) {
+    if (!cover.value) { error.value = '请上传技能作品封面。'; return }
+    if (files.value.length !== 1 || !/\.(md|zip)$/i.test(files.value[0]!.name)) { error.value = '请上传一个 SKILL.md 或 ZIP 技能包。'; return }
+    if (skillModelsLoading.value || skillModelsError.value || !skillGroups.value.some(group => group.id === skill.value.group) || !skillModels.value.some(model => model.id === draft.model)) { error.value = '请选择可用分组和组内文本模型。'; return }
+    if (!draft.body.trim()) { error.value = '请填写技能使用说明。'; return }
+  }
   tagValidation.value = ''
   if (status !== 'draft' && !sourceComment.value) {
     tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
@@ -215,14 +251,14 @@ async function save(status: 'draft' | 'pending') {
   try {
     const metadata = {
       parameters: draft.kind !== 'resource' ? publicationParameters(draft.kind, parameters.value, originalParameters.value) : isSkill.value ? null : undefined,
-      skill: isSkill.value ? { ...skill.value } : legacyResource.value ? undefined : null,
+      skill: isSkill.value ? { ...skill.value, platform: draft.model.slice(0, 100), coverFileId: cover.value?.id } : legacyResource.value ? undefined : null,
     }
-    await uploads.wait([...files.value, ...references.value])
+    await uploads.wait([...files.value, ...references.value, ...(cover.value ? [cover.value] : [])])
     if (current !== loadId || session.user?.id !== owner) return
     const body = {
-      ...draft, ...metadata, title: draft.title.trim(), tags: [...draft.tags],
+      ...draft, ...metadata, ...(metadata.skill ? { skill: { ...metadata.skill, coverFileId: cover.value?.id } } : {}), title: draft.title.trim(), tags: [...draft.tags],
       tagIds: draft.tagIds ?? (!tagsLoading.value && !tagsError.value && draft.tags.length === selectedTagIds.value.length ? [...selectedTagIds.value] : undefined),
-      fileIds: files.value.map(file => file.id), referenceFileIds: references.value.map(file => file.id),
+      fileIds: [...(isSkill.value && cover.value ? [cover.value] : []), ...files.value].map(file => file.id), referenceFileIds: references.value.map(file => file.id),
       ...(props.work ? { version: version.value, ...(['draft', 'rejected'].includes(props.work.status) ? { status } : {}) } : { status, requestId: requestId.value, idempotencyKey: requestId.value }),
     }
     const result = await api<{ work: Work }>(props.work ? `/api/works/${encodeURIComponent(props.work.id)}` : '/api/works', { method: props.work ? 'PATCH' : 'POST', body, expectedAccount: owner })
@@ -237,7 +273,7 @@ async function save(status: 'draft' | 'pending') {
   } catch (cause) { if (current === loadId) { error.value = errorMessage(cause); if (extra.value) extra.value.open = true } }
   finally { if (current === loadId) saving.value = false }
 }
-onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
+onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
 </script>
 
 <template>
@@ -252,13 +288,20 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
             <input ref="fileInput" type="file" multiple :accept="fileAccept" hidden aria-label="添加作品文件" @change="choose($event)" />
             <button v-if="!files.length" type="button" class="upload-area" @click="showUpload"><component :is="isSkill ? FileCode : draft.kind === 'video' ? Video : ImagePlus" :size="40" :stroke-width="1.8" aria-hidden="true" /><span>{{ uploadLabel }}</span><small>{{ uploadHint }}</small></button>
             <div v-else class="section-heading"><span class="form-note">{{ isSkill ? '技能' : legacyResource ? '资源' : kindLabels[draft.kind] }} · {{ files.length }}/16</span><button type="button" class="button subtle btn" @click="showUpload"><Plus :size="16" aria-hidden="true" />添加文件</button></div>
-            <WorkAttachments :files="files" featured @retry="index => uploads.retry(files[index]!)" @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
+            <WorkAttachments :files="files" :hide-role="isSkill" featured @retry="index => uploads.retry(files[index]!)" @move="(index, direction) => move(index, false, direction)" @role="index => changeRole(index, false)" @remove="index => removeFile(index)" />
             <label v-if="legacyResource" class="field resource-content"><span>资源内容</span><textarea v-model="draft.body" class="control" rows="7" maxlength="20000" /></label>
             <fieldset class="publication-types" :disabled="kindLocked || uploading || saving">
               <legend>作品类型</legend>
               <div class="type-options"><label v-for="option in publicationTypes" :key="option.kind" :class="{ selected: draft.kind === option.kind }"><input type="radio" name="publication-type" :value="option.kind" :checked="draft.kind === option.kind" @change="selectKind(option.kind)" /><component :is="option.icon" :size="18" aria-hidden="true" /><span>{{ option.kind === 'resource' && legacyResource ? '资源' : option.label }}</span></label></div>
               <p class="form-note">{{ kindLocked ? '编辑时保留原作品类型' : '按类型上传作品，填写对应信息' }}</p>
             </fieldset>
+            <section v-if="isSkill" class="skill-cover" aria-label="技能作品封面">
+              <div class="section-heading"><h3 class="title-4">技能封面（必传）</h3><button v-if="cover" type="button" class="button subtle btn" @click="coverInput?.click()">更换封面</button></div>
+              <p class="form-note">用于社区列表和技能详情展示，请上传技能效果图或介绍图。</p>
+              <input ref="coverInput" type="file" accept="image/*" hidden aria-label="上传技能封面" @change="chooseCover" />
+              <WorkAttachments v-if="cover" :files="[cover]" featured hide-role @retry="uploads.retry(cover!)" @remove="removeCover" />
+              <button v-else type="button" class="upload-area skill-cover-empty" @click="coverInput?.click()"><ImagePlus :size="32" aria-hidden="true" /><span>上传技能封面</span><small>图片将公开展示</small></button>
+            </section>
           </section>
           <div class="editor-content">
           <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
@@ -272,9 +315,16 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
             <p v-if="tagValidation" id="editor-tags-error" class="form-error" role="alert">{{ tagValidation }}</p>
           </fieldset>
           <section v-if="isSkill" class="skill-fields" aria-label="技能信息">
-            <label class="field"><span>适用工具（必填）</span><input v-model="skill.platform" class="control" maxlength="100" placeholder="例如 Claude Code、ComfyUI、n8n" /></label>
+            <div class="editor-columns">
+              <label class="field"><span>模型分组（必选）</span><select v-model="skill.group" class="control" :disabled="skillModelsLoading || !skillGroups.length" @change="draft.model = ''"><option :value="undefined">选择分组</option><option v-for="group in skillGroups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
+              <label class="field"><span>文本模型（必选）</span><select v-model="draft.model" class="control" :disabled="skillModelsLoading || !skillModels.length"><option value="">选择文本模型</option><option v-if="draft.model && !skillModels.some(item => item.id === draft.model)" :value="draft.model" disabled>原模型不可用，请重新选择</option><option v-for="model in skillModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option></select></label>
+            </div>
+            <p v-if="skillModelsLoading" class="form-note" role="status">正在读取可用文本模型…</p>
+            <p v-else-if="skillModelsError || !skillGroups.length" class="form-error" role="alert">{{ skillModelsError || '暂无可用文本分组，请确认账号模型权限。' }} <button type="button" class="text-link" @click="loadSkillModels">重新读取</button></p>
+            <fieldset class="skill-sharing"><legend>技能源文件</legend><label><input v-model="skill.sourcePublic" type="radio" :value="true" /><span><strong>公开技能</strong><small>审核通过后，其他用户可以下载技能包并调用。</small></span></label><label><input v-model="skill.sourcePublic" type="radio" :value="false" /><span><strong>不公开技能</strong><small>其他用户可在工作台调用，不能查看或下载源文件。</small></span></label></fieldset>
+            <p class="form-note">技能作品须经管理员审核后展示；修改后也需要重新审核。</p>
             <label class="field"><span>使用说明（必填）</span><textarea v-model="draft.body" class="control" rows="4" maxlength="20000" placeholder="介绍技能用途、使用步骤和运行条件" /></label>
-            <label class="field"><span>仓库 / 资源链接</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" placeholder="https://…" /><small class="form-note">上传技能文件或提供链接，至少填写一项。</small></label>
+            <label v-if="skill.sourcePublic" class="field"><span>仓库 / 资源链接（选填）</span><input v-model="draft.sourceUrl" class="control" type="url" maxlength="2000" autocapitalize="none" :spellcheck="false" placeholder="https://…" /><small class="form-note">此链接用于补充来源，调用技能仍需要上传 SKILL.md 或 ZIP 技能包。</small></label>
             <label class="field"><span>适用版本（选填）</span><input v-model="skill.version" class="control" maxlength="80" placeholder="例如 ComfyUI 0.3+" /></label>
             <label class="field"><span>安装方式（选填）</span><textarea v-model="skill.installation" class="control" rows="3" maxlength="10000" placeholder="说明安装目录、依赖和导入步骤" /></label>
           </section>
@@ -337,6 +387,14 @@ onBeforeUnmount(() => { loadId++; tagLoadId++; removeGuard(); window.removeEvent
 .publication-types:disabled .type-options label { cursor: default; }
 .publication-types > .form-note { margin-top: 8px; }
 .skill-fields { display: grid; gap: 16px; }
+.skill-cover { padding-top: 20px; margin-top: 16px; border-top: 1px solid var(--border); }
+.skill-cover-empty { min-height: 160px; margin-top: 12px; }
+.skill-sharing { display: grid; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.skill-sharing legend { margin-bottom: 8px; font-size: 14px; }
+.skill-sharing label { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.skill-sharing label:has(:checked) { background: var(--state-selected); border-color: var(--control-border); }
+.skill-sharing input { flex: none; margin-top: 4px; accent-color: var(--ink); }
+.skill-sharing span { display: grid; gap: 4px; }.skill-sharing strong { font-size: 14px; }.skill-sharing small { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .resource-content { margin-block-start: 16px; }
 .editor-tags { border: 0; padding: 0; margin: 0; min-width: 0; }
 .editor-tags legend { margin-bottom: 8px; font-size: 14px; }

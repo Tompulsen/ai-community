@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Locator } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { readFile } from 'node:fs/promises'
 import { mockUnifiedAccount } from './helpers/account-fixture'
@@ -11,9 +11,15 @@ async function fixture(page: Page, type = 'image/jpeg') {
   let uploads = 0
   await page.route('**/simple-preview.jpg', route => route.fulfill({ body: image, contentType: 'image/jpeg' }))
   await page.route('**/api/tags**', route => route.fulfill({ json: { items: ['image', 'video', 'resource'].flatMap(category => ['摄影', '插画', '角色', '海报'].map((name, index) => ({ id: `${category}tag${index}`, name, category }))) } }))
+  await page.route('**/api/creation/models**', route => route.fulfill({ json: {
+    groups: [{ id: 'text', name: '文本分组' }, { id: 'vip', name: '高级文本' }, { id: 'images', name: '图片分组' }],
+    items: [{ id: 'chat-test', kinds: ['text'], groups: ['text'] }, { id: 'chat-vip', kinds: ['text'], groups: ['vip'] }, { id: 'gpt-image-2', kinds: ['image'], groups: ['text', 'images'] }],
+  } }))
   await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 100, imagesMb: 20, videosMb: 100, filesMb: 20 } }))
   await page.route('**/api/uploads', route => {
     const payload = route.request().postDataBuffer()?.toString() || ''
+    if (payload.includes('filename="SKILL.md"')) return route.fulfill({ json: { file: { id: 'skillsource', name: 'SKILL.md', type: 'text/plain', url: '/source.md' } } })
+    if (payload.includes('filename="cover.png"')) return route.fulfill({ json: { file: { id: 'skillcover', name: 'cover.png', type: 'image/png', url: '/simple-preview.jpg' } } })
     const index = payload.includes('filename="second.jpg"') ? 2 : payload.includes('filename="first.jpg"') ? 1 : ++uploads
     return route.fulfill({ json: { file: { id: `file${index}`, name: `作品${index}`, type, url: '/simple-preview.jpg' } } })
   })
@@ -24,6 +30,14 @@ async function fixture(page: Page, type = 'image/jpeg') {
     return route.fulfill({ json: { work: { id: 'submitted', status: body.status, title: body.title } } })
   })
   return { ...account, image, writes }
+}
+
+async function configureSkill(form: Locator, image: Buffer) {
+  await form.getByRole('combobox', { name: '模型分组（必选）', exact: true }).selectOption('text')
+  await form.getByRole('combobox', { name: '文本模型（必选）', exact: true }).selectOption('chat-test')
+  await form.getByLabel('上传技能封面', { exact: true }).setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: image })
+  await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'SKILL.md', mimeType: 'text/plain', buffer: Buffer.from('---\nname: helper\ndescription: Helper\n---\nHelp the user.') })
+  await expect(form.getByText('SKILL.md', { exact: true })).toBeVisible()
 }
 
 for (const width of [320, 390, 800, 1440]) {
@@ -80,51 +94,48 @@ test('media layout retains file ordering and public reference selection on mobil
   expect(state.writes[0]).toMatchObject({ fileIds: ['file2'], referenceFileIds: ['file1'] })
 })
 
-for (const [type, kind, name] of [['video/mp4', 'video', 'video.mp4'], ['application/json', 'resource', 'workflow.json']]) {
-  test(`explicit ${kind} publication selects its files and parameters`, async ({ page }) => {
-    const state = await fixture(page, type)
-    await page.goto('/discover?publish=1')
-    const form = editor(page)
-    await form.getByRole('radio', { name: kind === 'video' ? '视频' : '技能', exact: true }).check()
-    if (kind === 'resource') {
-      await form.getByLabel('适用工具（必填）', { exact: true }).fill('ComfyUI')
-      await form.getByLabel('使用说明（必填）', { exact: true }).fill('导入工作流后运行')
-      await form.getByLabel('安装方式（选填）', { exact: true }).fill('安装依赖并导入 JSON')
-    } else {
-      await form.getByText('补充信息（选填）', { exact: true }).click()
-      await form.getByLabel('视频时长（秒）', { exact: true }).fill('8.001')
-      await form.getByLabel('帧率（FPS）', { exact: true }).fill('23.976')
-      await form.getByLabel('视频分辨率', { exact: true }).fill('1080p')
-    }
-    await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name, mimeType: type, buffer: Buffer.from('fixture') })
-    await expect(form.getByText(`${kind === 'video' ? '视频' : '技能'} · 1/16`, { exact: true })).toBeVisible()
-    await form.getByLabel('作品标题', { exact: true }).fill('自动识别作品')
-    await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
-    await form.getByRole('button', { name: '提交审核', exact: true }).click()
-    expect(state.writes[0]).toMatchObject({ kind, tags: ['摄影'], status: 'pending' })
-    if (kind === 'resource') expect(state.writes[0]).toMatchObject({ skill: { platform: 'ComfyUI', installation: '安装依赖并导入 JSON' } })
-    else expect(state.writes[0]).toMatchObject({ parameters: { kind: 'video', duration: 8.001, videoOptions: { resolution: '1080p', customParameters: '{"fps":23.976}' } } })
-  })
-}
+test('explicit video publication selects its files and parameters', async ({ page }) => {
+  const state = await fixture(page, 'video/mp4')
+  await page.goto('/discover?publish=1')
+  const form = editor(page)
+  await form.getByRole('radio', { name: '视频', exact: true }).check()
+  await form.getByText('补充信息（选填）', { exact: true }).click()
+  await form.getByLabel('视频时长（秒）', { exact: true }).fill('8.001')
+  await form.getByLabel('帧率（FPS）', { exact: true }).fill('23.976')
+  await form.getByLabel('视频分辨率', { exact: true }).fill('1080p')
+  await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'video.mp4', mimeType: 'video/mp4', buffer: Buffer.from('fixture') })
+  await expect(form.getByText('视频 · 1/16', { exact: true })).toBeVisible()
+  await form.getByLabel('作品标题', { exact: true }).fill('视频作品')
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  expect(state.writes[0]).toMatchObject({ kind: 'video', tags: ['摄影'], status: 'pending', parameters: { kind: 'video', duration: 8.001, videoOptions: { resolution: '1080p', customParameters: '{"fps":23.976}' } } })
+})
 
-test('link-based skill publication requires a tag while title-only drafts remain available', async ({ page }) => {
+test('skill source links cannot replace the cover and package; title-only drafts remain available', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/discover?publish=1')
   await editor(page).getByLabel('作品标题', { exact: true }).fill('待补充的草稿')
   await editor(page).getByRole('button', { name: '存为草稿', exact: true }).click()
   expect(state.writes[0]).toMatchObject({ status: 'draft', fileIds: [], tags: [] })
   await page.goto('/discover?publish=1')
-  await editor(page).getByRole('radio', { name: '技能', exact: true }).check()
-  await editor(page).getByLabel('适用工具（必填）').fill('Claude Code')
-  await editor(page).getByLabel('仓库 / 资源链接').fill('https://example.com/skill')
-  await editor(page).getByLabel('使用说明（必填）', { exact: true }).fill('可以独立发布的资源正文')
-  await editor(page).getByLabel('作品标题', { exact: true }).fill('纯文字资源')
-  await editor(page).getByRole('button', { name: '提交审核', exact: true }).click()
-  await expect(editor(page).getByRole('alert')).toContainText('至少选择 1 个作品标签')
+  const form = editor(page)
+  await form.getByRole('radio', { name: '技能', exact: true }).check()
+  await form.getByLabel('仓库 / 资源链接').fill('https://example.com/skill')
+  await form.getByLabel('使用说明（必填）', { exact: true }).fill('技能使用说明')
+  await form.getByLabel('作品标题', { exact: true }).fill('我的技能')
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('封面')
+  await form.getByLabel('上传技能封面', { exact: true }).setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: state.image })
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('SKILL.md')
+  await configureSkill(form, state.image)
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('至少选择 1 个作品标签')
   expect(state.writes).toHaveLength(1)
-  await editor(page).getByRole('checkbox', { name: '摄影', exact: true }).check()
-  await editor(page).getByRole('button', { name: '提交审核', exact: true }).click()
-  expect(state.writes[1]).toMatchObject({ kind: 'resource', body: '可以独立发布的资源正文', tags: ['摄影'], fileIds: [], status: 'pending' })
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+  await form.getByRole('radio', { name: /^不公开技能/ }).check()
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  expect(state.writes[1]).toMatchObject({ kind: 'resource', model: 'chat-test', tags: ['摄影'], fileIds: ['skillcover', 'skillsource'], status: 'pending', skill: { group: 'text', coverFileId: 'skillcover', sourcePublic: false } })
 })
 
 test('invalid optional URL reopens its section and preserves entered information', async ({ page }) => {
@@ -152,7 +163,7 @@ for (const unavailable of ['empty', 'error', 'loading']) test(`editor blocks ${u
   await page.goto('/discover?publish=1')
   const form = editor(page)
   await form.getByRole('radio', { name: '技能', exact: true }).check()
-  await form.getByLabel('适用工具（必填）').fill('ComfyUI')
+  await configureSkill(form, state.image)
   await form.getByLabel('仓库 / 资源链接').fill('https://example.com/skill')
   await form.getByLabel('作品标题', { exact: true }).fill('待选标签')
   await form.getByLabel('使用说明（必填）', { exact: true }).fill('保留正文')
@@ -165,7 +176,7 @@ for (const unavailable of ['empty', 'error', 'loading']) test(`editor blocks ${u
   await page.route('**/api/tags**', route => route.fulfill({ json: { items: [{ id: 'fixed', name: '教程', category: 'resource' }] } }))
   await page.goto('/discover?publish=1')
   await form.getByRole('radio', { name: '技能', exact: true }).check()
-  await form.getByLabel('适用工具（必填）').fill('ComfyUI')
+  await configureSkill(form, state.image)
   await form.getByLabel('仓库 / 资源链接').fill('https://example.com/skill')
   await form.getByLabel('作品标题', { exact: true }).fill('选择标签后发布')
   await form.getByLabel('使用说明（必填）', { exact: true }).fill('正文')
@@ -192,7 +203,8 @@ test('a saved empty draft reloads tag choices and accepts a video or text conten
   await expect(form.getByRole('checkbox', { name: '摄影', exact: true })).toBeVisible()
   await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('radio', { name: '技能', exact: true }).check()
-  await form.getByLabel('适用工具（必填）').fill('ComfyUI')
+  await form.getByLabel('模型分组（必选）').selectOption('text')
+  await form.getByLabel('文本模型（必选）').selectOption('chat-test')
   await form.getByLabel('仓库 / 资源链接').fill('https://example.com/skill')
   await expect(form.getByRole('button', { name: '移除标签 摄影（图片）', exact: true })).toBeVisible()
   await form.getByLabel('使用说明（必填）').fill('保留的文字')
@@ -294,13 +306,15 @@ for (const width of [320, 390, 1440]) test(`skill form is usable with required i
   await form.getByLabel('生成提示词', { exact: true }).fill('图片自己的提示词')
   await form.getByLabel('画面尺寸', { exact: true }).fill('1024x1024')
   await form.getByRole('radio', { name: '技能', exact: true }).check()
-  await expect(form.getByLabel('添加作品文件', { exact: true })).toHaveAttribute('accept', '.zip,.json,.md,.txt,.yaml,.yml')
+  await expect(form.getByLabel('添加作品文件', { exact: true })).toHaveAttribute('accept', '.md,.zip')
   await expect(form.getByLabel('生成提示词', { exact: true })).toHaveCount(0)
   await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
   await form.getByRole('button', { name: '提交审核', exact: true }).click()
-  await expect(form.getByRole('alert')).toContainText('适用工具')
+  await expect(form.getByRole('alert')).toContainText('封面')
   expect(state.writes).toHaveLength(0)
-  await form.getByLabel('适用工具（必填）').fill('Claude Code')
+  await configureSkill(form, state.image)
+  await expect(form.getByLabel('模型分组（必选）').locator('option[value="images"]')).toHaveCount(0)
+  await expect(form.getByLabel('文本模型（必选）').locator('option[value="gpt-image-2"]')).toHaveCount(0)
   await form.getByLabel('使用说明（必填）').fill('将技能安装后，根据描述使用。')
   await form.getByLabel('仓库 / 资源链接').fill('https://example.com/skills')
   await form.getByLabel('适用版本（选填）').fill('1.0+')
@@ -310,7 +324,7 @@ for (const width of [320, 390, 1440]) test(`skill form is usable with required i
   await expect(form.getByLabel('生成提示词', { exact: true })).toHaveValue('图片自己的提示词')
   await expect(form.getByLabel('画面尺寸', { exact: true })).toHaveValue('1024x1024')
   await form.getByRole('radio', { name: '技能', exact: true }).check()
-  await expect(form.locator('.featured > li')).toHaveCount(0)
+  await expect(form.locator('.featured > li')).toHaveCount(2)
   await expect(form.getByLabel('安装方式（选填）')).toHaveValue('复制到 skills 目录')
   expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
   expect((await new AxeBuilder({ page }).include('.editor-dialog[open]').analyze()).violations).toEqual([])
@@ -318,7 +332,7 @@ for (const width of [320, 390, 1440]) test(`skill form is usable with required i
   await expect(form.getByRole('radio', { name: '技能', exact: true })).toBeInViewport()
   await page.screenshot({ path: test.info().outputPath(`skill-${width}.png`) })
   await form.getByRole('button', { name: '提交审核', exact: true }).click()
-  expect(state.writes[0]).toMatchObject({ kind: 'resource', fileIds: [], parameters: null, prompt: '', body: '将技能安装后，根据描述使用。', skill: { platform: 'Claude Code', version: '1.0+', installation: '复制到 skills 目录' } })
+  expect(state.writes[0]).toMatchObject({ kind: 'resource', fileIds: ['skillcover', 'skillsource'], parameters: null, prompt: '', body: '将技能安装后，根据描述使用。', skill: { platform: 'chat-test', group: 'text', coverFileId: 'skillcover', sourcePublic: true, version: '1.0+', installation: '复制到 skills 目录' } })
 })
 
 test('wrong file types are rejected and hidden unsaved type content keeps the leave guard active', async ({ page }) => {
@@ -333,7 +347,7 @@ test('wrong file types are rejected and hidden unsaved type content keeps the le
   await page.keyboard.press('ArrowRight')
   await expect(form.getByRole('radio', { name: '技能', exact: true })).toBeChecked()
   await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'program.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('fixture') })
-  await expect(form.getByRole('alert')).toContainText('技能文件请选择')
+  await expect(form.getByRole('alert')).toContainText('SKILL.md 或 ZIP')
   await form.getByLabel('使用说明（必填）').fill('未保存的技能说明')
   await form.getByRole('radio', { name: '图片', exact: true }).check()
   await form.getByRole('button', { name: '关闭作品编辑', exact: true }).click()
@@ -346,10 +360,10 @@ test('wrong file types are rejected and hidden unsaved type content keeps the le
 
 test('editing a published skill restores its metadata and saves a partial revision without changing its type', async ({ page }) => {
   const state = await fixture(page)
-  const skill = { platform: 'ComfyUI', version: '0.3+', installation: '解压后导入工作流' }
+  const skill = { platform: 'chat-test', group: 'text', coverFileId: 'cover1', sourcePublic: true, version: '0.3+', installation: '导入 SKILL.md' }
   const work = { id: 'publishedskill', title: '技能工作流', authorId: state.state.user.id, author: '作者', avatar: '作', version: 3,
-    kind: 'resource', isSkill: true, status: 'published', files: [{ id: 'workflow1', name: 'workflow.json', type: 'application/json', url: '/workflow.json' }], fileIds: ['workflow1'],
-    tags: ['摄影'], tagIds: ['resourcetag0'], body: '加载后运行', sourceUrl: '', prompt: '', model: '', owned: true, likes: 0, date: '2026-11-23', cover: '',
+    kind: 'resource', isSkill: true, status: 'published', files: [{ id: 'cover1', name: 'cover.png', type: 'image/png', url: '/simple-preview.jpg' }, { id: 'workflow1', name: 'SKILL.md', type: 'text/plain', url: '/source.md' }], fileIds: ['cover1', 'workflow1'],
+    tags: ['摄影'], tagIds: ['resourcetag0'], body: '加载后运行', sourceUrl: '', prompt: '', model: 'chat-test', owned: true, likes: 0, date: '2026-11-23', cover: '',
     generation: { skill } }
   await page.route('**/api/library**', route => route.fulfill({ json: { items: [work], nextCursor: null } }))
   await page.route('**/api/works/publishedskill', route => {
@@ -360,12 +374,13 @@ test('editing a published skill restores its metadata and saves a partial revisi
   await page.goto('/library')
   await page.getByRole('button', { name: '编辑作品：技能工作流', exact: true }).click()
   const form = page.getByRole('dialog', { name: '编辑作品', exact: true })
-  await expect(form.getByLabel('适用工具（必填）')).toHaveValue('ComfyUI')
+  await expect(form.getByLabel('模型分组（必选）')).toHaveValue('text')
+  await expect(form.getByLabel('文本模型（必选）')).toHaveValue('chat-test')
   await expect(form.getByLabel('适用版本（选填）')).toHaveValue('0.3+')
   await expect(form.getByRole('radio', { name: '图片', exact: true })).toBeDisabled()
   await expect(form.getByRole('radio', { name: '技能', exact: true })).toBeChecked()
   await form.getByLabel('作品标题').fill('更新技能标题')
   await form.getByRole('button', { name: '保存修改', exact: true }).click()
-  expect(state.writes[0]).toMatchObject({ title: '更新技能标题', kind: 'resource', skill, fileIds: ['workflow1'], body: '加载后运行', version: 3 })
+  expect(state.writes[0]).toMatchObject({ title: '更新技能标题', kind: 'resource', skill, fileIds: ['cover1', 'workflow1'], body: '加载后运行', version: 3 })
   expect(state.writes[0]).not.toHaveProperty('generation')
 })

@@ -288,7 +288,7 @@ export async function uploadMedia(ctx: RequestContext, workId?: string) {
   } finally { await ctx.redis.zrem(reservationKey, reservation).catch(() => {}); }
 }
 
-async function confinedFile(root: string, key: string): Promise<string> {
+export async function confinedFile(root: string, key: string): Promise<string> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(key) || key === '.' || key === '..') throw new Error('Invalid media key');
   const source = await realpath(resolve(root, key));
   const displacement = relative(root, source);

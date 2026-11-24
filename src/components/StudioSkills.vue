@@ -45,7 +45,7 @@ async function toggle(skill: Skill, event: Event) {
     if (selected) {
       if (selectedIds.value.length >= maxSelectedSkills) throw new Error(`每次最多选择 ${maxSelectedSkills} 个技能。`)
       const document = await resolveCommunitySkill(skill, owner, kind)
-      await verifySkillDocument(document.body, document.sha256)
+      if (!skill.id.startsWith('work-')) await verifySkillDocument(document.body, document.sha256)
     }
     if (!active()) return
     const ids = resolveLegacySkillIds(selectedSkillIds(chat, kind), chats.skills)

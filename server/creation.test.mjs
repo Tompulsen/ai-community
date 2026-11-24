@@ -4,13 +4,14 @@
  */
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import Fastify from 'fastify'
 import sharp from 'sharp'
 import { handleCreation, processCreationTasks } from './creation.ts'
+import { readSkillPackage } from './skill-package.ts'
 import { httpError } from './auth.ts'
 import { NewApiError } from './native-account/config.ts'
 
@@ -149,6 +150,7 @@ function fixture(t, options = {}) {
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
       db: { async query(sql, params) {
+        if (options.workQuery && (sql.includes('FROM community_submission s') || sql.includes('FROM drive_file'))) return { rows: await options.workQuery(sql, params) }
         if (options.skillRows && sql.includes('FROM community_skill')) return { rows: await options.skillRows(sql, params) }
         assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
         if (options.modelReadError) throw options.modelReadError
@@ -169,6 +171,41 @@ function fixture(t, options = {}) {
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
+
+test('private work skills are resolved on the server, survive retries, and never expose the source in tracking or errors', async t => {
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-work-skill-'));
+  t.after(() => rm(filesRoot, { recursive: true, force: true }));
+  const source = Buffer.from('---\nname: private-helper\ndescription: Help users\n---\nPrivate instruction sentinel.');
+  await writeFile(path.join(filesRoot, 'source-key'), source);
+  const pack = await readSkillPackage('SKILL.md', source);
+  const row = { id: 'work1', authorId: 'author1', status: 'approved', fileIds: ['source1'], generation: { skill: { sourceFileId: 'source1', sourceSha256: pack.sha256, sourcePublic: false } } };
+  let visible = true, reject = false;
+  const { app, calls, values } = fixture(t, { filesRoot, workQuery(sql, params) {
+    if (sql.includes('FROM community_submission s')) { assert.match(sql, /s\.status IN \('published', 'approved'\)/); return visible ? [row] : []; }
+    assert.deepEqual(params, ['source1', 'author1']);
+    return [{ name: 'SKILL.md', accessKey: 'source-key', storedInternal: true, isLink: false }];
+  }, fetch(_url, init) {
+    const payload = JSON.parse(init.body);
+    assert.equal(payload.messages[0].role, 'system'); assert.equal(payload.messages[0].content, 'Private instruction sentinel.');
+    assert.equal(payload.messages.at(-1).content, 'hello');
+    return reject ? Response.json({ error: { message: 'Private instruction sentinel.' } }, { status: 400 })
+      : Response.json({ choices: [{ message: { role: 'assistant', content: 'Useful answer' } }] });
+  } });
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'work-skill-1', skills: [{ id: 'work-work1', sha256: pack.sha256 }] };
+  const accepted = await submit(app, input);
+  assert.equal(accepted.statusCode, 200, accepted.payload); assert(!accepted.payload.includes('Private instruction sentinel'));
+  assert(!JSON.stringify([...values.values()]).includes('Private instruction sentinel'));
+  visible = false;
+  assert.equal((await submit(app, input)).statusCode, 200); assert.equal(calls.length, 1);
+  assert.equal((await submit(app, { ...input, requestId: 'work-skill-2' })).statusCode, 404); assert.equal(calls.length, 1);
+  visible = true; row.status = 'pending';
+  assert.equal((await submit(app, { ...input, requestId: 'work-skill-3' })).statusCode, 409); assert.equal(calls.length, 1);
+  row.status = 'approved'; reject = true;
+  const denied = await submit(app, { ...input, requestId: 'work-skill-4' });
+  assert(!denied.payload.includes('Private instruction sentinel')); assert.equal(calls.length, 2);
+  await writeFile(path.join(filesRoot, 'source-key'), Buffer.concat([source, Buffer.from(' Changed after approval.')]));
+  assert.equal((await submit(app, { ...input, requestId: 'work-skill-5' })).statusCode, 409); assert.equal(calls.length, 2);
+});
 
 test('typed media skills reach the actual model request; accepted results survive withdrawal', async t => {
   for (const kind of ['image', 'video']) await t.test(kind, async t => {

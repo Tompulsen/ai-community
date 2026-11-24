@@ -3,7 +3,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
 import { api, errorMessage, session, sessionStatus } from '../state'
-import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats } from '../native-chat'
+import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats, type Skill } from '../native-chat'
 import { armStudioEntryStart, claimStudioEntryStart, clearStudioEntry, readStudioEntry } from '../studio-entry'
 import { modelChoices, modelsForKind } from '../model-preferences'
 import { activateConversation, conversationKind, syncMediaConversations } from '../studio-conversations'
@@ -16,7 +16,7 @@ import StudioSubmitPreference from '../components/StudioSubmitPreference.vue'
 import StudioLibraryDialog from '../components/StudioLibraryDialog.vue'
 import StudioSourceReferences from '../components/StudioSourceReferences.vue'
 import StudioPublishDialog from '../components/StudioPublishDialog.vue'
-import { creation, initializeCreation, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
+import { creation, initializeCreation, loadCreationGroups, loadCreationModels, selectCreationGroup, waitCreationGroup, type CreationTask, type CreationDestination } from '../native-studio'
 import { restoreRemixModels } from '../studio-remix-models'
 import { remixPrompt } from '../studio-remix'
 import StudioRemixDialog from '../components/StudioRemixDialog.vue'
@@ -27,12 +27,13 @@ const StudioAccountTools = defineAsyncComponent(() => import('../components/Stud
 import type { StudioKind } from '../studio-state'
 const route = useRoute(), router = useRouter()
 const source = ref<Work | null>(null), error = ref('')
+const skillImportError = ref(''), skillImportLoading = ref(false), skillImportRetry = ref(0)
 const sourceLoading = ref(false), sourceIssue = ref(''), sourceRetry = ref(0), sourceCanFallback = ref(false)
 let sourceOwner: string | undefined
 const preparingRemix = computed(() => route.query.prepare === '1')
 const importingRemix = ref(false)
 let previousRemixGroup: string | null | undefined
-const sourceBlocked = computed(() => sourceLoading.value || Boolean(sourceIssue.value) || preparingRemix.value || importingRemix.value)
+const sourceBlocked = computed(() => Boolean(route.query.skill) || sourceLoading.value || Boolean(sourceIssue.value) || preparingRemix.value || importingRemix.value)
 const accountTool = ref<'' | 'prices' | 'logs' | 'keys'>('')
 const accountMenu = ref<InstanceType<typeof StudioPopover>>()
 const sidebarMedia = window.matchMedia('(min-width: 1000px)')
@@ -76,7 +77,7 @@ watch([kind, () => chats.ready, () => creation.loaded], async () => {
   if (!chats.ready || !creation.loaded) return
   const requestedKind = kind.value, owner = session.user?.id
   await syncMediaConversations()
-  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse || route.query.entry) return
+  if (kind.value !== requestedKind || owner !== session.user?.id || route.query.reuse || route.query.entry || route.query.skill) return
   const active = chats.sessions.find(chat => chat.id === chats.activeId)
   const preferred = active || chats.sessions[0] || newChat(requestedKind)
   preferred.composerKind = requestedKind
@@ -92,6 +93,48 @@ watch([() => route.query.conversation, workspace, () => chats.ready, () => creat
   if (chats.activeId === id && !entryStart) workspace.value?.openConversation()
 }, { flush: 'post' })
 let revision = 0
+let skillDraft: { owner: string; work: string; chat: string } | undefined
+watch([() => route.query.skill, () => session.user?.id, () => chats.ready, () => creation.loaded, kind, skillImportRetry], async ([id, owner], _previous, onCleanup) => {
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  const requestedKind = kind.value
+  const current = () => !cancelled && entryLive && owner === session.user?.id && route.query.skill === id && kind.value === requestedKind
+  skillImportLoading.value = false; skillImportError.value = ''
+  if (typeof id !== 'string' || !owner || !chats.ready || !creation.loaded) return
+  skillImportLoading.value = true
+  try {
+    if (kind.value !== 'text' || !/^[a-zA-Z0-9]{1,32}$/.test(id)) throw new Error('技能调用入口无效，请返回作品后重试。')
+    const [{ work }, catalog] = await Promise.all([
+      api<{ work: Work }>(`/api/works/${id}`, { expectedAccount: owner, signal: AbortSignal.timeout(20000) }),
+      api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: session.user?.accountId || owner, signal: AbortSignal.timeout(20000) }),
+    ])
+    if (!current()) return
+    const skill = catalog.items.find(item => item.id === work.skillReference?.id && item.sha256 === work.skillReference.sha256)
+    const group = work.generation?.skill?.group
+    if (!skill || !group || !work.model) throw new Error('技能已更新、下架或尚未完成调用配置，请返回作品重新确认。')
+    await loadCreationGroups(skillImportRetry.value > 0)
+    if (!current()) return
+    await waitCreationGroup()
+    if (!current()) return
+    if (!creation.groups.some(item => item.id === group)) throw new Error('当前账号没有该技能模型分组的权限，请切换账号或联系管理员。')
+    await selectCreationGroup(group)
+    if (!current()) return
+    if (skillImportRetry.value > 0) await loadCreationModels(true)
+    if (!current()) return
+    if (creation.groupsError || creation.modelsError || creation.selectedGroup !== group || !modelsForKind('text').some(item => item.id === work.model)) throw new Error('该技能的文本模型暂不可用，请稍后重试。')
+    chats.skills = catalog.items; modelChoices.text = ''
+    let next = skillDraft?.owner === owner && skillDraft.work === id ? chats.sessions.find(item => item.id === skillDraft!.chat) : undefined
+    if (!next) {
+      next = newChat('text'); skillDraft = { owner, work: id, chat: next.id }
+      Object.assign(next, { topic: work.title, renamed: true, textModel: work.model, skillIds: [skill.id], draft: '', formatAutomatic: true })
+    }
+    activateConversation(next.id)
+    await nextTick(); await saveChats(true)
+    if (!current()) return
+    await router.replace({ query: { conversation: next.id } })
+  } catch (cause) { if (current()) skillImportError.value = errorMessage(cause) }
+  finally { if (current()) skillImportLoading.value = false }
+}, { immediate: true, flush: 'post' })
 watch([() => route.query.from, () => route.query.remix, () => session.user?.id, sourceRetry], async () => {
   const current = ++revision
   const sourceId = typeof route.query.from === 'string' ? route.query.from : typeof route.query.remix === 'string' ? route.query.remix : ''
@@ -156,7 +199,12 @@ async function cancelRemix() {
     if (owner === session.user?.id) await router.replace('/work/' + id)
   } finally { importingRemix.value = false }
 }
-function switchKind(value: StudioKind) { sidebar.value?.close(); accountTool.value = ''; void router.replace({ path: `/create/${value}`, query: route.query }) }
+function switchKind(value: StudioKind) {
+  sidebar.value?.close(); accountTool.value = ''
+  const query = { ...route.query }
+  if (value !== 'text') delete query.skill
+  void router.replace({ path: `/create/${value}`, query })
+}
 function openAccount(value: 'prices' | 'logs' | 'keys') { accountTool.value = value; accountMenu.value?.close() }
 function newCreation() { sidebar.value?.close(); accountMenu.value?.close(); accountTool.value = ''; pendingNew.value = true }
 function clearContext() {
@@ -165,7 +213,7 @@ function clearContext() {
   else void workspace.value?.clearContext()
 }
 function syncSource(id?: string) {
-  if (route.query.entry || route.query.start) return
+  if (route.query.entry || route.query.start || route.query.skill) return
   if (id && (route.query.remix === id || route.query.from === id)) return
   source.value = null
   void router.replace({ query: id ? { remix: id } : {} })
@@ -173,7 +221,7 @@ function syncSource(id?: string) {
 watch([workspace, () => chat.value?.ready], () => {
   const active = chats.sessions.find(item => item.id === chats.activeId)
   if (!active || (kind.value === 'text' ? !chat.value?.ready : !workspace.value)) return
-  if (!route.query.remix && !route.query.from && !route.query.reuse) syncSource(kind.value === 'text' ? chat.value?.sourceWorkId : workspace.value?.sourceWorkId)
+  if (!route.query.remix && !route.query.from && !route.query.reuse && !route.query.skill) syncSource(kind.value === 'text' ? chat.value?.sourceWorkId : workspace.value?.sourceWorkId)
 }, { flush: 'post' })
 function selectReferences(files: WorkFile[]) { if (kind.value === 'text') void chat.value?.applySourceReferences(files); else workspace.value?.applySourceReferences(files) }
 function share(task: CreationTask, destination: CreationDestination, content?: string) { mobileGallery.value?.close(); void publisher.value?.open(task, destination, content) }
@@ -304,10 +352,12 @@ watch([() => route.query.start, () => route.query.conversation, workspace, chat,
     <div v-if="chatDeletion.count" class="mobile-conversation-undo" role="status"><span>已删除 {{ chatDeletion.count }} 个对话</span><button type="button" class="studio-tool" @click="undoConversation"><Undo2 :size="15" />撤销删除</button></div>
     <div v-if="sessionStatus === 'guest'" class="empty-state"><h2>登录后开始创作</h2><RouterLink :to="{ path: '/account', query: { returnTo: route.fullPath } }" class="button primary btn">登录</RouterLink><RouterLink to="/discover" class="text-link"><ArrowLeft :size="16" />返回社区</RouterLink></div>
     <template v-else><div v-if="source && !preparingRemix" class="source-label"><RouterLink :to="`/work/${source.id}`" :title="source.title">同款 · {{ source.title }}</RouterLink><StudioSourceReferences :source="source" :selected="(kind === 'text' ? chat?.referenceUrls : workspace?.referenceUrls) || []" :disabled="kind === 'text' ? !chat?.ready || chat?.uploading : !workspace || workspace?.uploading" @select="selectReferences" /></div><p v-if="error" class="form-error" role="alert">{{ error }}</p><div v-if="accountTool" class="studio-account-view" :class="{ 'studio-prices-view': accountTool === 'prices' }"><button v-if="accountTool !== 'prices'" class="studio-tool" @click="accountTool = ''"><ArrowLeft :size="16" />返回创作</button><StudioAccountTools :view="accountTool" :model="kind === 'text' ? chat?.model : workspace?.model" /></div>
+      <p v-if="skillImportLoading" role="status">正在选择技能与文本模型…</p>
+      <p v-if="skillImportError" class="form-error" role="alert">{{ skillImportError }} <button type="button" class="text-link" @click="skillImportRetry++">重新读取技能</button><RouterLink :to="'/work/' + route.query.skill" class="text-link">返回技能作品</RouterLink></p>
       <p v-if="sourceLoading" role="status">正在恢复原作配置…</p><button v-if="preparingRemix && !source" type="button" class="text-link" :disabled="importingRemix" @click="cancelRemix">返回作品</button>
       <p v-if="sourceIssue && (!preparingRemix || !source)" class="form-error" role="alert">{{ sourceIssue }} <button v-if="sourceCanFallback" type="button" class="text-link" @click="sourceFallback">使用当前配置</button><button type="button" class="text-link" @click="sourceRetry++">重新读取原作</button></p>
       <p v-if="initialSaveIssue && !accountTool" class="form-error" role="alert">{{ initialSaveIssue }} <button type="button" class="text-link" :disabled="retryingSave" @click="retryInitialSave">重试保存</button></p>
-      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
+      <StudioChat v-show="!accountTool" ref="chat" :inert="!session.user || undefined" :mode="kind" :header-visible="!accountTool" :source="!preparingRemix && source?.kind === 'resource' ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix || Boolean(route.query.skill)" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @conversation="openConversation" @media-action="mediaAction" />
       <StudioWorkspace v-if="kind !== 'text'" v-show="!accountTool" ref="workspace" :inert="!session.user || undefined" :kind="kind" :source="!preparingRemix && source?.kind === kind ? source : null" :source-blocked="sourceBlocked" :remix-preparing="preparingRemix" @prices="openAccount('prices')" @keys="openAccount('keys')" @publish="share" @source="syncSource" @model="sourceIssue && sourceCanFallback && sourceFallback()" />
       <StudioRemixDialog v-if="source && preparingRemix" :key="source.id + session.user?.id" :source="source" :issue="sourceIssue" :loading="sourceLoading" :can-fallback="sourceCanFallback" :ready="remixReady" :busy="importingRemix" @apply="importRemix" @background="(files, prompt) => importRemix(files, prompt, true)" @cancel="cancelRemix" @retry="sourceRetry++" @fallback="sourceFallback" />
     </template><StudioPublishDialog ref="publisher" />

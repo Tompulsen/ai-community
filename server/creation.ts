@@ -4,6 +4,8 @@
  *
  * Reuses the Studio account relay, media import and generation protocol rules.
  */
+import { workSkillInstructions } from './content.ts'
+import { chatOptionsSchema } from '../shared/studio/options.ts'
 import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
@@ -30,7 +32,7 @@ import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes, type ModelApiFormat } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
-import { readAccountModelCatalogue } from './native-account/model-catalogue.ts'
+import { readAccountModelCatalogue, classifyModel } from './native-account/model-catalogue.ts'
 import { resolveModelGroup } from './native-account/model-groups.ts'
 import { assertSameOrigin } from './native-account/client.ts'
 
@@ -379,7 +381,11 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return cachedResult(ctx, cached, key)
   }
-  input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills)
+  if (input.kind === 'text' && input.skills?.length) {
+    const instructions = await workSkillInstructions(ctx, input.skills)
+    const options = input.chatOptions || chatOptionsSchema.parse({ messages: [{ role: 'user', content: input.prompt }] })
+    input.chatOptions = { ...options, messages: [...instructions.map(content => ({ role: 'system' as const, content })), ...options.messages] }
+  } else input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills)
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
   input = resolveCreationModelSettings(input, setting)
@@ -431,7 +437,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       if (!response.ok) {
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
       result = { status: response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: message(typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`, credentials.apiKey),
+        error: message(!input.skills?.some(skill => skill.id.startsWith('work-')) && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`, credentials.apiKey),
         tokenId: credentials.tokenId, protocol }
       } else {
         result = input.kind === 'text' && input.chatOptions
@@ -478,13 +484,6 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   return pending.result
 }
 
-function classifyModel(id: string): CreationKind | null {
-  const name = id.toLowerCase().split('/').pop()!
-  if (/seedance|^veo(?:[-_.]?\d|$)|t2v|i2v|s2v|video|sora|runway|pika|gen-[23]|luma|kling|hailuo/.test(name)) return 'video'
-  if (/gemini-(?:.*-)?(?:image|nano-banana)|grok-imagine-image|dall-?e|gpt-image|stable-diffusion|(?:^|-)sd-|sdxl|midjourney|flux|imagen|kandinsky|cogview|^agnes-image-|paint|draw|wanx/.test(name)) return 'image'
-  if (/embed|whisper|(?:^|-)asr|tts|voice|speech|rerank|^bge|^e[56]-|^gte|music/.test(name)) return null
-  return 'text'
-}
 
 async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServices) {
   const path = ctx.url.searchParams.get('path')

@@ -110,8 +110,8 @@ export function validateCreationInput(value: unknown): CreationInput {
   if (!boundedText(value.prompt, 100000) || !value.prompt.trim()) invalid('请填写提示词。')
   const result: CreationInput = { kind: value.kind as CreationKind, model: value.model.trim(), prompt: value.prompt }
   if (value.skills !== undefined) {
-    if (result.kind === 'text' || !Array.isArray(value.skills) || value.skills.length > maxSelectedSkills
-      || value.skills.some(skill => !record(skill) || typeof skill.id !== 'string' || !/^community-[a-zA-Z0-9]{1,32}$/.test(skill.id)
+    if (!Array.isArray(value.skills) || value.skills.length > maxSelectedSkills
+      || value.skills.some(skill => !record(skill) || typeof skill.id !== 'string' || !(result.kind === 'text' ? /^work-[a-zA-Z0-9]{1,32}$/ : /^community-[a-zA-Z0-9]{1,32}$/).test(skill.id)
         || typeof skill.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(skill.sha256))
       || new Set(value.skills.map(skill => skill.id)).size !== value.skills.length) invalid('所选技能无效，请重新选择。')
     result.skills = value.skills.map(skill => ({ id: skill.id, sha256: skill.sha256 }))

@@ -6,6 +6,7 @@ import { httpError } from './auth.ts'
 import { AccountRequest, accountRequest } from './native-account/index.ts'
 import { applicationRequest } from './web-request.ts'
 import { retrieveSkillSources, SkillRetrievalError } from './creation/skills-retrieval.ts'
+import { approvedWorkSkills } from './content.ts'
 import { approvedCommunitySkills } from './community-skills.ts'
 import { createClient, listTools, removeClient } from './mcp/client.ts'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -72,7 +73,7 @@ export async function handleStudioTools(ctx: RequestContext, overrides: { retrie
   req.headers.set('x-new-api-user', user.accountId)
   if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/skills/catalog') {
     await limited(ctx, 'catalog', 20)
-    ctx.json(200, { items: await approvedCommunitySkills(ctx.db) })
+    ctx.json(200, { items: [...await approvedCommunitySkills(ctx.db), ...await approvedWorkSkills(ctx)] })
     return true
   }
   if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/search') {

@@ -53,7 +53,7 @@ test('return paths preserve only current SPA destinations and their own query pa
   for (const path of ['/discover', '/work/old123', '/create', '/create/text', '/create/image', '/create/video',
     '/library', '/activities', '/community', '/account', '/messages', '/messages/creator123',
     '/discover?kind=image&q=%E7%AB%A0%E9%B1%BC+AI&tag=Skill&sort=latest',
-    '/create?from=old123', '/create/video?remix=old123', '/library?tab=saved&publish=1',
+    '/create?from=old123', '/create/text?skill=skill123', '/create/video?remix=old123', '/library?tab=saved&publish=1',
     '/community?creator=creator123&tab=creators', '/community?tab=announcements',
     '/account?tab=security', '/messages?peer=creator123', '/activities?invite=inviter123',
     '/messages?tab=messages', '/messages?tab=announcement', '/messages?tab=activity']) assert.equal(newApiReturnPath(path), path)
