@@ -65,11 +65,14 @@ test('homepage loads text controls on first use, keeps the chosen model and reta
 test('homepage reuses text controls and carries configuration and files into Studio once', async ({ page }) => {
   const { calls } = await fixture(page)
   const body = '使用简短中文回答。'
-  await page.route('**/api/creation/skills/catalog', route => route.fulfill({ json: { items: [{ id: 'short', name: '简短回答', description: '简洁表达', body, sha256: createHash('sha256').update(body).digest('hex') }] } }))
+  await page.route('**/api/creation/skills/catalog', route => route.fulfill({ json: { items: [{ id: 'short', kind: 'text', name: '简短回答', description: '简洁表达', body, sha256: createHash('sha256').update(body).digest('hex') }] } }))
   const searches: unknown[] = []
   await page.route('**/api/creation/search', route => { searches.push(route.request().postDataJSON()); return route.fulfill({ json: { sources: [] } }) })
   await page.goto('/create/text')
   await page.getByRole('textbox', { name: '消息', exact: true }).fill('原有文本草稿保持完整')
+  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
+  await page.getByRole('checkbox', { name: /简短回答/ }).check()
+  await page.keyboard.press('Escape')
   await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
   const composer = page.getByRole('form', { name: '快捷创作', exact: true })
   await composer.getByRole('combobox', { name: '模型', exact: true }).click()
@@ -80,9 +83,8 @@ test('homepage reuses text controls and carries configuration and files into Stu
   await composer.getByLabel('添加附件', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('首页附件内容') })
   await composer.getByRole('button', { name: '联网搜索：联网', exact: true }).click()
   await page.getByRole('button', { name: '快速搜索', exact: true }).click()
-  await page.getByRole('button', { name: '技能与工具', exact: true }).click()
-  await page.getByRole('checkbox', { name: /简短回答/ }).check()
-  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: '技能与工具', exact: true })).toHaveCount(0)
+  await expect(page.locator('.studio-context-tools')).toHaveCount(0)
   await composer.getByRole('button', { name: '对话参数', exact: true }).click()
   const parameters = page.getByRole('dialog', { name: '对话参数', exact: true })
   await parameters.getByRole('spinbutton', { name: '最大输出 Tokens', exact: true }).fill('2048')
@@ -103,7 +105,7 @@ test('homepage reuses text controls and carries configuration and files into Stu
   const file = calls[0].chatOptions.messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : []).find((part: any) => part.type === 'file').file
   expect(file.filename).toBe('notes.txt')
   expect(Buffer.from(file.file_data.split(',')[1], 'base64').toString()).toBe('首页附件内容')
-  expect(JSON.stringify(calls[0].chatOptions.messages)).toContain(body)
+  expect(JSON.stringify(calls[0].chatOptions.messages)).not.toContain(body)
   expect(searches).toEqual([expect.objectContaining({ mode: 'quick', query: '请整理这份材料' })])
   await expect(page).toHaveURL(new RegExp('/create/text'))
   await expect.poll(() => new URL(page.url()).searchParams.has('start')).toBe(false)
@@ -116,8 +118,8 @@ test('homepage reuses text controls and carries configuration and files into Stu
     const { chats } = await import(path)
     return chats.sessions.map((chat: any) => ({ draft: chat.draft, compressionThreshold: chat.compressionThreshold, sendMemory: chat.sendMemory, skillIds: chat.skillIds, textModel: chat.textModel }))
   })
-  expect(drafts).toContainEqual(expect.objectContaining({ draft: '原有文本草稿保持完整' }))
-  expect(drafts).toContainEqual(expect.objectContaining({ textModel: 'claude-opus', compressionThreshold: 12000, sendMemory: false, skillIds: ['short'] }))
+  expect(drafts).toContainEqual(expect.objectContaining({ draft: '原有文本草稿保持完整', skillIds: ['short'] }))
+  expect(drafts).toContainEqual(expect.objectContaining({ textModel: 'claude-opus', compressionThreshold: 12000, sendMemory: false, skillIds: [] }))
 })
 
 test('homepage switches between text and media models without leaving the page or changing existing text drafts', async ({ page }) => {

@@ -292,18 +292,19 @@ test('video generation sends only its chosen skill and blocks changed types befo
   expect(generated[0].skills).toEqual([{ id: 'community-videoSkill', sha256: checksum }])
 })
 
-for (const kind of ['image', 'video'] as const) test(`homepage ${kind} entry carries its selected skill to the first request`, async ({ page }) => {
+for (const kind of ['image', 'video'] as const) test(`homepage ${kind} entry leaves skill selection to Studio`, async ({ page }) => {
   const { generated } = await typedStudio(page)
   await page.goto('/discover')
   if (kind === 'video') await page.getByRole('button', { name: '视频生成', exact: true }).click()
-  await picker(page).click(); await page.getByLabel(`${kind}技能`, { exact: true }).check()
-  await expect(picker(page)).toContainText('技能 1'); await page.keyboard.press('Escape')
+  await expect(picker(page)).toHaveCount(0)
+  await expect(page.locator('.studio-context-tools')).toHaveCount(0)
   await page.getByRole('textbox', { name: '创作描述', exact: true }).fill('首页输入的创作描述')
   await page.getByRole('button', { name: '发送到创作台', exact: true }).click()
   await expect.poll(() => generated.length).toBe(1)
-  expect(generated[0].skills).toEqual([{ id: `community-${kind}Skill`, sha256: checksum }])
+  expect(generated[0].skills).toBeUndefined()
+  await expect(picker(page)).toHaveText('技能')
   expect(generated[0].prompt).toBe('首页输入的创作描述')
-  await page.reload(); await expect(picker(page)).toContainText('技能 1')
+  await page.reload(); await expect(picker(page)).toHaveText('技能')
   expect(generated).toHaveLength(1)
 })
 
