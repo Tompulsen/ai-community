@@ -5,6 +5,7 @@ import { chats, conversationBusy, saveChats, type NativeChat, type NativeMessage
 import { creation, type CreationTask } from './native-studio'
 import { attachMediaTask, mediaTasksForConversation } from './studio-conversations'
 import { session } from './state'
+import { pinnedContext, pinnedImageTurns, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
 
 const saving = new WeakSet<NativeChat>()
 function registered(chat: NativeChat) {
@@ -18,6 +19,7 @@ function snapshot(chat: NativeChat) {
     memoryPrompt: chat.memoryPrompt, lastSummarizeIndex: chat.lastSummarizeIndex, lastUpdate: chat.lastUpdate,
     deletedMediaTaskIds: chat.deletedMediaTaskIds && [...chat.deletedMediaTaskIds],
     mediaContextExcludedTaskIds: chat.mediaContextExcludedTaskIds && [...chat.mediaContextExcludedTaskIds],
+    pinnedMessageIds: chat.pinnedMessageIds && [...chat.pinnedMessageIds],
   }
 }
 async function savedMutation(chat: NativeChat, update: () => void) {
@@ -54,16 +56,33 @@ function contextTasks(chat: NativeChat, beforeTaskId?: string) {
     chat.messages.findIndex(message => message.taskId === task.id && message.role === 'assistant') >= (chat.clearContextIndex || 0))
 }
 export function buildImageContext(chat: NativeChat, beforeTaskId?: string): ImageConversationContext {
+  const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, session.user?.id || ''))
+  const pinned = pinnedImageTurns(fixed)
+  const pinnedTasks = new Set(fixed.flatMap(entry => entry.task ? [entry.task.id] : []))
   const turns: ImageConversationContext['turns'] = []
-  let images = 0, characters = 0
+  let images = pinned.reduce((total, turn) => total + turn.images.length + (turn.references?.length || 0), 0), characters = pinned.reduce((total, turn) => total + Array.from(turn.prompt).length, 0)
+  const recent = contextTasks(chat, beforeTaskId)
+  // A pinned question must not remove its completed answer from ordinary history.
+  const keys = [...new Set(fixed.map(entry => entry.task?.id || entry.message.id))]
+  for (const task of recent) {
+    const turn = pinned[keys.indexOf(task.id)]
+    if (turn && !turn.images.length && images + task.urls.length <= 16) {
+      turn.images = [...task.urls]; images += task.urls.length
+    }
+  }
   // Keep whole recent turns; never split a turn or count base64 as prompt text.
-  for (const task of contextTasks(chat, beforeTaskId).reverse()) {
+  for (const task of recent.reverse()) {
+    if (pinnedTasks.has(task.id)) continue
     const references = [...new Set(task.references.map(file => file.url))]
-    if (turns.length >= 20 || images + task.urls.length + references.length > 16 || characters + Array.from(task.prompt).length > 32000) break
+    if (turns.length + pinned.length >= 20 || images + task.urls.length + references.length > 16 || characters + Array.from(task.prompt).length > 32000) break
     turns.unshift({ prompt: task.prompt, images: [...task.urls], ...(references.length ? { references } : {}) })
     images += task.urls.length + references.length; characters += Array.from(task.prompt).length
   }
-  return { turns }
+  return { turns: [...pinned, ...turns] }
+}
+export function pinnedImageReferences(chat: NativeChat): CreationTask['references'] {
+  const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, session.user?.id || ''))
+  return [...new Set(pinnedImageTurns(fixed).flatMap(turn => [...(turn.references || []), ...turn.images]))].map((url, index) => ({ name: `固定参考图 ${index + 1}`, url }))
 }
 export function imageContinuationReferences(chat: NativeChat, beforeTaskId?: string): CreationTask['references'] {
   const last = contextTasks(chat, beforeTaskId).at(-1)
@@ -167,6 +186,7 @@ export async function deleteMediaTurns(chat: NativeChat, ids: string[]) {
     }
     chat.messages = chat.messages.flatMap(keep)
     chat.messageBranches = (chat.messageBranches || []).flatMap(keep)
+    chat.pinnedMessageIds = readPinnedMessageIds(chat.pinnedMessageIds).filter(id => !removed.has(id))
     chat.clearContextIndex = before.filter(message => !removed.has(message.id)).length
     chat.deletedMediaTaskIds = [...new Set([...(chat.deletedMediaTaskIds || []), ...removedTaskIds])]
     chat.memoryPrompt = ''; chat.lastSummarizeIndex = 0; chat.lastUpdate = Date.now()

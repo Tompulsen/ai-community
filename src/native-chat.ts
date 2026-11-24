@@ -1,6 +1,6 @@
 import { reactive, watch } from 'vue'
 import { api, errorMessage, session } from './state'
-import { creation, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
+import { creation, portableImage, resumeCreation, stopCreation, submitCreation, type CreationTask } from './native-studio'
 import { configuredModelFormat, modelFormat } from './model-preferences'
 import { readChatSnapshot, writeChatSnapshot } from '../shared/studio/chat-persistence'
 import { createDeferredWriteQueue } from '../shared/studio/latest-write-queue'
@@ -20,6 +20,7 @@ import { getToolArguments, isToolRecord, restoreInterruptedToolCalls } from '../
 import type { StudioToolActivity } from './studio-message-types'
 import { normalizeChatProjects, normalizeChatProjectSessions, type ChatProject } from '../shared/studio/chat-projects'
 import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills'
+import { pinnedContext, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
 export interface Skill { kind: SkillKind; id: string; name: string; description: string; body: string; sha256: string }
 export interface NativeMessage extends ChatMessage {
   taskId?: string
@@ -34,6 +35,7 @@ export interface NativeMessage extends ChatMessage {
   tools?: StudioToolActivity[]
 }
 export interface NativeChat extends ChatSession {
+  pinnedMessageIds?: string[]
   creationKind?: 'text' | 'image' | 'video'
   composerKind?: 'text' | 'image' | 'video'
   textModel?: string
@@ -252,6 +254,21 @@ export async function saveChats(required = false) {
   catch (error) { if (version === epoch && owner() === accepted) chats.error = '对话未能保存到浏览器，请保留当前内容。'; if (required) throw error }
 }
 export function flushChats() { return writes.flush().catch(() => {}) }
+export async function togglePinnedMessage(chat: NativeChat, messageId: string) {
+  if (!owner() || !chats.ready || !chats.sessions.includes(chat) || conversationBusy(chat)) throw new Error('当前对话不可用，请稍后重试。')
+  const before = chat.pinnedMessageIds, version = epoch
+  const ids = readPinnedMessageIds(before).filter(id => branchMessages(chat).some(message => message.id === id))
+  const pinned = !ids.includes(messageId)
+  if (pinned && ids.length >= 20) throw new Error('固定内容最多 20 条，请先取消部分固定。')
+  const next = pinned ? [...ids, messageId] : ids.filter(id => id !== messageId)
+  const entries = validatePinnedContext(pinnedContext({ ...chat, pinnedMessageIds: next }, creation.tasks, owner()))
+  if (pinned && !entries.some(entry => entry.message.id === messageId)) throw new Error('这条消息无法固定，请等待生成完成后重试。')
+  chats.preparing[chat.id] = true; chat.pinnedMessageIds = next
+  const pending = chat.pinnedMessageIds
+  try { await saveChats(true); return version === epoch && chats.sessions.includes(chat) ? pinned : undefined }
+  catch (error) { if (version === epoch && chats.sessions.includes(chat) && chat.pinnedMessageIds === pending) chat.pinnedMessageIds = before; throw error }
+  finally { if (version === epoch) chats.preparing[chat.id] = false }
+}
 function flushClosingChats() { checkpointDraft(); void flushChats() }
 function flushHiddenChats() { if (document.visibilityState === 'hidden') flushClosingChats() }
 if (typeof window !== 'undefined') window.addEventListener?.('pagehide', flushClosingChats)
@@ -277,7 +294,7 @@ export function loadChats() {
         const config = chatOptionsSchema.safeParse({ ...value.mask?.modelConfig, ...value.settings, messages: [{ role: 'user', content: 'initial' }] })
         const { messages: _, ...settings } = config.success ? config.data : { messages: [], ...defaults() }
         const next: NativeChat = { ...value, creationKind: value.creationKind === 'image' || value.creationKind === 'video' ? value.creationKind : 'text', topic: String(value.topic || '历史对话'), settings, system: value.system || '', skillIds: value.skillIds || [], search: value.search || 'off', compressionThreshold: value.compressionThreshold || 272000, sendMemory: value.sendMemory !== false, toolContext: value.toolContext || '', memoryPrompt: value.memoryPrompt || '', lastSummarizeIndex: value.lastSummarizeIndex || 0, lastUpdate: value.lastUpdate || Date.now(),
-          draftQuote: readMessageQuote(value.draftQuote), messages: value.messages.map(restoreMessage),
+          pinnedMessageIds: readPinnedMessageIds(value.pinnedMessageIds), draftQuote: readMessageQuote(value.draftQuote), messages: value.messages.map(restoreMessage),
           messageBranches: Array.isArray(value.messageBranches) ? value.messageBranches.map(restoreMessage) : [] }
         initializeBranches(next)
         if (!next.mediaDrafts && next.creationKind !== 'text') {
@@ -382,6 +399,7 @@ export function cloneChat(chat: NativeChat) {
     if (message.optionReceipt?.userMessageId) message.optionReceipt.userMessageId = ids.get(message.optionReceipt.userMessageId) || message.optionReceipt.userMessageId
   }
   if (copy.draftQuote) copy.draftQuote.messageId = ids.get(copy.draftQuote.messageId) || copy.draftQuote.messageId
+  copy.pinnedMessageIds = readPinnedMessageIds(chat.pinnedMessageIds).flatMap(id => ids.has(id) ? [ids.get(id)!] : [])
   chats.sessions.unshift(copy); chats.activeId = copy.id; void saveChats()
 }
 export function switchBranch(chat: NativeChat, source: string, target: string) { if (conversationBusy(chat)) return; selectAnswerBranch(chat, source, target, true); void saveChats() }
@@ -389,6 +407,7 @@ export function removeMessage(chat: NativeChat, message: NativeMessage) {
   if (conversationBusy(chat)) return
   const before = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
   deleteBranchMessage(chat, message.id)
+  chat.pinnedMessageIds = readPinnedMessageIds(chat.pinnedMessageIds).filter(id => branchMessages(chat).some(message => message.id === id))
   const remaining = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
   chat.deletedMediaTaskIds = [...new Set([...(chat.deletedMediaTaskIds || []),
     ...creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' && before.has(task.id) && !remaining.has(task.id)).map(task => task.id)])]
@@ -488,6 +507,18 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     if (!current()) return accepted
     if (chat.topic === '新对话' && !chat.renamed) chat.topic = (text || files[0]?.name || '附件对话').slice(0, 40)
     const prefix: RequestMessage[] = system.trim() ? [{ role: 'system', content: system }] : []
+    const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, owner())).filter(entry => entry.message.id !== user.id)
+    const fixedImages = new Set<string>()
+    for (const { message, task, text } of fixed) {
+      if (!task) { prefix.push({ role: message.role, content: modelMessage(message).content }); continue }
+      const urls = [...task.references.map(file => file.url), ...(message.role === 'assistant' ? task.urls : [])].filter(url => {
+        if (fixedImages.has(url)) return false
+        fixedImages.add(url); return true
+      })
+      const images = await Promise.all(urls.map(async url => ({ type: 'image_url' as const, image_url: { url: await portableImage(url) } })))
+      if (!current()) return accepted
+      prefix.push({ role: message.role, content: images.length ? [{ type: 'text', text }, ...images] : text })
+    }
     prefix.push({ role: 'system', content: messageInteractionPrompt(answer.id) })
     if (skillIds.some(id => id.startsWith('community-') || !chats.skills.some(skill => skill.id === id))) {
       const catalog = await api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: acceptedAccount })
@@ -516,7 +547,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     result.streaming = false
     const userIndex = history.findIndex(message => message.id === user.id)
     const prepared = await prepareContext({
-      prefix, history: history.slice(chat.sendMemory && memory ? Math.max(contextIndex || 0, summarizeIndex) : contextIndex || 0, userIndex).filter(message => !message.error && !message.streaming && !message.contextCompressing).flatMap(message => {
+      prefix, history: history.slice(chat.sendMemory && memory ? Math.max(contextIndex || 0, summarizeIndex) : contextIndex || 0, userIndex).filter(message => !message.error && !message.streaming && !message.contextCompressing && !fixed.some(entry => entry.message.id === message.id)).flatMap(message => {
         const task = creation.tasks.find(task => task.owner === owner() && task.id === message.taskId && task.kind !== 'text')
         if (task && message.role === 'assistant') return [{ role: 'assistant' as const, content: task.phase === 'complete' ? `已生成${task.kind === 'image' ? '图片' : '视频'}。` : '媒体生成未完成。' }]
         return [...(message.toolRounds || []), modelMessage(message)]

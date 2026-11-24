@@ -51,6 +51,110 @@ async function fixture(page: Page, kind = 'image') {
   return { calls, uploads, image }
 }
 const imageReference = (image: Buffer, type = 'jpeg') => `data:image/${type};base64,${image.toString('base64')}`
+
+for (const width of [320, 390, 1440]) test(`QX message toolbar has nine unique icon actions at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  await fixture(page)
+  await send(page, '工具栏展示验证', 1)
+  const toolbar = page.getByRole('group', { name: '生成结果操作', exact: true })
+  await toolbar.scrollIntoViewIfNeeded()
+  await expect(toolbar.getByRole('button')).toHaveCount(9)
+  expect(await toolbar.getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('data-action')))).toEqual(['editImage', 'edit', 'retry', 'delete', 'pin', 'copy', 'download', 'publish', 'comment'])
+  expect(await toolbar.getByRole('button').allTextContents()).toEqual(Array(9).fill(''))
+  expect(await toolbar.locator('.message-action-icon').evaluateAll(icons => icons.every(icon => getComputedStyle(icon).maskImage !== 'none'))).toBe(true)
+  await expect(page.getByRole('group', { name: '提问操作', exact: true }).getByRole('button')).toHaveCount(6)
+  const comment = toolbar.getByRole('button', { name: '发送到源作品评论区', exact: true })
+  await expect(comment).toBeDisabled()
+  await comment.hover()
+  await expect(page.getByRole('tooltip')).toHaveText('从源作品制作同款后，可发布至其评论区')
+  const tipBounds = (await page.getByRole('tooltip').boundingBox())!
+  expect(tipBounds.x).toBeGreaterThanOrEqual(0)
+  expect(tipBounds.x + tipBounds.width).toBeLessThanOrEqual(width)
+  await page.getByRole('tooltip').hover()
+  await expect(page.getByRole('tooltip')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('tooltip')).toHaveCount(0)
+  await toolbar.getByRole('button', { name: '复制提示词', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('tooltip')).toContainText('下载图片')
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: '提示词', exact: true }).focus()
+  await toolbar.scrollIntoViewIfNeeded()
+  const buttons = await toolbar.getByRole('button').evaluateAll(buttons => buttons.map(button => { const b = button.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height } }))
+  expect(buttons.every(button => button.x >= 0 && button.x + button.w <= width)).toBe(true)
+  if (width < 640) expect(buttons.every(button => button.w >= 44 && button.h >= 44)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => window.communityAppearance.set({ mode: theme as 'light' | 'dark' }), theme)
+    await page.screenshot({ path: `../studio-toolbar-20261124/toolbar-${width}-${theme}.png` })
+    expect((await new AxeBuilder({ page }).include('.studio-message-actions').analyze()).violations).toEqual([])
+  }
+})
+
+for (const model of ['gpt-image-2', 'gemini-3-pro-image-preview']) test(`pinning an image persists and reaches ${model} after clearing history`, async ({ page }) => {
+  const { calls } = await fixture(page)
+  if (model !== 'gpt-image-2') {
+    await page.getByRole('combobox', { name: '模型', exact: true }).click()
+    await page.getByRole('dialog', { name: '选择模型', exact: true })
+      .getByRole('button', { name: model, exact: true }).click()
+    await page.getByRole('button', { name: '高级参数', exact: true }).click()
+    await page.locator('.parameter-advanced > summary').click()
+    await page.getByRole('dialog', { name: '高级参数', exact: true }).getByRole('combobox', { name: '接口格式', exact: true }).selectOption('chat-completions')
+    await page.keyboard.press('Escape')
+  }
+  await send(page, '固定这张角色图', 1)
+  const first = page.locator('.creation-response').first()
+  await first.getByRole('button', { name: '固定到上下文', exact: true }).click()
+  await expect(first.getByRole('button', { name: '取消固定', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.reload()
+  await expect(first.getByRole('button', { name: '取消固定', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  await send(page, '保持角色继续创作', 2)
+  expect(calls[1].model).toBe(model)
+  expect(calls[1].imageContext.turns.map((turn: any) => turn.prompt)).toEqual(['固定这张角色图'])
+  expect(calls[1].imageContext.turns[0].images).toHaveLength(1)
+  if (model === 'gpt-image-2') expect(calls[1].referenceUrls).toContain(calls[1].imageContext.turns[0].images[0])
+  else expect(calls[1].referenceUrls).toEqual([])
+  await first.getByRole('button', { name: '取消固定', exact: true }).click()
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  await send(page, '重新开始', 3)
+  expect(calls[2].imageContext.turns).toEqual([])
+})
+
+test('one download action saves every image in a group without adding duplicate tools', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/first.png' }, { url: 'https://media.example/second.png' }], tokenId: 41, protocol: 'sync' } }))
+  await send(page, '生成一组图片', 1)
+  const toolbar = page.getByRole('group', { name: '生成结果操作', exact: true }), downloads: string[] = []
+  page.on('download', download => downloads.push(download.suggestedFilename()))
+  await expect(toolbar.getByRole('button')).toHaveCount(9)
+  await toolbar.getByRole('button', { name: '下载图片', exact: true }).click()
+  await expect.poll(() => downloads.length).toBe(2)
+  expect(new Set(downloads).size).toBe(2)
+  expect(downloads.every(name => name.endsWith('.jpg'))).toBe(true)
+})
+
+test('touch users can read unavailable action hints without publishing', async ({ browser }) => {
+  const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 375, height: 812 }, reducedMotion: 'reduce' })
+  const page = await context.newPage()
+  try {
+    await fixture(page)
+    await send(page, '手机工具栏', 1)
+    const toolbar = page.getByRole('group', { name: '生成结果操作', exact: true })
+    const comment = toolbar.getByRole('button', { name: '发送到源作品评论区', exact: true })
+    await comment.scrollIntoViewIfNeeded()
+    const bounds = (await comment.boundingBox())!
+    await page.touchscreen.tap(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    await expect(page.getByRole('tooltip')).toContainText('从源作品制作同款后')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await page.setViewportSize({ width: 812, height: 375 })
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await toolbar.scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: '../studio-toolbar-20261124/touch-landscape.png' })
+  } finally { await context.close() }
+})
+
 async function send(page: Page, prompt: string, turns: number) {
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill(prompt)
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
@@ -89,9 +193,10 @@ for (const width of [390, 1440]) test(`image results load lightweight previews a
   await expect.poll(() => viewer.locator('img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(3840)
   expect(reads.some(url => !url.searchParams.has('variant'))).toBe(true)
   const pending = page.waitForEvent('download')
-  await viewer.getByRole('button', { name: '下载原文件', exact: true }).click()
+  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
   const download = await pending
-  expect((await readFile((await download.path())!)).equals(original)).toBe(true)
+  const metadata = await sharp(await readFile((await download.path())!)).metadata()
+  expect(metadata).toMatchObject({ format: 'jpeg', width: 2160, height: 3840 })
 })
 
 test('editing a result restores its image and prompt without generating until sent', async ({ page }) => {
@@ -128,7 +233,8 @@ test('editing the original prompt restores original attachments and reuse clears
   await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^data:image\/jpeg/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原提问')
   expect(calls).toHaveLength(1)
-  await response.getByRole('button', { name: '复用参数', exact: true }).click()
+  await response.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: '复用参数', exact: true }).click()
   await expect(page.locator('.creation-editing')).toHaveCount(0)
   await send(page, '复用参数的新一轮', 2)
   expect(calls[1].referenceUrls).toEqual(calls[0].referenceUrls)

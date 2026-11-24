@@ -51,6 +51,9 @@ service declarations and QXChat MIT / GenOffice Apache-2.0 provenance.
 The shared media viewer also adapts zoom controls and touch interaction from
 QXChat `app/components/ui-lib.tsx` (`ZoomableImage`), under the same MIT /
 Copyright (c) 2023-2025 NextChat notice retained below.
+The workbench message toolbar adapts QXChat `app/components/chat.tsx` and
+`chat.module.scss`. Its seven base SVG icons in `src/assets/message-actions/`
+are copied from QXChat `app/icons/`, under the same MIT / NextChat notice.
 
 MIT notice for the reused Studio sources, retained here so it is distributed
 with the community image after the root `studio/` directory was retired:

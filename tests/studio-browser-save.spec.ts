@@ -131,7 +131,7 @@ test('generated images save original bytes automatically and survive an expired 
   expect(state.generations).toBe(1)
   expect(state.downloads).toBe(0)
   const download = page.waitForEvent('download', { timeout: 10000 })
-  await page.getByRole('button', { name: '下载图片 1', exact: true }).click()
+  await page.getByRole('button', { name: '下载图片', exact: true }).click()
   const file = await download
   expect((await readFile((await file.path())!))).toEqual(image)
   await page.getByRole('button', { name: '编辑图片', exact: true }).click()
@@ -187,7 +187,7 @@ test('quota failure cannot commit a local pointer and retry can finish the same 
     const transaction = IDBDatabase.prototype.transaction
     ;(window as any).denyOriginalSave = true
     IDBDatabase.prototype.transaction = function (names, mode, options) {
-      if ((window as any).denyOriginalSave && mode === 'readwrite' && Array.isArray(names) && names.length === 3 && names.includes('originals')) throw new DOMException('Full', 'QuotaExceededError')
+      if ((window as any).denyOriginalSave && mode === 'readwrite' && Array.isArray(names) && names[1] === 'originals') throw new DOMException('Full', 'QuotaExceededError')
       return Reflect.apply(transaction, this, [names, mode, options])
     }
   })

@@ -123,11 +123,11 @@ for (const shape of ['portrait', 'square', 'landscape', 'multiple'] as const) {
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
       }
       const actions = page.getByRole('group', { name: '生成结果操作', exact: true })
-      for (const name of ['发布作品', '复用参数']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
+      for (const name of ['发布作品', '固定到上下文']) await expect(actions.getByRole('button', { name, exact: true })).toBeVisible()
       await expect(actions.getByRole('button', { name: '新的创作', exact: true })).toHaveCount(0)
-      await expect(actions.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(0)
+      await expect(actions.getByRole('button')).toHaveCount(9)
       await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
-      await expect(actions.getByRole('button', { name: /^下载/ })).toHaveCount(images.length)
+      await expect(actions.getByRole('button', { name: /^下载/ })).toHaveCount(1)
       const mediaBounds = (await page.locator('.creation-media').boundingBox())!
       const actionBounds = (await actions.boundingBox())!
       expect(actionBounds.y).toBeGreaterThanOrEqual(mediaBounds.y + mediaBounds.height)
@@ -152,7 +152,7 @@ test('desktop sidebar restores media history without submitting and keeps accoun
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
   await page.route('**/api/creation/**', route => {
     if (new URL(route.request().url()).pathname === '/api/creation/media') return route.fulfill({ contentType: 'image/jpeg', body: photo })
-    if (route.request().method() === 'POST') submissions++
+    if (new URL(route.request().url()).pathname === '/api/creation/generate' && route.request().method() === 'POST') submissions++
     return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-image-2', kinds: ['image'] }] } })
   })
   await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, rows: [], currency: '¥' } } }))

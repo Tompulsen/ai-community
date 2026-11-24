@@ -8,7 +8,7 @@ import { creation, initializeCreation, loadCreationGroups, loadCreationModels, s
 import { chats, createEmptyChat, flushChats, newChat, saveChats, type NativeChat } from '../native-chat'
 import { createDeferredWriteQueue } from '../../shared/studio/latest-write-queue'
 import { ensureMediaConversation, isConversationBusy, mediaTasksForConversation, syncMediaConversations } from '../studio-conversations'
-import { buildImageContext, clearMediaContext, imageContinuationReferences, registerMediaTurn } from '../studio-image-conversation'
+import { buildImageContext, clearMediaContext, imageContinuationReferences, pinnedImageReferences, registerMediaTurn } from '../studio-image-conversation'
 import StudioMediaParameters from './StudioMediaParameters.vue'
 import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
@@ -322,6 +322,7 @@ async function submit(onRegistered?: () => void) {
   blank.value = false
   error.value = ''; submissions.value[kind] = true; chats.preparing[chat.id] = true
   try {
+    const fixedReferences = kind === 'image' && !usesGeminiImageChat(model.value, selectedApiFormat.value) ? pinnedImageReferences(chat) : []
     const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: requestSize.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, references: references.value, sourceWorkId: sourceWorkId.value,
       accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
       ...(props.kind === 'image' ? { imageOptions, references: requestReferences.value,
@@ -334,6 +335,10 @@ async function submit(onRegistered?: () => void) {
     if (!live || scope !== draftScope() || owner !== session.user?.id) return
     submittedReferences = JSON.stringify(references.value)
     input.references = JSON.parse(JSON.stringify(kind === 'image' ? requestReferences.value : references.value))
+    if (fixedReferences.length) {
+      input.references = [...new Map([...(input.references || []), ...fixedReferences].map(file => [file.url, file])).values()]
+      if (input.references.length > 16) throw new Error('固定图片和本次参考图合计不能超过 16 张，请先取消部分固定。')
+    }
     if (kind === 'image' && (!Number.isInteger(input.n) || input.n < 1 || input.n > 10)) throw new Error('图片数量需为 1 到 10 的整数。')
     if (input.videoOptions) {
       submittedPrompt = remapVideoMentions(submittedPrompt, initialReferenceUrls, references.value.map(file => file.url))
