@@ -8,7 +8,7 @@
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema, toolCallSchema, type ImageOptions, type VideoOptions, type ChatOptions } from '../shared/studio/options.ts'
 import { imageOutputParams, supportsImageOutputOptions, imageRequestSize, normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { buildVideoRequest, videoParameterFormat } from '../shared/studio/video-api.ts'
-import { validateVideoRequestParameters } from '../shared/studio/video-capabilities.ts'
+import { validateVideoRequestParameters, videoCapabilities } from '../shared/studio/video-capabilities.ts'
 import { selectedVideoSize } from '../shared/studio/video-size.ts'
 import { modelApiFormats, modelApiFormatSchema, type ModelApiFormat, type ModelTypeSetting, type VideoModelSetting } from '../shared/studio/model-types.ts'
 import { CHAT_API_FORMATS } from '../shared/studio/chat-api-format.ts'
@@ -16,6 +16,7 @@ import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-for
 import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
 import { imageConversationPrompt, MAX_IMAGE_CONTEXT_IMAGES, MAX_IMAGE_CONTEXT_TEXT, MAX_IMAGE_CONTEXT_TURNS, type ImageConversationContext } from '../shared/studio/image-conversation.ts'
 import { maxSelectedSkills, type SkillReference } from '../shared/community-skills.ts'
+import { resolveVideoModelSetting } from './video-models.ts'
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationProtocol = 'auto' | 'openai' | 'sync' | 'async'
 export type CreationTaskProtocol = Exclude<CreationProtocol, 'auto'> | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
@@ -242,10 +243,16 @@ export function resolveCreationModelSettings(input: CreationInput, modelSetting?
     normalizeImageRequest(result)
     if (usesGeminiImageChat(result.model, result.apiFormat) && result.protocol === 'async') invalid('图片对话接口不支持异步任务。')
     if (result.imageOptions?.imageStream && result.protocol === 'async') invalid('流式预览请使用同步接口。')
-  } else if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && setting?.video?.autoAspectRatio) {
-    result.aspect_ratio = setting.video.autoAspectRatio
-    if ((!result.size || result.size === 'auto') && result.videoOptions?.resolution && result.videoOptions.resolution !== 'auto') {
-      result.size = selectedVideoSize({ resolution: result.videoOptions.resolution, aspectRatio: result.aspect_ratio })
+  } else if (result.kind === 'video') {
+    const references = result.referenceUrls?.length ?? 0
+    const mode = result.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
+    const video = videoCapabilities(result.model, mode, resolveVideoModelSetting(result.model, setting?.video))
+    if (result.duration === undefined && video?.autoDuration !== undefined) result.duration = video.autoDuration
+    if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && video?.autoAspectRatio) {
+      result.aspect_ratio = video.autoAspectRatio
+      if ((!result.size || result.size === 'auto') && result.videoOptions?.resolution && result.videoOptions.resolution !== 'auto') {
+        result.size = selectedVideoSize({ resolution: result.videoOptions.resolution, aspectRatio: result.aspect_ratio }, video)
+      }
     }
   }
   return result
@@ -265,7 +272,6 @@ function referenceFiles(input: CreationInput, prepared: CreationReference[]): Cr
 }
 
 function automaticVideoResolution(input: CreationInput, setting?: VideoModelSetting): CreationInput {
-  if (input.videoOptions && input.videoOptions.resolution !== 'auto') return input
   if (!input.videoOptions && (!setting?.autoResolution || setting.autoResolution === 'auto')) return input
   const custom = input.videoOptions?.customParameters.trim() ? JSON.parse(input.videoOptions.customParameters) : {}
   if (!record(custom)) invalid('自定义参数必须是 JSON 对象。')
@@ -274,15 +280,17 @@ function automaticVideoResolution(input: CreationInput, setting?: VideoModelSett
   const dimensions = /^(\d+)x(\d+)$/.exec(input.size ?? '')
   if (input.size && input.size !== 'auto' && !dimensions) invalid('请填写有效的视频宽度和高度。')
   const short = dimensions ? Math.min(Number(dimensions[1]), Number(dimensions[2])) : undefined
-  let resolution = short === undefined ? setting?.autoResolution : `${short}p`
+  const explicit = input.videoOptions?.resolution && input.videoOptions.resolution !== 'auto' ? input.videoOptions.resolution : undefined
+  if (explicit && (!setting?.sizes?.[explicit] || dimensions)) return input
+  let resolution = explicit ?? (short === undefined ? setting?.autoResolution : `${short}p`)
   if (short === 2160 && setting?.autoResolution !== '2160p' && !setting?.resolutions?.includes('2160p')) resolution = '4k'
   if (!resolution || resolution === 'auto') return input
   const customRatio = [custom, metadata].flatMap(source => ['aspect_ratio', 'aspectRatio', 'ratio']
     .map(key => source[key])).find((value): value is string => typeof value === 'string')
-  const ratio = customRatio ?? input.aspect_ratio ?? '16:9'
+  const ratio = customRatio ?? input.aspect_ratio ?? setting?.autoAspectRatio ?? '16:9'
   return {
     ...input, aspect_ratio: ratio,
-    size: dimensions ? input.size : selectedVideoSize({ resolution, aspectRatio: ratio }),
+    size: dimensions ? input.size : selectedVideoSize({ resolution, aspectRatio: ratio }, setting),
     videoOptions: { ...videoOptionsSchema.parse({ mode: (input.referenceUrls?.length ?? 0) > 1 ? 'reference-to-video'
       : input.referenceUrls?.length ? 'image-to-video' : 'text-to-video' }), ...input.videoOptions, resolution },
   }
@@ -292,9 +300,15 @@ function automaticVideoResolution(input: CreationInput, setting?: VideoModelSett
 export function buildCreationPayload(input: CreationInput, preparedReferences: CreationReference[] = [], tools: unknown[] = [], videoSetting?: VideoModelSetting): CreationPayload {
   if (input.kind !== 'video') return creationPayload(input, preparedReferences, tools)
   try {
-    const payload = creationPayload(automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
     const references = input.referenceUrls?.length ?? 0
     const mode = input.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
+    videoSetting = videoCapabilities(input.model, mode, resolveVideoModelSetting(input.model, videoSetting))
+    input = {
+      ...input,
+      ...(input.duration === undefined && videoSetting?.autoDuration !== undefined ? { duration: videoSetting.autoDuration } : {}),
+      ...((!input.aspect_ratio || input.aspect_ratio === 'auto') && videoSetting?.autoAspectRatio ? { aspect_ratio: videoSetting.autoAspectRatio } : {}),
+    }
+    const payload = creationPayload(automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
     validateVideoRequestParameters(payload.body, mode, videoSetting)
     return payload
   } catch (error) {

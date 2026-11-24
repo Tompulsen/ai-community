@@ -5,7 +5,6 @@ import { ChevronDown, Sparkles } from '@lucide/vue'
 import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
 import type { ModelApiFormat, VideoModelSetting } from '../../shared/studio/model-types'
 import { IMAGE_QUALITIES, IMAGE_RATIOS, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
-import { VIDEO_RATIOS, VIDEO_RESOLUTIONS } from '../../shared/studio/video-size'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import StudioChoiceGroup from './StudioChoiceGroup.vue'
 import CreationAdvanced from './CreationAdvanced.vue'
@@ -22,9 +21,11 @@ const duration = defineModel<number>('duration', { required: true })
 const size = defineModel<string>('size', { required: true })
 const protocol = defineModel<string>('protocol', { required: true })
 const options = (values: readonly string[]) => values.map(value => ({ value, label: value === 'auto' ? '自动' : value.toUpperCase() }))
-const ratioOptions = computed(() => options(props.kind === 'image' ? IMAGE_RATIOS : VIDEO_RATIOS))
 const limits = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
-const resolutions = computed(() => options([...new Set(['auto', ...(limits.value?.resolutions.length ? limits.value.resolutions : VIDEO_RESOLUTIONS)])]))
+const ratioOptions = computed(() => options(props.kind === 'image' ? IMAGE_RATIOS : ['auto', ...(limits.value?.aspectRatios || [])]))
+const resolutions = computed(() => options(['auto', ...(limits.value?.resolutions || [])]))
+const exactSizes = computed(() => Object.entries(limits.value?.sizes || {}).flatMap(([resolution, ratios]) =>
+  Object.entries(ratios).map(([aspectRatio, value]) => ({ resolution, aspectRatio, value }))))
 const durationIndex = computed(() => Math.max(0, limits.value?.durations.indexOf(duration.value) ?? 0))
 const qualityLabel: Record<string, string> = { auto: '自动', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高' }
 function ratioShape(value: string) {
@@ -34,6 +35,12 @@ function ratioShape(value: string) {
 function revealInvalid(event: Event) {
   const field = event.target as HTMLElement
   for (let details = field.closest('details'); details; details = details.parentElement?.closest('details') || null) details.open = true
+}
+function selectVideoSize(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  const match = exactSizes.value.find(item => item.value === value)
+  if (match) { video.value.resolution = match.resolution; ratio.value = match.aspectRatio }
+  size.value = value
 }
 </script>
 <template>
@@ -68,7 +75,7 @@ function revealInvalid(event: Event) {
     </template>
     <details class="parameter-advanced">
       <summary>自定义参数<ChevronDown :size="15" /></summary>
-      <label v-if="!geminiImage" class="parameter-inline"><span>尺寸</span><input v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required aria-label="尺寸" /></label>
+      <label v-if="!geminiImage" class="parameter-inline"><span>尺寸</span><select v-if="kind === 'video' && exactSizes.length" :value="size" class="control" aria-label="尺寸" @change="selectVideoSize"><option value="auto">自动</option><option v-if="size !== 'auto' && !exactSizes.some(item => item.value === size)" :value="size">{{ size }}（不在可选列表中）</option><option v-for="value in [...new Set(exactSizes.map(item => item.value))]" :key="value" :value="value">{{ value }}</option></select><input v-else v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required aria-label="尺寸" /></label>
       <CreationAdvanced v-model:image="image" v-model:video="video" v-model:protocol="protocol" v-model:api-format="apiFormat" :kind="kind" :model="model" :model-api-format="modelApiFormat" :video-setting="videoSetting" embedded hide-primary />
     </details>
   </div>

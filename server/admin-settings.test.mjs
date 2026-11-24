@@ -384,6 +384,38 @@ test('video resolution settings reject unsafe, conflicting and oversized configu
   }
 })
 
+test('video parameter configuration round-trips through the existing versioned model settings', async () => {
+  const f = fixture(), before = await f.request(modelsPath)
+  const video = { resolutions: ['768p', '1080p'], autoResolution: '768p', durations: [4, 8, 10, 15], autoDuration: 10,
+    aspectRatios: ['16:9', '9:16'], autoAspectRatio: '16:9', unsupportedParameters: ['frame_rate'],
+    sizes: { '768p': { '16:9': '1368x768', '9:16': '768x1368' }, '1080p': { '16:9': '1920x1080', '9:16': '1080x1920' } },
+    modes: { 'reference-to-video': { durations: [8], resolutions: ['768p'] } } }
+  const items = [{ id: 'MiniMax H3视频生成', kind: 'video', video }]
+  const saved = await f.request(modelsPath, 'PATCH', { items, version: before.version })
+  assert.deepEqual(saved.items, items)
+  assert.deepEqual((await f.request(modelsPath)).items, items)
+  assert.deepEqual(f.state.row.clientOptions.communityModelTypes, items)
+  assert.deepEqual(f.state.row.clientOptions.custom, { preserved: true })
+})
+
+test('video parameter configuration rejects inconsistent defaults and maps without changing storage', async () => {
+  for (const video of [{ durations: [] }, { durations: [4, 4] }, { durations: [4.5] }, { durations: [0, 3601] },
+    { durations: [4, 8], autoDuration: 10 }, { aspectRatios: ['16:9'], autoAspectRatio: '9:16' },
+    { aspectRatios: ['auto'] }, { unsupportedParameters: ['frame_rate', 'frame_rate'] },
+    { sizes: { '768p': { '16:9': '1920x1080' } } },
+    { sizes: { '768p': { '16:9': '1367x768' } } },
+    { sizes: { '768p': { '16:9': '1368x768' }, '1080p': { '9:16': '1080x1920' } } },
+    { autoResolution: '1080p', sizes: { '768p': { '16:9': '1368x768' } } },
+    { autoAspectRatio: '9:16', sizes: { '768p': { '16:9': '1368x768' } } },
+    { resolutions: ['768p', '1080p'], sizes: { '768p': { '16:9': '1368x768' } } },
+    { modes: { 'reference-to-video': { durations: [4.5] } } },
+    { modes: { unsupported: { durations: [4] } } }]) {
+    const f = fixture(), before = await f.request(modelsPath)
+    await assert.rejects(f.request(modelsPath, 'PATCH', { items: [{ id: 'configured-video', kind: 'video', video }], version: before.version }), { statusCode: 400 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  }
+})
+
 test('review settings save their own fields atomically without changing uploads, models or existing submissions', async () => {
   const f = fixture({ clientOptions: { communityModelTypes: [{ id: 'keep-model', kind: 'video' }], communityFeedWeights: { interest: 50, fresh: 30, explore: 20 } } })
   const path = '/api/admin/community/config', before = await f.request(path)

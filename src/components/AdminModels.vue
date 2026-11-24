@@ -9,7 +9,7 @@ import { kindLabels, searchModels } from '../../shared/studio/model-catalog'
 import ContentSkeleton from './ContentSkeleton.vue'
 
 const props = defineProps<{ confirmLeave: () => boolean | Promise<boolean> }>()
-type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string }
+type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string; durationInput: string; defaultDurationInput: string | number; ratioInput: string; sizesInput: string; unsupportedInput: string }
 type Row = CreationModel & { available: boolean; setting?: ModelTypeSetting }
 const models = ref<CreationModel[]>([]), settings = ref<ModelTypeSetting[]>([])
 const groups = ref<CreationGroup[]>([]), groupFilter = ref('')
@@ -17,7 +17,7 @@ const loading = ref(true), pulling = ref(false), busy = ref(false), loaded = ref
 const error = ref(''), catalogError = ref(''), version = ref(''), query = ref('')
 const source = ref('all'), kindFilter = ref('all'), selectedId = ref('')
 const draft = ref<Draft | null>(null), baseline = ref(''), saved = ref(false)
-const editorHeading = ref<HTMLElement>(), resetDialog = ref<HTMLDialogElement>()
+const editorHeading = ref<HTMLElement>(), resetDialog = ref<HTMLDialogElement>(), validationError = ref<HTMLElement>()
 const groupFilterId = useId()
 const owner = session.user?.id, account = session.user?.accountId || owner
 let active = true
@@ -52,10 +52,14 @@ function rowKind(item: Row) { return item.setting?.kind || item.configuredKind |
 function groupName(id: string) { return groups.value.find(item => item.id === id)?.name || id }
 function edit(item: Row) {
   const setting = item.setting || { id: item.id, kind: rowKind(item) || 'text' }
+  const video = setting.video || (!item.setting ? item.video : undefined)
   draft.value = { ...setting, tagsInput: setting.tags?.join(', ') || '',
-    resolutionInput: setting.video?.resolutions?.join(', ') || '',
+    resolutionInput: video?.resolutions?.join(', ') || '',
+    durationInput: video?.durations?.join(', ') || '', defaultDurationInput: video?.autoDuration?.toString() || '',
+    ratioInput: video?.aspectRatios?.join(', ') || '', sizesInput: video?.sizes ? JSON.stringify(video.sizes, null, 2) : '',
+    unsupportedInput: video?.unsupportedParameters?.join(', ') || '',
     ...(setting.kind === 'image' ? { image: { ...setting.image } } : {}),
-    ...(setting.kind === 'video' ? { video: { ...setting.video } } : {}),
+    ...(setting.kind === 'video' ? { video: video ? JSON.parse(JSON.stringify(video)) : {} } : {}),
     ...(setting.kind === 'text' ? { text: { ...setting.text } } : {}),
   }
   baseline.value = JSON.stringify(draft.value); saved.value = false; error.value = ''
@@ -132,7 +136,10 @@ function changeKind() {
   if (item.apiFormat && item.apiFormat !== 'auto' && !(modelApiFormats[item.kind] as readonly string[]).includes(item.apiFormat)) delete item.apiFormat
   if (item.kind === 'text') { item.text ||= {}; delete item.protocol } else delete item.text
   if (item.kind === 'image') item.image ||= {}; else delete item.image
-  if (item.kind === 'video') item.video ||= {}; else { delete item.video; item.resolutionInput = '' }
+  if (item.kind === 'video') item.video ||= {}; else {
+    delete item.video
+    item.resolutionInput = ''; item.durationInput = ''; item.defaultDurationInput = ''; item.ratioInput = ''; item.sizesInput = ''; item.unsupportedInput = ''
+  }
   if (geminiImage.value && item.protocol === 'async') delete item.protocol
 }
 function normalized(): ModelTypeSetting {
@@ -150,6 +157,27 @@ function normalized(): ModelTypeSetting {
     if (automatic) video.autoResolution = automatic; else delete video.autoResolution
     if (item.resolutionInput.trim()) video.resolutions = item.resolutionInput.toLowerCase().split(/[\s,，]+/u).filter(Boolean)
     else delete video.resolutions
+    if (item.durationInput.trim()) video.durations = item.durationInput.split(/[\s,，]+/u).filter(Boolean).map(Number)
+    else delete video.durations
+    const resolutionsChanged = JSON.stringify(video.resolutions) !== JSON.stringify(item.video?.resolutions)
+    const durationsChanged = JSON.stringify(video.durations) !== JSON.stringify(item.video?.durations)
+    if (video.modes && (resolutionsChanged || durationsChanged)) {
+      video.modes = Object.fromEntries(Object.entries(video.modes).flatMap(([mode, limits]) => {
+        const next = { ...limits }
+        if (resolutionsChanged) delete next.resolutions
+        if (durationsChanged) delete next.durations
+        return Object.keys(next).length ? [[mode, next]] : []
+      }))
+      if (!Object.keys(video.modes).length) delete video.modes
+    }
+    if (String(item.defaultDurationInput).trim()) video.autoDuration = Number(item.defaultDurationInput)
+    else delete video.autoDuration
+    if (item.ratioInput.trim()) video.aspectRatios = item.ratioInput.split(/[\s,，]+/u).filter(Boolean)
+    else delete video.aspectRatios
+    if (item.sizesInput.trim()) video.sizes = JSON.parse(item.sizesInput)
+    else delete video.sizes
+    if (item.unsupportedInput.trim()) video.unsupportedParameters = item.unsupportedInput.split(/[\s,，]+/u).filter(Boolean)
+    else delete video.unsupportedParameters
   }
   const name = item.name?.trim(), remark = item.remark?.trim()
   const tags = item.tagsInput.split(/[,，\n]+/u).map(tag => tag.trim()).filter(Boolean)
@@ -181,18 +209,29 @@ async function write(items: ModelTypeSetting[]) {
 }
 async function save() {
   if (!draft.value || busy.value || !loaded.value) return
-  const item = normalized()
+  let item: ModelTypeSetting
+  try { item = normalized() }
+  catch {
+    error.value = '精确尺寸须为有效的 JSON 对象，按分辨率和画面比例填写宽高。'
+    await nextTick(); validationError.value?.focus()
+    return
+  }
   const next = settings.value.some(setting => setting.id === item.id)
     ? settings.value.map(setting => setting.id === item.id ? item : setting) : [...settings.value, item]
   const parsed = modelTypesSchema.safeParse(next)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!
     error.value = issue.path.includes('tags') ? '模型标签最多 12 个，每个最多 32 字符，不能重复。'
+      : issue.path.includes('durations') || issue.path.includes('autoDuration') ? '请检查视频时长：使用 1 到 3600 的整数秒，可选值不能重复，默认值须包含在可选值中。'
+      : issue.path.includes('aspectRatios') ? '请检查可选画面比例：使用 16:9 等有效比例，不能重复。'
+      : issue.path.includes('sizes') ? '精确尺寸须按可选分辨率和画面比例完整配置，宽高短边须匹配分辨率。'
+      : issue.path.includes('unsupportedParameters') ? '不支持的参数须为字母开头的字段名，只能包含字母、数字和下划线，不能重复。'
       : issue.path.includes('autoAspectRatio') ? '请检查自动画面比例：使用 auto 或 16:9 等有效比例。'
         : issue.path.includes('video') ? '请检查视频分辨率：使用 480p、720p、4k 等档位；自动值须包含在可选值中，且可选值不能重复。'
           : issue.path.includes('name') ? '显示名称最多 120 字符，不能包含控制字符。'
             : issue.path.includes('remark') ? '模型备注最多 2000 字符，不能包含控制字符。'
               : /接口|协议/u.test(issue.message) ? issue.message : '模型配置无效，请检查类型、接口与请求参数；最多可配置 500 个模型。'
+    await nextTick(); validationError.value?.focus()
     return
   }
   await write(parsed.data)
@@ -273,16 +312,22 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
                 <div class="model-field-pair">
                   <label class="field"><span>自动分辨率</span><input v-model="draft.video.autoResolution" class="control" maxlength="16" placeholder="auto 或 720p" /></label>
                   <label class="field"><span>可选分辨率</span><input v-model="draft.resolutionInput" class="control" maxlength="256" placeholder="480p, 720p, 1080p" /></label>
+                  <label class="field"><span>默认时长（秒）</span><input v-model="draft.defaultDurationInput" class="control" type="number" min="1" max="3600" step="1" /></label>
+                  <label class="field"><span>可选时长（秒）</span><input v-model="draft.durationInput" class="control" maxlength="20000" placeholder="5, 10, 15" /></label>
                   <label class="field"><span>自动画面比例</span><input v-model="draft.video.autoAspectRatio" class="control" maxlength="7" placeholder="auto 或 16:9" /></label>
+                  <label class="field"><span>可选画面比例</span><input v-model="draft.ratioInput" class="control" maxlength="256" placeholder="16:9, 9:16" /></label>
                   <label class="field"><span>视频参数格式</span><select :value="draft.video.parameterFormat || 'auto'" class="control" @change="setOption(draft.video, 'parameterFormat', $event)"><option value="auto">自动识别</option><option value="openai">OpenAI</option><option value="xai">xAI</option><option value="seedance">Seedance</option><option value="gemini">Gemini</option></select></label>
+                  <label class="field"><span>不支持的参数</span><input v-model="draft.unsupportedInput" class="control" maxlength="2200" placeholder="frame_rate" /></label>
                 </div>
-                <p class="form-note">分辨率以逗号分隔；留空或填 auto 时沿用上游默认。</p>
+                <p class="form-note">可选值以逗号分隔；留空时使用默认配置。</p>
+                <label class="field"><span>精确尺寸 JSON</span><textarea v-model="draft.sizesInput" class="control" rows="6" maxlength="20000" spellcheck="false" aria-describedby="model-video-sizes-help" /></label>
+                <p id="model-video-sizes-help" class="form-note">按分辨率和比例填写，例如 {"720p":{"16:9":"1280x720"}}；留空时使用后台默认尺寸规则。</p>
               </template>
             </section>
             <label class="field"><span>备注</span><textarea v-model="draft.remark" class="control" rows="3" maxlength="2000" aria-describedby="model-remark-help" /></label>
             <p id="model-remark-help" class="form-note">仅管理员可见。</p>
           </fieldset>
-          <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+          <p v-if="error" ref="validationError" class="form-error" role="alert" tabindex="-1">{{ error }}</p>
           <footer class="model-savebar">
             <span class="form-note" role="status">{{ dirty ? '有未保存的修改' : saved ? '已保存' : configured ? '配置已生效' : '使用自动识别' }}<Check v-if="!dirty && saved" :size="14" aria-hidden="true" /></span>
             <button v-if="configured" type="button" class="icon-button" aria-label="恢复自动识别" title="恢复自动识别" :disabled="busy" @click="resetDialog?.showModal()"><RotateCcw :size="17" aria-hidden="true" /></button>

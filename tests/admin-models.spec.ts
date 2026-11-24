@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import type { ModelTypeSetting } from '../shared/studio/model-types'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-type CatalogModel = { id: string; name?: string; kinds: ('text' | 'image' | 'video')[]; tags?: string[]; groups?: string[] }
+type CatalogModel = { id: string; name?: string; kinds: ('text' | 'image' | 'video')[]; tags?: string[]; groups?: string[]; video?: ModelTypeSetting['video'] }
 async function modelsFixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.isAdmin = true
@@ -27,9 +27,9 @@ async function modelsFixture(page: Page) {
   await page.route('**/api/site', route => route.fulfill({ json: { brand: '测试社区', logoUrl: '' } }))
   await page.route('**/api/creation/models*', route => {
     const request = route.request(), url = new URL(request.url())
+    if (url.searchParams.get('management') !== '1') return route.fulfill({ json: { tokenId: 41, items: [] } })
     reads.push({ path: url.pathname, url: request.url(), headers: request.headers() })
     if (state.failCatalog) return route.fulfill({ status: 503, json: { message: '模型目录拉取失败，请重试。' } })
-    if (url.searchParams.get('management') !== '1') return route.fulfill({ status: 400, json: { message: '管理目录需要 management=1' } })
     return route.fulfill({ json: { items: state.catalog, groups: state.groups } })
   })
   await page.route('**/api/admin/**', route => {
@@ -195,6 +195,60 @@ test('selected models save names, tags, interfaces and typed automatic parameter
   await expect(page.getByLabel('显示名称', { exact: true })).toHaveValue('图片创作')
   await expect(page.getByLabel('模型标签', { exact: true })).toHaveValue('绘图, 透明背景')
   await expect(combo(page, '自动分辨率')).toHaveValue('2k')
+})
+
+test('video parameter definitions persist with modes, validate JSON and reset to backend defaults', async ({ page }, info) => {
+  const fixture = await modelsFixture(page)
+  const defaults = { resolutions: ['480p'], durations: [4, 8], autoDuration: 8, aspectRatios: ['16:9'] }
+  fixture.state.catalog.find(model => model.id === 'custom/video')!.video = defaults
+  const modes = { 'reference-to-video': { resolutions: ['720p'], durations: [5] } }
+  fixture.state.items = [{ id: 'custom/video', kind: 'video', video: { resolutions: ['720p'], durations: [5, 10], autoDuration: 10,
+    aspectRatios: ['16:9', '9:16'], modes } }]
+  let generations = 0
+  await page.route('**/api/creation/generate', route => { generations++; return route.fulfill({ status: 500, json: { message: 'Unexpected generation' } }) })
+  await page.goto('/admin?tab=models')
+  await configure(page, 'custom/video').click()
+  await page.getByLabel('自动分辨率', { exact: true }).fill('720p')
+  await page.getByLabel('可选分辨率', { exact: true }).fill('720p')
+  await page.getByLabel('可选时长（秒）', { exact: true }).fill('5，10')
+  await page.getByLabel('默认时长（秒）', { exact: true }).fill('10')
+  await page.getByLabel('可选画面比例', { exact: true }).fill('16:9, 9:16')
+  await page.getByLabel('不支持的参数', { exact: true }).fill('frame_rate')
+  await page.getByLabel('精确尺寸 JSON', { exact: true }).fill('{broken')
+  await save(page).click()
+  await expect(page.getByRole('alert')).toContainText('有效的 JSON')
+  await expect(page.getByRole('alert')).toBeFocused()
+  expect(fixture.writes).toHaveLength(0)
+  const sizes = { '720p': { '16:9': '1360x720', '9:16': '720x1360' } }
+  await page.getByLabel('精确尺寸 JSON', { exact: true }).fill(JSON.stringify(sizes))
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video).toEqual({
+    autoResolution: '720p', resolutions: ['720p'], durations: [5, 10], autoDuration: 10,
+    aspectRatios: ['16:9', '9:16'], sizes, unsupportedParameters: ['frame_rate'], modes,
+  })
+  await page.reload()
+  await configure(page, 'custom/video').click()
+  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('5, 10')
+  await expect(page.getByLabel('默认时长（秒）', { exact: true })).toHaveValue('10')
+  expect(JSON.parse(await page.getByLabel('精确尺寸 JSON', { exact: true }).inputValue())).toEqual(sizes)
+  await page.screenshot({ path: info.outputPath('video-parameter-definitions.png'), fullPage: true })
+  await page.getByLabel('可选时长（秒）', { exact: true }).fill('5, 15')
+  await page.getByLabel('默认时长（秒）', { exact: true }).fill('15')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video?.modes).toEqual({ 'reference-to-video': { resolutions: ['720p'] } })
+  await page.getByLabel('自动分辨率', { exact: true }).fill('1080p')
+  await page.getByLabel('可选分辨率', { exact: true }).fill('1080p')
+  await page.getByLabel('精确尺寸 JSON', { exact: true }).fill('{"1080p":{"16:9":"1920x1080","9:16":"1080x1920"}}')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video?.resolutions).toEqual(['1080p'])
+  expect(item(fixture, 'custom/video')?.video?.modes).toBeUndefined()
+  await page.getByRole('button', { name: '恢复自动识别', exact: true }).click()
+  await page.getByRole('dialog', { name: '恢复自动识别？', exact: true }).getByRole('button', { name: '确认恢复', exact: true }).click()
+  await expect.poll(() => fixture.state.items.length).toBe(0)
+  await expect(page.getByLabel('可选分辨率', { exact: true })).toHaveValue('480p')
+  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('4, 8')
+  await expect(page.getByLabel('精确尺寸 JSON', { exact: true })).toHaveValue('')
+  expect(generations).toBe(0)
 })
 
 test('model drafts survive cancelled selection, navigation, back and pull actions', async ({ page }) => {

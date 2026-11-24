@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import Fastify from 'fastify'
-import { buildCreationPayload, validateCreationInput } from './creation-contract.ts'
+import { buildCreationPayload, resolveCreationModelSettings, validateCreationInput } from './creation-contract.ts'
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema } from '../shared/studio/options.ts'
 import { readGenerationStream } from './creation/stream.ts'
 import { handleStudioTools } from './studio-tools.ts'
 import { normalizeVideoParameters, videoCapabilities } from '../shared/studio/video-capabilities.ts'
+import { resolveVideoModelSetting } from './video-models.ts'
+import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
 const image = { kind: 'image', model: 'gpt-image-2', prompt: 'water', aspect_ratio: '16:9' }
 const options = imageOptionsSchema.parse({ resolution: '2k', quality: 'high', imageBackground: 'transparent', imageOutputFormat: 'jpeg' })
 const video = { kind: 'video', model: 'sora-2', prompt: 'water', duration: 8, aspect_ratio: '16:9', size: '1280x720' }
@@ -13,13 +15,13 @@ const png = 'data:image/png;base64,aGVsbG8='
 test('editable video parameters follow model and mode limits without changing the source snapshot', () => {
   const draft = { model: 'sd2.0-fast-720p', mode: 'text-to-video', resolution: '480p', duration: 8, aspectRatio: '16:9', size: '854x480' }
   const snapshot = structuredClone(draft)
-  assert.deepEqual(normalizeVideoParameters(draft), { ...draft, resolution: '720p', size: '1280x720' })
+  assert.deepEqual(normalizeVideoParameters(draft, resolveVideoModelSetting(draft.model)), { ...draft, resolution: '720p', size: '1280x720' })
   assert.deepEqual(draft, snapshot)
-  assert.equal(normalizeVideoParameters({ ...draft, model: 'sd2.0-fast-480p', resolution: '720p' }).resolution, '480p')
-  assert.deepEqual(normalizeVideoParameters({ ...draft, model: 'sora-2', resolution: 'auto', duration: 7 }),
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'sd2.0-fast-480p', resolution: '720p' }, resolveVideoModelSetting('sd2.0-fast-480p')).resolution, '480p')
+  assert.deepEqual(normalizeVideoParameters({ ...draft, model: 'sora-2', resolution: 'auto', duration: 7 }, resolveVideoModelSetting('sora-2')),
     { ...draft, model: 'sora-2', resolution: 'auto', duration: 8 })
-  assert.equal(normalizeVideoParameters({ ...draft, model: 'grok-imagine-video-1.5', mode: 'reference-to-video', resolution: '1080p' }).resolution, '720p')
-  assert.equal(normalizeVideoParameters({ ...draft, model: 'veo-3.1', mode: 'reference-to-video', duration: 4 }).duration, 8)
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'grok-imagine-video-1.5', mode: 'reference-to-video', resolution: '1080p' }, resolveVideoModelSetting('grok-imagine-video-1.5')).resolution, '720p')
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'veo-3.1', mode: 'reference-to-video', duration: 4 }, resolveVideoModelSetting('veo-3.1')).duration, 8)
   assert.deepEqual(normalizeVideoParameters({ ...draft, model: 'unknown' }), { ...draft, model: 'unknown' })
   const settings = { resolutions: ['540p', '1080p'], autoResolution: '1080p' }
   const custom = { ...draft, model: 'configured-video', duration: 23 }
@@ -40,8 +42,8 @@ test('image presets and output options use the existing exact sizes and transpar
   assert.throws(() => validateCreationInput({ ...image, protocol: 'async', imageOptions: { ...options, imageStream: true } }), /同步/)
 })
 test('video capability rules validate final custom overrides, preserving the old first-last roles', () => {
-  assert.deepEqual(videoCapabilities('sora-2').durations, [4, 8, 12])
-  assert.deepEqual(videoCapabilities('veo-3.1', 'reference-to-video').durations, [8])
+  assert.deepEqual(videoCapabilities('sora-2', 'text-to-video', resolveVideoModelSetting('sora-2')).durations, [4, 8, 12])
+  assert.deepEqual(videoCapabilities('veo-3.1', 'reference-to-video', resolveVideoModelSetting('veo-3.1')).durations, [8])
   assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, duration: 7, videoOptions: { mode: 'text-to-video' } })), /4 \/ 8 \/ 12/)
   assert.equal(buildCreationPayload(validateCreationInput({ ...video, model: 'unknown-video', videoOptions: { mode: 'text-to-video' } })).body.get('model'), 'unknown-video')
   const sent = JSON.parse(buildCreationPayload(validateCreationInput({ ...video, model: 'doubao-seedance-2-0', referenceUrls: [png, png], videoOptions: { mode: 'first-last-frame', generateAudio: true } })).body)
@@ -67,7 +69,7 @@ test('SD-compatible aliases reuse the working workbench range without changing e
     assert.throws(() => buildCreationPayload(validateCreationInput({ ...video, model, size: '1920x1080',
       videoOptions: { mode: 'text-to-video', resolution } })), /分辨率/)
   }
-  assert.deepEqual(videoCapabilities('sd2.0-mini-720p').durations, Array.from({ length: 12 }, (_, index) => index + 4))
+  assert.deepEqual(videoCapabilities('sd2.0-mini-720p', 'text-to-video', resolveVideoModelSetting('sd2.0-mini-720p')).durations, Array.from({ length: 12 }, (_, index) => index + 4))
   assert.equal(videoCapabilities('unknown-video-model'), undefined)
 })
 test('automatic video size is omitted from multipart and JSON reference requests', () => {
@@ -116,9 +118,10 @@ test('backend video resolution settings govern automatic requests without replac
   }
 })
 test('configured resolution choices override built-in tiers while unknown models retain generic safety checks', () => {
-  assert.deepEqual(videoCapabilities('sora-2', 'text-to-video', { autoResolution: '1080p', resolutions: ['720p', '1080p'] }),
-    { resolutions: ['720p', '1080p'], durations: [4, 8, 12] })
-  assert.equal(videoCapabilities('new-video', 'text-to-video', { autoResolution: '540p' }), undefined)
+  const limits = videoCapabilities('sora-2', 'text-to-video', resolveVideoModelSetting('sora-2', { autoResolution: '1080p', resolutions: ['720p', '1080p'] }))
+  assert.deepEqual(limits.resolutions, ['720p', '1080p'])
+  assert.deepEqual(limits.durations, [4, 8, 12])
+  assert.deepEqual(videoCapabilities('new-video', 'text-to-video', { autoResolution: '540p' }).resolutions, [])
   const make = customParameters => validateCreationInput({ ...video, model: 'new-video', size: 'auto',
     videoOptions: { mode: 'text-to-video', resolution: 'auto', customParameters } })
   for (const custom of ['{"seconds":-1}', '{"seconds":3601}', '{"seconds":1.5}', '{"seconds":true}',
@@ -158,6 +161,101 @@ test('automatic backend resolution reaches vendor metadata and reference JSON th
   const sent = JSON.parse(payload.body)
   assert.equal(sent.size, '1280x720')
   assert.equal(sent.metadata.resolution, '720p')
+})
+test('server video defaults preserve mode limits and accept administrator overrides without stale inherited defaults', () => {
+  assert.equal(videoCapabilities('sora-2'), undefined)
+  assert.equal(resolveVideoModelSetting('unknown-video'), undefined)
+  assert.deepEqual(videoCapabilities('grok-imagine-video', 'reference-to-video', resolveVideoModelSetting('grok-imagine-video')).durations,
+    Array.from({ length: 10 }, (_, index) => index + 1))
+  const override = resolveVideoModelSetting('grok-imagine-video-1.5', { resolutions: ['1080p'], durations: [6, 12],
+    modes: { 'first-last-frame': { durations: [6] } } })
+  assert.deepEqual(videoCapabilities('grok-imagine-video-1.5', 'reference-to-video', override).resolutions, ['1080p'])
+  assert.deepEqual(videoCapabilities('grok-imagine-video-1.5', 'first-last-frame', override).durations, [6])
+  assert.deepEqual(videoCapabilities('veo-3.1', 'reference-to-video', resolveVideoModelSetting('veo-3.1', { resolutions: ['720p'] })).durations, [8])
+  const mapped = resolveVideoModelSetting('grok-imagine-video-1.5', { sizes: { '1080p': { '16:9': '1920x1080' } } })
+  assert.deepEqual(videoCapabilities('grok-imagine-video-1.5', 'reference-to-video', mapped).resolutions, ['1080p'])
+  const firstLast = buildCreationPayload(validateCreationInput({ ...video, model: 'configured-video', duration: 4,
+    referenceUrls: [png, png], videoOptions: { mode: 'first-last-frame' } }), [], [],
+    { resolutions: ['720p'], durations: [4, 8], modes: { 'first-last-frame': { durations: [4] }, 'reference-to-video': { durations: [8] } } })
+  assert.equal(JSON.parse(firstLast.body).seconds, '4')
+  const modeSetting = { resolutions: ['720p', '1080p'], autoResolution: '1080p', durations: [8, 10], autoDuration: 10,
+    modes: { 'reference-to-video': { resolutions: ['720p'], durations: [8] } } }
+  const automaticReference = validateCreationInput({ ...video, model: 'configured-video', duration: undefined, size: 'auto',
+    referenceUrls: [png], videoOptions: { mode: 'reference-to-video', resolution: 'auto' } })
+  const resolvedReference = resolveCreationModelSettings(automaticReference, { id: 'configured-video', kind: 'video', video: modeSetting })
+  assert.equal(resolvedReference.duration, 8)
+  for (const request of [automaticReference, resolvedReference]) {
+    const sent = JSON.parse(buildCreationPayload(request, [], [], modeSetting).body)
+    assert.equal(sent.seconds, '8')
+    assert.equal(sent.metadata.resolution, '720p')
+    assert.equal(sent.size, '1280x720')
+  }
+  for (const stored of [{ resolutions: ['540p'] }, { durations: [4, 8, 12] }, { aspectRatios: ['1:1'] },
+    { resolutions: ['1080p'], aspectRatios: ['9:16'] }, { autoResolution: '540p' }, { autoDuration: 20 },
+    { sizes: { '768p': { '16:9': '1368x768' } } }]) {
+    const resolved = resolveVideoModelSetting('MiniMax H3视频生成', stored)
+    assert.equal(videoModelSettingSchema.safeParse(resolved).success, true, JSON.stringify(stored))
+  }
+  const narrowed = resolveVideoModelSetting('MiniMax H3视频生成', { resolutions: ['1080p'], durations: [4, 8, 12], aspectRatios: ['9:16'] })
+  assert.equal(narrowed.autoResolution, '1080p')
+  assert.equal(narrowed.autoDuration, 4)
+  assert.equal(narrowed.autoAspectRatio, '9:16')
+  assert.deepEqual(narrowed.sizes, { '1080p': { '9:16': '1080x1920' } })
+  for (const model of ['MiniMax H3视频生成', 'configured-video']) {
+    const mapped = resolveVideoModelSetting(model, { sizes: { '768p': { '16:9': '1368x768' } } })
+    assert.deepEqual(mapped.resolutions, ['768p'])
+    assert.deepEqual(mapped.aspectRatios, ['16:9'])
+    assert.equal(videoModelSettingSchema.safeParse(mapped).success, true)
+  }
+})
+test('H3 backend defaults and exact dimensions reach both video protocols while preserving explicit duration', () => {
+  const model = 'MiniMax H3视频生成', setting = resolveVideoModelSetting(model)
+  assert.equal(videoModelSettingSchema.safeParse(setting).success, true)
+  const fields = payload => typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+  const make = values => validateCreationInput({ kind: 'video', model, prompt: 'water', size: 'auto',
+    aspect_ratio: 'auto', videoOptions: { mode: 'text-to-video' }, ...values })
+  const input = make({}), snapshot = structuredClone(input)
+  const automatic = fields(buildCreationPayload(input))
+  assert.equal(automatic.seconds, '10')
+  assert.equal(automatic.size, '1368x768')
+  assert.equal(JSON.parse(automatic.metadata).resolution, '768p')
+  assert.deepEqual(input, snapshot)
+  assert.equal(resolveCreationModelSettings(input).duration, 10)
+  for (const protocol of ['openai', 'async']) for (const [resolution, ratios] of Object.entries(setting.sizes)) {
+    for (const [aspect_ratio, expected] of Object.entries(ratios)) {
+      const payload = buildCreationPayload(make({ protocol, duration: 4, aspect_ratio,
+        videoOptions: { mode: 'text-to-video', resolution } }))
+      const sent = fields(payload)
+      assert.equal(sent.size, expected)
+      assert.equal(sent.seconds, '4')
+      assert.equal(JSON.parse(sent.metadata).resolution, resolution)
+      assert.equal(payload.path, protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos')
+    }
+  }
+  const resolved = resolveCreationModelSettings(make({ videoOptions: { mode: 'text-to-video', resolution: '768p' } }))
+  assert.equal(resolved.size, '1368x768')
+  assert.equal(resolved.aspect_ratio, '16:9')
+})
+test('H3 final JSON and multipart validation rejects custom bypasses before a request is returned', () => {
+  const model = 'MiniMax H3视频生成'
+  const invalid = [
+    { seconds: 3 }, { seconds: 16 }, { seconds: 4.5 }, { duration: 16 }, { durationSeconds: 16 },
+    { duration_seconds: 16 }, { resolution: '720p' }, { resolution_name: '480p' },
+    { aspect_ratio: '2:1' }, { aspectRatio: '2:1' }, { ratio: '2:1' },
+    { size: '1366x768' }, { size: '2000x768' }, { frame_rate: 30 },
+    { resolution: '768p', aspect_ratio: '16:9', size: '768x768' },
+  ]
+  for (const mode of ['text-to-video', 'reference-to-video']) for (const custom of invalid) {
+    for (const parameters of [custom, { metadata: custom }]) {
+      const input = validateCreationInput({ kind: 'video', model, prompt: 'water', size: 'auto',
+        referenceUrls: mode === 'reference-to-video' ? [png] : [],
+        videoOptions: { mode, customParameters: JSON.stringify(parameters) } })
+      assert.throws(() => buildCreationPayload(input), { statusCode: 400 }, JSON.stringify({ mode, parameters }))
+    }
+  }
+  const valid = buildCreationPayload(validateCreationInput({ kind: 'video', model, prompt: 'water', duration: 15,
+    aspect_ratio: '16:9', size: '1368x768', videoOptions: { mode: 'text-to-video', resolution: '768p' } }))
+  assert.equal(valid.body.get('seconds'), '15')
 })
 test('chat formats retain real multi-turn history, attachment bytes and advanced parameters', () => {
   const messages = [{ role: 'user', content: 'previous' }, { role: 'assistant', content: 'answer' }, { role: 'user', content: [{ type: 'file', file: { filename: 'report.pdf', file_data: 'data:application/pdf;base64,aGVsbG8=' } }] }]

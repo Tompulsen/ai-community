@@ -1,4 +1,5 @@
 import type { VideoDraft } from "./types.ts";
+import type { VideoModelSetting } from "./model-types.ts";
 
 export const VIDEO_RESOLUTIONS = ["480p", "720p", "1080p", "auto"];
 export const VIDEO_RATIOS = [
@@ -47,11 +48,11 @@ export function isVideoSizeAuto(config: SizeConfig) {
 
 export function selectedVideoSize(
   config: Pick<SizeConfig, "resolution" | "aspectRatio">,
+  setting?: VideoModelSetting,
 ) {
-  return config.resolution === "auto" ||
-    ["auto", "adaptive"].includes(config.aspectRatio)
-    ? "auto"
-    : calculateVideoSize(config.resolution, config.aspectRatio);
+  if (config.resolution === "auto" || ["auto", "adaptive"].includes(config.aspectRatio)) return "auto";
+  if (setting?.sizes) return setting.sizes[config.resolution]?.[config.aspectRatio] ?? "auto";
+  return calculateVideoSize(config.resolution, config.aspectRatio);
 }
 
 export function videoSizePreview(config: SizeConfig) {

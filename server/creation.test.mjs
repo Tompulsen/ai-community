@@ -15,6 +15,7 @@ import { handleCreation, processCreationTasks } from './creation.ts'
 import { readSkillPackage } from './skill-package.ts'
 import { httpError } from './auth.ts'
 import { NewApiError } from './native-account/config.ts'
+import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -1319,16 +1320,26 @@ test('server model types apply to exact IDs across group catalogs without granti
   assert(second.items.every(item => !Object.hasOwn(item, 'video')))
 })
 
-test('model catalogs only publish validated administrator video settings instead of upstream metadata', async t => {
-  for (const video of [undefined, { autoResolution: '720p', headers: { authorization: 'must-not-forward' } }]) {
+test('model catalogs publish server video defaults and validated overrides without trusting upstream metadata', async t => {
+  for (const { id, video, resolutions } of [
+    { id: 'wan3.0', resolutions: ['720p', '1080p'] },
+    { id: 'wan3.0', video: { autoResolution: '720p', headers: { authorization: 'must-not-forward' } }, resolutions: ['720p', '1080p'] },
+    { id: 'MiniMax H3视频生成', resolutions: ['768p', '1080p'] },
+    { id: 'MiniMax H3视频生成', video: { resolutions: ['540p'], durations: [4, 8, 12] }, resolutions: ['540p'] },
+    { id: 'sd2.0-fast-720p', resolutions: ['720p'] },
+  ]) {
     const { app } = fixture(t, {
-      modelTypes: video ? [{ id: 'wan3.0', kind: 'video', video }] : [],
-      fetch() { return Response.json({ data: [{ id: 'wan3.0', video: { autoResolution: '4k', secret: 'must-not-forward' } }] }) },
+      modelTypes: video ? [{ id, kind: 'video', video }] : [],
+      fetch() { return Response.json({ data: [{ id, video: { autoResolution: '4k', secret: 'must-not-forward' } }] }) },
     })
     const response = await app.inject('/api/creation/models')
     assert.equal(response.statusCode, 200)
     assert.equal(response.json().items.length, 1)
-    assert(!Object.hasOwn(response.json().items[0], 'video'))
+    const item = response.json().items[0]
+    assert.deepEqual(item.kinds, ['video'])
+    assert.equal(videoModelSettingSchema.safeParse(item.video).success, true)
+    assert.deepEqual(item.video.resolutions, resolutions)
+    if (id === 'MiniMax H3视频生成') assert.equal(item.video.autoDuration, video ? 4 : 10)
     assert(!response.payload.includes('must-not-forward'))
   }
 })

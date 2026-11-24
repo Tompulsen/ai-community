@@ -4,14 +4,13 @@ import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
 import type { ModelApiFormat, VideoModelSetting } from '../../shared/studio/model-types'
 import { IMAGE_QUALITIES, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
-import { VIDEO_RESOLUTIONS } from '../../shared/studio/video-size'
 const image = defineModel<ImageOptions>('image', { required: true })
 const video = defineModel<VideoOptions>('video', { required: true })
 const protocol = defineModel<string>('protocol', { required: true })
 const apiFormat = defineModel<ModelApiFormat>('apiFormat', { required: true })
 const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string; modelApiFormat?: ModelApiFormat; videoSetting?: VideoModelSetting; embedded?: boolean; hidePrimary?: boolean }>()
 const capabilities = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
-const resolutions = computed(() => (capabilities.value?.resolutions.length ? capabilities.value.resolutions : VIDEO_RESOLUTIONS).filter(value => value !== 'auto'))
+const resolutions = computed(() => capabilities.value?.resolutions || [])
 const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model, apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value))
 const nativeImage = computed(() => props.kind === 'image' && (apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value) === 'gemini')
 const modes = { 'text-to-video': '文生视频', 'image-to-video': '图生视频', 'first-last-frame': '首尾帧', 'reference-to-video': '多图参考' }

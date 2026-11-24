@@ -22,14 +22,62 @@ export const textModelSettingSchema = z.object({
 
 const videoResolutionSchema = z.string().regex(/^(?:4k|[1-9]\d{0,4}p)$/)
   .refine(value => value === '4k' || Number(value.slice(0, -1)) <= 65535)
+const videoResolutionsSchema = z.array(videoResolutionSchema).min(1).max(16)
+  .refine(values => new Set(values).size === values.length)
+const videoDurationSchema = z.number().int().min(1).max(3600)
+const videoDurationsSchema = z.array(videoDurationSchema).min(1).max(3600)
+  .refine(values => new Set(values).size === values.length)
+const videoAspectRatioSchema = z.string().regex(/^[1-9]\d{0,2}:[1-9]\d{0,2}$/)
+const videoModeLimitsSchema = z.object({
+  resolutions: videoResolutionsSchema.optional(),
+  durations: videoDurationsSchema.optional(),
+}).strict()
+const videoSizeSchema = z.string().regex(/^[1-9]\d{0,4}x[1-9]\d{0,4}$/)
+  .refine(value => value.split('x').every(dimension => Number(dimension) <= 65534 && Number(dimension) % 2 === 0),
+    { message: '视频精确宽高须为 2 至 65534 的偶数。' })
 export const videoModelSettingSchema = z.object({
   autoResolution: z.union([z.literal('auto'), videoResolutionSchema]).optional(),
-  resolutions: z.array(videoResolutionSchema).min(1).max(16)
+  resolutions: videoResolutionsSchema.optional(),
+  durations: videoDurationsSchema.optional(),
+  autoDuration: videoDurationSchema.optional(),
+  aspectRatios: z.array(videoAspectRatioSchema).min(1).max(32)
     .refine(values => new Set(values).size === values.length).optional(),
+  sizes: z.record(videoResolutionSchema, z.record(videoAspectRatioSchema, videoSizeSchema))
+    .refine(values => Object.keys(values).length > 0 && Object.keys(values).length <= 16
+      && Object.values(values).every(ratios => Object.keys(ratios).length > 0 && Object.keys(ratios).length <= 32))
+    .optional(),
+  unsupportedParameters: z.array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/)).max(32)
+    .refine(values => new Set(values).size === values.length).optional(),
+  modes: z.object({
+    'text-to-video': videoModeLimitsSchema.optional(),
+    'image-to-video': videoModeLimitsSchema.optional(),
+    'first-last-frame': videoModeLimitsSchema.optional(),
+    'reference-to-video': videoModeLimitsSchema.optional(),
+  }).strict().optional(),
   autoAspectRatio: automaticAspectRatio.optional(),
   parameterFormat: z.enum(['auto', 'openai', 'xai', 'seedance', 'gemini']).optional(),
 }).strict().refine(value => !value.resolutions || !value.autoResolution || value.autoResolution === 'auto'
   || value.resolutions.includes(value.autoResolution), { message: '自动分辨率须包含在手动分辨率列表中。' })
+  .refine(value => !value.durations || value.autoDuration === undefined || value.durations.includes(value.autoDuration),
+    { message: '默认时长须包含在可选时长列表中。', path: ['autoDuration'] })
+  .refine(value => !value.aspectRatios || !value.autoAspectRatio || value.autoAspectRatio === 'auto'
+    || value.aspectRatios.includes(value.autoAspectRatio),
+    { message: '自动画面比例须包含在可选画面比例列表中。', path: ['autoAspectRatio'] })
+  .refine(value => !value.sizes || Object.entries(value.sizes).every(([resolution, ratios]) =>
+    (!value.resolutions || value.resolutions.includes(resolution))
+    && Object.entries(ratios).every(([ratio, size]) => (!value.aspectRatios || value.aspectRatios.includes(ratio))
+      && Math.min(...size.split('x').map(Number)) === (resolution === '4k' ? 2160 : Number(resolution.slice(0, -1)))))
+    && (!value.resolutions || value.resolutions.every(resolution => value.sizes![resolution]
+      && (!value.aspectRatios || value.aspectRatios.every(ratio => value.sizes![resolution]![ratio])))),
+    { message: '精确尺寸须与可选分辨率和画面比例对应，宽高短边须匹配分辨率。', path: ['sizes'] })
+  .refine(value => !value.sizes || (!value.autoResolution || value.autoResolution === 'auto' || !!value.sizes[value.autoResolution])
+    && (!value.autoAspectRatio || value.autoAspectRatio === 'auto'
+      || Object.values(value.sizes).every(ratios => !!ratios[value.autoAspectRatio!]))
+    && (value.aspectRatios || Object.values(value.sizes).every(ratios => {
+      const expected = Object.keys(Object.values(value.sizes!)[0]!)
+      return Object.keys(ratios).length === expected.length && expected.every(ratio => Object.hasOwn(ratios, ratio))
+    })),
+    { message: '精确尺寸须包含自动分辨率和画面比例，各分辨率须有完整的画面比例。', path: ['sizes'] })
 export type VideoModelSetting = z.infer<typeof videoModelSettingSchema>
 
 export const modelTypesSchema = z.array(z.object({

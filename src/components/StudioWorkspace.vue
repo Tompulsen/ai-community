@@ -71,7 +71,10 @@ const videoParameterIssue = computed(() => {
   if (props.kind !== 'video' || !model.value) return ''
   if (!Number.isInteger(duration.value) || duration.value < 1 || duration.value > 3600) return '视频时长需为 1 到 3600 的整数秒。'
   const limits = videoLimits.value
-  return limits?.durations.length && !limits.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(videoOptions.resolution) ? '原作时长或分辨率不受当前模型支持，请在高级参数中调整。' : ''
+  if (limits?.durations.length && !limits.durations.includes(duration.value) || videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(videoOptions.resolution)) return '原作时长或分辨率不受当前模型支持，请在高级参数中调整。'
+  if (ratio.value !== 'auto' && limits?.aspectRatios?.length && !limits.aspectRatios.includes(ratio.value)) return '当前模型不支持所选画面比例，请在高级参数中调整。'
+  if (size.value !== 'auto' && limits?.sizes && !Object.values(limits.sizes).some(ratios => Object.values(ratios).includes(size.value))) return '当前模型不支持所选精确尺寸，请在高级参数中调整。'
+  return ''
 })
 const imageCountIssue = computed(() => props.kind === 'image' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 10) ? '图片数量需为 1 到 10 的整数。' : '')
 const submissionIssue = computed(() => error.value || imageCountIssue.value || videoParameterIssue.value)
@@ -117,7 +120,7 @@ function finishRestore() {
   const scope = draftScope(), revision = ++restoreRevision
   void nextTick(() => { if (live && scope === draftScope() && revision === restoreRevision) restoringParameters.value = false })
 }
-const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }) : imageRequestSize(ratio.value, imageOptions.resolution, model.value, selectedApiFormat.value))
+const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize({ resolution: videoOptions.resolution, aspectRatio: ratio.value }, videoSetting.value) : imageRequestSize(ratio.value, imageOptions.resolution, model.value, selectedApiFormat.value))
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const requestSize = computed(() => props.kind === 'image' && (!manualSize.value || manualSize.value === 'auto') && (imageOptions.resolution === 'auto' || ratio.value === 'auto') ? 'auto' : size.value)
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
@@ -125,18 +128,20 @@ function adaptVideoParameters() {
   if (props.kind !== 'video' || !model.value) return
   const next = normalizeVideoParameters({ model: model.value, mode: videoOptions.mode, resolution: videoOptions.resolution,
     duration: duration.value, aspectRatio: ratio.value, size: size.value }, videoSetting.value)
-  if (next.resolution !== videoOptions.resolution) manualSize.value = ''
-  videoOptions.resolution = next.resolution; duration.value = next.duration
+  if (next.resolution !== videoOptions.resolution || next.aspectRatio !== ratio.value || next.size !== size.value) manualSize.value = ''
+  videoOptions.resolution = next.resolution; duration.value = next.duration; ratio.value = next.aspectRatio
 }
 function chooseModel() {
   if (props.remixPreparing || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
+  const initializing = !model.value
   const choice = takeModelChoice(props.kind, models.value)
   if (choice) {
     if (model.value !== choice) manualSize.value = ''
     model.value = choice
-    adaptVideoParameters()
   }
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
+  if (initializing && props.kind === 'video') duration.value = videoLimits.value?.autoDuration ?? duration.value
+  adaptVideoParameters()
 }
 function legacyApiFormat(value: string): ModelApiFormat {
   return props.kind === 'image' ? usesGeminiImageChat(value) ? 'chat-completions' : 'images' : 'openai'
@@ -188,8 +193,8 @@ watch(() => session.user?.id, () => {
   protocol.value = 'auto'; apiFormat.value = 'auto'
 })
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
-// Model and mode changes adapt the editable draft; catalogue refreshes and restored originals keep their explicit parameters.
-watch([model, () => videoOptions.mode], () => { if (!restoringParameters.value) adaptVideoParameters() }, { flush: 'sync' })
+// Only editable parameters adapt; saved requests and restored originals remain unchanged.
+watch([model, () => videoOptions.mode, videoSetting], () => { if (!restoringParameters.value) adaptVideoParameters() }, { deep: true, flush: 'sync' })
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
@@ -359,6 +364,8 @@ async function submit(onRegistered?: () => void) {
       const limits = videoCapabilities(input.model, input.videoOptions.mode, creation.models.find(item => item.id === input.model)?.video)
       if (limits?.durations.length && !limits.durations.includes(input.duration) || input.videoOptions.resolution !== 'auto' && limits?.resolutions.length && !limits.resolutions.includes(input.videoOptions.resolution))
         throw new Error('当前参考图模式不支持所选时长或分辨率，请在高级参数中调整。')
+      if (input.aspect_ratio !== 'auto' && limits?.aspectRatios?.length && !limits.aspectRatios.includes(input.aspect_ratio)) throw new Error('当前模型不支持所选画面比例，请在高级参数中调整。')
+      if (input.size !== 'auto' && limits?.sizes && !Object.values(limits.sizes).some(ratios => Object.values(ratios).includes(input.size))) throw new Error('当前模型不支持所选精确尺寸，请在高级参数中调整。')
     }
     const skills = await resolveMediaSkills(selectedSkills, kind, owner)
     if (skills.length) input.skills = skills

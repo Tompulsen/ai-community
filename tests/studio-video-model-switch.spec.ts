@@ -2,14 +2,20 @@ import { expect, test, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import { buildCreationPayload, validateCreationInput } from '../server/creation-contract'
+import type { CreationModel } from '../src/native-studio'
 
 async function fixture(page: Page) {
   await mockUnifiedAccount(page, true)
-  const models = [
-    { id: 'sd2.0-fast-480p', kinds: ['video'] }, { id: 'sd2.0-fast-720p', kinds: ['video'] },
-    { id: 'grok-imagine-video-1.5', kinds: ['video'] }, { id: 'sora-2', kinds: ['video'] },
+  const aspectRatios = ['1:1', '3:4', '4:3', '16:9', '9:16', '21:9']
+  const models: CreationModel[] = [
+    { id: 'sd2.0-fast-480p', kinds: ['video'], video: { resolutions: ['480p'], durations: [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30], aspectRatios } },
+    { id: 'sd2.0-fast-720p', kinds: ['video'], video: { resolutions: ['720p'], durations: [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30], aspectRatios } },
+    { id: 'grok-imagine-video-1.5', kinds: ['video'], video: { resolutions: ['480p', '720p', '1080p'], durations: Array.from({ length: 15 }, (_, index) => index + 1), aspectRatios, modes: { 'reference-to-video': { resolutions: ['480p', '720p'] } } } },
+    { id: 'sora-2', kinds: ['video'], video: { resolutions: ['720p'], durations: [4, 8, 12], aspectRatios } },
     { id: 'configured-video', kinds: ['video'], video: { resolutions: ['540p', '1080p'], autoResolution: '1080p' } },
     { id: 'gpt-image-2', kinds: ['image'] },
+    { id: 'H3-custom-video', kinds: ['video'], video: { resolutions: ['720p'], durations: [5, 10], autoDuration: 10,
+      aspectRatios: ['16:9', '9:16'], sizes: { '720p': { '16:9': '1360x720', '9:16': '720x1360' } }, unsupportedParameters: ['frame_rate'] } },
   ]
   const calls: any[] = []
   await page.route('**/api/creation/**', route => {
@@ -68,7 +74,7 @@ test('video model switches replace incompatible resolution and submit the matchi
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect.poll(() => calls.length).toBe(1)
   expect(calls[0]).toMatchObject({ model: 'sd2.0-fast-720p', size: '1280x720', duration: 8, videoOptions: { resolution: '720p' } })
-  expect(() => buildCreationPayload(validateCreationInput(calls[0]))).not.toThrow()
+  expect(() => buildCreationPayload(validateCreationInput(calls[0]), [], [], { resolutions: ['720p'], durations: [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30] })).not.toThrow()
   await choose(page, 'sd2.0-fast-480p')
   await parameters(page)
   await expect(resolution(page, '480P')).toBeChecked()
@@ -116,14 +122,46 @@ test('video mode and administrator capability updates select a supported resolut
   models[4]!.video = { resolutions: ['540p'], autoResolution: '540p' }
   await page.reload()
   await parameters(page)
-  await expect(page.locator('[aria-label="视频分辨率"] h3')).toContainText('1080p')
-  await page.keyboard.press('Escape')
-  await choose(page, 'configured-video')
-  await parameters(page)
   await expect(resolution(page, '540P')).toBeChecked()
   await page.getByText('自定义参数', { exact: true }).click()
   await expect(page.getByLabel('自定义参数 JSON', { exact: true })).toHaveValue('{"seed":123}')
   expect(calls).toHaveLength(0)
+})
+
+test('unknown video models use backend ratios, durations and exact sizes without submitting on changes', async ({ page }, info) => {
+  const { models, calls } = await fixture(page)
+  const configured = models.pop()!
+  configured.video!.durations = [5, 8, 10]
+  models.unshift(configured)
+  const request = { size: '1920x1080', aspect_ratio: '1:1', n: 1, duration: 12, videoOptions: { mode: 'text-to-video', resolution: '1080p' } }
+  await page.addInitScript(request => {
+    const now = Date.now()
+    localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify([{
+      id: 'unchanged-video-history', conversationId: 'unchanged-video-history', owner: '17', kind: 'video', model: 'H3-custom-video', prompt: '历史视频',
+      createdAt: now, settledAt: now, phase: 'complete', protocol: 'sync', references: [], urls: [], text: '', request,
+    }]))
+  }, request)
+  await page.goto('/create/video')
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('H3-custom-video')
+  await parameters(page)
+  await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio')).toHaveCount(3)
+  await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '1:1', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('slider', { name: '视频时长', exact: true })).toHaveAttribute('aria-valuetext', '10 秒')
+  await resolution(page, '720P').check()
+  await page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '16:9', exact: true }).check()
+  await page.getByText('自定义参数', { exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '尺寸', exact: true })).toHaveValue('1360x720')
+  await page.getByRole('combobox', { name: '尺寸', exact: true }).selectOption('720x1360')
+  await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '9:16', exact: true })).toBeChecked()
+  await expect(page.getByRole('combobox', { name: '尺寸', exact: true })).toHaveValue('720x1360')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    const panel = page.getByRole('dialog', { name: '高级参数', exact: true })
+    expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`backend-h3-parameters-${width}.png`) })
+  }
+  expect(calls).toHaveLength(0)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('octopus:user-17:native-creation-history:fallback') || '[]').find((item: { id: string }) => item.id === 'unchanged-video-history')?.request)).toEqual(request)
 })
 
 test('choosing a video model from image mode adapts the restored video draft', async ({ page }) => {

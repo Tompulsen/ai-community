@@ -36,6 +36,7 @@ import { signCommunityRequest } from './native-account/community-wallet.ts'
 import { readAccountModelCatalogue, classifyModel } from './native-account/model-catalogue.ts'
 import { resolveModelGroup } from './native-account/model-groups.ts'
 import { assertSameOrigin } from './native-account/client.ts'
+import { resolveVideoModelSetting } from './video-models.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -729,7 +730,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const configured = types.get(id), configuredKind = configured?.kind
         const valid = id.length > 0 && id.length <= 200 && id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)
-        const kind = valid ? configuredKind ?? classifyModel(id) : null
+        const kind = valid ? configuredKind ?? (resolveVideoModelSetting(id) ? 'video' : classifyModel(id)) : null
+        const video = kind === 'video' ? resolveVideoModelSetting(id, configured?.video) : undefined
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
         return valid && (kind || management) ? [{ id, name: configured?.name || text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: kind ? [kind] : [], ...(configuredKind ? { configuredKind } : {}),
           ...(catalogue && record(item) ? { groups: item.groups } : {}),
@@ -737,7 +739,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
           ...(configured?.apiFormat ? { apiFormat: configured.apiFormat } : {}),
           ...(kind === 'image' && configured?.image ? { image: configured.image } : {}),
           ...(kind === 'text' && configured?.text ? { text: configured.text } : {}),
-          ...(kind === 'video' && configured?.video ? { video: configured.video } : {}),
+          ...(video ? { video } : {}),
           protocol: configured?.protocol || 'openai' }] : []
       }) })
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/media') {
