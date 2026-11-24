@@ -166,6 +166,7 @@ test('poster routes retain account and token authorization before cached protect
       url: new URL(request.url, 'https://community.example'), config: { url: 'https://community.example' },
       redis: { async get(key) { return values.get(key) || null }, async eval() { return 1 } },
       body: {}, requireUser() { return user },
+      json(status, value) { reply.code(status).send(value) },
     }, {
       async credentials(req) { return { baseUrl: 'https://model.example', apiKey: 'dummy', tokenId: Number(req.headers.get('x-new-api-token')), userId: Number(accountId) } },
       async fetch(url) {
