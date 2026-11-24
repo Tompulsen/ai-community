@@ -8,7 +8,7 @@ vi.mock('./state', async () => {
 })
 vi.mock('./native-studio', async () => {
   const { reactive } = await import('vue')
-  return { creation: reactive({ tasks: [] as CreationTask[], selectedId: '', loaded: true }), resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn() }
+  return { creation: reactive({ tasks: [] as CreationTask[], selectedId: '', loaded: true }), portableImage: vi.fn(async (url: string) => url), resumeCreation: vi.fn(), stopCreation: vi.fn(), submitCreation: vi.fn() }
 })
 vi.mock('./model-preferences', () => ({ modelFormat: () => undefined, configuredModelFormat: () => undefined }))
 vi.mock('../shared/studio/chat-persistence', () => ({ readChatSnapshot: storage.read, writeChatSnapshot: storage.write }))
@@ -52,6 +52,78 @@ it('builds completed visible image context and the last original image without c
   expect(p.imageContinuationReferences(p.thread)).toEqual([{ name: '上一轮生成图片', url: 'https://example.test/three.png' }])
   expect(p.buildImageContext(p.thread, 'two').turns.map(turn => turn.prompt)).toEqual(['one'])
   expect(p.imageContinuationReferences(p.thread, 'one')).toEqual([])
+})
+it('keeps pinned media after clearing, deduplicates both sides, and removes pins with the source', async () => {
+  const p = await fixture()
+  await p.togglePinnedMessage(p.thread, 'media-user:one')
+  expect(p.buildImageContext(p.thread).turns[0]!.images).toEqual(['https://example.test/one.png'])
+  await p.togglePinnedMessage(p.thread, 'media-assistant:one')
+  expect(p.buildImageContext(p.thread).turns.map(turn => turn.prompt)).toEqual(['one', 'two', 'three'])
+  await p.clearMediaContext(p.thread)
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'one', images: ['https://example.test/one.png'] }])
+  expect(p.pinnedImageReferences(p.thread)).toEqual([{ name: '固定参考图 1', url: 'https://example.test/one.png' }])
+  expect(JSON.stringify(p.thread.pinnedMessageIds)).not.toContain('https:')
+  await p.deleteMediaTurns(p.thread, ['one'])
+  expect(p.thread.pinnedMessageIds).toEqual([])
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+})
+it('pins a specific image version without following regenerated results and remaps cloned message IDs', async () => {
+  const p = await fixture()
+  await p.togglePinnedMessage(p.thread, 'media-assistant:two')
+  const version = task('two-v2', p.thread.id, 4, { prompt: 'updated', mediaBranch: { taskId: 'two' } })
+  p.creation.tasks.push(version); await p.registerMediaTurn(p.thread, version)
+  await p.clearMediaContext(p.thread)
+  expect(p.buildImageContext(p.thread).turns[0]!.images).toEqual(['https://example.test/two.png'])
+  p.cloneChat(p.thread)
+  const copy = p.chats.sessions[0]!
+  expect(copy.pinnedMessageIds).toHaveLength(1)
+  expect(copy.pinnedMessageIds![0]).not.toBe('media-assistant:two')
+  expect(p.buildImageContext(copy).turns[0]!.images).toEqual(['https://example.test/two.png'])
+})
+it('rolls back a pin when saving fails and rejects foreign or oversized pinned context', async () => {
+  const p = await fixture()
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.togglePinnedMessage(p.thread, 'media-assistant:one')).rejects.toThrow('disk full')
+  expect(p.thread.pinnedMessageIds || []).toEqual([])
+  await expect(p.togglePinnedMessage(p.thread, 'missing')).rejects.toThrow('无法固定')
+  p.creation.tasks[0]!.urls = Array.from({ length: 17 }, (_, i) => `https://example.test/${i}.png`)
+  await expect(p.togglePinnedMessage(p.thread, 'media-assistant:one')).rejects.toThrow('16 张图片')
+  p.creation.tasks[0]!.urls = ['https://example.test/one.png']
+  await p.togglePinnedMessage(p.thread, 'media-assistant:one')
+  p.session.user = { id: '18' } as any
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  await expect(p.togglePinnedMessage(p.thread, 'media-assistant:one')).rejects.toThrow('当前对话不可用')
+})
+it('sends pinned text with its original role once and preserves it after history clearing', async () => {
+  const p = await fixture(), textChat = p.newChat()
+  const { submitCreation } = await import('./native-studio')
+  vi.mocked(submitCreation).mockResolvedValue(task('answer', textChat.id, 10, { kind: 'text', text: 'done', urls: [] }))
+  await p.sendChat(textChat, '始终使用中文', [], 'gpt-5')
+  const answer = textChat.messages.find(message => message.role === 'assistant')!
+  await p.togglePinnedMessage(textChat, answer.id)
+  vi.mocked(submitCreation).mockClear()
+  await p.sendChat(textChat, '继续', [], 'gpt-5')
+  const sent = vi.mocked(submitCreation).mock.calls[0]![0].chatOptions!.messages
+  expect(sent.filter(message => message.content === 'done')).toEqual([{ role: 'assistant', content: 'done' }])
+  await p.clearMediaContext(textChat)
+  vi.mocked(submitCreation).mockClear()
+  await p.sendChat(textChat, '下一条', [], 'gpt-5')
+  expect(vi.mocked(submitCreation).mock.calls[0]![0].chatOptions!.messages).toContainEqual({ role: 'assistant', content: 'done' })
+  await p.togglePinnedMessage(textChat, answer.id)
+  expect(textChat.pinnedMessageIds).toEqual([])
+})
+it('passes pinned media to text models as image content instead of just the old prompt', async () => {
+  const p = await fixture()
+  const { submitCreation, portableImage } = await import('./native-studio')
+  vi.mocked(submitCreation).mockResolvedValue(task('text-answer', p.thread.id, 10, { kind: 'text', text: 'done', urls: [] }))
+  await p.togglePinnedMessage(p.thread, 'media-assistant:one')
+  await p.clearMediaContext(p.thread)
+  vi.mocked(submitCreation).mockClear()
+  await p.sendChat(p.thread, '解释固定的图片', [], 'gpt-5')
+  expect(portableImage).toHaveBeenCalledWith('https://example.test/one.png')
+  expect(vi.mocked(submitCreation).mock.calls[0]![0].chatOptions!.messages).toContainEqual({ role: 'assistant', content: [
+    { type: 'text', text: 'one' }, { type: 'image_url', image_url: { url: 'https://example.test/one.png' } },
+  ] })
 })
 it('clears only outgoing context, keeps displayed records, and includes subsequent completed turns', async () => {
   const p = await fixture()

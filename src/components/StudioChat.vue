@@ -31,6 +31,8 @@ import StudioMaterialStatus from './studio-message/StudioMaterialStatus.vue'
 import StudioMessageFrame from './studio-message/StudioMessageFrame.vue'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 import StudioMediaTurn from './studio-message/StudioMediaTurn.vue'
+import StudioMessageActions, { type MessageAction } from './studio-message/StudioMessageActions.vue'
+import { togglePinnedMessage } from '../native-chat'
 import StudioContextMenu, { type StudioMenuAction } from './studio-message/StudioContextMenu.vue'
 import StudioFollowupSuggestions from './studio-message/StudioFollowupSuggestions.vue'
 import StudioReferenceAttachments from './StudioReferenceAttachments.vue'
@@ -400,6 +402,31 @@ async function removeMessage(chat: NativeChat, message: NativeMessage) {
   deleteChatMessage(chat, message)
 }
 async function download(message: NativeMessage) { const task = creation.tasks.find(item => item.id === message.taskId); if (task) try { await downloadCreation(task, 0, undefined, messageText(message)) } catch (cause) { error.value = errorMessage(cause) } }
+async function pin(message: NativeMessage) {
+  const chat = current.value, owner = session.user?.id
+  if (!chat) return
+  try {
+    const value = await togglePinnedMessage(chat, message.id)
+    if (value !== undefined && current.value === chat && session.user?.id === owner) notify(value ? '已固定至当前对话上下文' : '已取消固定')
+  } catch (cause) { if (current.value === chat && session.user?.id === owner) error.value = errorMessage(cause) }
+}
+function messageActions(message: NativeMessage): MessageAction[] {
+  const chat = current.value!, pinned = !!chat.pinnedMessageIds?.includes(message.id), blocked = Boolean(busy.value || props.sourceBlocked)
+  const task = creation.tasks.find(item => item.owner === session.user?.id && item.id === message.taskId)
+  const items: MessageAction[] = [
+    { icon: 'edit', label: message.role === 'user' ? '编辑提问' : '编辑回答', disabled: blocked || pending(message) || message.role === 'user' && !models.value.some(item => item.id === model.value), run: () => edit(message) },
+    { icon: 'retry', label: message.role === 'user' ? '重新发送提问' : '重新生成回答', disabled: blocked || pending(message) || !models.value.some(item => item.id === model.value), run: () => regenerate(message) },
+    { icon: 'delete', label: '删除消息', disabled: busy.value, run: () => removeMessage(chat, message) },
+    { icon: 'pin', label: pinned ? '取消固定' : '固定到上下文', hint: pinned ? '取消固定：后续不再保留此条上下文' : '固定到上下文：清除历史后仍可用于图片和对话', pressed: pinned, disabled: blocked || pending(message) || !!message.interrupted || !!message.error, run: () => pin(message) },
+    { icon: 'copy', label: message.role === 'user' ? '复制提问' : '复制回答', run: () => copy(message) },
+  ]
+  if (message.role === 'assistant' && task?.phase === 'complete' && !pending(message) && !message.interrupted) items.push(
+    { icon: 'download', label: '下载文本', run: () => download(message) },
+    { icon: 'publish', label: '发布作品', run: () => publish(message) },
+    { icon: 'comment', label: '发送到源作品评论区', hint: task.sourceWorkId ? '发布至源作品评论区' : '从源作品制作同款后，可发布至其评论区', disabled: !task.sourceWorkId, run: () => publish(message, 'source-comment') },
+  )
+  return items
+}
 function publish(message: NativeMessage, destination: CreationDestination = 'community') {
   const task = creation.tasks.find(item => item.id === message.taskId)
   if (task) emit('publish', task, destination, messageText(message))
@@ -480,11 +507,10 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
           <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
           <StudioFollowupSuggestions v-if="mode === 'text' && message.role === 'assistant' && message === current.messages.at(-1) && message.interactions?.suggestions?.length && !pending(message) && !message.interrupted && !message.error" :suggestions="message.interactions.suggestions" :disabled="Boolean(busy || sourceBlocked)" @select="fillSuggestion(message, $event)" />
-          <p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p><div v-if="message.role === 'assistant' && message.taskId && !message.streaming && !message.interrupted" class="message-actions"><button class="button subtle btn" @click="download(message)">下载文本</button><button class="button subtle btn" @click="publish(message)">发布作品</button><button v-if="creation.tasks.find(task => task.id === message.taskId)?.sourceWorkId" class="button subtle btn" @click="publish(message, 'source-comment')">发送到源作品评论区</button></div>
-          <div class="message-actions">
-            <button class="icon-button" title="复制消息" :aria-label="`复制${message.role === 'user' ? '提问' : '回答'}`" @click="copy(message)"><Copy :size="16" /></button><button v-if="message.role === 'user' || message.role === 'assistant'" class="icon-button" :title="message.role === 'user' ? '编辑提问' : '编辑回答'" :aria-label="message.role === 'user' ? '编辑提问' : '编辑回答'" :disabled="sourceBlocked || busy || message.role === 'user' && !models.some(item => item.id === model)" @click="edit(message)"><Pencil :size="16" /></button>
-            <button v-if="message.role === 'assistant'" class="icon-button" title="重新生成回答" aria-label="重新生成回答" :disabled="sourceBlocked || busy || !models.some(item => item.id === model)" @click="regenerate(message)"><RefreshCw :size="16" /></button>
-            <button class="icon-button" title="删除消息" aria-label="删除消息" :disabled="busy" @click="removeMessage(current, message)"><Trash2 :size="16" /></button><template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
+          <p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p>
+          <StudioMessageActions class="message-actions" :label="message.role === 'user' ? '提问操作' : '回答操作'" :actions="messageActions(message)" />
+          <div v-if="branch(message).total > 1 || message.usage" class="message-meta">
+            <template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </StudioMessageFrame>
         <StudioClearContext v-if="messageIndex + 1 === current.clearContextIndex" :disabled="Boolean(busy)" @restore="restoreContext" />
@@ -542,19 +568,17 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
   .chat-toolbar > .chat-toolbar-actions { display: none; }
   .chat-main .chat-messages { padding-inline: 0; }
 }
-.chat-toolbar, .chat-toolbar-actions, .message-heading, .message-actions { display: flex; align-items: center; gap: 8px; }
+.chat-toolbar, .chat-toolbar-actions, .message-heading, .message-meta { display: flex; align-items: center; gap: 8px; }
 .chat-toolbar { flex: 1; justify-content: space-between; min-width: 0; min-height: 44px; }.chat-toolbar-actions { flex: none; }
 .chat-history { max-height: min(480px, 60dvh); }
 .chat-messages-wrap { position: relative; flex: 1; min-height: 0; }.chat-messages { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px 8px; scrollbar-color: var(--border) transparent; }.chat-empty { height: 100%; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--muted); font-size: 16px; }.chat-empty img { border-radius: 10px; }.chat-empty p { margin: 0; }.jump-latest { position: absolute; right: 12px; bottom: 8px; border: 1px solid var(--border); border-radius: 50%; background: var(--canvas); }
 .message-usage { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .message-content, .user-text { overflow-wrap: anywhere; font-size: 16px; line-height: 28px; max-width: min(75ch, 100%); min-width: 0; }.user-text { margin: 0; }.message-content :deep(p) { margin-block: 0 12px; }.message-content :deep(> :last-child) { margin-bottom: 0; }.message-content :deep(pre) { overflow-x: auto; max-width: 100%; padding: 12px; background: var(--canvas); border-radius: 6px; font-size: 14px; line-height: 22px; }.message-content :deep(img) { max-width: 100%; }.message-content :deep(table) { display: block; overflow-x: auto; border-collapse: collapse; }.message-content :deep(td), .message-content :deep(th) { border: 1px solid var(--border); padding: 8px; }.message-content :deep(a), .search-sources a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }.message-content :deep(blockquote) { margin-inline: 0; border-left: 1px solid var(--border); padding-left: 16px; color: var(--muted); }
-.message-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; max-width: 100%; }.message-attachments img { display: block; width: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: 6px; }.attachment-image { max-width: 100%; border: 0; padding: 0; background: transparent; cursor: zoom-in; }.message-attachments video, .message-attachments audio { width: min(480px, 100%); max-width: 100%; }
+.message-meta { display: flex; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 12px; max-width: 100%; }.message-attachments img { display: block; width: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: 6px; }.attachment-image { max-width: 100%; border: 0; padding: 0; background: transparent; cursor: zoom-in; }.message-attachments video, .message-attachments audio { width: min(480px, 100%); max-width: 100%; }
 .chat-message > .reasoning, .chat-message > .tool-activity, .chat-message > .message-options, .chat-message > .message-editor { width: min(75ch, 100%); }
 .chat-composer > .message-quote { margin: 0 8px 8px; max-height: 120px; overflow: auto; }
 .context-compression-notice { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .composer-files { padding: 0 8px; margin: 8px 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }.composer-files li { display: flex; gap: 8px; align-items: center; font-size: 12px; max-width: 100%; }.composer-files li span { overflow-wrap: anywhere; }.editing-state { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin: 0 8px 8px; }
-.message-actions > .button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--ink); font-size: 12px; }.message-actions > .button:hover:not(:disabled) { background: var(--state-hover); }.message-actions > .button:active:not(:disabled) { background: var(--state-pressed); }
-@media (hover: hover) and (pointer: fine) { .message-actions { opacity: 0; transition: opacity 200ms var(--ease); }.chat-message:hover .message-actions, .chat-message:focus-within .message-actions { opacity: 1; } }
 .attachment-video { position: relative; max-width: 100%; }.attachment-expand { position: absolute; top: 8px; right: 8px; background: rgb(0 0 0 / 65%); color: white; }
 @media (max-width: 999px) { .chat-toolbar { display: none; }.chat-messages { padding: 16px 4px; }.message-usage { flex-basis: 100%; } }
 </style>

@@ -322,7 +322,7 @@ export async function readableMedia(url: string, kind: CreationKind, preview = f
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
 }
-async function portableImage(url: string) {
+export async function portableImage(url: string) {
   if (!url.startsWith('legacy-gallery:') && !url.startsWith('studio-asset:') && !url.startsWith('blob:')) return url
   const response = await fetch(url.startsWith('blob:') ? url : await readableMedia(url, 'image'))
   if (!response.ok) throw new Error('历史图片无法读取，请重新选择参考图。')
