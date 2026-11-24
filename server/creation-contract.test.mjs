@@ -581,6 +581,13 @@ test('task error codes supply safe fallback reasons without replacing provider m
     assert.equal(result.upstreamId, 'job_1')
     assert.equal(result.error, '图片保存空间不足，勿重复生成，请联系管理员')
   }
+  for (const code of ['video_content_gone', 'video_content_unavailable']) {
+    const result = normalizeCreationTask('video', { id: 'video_1', status: 'save_failed', error: { code } }, undefined, 'async')
+    assert.equal(result.status, 'save_failed')
+    assert.equal(result.upstreamId, 'video_1')
+    assert.match(result.error, /上游视频成品/)
+    assert.match(result.error, /勿重复生成/)
+  }
   const wrapped = normalizeCreationTask('image', { error: { message: '供应商原始错误' },
     data: { id: 'job_1', status: 'failed', error: { code: 'missing_upstream_image' } } })
   assert.equal(wrapped.error, '供应商原始错误')

@@ -974,6 +974,44 @@ test('concurrent and repeated paid submissions send one upstream POST, and reque
   assert.equal(calls.length, 1)
 })
 
+test('video admission rejection explains unsubmitted tasks and never replays their POST', async t => {
+  for (const [code, status, phrase] of [
+    ['video_storage_capacity_reached', 503, '缓存'],
+    ['insufficient_disk_space', 503, '磁盘'],
+    ['video_queue_full', 429, '队列'],
+  ]) {
+    const { app, calls } = fixture(t, { fetch() { return Response.json({ detail: code }, { status }) } })
+    const input = { kind: 'video', model: 'sora-2', protocol: 'async', prompt: 'Video', duration: 8, requestId: code }
+    const first = await submit(app, input)
+    assert.equal(first.statusCode, 200, first.payload)
+    assert.equal(first.json().status, 'failed')
+    assert.match(first.json().error, new RegExp(phrase))
+    assert.match(first.json().error, /未提交至模型/)
+    assert.deepEqual((await submit(app, input)).json(), first.json())
+    assert.equal(calls.length, 1)
+  }
+})
+
+test('unknown, malformed, and non-queue 503 responses keep the paid outcome uncertain', async t => {
+  for (const [detail, protocol] of [
+    ['video_storage_capacity_reached', 'sync'],
+    ['unrecognized_' + apiKey, 'async'],
+    [{ error: apiKey }, 'async'],
+    [['video_storage_capacity_reached'], 'async'],
+    ['__proto__', 'async'],
+  ]) {
+    const { app, calls } = fixture(t, { fetch() { return Response.json({ detail }, { status: 503 }) } })
+    const input = { kind: 'video', model: 'sora-2', protocol, prompt: 'Video', duration: 8, requestId: 'uncertain-video' }
+    const first = await submit(app, input)
+    assert.equal(first.statusCode, 200, first.payload)
+    assert.equal(first.json().status, 'indeterminate')
+    assert.match(first.json().error, /503/)
+    assert(!first.payload.includes(apiKey))
+    assert.deepEqual((await submit(app, input)).json(), first.json())
+    assert.equal(calls.length, 1)
+  }
+})
+
 for (const scenario of ['server-error', 'submission-timeout']) {
   test(`${scenario} stays indeterminate and a retry never replays the paid POST`, async t => {
     const { app, calls } = fixture(t, { fetch() {

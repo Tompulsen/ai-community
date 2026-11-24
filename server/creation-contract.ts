@@ -76,6 +76,8 @@ const taskErrorMessages: Record<string, string> = {
   image_too_large: '上游返回的单张图片超过大小限制',
   image_storage_capacity_reached: '图片保存空间不足，勿重复生成，请联系管理员',
   insufficient_disk_space: '服务器磁盘空间不足，勿重复生成，请联系管理员',
+  video_content_gone: '模型已返回完成状态，但上游视频成品无法获取。请核对原任务，勿重复生成。',
+  video_content_unavailable: '上游视频成品暂时无法下载，原任务已保留。请稍后重试保存，勿重复生成。',
 }
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 function invalid(message: string): never {

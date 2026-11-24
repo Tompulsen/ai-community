@@ -14,7 +14,28 @@
  from .core import AdmissionError, DATA, PUBLIC, UPSTREAM, db, seal, unseal
  
  MAX_VIDEO = int(os.getenv("MAX_VIDEO_BYTES", str(512 * 1024**2)))
-@@ -82,9 +84,9 @@
+@@ -56,6 +58,20 @@
+ 
+ def video_path(identifier):
+     return VIDEO_ROOT / identifier
++
++
++def video_reservation(payload):
++    return MAX_VIDEO + max(1024**2, 4096 + len(payload or b""))
++
++
++def retained_video_bytes(row):
++    size = 4096 + len(row["payload"] or b"")
++    for path in (video_path(row["id"]), video_path(row["id"]).with_suffix(".part")):
++        try:
++            size += path.stat().st_size
++        except FileNotFoundError:
++            pass
++    return size
+ 
+ 
+ def video_row(identifier):
+@@ -82,9 +98,9 @@
      return result
  
  
@@ -26,29 +47,32 @@
      if api_format not in CREATE_PATHS:
          raise AdmissionError("unsupported_video_api_format", 422)
      if (not isinstance(payload.get("model"), str) or not 1 <= len(payload["model"]) <= 256
-@@ -97,6 +99,12 @@
+@@ -97,7 +113,14 @@
      normalized = json.dumps({"api_format": api_format, "request": payload},
                              sort_keys=True, separators=(",", ":"), allow_nan=False)
      digest = hashlib.sha256(normalized.encode()).hexdigest()
+-    reserve = MAX_VIDEO + 1024**2
 +    if wire:
 +        digest = hashlib.sha256((digest + "\n" + wire["body"]).encode()).hexdigest()
 +    wallet = current_wallet(token)
 +    if wire and not wallet:
 +        raise AdmissionError("community_wallet_required", 403)
 +    digest = wallet_digest(digest, wallet)
-     reserve = MAX_VIDEO + 1024**2
++    encrypted = seal({"request": payload, "token": token, "origin": origin, "wallet": wallet, "wire": wire})
++    reserve = video_reservation(encrypted)
      now = timestamp()
      with db() as c:
-@@ -122,7 +130,7 @@
+         c.execute("BEGIN IMMEDIATE")
+@@ -122,7 +145,7 @@
              "payload,api_format,reserved) VALUES(?,?,?,?,'queued',?,?,?,?,?,?,?)",
              (identifier, owner, idem, digest, now, now, now + VIDEO_TTL,
               now + GENERATION_DEADLINE,
 -             seal({"request": payload, "token": token, "origin": origin}), api_format, reserve),
-+             seal({"request": payload, "token": token, "origin": origin, "wallet": wallet, "wire": wire}), api_format, reserve),
++             encrypted, api_format, reserve),
          )
          return dict(c.execute("SELECT * FROM video_jobs WHERE id=?", (identifier,)).fetchone())
  
-@@ -155,7 +163,7 @@
+@@ -155,7 +178,7 @@
      async with client.stream(method, UPSTREAM + path, **kwargs) as response:
          if response.status_code not in (200, 201, 202):
              rejected = method == "POST" and response.status_code in (
@@ -57,7 +81,16 @@
              )
              raise VideoError("upstream_rejected" if rejected else "upstream_query_unavailable")
          body = bytearray()
-@@ -273,13 +281,19 @@
+@@ -206,6 +229,8 @@
+         path = "/v1/videos/" + quote(row["upstream_id"], safe="") + "/content"
+         async with client.stream("GET", UPSTREAM + path, headers=token_headers(payload),
+                                  timeout=httpx.Timeout(1800, connect=15, read=90)) as response:
++            if response.status_code in (404, 410):
++                raise VideoError("video_content_gone")
+             if response.status_code != 200:
+                 raise VideoError("video_content_unavailable")
+             if response.headers.get("content-encoding", "identity").lower() != "identity":
+@@ -273,13 +298,19 @@
                        (identifier, claim))
          try:
              kwargs = {"headers": token_headers(payload)}
@@ -78,7 +111,51 @@
              result = await read_json(client, "POST", CREATE_PATHS[row["api_format"]], **kwargs)
              upstream_id = result.get("id") or result.get("task_id")
              if not isinstance(upstream_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", upstream_id):
-@@ -409,6 +423,9 @@
+@@ -321,9 +352,11 @@
+     except Exception as error:
+         attempts = row["attempts"] + 1
+         code = error.code if isinstance(error, VideoError) else "video_download_failed"
+-        permanent = code in ("video_too_large", "unsupported_video_type", "unsupported_video_encoding")
+-        transition(identifier, claim, "save_failed" if permanent or attempts >= 3 else "saving",
+-                   attempts=attempts, error=code, next_attempt=timestamp() + 15 * attempts)
++        permanent = code in ("video_too_large", "unsupported_video_type", "unsupported_video_encoding", "video_content_gone")
++        stopped = permanent or attempts >= 3
++        transition(identifier, claim, "save_failed" if stopped else "saving",
++                   attempts=attempts, error=code, next_attempt=timestamp() + 15 * attempts,
++                   reserved=retained_video_bytes(row) if stopped else row["reserved"])
+ 
+ 
+ def claim_video():
+@@ -355,7 +388,7 @@
+         except Exception:
+             # A broken record must not kill all background processing.
+             transition(row["id"], claim, "indeterminate", error="video_processing_interrupted",
+-                       payload=None, reserved=MAX_VIDEO + 1024**2)
++                       payload=None, reserved=retained_video_bytes({**row, "payload": None}))
+ 
+ 
+ def cleanup_videos():
+@@ -370,6 +403,11 @@
+             c.execute("UPDATE video_jobs SET status='expired',payload=NULL,reserved=4096 WHERE id=?",
+                       (row["id"],))
+         c.execute("DELETE FROM video_jobs WHERE status='expired' AND expires<?", (now - 7 * 86400,))
++        # Stopped downloads retain their data, but must not reserve a future full-size video.
++        rows = c.execute("SELECT * FROM video_jobs WHERE status IN ('save_failed','indeterminate') "
++                         "AND claim IS NULL").fetchall()
++        for row in rows:
++            c.execute("UPDATE video_jobs SET reserved=? WHERE id=?", (retained_video_bytes(row), row["id"]))
+ 
+ 
+ async def maintenance():
+@@ -387,6 +425,7 @@
+         c.execute("UPDATE video_jobs SET claim=NULL")
+     for partial in VIDEO_ROOT.glob("*.part"):
+         partial.unlink()
++    cleanup_videos()
+     async with httpx.AsyncClient(
+         trust_env=False, follow_redirects=False, timeout=httpx.Timeout(120, connect=15),
+         limits=httpx.Limits(max_connections=WORKERS + 4),
+@@ -409,6 +448,9 @@
  )
  
  
@@ -88,7 +165,7 @@
  @app.get("/healthz")
  async def health():
      background = getattr(app.state, "background", [])
-@@ -425,13 +442,28 @@
+@@ -425,13 +467,28 @@
      body = bytearray()
      async for chunk in request.stream():
          body.extend(chunk)
@@ -120,3 +197,28 @@
      except AdmissionError as error:
          raise HTTPException(error.status, error.code) from None
      except (ValueError, UnicodeError, TypeError):
+@@ -462,12 +519,21 @@
+     row = await owned_video(identifier, request)
+     with db() as c:
+         c.execute("BEGIN IMMEDIATE")
++        row = c.execute("SELECT * FROM video_jobs WHERE id=? AND owner=?", (identifier, row["owner"])).fetchone()
++        if not row:
++            raise HTTPException(404, "video_task_not_found")
+         if row["expires"] <= timestamp():
+             raise HTTPException(410, "video_expired")
+-        if row["status"] != "save_failed":
++        if row["status"] != "save_failed" or row["claim"] is not None or not row["payload"]:
+             raise HTTPException(409, "video_is_not_save_failed")
+-        c.execute("UPDATE video_jobs SET status='saving',attempts=0,next_attempt=0,error=NULL "
+-                  "WHERE id=? AND status='save_failed'", (identifier,))
++        reserve = max(video_reservation(row["payload"]), retained_video_bytes(row))
++        reserved = c.execute("SELECT COALESCE(SUM(reserved),0) FROM video_jobs").fetchone()[0]
++        if reserved - row["reserved"] + reserve > VIDEO_QUOTA:
++            raise HTTPException(503, "video_storage_capacity_reached")
++        if shutil.disk_usage(DATA).free < VIDEO_MIN_FREE + reserve:
++            raise HTTPException(503, "insufficient_disk_space")
++        c.execute("UPDATE video_jobs SET status='saving',attempts=0,next_attempt=0,error=NULL,reserved=? "
++                  "WHERE id=? AND status='save_failed'", (reserve, identifier))
+     return JSONResponse(public_task(video_row(identifier)), status_code=202,
+                         headers={"Cache-Control": "no-store"})
+ 

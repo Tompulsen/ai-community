@@ -437,8 +437,15 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       const data = await readJson(response, 40 * MiB)
       if (!response.ok) {
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
-      result = { status: response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: message(!input.skills?.some(skill => skill.id.startsWith('work-')) && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`, credentials.apiKey),
+      const admission = payload.path === 'async-videos/v1/tasks' && record(data) && typeof data.detail === 'string'
+        ? new Map([
+          ['video_storage_capacity_reached', { status: 503, error: '视频缓存暂时没有足够空间，本次请求未提交至模型，请稍后重试。' }],
+          ['insufficient_disk_space', { status: 503, error: '视频服务磁盘空间不足，本次请求未提交至模型，请联系管理员。' }],
+          ['video_queue_full', { status: 429, error: '视频生成队列已满，本次请求未提交至模型，请稍后重试。' }],
+        ]).get(data.detail) : undefined
+      const rejected = admission?.status === response.status ? admission.error : undefined
+      result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
+        error: message(rejected || (!input.skills?.some(skill => skill.id.startsWith('work-')) && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`), credentials.apiKey),
         tokenId: credentials.tokenId, protocol }
       } else {
         result = input.kind === 'text' && input.chatOptions

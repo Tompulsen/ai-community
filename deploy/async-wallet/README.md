@@ -77,6 +77,23 @@ nonce replay, persisted key binding, image JSON/SSE/uploads, video JSON/uploads,
 deduplication and unsigned task polling. A real New API end-to-end check remains
 part of server rollout; local mocks do not establish production settlement.
 
+Video reservation recovery (2026-11-24): stopped downloads now retain only their
+encrypted payload, existing file bytes and metadata reservation. Startup and
+maintenance reconcile older stopped rows without removing their tasks or valid
+files. Retrying a save acquires its full reservation under the same SQLite write
+transaction that rechecks ownership, state, expiry and available disk/capacity;
+it only downloads the existing upstream task. Upstream 404/410 content responses
+stop automatic download retries and do not replay generation. Other transient
+download failures retain their reservation until the existing three-attempt limit.
+
+Run `test_video_capacity.py` against the prepared video source alongside the
+wallet and video integration tests. Preserve an immutable export of the original
+base source: the overlay still verifies `baseline-sha256.json`. If exporting an
+already wallet-patched runtime, reverse its **previous exact** video patch in a
+separate copy and verify the original checksum before preparing the new overlay.
+Never reverse a patch in a live container. This repair cannot restore content
+that the upstream provider does not make available.
+
 Validation on 2026-11-16: all 22 proxy tests passed. Both overlay preparations
 verified the exported source hashes and applied successfully; every prepared
 Python file was compared byte-for-byte with the tested source. Unsigned image
