@@ -5,11 +5,27 @@ import { buildCreationPayload, validateCreationInput } from './creation-contract
 import { imageOptionsSchema, videoOptionsSchema, chatOptionsSchema } from '../shared/studio/options.ts'
 import { readGenerationStream } from './creation/stream.ts'
 import { handleStudioTools } from './studio-tools.ts'
-import { videoCapabilities } from '../shared/studio/video-capabilities.ts'
+import { normalizeVideoParameters, videoCapabilities } from '../shared/studio/video-capabilities.ts'
 const image = { kind: 'image', model: 'gpt-image-2', prompt: 'water', aspect_ratio: '16:9' }
 const options = imageOptionsSchema.parse({ resolution: '2k', quality: 'high', imageBackground: 'transparent', imageOutputFormat: 'jpeg' })
 const video = { kind: 'video', model: 'sora-2', prompt: 'water', duration: 8, aspect_ratio: '16:9', size: '1280x720' }
 const png = 'data:image/png;base64,aGVsbG8='
+test('editable video parameters follow model and mode limits without changing the source snapshot', () => {
+  const draft = { model: 'sd2.0-fast-720p', mode: 'text-to-video', resolution: '480p', duration: 8, aspectRatio: '16:9', size: '854x480' }
+  const snapshot = structuredClone(draft)
+  assert.deepEqual(normalizeVideoParameters(draft), { ...draft, resolution: '720p', size: '1280x720' })
+  assert.deepEqual(draft, snapshot)
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'sd2.0-fast-480p', resolution: '720p' }).resolution, '480p')
+  assert.deepEqual(normalizeVideoParameters({ ...draft, model: 'sora-2', resolution: 'auto', duration: 7 }),
+    { ...draft, model: 'sora-2', resolution: 'auto', duration: 8 })
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'grok-imagine-video-1.5', mode: 'reference-to-video', resolution: '1080p' }).resolution, '720p')
+  assert.equal(normalizeVideoParameters({ ...draft, model: 'veo-3.1', mode: 'reference-to-video', duration: 4 }).duration, 8)
+  assert.deepEqual(normalizeVideoParameters({ ...draft, model: 'unknown' }), { ...draft, model: 'unknown' })
+  const settings = { resolutions: ['540p', '1080p'], autoResolution: '1080p' }
+  const custom = { ...draft, model: 'configured-video', duration: 23 }
+  assert.deepEqual(normalizeVideoParameters(custom, settings), { ...custom, resolution: '1080p', size: '1920x1080' })
+  assert.deepEqual(normalizeVideoParameters({ ...custom, resolution: '540p' }, settings), { ...custom, resolution: '540p' })
+})
 function fragmented(value) {
   const bytes = new TextEncoder().encode(value)
   return new Response(new ReadableStream({ start(controller) { for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7)); controller.close() } }), { headers: { 'Content-Type': 'text/event-stream' } })

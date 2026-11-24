@@ -25,7 +25,7 @@ import { modelsForKind, takeModelChoice } from '../model-preferences'
 import { imageOptionsSchema, videoOptionsSchema } from '../../shared/studio/options'
 import { modelApiFormatSchema, type ModelApiFormat } from '../../shared/studio/model-types'
 import { imageRequestSize, usesGeminiImageChat } from '../../shared/studio/image-params'
-import { videoCapabilities } from '../../shared/studio/video-capabilities'
+import { normalizeVideoParameters, videoCapabilities } from '../../shared/studio/video-capabilities'
 import { selectedVideoSize } from '../../shared/studio/video-size'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
 import { remixVideoMode } from '../studio-remix'
@@ -121,10 +121,21 @@ const automaticSize = computed(() => props.kind === 'video' ? selectedVideoSize(
 const size = computed({ get: () => manualSize.value || automaticSize.value, set: (value: string) => { manualSize.value = value.trim() } })
 const requestSize = computed(() => props.kind === 'image' && (!manualSize.value || manualSize.value === 'auto') && (imageOptions.resolution === 'auto' || ratio.value === 'auto') ? 'auto' : size.value)
 const draftKey = () => `octopus:user-${session.user?.id}:native-creation-draft:${props.kind}`
+function adaptVideoParameters() {
+  if (props.kind !== 'video' || !model.value) return
+  const next = normalizeVideoParameters({ model: model.value, mode: videoOptions.mode, resolution: videoOptions.resolution,
+    duration: duration.value, aspectRatio: ratio.value, size: size.value }, videoSetting.value)
+  if (next.resolution !== videoOptions.resolution) manualSize.value = ''
+  videoOptions.resolution = next.resolution; duration.value = next.duration
+}
 function chooseModel() {
   if (props.remixPreparing || restoringTask.value || parameterModel.value || !creation.modelsLoaded || creation.modelsLoading || creation.groupsLoading || creation.groupSwitching) return
   const choice = takeModelChoice(props.kind, models.value)
-  if (choice) model.value = choice
+  if (choice) {
+    if (model.value !== choice) manualSize.value = ''
+    model.value = choice
+    adaptVideoParameters()
+  }
   else if (!models.value.some(item => item.id === model.value)) model.value = models.value[0]?.id || ''
 }
 function legacyApiFormat(value: string): ModelApiFormat {
@@ -177,6 +188,8 @@ watch(() => session.user?.id, () => {
   protocol.value = 'auto'; apiFormat.value = 'auto'
 })
 watch([models, () => creation.modelsLoaded, () => creation.groupsLoading, () => creation.groupSwitching, () => props.remixPreparing], chooseModel)
+// Model and mode changes adapt the editable draft; catalogue refreshes and restored originals keep their explicit parameters.
+watch([model, () => videoOptions.mode], () => { if (!restoringParameters.value) adaptVideoParameters() }, { flush: 'sync' })
 watch([ratio, () => imageOptions.resolution, () => videoOptions.resolution, model], () => { if (!restoringParameters.value) manualSize.value = '' })
 watch([prompt, model, manualSize, ratio, count, duration, imageOptions, videoOptions, protocol, apiFormat, references, sourceWorkId, imageEditTaskId, restoringParameters], () => {
   if (props.entryOnly || !session.user || restoringParameters.value || !live || props.remixPreparing && !remixApplied.value) return
@@ -196,6 +209,7 @@ watch([model, selectedApiFormat, () => props.kind, restoringParameters], () => {
   manualSize.value = ''; imageOptions.seed = ''; count.value = 1
 })
 function modelChanged() {
+  adaptVideoParameters()
   if (props.source && model.value !== props.source.model) { apiFormat.value = 'auto'; protocol.value = 'auto' }
   error.value = ''; emit('model')
 }

@@ -36,18 +36,21 @@ export function videoDurationLabel(durations: number[]) {
 }
 
 /** Correct editable drafts, never historical result/request snapshots. */
-export function normalizeVideoParameters(draft: VideoDraft): VideoDraft {
-  const limits = videoCapabilities(draft.model, draft.mode);
+export function normalizeVideoParameters<T extends Pick<VideoDraft, "model" | "mode" | "resolution" | "duration" | "size" | "aspectRatio">>(draft: T, setting?: VideoModelSetting): T {
+  const limits = videoCapabilities(draft.model, draft.mode, setting);
   if (!limits) return draft;
   const resolution =
-    draft.resolution === "auto" || limits.resolutions.includes(draft.resolution)
+    draft.resolution === "auto" || !limits.resolutions.length || limits.resolutions.includes(draft.resolution)
       ? draft.resolution
+      : setting?.autoResolution && limits.resolutions.includes(setting.autoResolution)
+      ? setting.autoResolution
       : limits.resolutions.includes("720p")
       ? "720p"
-      : limits.resolutions[0];
+      : limits.resolutions[0]!;
   const requested = Number.isFinite(draft.duration) ? draft.duration : 8;
   const duration = limits.durations.reduce((best, value) =>
     Math.abs(value - requested) < Math.abs(best - requested) ? value : best,
+    limits.durations[0] ?? requested,
   );
   return {
     ...draft,
