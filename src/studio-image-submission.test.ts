@@ -71,6 +71,58 @@ it('awaits durable conversation registration before the paid POST and sends an i
   expect(body.references).toBeUndefined()
   expect(task.conversationPending).toBe(false)
 })
+it('sends a large pinned image once through the Images API without losing original bytes or context text', async () => {
+  const p = await fixture()
+  const original = `data:image/png;base64,${'A'.repeat(16 * 1024 ** 2)}` // A 12 MiB original previously occupied 32 MiB when repeated.
+  p.input.apiFormat = 'images'
+  p.input.references = [{ name: '产品原图', url: original }]
+  p.input.imageContext = { turns: [{ prompt: '保留产品包装文案', images: [original] }] }
+  const task = await p.submitCreation(p.input)
+  expect(task.phase).toBe('complete')
+  expect(p.send).toHaveBeenCalledTimes(1)
+  const serialized = p.send.mock.calls[0]![1]!.body as string, body = JSON.parse(serialized)
+  expect(new TextEncoder().encode(serialized).byteLength).toBeLessThan(27 * 1024 ** 2)
+  expect(body.referenceUrls).toEqual([original])
+  expect(body.imageContext.turns).toEqual([{ prompt: '保留产品包装文案', images: [] }])
+  expect(task.references.map(file => file.url)).toEqual([original])
+  expect(p.input.imageContext.turns[0]!.images).toEqual([original])
+})
+for (const apiFormat of ['images', 'chat-completions', 'gemini'] as const) it(`resolves auto model aliases without changing ${apiFormat} image roles`, async () => {
+  const p = await fixture()
+  p.input.model = 'custom-image-alias'; p.input.apiFormat = 'auto'
+  p.creation.models = [{ id: p.input.model, kinds: ['image'], apiFormat }]
+  p.input.imageContext = { turns: [{ prompt: '第一轮要求', references: ['https://media.example/reference.png'], images: ['https://media.example/output.png'] }] }
+  const context = structuredClone(p.input.imageContext)
+  const task = await p.submitCreation(p.input)
+  const body = JSON.parse(p.send.mock.calls[0]![1]!.body as string)
+  expect(body.apiFormat).toBe('auto')
+  if (apiFormat === 'images') {
+    expect(body.referenceUrls).toEqual(['https://media.example/original.png', 'https://media.example/reference.png', 'https://media.example/output.png'])
+    expect(body.imageContext.turns).toEqual([{ prompt: '第一轮要求', images: [] }])
+    expect(task.references.map(file => file.url)).toEqual(body.referenceUrls)
+  } else {
+    expect(body.referenceUrls).toEqual(['https://media.example/original.png'])
+    expect(body.imageContext).toEqual(context)
+  }
+  expect(p.input.imageContext).toEqual(context)
+})
+it('preserves auto image context when the model catalogue belongs to another group', async () => {
+  const p = await fixture()
+  p.input.apiFormat = 'auto'; p.input.accountGroup = 'other-group'
+  p.creation.models = [{ id: p.input.model, kinds: ['image'], apiFormat: 'images' }]
+  await p.submitCreation(p.input)
+  expect(JSON.parse(p.send.mock.calls[0]![1]!.body as string).imageContext).toEqual(p.input.imageContext)
+})
+it('rejects a genuinely oversized request before task creation or paid submission and explains pinned content', async () => {
+  const p = await fixture(), registered = vi.fn()
+  p.input.references = ['A', 'B'].map(value => ({ name: value, url: `data:image/png;base64,${value.repeat(14 * 1024 ** 2)}` }))
+  p.input.imageContext = { turns: [] }
+  await expect(p.submitCreation(p.input, registered)).rejects.toThrow(/28\.00 MiB.*27 MiB.*取消固定.*清除上下文不会移除已固定内容/)
+  expect(p.send).not.toHaveBeenCalled()
+  expect(registered).not.toHaveBeenCalled()
+  expect(p.creation.tasks).toEqual([])
+  expect(p.input.prompt).toBe('换蓝色背景')
+})
 it('submits two tasks in the same conversation and keeps out-of-order results on their original tasks', async () => {
   const p = await fixture()
   let release!: (response: Response) => void

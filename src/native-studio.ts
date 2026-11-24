@@ -721,6 +721,11 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
   const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
   const selectedGroup = input.accountGroup === undefined ? creation.selectedGroup : input.accountGroup
+  const configuredModel = selectedGroup === creation.selectedGroup && selectedTokenId === creation.modelTokenId
+    ? creation.models.find(model => model.id === input.model) : undefined
+  const imageFormat = input.apiFormat === 'auto' ? configuredModel?.apiFormat : input.apiFormat
+  const compactImageContext = input.kind === 'image' && (input.apiFormat !== 'auto' || configuredModel !== undefined)
+    && !usesGeminiImageChat(input.model, imageFormat)
   const version = epoch, acceptedOwner = activeOwner(), acceptedAccount = /^[1-9]\d*$/.test(acceptedOwner) ? acceptedOwner : session.user?.accountId
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
@@ -737,14 +742,31 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (!portable.has(url)) portable.set(url, portableImage(url))
     return portable.get(url)!
   }
+  if (compactImageContext && input.imageContext) {
+    // Images edits use one reference list; only dialogue APIs need images in historical turns.
+    const references = new Map((input.references || []).map(file => [file.url, file]))
+    for (const turn of input.imageContext.turns) {
+      for (const url of [...(turn.references || []), ...turn.images]) {
+        if (!references.has(url)) references.set(url, { name: `固定参考图 ${references.size + 1}`, url })
+      }
+    }
+    if (references.size > 16) throw new Error('固定图片和本次参考图合计不能超过 16 张，请先取消部分固定。')
+    input.references = [...references.values()]
+    input.imageContext = { turns: input.imageContext.turns.map(turn => ({ prompt: turn.prompt, images: [] })) }
+  }
   for (const file of input.references || []) file.url = await prepareImage(file.url)
+  if (compactImageContext) input.references = [...new Map((input.references || []).map(file => [file.url, file])).values()]
   for (const turn of input.imageContext?.turns || []) {
     turn.images = await Promise.all(turn.images.map(prepareImage))
     if (turn.references) turn.references = await Promise.all(turn.references.map(prepareImage))
   }
-  if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 27 * 1024 ** 2) throw new Error('图片和对话上下文超过请求大小上限，请清除上下文或减少参考图。')
-  if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   const id = crypto.randomUUID()
+  const body = JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined,
+    references: undefined, referenceUrls: (input.references || []).map(file => file.url), requestId: id })
+  const requestBytes = new TextEncoder().encode(body).byteLength
+  if (requestBytes > 27 * 1024 ** 2)
+    throw new Error(`本次图片和上下文请求为 ${(requestBytes / 1024 ** 2).toFixed(2)} MiB，超过 27 MiB 上限。请减少参考图或取消固定内容后重试；清除上下文不会移除已固定内容。`)
+  if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
     id, conversationId: previous ? creationConversationId(previous) : validId(input.conversationId) ? input.conversationId : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
@@ -788,7 +810,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
         ...(selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
-      body: JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, references: undefined, referenceUrls: task.references.map(file => file.url), requestId: task.id }),
+      body,
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))

@@ -102,6 +102,52 @@ test('pinning only a question never selects its generated image', async ({ page 
   expect(calls[1].imageContext.turns).toEqual([{ prompt: '猫头鹰海报', images: [] }])
 })
 
+for (const width of [390, 1440]) test(`large pinned image editing sends original bytes once at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { calls, image } = await fixture(page)
+  const original = Buffer.alloc(12 * 1024 ** 2)
+  image.copy(original)
+  await page.route('**/api/creation/media?**', route => route.fulfill({ contentType: 'image/jpeg',
+    body: new URL(route.request().url()).searchParams.has('variant') ? image : original }))
+  await send(page, '原产品图片', 1)
+  const first = page.locator('.creation-response').first()
+  await first.getByRole('button', { name: '固定到上下文', exact: true }).click()
+  await first.getByRole('button', { name: '编辑图片', exact: true }).click()
+  await expect(page.locator('.reference-list img')).toHaveCount(1)
+  await send(page, '移除背景文案，保持产品包装文案不变', 2)
+  expect(calls).toHaveLength(2)
+  expect(calls[1].referenceUrls).toHaveLength(1)
+  expect(Buffer.from(calls[1].referenceUrls[0].split(',')[1], 'base64').equals(original)).toBe(true)
+  expect(calls[1].imageContext.turns).toEqual([{ prompt: '原产品图片', images: [] }])
+  expect(Buffer.byteLength(JSON.stringify(calls[1]))).toBeLessThan(27 * 1024 ** 2)
+})
+
+test('oversized pinned originals keep the draft and explain why clearing context does not help', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 })
+  const { image } = await fixture(page)
+  const originals = [1, 2].map(value => { const data = Buffer.alloc(11 * 1024 ** 2, value); image.copy(data); return data })
+  let calls = 0
+  await page.route('**/api/creation/generate', route => {
+    calls++
+    return route.fulfill({ json: { status: 'succeeded', outputs: [1, 2].map(id => ({ url: `https://media.example/large-${id}.jpg` })), tokenId: 41, protocol: 'sync' } })
+  })
+  await page.route('**/api/creation/media?**', route => {
+    const query = new URL(route.request().url()).searchParams
+    return route.fulfill({ contentType: 'image/jpeg', body: query.has('variant') ? image : originals[query.get('url')?.includes('large-2') ? 1 : 0] })
+  })
+  await send(page, '两张产品原图', 1)
+  await page.locator('.creation-response').first().getByRole('button', { name: '固定到上下文', exact: true }).click()
+  await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留这条修改要求')
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect(page.locator('.studio-composer')).toContainText('超过 27 MiB 上限')
+  await expect(page.locator('.studio-composer')).toContainText('清除上下文不会移除已固定内容')
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留这条修改要求')
+  await expect(page.locator('.creation-turn')).toHaveCount(1)
+  expect(calls).toBe(1)
+})
+
 for (const width of [320, 390, 1440]) test(`QX message toolbar has nine unique icon actions at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   await fixture(page)
@@ -162,9 +208,13 @@ for (const model of ['gpt-image-2', 'gemini-3-pro-image-preview']) test(`pinning
   await send(page, '保持角色继续创作', 2)
   expect(calls[1].model).toBe(model)
   expect(calls[1].imageContext.turns.map((turn: any) => turn.prompt)).toEqual(['固定这张角色图'])
-  expect(calls[1].imageContext.turns[0].images).toHaveLength(1)
-  if (model === 'gpt-image-2') expect(calls[1].referenceUrls).toContain(calls[1].imageContext.turns[0].images[0])
-  else expect(calls[1].referenceUrls).toEqual([])
+  if (model === 'gpt-image-2') {
+    expect(calls[1].imageContext.turns[0].images).toEqual([])
+    expect(calls[1].referenceUrls).toHaveLength(1)
+  } else {
+    expect(calls[1].imageContext.turns[0].images).toHaveLength(1)
+    expect(calls[1].referenceUrls).toEqual([])
+  }
   await first.getByRole('button', { name: '取消固定', exact: true }).click()
   await page.getByRole('button', { name: '清除上下文', exact: true }).click()
   await send(page, '重新开始', 3)
