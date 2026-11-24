@@ -40,7 +40,9 @@ test('wallet-paid creation signs the actual relay request once and config failur
     return Response.json({ data: [{ url: 'https://media.example/result.png' }] })
   } })
   process.env.COMMUNITY_WALLET_SECRET = ''
-  assert.equal((await submit(app)).statusCode, 503)
+  const unaccepted = await submit(app)
+  assert.equal(unaccepted.statusCode, 503)
+  assert.equal(unaccepted.json().notAccepted, true)
   assert.equal(calls.length, 0)
   assert.equal((await app.inject('/api/creation/requests/request-1')).statusCode, 404)
   const streaming = await submit(app, { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'stream-config',
@@ -406,15 +408,26 @@ test('background media returns its request ID before the upstream responds and a
   process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
   const upstream = deferred(), trackingSaved = deferred()
+  let queryFailure = 'http'
   const f = fixture(t, {
     afterRedisSet(key, value) { if (key.endsWith(':background-video') && JSON.parse(value).tracking) trackingSaved.resolve() },
     fetch(url, init) {
       if (init.method === 'POST') return upstream.promise
       assert.equal(new URL(url).pathname, '/v1/videos/upstream-video')
+      if (queryFailure === 'http') return new Response('temporarily unavailable', { status: 503 })
+      if (queryFailure === 'transport') throw new TypeError(`fetch failed with ${apiKey}`)
+      if (queryFailure === 'json') return new Response('invalid JSON')
       return Response.json({ id: 'upstream-video', status: 'completed' })
     },
   })
   const input = { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'background-video' }
+  process.env.NEW_API_SESSION_SECRET = ''
+  const unaccepted = await submit(f.app, input, { Prefer: 'respond-async' })
+  assert.equal(unaccepted.statusCode, 503)
+  assert.equal(unaccepted.json().notAccepted, true)
+  assert.equal(f.calls.length, 0)
+  assert.equal((await f.app.inject('/api/creation/requests/background-video')).statusCode, 404)
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   const response = await submit(f.app, input, { Prefer: 'respond-async' })
   assert.equal(response.statusCode, 202, response.payload)
   assert.equal(response.json().requestId, input.requestId)
@@ -433,10 +446,29 @@ test('background media returns its request ID before the upstream responds and a
   assert(!JSON.stringify(stored).includes(apiKey))
   // This pass needs only persisted Redis data, not the original request or browser.
   await processCreationTasks(f.redis, f.services)
+  const temporary = (await f.app.inject('/api/creation/requests/background-video')).json()
+  assert.equal(temporary.status, 'pending')
+  assert.equal(temporary.errorStage, '任务查询')
+  assert.equal(temporary.errorStatus, 503)
+  assert.match(temporary.error, /HTTP 503/)
+  for (const failure of ['transport', 'json']) {
+    queryFailure = failure
+    await f.redis.zadd('community-next:creation:pending', 0, key)
+    await processCreationTasks(f.redis, f.services)
+    const recovered = (await f.app.inject('/api/creation/requests/background-video')).json()
+    assert.equal(recovered.status, 'pending')
+    assert.equal(recovered.errorStage, '任务查询')
+    assert.equal(recovered.errorStatus, failure === 'json' ? 200 : undefined)
+    assert(!JSON.stringify(recovered).includes(apiKey))
+  }
+  queryFailure = ''
+  await f.redis.zadd('community-next:creation:pending', 0, key)
+  await processCreationTasks(f.redis, f.services)
   const result = (await f.app.inject('/api/creation/requests/background-video')).json()
   assert.equal(result.status, 'succeeded')
   assert.equal(result.requestId, input.requestId)
   assert.equal(result.upstreamId, 'upstream-video')
+  assert.equal(result.errorStage, undefined)
   assert.equal(result.mediaPath, 'videos/upstream-video/content')
   assert.equal(JSON.parse(f.values.get(key)).tracking, undefined)
   assert.equal((await f.app.inject({ url: '/api/creation/requests/background-video', headers: { 'x-test-account': '18' } })).statusCode, 404)
@@ -971,6 +1003,88 @@ test('concurrent and repeated paid submissions send one upstream POST, and reque
   assert.deepEqual((await submit(app)).json(), result.json())
   const changed = await submit(app, { ...imageRequest, prompt: 'A different paid request' })
   assert.equal(changed.statusCode, 409)
+  assert.equal(changed.json().notAccepted, false)
+  assert.equal(calls.length, 1)
+})
+
+for (const [scenario, fetch, expected] of [
+  ['empty-result', () => Response.json({ data: [] }), '生成服务未返回可读取的生成结果。'],
+  ['invalid-response', () => new Response('invalid JSON'), '创作服务返回了无法识别的响应。'],
+  ['submission-timeout', () => { throw new DOMException('Submission timed out', 'TimeoutError') }, '等待生成服务响应超时。'],
+  ['connection-error', () => { throw new TypeError(`fetch failed with ${apiKey}`) }, '生成服务连接异常，未能获取生成结果。'],
+  ['response-read-error', () => new Response(new ReadableStream({ start(controller) {
+    controller.error(new Error(`response interrupted with ${apiKey}`))
+  } })), '读取生成结果失败。'],
+]) {
+  test(`${scenario} returns a concrete error without asking users to investigate or resubmitting`, async t => {
+    const { app, calls } = fixture(t, { fetch })
+    const response = await submit(app)
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.json().status, 'indeterminate')
+    const stage = ['submission-timeout', 'connection-error'].includes(scenario) ? '网关提交' : '网关响应处理'
+    assert.equal(response.json().errorStage, stage)
+    assert.equal(response.json().error, `${stage}失败${stage === '网关响应处理' ? '（HTTP 200）' : ''}：${expected}`)
+    assert.doesNotMatch(response.payload, /核对|联系管理员|尚无法确认/)
+    assert(!response.payload.includes(apiKey))
+    assert.deepEqual((await app.inject('/api/creation/requests/request-1')).json(), response.json())
+    assert.deepEqual((await submit(app)).json(), response.json())
+    assert.equal(calls.length, 1)
+  })
+}
+
+test('submission failures identify their boundary and retain HTTP errors even without a JSON body', async t => {
+  for (const [scenario, options, expectedStage, expectedStatus, paidCalls] of [
+    ['models', { modelReadError: new Error('database details must stay private') }, '模型配置读取', 500, 0],
+    ['references', { publicMedia() { throw httpError(404, '参考图片不存在。') } }, '参考素材准备', 404, 0],
+    ['credentials', { credentials() { throw new NewApiError('Group key changed', 409, 'NEW_API_GROUP_TOKEN_UNAVAILABLE') } }, '网关凭证准备', 409, 0],
+    ['tracking', { beforeRedisSet() { throw new Error('Redis unavailable') } }, '任务登记', 500, 0],
+    ['gateway-http', { fetch() { return new Response('<html>Bad Gateway</html>', { status: 504 }) } }, '网关提交', 504, 1],
+    ['gateway-read', { fetch() { return new Response('invalid JSON') } }, '网关响应处理', 200, 1],
+    ['save-failed', { fetch() { return Response.json({ id: 'saved-job', status: 'save_failed', error: { code: 'insufficient_disk_space' } }) } }, '结果保存', undefined, 1],
+  ]) await t.test(scenario, async t => {
+    const { app, calls } = fixture(t, options)
+    const response = await submit(app, { ...imageRequest, ...(scenario === 'references' ? { referenceUrls: ['https://media.example/missing.png'] } : {}) })
+    const data = response.json()
+    assert.equal(data.errorStage, expectedStage)
+    assert.equal(data.errorStatus, expectedStatus)
+    assert.match(typeof data.error === 'string' ? data.error : data.error.message, new RegExp(expectedStage))
+    assert.equal(calls.length, paidCalls)
+    assert(!response.payload.includes('database details must stay private'))
+    if (scenario === 'gateway-http') assert.match(data.error, /HTTP 504/)
+    if (!paidCalls && scenario !== 'tracking') assert.equal(data.notAccepted, true)
+    if (paidCalls) {
+      assert.equal(data.notAccepted, undefined)
+      assert.deepEqual((await app.inject('/api/creation/requests/request-1')).json(), data)
+      await submit(app)
+      assert.equal(calls.length, 1)
+    }
+  })
+})
+
+test('result persistence errors after a paid submission are not reported as unaccepted registration errors', async t => {
+  const { app, calls } = fixture(t, {
+    beforeRedisSet(key, _value, flags) { if (key.includes(':creation:request:') && !flags.includes('NX')) throw new Error('Result storage unavailable') },
+    fetch() { return Response.json({ data: [{ url: 'https://media.example/result.png' }] }) },
+  })
+  const response = await submit(app)
+  assert.equal(response.statusCode, 500)
+  assert.equal(response.json().errorStage, '结果保存')
+  assert.equal(response.json().notAccepted, false)
+  assert.equal(calls.length, 1)
+  await submit(app)
+  assert.equal(calls.length, 1)
+})
+
+test('cached legacy errors use the current failure message without replaying generation', async t => {
+  const { app, values, calls } = fixture(t, { fetch: () => Response.json({ data: [] }) })
+  await submit(app)
+  const [key, raw] = [...values].find(([key]) => key.includes(':creation:request:'))
+  const cached = JSON.parse(raw)
+  cached.result.error = '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。'
+  values.set(key, JSON.stringify(cached))
+  const response = await app.inject('/api/creation/requests/request-1')
+  assert.equal(response.json().error, '获取生成结果失败。')
+  assert.equal(response.json().status, 'indeterminate')
   assert.equal(calls.length, 1)
 })
 

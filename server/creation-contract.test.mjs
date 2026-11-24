@@ -579,7 +579,7 @@ test('task error codes supply safe fallback reasons without replacing provider m
     const result = normalizeCreationTask('image', { id: 'job_1', status, error: { code: 'image_storage_capacity_reached' } })
     assert.equal(result.status, status)
     assert.equal(result.upstreamId, 'job_1')
-    assert.equal(result.error, '图片保存空间不足，勿重复生成，请联系管理员')
+    assert.equal(result.error, '图片保存失败：存储空间不足。')
   }
   for (const code of ['video_content_gone', 'video_content_unavailable']) {
     const result = normalizeCreationTask('video', { id: 'video_1', status: 'save_failed', error: { code } }, undefined, 'async')
@@ -592,7 +592,7 @@ test('task error codes supply safe fallback reasons without replacing provider m
     data: { id: 'job_1', status: 'failed', error: { code: 'missing_upstream_image' } } })
   assert.equal(wrapped.error, '供应商原始错误')
   assert.deepEqual(normalizeCreationTask('video', { id: 'job_1', status: 'indeterminate', error: { code: 'generation_outcome_unknown' } }),
-    { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '暂时无法确认生成结果，原任务记录已保留，请核对使用记录，避免重复生成。' })
+    { id: 'job_1', upstreamId: 'job_1', status: 'indeterminate', outputs: [], error: '上游未返回生成结果。' })
 })
 
 test('completed image/text results and protected OpenAI video media keep their actual outputs', () => {

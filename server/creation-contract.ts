@@ -50,6 +50,8 @@ export interface CreationTask {
   progress?: number
   outputs: CreationOutput[]
   error?: string
+  errorStage?: string
+  errorStatus?: number
   mediaPath?: string
   poster?: string
   reasoning?: string
@@ -62,7 +64,7 @@ const operationPattern = /^models\/[A-Za-z0-9._-]+\/operations\/[A-Za-z0-9_-]+$/
 const successStates = new Set(['completed', 'succeeded', 'success', 'done'])
 const failedStates = new Set(['failed', 'failure', 'error', 'cancelled', 'canceled'])
 const taskErrorMessages: Record<string, string> = {
-  generation_outcome_unknown: '暂时无法确认生成结果，原任务记录已保留，请核对使用记录，避免重复生成。',
+  generation_outcome_unknown: '上游未返回生成结果。',
   upstream_rejected: '上游拒绝了生成请求，请检查模型、参数或参考素材。',
   upstream_image_count_exceeded: '上游返回图片数量超过安全上限',
   invalid_upstream_image_item: '上游返回的图片条目格式不正确',
@@ -74,8 +76,8 @@ const taskErrorMessages: Record<string, string> = {
   invalid_image_base64: '上游返回的图片 Base64 数据无效',
   unsupported_image_type: '上游返回的图片格式不受支持',
   image_too_large: '上游返回的单张图片超过大小限制',
-  image_storage_capacity_reached: '图片保存空间不足，勿重复生成，请联系管理员',
-  insufficient_disk_space: '服务器磁盘空间不足，勿重复生成，请联系管理员',
+  image_storage_capacity_reached: '图片保存失败：存储空间不足。',
+  insufficient_disk_space: '生成结果保存失败：服务器磁盘空间不足。',
   video_content_gone: '模型已返回完成状态，但上游视频成品无法获取。请核对原任务，勿重复生成。',
   video_content_unavailable: '上游视频成品暂时无法下载，原任务已保留。请稍后重试保存，勿重复生成。',
 }
@@ -524,8 +526,8 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     || (code ? Object.hasOwn(taskErrorMessages, code) ? taskErrorMessages[code] : `上游返回错误：${code}` : undefined)
   if (['save_failed', 'indeterminate', 'expired'].includes(state)) {
     result.status = state as CreationTask['status']
-    result.error = error || (state === 'save_failed' ? '生成已完成，但保存失败；请保留记录并核对，勿重复生成。'
-      : state === 'expired' ? '任务或文件已过期。' : '生成结果尚无法确认，请保留记录并核对，勿重复生成。')
+    result.error = error || (state === 'save_failed' ? '生成已完成，但结果保存失败。'
+      : state === 'expired' ? '任务或文件已过期。' : '获取生成结果失败。')
     return result
   }
   if (failedStates.has(state) || failedStates.has(envelopeState) || data.success === false || envelope.success === false || failure || reason) {
@@ -550,9 +552,9 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
     const text = parts.map(part => typeof part.text === 'string' ? part.text : '').join('')
     const markdownImages = chatImageOutputs({ choices: [{ message: { content: text } }] })
     const images = [...new Map([...inlineImages, ...markdownImages].map(image => [image.url, image])).values()]
-    if (images.length > 10) return { status: 'indeterminate', outputs: [], error: 'Gemini 返回图片数量超过安全上限，请核对原任务。' }
+    if (images.length > 10) return { status: 'indeterminate', outputs: [], error: 'Gemini 返回图片数量超过安全上限。' }
     return images.length ? { status: 'succeeded', outputs: images }
-      : { status: 'indeterminate', outputs: [], error: 'Gemini 未返回可读取的图片，请核对原任务。' }
+      : { status: 'indeterminate', outputs: [], error: 'Gemini 未返回可读取的图片。' }
   }
   if (kind === 'video' && protocol === 'gemini') {
     if (data.done !== true) return result
@@ -598,7 +600,7 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
   }
   if (!result.outputs.length && !result.mediaPath) {
     result.status = 'indeterminate'
-    result.error = '上游任务已结束，但没有可读取的结果；请保留记录并核对，勿重复生成。'
+    result.error = '上游任务已结束，但未返回可读取的结果。'
   }
   return result
 }

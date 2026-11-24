@@ -58,6 +58,9 @@ export interface CreationTask {
   galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
   error?: string
+  errorStage?: string
+  errorStatus?: number
+  submissionError?: string
   sourceWorkId?: string
   references: { name: string; url: string; id?: string; fromWorkId?: string }[]
   publicationFiles?: string[]
@@ -201,7 +204,7 @@ function validTask(value: unknown): value is CreationTask {
     && typeof value.protocol === 'string' && ['submitting', 'running', 'paused', 'complete', 'error', 'attention'].includes(String(value.phase))
 }
 export function creationRequestTimedOut(task: CreationTask): boolean {
-  return task.protocol === 'sync' && !task.upstreamId && /\b504\b|gateway\s+timeout/i.test(task.error || '')
+  return task.protocol === 'sync' && !task.upstreamId && !task.submissionError && /\b504\b|gateway\s+timeout/i.test(task.error || '')
 }
 function safeResultUrl(value: unknown): string | undefined {
   if (typeof value !== 'string') return
@@ -459,15 +462,18 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (apiFormat && apiFormat !== 'auto') task.apiFormat = apiFormat
   const urls = resultUrls(data, task), text = resultText(data)
   const id = data.upstreamId || data.task_id || data.id || data.taskId
+  if (task.serverTracked || validUpstreamId(id) || status || urls.length || text || task.toolCalls?.length) task.submissionError = undefined
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
   const detail = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
+  task.errorStage = typeof data.errorStage === 'string' ? data.errorStage : undefined
+  task.errorStatus = typeof data.errorStatus === 'number' ? data.errorStatus : undefined
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
     task.phase = 'attention'
-    task.error = task.kind === 'text' ? `${detail ? detail + ' ' : ''}任务结果暂时无法确认，记录已保留，请先核对使用记录，避免重复生成。` : detail || '生成服务未返回可读取的结果。'
+    task.error = detail || '获取生成结果失败。'
     if (status === 'indeterminate' && creationRequestTimedOut(task)) {
-      task.error = `${detail} 本次请求已超时，未收到生成结果。扣费请核对账号使用记录，勿重复提交。`
+      task.error = `${detail} 本次请求已超时，未收到生成结果。`
     }
     return true
   }
@@ -487,8 +493,8 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     return true
   }
   task.phase = task.upstreamId || task.serverTracked ? 'running' : 'attention'
-  if (task.phase === 'running') { task.settledAt = undefined; task.error = '' }
-  if (!task.upstreamId && !task.serverTracked) task.error = '未收到可恢复的任务编号，请核对账号使用记录，勿重复提交。'
+  if (task.phase === 'running') { task.settledAt = undefined; task.error = task.errorStage === '任务查询' ? detail : '' }
+  if (!task.upstreamId && !task.serverTracked) task.error = '生成服务未返回结果或有效的任务编号。'
   return !task.upstreamId && !task.serverTracked
 }
 function delay(signal: AbortSignal, duration: number) {
@@ -555,7 +561,14 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
       const status = record(error) ? error.status : undefined
       const permanent = typeof status === 'number' && status < 500 && status !== 429
       task.phase = permanent ? 'attention' : 'running'
-      task.error = permanent ? errorMessage(error) : '正在恢复任务状态…'
+      const submissionError = status === 404 && !task.upstreamId ? task.submissionError : undefined
+      if (submissionError) task.error = submissionError
+      else {
+        if (!task.submissionError) { task.errorStage = '任务查询'; task.errorStatus = typeof status === 'number' ? status : undefined }
+        const detail = errorMessage(error)
+        const failure = detail.startsWith('任务查询失败') ? detail : `任务查询失败${status ? `（HTTP ${status}）` : ''}：${detail}`
+        task.error = permanent ? failure : `${failure} 正在自动重试。`
+      }
       if (permanent) task.settledAt = Date.now()
       await persist()
       let wait = 5000
@@ -697,6 +710,7 @@ export async function resumeCreation(task: CreationTask) {
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
+  if (!task.upstreamId && !task.serverTracked && task.error) task.submissionError ||= task.error
   const controller = new AbortController(), version = epoch
   controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.settledAt = undefined
   try {
@@ -803,6 +817,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (epoch === version) { task.phase = 'error'; task.settledAt = Date.now(); task.error = '操作已停止，未提交生成。'; await persist() }
     return task
   }
+  let responseReceived = false, responseStatus: number | undefined
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
@@ -812,11 +827,14 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
         ...(selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
       body,
     })
+    responseReceived = true; responseStatus = response.status
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
-      throw Object.assign(new Error((typeof data.error === 'string' ? data.error : data.error?.message) || data.message || `生成请求失败 (${response.status})`), {
-        notAccepted: data.notAccepted === true || [400, 401, 403, 413, 422, 429].includes(response.status),
+      const detail = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || '社区提交接口未返回错误详情。'
+      throw Object.assign(new Error(data.errorStage ? detail : `社区提交接口失败（HTTP ${response.status}）：${detail}`), {
+        notAccepted: typeof data.notAccepted === 'boolean' ? data.notAccepted : [400, 401, 403, 413, 422, 429].includes(response.status),
         code: data.error?.code || data.code,
+        errorStage: data.errorStage || '社区提交接口', errorStatus: data.errorStatus ?? response.status,
       })
     }
     const tokenId = Number(response.headers.get('X-New-Api-Token'))
@@ -829,7 +847,14 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const parser = getLines(getMessages(message => {
         if (!message.data || epoch !== version || controller.signal.aborted) return
         const event = JSON.parse(message.data)
-        if (event.type === 'error') throw Object.assign(new Error(event.error || '生成失败。'), { notAccepted: event.notAccepted === true, code: event.code })
+        if (event.type === 'error') {
+          const stage = event.errorStage || (event.notAccepted ? '请求校验' : '社区响应读取')
+          const status = event.errorStatus ?? event.statusCode
+          const detail = event.error || '生成失败。'
+          throw Object.assign(new Error(event.errorStage ? detail : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${detail}`), {
+            notAccepted: event.notAccepted === true, code: event.code, errorStage: stage, errorStatus: status,
+          })
+        }
         if (event.type === 'preview' && safeResultUrl(event.url)) { task.preview = event.url; task.phase = 'running' }
         if (event.type === 'delta') {
           task.text = typeof event.text === 'string' ? event.text : task.text
@@ -868,9 +893,15 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       task.phase = notAccepted ? 'error' : task.kind === 'text' && task.upstreamId ? 'paused' : 'attention'
       if (controller.signal.aborted && task.kind !== 'text') task.phase = 'paused'
       task.settledAt ??= Date.now()
-      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : notAccepted ? errorMessage(error) : `${errorMessage(error)} 原请求可能已被受理，请勿重复提交。`
+      const stage = record(error) && typeof error.errorStage === 'string' ? error.errorStage : responseReceived ? '社区响应读取' : '提交到社区'
+      const status = record(error) && typeof error.errorStatus === 'number' ? error.errorStatus : responseStatus
+      const detail = record(error) && typeof error.errorStage === 'string' ? errorMessage(error)
+        : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${errorMessage(error)}`
+      task.errorStage = stage; task.errorStatus = status
+      task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : detail
       if (!controller.signal.aborted && !notAccepted) {
-        task.serverTracked = true
+        task.submissionError = detail
+        await persist()
         await poll(task, controller, version).catch(() => {})
       }
     }

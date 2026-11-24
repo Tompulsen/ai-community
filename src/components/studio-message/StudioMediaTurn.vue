@@ -147,7 +147,7 @@ async function remove() {
       <StudioMessageActions class="creation-turn-tools message-actions" label="提问操作" :actions="actions" />
     </template>
     <template v-else>
-      <p v-if="task.error && !working" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
+      <p v-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url">

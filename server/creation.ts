@@ -42,9 +42,9 @@ const taskTtl = 90 * 86400
 const requestTtl = 30 * 86400
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。' }
+const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '获取生成结果失败。' }
 const workSkillError = '生成服务未能完成本次技能调用，请核对任务与使用记录。'
-const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED'])
+const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED', 'COMMUNITY_WALLET_CONFIG'])
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
 type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string }
 interface TrackedRequest {
@@ -117,9 +117,14 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
         return
       }
       if (!cached.deadline || Date.now() >= cached.deadline) {
-        cached.result = { ...cached.result, ...uncertain }
+        const stage = cached.tracking ? '任务查询' : '网关提交'
+        cached.result = { ...cached.result, ...uncertain, errorStage: stage,
+          error: stageError(stage, '等待结果超时。', cached.result.errorStatus) }
         delete cached.tracking
       } else if (cached.tracking) {
+        let result: Result
+        let queryStatus: number | undefined
+        try {
         const credentials = await unsealData<PollCredentials>(cached.tracking, { password: getNewApiConfig().secret })
         if (credentials.key !== key || credentials.deadline !== cached.deadline || !cached.result.upstreamId
           || !['image', 'video'].includes(cached.kind)) throw new Error('Invalid task tracking record')
@@ -129,13 +134,23 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
           headers: { Authorization: `Bearer ${credentials.credentials.apiKey}`, 'Cache-Control': 'no-store' },
           redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(60000),
         })
+        queryStatus = response.status
         if (!response.ok) {
           await response.body?.cancel()
-          await redis.zadd(pendingTasks, Date.now() + (response.status === 429 ? 30000 : 10000), key)
+          cached.result = { ...cached.result, errorStage: '任务查询', errorStatus: response.status,
+            error: stageError('任务查询', '网关暂未返回任务状态，后台将自动重试。', response.status) }
+          await saveRequestResult(redis, key, cached, filesRoot, response.status === 429 ? 30000 : 10000)
           return
         }
-        const result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
+        result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
           cached.result.protocol, cached.result.upstreamId, cached.hasWorkSkills)
+        } catch {
+          cached.result = { ...cached.result, errorStage: '任务查询', errorStatus: queryStatus,
+            error: stageError('任务查询', '读取网关任务状态失败，后台将自动重试。', queryStatus) }
+          logCreationFailure(key.split(':').pop(), '任务查询', queryStatus)
+          await saveRequestResult(redis, key, cached, filesRoot, 15000)
+          return
+        }
         cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
         if (result.status !== 'pending') delete cached.tracking
         if (result.mediaPath) {
@@ -171,6 +186,16 @@ function message(error: unknown, secret = '') {
   const value = record(error) && typeof error.message === 'string' ? error.message : typeof error === 'string' ? error : '创作服务暂时不可用。'
   return (secret ? value.split(secret).join('[redacted]') : value)
     .replace(/(?:Bearer\s+|sk-)[A-Za-z0-9_.-]{8,}/gi, '[redacted]').slice(0, 500)
+}
+function stageError(stage: string, detail: string, status?: number) {
+  return `${stage}失败${status ? `（HTTP ${status}）` : ''}：${detail}`
+}
+function logCreationFailure(requestId: unknown, stage: string, status?: number, code?: unknown, notAccepted?: boolean) {
+  console.error(JSON.stringify({ event: 'creation_failure',
+    requestId: typeof requestId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(requestId) ? requestId : undefined,
+    stage, status, code: typeof code === 'string' && /^[A-Za-z0-9_]{1,80}$/.test(code) ? code : undefined,
+    ...(notAccepted === undefined ? {} : { notAccepted }),
+  }))
 }
 
 async function readJson(response: Response, maximum = 2 * MiB): Promise<unknown> {
@@ -227,7 +252,10 @@ function ownedResponse(value: unknown, credentials: Credentials, requireOwner = 
 function responseResult(kind: CreationKind, value: unknown, credentials: Credentials, protocol: CreationTaskProtocol, id?: string, hasWorkSkills = false): Result {
   ownedResponse(value, credentials)
   const result = normalizeCreationTask(kind, value, id, protocol)
-  if (result.error) result.error = hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey)
+  if (result.error) {
+    result.errorStage = result.status === 'save_failed' ? '结果保存' : result.status === 'indeterminate' ? '网关响应处理' : '生成任务'
+    result.error = stageError(result.errorStage, hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey))
+  }
   return { ...result, tokenId: credentials.tokenId, protocol }
 }
 
@@ -244,8 +272,8 @@ async function upstreamJson(ctx: RequestContext, req: AccountRequest, credential
       if (retryAfter) ctx.reply.header('Retry-After', retryAfter)
       throw httpError(429, '任务查询过于频繁，请稍后重试。')
     }
-    throw httpError(response.status === 404 ? 404 : response.status === 401 || response.status === 403 ? 403 : 502,
-      response.status === 404 ? '任务或生成文件不存在，可能已过期。' : '暂时无法查询此任务，请稍后再试。')
+    throw Object.assign(httpError(response.status === 404 ? 404 : response.status === 401 || response.status === 403 ? 403 : 502,
+      response.status === 404 ? '任务或生成文件不存在，可能已过期。' : '暂时无法查询此任务，请稍后再试。'), { errorStatus: response.status })
   }
   return readJson(response, 40 * MiB)
 }
@@ -367,24 +395,33 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
     try { result = JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
     catch { /* Keep the saved request state when its result file is unavailable. */ }
   }
-  if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline)
-    result = { ...result, ...uncertain }
+  if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline) {
+    const stage = cached.tracking ? '任务查询' : '网关提交'
+    result = { ...result, ...uncertain, errorStage: stage, error: stageError(stage, '等待结果超时。', result.errorStatus) }
+  }
+  if (result.status === 'indeterminate' && result.error === '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。')
+    result = { ...result, error: uncertain.error }
   if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
     await remember(ctx, cached.kind, result, cached.hasWorkSkills === true).catch(() => {})
   }
   return result
 }
 async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}, background = false) {
+  let errorStage = '请求校验', recoverable = false
+  try {
   let input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
   const key = `community-next:creation:request:${accountNamespace(ctx)}:${input.requestId}`
   const fingerprint = hash(JSON.stringify(ctx.body))
+  errorStage = '请求记录读取'; recoverable = true
   const existing = await ctx.redis.get(key)
+  recoverable = Boolean(existing)
   if (existing) {
     const cached: unknown = JSON.parse(existing)
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cachedResult(ctx, cached, key)
+    return await cachedResult(ctx, cached, key)
   }
+  errorStage = '技能准备'
   const workSkills = input.skills?.filter(skill => skill.id.startsWith('work-')) || []
   const instructions = await workSkillInstructions(ctx, workSkills, input.kind)
   const hasWorkSkills = workSkills.length > 0
@@ -392,6 +429,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     const options = input.chatOptions || chatOptionsSchema.parse({ messages: [{ role: 'user', content: input.prompt }] })
     input.chatOptions = { ...options, messages: [...instructions.map(content => ({ role: 'system' as const, content })), ...options.messages] }
   } else input.prompt = await mediaSkillPrompt(ctx.db, input.kind, input.prompt, input.skills, new Map(workSkills.map((skill, index) => [skill.id, instructions[index]!])))
+  errorStage = '模型配置读取'
   const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
   const setting = readModelTypes(options?.communityModelTypes).find(item => item.id === input.model)
   input = resolveCreationModelSettings(input, setting)
@@ -400,46 +438,60 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (input.referenceUrls.some(value => { try { const url = new URL(value); return !['http:', 'https:'].includes(url.protocol) || !!url.username || !!url.password } catch { return true } })) throw httpError(400, '请填写有效的参考图片 URL。')
     input.videoOptions.openaiReferenceSource = 'upload'
   }
+  errorStage = '参考素材准备'
   const files = await references(ctx, req, input, svc)
+  errorStage = '工具准备'
   const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
+  errorStage = '生成参数组装'
   const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })), setting?.video)
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
+  errorStage = '网关凭证准备'
   const credentials = await svc.credentials(req, payload.path)
   const url = new URL(`/${payload.path}`, credentials.baseUrl)
   const headers = relayHeaders(req, credentials.apiKey)
   headers.delete('content-type')
   if (payload.contentType) headers.set('content-type', payload.contentType)
   headers.set('Idempotency-Key', hash(`${accountNamespace(ctx)}:${input.requestId}`))
+  errorStage = '请求签名'
   const signed = await signCommunityRequest(url, credentials.userId, headers, payload.body)
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
-  if (background && getNewApiConfig().secret.length < 32) throw httpError(503, '任务服务配置不完整，请联系管理员。')
+  errorStage = '任务登记'
+  if (background && getNewApiConfig().secret.length < 32)
+    throw Object.assign(httpError(503, '任务服务配置不完整，请联系管理员。'), { notAccepted: true })
   const pending: TrackedRequest = { fingerprint, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
     deadline: Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : 195000),
     ...(background ? { background: true, filesRoot: ctx.filesRoot } : {}) }
+  recoverable = true
   const accepted = background ? await ctx.redis.eval(
     'if redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2],"NX") then redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]); return "OK" end; return false',
     2, key, pendingTasks, JSON.stringify(pending), requestTtl, pending.deadline!, key,
   ) : await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl, 'NX')
   if (accepted !== 'OK') {
+    errorStage = '请求记录读取'
     const previous = await ctx.redis.get(key)
     const cached: unknown = previous ? JSON.parse(previous) : null
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
-    return cachedResult(ctx, cached, key)
+    return await cachedResult(ctx, cached, key)
   }
+  errorStage = '结果保存'
   const finish = async () => {
   let result: Result
+  let responseReceived = false
+  let responseStatus: number | undefined
   try {
     // Keep a paid request alive after the browser stops waiting, and never replay it.
     const response = await svc.fetch(url, {
       method: 'POST', ...signed, redirect: 'error', cache: 'no-store',
       signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : input.kind === 'video' ? 360000 : 180000),
     })
+    responseReceived = true
+    responseStatus = response.status
     if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
       result = { ...await readGenerationStream(response, input, emit), tokenId: credentials.tokenId, protocol }
     } else {
-      const data = await readJson(response, 40 * MiB)
+      const data = await readJson(response, 40 * MiB).catch(error => { if (response.ok) throw error; return null })
       if (!response.ok) {
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
       const admission = payload.path === 'async-videos/v1/tasks' && record(data) && typeof data.detail === 'string'
@@ -450,7 +502,8 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
         ]).get(data.detail) : undefined
       const rejected = admission?.status === response.status ? admission.error : undefined
       result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : `生成服务返回 ${response.status}，请核对任务与使用记录。`), credentials.apiKey),
+        error: stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
+        errorStage: '网关提交', errorStatus: response.status,
         tokenId: credentials.tokenId, protocol }
       } else {
         result = input.kind === 'text' && input.chatOptions
@@ -464,13 +517,26 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
         if (input.kind === 'image' && result.status === 'succeeded' && record(data) && Array.isArray(data.data)) {
           result.outputs = imageResultUrls(data).map(url => ({ url }))
         }
-        if (result.status === 'pending' && !result.upstreamId) result = { ...result, ...uncertain }
+        if (result.status === 'pending' && !result.upstreamId)
+          result = { ...result, ...uncertain, error: '生成服务未返回可读取的生成结果。' }
       }
     }
-  } catch {
-    result = { ...uncertain, tokenId: credentials.tokenId, protocol }
+  } catch (error) {
+    const detail = record(error) && typeof error.statusCode === 'number' ? message(error, credentials.apiKey)
+      : error instanceof Error && error.name === 'TimeoutError' ? '等待生成服务响应超时。'
+      : responseReceived ? '读取生成结果失败。' : '生成服务连接异常，未能获取生成结果。'
+    const stage = responseReceived ? '网关响应处理' : '网关提交'
+    result = { ...uncertain, error: stageError(stage, detail, responseStatus), errorStage: stage,
+      ...(responseStatus ? { errorStatus: responseStatus } : {}), tokenId: credentials.tokenId, protocol }
   }
-  if (hasWorkSkills && result.error) result.error = workSkillError
+  if (hasWorkSkills && result.error)
+    result.error = result.errorStage ? stageError(result.errorStage, workSkillError, result.errorStatus) : workSkillError
+  if (result.error && !result.errorStage) {
+    result.errorStage = result.status === 'save_failed' ? '结果保存' : result.status === 'failed' ? '生成任务' : '网关响应处理'
+    result.errorStatus = responseStatus
+    result.error = stageError(result.errorStage, result.error, responseStatus)
+  }
+  if (result.error) logCreationFailure(input.requestId, result.errorStage || '网关响应处理', result.errorStatus)
   if (apiFormat) result.apiFormat = apiFormat
   if (background) result.requestId = input.requestId
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
@@ -493,9 +559,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   } else if (!saved && !background) await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl)
   return result
   }
-  if (!background) return finish()
+  if (!background) return await finish()
   void finish().catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
   return pending.result
+  } catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error('创作服务暂时不可用。'), { errorStage, notAccepted: !recoverable })
+  }
 }
 
 
@@ -536,7 +605,7 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
         const type = upstream.headers.get('content-type')?.split(';')[0] || ''
         if (![200, 206].includes(upstream.status) || !/^video\/(?:mp4|webm|quicktime|x-matroska)$/.test(type)) {
           await upstream.body?.cancel()
-          throw httpError(upstream.status === 404 ? 404 : 502, '生成文件暂时无法读取。')
+          throw Object.assign(httpError(upstream.status === 404 ? 404 : 502, '生成文件暂时无法读取。'), { errorStatus: upstream.status })
         }
         const headers = new Headers({ 'Content-Type': type })
         for (const name of ['content-range', 'accept-ranges', 'etag', 'last-modified', 'content-length']) {
@@ -560,7 +629,7 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
         const original = await svc.publicMedia(url, 'image', 32 * MiB, signal)
         let bytes: Buffer
         try { bytes = Buffer.from(await original.arrayBuffer()) }
-        catch { throw httpError(502, '原图传输中断，请重试保存图片。') }
+        catch { throw httpError(502, '原图传输中断，请重试保存图片。', 'ORIGINAL_IMAGE_READ_FAILED') }
         signal.throwIfAborted()
         if (!bytes.length || bytes.length > 32 * MiB) throw httpError(413, '原图为空或超过 32 MB，请手动下载保存。')
         // A sent Fastify reply can still have bytes queued for a slow client.
@@ -613,9 +682,12 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         try { emit({ type: 'result', ...await generate(ctx, req, svc, emit) as object }) }
         catch (error) {
           const statusCode = record(error) ? Number(error.statusCode ?? error.status) : 0
-          const notAccepted = [400, 401, 403, 413, 422, 429].includes(statusCode)
-            || record(error) && (error.code === 'COMMUNITY_WALLET_CONFIG' || preparationErrors.has(String(error.code)))
-          emit({ type: 'error', error: message(error),
+          const stage = record(error) && typeof error.errorStage === 'string' ? error.errorStage : '请求校验'
+          const notAccepted = record(error) && typeof error.notAccepted === 'boolean' ? error.notAccepted
+            : [400, 401, 403, 413, 422, 429].includes(statusCode) || record(error) && preparationErrors.has(String(error.code))
+          const detail = statusCode < 500 || error instanceof NewApiError || error instanceof PublicImageError ? message(error) : '服务暂时不可用。'
+          logCreationFailure(record(ctx.body) ? ctx.body.requestId : undefined, stage, statusCode || 500, record(error) ? error.code : undefined, notAccepted)
+          emit({ type: 'error', error: stageError(stage, detail, statusCode || 500) + (notAccepted ? ' 未向生成网关提交请求。' : ''), errorStage: stage, errorStatus: statusCode || 500, notAccepted,
             ...(error instanceof NewApiError ? { code: error.code } : {}),
             ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
@@ -681,8 +753,20 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     }
     return true
   } catch (error) {
-    if (ctx.url.pathname === '/api/creation/generate' && error instanceof NewApiError && preparationErrors.has(error.code)) {
-      ctx.json(error.status, { error: { code: error.code, message: error.message }, notAccepted: true })
+    const route = ctx.url.pathname
+    const stage = record(error) && typeof error.errorStage === 'string' ? error.errorStage
+      : route === '/api/creation/generate' ? '请求校验' : route === '/api/creation/media' ? '结果下载'
+      : /^\/api\/creation\/(?:requests|tasks)\//.test(route) ? '任务查询' : undefined
+    if (stage) {
+      const failure = record(error) ? error : {}
+      const status = Number(failure.statusCode ?? failure.status) || 500
+      const errorStatus = Number(failure.errorStatus) || status
+      const detail = status < 500 || error instanceof NewApiError || error instanceof PublicImageError || failure.code === 'ORIGINAL_IMAGE_READ_FAILED'
+        || failure.notAccepted === true && status === 503 ? message(error) : '服务暂时不可用。'
+      const requestId = record(ctx.body) && ctx.body.requestId || /^\/api\/creation\/requests\//.test(route) && route.split('/').pop()
+      logCreationFailure(requestId, stage, errorStatus, failure.code, typeof failure.notAccepted === 'boolean' ? failure.notAccepted : undefined)
+      ctx.json(status, { error: { code: failure.code, message: stageError(stage, detail, errorStatus) + (failure.notAccepted === true ? ' 未向生成网关提交请求。' : '') }, errorStage: stage, errorStatus,
+        ...(typeof failure.notAccepted === 'boolean' ? { notAccepted: failure.notAccepted } : {}) })
       return true
     }
     if (error instanceof NewApiError || error instanceof PublicImageError)

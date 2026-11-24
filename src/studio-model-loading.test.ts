@@ -183,7 +183,7 @@ it.each(['JSON', 'SSE'])('marks a %s group-key rejection as an ordinary failure 
   const fetch = vi.fn().mockResolvedValue(response); vi.stubGlobal('fetch', fetch)
   const task = await p.submitCreation({ kind: 'image', model: 'images-model', prompt: 'test', size: '1024x1024', aspect_ratio: '1:1', n: 1, duration: 8 })
   expect(task.phase).toBe('error')
-  expect(task.error).toBe(error.message)
+  expect(task.error).toContain(error.message)
   expect(p.creation.modelTokenId).toBeNull()
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0]![1].headers['X-New-Api-Group']).toBe('images')

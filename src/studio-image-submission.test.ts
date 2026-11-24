@@ -273,7 +273,7 @@ it('bounds the original-request recovery read and retains its ID when the read t
     const recovery = p.resumeCreation(task)
     expect(deadline).toHaveBeenCalledWith(65000)
     timeout.abort(new DOMException('读取超时', 'TimeoutError'))
-    await vi.waitFor(() => expect(task.error).toBe('正在恢复任务状态…'))
+    await vi.waitFor(() => expect(task.error).toBe('任务查询失败：读取超时 正在自动重试。'))
     p.stopCreation(task)
     await recovery
     expect(task).toMatchObject({ id: task.id, phase: 'paused' })
@@ -288,13 +288,98 @@ it.each([413, 409, 503, 0])('retains the original request after %s while allowin
   })
   const task = await p.submitCreation(p.input)
   expect(task.phase).toBe(status === 413 ? 'error' : 'attention')
-  expect(task.error).toContain(status === 413 ? '请求错误' : '没有找到此请求记录')
+  expect(task.error).toContain(status ? '请求错误' : 'Failed to fetch')
+  expect(task.error).not.toContain('没有找到此请求记录')
+  expect(task.serverTracked).not.toBe(true)
   expect((await p.submitCreation(p.input)).phase).toBe('complete')
   expect(p.creation.tasks).toHaveLength(2)
   expect(p.creation.tasks[1]!.id).toBe(task.id)
   expect(p.send).toHaveBeenCalledTimes(2)
   const { api } = await import('./state')
   expect(api).toHaveBeenCalledTimes(status === 413 ? 0 : 1)
+})
+it.each([0, 504])('keeps the original submission failure after %s across restoration and recovers without another POST', async status => {
+  const p = await fixture(), { api } = await import('./state')
+  p.input.protocol = 'sync'
+  p.send.mockImplementationOnce(async () => {
+    if (!status) throw new TypeError('Failed to fetch')
+    return Response.json({ message: 'Gateway timeout 504' }, { status })
+  })
+  const error = status ? 'Gateway timeout 504' : 'Failed to fetch'
+  const original = await p.submitCreation(p.input)
+  await restoreTasks(p, [{ ...original }])
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(2))
+  expect(p.creation.tasks[0]).toMatchObject({ id: original.id, phase: 'attention', submissionError: status ? `社区提交接口失败（HTTP 504）：${error}` : `提交到社区失败：${error}` })
+  expect(p.creation.tasks[0]!.error).toContain(error)
+  expect(p.creation.tasks[0]!.error).not.toContain('没有找到此请求记录')
+  vi.mocked(api).mockResolvedValueOnce({ status: 'succeeded', requestId: original.id, outputs: [{ url: 'https://media.example/recovered.png' }] })
+  await p.resumeCreation(p.creation.tasks[0]!)
+  expect(p.creation.tasks[0]).toMatchObject({ phase: 'complete', serverTracked: true, error: '' })
+  expect(p.creation.tasks[0]!.submissionError).toBeUndefined()
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it('keeps the submission error when a temporary recovery failure is followed by a missing record', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+  vi.mocked(api).mockRejectedValueOnce(Object.assign(new Error('读取暂时不可用'), { status: 502 }))
+  vi.useFakeTimers()
+  const pending = p.submitCreation(p.input)
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+  await vi.advanceTimersByTimeAsync(5000)
+  const task = await pending
+  expect(task).toMatchObject({ phase: 'attention', submissionError: '提交到社区失败：Failed to fetch' })
+  expect(task.error).toContain('Failed to fetch')
+  expect(p.send).toHaveBeenCalledTimes(1)
+  expect(api).toHaveBeenCalledTimes(2)
+})
+it('saves the original submission error before waiting for the first recovery read', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+  let finish: (() => void) | undefined
+  vi.mocked(api).mockImplementationOnce(async () => new Promise((_resolve, reject) => {
+    finish = () => reject(Object.assign(new Error('没有找到此请求记录。'), { status: 404 }))
+  }))
+  const pending = p.submitCreation(p.input)
+  try {
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    const saved = JSON.parse(localStorage.getItem('octopus:user-fixture-owner:native-creation-history:v2-fallback')!)[0]
+    expect(saved).toMatchObject({ id: p.creation.tasks[0]!.id, submissionError: '提交到社区失败：Failed to fetch' })
+    expect(p.send).toHaveBeenCalledTimes(1)
+  } finally {
+    finish?.()
+    await pending
+  }
+})
+it('automatically recovers a result accepted before the submission connection failed', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockImplementationOnce(async (_url, init) => {
+    const { requestId } = JSON.parse(init!.body as string)
+    vi.mocked(api).mockResolvedValueOnce({ status: 'succeeded', requestId, outputs: [{ url: 'https://media.example/recovered.png' }] })
+    throw new TypeError('Failed to fetch')
+  })
+  const task = await p.submitCreation(p.input)
+  expect(task).toMatchObject({ phase: 'complete', serverTracked: true, error: '', urls: ['https://media.example/recovered.png'] })
+  expect(task.submissionError).toBeUndefined()
+  expect(api).toHaveBeenCalledTimes(1)
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it('does not query a request explicitly rejected before acceptance even with HTTP 503', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  const error = '任务登记失败（HTTP 503）：任务服务配置不完整，请联系管理员。'
+  p.send.mockResolvedValueOnce(Response.json({ error: { message: error }, errorStage: '任务登记', errorStatus: 503, notAccepted: true }, { status: 503 }))
+  expect(await p.submitCreation({ ...p.input, kind: 'video' })).toMatchObject({ phase: 'error', error, errorStage: '任务登记', errorStatus: 503 })
+  expect(api).not.toHaveBeenCalled()
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it.each(['json', 'stream'])('shows the server preparation stage for %s errors without querying an unaccepted task', async transport => {
+  const p = await fixture(), { api } = await import('./state')
+  const error = '参考素材准备失败（HTTP 404）：参考图片不存在。'
+  p.send.mockResolvedValueOnce(transport === 'json'
+    ? Response.json({ error: { message: error }, errorStage: '参考素材准备', errorStatus: 404, notAccepted: true }, { status: 404 })
+    : new Response(`data: ${JSON.stringify({ type: 'error', error, errorStage: '参考素材准备', errorStatus: 404, notAccepted: true })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } }))
+  expect(await p.submitCreation(p.input)).toMatchObject({ phase: 'error', error, errorStage: '参考素材准备', errorStatus: 404 })
+  expect(api).not.toHaveBeenCalled()
+  expect(p.send).toHaveBeenCalledTimes(1)
 })
 it('recovers a known task from a temporary read failure using GET without another POST', async () => {
   const p = await fixture(), { api } = await import('./state')
@@ -304,12 +389,31 @@ it('recovers a known task from a temporary read failure using GET without anothe
   vi.useFakeTimers()
   const pending = p.submitCreation(p.input)
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
-  expect(p.creation.tasks[0]).toMatchObject({ phase: 'running', upstreamId: 'known-task', error: '正在恢复任务状态…' })
+  expect(p.creation.tasks[0]).toMatchObject({ phase: 'running', upstreamId: 'known-task', error: '任务查询失败（HTTP 502）：读取暂时不可用 正在自动重试。' })
   await vi.advanceTimersByTimeAsync(5000)
   expect(await pending).toMatchObject({ phase: 'complete', error: '', urls: ['https://media.example/recovered.png'] })
   expect(api).toHaveBeenCalledTimes(2)
   expect(p.send).toHaveBeenCalledTimes(1)
   expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/tasks/image/known-task?'))).toBe(true)
+})
+it('keeps a worker query error visible until the automatic read recovers', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockImplementationOnce(async (_url, init) => {
+    const { requestId } = JSON.parse(init!.body as string)
+    vi.mocked(api).mockResolvedValueOnce({ status: 'pending', requestId, upstreamId: 'known-task', outputs: [],
+      error: '任务查询失败（HTTP 503）：网关暂未返回任务状态，后台将自动重试。', errorStage: '任务查询', errorStatus: 503 })
+      .mockResolvedValueOnce({ status: 'succeeded', requestId, outputs: [{ url: 'https://media.example/recovered.png' }] })
+    return Response.json({ status: 'pending', requestId, outputs: [] }, { status: 202 })
+  })
+  vi.useFakeTimers()
+  const pending = p.submitCreation(p.input)
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+  expect(p.creation.tasks[0]).toMatchObject({ phase: 'running', errorStage: '任务查询', errorStatus: 503 })
+  expect(p.creation.tasks[0]!.error).toContain('HTTP 503')
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(await pending).toMatchObject({ phase: 'complete', error: '' })
+  expect(p.creation.tasks[0]!.errorStage).toBeUndefined()
+  expect(p.send).toHaveBeenCalledTimes(1)
 })
 it('continues automatic recovery after three failed reads without repeating the paid POST', async () => {
   const p = await fixture(), { api } = await import('./state')
@@ -332,7 +436,15 @@ it('keeps streamed preflight validation rejection editable instead of waiting fo
   p.send.mockImplementationOnce(async () => new Response(`data: ${JSON.stringify({ type: 'error', error: '参考图过大', statusCode: 413, notAccepted: true })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } }))
   const result = await p.submitCreation(p.input)
   expect(result.phase).toBe('error')
-  expect(result.error).toBe('参考图过大')
+  expect(result.error).toBe('请求校验失败（HTTP 413）：参考图过大')
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+it('shows missing results as an error without asking the user to investigate', async () => {
+  const p = await fixture()
+  p.send.mockImplementationOnce(async () => Response.json({ status: 'indeterminate', protocol: 'sync', outputs: [] }))
+  const task = await p.submitCreation(p.input)
+  expect(task.phase).toBe('attention')
+  expect(task.error).toBe('获取生成结果失败。')
   expect(p.send).toHaveBeenCalledTimes(1)
 })
 it('retains a synchronous upstream timeout without querying or automatically submitting again', async () => {
@@ -341,7 +453,8 @@ it('retains a synchronous upstream timeout without querying or automatically sub
   const task = await p.submitCreation(p.input)
   expect(task.phase).toBe('attention')
   expect(task.error).toContain('504')
-  expect(task.error).toContain('扣费')
+  expect(task.error).toContain('超时')
+  expect(task.error).not.toMatch(/核对|联系管理员|扣费/)
   await p.resumeCreation(task)
   expect(p.send).toHaveBeenCalledTimes(1)
   const { api } = await import('./state')
@@ -359,7 +472,8 @@ it.each(['attention', 'submitting', 'paused'])('retains the original ID of a res
   vi.mocked(api).mockRejectedValue(Object.assign(new Error('没有找到此请求记录。'), { status: 404 }))
   p.session.user = user
   await p.initializeCreation()
-  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention', error: '没有找到此请求记录。' }))
+  await vi.waitFor(() => expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything()))
+  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ id: task.id, phase: 'attention', error: '连接中断' }))
   expect(api).toHaveBeenCalledWith(`/api/creation/requests/${task.id}`, expect.anything())
   expect((await p.submitCreation(p.input)).phase).toBe('complete')
   expect(p.send).toHaveBeenCalledTimes(2)
