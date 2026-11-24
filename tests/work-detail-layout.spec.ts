@@ -255,8 +255,10 @@ for (const width of [320, 390, 1440]) test(`four selectable image formats export
   await expect(chooser.getByRole('radio', { name: 'JPG / JPEG', exact: true })).toBeChecked()
   const box = (await chooser.boundingBox())!
   expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(width)
+  await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' })
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme })
+    await page.evaluate(mode => window.communityAppearance.set({ mode }), colorScheme)
     expect((await new AxeBuilder({ page }).include('.image-download-dialog').analyze()).violations).toEqual([])
     await page.screenshot({ path: test.info().outputPath(`download-formats-${width}-${colorScheme}.png`) })
   }
