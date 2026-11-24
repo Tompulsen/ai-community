@@ -326,6 +326,55 @@ export async function readableMedia(url: string, kind: CreationKind, preview = f
   if (!source) throw new Error('生成文件暂时无法读取，任务记录已保留。')
   return source
 }
+async function readCreationImage(url: string, signal: AbortSignal = new AbortController().signal): Promise<Blob> {
+  const version = epoch, accepted = activeOwner()
+  const check = () => {
+    signal.throwIfAborted()
+    if (version !== epoch || accepted !== activeOwner()) throw new DOMException('Stopped', 'AbortError')
+  }
+  check()
+  const inline = await imageBlob(url)
+  if (inline) return inline
+  const source = await readableMedia(url, 'image')
+  const remote = !/^(?:blob:|data:)/.test(source)
+  for (let attempt = 0; ; attempt++) {
+    check()
+    let response: Response
+    try {
+      response = await fetch(source, { credentials: 'same-origin', cache: 'no-store',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
+    } catch (cause) {
+      check()
+      if (!remote || attempt >= 2) throw new Error('原图传输中断，图片生成记录已保留，请重试保存图片。')
+      if (!(cause instanceof TypeError) && !(cause instanceof DOMException && ['TimeoutError', 'AbortError', 'NetworkError'].includes(cause.name))) throw cause
+      await delay(signal, 400 * (attempt + 1)); continue
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {})
+      if (remote && [408, 500, 502, 503, 504].includes(response.status) && attempt < 2) {
+        await delay(signal, 400 * (attempt + 1)); continue
+      }
+      throw new Error(response.status === 401 ? '登录状态已失效，请重新登录后保存图片。'
+        : response.status === 403 ? '当前账号无权读取此图片。'
+          : '原图暂时无法读取或链接已失效，尚未保存到此浏览器。')
+    }
+    if (Number(response.headers.get('content-length')) > 32 * 1024 ** 2) {
+      await response.body?.cancel().catch(() => {})
+      throw new Error('原图超过 32 MB，请手动下载保存。')
+    }
+    let blob: Blob
+    try { blob = await response.blob() }
+    catch {
+      check()
+      if (!remote || attempt >= 2) throw new Error('原图传输中断，图片生成记录已保留，请重试保存图片。')
+      await delay(signal, 400 * (attempt + 1)); continue
+    }
+    check()
+    if (!blob.size || !blob.type.startsWith('image/')) throw new Error('原图数据不完整，请重试保存图片。')
+    if (blob.size > 32 * 1024 ** 2) throw new Error('原图超过 32 MB，请手动下载保存。')
+    return blob
+  }
+}
 export async function portableImage(url: string) {
   if (!url.startsWith('legacy-gallery:') && !url.startsWith('studio-asset:') && !url.startsWith('blob:')) return url
   const response = await fetch(url.startsWith('blob:') ? url : await readableMedia(url, 'image'))
@@ -992,14 +1041,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
             if (!await readTaskAsset(task.owner, source)) throw new Error('此浏览器中的原图已丢失，请从已下载的文件恢复。')
             check(); continue
           }
-          let blob = await imageBlob(source)
-          if (!blob) {
-            const response = await fetch(await readableMedia(source, 'image'), { credentials: 'same-origin',
-              signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
-            if (!response.ok) throw new Error('原图暂时无法读取或链接已失效，尚未保存到此浏览器。')
-            if (Number(response.headers.get('content-length')) > 32 * 1024 ** 2) throw new Error('原图超过 32 MB，请手动下载保存。')
-            blob = await response.blob()
-          }
+          const blob = await readCreationImage(source, signal)
           check()
           const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal); check()
           if (!local || ![source, local].includes(task.urls[index]!)) throw new Error('原图记录已变化，请重新打开后保存。')
@@ -1068,9 +1110,11 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
       await persist(true); check()
       for (let index = completed; index < task.urls.length; index++) {
         const source = await readableMedia(task.urls[index]!, task.kind); check()
-        const response = await fetch(source, { credentials: 'same-origin', signal: controller.signal })
-        if (!response.ok) throw new Error('原文件下载失败，请重试保存。')
-        const blob = await response.blob(); check()
+        const blob = task.kind === 'image' ? await readCreationImage(task.urls[index]!, controller.signal) : await (async () => {
+          const response = await fetch(source, { credentials: 'same-origin', signal: controller.signal })
+          if (!response.ok) throw new Error('原文件下载失败，请重试保存。')
+          return response.blob()
+        })(); check()
         if (!blob.size || !blob.type.startsWith(`${task.kind}/`)) throw new Error('原文件格式无效，请重试保存。')
         urls[index] = await cacheDownloadedImage(task, index, urls[index]!, blob); check()
         const exported = task.kind === 'image' ? await jpegDownload(blob, controller.signal) : blob; check()
@@ -1116,9 +1160,10 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
     if (!format) return
     url = task.urls[index]
   }
-  const response = url ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
+  const image = url && task.kind === 'image' ? await readCreationImage(url, signal) : undefined
+  const response = url && !image ? await fetch(await readableMedia(url, task.kind), { credentials: 'same-origin', signal }) : undefined
   if (response && !response.ok) throw new Error('结果下载失败，请稍后重试。')
-  const blob = response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' })
+  const blob = image || (response ? await response.blob() : new Blob([content ?? task.text], { type: 'text/markdown' }))
   signal?.throwIfAborted()
   if (version !== epoch) throw new Error('账号已切换，请重新操作。')
   if (url && await cacheDownloadedImage(task, index, url, blob) !== url) await persist()

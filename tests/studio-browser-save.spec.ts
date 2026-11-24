@@ -183,6 +183,54 @@ test('an expired image keeps its record and supports retry without generating ag
   expect(state.downloads).toBe(0)
 })
 
+test('original network failures recover without regenerating or saving the preview', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  const { default: sharp } = await import('sharp')
+  const preview = await sharp(image).resize(40, 40).webp().toBuffer()
+  let attempts = 0
+  await page.route('**/api/creation/media?**', route => {
+    if (new URL(route.request().url()).searchParams.has('variant')) return route.fulfill({ contentType: 'image/webp', body: preview })
+    if (++attempts < 3) return route.abort('connectionreset')
+    return route.fulfill({ contentType: 'image/jpeg', body: image })
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器', { timeout: 10000 })
+  expect(attempts).toBe(3)
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
+})
+
+test('an interrupted original body retries and persistent network failure supports a fresh manual retry', async ({ page }) => {
+  const { state, image } = await fixture(page)
+  await page.evaluate(() => {
+    const originalFetch = window.fetch
+    ;(window as any).originalReads = 0
+    ;(window as any).breakOriginalBody = true
+    window.fetch = async (...args) => {
+      const url = new URL(String(args[0]), location.href)
+      if (url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) {
+        ;(window as any).originalReads++
+        if ((window as any).breakOriginalBody) return new Response(new ReadableStream({
+          start(controller) { controller.enqueue(new Uint8Array([255, 216, 255])); },
+          pull(controller) { controller.error(new TypeError('Failed to fetch')); },
+        }), { headers: { 'Content-Type': 'image/jpeg' } })
+      }
+      return originalFetch(...args)
+    }
+  })
+  await send(page)
+  const status = page.locator('.browser-save')
+  await expect(status).toContainText('原图传输中断', { timeout: 10000 })
+  expect(await page.evaluate(() => (window as any).originalReads)).toBe(3)
+  expect((await storedImages(page)).sizes).toEqual([])
+  await page.evaluate(() => { (window as any).breakOriginalBody = false })
+  await status.getByRole('button', { name: '重试保存图片', exact: true }).click()
+  await expect(status).toHaveText('图片已保存到此浏览器')
+  expect((await storedImages(page)).sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+})
+
 test('quota failure cannot commit a local pointer and retry can finish the same generation', async ({ page }) => {
   await fixture(page)
   await page.evaluate(() => {
@@ -200,6 +248,49 @@ test('quota failure cannot commit a local pointer and retry can finish the same 
   await page.evaluate(() => { (window as any).denyOriginalSave = false })
   await page.getByRole('button', { name: '重试保存图片', exact: true }).click()
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+})
+
+for (const code of [401, 403, 404, 413]) test(`original HTTP ${code} does not retry or commit a local image`, async ({ page }) => {
+  const { state, image } = await fixture(page)
+  let attempts = 0
+  await page.route('**/api/creation/media?**', route => {
+    if (new URL(route.request().url()).searchParams.has('variant')) return route.fulfill({ contentType: 'image/jpeg', body: image })
+    attempts++
+    return route.fulfill({ status: code })
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toHaveClass(/failed/)
+  expect(attempts).toBe(1)
+  expect((await storedImages(page)).sizes).toEqual([])
+  expect(state.generations).toBe(1)
+})
+
+test('cancelling a save during retry stops further reads and keeps original bytes out of storage', async ({ page }) => {
+  const { image } = await fixture(page)
+  await page.evaluate(() => {
+    const originalFetch = window.fetch
+    ;(window as any).originalReads = 0
+    window.fetch = async (...args) => {
+      const url = new URL(String(args[0]), location.href)
+      if (url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) {
+        ;(window as any).originalReads++
+        throw new TypeError('Failed to fetch')
+      }
+      return originalFetch(...args)
+    }
+  })
+  await send(page)
+  await expect.poll(() => page.evaluate(() => (window as any).originalReads)).toBeGreaterThan(0)
+  await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/state\.ts(?:\?|$)/.test(name))!
+    const { session } = await import(/* @vite-ignore */ path)
+    session.user = null
+  })
+  const attempts = await page.evaluate(() => (window as any).originalReads)
+  await page.waitForTimeout(1400)
+  expect(await page.evaluate(() => (window as any).originalReads)).toBe(attempts)
+  expect((await storedImages(page)).sizes).toEqual([])
+  expect(image.length).toBeGreaterThan(0)
 })
 
 test('manual download corrects an earlier browser-save failure after the upstream recovers', async ({ page }) => {

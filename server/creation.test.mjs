@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
+import { get as httpGet } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -274,9 +275,113 @@ test('image previews are small WebP responses while original downloads retain ev
   assert(preview.rawPayload.length < original.length / 5)
   const download = await app.inject(url)
   assert.equal(download.headers['content-type'], 'image/png')
+  assert.equal(Number(download.headers['content-length']), original.length)
   assert.deepEqual(download.rawPayload, original)
   assert.equal(reads.length, 2)
   assert(reads.every(read => read.url === 'https://media.example/large.png' && read.kind === 'image' && read.maximum === 32 * 1024 * 1024 && read.signal instanceof AbortSignal))
+})
+
+test('original image streams finish before success and broken bodies return a readable error', async t => {
+  const original = await sharp({ create: { width: 17, height: 23, channels: 3, background: '#336699' } }).png().toBuffer()
+  let broken = true
+  const { app } = fixture(t, { publicMedia() {
+    let first = true
+    return new Response(new ReadableStream({ pull(controller) {
+      if (first) { first = false; controller.enqueue(original.subarray(0, 10)); return }
+      if (broken) controller.error(new TypeError('upstream reset'))
+      else { controller.enqueue(original.subarray(10)); controller.close() }
+    } }), { headers: { 'Content-Type': 'image/png' } })
+  } })
+  const url = '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fstream.png&kind=image'
+  const failed = await app.inject(url)
+  assert.equal(failed.statusCode, 502)
+  assert.match(failed.payload, /原图/)
+  assert.doesNotMatch(failed.payload, /upstream reset/)
+  broken = false
+  const saved = await app.inject(url)
+  assert.equal(saved.statusCode, 200)
+  assert.equal(Number(saved.headers['content-length']), original.length)
+  assert.deepEqual(saved.rawPayload, original)
+})
+
+test('original image buffering shares bounded read slots and never forwards oversized bodies', async t => {
+  const { acquireImageRead, releaseImageRead } = await import('./creation/image-preview.ts')
+  const pending = [], controllers = Array.from({ length: 16 }, () => new AbortController())
+  await acquireImageRead(controllers[0].signal)
+  await acquireImageRead(controllers[1].signal)
+  try {
+    for (const controller of controllers.slice(2)) pending.push(acquireImageRead(controller.signal).catch(error => error))
+    await assert.rejects(acquireImageRead(new AbortController().signal), error => error.statusCode === 503)
+    controllers.slice(2).forEach(controller => controller.abort())
+    assert((await Promise.all(pending)).every(error => error.name === 'AbortError'))
+  } finally { releaseImageRead(); releaseImageRead() }
+  const { app } = fixture(t, { publicMedia() {
+    return new Response(new Uint8Array(32 * 1024 * 1024 + 1), { headers: { 'Content-Type': 'image/png' } })
+  } })
+  const result = await app.inject('/api/creation/media?url=https%3A%2F%2Fmedia.example%2Flarge.png&kind=image')
+  assert.equal(result.statusCode, 413)
+  assert(result.rawPayload.length < 1000)
+})
+
+for (const ending of ['finish', 'disconnect', 'timeout']) test(`original image response holds its read slot until ${ending}`, { timeout: 5000 }, async t => {
+  const { acquireImageRead, releaseImageRead } = await import('./creation/image-preview.ts')
+  const bytes = Buffer.from('complete original image'), writeGate = deferred(), writing = deferred(), ended = deferred()
+  const deadline = new AbortController()
+  if (ending === 'timeout') {
+    const timeout = AbortSignal.timeout.bind(AbortSignal)
+    t.mock.method(AbortSignal, 'timeout', ms => ms === 65000 ? deadline.signal : timeout(ms))
+  }
+  const { app } = fixture(t, { publicMedia() { return new Response(bytes, { headers: { 'Content-Type': 'image/png' } }) } })
+  let raw, client, probe, acquired = false, reserved = false
+  const probeController = new AbortController()
+  app.addHook('onRequest', (request, reply, done) => {
+    raw = reply.raw
+    raw.once('finish', () => ended.resolve('finish'))
+    raw.once('close', () => ended.resolve('close'))
+    // Hold actual socket writes so writableEnded is true while writableFinished remains false.
+    for (const name of ['_write', '_writev']) {
+      const write = raw.socket[name]
+      if (!write) continue
+      raw.socket[name] = function (...args) {
+        writing.resolve()
+        void writeGate.promise.then(() => this.destroyed ? args.at(-1)() : write.apply(this, args))
+      }
+    }
+    done()
+  })
+  await app.listen({ host: '127.0.0.1', port: 0 })
+  try {
+    await acquireImageRead(new AbortController().signal); reserved = true
+    const received = new Promise(resolve => {
+      client = httpGet({ host: '127.0.0.1', port: app.server.address().port, agent: false,
+        path: '/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fslow.png&kind=image' }, response => {
+        const chunks = []
+        response.on('data', chunk => chunks.push(chunk))
+        response.on('end', () => resolve(Buffer.concat(chunks)))
+        response.on('error', () => resolve(null))
+      })
+      client.on('error', () => resolve(null))
+    })
+    await writing.promise
+    assert.equal(raw.writableEnded, true)
+    assert.equal(raw.writableFinished, false)
+    probe = acquireImageRead(probeController.signal).then(() => { acquired = true }, () => {})
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(acquired, false, 'a buffered response must keep its slot while the socket write is pending')
+    if (ending === 'finish') writeGate.resolve()
+    else if (ending === 'disconnect') client.socket.resetAndDestroy()
+    else deadline.abort(new DOMException('Image response deadline', 'TimeoutError'))
+    assert.equal(await ended.promise, ending === 'finish' ? 'finish' : 'close')
+    await probe
+    assert.equal(acquired, true, 'ending the response must release its slot')
+    if (ending === 'finish') assert.deepEqual(await received, bytes)
+  } finally {
+    probeController.abort()
+    client?.destroy(); raw?.destroy(); writeGate.resolve()
+    await probe
+    if (acquired) releaseImageRead()
+    if (reserved) releaseImageRead()
+  }
 })
 
 test('preview requests reject invalid variants, protected paths, videos and switched accounts before reading media', async t => {

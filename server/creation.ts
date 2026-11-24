@@ -9,6 +9,7 @@ import { chatOptionsSchema } from '../shared/studio/options.ts'
 import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
+import { finished } from 'node:stream/promises'
 import path from 'node:path'
 import sharp from 'sharp'
 import { sealData, unsealData } from 'iron-session'
@@ -22,7 +23,7 @@ import {
 } from './creation-contract.ts'
 import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
-import { imagePreview } from './creation/image-preview.ts'
+import { acquireImageRead, imagePreview, releaseImageRead } from './creation/image-preview.ts'
 import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
@@ -539,6 +540,31 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
   } else {
     const url = ctx.url.searchParams.get('url')
     if (!url || url.length > 8192) throw httpError(400, '生成文件地址无效。')
+    if (kind === 'image' && variant === null) {
+      const signal = AbortSignal.any([req.signal, AbortSignal.timeout(65000)])
+      await acquireImageRead(signal)
+      try {
+        const original = await svc.publicMedia(url, 'image', 32 * MiB, signal)
+        let bytes: Buffer
+        try { bytes = Buffer.from(await original.arrayBuffer()) }
+        catch { throw httpError(502, '原图传输中断，请重试保存图片。') }
+        signal.throwIfAborted()
+        if (!bytes.length || bytes.length > 32 * MiB) throw httpError(413, '原图为空或超过 32 MB，请手动下载保存。')
+        // A sent Fastify reply can still have bytes queued for a slow client.
+        const completed = finished(ctx.res, { cleanup: true }).catch(() => { ctx.res.destroy() })
+        const abortResponse = () => { ctx.res.destroy() }
+        signal.addEventListener('abort', abortResponse, { once: true })
+        try {
+          ctx.reply.headers({ 'Content-Type': original.headers.get('content-type') || 'application/octet-stream',
+            'Content-Length': String(bytes.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(bytes)
+        } catch (error) { ctx.res.destroy(); throw error }
+        finally {
+          await completed
+          signal.removeEventListener('abort', abortResponse)
+        }
+        return
+      } finally { releaseImageRead() }
+    }
     response = variant === 'preview' ? await imagePreview(url, svc.publicMedia, req.signal)
       : variant === 'poster' ? await videoPoster(
         hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${ctx.sessionHash || ''}:${req.headers.get('x-new-api-token') || ''}:${url}`),

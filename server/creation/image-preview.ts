@@ -6,10 +6,10 @@ import { createProxyLifecycle } from './proxy-lifecycle.ts'
 let active = 0
 const waiting: (() => void)[] = []
 
-async function acquire(signal: AbortSignal) {
+export async function acquireImageRead(signal: AbortSignal) {
   signal.throwIfAborted()
   if (active < 2) { active++; return }
-  if (waiting.length >= 14) throw httpError(503, '图片预览处理中，请稍后重试。')
+  if (waiting.length >= 14) throw httpError(503, '图片读取繁忙，请稍后重试。')
   await new Promise<void>((resolve, reject) => {
     const start = () => {
       signal.removeEventListener('abort', cancel)
@@ -25,12 +25,14 @@ async function acquire(signal: AbortSignal) {
   })
 }
 
+export function releaseImageRead() { active--; waiting.shift()?.() }
+
 export async function imagePreview(url: string, publicMedia: typeof fetchPublicMedia, clientSignal: AbortSignal) {
   const deadline = Date.now() + 65000
   const lifecycle = createProxyLifecycle(clientSignal, 65000)
   let acquired = false
   try {
-    await acquire(lifecycle.signal)
+    await acquireImageRead(lifecycle.signal)
     acquired = true
     lifecycle.signal.throwIfAborted()
     const original = await publicMedia(url, 'image', 32 * 1024 * 1024, lifecycle.signal)
@@ -51,6 +53,6 @@ export async function imagePreview(url: string, publicMedia: typeof fetchPublicM
     throw error
   } finally {
     lifecycle.dispose()
-    if (acquired) { active--; waiting.shift()?.() }
+    if (acquired) releaseImageRead()
   }
 }
