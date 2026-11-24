@@ -74,6 +74,69 @@ async function welfareFixture(page: Page, authenticated = true) {
   return { state, writes, config, referral, account, draws }
 }
 
+test('draw entry does not load history or rankings and does not wait for point display settings', async ({ page }) => {
+  await welfareFixture(page)
+  const reads: string[] = []
+  page.on('request', request => { reads.push(new URL(request.url()).pathname) })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/new-api/status', async route => { await held; await route.fallback() })
+  try {
+    await page.goto('/activities')
+    await expect(page.locator('.draw-console > .button')).toBeEnabled()
+    expect(reads).not.toContain('/api/lottery/records')
+    expect(reads).not.toContain('/api/lottery/public-summary')
+    await page.getByRole('button', { name: '奖励记录', exact: true }).click()
+    await expect(page.locator('.records-section .empty-state')).toBeVisible()
+    expect(reads.filter(path => path === '/api/lottery/records')).toHaveLength(1)
+    await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
+    await page.getByRole('button', { name: '奖励记录', exact: true }).click()
+    expect(reads.filter(path => path === '/api/lottery/records')).toHaveLength(1)
+  } finally { release() }
+})
+
+test('draw receipts display immediately while only the current status refreshes in the background', async ({ page }) => {
+  const fixture = await welfareFixture(page)
+  const reads: string[] = []
+  page.on('request', request => { reads.push(new URL(request.url()).pathname) })
+  await page.goto('/activities')
+  const button = page.locator('.draw-console > .button')
+  await expect(button).toBeEnabled()
+  let release!: () => void
+  fixture.state.statusDelay = new Promise<void>(resolve => { release = resolve })
+  try {
+    reads.length = 0
+    await button.click()
+    await expect(page.locator('.draw-result')).toContainText('待发放')
+    await expect(button).not.toContainText('正在确认结果')
+    await expect(page.locator('.activity-loading')).toHaveCount(0)
+    expect(reads).not.toContain('/api/lottery/records')
+    expect(reads).not.toContain('/api/lottery/public-summary')
+  } finally { release() }
+  await expect(button).toContainText('今日已参与')
+  await expect(page.locator('.draw-controls')).toContainText('可用 2 次')
+  expect(fixture.writes).toHaveLength(1)
+})
+
+test('a failed post-draw refresh preserves the receipt and blocks new draws until recovery', async ({ page }) => {
+  const fixture = await welfareFixture(page)
+  await page.goto('/activities')
+  const button = page.locator('.draw-console > .button')
+  await expect(button).toBeEnabled()
+  fixture.state.failStatus = true
+  await button.click()
+  await expect(page.locator('.draw-result')).toContainText('待发放')
+  await expect(page.getByRole('alert')).toContainText('活动或奖励发放暂不可用')
+  await expect(button).toBeDisabled()
+  await expect(page.locator('.activity-loading')).toHaveCount(0)
+  fixture.state.failStatus = false
+  await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+  await expect(button).toContainText('今日已参与')
+  await expect(page.locator('.draw-result')).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(fixture.writes).toHaveLength(1)
+})
+
 test('new prizes show welfare validity while saved rewards retain their own amounts and deadlines', async ({ page }, info) => {
   const start = new Date('2026-11-21T10:00:00Z')
   await page.clock.install({ time: start })
@@ -100,7 +163,7 @@ test('new prizes show welfare validity while saved rewards retain their own amou
   await page.clock.runFor(3000)
   await expect(timer).toHaveText('已到期')
   fixture.config.settings.rewardValidityHours = 48
-  await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+  await page.getByRole('button', { name: '刷新奖励记录', exact: true }).click()
   await expect(rows.nth(2)).toContainText('首次到账后 2 小时有效')
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
@@ -113,6 +176,7 @@ test('new prizes show welfare validity while saved rewards retain their own amou
     await page.screenshot({ path: info.outputPath(`timed-rewards-${width}.png`), fullPage: true })
   }
   await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
+  await page.getByRole('button', { name: '刷新活动', exact: true }).click()
   await expect(page.locator('.prize-list')).toContainText('6,000 福利积分 · 2 天有效')
   expect(fixture.writes).toHaveLength(0)
 })
@@ -133,6 +197,10 @@ test('a delivered record updates the original draw result with its frozen expiry
   } }))
   await page.goto('/activities')
   await page.locator('.draw-console > .button').click()
+  await expect(page.locator('.draw-result')).toContainText('待发放')
+  await page.getByRole('button', { name: '查看奖励记录', exact: true }).click()
+  await expect(page.locator('.records-section')).toContainText('已到账')
+  await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
   await expect(page.locator('.draw-result')).toContainText('已到账，1,000 福利积分')
   await expect(page.locator('.draw-result')).not.toContainText('待发放')
   await expect(page.locator('.draw-result').getByRole('timer')).toHaveText('剩余 01:00:00')
@@ -397,7 +465,7 @@ test('a guest sees a login action and the configured daily pool', async ({ page 
   await welfareFixture(page, false)
   await page.goto('/activities')
   await expect(page.getByRole('link', { name: '登录后参与', exact: true })).toBeVisible()
-  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  const conditions = page.getByRole('region', { name: '参与状态', exact: true })
   await expect(conditions).toContainText('累计支持 > ✦0.00')
   await expect(conditions).toContainText('登录后查看累计支持及资格')
   await expect(conditions).not.toContainText('当前累计支持')
@@ -410,7 +478,7 @@ test('cumulative support and tickets remain separate participation requirements'
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/activities')
   const draw = page.locator('.draw-console > .button')
-  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  const conditions = page.getByRole('region', { name: '参与状态', exact: true })
   await expect(page.getByRole('heading', { name: '活动抽奖', exact: true })).toBeVisible()
   await expect(draw).toBeDisabled()
   await expect(conditions).toContainText('累计支持 > ✦0.00')
@@ -454,7 +522,7 @@ test('historical and later support can qualify without consumption while tasks s
   fixture.state.support = { checked: true, eligible: true, amountCnyFen: completedTopups.reduce((sum, amount) => sum + amount, 0) }
   fixture.state.balance = 0
   await page.goto('/activities')
-  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  const conditions = page.getByRole('region', { name: '参与状态', exact: true })
   const draw = page.locator('.draw-console > .button')
   await expect(conditions).toContainText('累计支持 ≥ ✦10.00')
   await expect(conditions).toContainText('当前累计支持 ✦10.00')
@@ -473,7 +541,7 @@ test('zero threshold shows verified positive sub-fen support without rounding it
   fixture.state.support.amountCnyFen = 0
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
-  const conditions = page.getByRole('region', { name: '参与条件', exact: true })
+  const conditions = page.getByRole('region', { name: '参与状态', exact: true })
   await expect(conditions).toContainText('累计支持 > ✦0.00')
   await expect(conditions).toContainText('当前累计支持 小于 ✦0.01')
   await expect(conditions).toContainText('已满足')
@@ -485,7 +553,7 @@ test('a support verification failure blocks new draws and can be retried', async
   fixture.state.support = { checked: false, eligible: false, amountCnyFen: null }
   await page.goto('/activities')
   await expect(page.locator('.draw-console > .button')).toBeDisabled()
-  await expect(page.getByRole('region', { name: '参与条件', exact: true })).toContainText('暂无法核验')
+  await expect(page.getByRole('region', { name: '参与状态', exact: true })).toContainText('暂无法核验')
   await page.screenshot({ path: info.outputPath('support-unavailable.png'), fullPage: true })
   fixture.state.support = { checked: true, eligible: true, amountCnyFen: 1000 }
   await page.getByRole('button', { name: '重新核验', exact: true }).click()

@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { defaultDailyLotteryPrizes, lotteryDay } from '../shared/lottery-daily.ts'
+import { publicLotteryRange } from '../server/lottery.ts'
 
 const portrait = '/assets/brand/octopus-community.jpg'
 const timestamp = '2026-11-19T08:00:00Z'
@@ -117,6 +118,10 @@ export function createPreviewMiddleware() {
       if (path === '/api/creators' && read) return reply(page([creator()]))
       if (path === '/api/announcements' && read) return reply(page([{ id: 'previewNews', title: '创作交流', body: '分享你的创作灵感与作品。', createdAt: timestamp }]))
       if (path === '/api/community/ads' && read) return reply(page([]))
+      if (path === '/api/lottery/public-summary' && read) {
+        const range = publicLotteryRange(url.searchParams), counts = { totalPoints: '0', charityPoints: '0', permanentPoints: '0', drawCount: '0', fulfilledCount: '0' }
+        return reply({ items: [], range, updatedAt: new Date().toISOString(), totals: { ...counts, participantCount: '0', undatedPoints: '0' }, daily: [] })
+      }
       if (path === '/api/lottery/status' && read) {
         const day = lotteryDay(new Date()), rule = { enabled: false, threshold: 10, tickets: 1 }
         const prizes = defaultDailyLotteryPrizes(5000).map(prize => ({ ...prize, dailyQuota: prize.stock }))
@@ -244,6 +249,9 @@ async function selfCheck() {
   const lottery = JSON.parse((await request('GET', '/api/lottery/status')).body)
   assert.equal(lottery.daily.limit, 200)
   assert.equal(lottery.settings.prizes.reduce((sum, prize) => sum + prize.dailyQuota, 0), lottery.daily.limit)
+  const leaderboard = JSON.parse((await request('GET', '/api/lottery/public-summary?period=today')).body)
+  assert.equal(leaderboard.range.period, 'today')
+  assert.equal(leaderboard.totals.participantCount, '0')
   assert.equal((await request('GET', '/account')).vite, true)
   for (const path of ['/api/unknown', '/api/new-api/wallet/pay', '/api/creation/generate', '/auth/newapi', '/studio/api/session']) {
     const response = await request(path.includes('unknown') ? 'GET' : 'POST', path, {})

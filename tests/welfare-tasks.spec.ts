@@ -211,9 +211,12 @@ test('record failures preserve successfully loaded welfare rules and the wheel',
   await page.route('**/api/lottery/records*', route => route.fulfill({ status: 503, json: { error: '记录暂时不可用' } }))
   await page.goto('/activities?tab=tasks')
   await expect(page.locator('[data-task="publish"]')).toContainText('每件公开作品每获 100 赞')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.getByRole('button', { name: '奖励记录', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('奖励记录读取失败')
   await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
   await expect(page.locator('.draw-console')).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
 })
 
 test('admin load failure recovers and moderators have no welfare configuration entry', async ({ page }) => {

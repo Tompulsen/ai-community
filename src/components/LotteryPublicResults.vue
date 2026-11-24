@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CalendarDays, Coins, RefreshCw } from '@lucide/vue'
+import { CalendarDays, Coins } from '@lucide/vue'
 import { lotteryPointUnits, type PublicLotteryPeriod, type PublicLotterySummary } from '../../shared/lottery-public'
 import { lotteryDay } from '../../shared/lottery-daily'
 import { formatPoints } from '../../shared/studio/community-wallet'
@@ -57,14 +57,13 @@ async function load() {
 }
 onMounted(() => load())
 onBeforeUnmount(() => { sequence++; controller?.abort() })
-defineExpose({ refresh: () => load() })
+defineExpose({ refresh: () => load(), loading })
 </script>
 
 <template>
   <section class="lottery-public-results" aria-labelledby="lottery-public-title">
     <header class="section-heading">
-      <div><h2 id="lottery-public-title">用户抽奖统计</h2><p class="muted">看看大家获得了多少福利，按日期查看积分发放情况。</p></div>
-      <button type="button" class="icon-button" aria-label="刷新抽奖统计" :disabled="loading" @click="load()"><RefreshCw :size="18" aria-hidden="true" /></button>
+      <div><h2 id="lottery-public-title">排行榜</h2></div>
     </header>
     <div class="public-periods" role="group" aria-label="统计时间范围">
       <button v-for="item in periods" :key="item.value" type="button" :aria-pressed="period === item.value" @click="choosePeriod(item.value)">{{ item.label }}</button>
@@ -76,10 +75,10 @@ defineExpose({ refresh: () => load() })
       <p id="lottery-date-help" class="muted">包含起止当天，最多查询 366 天。</p>
       <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
     </form>
-    <p v-if="loading" class="public-feedback" role="status">正在读取抽奖统计…</p>
-    <div v-if="error" class="form-error" role="alert"><p>抽奖统计读取失败：{{ error }}</p><button type="button" class="button" :disabled="loading" @click="load()">重新读取抽奖统计</button></div>
+    <p v-if="loading" class="public-feedback" role="status">正在读取排行榜…</p>
+    <div v-if="error" class="form-error" role="alert"><p>排行榜读取失败：{{ error }}</p><button type="button" class="button" :disabled="loading" @click="load()">重新读取排行榜</button></div>
     <template v-if="data">
-      <p class="public-range" role="status"><CalendarDays :size="16" aria-hidden="true" /><span>{{ rangeLabel }}</span><span class="muted">北京时间</span></p>
+      <p class="public-range" role="status"><CalendarDays :size="16" aria-hidden="true" /><span>{{ rangeLabel }}</span><span class="muted">北京时间</span><time :datetime="data.updatedAt" class="muted">更新于 {{ new Date(data.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) }}</time></p>
       <dl class="public-overview">
         <div class="public-total"><dt><Coins :size="18" aria-hidden="true" />{{ data.range.period === 'today' ? '今日已发放积分' : '所选期间已发放积分' }}</dt><dd>{{ formatPoints(data.totals.totalPoints) }}<small>积分</small></dd><dd class="public-detail">福利积分 {{ formatPoints(data.totals.charityPoints) }}<span>永久积分 {{ formatPoints(data.totals.permanentPoints) }}</span></dd></div>
         <div><dt>抽奖总次数</dt><dd>{{ formatPoints(data.totals.drawCount) }}<small>次</small></dd><dd class="public-detail">按抽奖发生日期统计</dd></div>
@@ -95,7 +94,7 @@ defineExpose({ refresh: () => load() })
         <button v-if="dayCount < data.daily.length" type="button" class="button public-more" @click="dayCount += 30">查看更多日期（剩余 {{ data.daily.length - dayCount }} 天）</button>
       </section>
       <section class="public-users" aria-labelledby="lottery-users-title">
-        <div class="public-subheading"><h3 id="lottery-users-title">用户汇总</h3><span class="muted">共 {{ formatPoints(String(records.length)) }} 位 · 每人一行</span></div>
+        <div class="public-subheading"><h3 id="lottery-users-title">用户排行</h3><span class="muted">共 {{ formatPoints(String(records.length)) }} 位</span></div>
         <div class="public-result-controls"><label for="lottery-public-sort">排序方式</label><select id="lottery-public-sort" v-model="sort"><option value="points-desc">中奖积分：从高到低</option><option value="points-asc">中奖积分：从低到高</option><option value="draws-desc">抽奖次数：从多到少</option><option value="draws-asc">抽奖次数：从少到多</option></select></div>
         <div v-if="records.length" class="public-result-table">
           <table aria-labelledby="lottery-users-title"><thead><tr><th scope="col">参与用户</th><th scope="col" :aria-sort="sort.startsWith('points') ? sort.endsWith('asc') ? 'ascending' : 'descending' : undefined">已到账积分</th><th scope="col" :aria-sort="sort.startsWith('draws') ? sort.endsWith('asc') ? 'ascending' : 'descending' : undefined">抽奖次数</th><th scope="col">奖励状态</th></tr></thead><tbody>
@@ -116,8 +115,8 @@ defineExpose({ refresh: () => load() })
 </template>
 
 <style scoped>
-.lottery-public-results { border-top: 1px solid var(--border); padding-block: var(--space-section); min-width: 0; }
-.lottery-public-results > .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) var(--target-size); align-items: start; gap: var(--space-group); margin-bottom: var(--space-group); }
+.lottery-public-results { padding-block: var(--space-section); min-width: 0; }
+.lottery-public-results > .section-heading { margin-bottom: var(--space-group); }
 .lottery-public-results h2 { margin: 0 0 var(--space-small); font-size: 20px; line-height: 28px; }
 .lottery-public-results header p, .public-note { margin: 0; line-height: 22px; font-size: 12px; text-wrap: pretty; }
 .lottery-public-results :is(button, select, input) { min-height: var(--target-size, 44px); }

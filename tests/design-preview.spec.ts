@@ -9,6 +9,17 @@ test('UI preview serves a local signed-in session without browser API mocks', as
   expect((await response.json()).user.id).toBe('previewCreator')
 })
 
+test('UI preview opens the welfare rankings without real account requests', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/activities')
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '排行榜', exact: true })).toBeVisible()
+  await expect(page.locator('.lottery-public-results')).toContainText('所选日期还没有抽奖记录')
+  await expect(page.locator('.lottery-public-results').getByRole('alert')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
 test('UI preview opens settings and saves profile drafts with local data only', async ({ page }) => {
   const external: string[] = [], errors: string[] = []
   page.on('request', request => {

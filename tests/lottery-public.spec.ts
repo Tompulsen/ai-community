@@ -14,7 +14,7 @@ async function fixture(page: Page, authenticated = true) {
   await mockUnifiedAccount(page, authenticated)
   const settings = { ...defaultLotterySettings(), enabled: true, dailyLimit: 200,
     prizes: defaultDailyLotteryPrizes(5000).map(prize => ({ ...prize, dailyQuota: prize.stock })) }
-  const state = { fail: false, participated: false, publicReads: 0, requests: [] as string[],
+  const state = { fail: false, participated: false, publicReads: 0, statusReads: 0, requests: [] as string[],
     items: [{ id: 'draw1', participant: '创***', drawCount: '7', totalPoints: '6100', charityPoints: '2000', permanentPoints: '4100',
       fulfilledCount: '3', pendingCount: '1', unverifiedCount: '2', emptyCount: '1' },
     { id: 'draw2', participant: '小***', drawCount: '12', totalPoints: '1000', charityPoints: '1000', permanentPoints: '0',
@@ -37,9 +37,9 @@ async function fixture(page: Page, authenticated = true) {
     return route.fulfill({ json: { items: state.items, range, totals, daily, updatedAt: statsNow.toISOString() } })
   })
   const day = lotteryDay(new Date())
-  await page.route('**/api/lottery/status', route => route.fulfill({ json: { settings, balance: 1, creditReady: true, accountLinked: authenticated,
+  await page.route('**/api/lottery/status', route => { state.statusReads++; return route.fulfill({ json: { settings, balance: 1, creditReady: true, accountLinked: authenticated,
     daily: { date: day.date, timezone: 'Asia/Shanghai', resetsAt: day.end.toISOString(), limit: 200, remaining: 200, used: 0, participated: state.participated },
-    support: { checked: true, eligible: true, amountCnyFen: 1000 }, counts: { invites: 0, likes: 0, bestWorkLikes: 0, followers: 0 }, earned: { invites: 0, likes: 0, followers: 0 } } }))
+    support: { checked: true, eligible: true, amountCnyFen: 1000 }, counts: { invites: 0, likes: 0, bestWorkLikes: 0, followers: 0 }, earned: { invites: 0, likes: 0, followers: 0 } } }) })
   await page.route('**/api/new-api/status', route => route.fulfill({ json: { success: true, data: { currencySymbol: '积分', pointsPerUsd: 5000 } } }))
   await page.route('**/api/lottery/records*', route => route.fulfill({ json: { items: [], nextCursor: null } }))
   await page.route('**/api/lottery/draw', route => {
@@ -49,12 +49,35 @@ async function fixture(page: Page, authenticated = true) {
   return state
 }
 
+test('rankings load on demand and keep their result when switching tabs', async ({ page }) => {
+  const state = await fixture(page)
+  await page.goto('/activities')
+  await expect(page.locator('.draw-console > .button')).toBeEnabled()
+  expect(state.publicReads).toBe(0)
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
+  await expect(page.locator('.lottery-public-results tbody tr')).toHaveCount(3)
+  expect(state.publicReads).toBe(1)
+  await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
+  await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+  await expect(page.locator('.draw-console > .button')).toBeEnabled()
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
+  await expect(page.locator('.lottery-public-results')).toBeVisible()
+  expect(state.publicReads).toBe(1)
+  await page.getByRole('button', { name: '刷新排行榜', exact: true }).click()
+  await expect.poll(() => state.publicReads).toBe(2)
+})
+
 for (const [width, mode] of [[320, 'dark'], [390, 'light'], [1440, 'dark'], [1440, 'light']] as const) test(`public lottery results and clown fit ${width}px ${mode}`, async ({ page }, info) => {
   await fixture(page, false)
   await page.setViewportSize({ width, height: 1000 })
   await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'paper', dark: 'sage' })), mode)
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/activities')
+  await expect(page.locator('.wheel-label')).toHaveText(['一等奖', '二等奖', '三等奖', '🤡'])
+  await expect(page.locator('.prize-list').getByRole('img', { name: '小丑奖' })).toBeVisible()
+  await expect(page.locator('.prize-list')).not.toContainText('非常遗憾')
+  await expect(page.locator('.prize-list')).toContainText('1,000 福利积分')
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
   const panel = page.locator('.lottery-public-results')
   await expect(panel.locator('tbody tr')).toHaveCount(3)
   await expect(panel).toContainText('6,100 积分')
@@ -76,10 +99,6 @@ for (const [width, mode] of [[320, 'dark'], [390, 'light'], [1440, 'dark'], [144
   await expect(panel.getByLabel('排序方式')).toHaveValue('points-asc')
   const control = await panel.getByLabel('排序方式').boundingBox()
   expect(control!.height).toBeGreaterThanOrEqual(44)
-  await expect(page.locator('.wheel-label')).toHaveText(['一等奖', '二等奖', '三等奖', '🤡'])
-  await expect(page.locator('.prize-list').getByRole('img', { name: '小丑奖' })).toBeVisible()
-  await expect(page.locator('.prize-list')).not.toContainText('非常遗憾')
-  await expect(page.locator('.prize-list')).toContainText('1,000 福利积分')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect((await new AxeBuilder({ page }).include('.lottery-public-results').analyze()).violations).toEqual([])
   await page.screenshot({ path: info.outputPath(`lottery-public-${width}-${mode}.png`), fullPage: true })
@@ -89,8 +108,11 @@ for (const [width, mode] of [[320, 'dark'], [390, 'light'], [1440, 'dark'], [144
 test('all four sorts are numeric and stable; more users and refresh preserve one row per identity', async ({ page }) => {
   const state = await fixture(page)
   state.items.push({ ...state.items[0]!, id: 'draw4', participant: '同***' })
-  await page.goto('/activities')
+  await page.goto('/activities?tab=leaderboard')
   const panel = page.locator('.lottery-public-results'), names = panel.locator('tbody tr td:first-child')
+  await expect(panel.locator('tbody tr')).toHaveCount(4)
+  expect(state.statusReads).toBe(0)
+  expect(state.publicReads).toBe(1)
   for (const [sort, order] of [
     ['points-desc', ['创***','同***','小***','匿名用户']],
     ['points-asc', ['匿名用户','小***','创***','同***']],
@@ -101,7 +123,7 @@ test('all four sorts are numeric and stable; more users and refresh preserve one
     await expect(names).toHaveText([...order])
   }
   state.items = Array.from({length:25}, (_,i) => ({...state.items[0]!,id:`user${i}`,participant:`用户${i}`,totalPoints:String(i)}))
-  await panel.getByRole('button', { name: '刷新抽奖统计' }).click()
+  await page.getByRole('button', { name: '刷新排行榜' }).click()
   await expect(panel.locator('tbody tr')).toHaveCount(20)
   await panel.getByRole('button', { name: '查看更多用户' }).click()
   await expect(panel.locator('tbody tr')).toHaveCount(25)
@@ -114,32 +136,39 @@ test('all four sorts are numeric and stable; more users and refresh preserve one
 
 test('failure, retry and empty results are explicit without affecting the draw controls', async ({ page }) => {
   const state = await fixture(page); state.fail = true
-  await page.goto('/activities')
+  await page.goto('/activities?tab=leaderboard')
   const panel = page.locator('.lottery-public-results')
-  await expect(panel.getByRole('alert')).toContainText('抽奖统计读取失败')
+  await expect(panel.getByRole('alert')).toContainText('排行榜读取失败')
+  await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
   state.fail = false; state.items = []
-  await panel.getByRole('button', { name: '重新读取抽奖统计' }).click()
+  await panel.getByRole('button', { name: '重新读取排行榜' }).click()
   await expect(panel).toContainText('还没有抽奖记录')
 })
 
-test('successful draws refresh public records and precise historical points are never rounded', async ({ page }) => {
+test('rankings stay cached across draws until explicitly refreshed and preserve precise historical points', async ({ page }) => {
   const state = await fixture(page)
   state.items[0]!.totalPoints = '9007199254740993.123456'
   state.items[1]!.totalPoints = '9007199254740993.123457'
-  await page.goto('/activities')
+  await page.goto('/activities?tab=leaderboard')
   const panel = page.locator('.lottery-public-results')
   await expect(panel).toContainText('9,007,199,254,740,993.123456 积分')
+  await page.getByRole('button', { name: '活动抽奖', exact: true }).click()
   await expect(page.locator('.draw-console > .button')).toBeEnabled()
   const readsBeforeDraw = state.publicReads
   await page.locator('.draw-console > .button').click()
+  await expect(page.locator('.draw-result')).toBeVisible()
+  await page.getByRole('button', { name: '排行榜', exact: true }).click()
+  expect(state.publicReads).toBe(readsBeforeDraw)
+  await page.getByRole('button', { name: '刷新排行榜' }).click()
   await expect(panel.locator('tbody tr')).toHaveCount(3)
   await expect(panel.locator('tbody tr').filter({hasText:'创***'})).toContainText('8 次')
   await expect(panel.locator('tbody tr td:first-child').first()).toHaveText('小***')
   await panel.getByLabel('排序方式').selectOption('points-asc')
   await expect(panel.locator('tbody tr td:first-child')).toHaveText(['匿名用户','创***','小***'])
   state.items[0]!.drawCount = '9007199254740993'; state.items[1]!.drawCount = '9007199254740994'
-  await panel.getByRole('button', {name:'刷新抽奖统计'}).click()
+  await page.getByRole('button', {name:'刷新排行榜'}).click()
   await panel.getByLabel('排序方式').selectOption('draws-desc')
   await expect(panel.locator('tbody tr td:first-child')).toHaveText(['小***','创***','匿名用户'])
   expect(state.publicReads).toBe(readsBeforeDraw + 2)
@@ -148,7 +177,7 @@ test('successful draws refresh public records and precise historical points are 
 test('date presets, custom day totals and pagination keep the displayed range explicit', async ({ page }) => {
   const state = await fixture(page)
   await page.setViewportSize({ width: 375, height: 812 })
-  await page.goto('/activities')
+  await page.goto('/activities?tab=leaderboard')
   const panel = page.locator('.lottery-public-results')
   await expect(panel.locator('.public-total')).toContainText('今日已发放积分')
   await panel.getByRole('button', { name: '近 7 天', exact: true }).click()
@@ -180,7 +209,7 @@ test('date presets, custom day totals and pagination keep the displayed range ex
 
 test('switching periods cancels stale responses and failures never relabel old totals', async ({ page }) => {
   const state = await fixture(page)
-  await page.goto('/activities')
+  await page.goto('/activities?tab=leaderboard')
   const panel = page.locator('.lottery-public-results')
   await expect(panel.locator('tbody tr')).toHaveCount(3)
   let release!: () => void
@@ -202,9 +231,9 @@ test('switching periods cancels stale responses and failures never relabel old t
   await expect(panel.locator('.public-range')).not.toContainText('7 天')
   state.fail = true
   await panel.getByRole('button', { name: '今日', exact: true }).click()
-  await expect(panel.getByRole('alert')).toContainText('抽奖统计读取失败')
+  await expect(panel.getByRole('alert')).toContainText('排行榜读取失败')
   await expect(panel.locator('.public-overview')).toHaveCount(0)
   state.fail = false
-  await panel.getByRole('button', { name: '重新读取抽奖统计' }).click()
+  await panel.getByRole('button', { name: '重新读取排行榜' }).click()
   await expect(panel.locator('.public-total')).toContainText('今日已发放积分')
 })

@@ -4,14 +4,13 @@ SPDX-FileCopyrightText: 2026 Community contributors
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { Gift, Users, Heart, RefreshCw } from '@lucide/vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { Gift, RefreshCw } from '@lucide/vue'
 import '../welfare-tokens.css'
 import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
 import WelfareTasks from '../components/WelfareTasks.vue'
-import LotteryPublicResults from '../components/LotteryPublicResults.vue'
 import { isClownPrize } from '../../shared/lottery-public'
-import { refreshLotteryBalance } from '../lottery-balance'
+import { refreshLotteryBalance, updateLotteryBalance } from '../lottery-balance'
 import { useRoute } from 'vue-router'
 import { formatPoints } from '../../shared/studio/community-wallet'
 
@@ -28,13 +27,18 @@ interface LotteryStatus {
   support: { checked: boolean; eligible: boolean; amountCnyFen: number | null }
 }
 const route = useRoute()
+const LotteryPublicResults = defineAsyncComponent(() => import('../components/LotteryPublicResults.vue'))
 const wheelId = `lottery-${useId()}`
-const tab = ref(route.query.invite || route.query.aff || route.query.tab === 'tasks' ? 'tasks' : 'draw')
+const tab = ref(route.query.invite || route.query.aff || route.query.tab === 'tasks' ? 'tasks' : ['records', 'leaderboard'].includes(String(route.query.tab)) ? String(route.query.tab) : 'draw')
+const leaderboardOpened = ref(false)
 const tasks = ref<InstanceType<typeof WelfareTasks>>()
 const publicResults = ref<InstanceType<typeof LotteryPublicResults>>()
-const tabs = [{ id: 'draw', label: '活动抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }]
+const tabs = [{ id: 'draw', label: '活动抽奖' }, { id: 'tasks', label: '任务与邀请' }, { id: 'records', label: '奖励记录' }, { id: 'leaderboard', label: '排行榜' }]
 const status = ref<LotteryStatus | null>(null), records = ref<Draw[]>([]), nextCursor = ref<string | null>(null), result = ref<Draw | null>(null)
-const loading = ref(true), drawing = ref(false), recordsLoading = ref(false), error = ref('')
+const loading = ref(false), drawing = ref(false), recordsLoading = ref(false), recordsLoaded = ref(false), error = ref('')
+const recordsError = ref('')
+const refreshLabel = computed(() => tab.value === 'leaderboard' ? '刷新排行榜' : tab.value === 'records' ? '刷新奖励记录' : '刷新活动')
+const refreshing = computed(() => tab.value === 'leaderboard' ? publicResults.value?.loading : tab.value === 'records' ? recordsLoading.value : loading.value || drawing.value)
 const statusFailed = ref(false)
 const pointDisplay = ref<{ currencySymbol?: string; pointsPerUsd?: number }>()
 function rewardAmount(value: Prize | Award) {
@@ -65,10 +69,6 @@ const drawCounts = computed(() => status.value?.daily ? [1] as const : allDrawCo
 const dailyPoints = computed(() => pointDisplay.value?.pointsPerUsd && status.value?.daily
   ? status.value.settings.prizes.reduce((sum, prize) => sum + (prize.dailyQuota ?? 0) * prize.amountCents / 100 * pointDisplay.value!.pointsPerUsd!, 0) : null)
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
-const rules = computed(() => status.value ? [
-  { key: 'followers' as const, label: '收获关注', icon: Users, rule: status.value.settings.followers, count: status.value.counts.followers },
-  { key: 'likes' as const, label: status.value.settings.likesMode === 'work' ? '单件作品获赞' : '作品累计获赞', icon: Heart, rule: status.value.settings.likes, count: status.value.settings.likesMode === 'work' ? status.value.counts.bestWorkLikes : status.value.counts.likes },
-].filter(item => item.rule.enabled) : [])
 const awardLabels = { pending: '待发放', fulfilled: '已到账', empty: '未中奖' }
 const appearance = computed(() => status.value?.settings.wheel ?? { theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' })
 const drawTitle = computed(() => !appearance.value.title || appearance.value.title === '每日幸运转盘' ? '活动抽奖' : appearance.value.title)
@@ -82,6 +82,22 @@ const resetCountdown = computed(() => {
 })
 const supportChecked = computed(() => status.value?.support?.checked === true)
 const supportEligible = computed(() => supportChecked.value && status.value?.support.eligible === true)
+const participationStatus = computed(() => {
+  const value = status.value
+  if (!session.user) return '登录后参与'
+  if (pending.value) return '上次结果尚未确认，请核对原抽奖'
+  if (statusFailed.value) return '参与状态更新失败，请刷新后重试'
+  if (!value?.settings.enabled) return '活动暂未开放'
+  if (!value.accountLinked) return '请先连接章鱼账号'
+  if (value.daily?.participated) return '今天的福利已领取，明天再来'
+  if (value.daily && !value.daily.remaining) return '今日名额已领完，明天 00:00 重置'
+  if (!availablePrizes.value.length) return '奖池暂无可用奖项'
+  if (!supportChecked.value) return '累计支持暂无法核验'
+  if (!supportEligible.value) return '累计支持未满足参与条件'
+  if (!value.creditReady) return '奖励发放服务暂不可用'
+  if (value.balance < count.value) return '完成任务获取抽奖次数'
+  return '可以参与'
+})
 const supportRequirement = computed(() => {
   const minimum = status.value?.settings.minSupportCnyFen ?? 0
   return `累计支持 ${minimum ? '≥' : '>'} ✦${(minimum / 100).toFixed(2)}`
@@ -95,7 +111,7 @@ const supportAmount = computed(() => {
 })
 const availablePrizes = computed(() => status.value?.settings.prizes.filter(prize => prize.enabled && prize.weight > 0 && prize.stock !== 0) || [])
 const totalWeight = computed(() => availablePrizes.value.reduce((sum, prize) => sum + prize.weight, 0))
-const drawDisabled = computed(() => drawing.value || loading.value || (!pending.value && (!status.value?.settings.enabled || !status.value.accountLinked || !status.value.creditReady || !supportEligible.value || status.value.balance < count.value || !availablePrizes.value.length || Boolean(status.value.daily && (status.value.daily.participated || !status.value.daily.remaining)))))
+const drawDisabled = computed(() => drawing.value || loading.value || (!pending.value && (statusFailed.value || !status.value?.settings.enabled || !status.value.accountLinked || !status.value.creditReady || !supportEligible.value || status.value.balance < count.value || !availablePrizes.value.length || Boolean(status.value.daily && (status.value.daily.participated || !status.value.daily.remaining)))))
 const wheelSlots = computed(() => {
   const prizes = [...(status.value?.settings.prizes || [])]
   const winner = result.value?.prizes.at(-1)
@@ -130,6 +146,7 @@ async function loadRecords(append = false) {
     const data = await api<{ items: Draw[]; nextCursor: string | null }>(`/api/lottery/records${queryString({ cursor: append ? nextCursor.value || undefined : undefined })}`)
     if (!current()) return
     records.value = append ? [...records.value, ...data.items] : data.items
+    recordsLoaded.value = true
     const updated = result.value && data.items.find(item => item.id === result.value!.id)
     if (updated) result.value = updated
     nextCursor.value = data.nextCursor
@@ -148,35 +165,66 @@ function restorePending() {
 async function load() {
   if (!active) return
   const request = ++statusRequest
-  loading.value = true; error.value = ''; pointDisplay.value = undefined
+  loading.value = true; error.value = ''
   await loadSession()
   if (!active || request !== statusRequest) return
   const owner = session.user?.id
   const current = () => active && request === statusRequest && owner === session.user?.id
   try {
-    const [lottery] = await Promise.all([
-      api<LotteryStatus>('/api/lottery/status'),
-      api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
-        .then(value => { if (current() && value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data }).catch(() => {}),
-    ])
+    if (!pointDisplay.value) void loadPointDisplay()
+    const lottery = await api<LotteryStatus>('/api/lottery/status')
     if (!current()) return
     status.value = lottery; statusFailed.value = false; if (lottery.daily) count.value = 1
-    void refreshLotteryBalance(true)
+    if (owner) updateLotteryBalance(owner, lottery.balance)
     restorePending(); scheduleReset()
-    await loadRecords().catch(cause => { if (current()) error.value = `奖励记录读取失败：${drawMessage(cause)}` })
   }
   catch (cause) { if (current()) { statusFailed.value = true; error.value = drawMessage(cause) } }
   finally { if (current()) loading.value = false }
 }
-function refresh() { void load(); void tasks.value?.refresh(); void publicResults.value?.refresh() }
+async function loadPointDisplay() {
+  const owner = session.user?.id
+  try {
+    const value = await api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
+    if (active && owner === session.user?.id && value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data
+  } catch { /* Prize amounts stay unverified when conversion settings are unavailable. */ }
+}
+function readRecords(append = false) {
+  if (!session.user || recordsLoading.value) return
+  const owner = session.user.id, request = recordsRequest + 1
+  recordsError.value = ''
+  void loadRecords(append).catch(cause => {
+    if (active && owner === session.user?.id && request === recordsRequest) recordsError.value = `奖励记录读取失败：${drawMessage(cause)}`
+  })
+}
+function loadTab() {
+  if (tab.value === 'leaderboard') {
+    void loadSession().then(() => { if (active && tab.value === 'leaderboard') leaderboardOpened.value = true })
+    return
+  }
+  if (tab.value === 'records') {
+    void loadSession().then(() => {
+      if (!active || tab.value !== 'records') return
+      if (!pointDisplay.value) void loadPointDisplay()
+      if (!recordsLoaded.value) readRecords()
+    })
+  } else if (!status.value && !loading.value) void load()
+  else updateResetCountdown()
+}
+function refresh() {
+  if (tab.value === 'leaderboard') { void publicResults.value?.refresh(); return }
+  if (tab.value === 'records') { readRecords(); return }
+  void load()
+  if (tab.value === 'tasks') void tasks.value?.refresh()
+}
 let active = true, lastResetAttempt = 0, statusRequest = 0, recordsRequest = 0
-watch(() => session.user?.id, () => { status.value = null; records.value = []; recordsRequest++; recordsLoading.value = false; nextCursor.value = null; result.value = null; pending.value = null; void load() })
+watch(tab, loadTab)
+watch(() => session.user?.id, () => { statusRequest++; status.value = null; loading.value = false; drawing.value = false; statusFailed.value = false; error.value = ''; pointDisplay.value = undefined; records.value = []; recordsRequest++; recordsLoading.value = false; recordsLoaded.value = false; recordsError.value = ''; nextCursor.value = null; result.value = null; pending.value = null; loadTab() })
 let resetTimer: ReturnType<typeof setInterval> | undefined
 function updateResetCountdown() {
   if (!active || document.visibilityState === 'hidden') return
   currentTime.value = Date.now()
   if (Number.isFinite(resetAt.value) && currentTime.value >= resetAt.value + 1000
-    && !loading.value && !drawing.value && currentTime.value - lastResetAttempt >= 15000) {
+    && (tab.value === 'draw' || tab.value === 'tasks') && !loading.value && !drawing.value && currentTime.value - lastResetAttempt >= 15000) {
     lastResetAttempt = currentTime.value
     void load()
   }
@@ -190,7 +238,7 @@ function scheduleReset() {
 onMounted(() => {
   document.addEventListener('visibilitychange', updateResetCountdown)
   window.addEventListener('focus', updateResetCountdown)
-  void load()
+  loadTab()
 })
 onBeforeUnmount(() => {
   active = false
@@ -210,19 +258,25 @@ async function draw() {
   drawing.value = true; error.value = ''
   let receipt: Draw
   const owner = session.user.id
+  const current = () => active && owner === session.user?.id
   try { receipt = await api<Draw>('/api/lottery/draw', { method: 'POST', body: pending.value }) }
   catch (cause) {
+    if (!current()) return
     const code = errorMessage(cause)
     if (['LOTTERY_DAILY_USED', 'LOTTERY_DAILY_SINGLE', 'LOTTERY_DAILY_EXHAUSTED', 'LOTTERY_INSUFFICIENT', 'LOTTERY_ACCOUNT_REQUIRED', 'LOTTERY_SUPPORT_REQUIRED', 'LOTTERY_UNAVAILABLE', 'LOTTERY_INVALID', 'LOTTERY_FORBIDDEN', 'LOTTERY_CONFLICT'].includes(code)) {
       pending.value = null
       try { sessionStorage.removeItem(storageKey) } catch { /* Keep the same safe request if local cleanup is unavailable. */ }
     }
     if (code.startsWith('LOTTERY_DAILY_') || code === 'LOTTERY_SUPPORT_REQUIRED') {
-      try { status.value = await api<LotteryStatus>('/api/lottery/status'); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset() } catch { /* Keep the authoritative draw error visible. */ }
-    }
+      await load()
+    } else void refreshLotteryBalance(true)
+    if (!current()) return
     error.value = drawMessage(cause); drawing.value = false; return
-  } finally { if (owner === session.user?.id) void refreshLotteryBalance(true) }
-  result.value = receipt; pending.value = null; scheduleReset()
+  }
+  if (!current()) return
+  result.value = receipt; pending.value = null; drawing.value = false
+  recordsLoaded.value = false; recordsRequest++; recordsLoading.value = false
+  scheduleReset()
   try { sessionStorage.removeItem(storageKey) } catch { /* Retrying a confirmed receipt cannot consume another chance. */ }
   const winner = receipt.prizes.at(-1)
   const index = wheelSlots.value.findIndex(prize => prize.id === winner?.prizeId)
@@ -231,43 +285,43 @@ async function draw() {
     wheelRotation.value += 1440 + (target - wheelRotation.value % 360 + 360) % 360
   }
   notify('抽奖结果已记录。')
-  void publicResults.value?.refresh()
-  try { status.value = await api<LotteryStatus>('/api/lottery/status'); if (owner === session.user?.id) void refreshLotteryBalance(true); statusFailed.value = false; if (status.value.daily) count.value = 1; scheduleReset(); await loadRecords() }
-  catch (cause) { error.value = `抽奖已完成，账户信息刷新失败：${drawMessage(cause)}` }
-  finally { drawing.value = false }
+  void load()
 }
 
 </script>
 
 <template>
   <div class="page-container activity-page">
-    <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" aria-label="刷新活动" title="刷新活动" :disabled="loading || drawing" @click="refresh"><RefreshCw :size="18" aria-hidden="true" /></button></div>
+    <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" :aria-label="refreshLabel" :title="refreshLabel" :disabled="refreshing" @click="refresh"><RefreshCw :size="18" aria-hidden="true" /></button></div>
     <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" type="button" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
-    <p v-if="error" class="notice-inline" role="alert">{{ error }}</p>
+    <p v-if="error && (tab === 'draw' || tab === 'tasks')" class="notice-inline" role="alert">{{ error }}</p>
     <WelfareTasks v-if="tab === 'tasks'" :key="session.user?.id ?? 'guest'" ref="tasks" :lottery="loading || statusFailed ? null : status" :rules-loading="loading" />
-    <div v-else-if="loading" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
-    <template v-else-if="status">
-      <section v-if="status.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
+    <div v-else-if="loading && !status && tab === 'draw'" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
+    <template v-else-if="status || tab === 'records'">
+      <p v-if="loading && status && tab === 'draw'" class="muted" role="status" aria-label="正在加载活动">正在更新活动…</p>
+      <section v-if="status?.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
         <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
         <p class="reset-countdown"><template v-if="resetSeconds !== null">距重置 <time role="timer" aria-label="每日奖池重置倒计时" aria-live="off" :datetime="`PT${resetSeconds}S`">{{ resetCountdown }}</time></template><span v-else>重置时间待核对</span></p>
       </section>
-      <div v-if="tab === 'draw'" class="activity-layout lottery-layout">
+      <div v-if="tab === 'draw' && status" class="activity-layout lottery-layout">
         <section class="panel-section draw-section" :class="`theme-${appearance.theme}`">
           <div class="draw-console">
           <div class="section-heading"><h2>{{ drawTitle }}</h2></div>
           <section class="participation-conditions" :aria-labelledby="`${wheelId}-conditions`">
-            <h3 :id="`${wheelId}-conditions`">参与条件</h3>
-            <p>{{ supportRequirement }}</p>
-            <p v-if="!session.user" class="form-note">登录后查看累计支持及资格</p>
-            <template v-else>
-              <p class="support-status" role="status"><span>当前累计支持 {{ supportAmount }}</span><strong>{{ !supportChecked ? '暂无法核验' : supportEligible ? '已满足' : '未满足' }}</strong></p>
-              <p v-if="supportChecked && !supportEligible" class="form-note">累计支持未满足参与条件。</p>
-              <button v-if="!supportChecked" type="button" class="text-link" :disabled="loading || drawing" @click="load">重新核验</button>
-            </template>
+            <h3 :id="`${wheelId}-conditions`">参与状态</h3>
+            <p role="status">{{ participationStatus }}</p>
+            <RouterLink v-if="session.user && !status.accountLinked" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink>
+            <button v-else-if="session.user && !supportChecked && !pending" type="button" class="text-link" :disabled="loading || drawing" @click="load">重新核验</button>
+            <button v-else-if="session.user && supportEligible && status.balance < count && !pending && !status.daily?.participated" type="button" class="text-link" @click="tab = 'tasks'">前往任务与邀请</button>
+            <details>
+              <summary>参与条件与支持金额</summary>
+              <p>{{ supportRequirement }}</p>
+              <p v-if="!session.user" class="form-note">登录后查看累计支持及资格</p>
+              <p v-else class="support-status"><span>当前累计支持 {{ supportAmount }}</span><strong>{{ !supportChecked ? '暂无法核验' : supportEligible ? '已满足' : '未满足' }}</strong></p>
+            </details>
           </section>
           <div class="draw-controls"><p>可用 <strong>{{ status.balance }}</strong> 次</p><div v-if="!status.daily" class="view-switch" role="group" aria-label="本次抽奖次数"><button v-for="n in drawCounts" :key="n" type="button" class="button subtle btn" :class="{ selected: count === n }" :aria-pressed="count === n" :disabled="drawing || !!pending" @click="count = n">{{ n }} 次</button></div></div>
           <button v-if="session.user" type="button" class="button primary btn" :disabled="drawDisabled" :aria-busy="drawing" @click="draw"><Gift :size="17" aria-hidden="true" />{{ drawing ? '正在确认结果…' : pending ? '核对上次抽奖' : status.daily?.participated ? '今日已参与' : status.daily && !status.daily.remaining ? '今日名额已领完' : `抽奖 ${count} 次` }}</button><RouterLink v-else to="/account" class="button primary btn">登录后参与</RouterLink>
-          <p v-if="pending && !drawing" class="form-note">上次结果尚未确认，再次核对会使用同一凭证。</p><p v-if="!status.settings.enabled" class="form-note">活动暂未开放。</p><p v-else-if="!status.creditReady" class="form-note">奖励发放服务暂不可用。</p><RouterLink v-else-if="!status.accountLinked && session.user" to="/account?tab=balance" class="text-link">连接章鱼账号</RouterLink><p v-else-if="status.daily?.participated && !pending" class="form-note">今天的福利已领取，明天再来。</p><p v-else-if="status.daily && !status.daily.remaining && !pending" class="form-note">今日名额已领完，明天 00:00 重置。</p><p v-else-if="status.balance < count && session.user && !pending" class="form-note"><template v-if="supportEligible">完成任务获取抽奖次数。<button type="button" class="text-link" @click="tab = 'tasks'">前往任务与邀请</button></template><template v-else>本次需要 {{ count }} 次机会，当前次数不足。</template></p>
           <div v-if="result" class="notice-inline draw-result" role="status"><div v-for="(award, index) in result.prizes" :key="index"><strong>{{ index + 1 }}. {{ award.name }}</strong><p class="caption-5">{{ awardLabels[award.status] }}<span v-if="award.amountCents">，{{ rewardAmount(award) }}</span></p><p v-if="award.rewardKind === 'charity'" class="reward-expiry"><time v-if="award.expiresAt" :datetime="new Date(award.expiresAt * 1000).toISOString()" role="timer" aria-label="奖励到期倒计时" aria-live="off">{{ rewardExpiry(award) }}</time><span v-else>{{ rewardExpiry(award) }}</span></p></div><button type="button" class="text-link" @click="tab = 'records'">查看奖励记录</button></div>
           </div>
           <div class="lottery-wheel" :class="[`theme-${appearance.theme}`, { 'wheel-dense': wheelSegments.length > 4 }]" data-testid="lottery-wheel">
@@ -327,12 +381,27 @@ async function draw() {
             <p v-if="!status.settings.prizes.length" class="muted">暂无可用奖项</p>
           </div>
         </section>
-        <section v-if="rules.length" class="panel-section chances-section"><div class="section-heading"><h2>获得抽奖机会</h2></div><div v-for="item in rules" :key="item.key" class="reward-item"><div><strong>{{ item.label }}</strong><p class="caption-5">每 {{ item.rule.threshold }} 个获得 {{ item.rule.tickets }} 次机会</p></div><span>{{ item.count }} 个</span></div></section>
-        <section class="panel-section account-section"><div class="section-heading"><h2>奖励账户</h2></div><dl class="info-list"><div><dt>章鱼账号</dt><dd>{{ status.accountLinked ? '已连接' : '未连接' }}</dd></div><div><dt>发放服务</dt><dd>{{ status.creditReady ? '可用' : '不可用' }}</dd></div></dl><RouterLink v-wallet-prefetch to="/account?tab=balance" class="button subtle btn">我的账户</RouterLink></section>
       </div>
-      <section v-else class="panel-section records-section"><div class="section-heading"><h2 id="rewards-heading">奖励记录</h2><button type="button" class="button subtle btn" :disabled="recordsLoading" @click="loadRecords().catch(cause => error = drawMessage(cause))"><RefreshCw :size="15" aria-hidden="true" />刷新</button></div><div v-if="records.length" class="table-wrap" tabindex="0" role="region" aria-labelledby="rewards-heading"><table class="data-table"><thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead><tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`"><td data-label="时间">{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td><td data-label="奖励">{{ award.name }}</td><td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents ? rewardAmount(award) : '--' }}</td><td data-label="状态"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.rewardKind === 'charity'" class="reward-expiry"><time v-if="award.expiresAt" :datetime="new Date(award.expiresAt * 1000).toISOString()" role="timer" aria-label="奖励到期倒计时" aria-live="off">{{ rewardExpiry(award) }}</time><span v-else>{{ rewardExpiry(award) }}</span></p></td></tr></template></tbody></table></div><div v-else class="empty-state"><Gift :size="28" aria-hidden="true" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div><button v-if="nextCursor" type="button" class="button btn" :disabled="recordsLoading" @click="loadRecords(true).catch(cause => error = drawMessage(cause))">加载更多</button></section>
+      <section v-else-if="tab === 'records'" class="panel-section records-section">
+        <div class="section-heading"><h2 id="rewards-heading">奖励记录</h2></div>
+        <p v-if="recordsError" class="notice-inline" role="alert">{{ recordsError }}</p>
+        <p v-if="recordsLoading" class="muted" role="status">正在读取奖励记录…</p>
+        <div v-if="records.length" class="table-wrap" tabindex="0" role="region" aria-labelledby="rewards-heading">
+          <table class="data-table">
+            <thead><tr><th scope="col">时间</th><th scope="col">奖励</th><th scope="col">{{ pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度' }}</th><th scope="col">状态</th></tr></thead>
+            <tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`">
+              <td data-label="时间">{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td>
+              <td data-label="奖励">{{ award.name }}</td>
+              <td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents ? rewardAmount(award) : '--' }}</td>
+              <td data-label="状态"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.rewardKind === 'charity'" class="reward-expiry"><time v-if="award.expiresAt" :datetime="new Date(award.expiresAt * 1000).toISOString()" role="timer" aria-label="奖励到期倒计时" aria-live="off">{{ rewardExpiry(award) }}</time><span v-else>{{ rewardExpiry(award) }}</span></p></td>
+            </tr></template></tbody>
+          </table>
+        </div>
+        <div v-else-if="!recordsLoading && !recordsError" class="empty-state"><Gift :size="28" aria-hidden="true" /><h2>{{ session.user ? '暂无奖励记录' : '登录后查看奖励记录' }}</h2><RouterLink v-if="!session.user" to="/account" class="button btn">登录</RouterLink></div>
+        <button v-if="nextCursor" type="button" class="button btn" :disabled="recordsLoading" @click="readRecords(true)">加载更多</button>
+      </section>
     </template>
-    <LotteryPublicResults v-if="tab === 'draw'" ref="publicResults" />
+    <LotteryPublicResults v-if="leaderboardOpened" v-show="tab === 'leaderboard'" ref="publicResults" />
   </div>
 </template>
 
@@ -376,6 +445,7 @@ async function draw() {
 .support-status { display: flex; flex-wrap: wrap; gap: var(--space-label) var(--space-small); color: var(--muted); font-size: var(--font-size-help); line-height: var(--line-height-help); }
 .support-status strong { color: var(--ink); font-weight: 500; }
 .participation-conditions .text-link { justify-self: start; min-height: var(--target-size); }
+.participation-conditions summary { display: list-item; min-height: var(--target-size); padding-block: var(--space-control); color: var(--muted); font-size: var(--font-size-help); cursor: pointer; }
 .lottery-layout > .prize-section { padding-inline-start: var(--space-page); border-inline-start: 1px solid var(--border); }
 .pool-caption { color: var(--muted); font-size: 12px; line-height: 20px; margin-bottom: var(--space-small); }
 .lottery-layout > .prize-section > .section-heading { margin-bottom: var(--space-label); }
@@ -453,17 +523,6 @@ async function draw() {
 .prize-item .prize-amount { color: var(--ink); font-size: 14px; font-weight: 500; line-height: 21px; }
 .prize-availability { color: var(--muted); text-align: end; font-variant-numeric: tabular-nums; }
 .prize-availability strong { color: var(--ink); font-weight: 500; }
-.lottery-layout > .chances-section { grid-column: 1 / -1; padding-block: var(--space-group); border-block-start: 1px solid var(--border); }
-.activity-page .reward-item { justify-content: space-between; align-items: start; gap: var(--space-group); margin: 0; padding-block: var(--space-control); border-bottom: 1px solid var(--border); }
-.activity-page .reward-item:last-of-type { border-bottom: 0; }
-.activity-page .reward-item > div { flex: 1; }
-.activity-page .reward-item > span { flex-shrink: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
-.lottery-layout > .account-section { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-control) var(--space-page); padding-block: var(--space-group); border-block-start: 1px solid var(--border); }
-.lottery-layout > .account-section > .section-heading { margin: 0; }
-.account-section h2 { font-size: 14px; line-height: 21px; }
-.account-section .info-list { display: flex; flex-wrap: wrap; gap: var(--space-control) var(--space-section); margin: 0; padding: 0; }
-.account-section .info-list > div { gap: var(--space-small); }
-.account-section > .button { margin: 0 0 0 auto; min-height: var(--control-height); white-space: nowrap; }
 .activity-page > .stack { gap: var(--space-section); }
 .records-section > .section-heading { margin-bottom: var(--space-group); }
 .records-section .table-wrap { container: reward-records / inline-size; }
@@ -490,10 +549,12 @@ async function draw() {
   .activity-page > .page-heading { position: relative; height: 0; min-height: 0; margin: 0; }
   .activity-page > .page-heading h1 { display: none; }
   .activity-page > .page-heading > .icon-button { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
-  .activity-page > .tabs { padding-inline-end: calc(var(--target-size) + var(--space-small)); gap: var(--space-group); }
+  .activity-page > .tabs { max-inline-size: calc(100% - var(--target-size) - var(--space-small)); gap: var(--space-group); }
 }
 @media (max-width: 639px) {
   .activity-page { padding-top: var(--space-group); }
+  .activity-page > .tabs { gap: var(--space-label); }
+  .activity-page .tab { min-inline-size: var(--target-size); font-size: 12px; }
   .daily-overview { align-items: start; gap: var(--space-control); padding-block: var(--space-control); }
   .daily-overview dl { inline-size: 100%; gap: var(--space-group); }
   .daily-overview dl > div { flex: 1; }
@@ -506,9 +567,6 @@ async function draw() {
   .lottery-wheel { grid-column: 1; grid-row: auto; inline-size: min(100%, 248px); }
   .prize-item { column-gap: var(--space-small); }
   .prize-availability p { max-inline-size: 104px; }
-  .lottery-layout > .account-section { gap: var(--space-group); }
-  .account-section .info-list { inline-size: 100%; }
-  .account-section > .button { margin: 0; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .wheel-disc { transition: transform 1600ms var(--ease); }

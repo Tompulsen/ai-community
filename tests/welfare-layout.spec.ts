@@ -77,9 +77,11 @@ for (const theme of themes) for (const viewport of viewports) {
     await page.mouse.move(0, 0)
     if (viewport.width < 1000) {
       const refresh = (await page.getByRole('button', { name: '刷新活动', exact: true }).boundingBox())!
-      const lastTab = (await page.getByRole('button', { name: '奖励记录', exact: true }).boundingBox())!
+      const lastTab = (await page.getByRole('button', { name: '排行榜', exact: true }).boundingBox())!
+      const tabs = (await page.locator('.activity-page > .tabs').boundingBox())!
       expect(refresh.y).toBe(lastTab.y)
       expect(lastTab.x + lastTab.width).toBeLessThanOrEqual(refresh.x)
+      expect(lastTab.x + lastTab.width).toBeLessThanOrEqual(tabs.x + tabs.width)
     }
     await expect(page.locator('.prize-item')).toHaveCount(4)
     await expect(page.locator('.wheel-label')).toHaveText(['一等奖', '二等奖', '三等奖', '🤡'])

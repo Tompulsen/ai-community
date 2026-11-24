@@ -14,6 +14,12 @@ watch(identity, () => {
   attemptedAt = 0; lotteryBalance.balance = null
 }, { flush: 'sync' })
 
+export function updateLotteryBalance(userId: string, balance: number) {
+  if (session.user?.id !== userId || !Number.isSafeInteger(balance) || balance < 0) return
+  revision++; controller?.abort(); controller = undefined; pending = undefined
+  attemptedAt = Date.now(); lotteryBalance.balance = balance
+}
+
 export function refreshLotteryBalance(force = false): Promise<void> {
   const userId = session.user?.id
   if (!userId) return Promise.resolve()

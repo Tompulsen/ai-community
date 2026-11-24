@@ -35,6 +35,28 @@ it('forced post-draw reads supersede a slow response from before the draw', asyn
   expect(lotteryCount.value).toBe(0)
 })
 
+it('reuses a current status balance without allowing an older badge read to overwrite it', async () => {
+  const { session } = await import('./state')
+  const { lotteryBalance, refreshLotteryBalance, updateLotteryBalance } = await import('./lottery-balance')
+  session.user = { ...user }
+  let resolve!: (value: Response) => void
+  fetchMock.mockReturnValueOnce(new Promise<Response>(done => { resolve = done }))
+  const old = refreshLotteryBalance()
+  const signal = fetchMock.mock.calls[0]![1].signal
+  updateLotteryBalance(user.id, 2)
+  expect(signal.aborted).toBe(true)
+  resolve(response(9)); await old
+  await refreshLotteryBalance()
+  expect(lotteryBalance.balance).toBe(2)
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  updateLotteryBalance('another-user', 8)
+  updateLotteryBalance(user.id, -1)
+  expect(lotteryBalance.balance).toBe(2)
+  session.user = null
+  updateLotteryBalance(user.id, 5)
+  expect(lotteryBalance.balance).toBeNull()
+})
+
 it('clears on account changes and ignores late data and failures from prior accounts', async () => {
   const { session } = await import('./state')
   const { lotteryBalance, refreshLotteryBalance } = await import('./lottery-balance')
