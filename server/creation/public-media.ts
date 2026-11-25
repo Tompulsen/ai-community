@@ -84,7 +84,88 @@ function imageUrl(value: string) {
   return url;
 }
 
-function connect(url: URL, signal: AbortSignal, kind: "image" | "video") {
+export function videoRangeHeaders(source?: Headers) {
+  const headers = new Headers();
+  const range = source?.get("range");
+  if (!range) return headers;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (range.length > 100 || !match || (!match[1] && !match[2])
+    || [match[1], match[2]].some(value => value && !Number.isSafeInteger(Number(value))))
+    throw new PublicImageError("视频分段请求无效。", 400);
+  headers.set("Range", range);
+  const validator = source?.get("if-range");
+  if (validator && /^[\x20-\x7e]{1,200}$/.test(validator)) headers.set("If-Range", validator);
+  return headers;
+}
+
+/** Range offsets and lengths describe the original bytes, never a decoded body. */
+export function videoResponseHeaders(status: number, source: Headers, maxBytes: number) {
+  const invalid = () => new PublicImageError("视频分段响应无效，请重试。", 502);
+  const headers = new Headers();
+  const number = (value: string) => {
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw invalid();
+    return Number(value);
+  };
+  const bounded = (size: number) => {
+    if (size > maxBytes) throw new PublicImageError("Video exceeds the import limit", 413);
+    return size;
+  };
+  if (status === 416) {
+    const range = /^bytes \*\/(\d+)$/.exec(source.get("content-range") || "");
+    if (!range) throw invalid();
+    bounded(number(range[1]!));
+    headers.set("Content-Range", range[0]);
+    headers.set("Content-Length", "0");
+    return headers;
+  }
+  if (![200, 206].includes(status)) throw invalid();
+  const encoding = source.get("content-encoding")?.toLowerCase();
+  if (encoding && encoding !== "identity") throw new PublicImageError("视频响应编码不支持分段读取。", 415);
+  const length = source.get("content-length");
+  if (length !== null) headers.set("Content-Length", String(bounded(number(length))));
+  if (status === 206) {
+    const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(source.get("content-range") || "");
+    if (!range) throw invalid();
+    const start = number(range[1]!), end = number(range[2]!);
+    if (start > end) throw invalid();
+    bounded(end + 1);
+    if (range[3] !== "*" && end >= bounded(number(range[3]!))) throw invalid();
+    const count = end - start + 1;
+    if (length !== null && Number(length) !== count) throw invalid();
+    headers.set("Content-Range", range[0]);
+    headers.set("Content-Length", String(count));
+  }
+  for (const name of ["content-type", "etag", "last-modified"]) {
+    const value = source.get(name);
+    if (value) headers.set(name, value);
+  }
+  const ranges = source.get("accept-ranges");
+  if (ranges === "bytes" || ranges === "none") headers.set("Accept-Ranges", ranges);
+  return headers;
+}
+
+export function videoResponseBody(body: ReadableStream<Uint8Array> | null, headers: Headers, maxBytes: number) {
+  const length = headers.get("content-length");
+  let received = 0;
+  const incomplete = () => new PublicImageError("视频分段数据不完整，请重试。", 502);
+  if (!body) {
+    if (length !== null && Number(length) !== 0) throw incomplete();
+    return null;
+  }
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, output) {
+      received += chunk.byteLength;
+      if (received > maxBytes) throw new PublicImageError("Video exceeds the import limit", 413);
+      if (length !== null && received > Number(length)) throw incomplete();
+      output.enqueue(chunk);
+    },
+    flush() {
+      if (length !== null && received !== Number(length)) throw incomplete();
+    },
+  }));
+}
+
+function connect(url: URL, signal: AbortSignal, kind: "image" | "video", ranges: Headers) {
   return new Promise<IncomingMessage>((resolve, reject) => {
     const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
       url,
@@ -96,6 +177,7 @@ function connect(url: URL, signal: AbortSignal, kind: "image" | "video") {
           "User-Agent": "OctopusChat/1.0",
           Accept: `${kind}/*`,
           "Accept-Encoding": "identity",
+          ...Object.fromEntries(ranges),
         },
         agent: false,
         // Resolve once and connect to that checked address, preventing DNS rebinding.
@@ -138,13 +220,14 @@ export function fetchPublicImage(source: string, signal?: AbortSignal) {
   return fetchPublicMedia(source, "image", MAX_IMAGE_BYTES, signal);
 }
 
-export async function fetchPublicMedia(source: string, kind: "image" | "video", maxBytes: number, signal?: AbortSignal) {
+export async function fetchPublicMedia(source: string, kind: "image" | "video", maxBytes: number, signal?: AbortSignal, requestHeaders?: Headers) {
   const allowed = kind === "image" ? IMAGE_TYPES : new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]);
   const limitMessage =
     kind === "image"
       ? "Image exceeds the import limit"
       : "Video exceeds the import limit";
   let url = imageUrl(source);
+  const ranges = videoRangeHeaders(kind === "video" ? requestHeaders : undefined);
   const controller = new AbortController();
   const abort = () => controller.abort();
   const timeout = setTimeout(abort, kind === "video" ? 120000 : 60000);
@@ -156,7 +239,7 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
   };
   try {
     for (let redirects = 0; ; redirects++) {
-      const response = await connect(url, controller.signal, kind);
+      const response = await connect(url, controller.signal, kind, ranges);
       const status = response.statusCode || 502;
       if ([301, 302, 303, 307, 308].includes(status)) {
         response.destroy();
@@ -164,6 +247,21 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
           throw new PublicImageError("Too many image redirects", 502);
         url = imageUrl(new URL(response.headers.location, url).href);
         continue;
+      }
+      let videoHeaders: Headers | undefined;
+      if (kind === "video" && [200, 206, 416].includes(status)) {
+        try {
+          const incoming = new Headers();
+          for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "content-encoding"]) {
+            const value = response.headers[name];
+            if (typeof value === "string") incoming.set(name, value);
+          }
+          videoHeaders = videoResponseHeaders(status, incoming, maxBytes);
+        } catch (error) { response.destroy(); throw error; }
+        if (status === 416) {
+          response.destroy(); cleanup();
+          return new Response(null, { status, headers: videoHeaders });
+        }
       }
       if (status < 200 || status >= 300) {
         response.destroy();
@@ -213,12 +311,14 @@ export async function fetchPublicMedia(source: string, kind: "image" | "video", 
       limited.once("close", cleanup);
       if (decoder) pipeline(response, decoder, limited, () => {});
       else pipeline(response, limited, () => {});
-      const headers = new Headers({ "Content-Type": type });
-      if (!decoder && length && /^[1-9]\d*$/.test(length)) {
+      const headers = videoHeaders ?? new Headers({ "Content-Type": type });
+      if (kind === "image" && !decoder && length && /^[1-9]\d*$/.test(length)) {
         headers.set("Content-Length", length);
         headers.set("X-Image-Content-Length", length);
       }
-      return new Response(Readable.toWeb(limited) as ReadableStream, {
+      const body = Readable.toWeb(limited) as ReadableStream<Uint8Array>;
+      return new Response(videoHeaders ? videoResponseBody(body, headers, maxBytes) : body, {
+        status: kind === "video" ? status : 200,
         headers,
       });
     }

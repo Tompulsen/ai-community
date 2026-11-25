@@ -21,7 +21,7 @@ import {
   buildCreationPayload, creationRelayPath, creationTaskPath, normalizeCreationTask, normalizeNativeChat, resolveCreationModelSettings, validateCreationInput,
   type CreationInput, type CreationKind, type CreationReference, type CreationTask, type CreationTaskProtocol,
 } from './creation-contract.ts'
-import { fetchPublicMedia, PublicImageError } from './creation/public-media.ts'
+import { fetchPublicMedia, PublicImageError, videoRangeHeaders, videoResponseHeaders, videoResponseBody } from './creation/public-media.ts'
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
 import { acquireImageRead, imagePreview, releaseImageRead } from './creation/image-preview.ts'
 import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
@@ -719,6 +719,7 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
       variant === 'preview' && !ctx.url.searchParams.has('path') && (!ctx.url.searchParams.has('kind') || ctx.url.searchParams.get('kind') === 'image'))))
     throw httpError(400, '媒体预览地址无效。')
   let response: Response
+  const ranges = videoRangeHeaders((path || kind === 'video') && variant !== 'poster' ? req.headers : undefined)
   if (path) {
     const normalized = mediaPath(path)
     if (!creationRelayPath('GET', normalized) || !/(?:\/content|:download\?alt=media)$/.test(normalized))
@@ -733,8 +734,11 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
     const load = async (signal: AbortSignal) => {
       const lifecycle = createProxyLifecycle(signal, 120000)
       try {
+      const headers = relayHeaders(req, credentials.apiKey)
+      headers.set('Accept-Encoding', 'identity')
+      for (const [name, value] of ranges) headers.set(name, value)
       const upstream = await svc.fetch(new URL(`/${normalized}`, credentials.baseUrl), {
-        headers: relayHeaders(req, credentials.apiKey, true), signal: lifecycle.signal,
+        headers, signal: lifecycle.signal,
         redirect: 'manual', cache: 'no-store',
       })
       if ([301, 302, 303, 307, 308].includes(upstream.status)) {
@@ -742,19 +746,21 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
         lifecycle.dispose()
         const target = upstream.headers.get('location')
         if (!target) throw httpError(502, '生成文件地址暂时不可用。')
-        return await svc.publicMedia(new URL(target, credentials.baseUrl).href, 'video', variant === 'poster' ? videoPosterSourceLimit : 512 * MiB, signal)
+        return await svc.publicMedia(new URL(target, credentials.baseUrl).href, 'video', variant === 'poster' ? videoPosterSourceLimit : 512 * MiB, signal, ranges)
       } else {
+        if (upstream.status === 416) {
+          await upstream.body?.cancel(); lifecycle.dispose()
+          return new Response(null, { status: 416, headers: videoResponseHeaders(416, upstream.headers, 512 * MiB) })
+        }
         const type = upstream.headers.get('content-type')?.split(';')[0] || ''
         if (![200, 206].includes(upstream.status) || !/^video\/(?:mp4|webm|quicktime|x-matroska)$/.test(type)) {
           await upstream.body?.cancel()
           throw Object.assign(httpError(upstream.status === 404 ? 404 : 502, '生成文件暂时无法读取。'), { errorStatus: upstream.status })
         }
-        const headers = new Headers({ 'Content-Type': type })
-        for (const name of ['content-range', 'accept-ranges', 'etag', 'last-modified', 'content-length']) {
-          const value = upstream.headers.get(name)
-          if (value) headers.set(name, value)
-        }
-        return new Response(lifecycle.stream(upstream.body), { status: upstream.status, headers })
+        let headers: Headers
+        try { headers = videoResponseHeaders(upstream.status, upstream.headers, variant === 'poster' ? videoPosterSourceLimit : 512 * MiB) }
+        catch (error) { await upstream.body?.cancel(); throw error }
+        return new Response(videoResponseBody(lifecycle.stream(upstream.body), headers, variant === 'poster' ? videoPosterSourceLimit : 512 * MiB), { status: upstream.status, headers })
       }
       } catch (error) { lifecycle.dispose(); throw error }
     }
@@ -793,11 +799,16 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
       : variant === 'poster' ? await videoPoster(
         hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${ctx.sessionHash || ''}:${req.headers.get('x-new-api-token') || ''}:${url}`),
         signal => svc.publicMedia(url, 'video', videoPosterSourceLimit, signal), req.signal)
-        : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal)
+        : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal, ranges)
   }
   response.headers.set('Cache-Control', 'private, no-store')
   response.headers.set('X-Content-Type-Options', 'nosniff')
   if (variant === 'preview' || variant === 'poster') ctx.reply.header('Content-Length', response.headers.get('content-length')!)
+  else if (path || kind === 'video') {
+    // The generic response adapter drops lengths for decoded bodies; these video bytes are unchanged.
+    const length = response.headers.get('content-length')
+    if (length !== null) ctx.reply.header('Content-Length', length)
+  }
   await sendWebResponse(ctx.reply, response)
 }
 

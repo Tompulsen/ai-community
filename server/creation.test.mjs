@@ -1640,7 +1640,90 @@ test('task and protected video recovery retain the original token and account ow
   assert.equal(media.statusCode, 206)
   assert.equal(media.payload, 'vid')
   assert.equal(media.headers['content-range'], 'bytes 0-2/12')
+  assert.equal(media.headers['content-length'], '3')
   assert.equal(credentialCalls.at(-1).tokenId, 71)
+})
+
+test('public video replies preserve length and range through the HTTP response adapter', async t => {
+  const cases = [
+    { status: 200, headers: { 'content-length': '5' }, body: 'video' },
+    { status: 206, headers: { 'content-length': '3', 'content-range': 'bytes 2-4/5' }, body: 'deo' },
+    { status: 416, headers: { 'content-length': '0', 'content-range': 'bytes */5' }, body: null },
+  ]
+  for (const upstream of cases) {
+    const { app } = fixture(t, { async publicMedia(_url, kind, _limit, _signal, ranges) {
+      assert.equal(kind, 'video')
+      assert.deepEqual(Object.fromEntries(ranges), { 'if-range': '"v1"', range: 'bytes=2-' })
+      return new Response(upstream.body, { status: upstream.status, headers: { 'content-type': 'video/mp4', 'accept-ranges': 'bytes', ...upstream.headers } })
+    } })
+    const response = await app.inject({ url: '/api/creation/media?kind=video&url=https%3A%2F%2Fmedia.example%2Fvideo.mp4',
+      headers: { range: 'bytes=2-', 'if-range': '"v1"', cookie: 'private=value', authorization: 'Bearer private' } })
+    assert.equal(response.statusCode, upstream.status)
+    assert.equal(response.headers['content-length'], upstream.headers['content-length'])
+    assert.equal(response.headers['content-range'], upstream.headers['content-range'])
+    assert.equal(response.headers['cache-control'], 'private, no-store')
+    assert.equal(response.payload, upstream.body || '')
+  }
+})
+
+test('protected videos and their redirects retain ranges without leaking account credentials', async t => {
+  for (const status of [200, 206, 302, 416]) {
+    let cancelled = false, redirected = false
+    const { app } = fixture(t, {
+      async fetch(_url, init) {
+        if (init.method === 'POST') return Response.json({ id: 'range_job', status: 'completed', user_id: 17 })
+        assert.equal(init.headers.get('range'), 'bytes=-3')
+        assert.equal(init.headers.get('if-range'), '"v1"')
+        assert.equal(init.headers.get('accept-encoding'), 'identity')
+        if (status === 302 || status === 416) return new Response(new ReadableStream({ cancel() { cancelled = true } }), {
+          status, headers: status === 302 ? { location: 'https://cdn.example/video' } : { 'content-type': 'text/html', 'content-range': 'bytes */5' },
+        })
+        return new Response(status === 200 ? 'video' : 'deo', { status, headers: { 'content-type': 'video/mp4',
+          ...(status === 200 ? { 'content-length': '5' } : { 'content-range': 'bytes 2-4/5' }) } })
+      },
+      async publicMedia(url, kind, _limit, _signal, ranges) {
+        redirected = true
+        assert.equal(url, 'https://cdn.example/video')
+        assert.equal(kind, 'video')
+        assert.deepEqual(Object.fromEntries(ranges), { 'if-range': '"v1"', range: 'bytes=-3' })
+        return new Response('deo', { status: 206, headers: { 'content-type': 'video/mp4', 'content-length': '3', 'content-range': 'bytes 2-4/5' } })
+      },
+    })
+    await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Video', duration: 8, requestId: 'range-video' })
+    const response = await app.inject({ url: '/api/creation/media?path=videos/range_job/content&tokenId=71', headers: { range: 'bytes=-3', 'if-range': '"v1"' } })
+    assert.equal(response.statusCode, status === 302 ? 206 : status)
+    assert.equal(response.headers['content-length'], status === 416 ? '0' : status === 200 ? '5' : '3')
+    assert.equal(response.payload, status === 416 ? '' : status === 200 ? 'video' : 'deo')
+    assert.equal(redirected, status === 302)
+    assert.equal(cancelled, status === 302 || status === 416)
+  }
+})
+
+test('poster extraction ignores incoming video ranges on public and protected sources', async t => {
+  let publicReads = 0, protectedReads = 0
+  const { app } = fixture(t, {
+    async publicMedia(_url, _kind, _limit, _signal, ranges) {
+      publicReads++
+      assert.equal(ranges?.get('range'), undefined)
+      throw httpError(502, 'fixture media unavailable')
+    },
+    async fetch(_url, init) {
+      if (init.method === 'POST') return Response.json({ id: 'poster_range_job', status: 'completed', user_id: 17 })
+      protectedReads++
+      assert.equal(init.headers.get('range'), null)
+      assert.equal(init.headers.get('if-range'), null)
+      assert.equal(init.headers.get('accept-encoding'), 'identity')
+      return new Response(null, { status: 404 })
+    },
+  })
+  await submit(app, { kind: 'video', model: 'sora-2', prompt: 'Video', duration: 8, requestId: 'poster-range' })
+  for (const source of ['url=https%3A%2F%2Fmedia.example%2Fposter-range.mp4', 'path=videos/poster_range_job/content&tokenId=71']) {
+    const response = await app.inject({ url: '/api/creation/media?kind=video&variant=poster&' + source,
+      headers: { range: 'not-a-byte-range', 'if-range': '"v1"' } })
+    assert.ok([404, 502].includes(response.statusCode))
+  }
+  assert.equal(publicReads, 1)
+  assert.equal(protectedReads, 1)
 })
 
 for (const failedMapping of ['task', 'media']) {
