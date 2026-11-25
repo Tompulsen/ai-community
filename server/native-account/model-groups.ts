@@ -349,14 +349,18 @@ async function resolveGroup(
       // Explicit switching and system search may replace a confirmed deleted key.
       // Disabled, expired, edited and ambiguous keys keep their binding.
       replacedTokenId = binding.tokenId;
-      if (!(await compare(key, binding, null)))
-        throw new NewApiError("分组记录已更新，请重试", 409);
-      binding = null;
+      if (!durable) {
+        if (!(await compare(key, binding, null)))
+          throw new NewApiError("分组记录已更新，请重试", 409);
+        binding = null;
+      }
     }
 
     if (!create) return;
-    if (!binding) {
-      if (durable && (await readBinding(groupKey) || await readBinding(`${groupKey}:web-search`)))
+    if (!binding || "tokenId" in binding) {
+      const previous = binding;
+      const legacy = durable ? await Promise.all([groupKey, `${groupKey}:web-search`].map(async key => ({ key, binding: await readBinding(key) }))) : [];
+      if (legacy.some(({ binding }) => binding && !(replacedTokenId && Object.keys(binding).length === 1 && "tokenId" in binding && binding.tokenId === replacedTokenId)))
         throw new NewApiError("旧分组密钥尚未核对，请联系管理员导入绑定；不会另建密钥", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
       const tokens = await listTokens(request);
       const matches = tokens.filter(
@@ -378,11 +382,16 @@ async function resolveGroup(
         return rememberSystemToken(tokenId);
       }
       if (login && tokens.length) return;
+      // Retain PG provenance while removing only pointers to the confirmed deleted key.
+      for (const { key: legacyKey, binding: old } of legacy) {
+        if (old && !(await compareBinding(legacyKey, old, null)))
+          throw new NewApiError("分组记录已更新，请重试", 409);
+      }
       binding = {
         pendingName: `${SYSTEM_TOKEN_NAME}-${randomBytes(8).toString("hex")}`,
-        ...(systemAuto && replacedTokenId ? { replacedTokenId } : {}),
+        ...((durable || systemAuto) && replacedTokenId ? { replacedTokenId } : {}),
       };
-      if (!(await compare(key, null, binding)))
+      if (!(await compare(key, previous, binding)))
         throw new NewApiError("分组正在准备，请重试", 409);
       try {
         await request("/api/token/", {
@@ -409,7 +418,7 @@ async function resolveGroup(
           error.status < 500 &&
           ![408, 409].includes(error.status)
         ) {
-          await compare(key, binding, null);
+          await compare(key, binding, previous);
           throw error;
         }
       }

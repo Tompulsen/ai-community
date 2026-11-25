@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import test from 'node:test'
 import { AccountRequest } from './http.ts'
 import { saveSession, removeSessionById } from './session.ts'
@@ -64,6 +64,63 @@ test('native credentials retain PostgreSQL provenance across concurrency, cache 
     const f = await fixture(t); f.request.database = db
     const ordinary = await resolveModelGroup(f.request, 'auto')
     assert.equal(await resolveSystemAutoToken(f.request), ordinary)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+  })
+  async function deletedImportedToken(t, options = {}) {
+    const f = await fixture(t, [{ id: 830, group: 'auto' }], options)
+    const key = 'octopus:new-api:model-group:' + createHash('sha256')
+      .update(JSON.stringify(['https://token-reuse.test', f.credentials.user.id, 'auto'])).digest('hex')
+    for (const suffix of ['', ':web-search']) globalThis.__octopusModelGroups.set(key + suffix, JSON.stringify({ tokenId: 830 }))
+    await db.query('INSERT INTO community_group_credential (key,binding,provenance) VALUES ($1,$2,$3)',
+      [key + ':native', JSON.stringify({ tokenId: 830 }), 'operator-import: fixture'])
+    f.items.length = 0
+    return { ...f, key, fresh() { const req = new AccountRequest(f.request.url, { headers: f.request.headers }); req.database = db; return req } }
+  }
+  await t.test('a deleted imported Auto key is replaced once across concurrent fresh requests', async t => {
+    const f = await deletedImportedToken(t)
+    assert.equal(await resolveModelGroup(f.fresh(), 'auto', false), undefined)
+    assert.deepEqual((await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [f.key + ':native'])).rows[0].binding, { tokenId: 830 })
+    const ids = await Promise.all(Array.from({ length: 8 }, () => resolveModelGroup(f.fresh(), 'auto')))
+    assert.equal(new Set(ids).size, 1)
+    assert.equal(await resolveSystemAutoToken(f.fresh()), ids[0])
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+    assert.equal(globalThis.__octopusModelGroups.has(f.key), false)
+    assert.equal(globalThis.__octopusModelGroups.has(f.key + ':web-search'), false)
+  })
+  for (const conflict of [{ tokenId: 831 }, { pendingName: systemName + '-0000000000000000' }]) {
+    await t.test('a deleted imported key preserves conflicting legacy state: ' + JSON.stringify(conflict), async t => {
+      const f = await deletedImportedToken(t)
+      globalThis.__octopusModelGroups.set(f.key + ':web-search', JSON.stringify(conflict))
+      await assert.rejects(resolveModelGroup(f.fresh(), 'auto'), { code: 'NEW_API_CREDENTIAL_VERIFICATION_REQUIRED' })
+      assert.deepEqual((await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [f.key + ':native'])).rows[0].binding, { tokenId: 830 })
+      assert.equal(globalThis.__octopusModelGroups.get(f.key + ':web-search'), JSON.stringify(conflict))
+      assert.equal(f.writes().length, 0)
+    })
+  }
+  await t.test('a rejected replacement preserves the deleted binding for a fresh retry', async t => {
+    let reject = true
+    const f = await deletedImportedToken(t, { respond(call) {
+      if (call.method === 'POST' && reject) return Response.json({ success: false, message: 'capacity reached' }, { status: 400 })
+    } })
+    await assert.rejects(resolveModelGroup(f.fresh(), 'auto'), { status: 400 })
+    assert.deepEqual((await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [f.key + ':native'])).rows[0].binding, { tokenId: 830 })
+    reject = false
+    assert.equal(await resolveModelGroup(f.fresh(), 'auto'), 1)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 2)
+  })
+  await t.test('an uncertain replacement keeps its intent and never repeats the create', async t => {
+    let hide = true
+    const f = await deletedImportedToken(t, { respond(call, { items, token, ok }) {
+      if (call.path === '/api/token/' && call.method === 'POST') {
+        items.push(token(901, call.body)); throw new TypeError('fixture: lost replacement response')
+      }
+      if (call.path === '/api/token/' && call.method === 'GET' && hide) return ok({ items: [], total: 0 })
+    } })
+    await assert.rejects(resolveModelGroup(f.fresh(), 'auto'), { code: 'NEW_API_GROUP_TOKEN_PENDING' })
+    const pending = (await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [f.key + ':native'])).rows[0].binding
+    assert.equal(pending.replacedTokenId, 830)
+    hide = false
+    assert.equal(await resolveModelGroup(f.fresh(), 'auto'), 901)
     assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
   })
 })
