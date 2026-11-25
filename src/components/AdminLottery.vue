@@ -227,7 +227,7 @@ onMounted(() => { void loadConfig(); void loadRecords() })
           <label class="check-label"><input type="checkbox" :checked="dailyMode" @change="draft.settings.dailyLimit = ($event.target as HTMLInputElement).checked ? 200 : undefined" />每日重置，每人每天限抽 1 次</label>
           <template v-if="dailyMode">
             <label class="field"><span>每日总人数上限</span><input v-model.number="draft.settings.dailyLimit" class="control" type="number" min="1" max="1000000" step="1" required /></label>
-            <p class="form-note">北京时间 00:00 重置。每次消耗 1 次抽奖机会，概率按剩余名额自动计算。修改奖项不会退还当天已用名额。</p>
+            <p class="form-note">每天北京时间 00:00，所有用户的每日参与资格与奖池名额统一重置。每次消耗 1 次抽奖机会，概率按剩余名额自动计算。修改奖项不会退还当天已用名额。</p>
             <p class="probability-total" role="status">每日名额合计 <strong>{{ dailyQuota }} 名</strong><span> · 每日奖池 <strong>{{ dailyPoints === null ? '待核对' : dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) }} 积分</strong></span></p>
           </template>
           <div class="section-heading prize-heading"><h3>奖项独立配置</h3><button type="button" class="button subtle btn" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>

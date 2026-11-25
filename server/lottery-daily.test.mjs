@@ -296,6 +296,34 @@ test('daily lottery PostgreSQL concurrency and rollover', { skip: !process.env.F
     await draw(1)
     assert.equal((await service.status('1')).daily.remaining, 199)
   })
+  await t.test('all users reset at the same Beijing midnight regardless of their last draw time', async () => {
+    await reset()
+    await draw(1)
+    clock = new Date('2026-11-18T15:59:59.999Z')
+    await draw(2)
+    for (const user of ['1', '2']) {
+      const status = await service.status(user)
+      assert.equal(status.daily.resetsAt, '2026-11-18T16:00:00.000Z')
+      assert.equal(status.daily.participated, true)
+      assert.equal(status.balance, 4)
+    }
+    clock = new Date('2026-11-18T16:00:00.000Z')
+    for (const user of [undefined, '1', '2']) {
+      const status = await service.status(user)
+      assert.equal(status.daily.date, '2026-11-19')
+      assert.equal(status.daily.resetsAt, '2026-11-19T16:00:00.000Z')
+      assert.equal(status.daily.participated, false)
+      assert.equal(status.daily.remaining, 200)
+      if (user) assert.equal(status.balance, 4)
+    }
+    await draw(1); await draw(2)
+    for (const user of ['1', '2']) {
+      const status = await service.status(user)
+      assert.equal(status.daily.participated, true)
+      assert.equal(status.daily.remaining, 198)
+      assert.equal(status.balance, 3)
+    }
+  })
   await t.test('configuration changes and failed delivery do not refund daily places', async () => {
     const settings = dailySettings(); settings.dailyLimit = 1; settings.prizes = [{ ...settings.prizes[0], stock: 1 }]
     await reset(settings); await draw(1)

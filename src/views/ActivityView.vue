@@ -74,12 +74,6 @@ const appearance = computed(() => status.value?.settings.wheel ?? { theme: 'teal
 const drawTitle = computed(() => !appearance.value.title || appearance.value.title === '每日幸运转盘' ? '活动抽奖' : appearance.value.title)
 const currentTime = ref(Date.now())
 const resetAt = computed(() => Date.parse(status.value?.daily?.resetsAt ?? ''))
-const resetSeconds = computed(() => Number.isFinite(resetAt.value) ? Math.max(0, Math.ceil((resetAt.value - currentTime.value) / 1000)) : null)
-const resetCountdown = computed(() => {
-  const seconds = resetSeconds.value
-  if (seconds === null) return '—'
-  return [Math.floor(seconds / 3600), Math.floor(seconds % 3600 / 60), seconds % 60].map(value => String(value).padStart(2, '0')).join(':')
-})
 const supportChecked = computed(() => status.value?.support?.checked === true)
 const supportEligible = computed(() => supportChecked.value && status.value?.support.eligible === true)
 const participationStatus = computed(() => {
@@ -89,8 +83,8 @@ const participationStatus = computed(() => {
   if (statusFailed.value) return '参与状态更新失败，请刷新后重试'
   if (!value?.settings.enabled) return '活动暂未开放'
   if (!value.accountLinked) return '请先连接章鱼账号'
-  if (value.daily?.participated) return '今天的福利已领取，明天再来'
-  if (value.daily && !value.daily.remaining) return '今日名额已领完，明天 00:00 重置'
+  if (value.daily?.participated) return '今日已参与，下次北京时间 00:00 统一重置'
+  if (value.daily && !value.daily.remaining) return '今日名额已领完，下次北京时间 00:00 统一重置'
   if (!availablePrizes.value.length) return '奖池暂无可用奖项'
   if (!supportChecked.value) return '累计支持暂无法核验'
   if (!supportEligible.value) return '累计支持未满足参与条件'
@@ -135,7 +129,7 @@ const wheelSegments = computed(() => wheelSlots.value.map((prize, index, slots) 
 }))
 function drawMessage(cause: unknown) {
   const value = errorMessage(cause)
-  return ({ LOTTERY_DAILY_USED: '今天已参与，明天再来领取福利。', LOTTERY_DAILY_SINGLE: '每日福利每人每天限抽 1 次。', LOTTERY_DAILY_EXHAUSTED: '今日名额已领完，北京时间 00:00 后再来。', LOTTERY_INSUFFICIENT: '抽奖次数不足。', LOTTERY_ACCOUNT_REQUIRED: '请先连接章鱼账号。', LOTTERY_SUPPORT_REQUIRED: '累计支持未满足参与条件，请刷新后查看。', LOTTERY_SUPPORT_UNAVAILABLE: '累计支持暂时无法核验，请使用原凭证重新核对。', LOTTERY_UNAVAILABLE: '活动或奖励发放暂不可用。', LOTTERY_INVALID: '本次抽奖参数无效，请重新参与。', LOTTERY_CONFLICT: '本次抽奖凭证与原请求不一致，请刷新后核对。', LOTTERY_FORBIDDEN: '当前账号暂不能参与活动。' } as Record<string, string>)[value] || value
+  return ({ LOTTERY_DAILY_USED: '今天已参与，下次北京时间 00:00 统一重置。', LOTTERY_DAILY_SINGLE: '每日福利每人每天限抽 1 次。', LOTTERY_DAILY_EXHAUSTED: '今日名额已领完，北京时间 00:00 后再来。', LOTTERY_INSUFFICIENT: '抽奖次数不足。', LOTTERY_ACCOUNT_REQUIRED: '请先连接章鱼账号。', LOTTERY_SUPPORT_REQUIRED: '累计支持未满足参与条件，请刷新后查看。', LOTTERY_SUPPORT_UNAVAILABLE: '累计支持暂时无法核验，请使用原凭证重新核对。', LOTTERY_UNAVAILABLE: '活动或奖励发放暂不可用。', LOTTERY_INVALID: '本次抽奖参数无效，请重新参与。', LOTTERY_CONFLICT: '本次抽奖凭证与原请求不一致，请刷新后核对。', LOTTERY_FORBIDDEN: '当前账号暂不能参与活动。' } as Record<string, string>)[value] || value
 }
 async function loadRecords(append = false) {
   if (!session.user || recordsLoading.value) return
@@ -208,7 +202,7 @@ function loadTab() {
       if (!recordsLoaded.value) readRecords()
     })
   } else if (!status.value && !loading.value) void load()
-  else updateResetCountdown()
+  else updateActivityClock()
 }
 function refresh() {
   if (tab.value === 'leaderboard') { void publicResults.value?.refresh(); return }
@@ -220,7 +214,7 @@ let active = true, lastResetAttempt = 0, statusRequest = 0, recordsRequest = 0
 watch(tab, loadTab)
 watch(() => session.user?.id, () => { statusRequest++; status.value = null; loading.value = false; drawing.value = false; statusFailed.value = false; error.value = ''; pointDisplay.value = undefined; records.value = []; recordsRequest++; recordsLoading.value = false; recordsLoaded.value = false; recordsError.value = ''; nextCursor.value = null; result.value = null; pending.value = null; loadTab() })
 let resetTimer: ReturnType<typeof setInterval> | undefined
-function updateResetCountdown() {
+function updateActivityClock() {
   if (!active || document.visibilityState === 'hidden') return
   currentTime.value = Date.now()
   if (Number.isFinite(resetAt.value) && currentTime.value >= resetAt.value + 1000
@@ -233,18 +227,18 @@ function scheduleReset() {
   clearInterval(resetTimer)
   currentTime.value = Date.now()
   if (active && (Number.isFinite(resetAt.value) || records.value.some(record => record.prizes.some(award => award.expiresAt))
-    || result.value?.prizes.some(award => award.expiresAt))) resetTimer = setInterval(updateResetCountdown, 1000)
+    || result.value?.prizes.some(award => award.expiresAt))) resetTimer = setInterval(updateActivityClock, 1000)
 }
 onMounted(() => {
-  document.addEventListener('visibilitychange', updateResetCountdown)
-  window.addEventListener('focus', updateResetCountdown)
+  document.addEventListener('visibilitychange', updateActivityClock)
+  window.addEventListener('focus', updateActivityClock)
   loadTab()
 })
 onBeforeUnmount(() => {
   active = false
   clearInterval(resetTimer)
-  document.removeEventListener('visibilitychange', updateResetCountdown)
-  window.removeEventListener('focus', updateResetCountdown)
+  document.removeEventListener('visibilitychange', updateActivityClock)
+  window.removeEventListener('focus', updateActivityClock)
 })
 async function draw() {
   if (!session.user || drawDisabled.value) return
@@ -301,7 +295,7 @@ async function draw() {
       <p v-if="loading && status && tab === 'draw'" class="muted" role="status" aria-label="正在加载活动">正在更新活动…</p>
       <section v-if="status?.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
         <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
-        <p class="reset-countdown"><template v-if="resetSeconds !== null">距重置 <time role="timer" aria-label="每日奖池重置倒计时" aria-live="off" :datetime="`PT${resetSeconds}S`">{{ resetCountdown }}</time></template><span v-else>重置时间待核对</span></p>
+        <p class="reset-schedule"><strong>每天 00:00 统一重置</strong><span>北京时间 · 所有用户同步</span></p>
       </section>
       <div v-if="tab === 'draw' && status" class="activity-layout lottery-layout">
         <section class="panel-section draw-section" :class="`theme-${appearance.theme}`">
@@ -423,8 +417,8 @@ async function draw() {
 .daily-overview strong { font-size: 28px; line-height: 36px; font-weight: 600; }
 .daily-overview dd span, .daily-overview p { color: var(--muted); font-size: 12px; line-height: 20px; }
 .daily-overview p { margin: 0; }
-.reset-countdown { white-space: nowrap; }
-.reset-countdown time { display: inline-block; min-inline-size: 8ch; color: var(--ink); font-variant-numeric: tabular-nums; }
+.reset-schedule { display: grid; gap: 4px; }
+.reset-schedule strong { color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 500; }
 .reward-expiry { margin: var(--space-label) 0 0; color: var(--muted); font-size: var(--font-size-help); line-height: var(--line-height-help); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .lottery-layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--space-section) var(--space-page); padding-top: var(--space-section); align-items: start; }
 .lottery-layout > .panel-section { padding: 0; border: 0; border-radius: 0; background: transparent; }
