@@ -159,7 +159,7 @@ for (const mode of ['light', 'dark']) {
     await expect(rail.getByRole('link', { name: '账号设置', exact: true })).toHaveAttribute('aria-current', 'page')
     await theme.click()
     const nextMode = mode === 'dark' ? 'light' : 'dark'
-    await expect(page).toHaveURL('http://localhost:18775/account')
+    await expect(page).toHaveURL(/\/account$/)
     await expect(page.locator('html')).toHaveAttribute('data-color-scheme', nextMode)
     await expect(page.locator('html')).toHaveAttribute('data-theme', nextMode === 'dark' ? 'jade' : 'paper')
     const reverseToggle = rail.getByRole('button', { name: mode === 'dark' ? '切换到暗色模式' : '切换到明亮模式', exact: true })
@@ -186,7 +186,8 @@ test('guest theme shortcut overrides automatic modes without leaving discovery',
     await page.locator('.rail-theme').focus()
     await page.keyboard.press('Space')
     await expect(page.locator('html')).toHaveAttribute('data-color-scheme', next)
-    await expect(page).toHaveURL('http://localhost:18775/discover')
+    await expect(page).toHaveURL(/\/discover$/)
+    await expect(page.locator('html')).not.toHaveClass(/theme-reveal/)
     expect(await page.evaluate(() => window.communityAppearance.settings.mode)).toBe(next)
   }
 })
@@ -267,7 +268,7 @@ test.describe('touchscreen sidebar', () => {
     expect((await expand.boundingBox())!.width).toBe(44)
     await expand.tap()
     await expect(page.getByRole('button', { name: '收起侧栏', exact: true })).toBeFocused()
-    await expect(page).toHaveURL('http://localhost:18775/community')
+    await expect(page).toHaveURL(/\/community$/)
   })
 })
 
@@ -297,7 +298,7 @@ for (const mode of ['light', 'dark'] as const) {
     await brand.focus()
     await expect(expandIcon).toHaveCSS('opacity', '1')
     await page.keyboard.press('Enter')
-    await expect(page).toHaveURL('http://localhost:18775/discover')
+    await expect(page).toHaveURL(/\/discover$/)
     const collapse = rail.getByRole('button', { name: '收起侧栏', exact: true })
     await expect(collapse).toBeFocused()
     await expect(collapse).toHaveAttribute('aria-expanded', 'true')

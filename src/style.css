@@ -72,6 +72,13 @@
 * { box-sizing: border-box; }
 html { scrollbar-gutter: stable; scroll-padding-top: calc(var(--header-height) + 16px); scroll-padding-bottom: calc(var(--mobile-nav-height) + 16px); }
 html:has(.studio-shell) { scrollbar-gutter: auto; }
+html.theme-reveal *, html.theme-reveal *::before, html.theme-reveal *::after { transition: none !important; }
+html.theme-reveal::view-transition-group(root) { animation: none; }
+html.theme-reveal::view-transition-old(root), html.theme-reveal::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+html.theme-reveal::view-transition-old(root) { z-index: 1; }
+html.theme-reveal::view-transition-new(root) { z-index: 2; }
+html.theme-reveal-dark::view-transition-old(root) { z-index: 2; }
+html.theme-reveal-dark::view-transition-new(root) { z-index: 1; }
 body { margin: 0; min-width: min(320px, 100%); }
 button, input, textarea, select { font: inherit; color: inherit; letter-spacing: 0; }
 button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }

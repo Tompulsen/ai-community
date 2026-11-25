@@ -29,9 +29,43 @@ const mobileCommunity = computed(() => communityShell.value && !wideViewport.val
 const railExpanded = ref(false)
 const railHint = ref<{ label: string; top: number } | null>(null)
 const themeToggleLabel = computed(() => themeState.value.current === 'dark' ? '切换到明亮模式' : '切换到暗色模式')
-function toggleTheme() {
+let themeSwitching = false
+async function toggleTheme(event: MouseEvent) {
+  if (themeSwitching) return
   railHint.value = null
-  appearance.set({ mode: themeState.value.current === 'dark' ? 'light' : 'dark' })
+  const mode = themeState.value.current === 'dark' ? 'light' : 'dark'
+  if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    appearance.set({ mode }); return
+  }
+  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2
+  const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y))
+  const root = document.documentElement
+  themeSwitching = true
+  let transition: ViewTransition | undefined
+  let animation: Animation | undefined
+  try {
+    await nextTick()
+    root.classList.add('theme-reveal')
+    root.classList.toggle('theme-reveal-dark', mode === 'dark')
+    transition = document.startViewTransition(async () => { appearance.set({ mode }); await nextTick() })
+    await transition.ready
+    const clipPath = [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`]
+    animation = root.animate({ clipPath: mode === 'dark' ? clipPath.reverse() : clipPath }, {
+      duration: 500, easing: 'cubic-bezier(.22, 1, .36, 1)', fill: 'forwards',
+      pseudoElement: mode === 'dark' ? '::view-transition-old(root)' : '::view-transition-new(root)',
+    })
+    await animation.finished
+  } catch {
+    // A skipped snapshot must still apply the selected theme.
+    if (!transition) appearance.set({ mode })
+    transition?.skipTransition()
+  } finally {
+    await transition?.finished.catch(() => {})
+    animation?.cancel()
+    root.classList.remove('theme-reveal', 'theme-reveal-dark')
+    themeSwitching = false
+  }
 }
 async function toggleRail() {
   railHint.value = null
