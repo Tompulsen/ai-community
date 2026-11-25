@@ -159,6 +159,7 @@ test('rankings stay cached across draws until explicitly refreshed and preserve 
   const readsBeforeDraw = state.publicReads
   await page.locator('.draw-console > .button').click()
   await expect(page.locator('.draw-result')).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', { name: '知道了' }).click()
   await page.getByRole('button', { name: '排行榜', exact: true }).click()
   expect(state.publicReads).toBe(readsBeforeDraw)
   await page.getByRole('button', { name: '刷新排行榜' }).click()

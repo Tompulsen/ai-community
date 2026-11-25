@@ -47,6 +47,22 @@ it('shares one read and displays the authoritative amount without quota conversi
   expect(accountBalance.currency).toBe('USD')
 })
 
+it('a fresh read after a reward ignores any older in-flight balance', async () => {
+  const { session } = await import('./state')
+  const { accountBalance, refreshAccountBalance } = await import('./account-balance')
+  session.user = { ...user }
+  let resolve!: (value: Response) => void
+  fetchMock.mockReturnValueOnce(new Promise<Response>(done => { resolve = done }))
+  const old = refreshAccountBalance()
+  fetchMock.mockResolvedValueOnce(response(15))
+  await refreshAccountBalance(true)
+  expect(accountBalance.amount).toBe(15)
+  resolve(response(12))
+  await old
+  expect(accountBalance.amount).toBe(15)
+  expect(accountBalance.loading).toBe(false)
+})
+
 it('clears on identity changes and ignores delayed responses from the previous account', async () => {
   const { session } = await import('./state')
   const { accountBalance, refreshAccountBalance } = await import('./account-balance')

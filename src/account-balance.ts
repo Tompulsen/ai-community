@@ -20,14 +20,16 @@ watch(identity, () => {
   Object.assign(accountBalance, { amount: null, currency: '', points: null, loading: false, error: '' })
 }, { flush: 'sync' })
 
-export function refreshAccountBalance(): Promise<void> {
+export function refreshAccountBalance(fresh = false): Promise<void> {
   if (!session.user) return Promise.resolve()
+  // A receipt confirmed after an earlier wallet request needs its own fresh read.
+  if (fresh) { revision++; pending = undefined }
   if (pending) return pending
   const current = revision, owner = identity(), subject = session.user.accountId || session.user.id
   accountBalance.loading = true
   pending = (async () => {
     try {
-      const result = await api<{ linked: boolean; subject: string | null; balance: number | null; currencySymbol?: string; walletEnabled?: boolean; points?: unknown }>('/api/account', { expectedAccount: subject })
+      const result = await api<{ linked: boolean; subject: string | null; balance: number | null; currencySymbol?: string; walletEnabled?: boolean; points?: unknown }>('/api/account', { expectedAccount: subject, signal: AbortSignal.timeout(15000) })
       if (current !== revision || owner !== identity()) return
       if (!result.linked || result.subject !== subject) throw new Error('可用余额暂不可用')
       if (result.walletEnabled) {

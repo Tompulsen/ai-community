@@ -7,8 +7,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { Gift, RefreshCw } from '@lucide/vue'
 import '../welfare-tokens.css'
-import { api, errorMessage, loadSession, notify, queryString, session } from '../state'
+import { api, errorMessage, loadSession, queryString, session } from '../state'
 import WelfareTasks from '../components/WelfareTasks.vue'
+import LotteryFeedbackDialog, { type LotteryAward as Award, type LotteryDraw as Draw, type LotteryNotice } from '../components/LotteryFeedbackDialog.vue'
 import { isClownPrize } from '../../shared/lottery-public'
 import { refreshLotteryBalance, updateLotteryBalance } from '../lottery-balance'
 import { useRoute } from 'vue-router'
@@ -16,8 +17,6 @@ import { formatPoints } from '../../shared/studio/community-wallet'
 
 interface Rule { enabled: boolean; threshold: number; tickets: number }
 interface Prize { id: string; name: string; description: string; amountCents: number; kind: 'balance' | 'empty'; weight: number; stock: number; enabled: boolean; dailyQuota?: number }
-interface Award { prizeId: string; name: string; description: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note?: string; legacyPoints?: string | null; rewardKind?: 'charity'; validityHours?: number; points?: string | null; expiresAt?: number | null }
-interface Draw { id: string; createdAt: string; prizes: Award[] }
 interface PendingDraw { requestId: string; count: 1 | 3 | 5 }
 interface LotteryStatus {
   settings: { enabled: boolean; minSupportCnyFen: number; rewardValidityHours?: number; prizes: Prize[]; invites: Rule; followers: Rule; likes: Rule; likesMode: string; wheel: { theme: 'teal' | 'violet' | 'sunset'; title: string; subtitle: string; buttonText: string; rulesText: string } }
@@ -40,6 +39,9 @@ const recordsError = ref('')
 const refreshLabel = computed(() => tab.value === 'leaderboard' ? '刷新排行榜' : tab.value === 'records' ? '刷新奖励记录' : '刷新活动')
 const refreshing = computed(() => tab.value === 'leaderboard' ? publicResults.value?.loading : tab.value === 'records' ? recordsLoading.value : loading.value || drawing.value)
 const statusFailed = ref(false)
+const feedback = ref<'result' | 'blocked' | null>(null)
+const serverNotice = ref<LotteryNotice | null>(null)
+const identity = () => `${session.user?.id || ''}:${session.user?.accountId || session.user?.id || ''}`
 const pointDisplay = ref<{ currencySymbol?: string; pointsPerUsd?: number }>()
 function rewardAmount(value: Prize | Award) {
   const charity = !('status' in value) || value.rewardKind === 'charity'
@@ -94,18 +96,52 @@ const participationStatus = computed(() => {
 })
 const supportRequirement = computed(() => {
   const minimum = status.value?.settings.minSupportCnyFen ?? 0
-  return `累计支持 ${minimum ? '≥' : '>'} ✦${(minimum / 100).toFixed(2)}`
+  return `累计支持 ${minimum ? '≥' : '>'} ¥${(minimum / 100).toFixed(2)}`
 })
 const supportAmount = computed(() => {
   if (!supportChecked.value) return '待核验'
   const amount = status.value?.support.amountCnyFen
   if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) return '待核验'
-  if (amount === 0 && supportEligible.value && !status.value?.settings.minSupportCnyFen) return '小于 ✦0.01'
-  return `✦${(amount / 100).toFixed(2)}`
+  if (amount === 0 && supportEligible.value && !status.value?.settings.minSupportCnyFen) return '小于 ¥0.01'
+  return `¥${(amount / 100).toFixed(2)}`
 })
 const availablePrizes = computed(() => status.value?.settings.prizes.filter(prize => prize.enabled && prize.weight > 0 && prize.stock !== 0) || [])
 const totalWeight = computed(() => availablePrizes.value.reduce((sum, prize) => sum + prize.weight, 0))
-const drawDisabled = computed(() => drawing.value || loading.value || (!pending.value && (statusFailed.value || !status.value?.settings.enabled || !status.value.accountLinked || !status.value.creditReady || !supportEligible.value || status.value.balance < count.value || !availablePrizes.value.length || Boolean(status.value.daily && (status.value.daily.participated || !status.value.daily.remaining)))))
+const drawDisabled = computed(() => drawing.value || loading.value)
+const drawBlocker = computed<LotteryNotice | null>(() => {
+  if (pending.value) return null
+  const value = status.value
+  const unavailable: LotteryNotice = { title: '暂时无法参与抽奖', message: participationStatus.value, action: 'refresh' }
+  if (statusFailed.value || !value?.settings.enabled) return unavailable
+  if (!value.accountLinked) return { title: '请先连接章鱼账号', message: '连接账号后可核验参与资格，并将中奖积分发放至你的积分账户。', action: 'account' }
+  if (value.daily && Number.isFinite(resetAt.value) && currentTime.value >= resetAt.value) return {
+    title: '请更新今日参与资格', message: '已到北京时间的每日重置时间，请重新核验今日资格与剩余名额。', action: 'refresh',
+  }
+  if (value.daily && (value.daily.participated || !value.daily.remaining)) return {
+    title: value.daily.participated ? '今日已完成抽奖' : '今日名额已领完',
+    message: value.daily.participated ? '每人每天限抽 1 次，今天已经参与。请在下次开放后再来试试手气。' : '今日奖池名额已经领完，新的每日名额开放后可再来参与。',
+    resetsAt: value.daily.resetsAt,
+  }
+  if (!availablePrizes.value.length || !supportChecked.value) return unavailable
+  if (!supportEligible.value) {
+    const minimum = value.settings.minSupportCnyFen, amount = value.support.amountCnyFen
+    return {
+      title: '解锁长期抽奖福利',
+      message: minimum ? `累计支持社区满 ¥${(minimum / 100).toFixed(2)}，即可满足抽奖的支持条件。` : '支持社区任意正金额，即可满足抽奖的支持条件。',
+      supportAmount: supportAmount.value,
+      shortfall: typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0 && minimum > amount ? `¥${((minimum - amount) / 100).toFixed(2)}` : undefined,
+      action: 'support',
+    }
+  }
+  if (!value.creditReady) return unavailable
+  if (value.balance < count.value) return { title: '抽奖机会不足', message: `本次需要 ${count.value} 次抽奖机会，完成任务或邀请朋友即可获取。`, action: 'tasks' }
+  return null
+})
+const feedbackNotice = computed<LotteryNotice>(() => drawBlocker.value || serverNotice.value || {
+  title: '已满足参与条件', message: '参与资格已更新，关闭提示后点击抽奖即可参与。',
+})
+async function refreshFeedback() { serverNotice.value = null; await load() }
+function feedbackTab(value: string) { feedback.value = null; tab.value = value }
 const wheelSlots = computed(() => {
   const prizes = [...(status.value?.settings.prizes || [])]
   const winner = result.value?.prizes.at(-1)
@@ -133,8 +169,8 @@ function drawMessage(cause: unknown) {
 }
 async function loadRecords(append = false) {
   if (!session.user || recordsLoading.value) return
-  const owner = session.user.id, request = ++recordsRequest
-  const current = () => active && request === recordsRequest && session.user?.id === owner
+  const owner = identity(), request = ++recordsRequest
+  const current = () => active && request === recordsRequest && identity() === owner
   recordsLoading.value = true
   try {
     const data = await api<{ items: Draw[]; nextCursor: string | null }>(`/api/lottery/records${queryString({ cursor: append ? nextCursor.value || undefined : undefined })}`)
@@ -162,32 +198,32 @@ async function load() {
   loading.value = true; error.value = ''
   await loadSession()
   if (!active || request !== statusRequest) return
-  const owner = session.user?.id
-  const current = () => active && request === statusRequest && owner === session.user?.id
+  const owner = identity()
+  const current = () => active && request === statusRequest && owner === identity()
   try {
     if (!pointDisplay.value) void loadPointDisplay()
     const lottery = await api<LotteryStatus>('/api/lottery/status')
     if (!current()) return
     status.value = lottery; statusFailed.value = false; if (lottery.daily) count.value = 1
-    if (owner) updateLotteryBalance(owner, lottery.balance)
+    if (session.user) updateLotteryBalance(session.user.id, lottery.balance)
     restorePending(); scheduleReset()
   }
   catch (cause) { if (current()) { statusFailed.value = true; error.value = drawMessage(cause) } }
   finally { if (current()) loading.value = false }
 }
 async function loadPointDisplay() {
-  const owner = session.user?.id
+  const owner = identity()
   try {
     const value = await api<{ success: boolean; data: { currencySymbol?: string; pointsPerUsd?: number } }>('/api/new-api/status')
-    if (active && owner === session.user?.id && value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data
+    if (active && owner === identity() && value.success && typeof value.data?.currencySymbol === 'string') pointDisplay.value = value.data
   } catch { /* Prize amounts stay unverified when conversion settings are unavailable. */ }
 }
 function readRecords(append = false) {
   if (!session.user || recordsLoading.value) return
-  const owner = session.user.id, request = recordsRequest + 1
+  const owner = identity(), request = recordsRequest + 1
   recordsError.value = ''
   void loadRecords(append).catch(cause => {
-    if (active && owner === session.user?.id && request === recordsRequest) recordsError.value = `奖励记录读取失败：${drawMessage(cause)}`
+    if (active && owner === identity() && request === recordsRequest) recordsError.value = `奖励记录读取失败：${drawMessage(cause)}`
   })
 }
 function loadTab() {
@@ -210,9 +246,9 @@ function refresh() {
   void load()
   if (tab.value === 'tasks') void tasks.value?.refresh()
 }
-let active = true, lastResetAttempt = 0, statusRequest = 0, recordsRequest = 0
+let active = true, lastResetAttempt = 0, statusRequest = 0, recordsRequest = 0, drawRevision = 0
 watch(tab, loadTab)
-watch(() => session.user?.id, () => { statusRequest++; status.value = null; loading.value = false; drawing.value = false; statusFailed.value = false; error.value = ''; pointDisplay.value = undefined; records.value = []; recordsRequest++; recordsLoading.value = false; recordsLoaded.value = false; recordsError.value = ''; nextCursor.value = null; result.value = null; pending.value = null; loadTab() })
+watch(identity, () => { drawRevision++; feedback.value = null; serverNotice.value = null; statusRequest++; status.value = null; loading.value = false; drawing.value = false; statusFailed.value = false; error.value = ''; pointDisplay.value = undefined; records.value = []; recordsRequest++; recordsLoading.value = false; recordsLoaded.value = false; recordsError.value = ''; nextCursor.value = null; result.value = null; pending.value = null; loadTab() }, { flush: 'sync' })
 let resetTimer: ReturnType<typeof setInterval> | undefined
 function updateActivityClock() {
   if (!active || document.visibilityState === 'hidden') return
@@ -235,13 +271,22 @@ onMounted(() => {
   loadTab()
 })
 onBeforeUnmount(() => {
-  active = false
+  active = false; drawRevision++
   clearInterval(resetTimer)
   document.removeEventListener('visibilitychange', updateActivityClock)
   window.removeEventListener('focus', updateActivityClock)
 })
 async function draw() {
   if (!session.user || drawDisabled.value) return
+  const owner = identity(), request = ++drawRevision
+  const current = () => active && owner === identity() && request === drawRevision
+  serverNotice.value = null
+  if (!pending.value && Number.isFinite(resetAt.value) && Date.now() >= resetAt.value) {
+    await load()
+    if (current()) feedback.value = 'blocked'
+    return
+  }
+  if (drawBlocker.value) { feedback.value = 'blocked'; return }
   const storageKey = drawStorageKey.value
   if (!pending.value) {
     const value: PendingDraw = { requestId: crypto.randomUUID(), count: count.value }
@@ -251,8 +296,6 @@ async function draw() {
   }
   drawing.value = true; error.value = ''
   let receipt: Draw
-  const owner = session.user.id
-  const current = () => active && owner === session.user?.id
   try { receipt = await api<Draw>('/api/lottery/draw', { method: 'POST', body: pending.value }) }
   catch (cause) {
     if (!current()) return
@@ -265,7 +308,9 @@ async function draw() {
       await load()
     } else void refreshLotteryBalance(true)
     if (!current()) return
-    error.value = drawMessage(cause); drawing.value = false; return
+    error.value = drawMessage(cause); drawing.value = false
+    if (!pending.value) { serverNotice.value = { title: '本次暂未抽奖', message: error.value, action: 'refresh' }; feedback.value = 'blocked' }
+    return
   }
   if (!current()) return
   result.value = receipt; pending.value = null; drawing.value = false
@@ -278,7 +323,7 @@ async function draw() {
     const target = (360 - index * 360 / wheelSlots.value.length) % 360
     wheelRotation.value += 1440 + (target - wheelRotation.value % 360 + 360) % 360
   }
-  notify('抽奖结果已记录。')
+  feedback.value = 'result'
   void load()
 }
 
@@ -396,6 +441,9 @@ async function draw() {
       </section>
     </template>
     <LotteryPublicResults v-if="leaderboardOpened" v-show="tab === 'leaderboard'" ref="publicResults" />
+    <LotteryFeedbackDialog v-if="feedback" :draw="feedback === 'result' ? result : null" :notice="feedbackNotice"
+      :chances="status?.balance ?? 0" :refreshing="loading" :reward-amount="rewardAmount" :reward-expiry="rewardExpiry"
+      @close="feedback = null" @refresh="refreshFeedback" @records="feedbackTab('records')" @tasks="feedbackTab('tasks')" @update="result = $event" />
   </div>
 </template>
 
