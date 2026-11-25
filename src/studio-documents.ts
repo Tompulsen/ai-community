@@ -97,14 +97,15 @@ export async function recoverDocumentContent(task: ChatDocumentTask, publish: ()
 }
 export function documentContentIssue(task: ChatDocumentTask): string | undefined {
   if (task.plan || task.clarification || task.job) return
-  if (task.modelContentError) return task.modelContentError
   const modelTask = creation.tasks.find(item => item.id === task.modelTaskId && item.owner === session.user?.id)
+  if (modelTask?.phase === 'complete') {
+    try { parseDocumentResponse(modelTask.text); return }
+    catch (error) { if (error instanceof DocumentResponseError) return error.message }
+  }
+  if (task.modelContentError) return task.modelContentError
   if (!modelTask && /Unterminated|Unexpected (?:end|token|non-whitespace)|JSON at position|not valid JSON/i.test(task.error || ''))
     return '模型返回的文档内容不完整或格式有误，尚未制作文件。请调整要求后重新生成。'
   if (modelTask?.phase === 'error') return modelTask.error || '原模型请求已失败，请调整要求后重新生成。'
-  if (modelTask?.phase !== 'complete') return
-  try { parseDocumentResponse(modelTask.text) }
-  catch (error) { if (error instanceof DocumentResponseError) return error.message }
 }
 export async function runDocumentGeneration(options: {
   chat: NativeChat; result: NativeMessage; task: ChatDocumentTask; files: ParsedFile[]; history: NativeMessage[];

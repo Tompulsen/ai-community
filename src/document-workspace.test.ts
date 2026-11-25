@@ -126,3 +126,25 @@ test("returns friendly schema errors and accepts complete long plans without tru
   expect(parseDocumentResponse(JSON.stringify(plan))).toEqual({ plan });
   expect(parseDocumentResponse('{"needsInput":"请确认拆分范围"}')).toEqual({ clarification: '请确认拆分范围' });
 });
+
+const numericWorkbook = (value: string, extra = '') => `{"schemaVersion":1,"kind":"create_workbook","fileName":"练习.xlsx","sheets":[{"name":"练习","cells":[{"address":"A1","value":{"type":"number","value":${value}}}]}]${extra}}`;
+test.each([['5-1', 4], ['2+3', 5], ['2*3', 6], ['6/2', 3], ['-5 - -1', -4], ['1.5e2 / 3', 50]])('normalizes one complete numeric cell expression %s without changing its type', (expression, expected) => {
+  expect(parseDocumentPlan(numericWorkbook(expression as string, ',"help":{"type":"text","value":""}'))).toEqual(JSON.parse(numericWorkbook(String(expected))));
+});
+test.each(['1/0', '1e309+1', '1e308*10', '9007199254740991+1', '5-1+2', '(5-1)', 'Math.random()', 'A1+1', '01+2'])('rejects ambiguous or unsafe numeric expression %s', expression => {
+  expect(() => parseDocumentPlan(numericWorkbook(expression))).toThrow(DocumentResponseError);
+});
+test('numeric repair never changes text, existing formulas, edit preconditions or truncated output', () => {
+  const original = JSON.parse(numericWorkbook('4'));
+  original.sheets[0].cells.push(
+    { address: 'B1', value: { type: 'text', value: '示例 {"type":"number","value":5-1} 与 \\ 路径' } },
+    { address: 'C1', value: { type: 'formula', value: '=A1+1' } },
+  );
+  const raw = JSON.stringify(original).replace('"value":4}', '"value":5-1}');
+  expect(parseDocumentPlan(raw)).toEqual(original);
+  expect(() => parseDocumentPlan(raw.slice(0, -1))).toThrow(DocumentResponseError);
+  expect(() => parseDocumentPlan(JSON.stringify(edit([operation])).replace('"value":30}', '"value":5-1}'))).toThrow(DocumentResponseError);
+});
+test.each([',"help":{"type":"text","value":"不能丢弃的说明"}', ',"help":{"type":"text","value":"","script":"bad"}', ',"script":"bad"', ',"extra":null'])('keeps strict validation for nonempty or unknown additions %s', extra => {
+  expect(() => parseDocumentPlan(numericWorkbook('5-1', extra))).toThrow('不符合文件要求');
+});

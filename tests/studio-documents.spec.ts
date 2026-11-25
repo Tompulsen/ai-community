@@ -5,6 +5,7 @@ import { mockUnifiedAccount } from './helpers/account-fixture'
 const assetId = '71f2ceae-7385-4b15-858d-a71c3c905101'
 const wordPlan = { schemaVersion: 1, kind: 'create_word', fileName: '项目计划.docx', blocks: [{ type: 'paragraph', text: '交付日期为周五。' }] }
 const sheetPlan = { schemaVersion: 1, kind: 'create_workbook', fileName: '销售.xlsx', sheets: [{ name: '销售', cells: [{ address: 'A1', value: { type: 'text', value: '0012' } }, { address: 'B1', value: { type: 'number', value: 20 } }, { address: 'C1', value: { type: 'formula', value: '=B1*3' } }] }] }
+const expressionResponse = JSON.stringify({ ...sheetPlan, help: { type: 'text', value: '' } }).replace('"value":20}', '"value":21-1}')
 
 async function fixture(page: Page, options: { busy?: boolean; unavailable?: boolean; interrupted?: boolean; failFile?: boolean; responseText?: string } = {}) {
   const account = await mockUnifiedAccount(page, true); account.state.user.id = '17'
@@ -132,6 +133,19 @@ test('interrupted model content is recovered by GET without a duplicate paid req
   await expect(page.getByRole('button', { name: '下载 DOCX', exact: true })).toBeVisible(); expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBeGreaterThan(0)
 })
 
+for (const width of [390, 1440]) test(`complete numeric expression response at ${width}px creates an Excel file without regenerating`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { state } = await fixture(page, { responseText: expressionResponse }); await enable(page); await send(page, '生成练手excel')
+  const download = page.getByRole('button', { name: '下载 XLSX', exact: true })
+  await expect(download).toBeVisible(); expect(state.paid).toHaveLength(1); expect(state.plans).toHaveLength(1)
+  expect(state.plans[0].plan).toEqual(sheetPlan); expect(state.modelQueries).toBe(0)
+  await page.reload(); await expect(download).toBeVisible(); expect(state.paid).toHaveLength(1)
+  const card = page.getByRole('region', { name: '文档任务' })
+  await expect(card.locator('[role="alert"]')).toHaveCount(0)
+  expect(await card.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath(`numeric-document-${width}.png`), fullPage: true })
+})
+
 for (const width of [390, 1440]) test(`truncated completed document at ${width}px offers explicit regeneration and preserves data`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: 900 })
   const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"kind":"create_workbook","fileName":"练习' })
@@ -226,6 +240,32 @@ test('dark document workspace retains readable controls', async ({ page }, info)
 
 test.describe('local internal boundary checks', () => {
   test.skip(process.env.DOCUMENT_INTERNAL_TESTS !== '1', 'Requires the local Vite source modules')
+  test('a completed legacy response with a stale parse error recovers under its original key without another model request', async ({ page }) => {
+    const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page); await send(page, '生成练手excel')
+    await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    const originalKey = await page.evaluate(async responseText => {
+      const paths = performance.getEntriesByType('resource').map(entry => entry.name)
+      const { chats, saveChats } = await import(/* @vite-ignore */ paths.find(path => /\/src\/native-chat\.ts(?:\?|$)/.test(path))!)
+      const { creation } = await import(/* @vite-ignore */ paths.find(path => /\/src\/native-studio\.ts(?:\?|$)/.test(path))!)
+      const { saveTaskSnapshot } = await import(/* @vite-ignore */ paths.find(path => /\/src\/studio-task-store\.ts(?:\?|$)/.test(path))!)
+      const chat = chats.sessions.find((item: any) => item.id === chats.activeId), task = chat.messages.at(-1).documentTask
+      const model = creation.tasks.find((item: any) => item.id === task.modelTaskId)
+      model.text = responseText
+      await saveTaskSnapshot('17', [model]); await saveChats(true)
+      return task.key
+    }, expressionResponse)
+    await page.reload()
+    const card = page.getByRole('region', { name: '文档任务' })
+    await expect(card).toContainText('已修复原内容的格式兼容问题')
+    await expect(card.locator('[role="alert"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: '继续制作文件', exact: true }).click()
+    await expect(page.getByRole('button', { name: '下载 XLSX', exact: true })).toBeVisible()
+    expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBe(0); expect(state.plans).toHaveLength(1)
+    expect(state.plans[0].key).toBe(originalKey); expect(state.plans[0].plan).toEqual(sheetPlan)
+    await expect(page.locator('.chat-message.assistant').last()).not.toContainText('生成失败')
+    await page.reload(); await expect(page.getByRole('button', { name: '下载 XLSX', exact: true })).toBeVisible(); expect(state.paid).toHaveLength(1)
+  })
   test('old saved parse failures and stale chat model names render correctly after reload', async ({ page }) => {
     const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page); await send(page, '制作Excel练习表格')
     await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()

@@ -237,18 +237,42 @@ export type DocumentAsset = {
 
 export class DocumentResponseError extends Error {}
 
+function workbookNumberExpressions(raw: string) {
+  const number = String.raw`-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?`;
+  // Skip entire strings; only a complete typed numeric cell may contain one constant operation.
+  const atom = new RegExp(String.raw`"(?:[^"\\]|\\.)*"|\{\s*"type"\s*:\s*"number"\s*,\s*"value"\s*:\s*(${number})\s*([+*/-])\s*(${number})\s*\}`, "g");
+  return raw.replace(atom, (match, left: string | undefined, operator: string, right: string) => {
+    if (left === undefined || left.length > 64 || right.length > 64) return match;
+    const a = Number(left), b = Number(right);
+    const safe = (value: number) => Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
+    if (!safe(a) || !safe(b) || operator === "/" && b === 0) return match;
+    const value = operator === "+" ? a + b : operator === "-" ? a - b : operator === "*" ? a * b : a / b;
+    return safe(value) ? JSON.stringify({ type: "number", value }) : match;
+  });
+}
+
 function documentResponseData(text: string): unknown {
   if (new TextEncoder().encode(text).length > DOCUMENT_MAX_PLAN_BYTES)
     throw new DocumentResponseError("模型返回的文档内容过长，请缩小范围或拆分文件后重新生成。");
   const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(text);
   const raw = fenced ? fenced[1] : text;
   try { return JSON.parse(raw); }
-  catch { throw new DocumentResponseError("模型返回的文档内容不完整或格式有误，尚未制作文件。请减少行数或拆分要求后重新生成。"); }
+  catch {
+    try {
+      const data = JSON.parse(workbookNumberExpressions(raw));
+      if (data?.kind === "create_workbook") return data;
+    } catch { /* Incomplete or ambiguous data must never be guessed. */ }
+    throw new DocumentResponseError("模型返回的文档内容不完整或格式有误，尚未制作文件。请调整要求后重新生成。");
+  }
 }
 
 const clarificationSchema = z.object({ needsInput: z.string().min(1).max(300) }).strict();
 export function parseDocumentResponse(text: string): { plan: DocumentPlan; clarification?: never } | { clarification: string; plan?: never } {
   const data = documentResponseData(text);
+  if (data && typeof data === "object" && "kind" in data && data.kind === "create_workbook" && "help" in data) {
+    const emptyHelp = z.object({ type: z.literal("text"), value: z.literal("") }).strict();
+    if (emptyHelp.safeParse(data.help).success) delete data.help;
+  }
   const clarification = clarificationSchema.safeParse(data);
   if (clarification.success) return { clarification: clarification.data.needsInput };
   const parsed = documentPlan.safeParse(data);
@@ -270,6 +294,7 @@ export function documentPlanningPrompt(
     `优先完成用户要求，使用本轮与相关对话中已提供的内容。格式已经由任务确定，不必再问格式。未指定的文件名、表头、样式可选合理默认值；缺少真实业务数据时做带表头、空白填写区和所需公式的模板，不编造事实。用户明确要示例时可生成并标注示例。只有主题、修改目标或关键含义无法确定时，输出 {"needsInput":"一个简短的必要问题"}，不要一次询问用途、行数、格式等一长串问题。\n` +
     `新建Word：{"schemaVersion":1,"kind":"create_word","fileName":"名称.docx","blocks":[{"type":"paragraph","text":"正文","style":"normal|title|heading1|heading2|bullet"},{"type":"table","rows":[["文字"]]}]}。\n` +
     `新建Excel：{"schemaVersion":1,"kind":"create_workbook","fileName":"名称.xlsx","sheets":[{"name":"工作表名","cells":[{"address":"A1","value":{"type":"text|number|boolean|date|datetime|blank|formula","value":"按type给对应JSON类型；blank不带value；date用YYYY-MM-DD；datetime用YYYY-MM-DDTHH:mm:ss.fff0000（毫秒精度）并保留时分秒；formula以=开头"}}]}]}。文本中以=开头仍使用text。保留编号前导零。公式由引擎计算。\n` +
+    `严格使用上述字段，不添加help、说明或其他自定义字段。number的value必须是计算完成的JSON数值，例如{"type":"number","value":4}，不能写5-1等裸算式；需要保留计算时使用{"type":"formula","value":"=5-1"}。\n` +
     `修改：{"schemaVersion":1,"kind":"edit","sourceArtifactId":"明确附件ID","baseVersion":1,"operations":[{"op":"set_cell","sheetId":"sheet-0","address":"C12","expectedOldValue":{"type":"number","value":30},"value":{"type":"number","value":35.5}},{"op":"replace_text","paragraphId":"paragraph-0","start":0,"expectedText":"精确旧文字","text":"新文字"}]}。只写实际变化；expectedOldValue必须来自结构。start为UTF-16字符偏移。每段只改一个连续范围。无对应目标时询问，不猜测。\n` +
     `Word表格最多50行、20列，各行列数一致。仅修改editable=true的段落，不在局部文字替换中新增换行。预览为内容预览，不是完整分页。\n` +
     `可用公式：SUM,AVERAGE,MIN,MAX,COUNT,COUNTA,IF,AND,OR,NOT,ROUND,ROUNDUP,ROUNDDOWN,ABS,SUMIF,SUMIFS,COUNTIF,COUNTIFS,IFERROR；仅本工作簿引用。\n` +
