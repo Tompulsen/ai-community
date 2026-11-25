@@ -2,14 +2,15 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { Download, FileText, FolderOpen, RefreshCw } from '@lucide/vue'
 import { saveChats as persistChats, type NativeChat, type NativeMessage } from '../native-chat'
-import { documentApi, documentScope, documentPending, documentPhases, downloadDocument, recoverDocumentContent, sourceFromJob, waitDocumentJob } from '../studio-documents'
+import { documentApi, documentScope, documentPending, documentPhases, documentContentIssue, downloadDocument, recoverDocumentContent, sourceFromJob, waitDocumentJob } from '../studio-documents'
 import { errorMessage } from '../state'
 import type { DocumentJob } from '../../shared/studio/document-workspace'
-import type { DocumentSource } from '../../shared/studio/document-chat'
+import type { ChatDocumentTask, DocumentSource } from '../../shared/studio/document-chat'
 const props = defineProps<{ chat: NativeChat; message: NativeMessage; disabled?: boolean }>()
-const emit = defineEmits<{ open: [source?: DocumentSource] }>()
+const emit = defineEmits<{ open: [source?: DocumentSource]; retry: [task: ChatDocumentTask] }>()
 const task = computed(() => props.message.documentTask!)
 const source = computed(() => task.value.job && sourceFromJob(task.value.job, task.value.request.format))
+const contentIssue = computed(() => documentContentIssue(task.value))
 const working = ref(false), issue = ref('')
 const lifetime = new AbortController()
 onBeforeUnmount(() => lifetime.abort())
@@ -38,15 +39,17 @@ async function perform(action: 'download' | 'recover' | 'refresh') {
 <template>
   <section class="document-result" aria-label="文档任务">
     <div class="document-result-heading"><span class="document-file-icon"><FileText :size="23" aria-hidden="true" /></span><div><strong>{{ source?.fileName || task.job?.fileName || (task.request.format === 'xlsx' ? 'Excel 表格' : 'Word 文档') }}</strong><p>{{ task.preparing ? '正在生成内容…' : task.job ? documentPhases[task.job.status] : task.clarification ? '请补充文件要求' : task.plan ? '内容已保存，可继续制作文件' : '文档任务' }}<template v-if="source"> · v{{ source.version }}</template></p></div></div>
-    <p v-if="task.error || issue" class="form-error" role="alert">{{ issue || task.error }}</p>
+    <p v-if="contentIssue || task.error || issue" class="form-error" role="alert">{{ issue || contentIssue || task.error }}</p>
     <div class="document-result-actions">
       <button v-if="source" type="button" :disabled="working" @click="perform('download')"><Download :size="16" aria-hidden="true" />下载 {{ task.request.format.toUpperCase() }}</button>
       <button v-if="source" type="button" :disabled="disabled" @click="emit('open', source)"><FolderOpen :size="16" aria-hidden="true" />预览 / 继续修改</button>
       <button v-else-if="documentPending(task.job) && !message.streaming" type="button" :disabled="working" @click="perform('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新任务</button>
+      <button v-else-if="contentIssue && !message.streaming && !task.preparing" type="button" :disabled="working || disabled" @click="emit('retry', task)"><RefreshCw :size="16" aria-hidden="true" />调整要求后重新生成</button>
       <button v-else-if="!task.preparing && !task.clarification && !message.streaming && (task.plan || task.modelTaskId)" type="button" :disabled="working" @click="perform('recover')"><RefreshCw :size="16" aria-hidden="true" />{{ working ? '正在恢复…' : task.plan ? '重试制作文件' : '恢复原模型请求' }}</button>
       <button v-for="candidate in task.candidates || []" :key="candidate.assetId" type="button" :disabled="disabled" @click="emit('open', candidate)">{{ candidate.fileName }}</button>
     </div>
-    <small v-if="!source && (task.plan || task.modelTaskId)">恢复沿用原请求与已保存内容，不会重新调用模型。</small>
+    <small v-if="contentIssue">原请求已结束，无法继续恢复。确认创建后会发起新请求，按当前模型计费。</small>
+    <small v-else-if="!source && (task.plan || task.modelTaskId)">恢复沿用原请求与已保存内容，不会重新调用模型。</small>
   </section>
 </template>
 <style scoped>

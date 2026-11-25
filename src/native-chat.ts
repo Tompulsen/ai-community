@@ -461,7 +461,7 @@ watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as Nativ
     if (task.phase === 'complete') message.interrupted = false
   }
 }, { deep: true })
-export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse; document?: { format: 'docx' | 'xlsx'; source?: DocumentSource } }): Promise<boolean> {
+export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse; document?: { format: 'docx' | 'xlsx'; source?: DocumentSource; reference?: DocumentSource } }): Promise<boolean> {
   if (conversationBusy(chat) || !owner() || !registeredChat(chat)) return false
   if (regenerate) {
     regenerate = chat.messages.find(message => message.id === regenerate!.id && message.role === 'user')
@@ -573,7 +573,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     if (documentIntent && result.documentTask) {
       const controller = new AbortController()
       toolControllers.set(runId, controller); result.streaming = true
-      await runDocumentGeneration({ chat, result, task: result.documentTask, files, history: history.slice(contextIndex || 0).filter(item => item.id !== user.id && item.id !== answer.id), source: documentIntent.source, attachment: documentIntent.attachment,
+      await runDocumentGeneration({ chat, result, task: result.documentTask, files, history: history.slice(contextIndex || 0).filter(item => item.id !== user.id && item.id !== answer.id), source: documentIntent.source || options?.document?.reference, attachment: documentIntent.attachment,
         modelRequest: { kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, sourceWorkId, skills: selectedSkills.filter(skill => skill.id.startsWith('work-')).map(({ id, sha256 }) => ({ id, sha256 })), prompt: text, size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [] } },
         prefix, signal: controller.signal, assertCurrent: () => { if (!current()) throw new Error('对话已切换，可在原会话恢复文档任务。') }, publish: () => saveChats(true) })
       chat.lastUpdate = Date.now()
@@ -680,7 +680,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     if (version === epoch && runs.has(runId)) {
       if (result.documentTask) { result.documentTask.error = errorMessage(error); result.content = '文档尚未完成，已保留原任务。' }
       result.error = errorMessage(error); result.interrupted = true
-      chats.error = errorMessage(error)
+      chats.error = result.documentTask ? '' : errorMessage(error)
       for (const tool of result.tools || []) if (tool.status === 'pending' || tool.status === 'running') { tool.status = 'stopped'; tool.error = '执行状态未确认，请核对原执行结果。' }
     }
   }

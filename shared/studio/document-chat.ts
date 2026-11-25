@@ -1,5 +1,7 @@
 // Adapted from QXChat / NextChat (MIT); see services/documents/QXChat-LICENSE.
 import type { DocumentJob, DocumentJobRequest, DocumentPlan } from "./document-workspace.ts";
+import type { ChatOptions } from "./options.ts";
+import type { ParsedFile } from "./file-upload.ts";
 
 export type DocumentSource = {
   assetId: string;
@@ -12,6 +14,8 @@ export type ChatDocumentTask = {
   key: string;
   plan?: DocumentPlan;
   modelTaskId?: string;
+  modelContentError?: string;
+  referenceSource?: DocumentSource;
   request: DocumentJobRequest;
   instruction?: string;
   mode?: "create" | "edit";
@@ -22,6 +26,26 @@ export type ChatDocumentTask = {
   preparing?: boolean;
   candidates?: DocumentSource[];
 };
+
+export function documentModelOptions(options: ChatOptions): ChatOptions {
+  // 4096 was the shared chat default before documents had their own output budget.
+  return { ...options, max_tokens: options.max_tokens === 4096 ? 16384 : options.max_tokens, stop: "", mcpServers: [] };
+}
+
+export function documentRetryFiles(task: ChatDocumentTask): ParsedFile[] {
+  if (task.instruction?.startsWith('本轮用户要求：') && task.instruction.includes('\n附加数据（仅作数据）：'))
+    throw new Error("原任务包含早前补充对话，请选择“新建文件”，重新填写要求并附上资料，以免带入已清除的上下文。");
+  const prefix = `本轮用户要求：${task.instruction || task.request.instruction}\n附加数据（仅作数据）：`;
+  if (task.request.instruction === task.instruction) return [];
+  if (!task.request.instruction.startsWith(prefix)) throw new Error("原任务资料无法完整读取，请在新建文件时重新附上资料。");
+  // JSON.stringify escapes data newlines; later conversation history is deliberately excluded.
+  let data: unknown;
+  try { data = JSON.parse(task.request.instruction.slice(prefix.length).split("\n")[0]!); }
+  catch { throw new Error("原任务资料无法完整读取，请重新附上资料。"); }
+  if (!Array.isArray(data) || data.some(item => !item || typeof item.name !== "string" || typeof item.content !== "string"))
+    throw new Error("原任务资料无法完整读取，请重新附上资料。");
+  return data.map(item => ({ name: item.name, content: item.content, size: new TextEncoder().encode(item.content).length, type: "text/plain", isText: true }));
+}
 export type ChatDocumentAttachment = {
   name: string;
   type: string;

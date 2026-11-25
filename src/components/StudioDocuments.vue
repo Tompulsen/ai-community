@@ -7,17 +7,19 @@ import { creation } from '../native-studio'
 import { confirmStudioDelete } from '../studio-confirm'
 import { documentApi, documentScope, documentPending, documentPhases, downloadDocument, sourceFromAsset, sourceFromJob, submitDocumentPlan, uploadDocument, waitDocumentJob, type CellValue, type DocumentCapabilities, type DocumentStructure } from '../studio-documents'
 import { documentPlan, type DocumentAsset, type DocumentJob } from '../../shared/studio/document-workspace'
-import type { ChatDocumentTask, DocumentSource } from '../../shared/studio/document-chat'
+import { documentRetryFiles, type ChatDocumentTask, type DocumentSource } from '../../shared/studio/document-chat'
+import type { ParsedFile } from '../../shared/studio/file-upload'
 import StudioDocumentPreview from './StudioDocumentPreview.vue'
 import { initializeBranches } from '../../shared/studio/chat-branches'
 
-const props = defineProps<{ chat: NativeChat; model: string; initialSource?: DocumentSource; disabled?: boolean }>()
+const props = defineProps<{ chat: NativeChat; model: string; initialSource?: DocumentSource; retryTask?: ChatDocumentTask; disabled?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>(), upload = ref<HTMLInputElement>()
 const available = ref<DocumentCapabilities>(), assets = ref<DocumentAsset[]>([]), jobs = ref<DocumentJob[]>([])
 const source = ref<DocumentSource>(), format = ref<'docx' | 'xlsx'>('docx'), instruction = ref(''), issue = ref(''), loading = ref(false), busy = ref(false)
 const structure = ref<DocumentStructure>(), versions = ref<DocumentAsset[]>([]), changes = ref<Record<string, unknown>[]>([]), showHistory = ref(false)
 const target = ref(''), editText = ref(''), valueType = ref<CellValue['type']>('text'), manualTask = ref<ChatDocumentTask>()
+const retryFiles = ref<ParsedFile[]>([]), reference = ref<DocumentSource>(), retryBlocked = ref(!!props.retryTask)
 const scope = documentScope(), sessionId = props.chat.id, lifetime = new AbortController()
 const current = () => !lifetime.signal.aborted && props.chat.id === sessionId
 const assertCurrent = () => { scope.assert(); if (!current()) throw new Error('文档工作区已关闭。') }
@@ -26,7 +28,7 @@ const targets = computed(() => structure.value?.format === 'docx'
   ? (structure.value.paragraphs || []).filter(item => item.editable && item.text).map(item => ({ key: item.id, label: item.text.slice(0, 80), value: { type: 'text', value: item.text } as CellValue, paragraphId: item.id, sheetId: '', address: '' }))
   : (structure.value?.sheets || []).flatMap(sheet => sheet.cells.map(cell => ({ key: `${sheet.id}:${cell.address}`, label: `${sheet.name} · ${cell.address}`, value: cell.value, paragraphId: '', sheetId: sheet.id, address: cell.address }))))
 function chooseTarget() { const item = targets.value.find(item => item.key === target.value); editText.value = String(item?.value.value ?? ''); valueType.value = item?.value.type || 'text' }
-function newFile() { source.value = undefined; structure.value = undefined; versions.value = []; changes.value = []; target.value = ''; showHistory.value = false; manualTask.value = undefined; issue.value = '' }
+function newFile() { source.value = undefined; reference.value = undefined; retryFiles.value = []; retryBlocked.value = false; structure.value = undefined; versions.value = []; changes.value = []; target.value = ''; showHistory.value = false; manualTask.value = undefined; issue.value = '' }
 async function refresh() {
   const results = await Promise.all([
     documentApi<DocumentCapabilities>(scope, 'capabilities', { signal: lifetime.signal }),
@@ -47,7 +49,7 @@ async function inspect(value: DocumentSource) {
     documentApi<{ versions: DocumentAsset[] }>(scope, `assets/${value.assetId}/versions`, { signal: lifetime.signal }),
     documentApi<Record<string, unknown>[]>(scope, `assets/${value.assetId}/${value.version}/changes`, { signal: lifetime.signal }),
   ])
-  assertCurrent(); source.value = value; format.value = value.format; structure.value = results[0]; versions.value = results[1].versions; changes.value = results[2]; target.value = ''; manualTask.value = undefined
+  assertCurrent(); source.value = value; reference.value = undefined; retryBlocked.value = false; format.value = value.format; structure.value = results[0]; versions.value = results[1].versions; changes.value = results[2]; target.value = ''; manualTask.value = undefined
 }
 function selectFile(event: Event) {
   const asset = assets.value.find(item => item.id === (event.target as HTMLSelectElement).value)
@@ -77,11 +79,11 @@ async function uploadFile(event: Event) {
 }
 function requireLatest() { if (source.value && versions.value[0]?.version !== source.value.version) throw new Error('请在历史版本中选择最新版本后继续修改。') }
 async function generate() {
-  if (blocked.value || !instruction.value.trim() || !props.model) return
+  if (blocked.value || retryBlocked.value || !instruction.value.trim() || !props.model) return
   await perform(async () => {
     requireLatest()
     props.chat.documentEnabled = true; await persistChats(true); assertCurrent()
-    await sendChat(props.chat, instruction.value, [], props.model, undefined, undefined, { document: { format: format.value, source: source.value } })
+    await sendChat(props.chat, instruction.value, retryFiles.value, props.model, undefined, undefined, { document: { format: format.value, source: source.value, reference: reference.value } })
     assertCurrent(); await refresh()
     const task = props.chat.messages.at(-1)?.documentTask, value = task?.job && sourceFromJob(task.job, task.request.format)
     if (value) { instruction.value = ''; await inspect(value) }
@@ -136,7 +138,22 @@ function close() { dialog.value?.close(); emit('close') }
 watch(() => session.user?.id, close)
 onMounted(async () => {
   await nextTick(); dialog.value?.showModal(); loading.value = true
-  try { await refresh(); if (props.initialSource) await inspect(props.initialSource) } catch (cause) { if (current()) issue.value = errorMessage(cause) } finally { loading.value = false }
+  try {
+    await refresh()
+    const task = props.retryTask
+    if (task) {
+      if (task.request.sessionId !== sessionId) throw new Error('请回到原聊天重新生成，或选择新建文件。')
+      retryFiles.value = documentRetryFiles(task)
+      instruction.value = task.instruction || task.request.instruction; format.value = task.request.format
+      if (task.request.sourceArtifactId && task.request.baseVersion) {
+        await inspect({ assetId: task.request.sourceArtifactId, version: task.request.baseVersion, format: task.request.format, fileName: task.referenceSource?.fileName || task.uploadJob?.fileName || '原文件', sessionId })
+      } else {
+        reference.value = task.referenceSource || (task.uploadJob && sourceFromJob(task.uploadJob, task.uploadJob.fileName?.endsWith('.xlsx') ? 'xlsx' : 'docx')) || undefined
+        if (reference.value) await documentApi(scope, `assets/${reference.value.assetId}/${reference.value.version}/structure`, { signal: lifetime.signal })
+        assertCurrent(); retryBlocked.value = false
+      }
+    } else if (props.initialSource) await inspect(props.initialSource)
+  } catch (cause) { if (current()) issue.value = errorMessage(cause) } finally { loading.value = false }
 })
 onBeforeUnmount(() => { lifetime.abort(); dialog.value?.close() })
 </script>
@@ -153,8 +170,9 @@ onBeforeUnmount(() => { lifetime.abort(); dialog.value?.close() })
         <label class="field"><span>选择文件</span><select :value="source?.assetId || ''" :disabled="blocked" @change="selectFile"><option value="">新建文件</option><option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.fileName }} · v{{ asset.version }}</option></select></label>
         <div class="document-format" role="group" aria-label="输出格式"><button type="button" :aria-pressed="format === 'docx'" :disabled="blocked || !!source || !available?.docx" @click="format = 'docx'"><FileText :size="20" aria-hidden="true" /><span>Word<small>DOCX 文档</small></span></button><button type="button" :aria-pressed="format === 'xlsx'" :disabled="blocked || !!source || !available?.xlsx" @click="format = 'xlsx'"><FileSpreadsheet :size="20" aria-hidden="true" /><span>Excel<small>XLSX 表格</small></span></button></div>
         <label class="field"><span>文件要求</span><textarea v-model="instruction" rows="4" maxlength="12000" :disabled="blocked" placeholder="例如：制作一份包含明细、汇总和公式的销售表；或将选中文档的付款期限改为 45 天。" /></label>
+        <p v-if="retryFiles.length || reference" class="document-note">已保留原任务资料：{{ [reference?.fileName, ...retryFiles.map(file => file.name)].filter(Boolean).join('、') }}。创建时会一并使用；选择“新建文件”可清除。</p>
         <p class="document-note">当前模型：{{ model || '请先选择文本模型' }}。AI 生成按现有积分规则计费；上传、手工修改和下载不调用模型。</p>
-        <button type="button" class="document-primary" :disabled="blocked || !instruction.trim() || !model || !available?.[format]" @click="generate"><LoaderCircle v-if="busy" :size="17" aria-hidden="true" />{{ busy ? '正在处理…' : source ? '生成修改版' : '创建文件' }}</button>
+        <button type="button" class="document-primary" :disabled="blocked || retryBlocked || !instruction.trim() || !model || !available?.[format]" @click="generate"><LoaderCircle v-if="busy" :size="17" aria-hidden="true" />{{ busy ? '正在处理…' : source ? '生成修改版' : '创建文件' }}</button>
         <p class="document-note">开启后也可在聊天中说“做一份销售表”。普通提问仍按聊天回答。</p>
       </section>
       <aside class="document-library"><div class="document-section-heading"><h3>我的文件 <span class="muted">{{ assets.length }}</span></h3><button type="button" class="icon-button" title="刷新文档列表" aria-label="刷新文档列表" :disabled="blocked" @click="perform(refresh)"><RefreshCw :size="17" /></button></div>

@@ -3,6 +3,9 @@ import {
   documentPlan,
   parseDocumentPlan,
   parseDocumentClarification,
+  parseDocumentResponse,
+  DocumentResponseError,
+  DOCUMENT_MAX_PLAN_BYTES,
   cellAddress,
   cellValue,
 } from "../shared/studio/document-workspace.ts";
@@ -106,3 +109,20 @@ test("rejects case-insensitive duplicate workbook sheets", () =>
       ],
     }).success,
   ).toBe(false));
+
+test.each(['{"schemaVersion":1,"fileName":"练习', '{"needsInput":"请提供', 'not JSON'])("incomplete output has an actionable error: %s", (value) => {
+  expect(() => parseDocumentResponse(value)).toThrow(DocumentResponseError);
+  expect(() => parseDocumentClarification(value)).toThrow('内容不完整或格式有误');
+});
+test("rejects oversized output before parsing even for clarification", () => {
+  const value = ' '.repeat(DOCUMENT_MAX_PLAN_BYTES + 1);
+  expect(() => parseDocumentResponse(value)).toThrow('内容过长');
+  expect(() => parseDocumentClarification(value)).toThrow('内容过长');
+});
+test("returns friendly schema errors and accepts complete long plans without truncating data", () => {
+  expect(() => parseDocumentResponse('{"schemaVersion":1,"kind":"create_workbook"}')).toThrow('不符合文件要求');
+  const plan = { schemaVersion: 1, kind: 'create_workbook', fileName: '练习.xlsx', sheets: [{ name: '练习', cells: Array.from({ length: 100 }, (_, i) => ({ address: `A${i+1}`, value: { type: 'text', value: `示例${i}` } })) }] };
+  expect(JSON.stringify(plan).length).toBeGreaterThan(4096);
+  expect(parseDocumentResponse(JSON.stringify(plan))).toEqual({ plan });
+  expect(parseDocumentResponse('{"needsInput":"请确认拆分范围"}')).toEqual({ clarification: '请确认拆分范围' });
+});

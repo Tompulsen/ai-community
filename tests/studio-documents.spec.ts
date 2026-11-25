@@ -6,9 +6,9 @@ const assetId = '71f2ceae-7385-4b15-858d-a71c3c905101'
 const wordPlan = { schemaVersion: 1, kind: 'create_word', fileName: '项目计划.docx', blocks: [{ type: 'paragraph', text: '交付日期为周五。' }] }
 const sheetPlan = { schemaVersion: 1, kind: 'create_workbook', fileName: '销售.xlsx', sheets: [{ name: '销售', cells: [{ address: 'A1', value: { type: 'text', value: '0012' } }, { address: 'B1', value: { type: 'number', value: 20 } }, { address: 'C1', value: { type: 'formula', value: '=B1*3' } }] }] }
 
-async function fixture(page: Page, options: { busy?: boolean; unavailable?: boolean; interrupted?: boolean; failFile?: boolean } = {}) {
+async function fixture(page: Page, options: { busy?: boolean; unavailable?: boolean; interrupted?: boolean; failFile?: boolean; responseText?: string } = {}) {
   const account = await mockUnifiedAccount(page, true); account.state.user.id = '17'
-  const state = { paid: [] as any[], headers: [] as any[], plans: [] as any[], jobs: new Map<string, any>(), assets: [] as any[], formats: new Map<string, string>(), busy: !!options.busy, failFile: !!options.failFile, modelQueries: 0, uploads: 0, deleted: 0, lastPlan: wordPlan as any }
+  const state = { paid: [] as any[], headers: [] as any[], plans: [] as any[], jobs: new Map<string, any>(), assets: [] as any[], formats: new Map<string, string>(), busy: !!options.busy, failFile: !!options.failFile, responseText: options.responseText, missingSource: false, modelQueries: 0, uploads: 0, deleted: 0, lastPlan: wordPlan as any }
   await page.route('**/api/creation/**', async route => {
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/models')) return route.fulfill({ json: { tokenId: 41, items: [{ id: 'gpt-5', kinds: ['text'] }, { id: 'gpt-image', kinds: ['image'] }] } })
@@ -18,12 +18,12 @@ async function fixture(page: Page, options: { busy?: boolean; unavailable?: bool
       const input = route.request().postDataJSON(); state.paid.push(input); state.headers.push(route.request().headers())
       const document = input.chatOptions.messages.some((message: any) => typeof message.content === 'string' && message.content.includes('schemaVersion'))
       state.lastPlan = input.chatOptions.messages.some((message: any) => typeof message.content === 'string' && /"format"\s*:\s*"xlsx"/.test(message.content)) ? sheetPlan : wordPlan
-      const text = document ? JSON.stringify(state.lastPlan) : '这是普通聊天回答。'
+      const text = document ? state.responseText ?? JSON.stringify(state.lastPlan) : '这是普通聊天回答。'
       const events = [{ type: 'accepted', requestId: input.requestId, deadline: Date.now() + 180000 }, { type: 'delta', append: true, text: options.interrupted ? '{' : text }]
-      if (!options.interrupted) events.push({ type: 'result', status: 'succeeded', outputs: [{ text }], usage: { outputTokens: 32 } } as any)
+      if (!options.interrupted) events.push({ type: 'result', status: 'succeeded', outputs: [{ text }], usage: { outputTokens: state.responseText ? 4096 : 32 } } as any)
       return route.fulfill({ contentType: 'text/event-stream', body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') })
     }
-    if (path.includes('/requests/')) { state.modelQueries++; return route.fulfill({ json: { requestId: path.split('/').at(-1), status: 'succeeded', outputs: [{ text: JSON.stringify(state.lastPlan) }] } }) }
+    if (path.includes('/requests/')) { state.modelQueries++; return route.fulfill({ json: { requestId: path.split('/').at(-1), status: 'succeeded', outputs: [{ text: state.responseText ?? JSON.stringify(state.lastPlan) }] } }) }
     return route.fulfill({ json: { items: [] } })
   })
   await page.route('**/api/documents/**', async route => {
@@ -31,6 +31,7 @@ async function fixture(page: Page, options: { busy?: boolean; unavailable?: bool
     expect(route.request().headers()['x-new-api-user']).toBe('17')
     if (path === 'capabilities') return route.fulfill({ json: { enabled: !options.unavailable, docx: !options.unavailable, xlsx: !options.unavailable } })
     if (path === 'assets') return route.fulfill({ json: { assets: state.assets } })
+    if (state.missingSource && path.startsWith('assets/')) return route.fulfill({ status: 404, json: { error: { message: '原文件不存在，请重新选择文件。' } } })
     if (path === 'jobs' && method === 'GET') return route.fulfill({ json: { jobs: [...state.jobs.values()].filter(job => !url.searchParams.get('sessionId') || job.sessionId === url.searchParams.get('sessionId')) } })
     if ((path === 'jobs' || path === 'upload') && method === 'POST') {
       const body = route.request().postDataJSON()
@@ -130,6 +131,79 @@ test('interrupted model content is recovered by GET without a duplicate paid req
   const { state } = await fixture(page, { interrupted: true }); await enable(page); await send(page, '制作一份 Word 项目计划文档')
   await expect(page.getByRole('button', { name: '下载 DOCX', exact: true })).toBeVisible(); expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBeGreaterThan(0)
 })
+
+for (const width of [390, 1440]) test(`truncated completed document at ${width}px offers explicit regeneration and preserves data`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"kind":"create_workbook","fileName":"练习' })
+  await send(page, '已清除私密预算987654321')
+  await expect(page.locator('.chat-message.assistant')).toContainText('这是普通聊天回答。')
+  await enable(page)
+  await page.getByLabel('添加附件', { exact: true }).setInputFiles({ name: '销售.csv', mimeType: 'text/csv', buffer: Buffer.from('编号,价格\n0012,35.5') })
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
+  await send(page, '生成一个可练手的excel表格')
+  const card = page.getByRole('region', { name: '文档任务' }).last()
+  await expect(card).toContainText('内容不完整或格式有误')
+  expect(state.paid).toHaveLength(2); expect(state.paid[1].chatOptions.max_tokens).toBe(16384)
+  expect(state.plans).toHaveLength(0)
+  await expect(page.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+  await expect(page.locator('body')).not.toContainText('Unterminated')
+  await expect(page.locator('.chat-message.assistant .message-heading strong').last()).toHaveText('gpt-5')
+  await page.reload(); await expect(card).toContainText('内容不完整或格式有误')
+  if (width < 640) await page.getByRole('button', { name: '创作台菜单', exact: true }).click()
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  await page.getByRole('button', { name: '调整要求后重新生成', exact: true }).click()
+  await expect(page.getByLabel('文件要求', { exact: true })).toHaveValue('生成一个可练手的excel表格')
+  await expect(page.getByRole('dialog')).toContainText('销售.csv')
+  await expect(page.getByRole('button', { name: 'Excel XLSX 表格', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: '创建文件', exact: true })).toBeEnabled()
+  expect(state.paid).toHaveLength(2); expect(state.modelQueries).toBe(0)
+  expect(await page.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  await page.getByRole('dialog').evaluate(async el => { await Promise.allSettled(el.getAnimations({ subtree: true }).map(animation => animation.finished)) })
+  expect((await new AxeBuilder({ page }).include('.document-workspace').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`document-retry-${width}.png`) })
+  state.responseText = undefined
+  await page.getByLabel('文件要求', { exact: true }).fill('生成5行练习数据的Excel表格')
+  await page.getByRole('button', { name: '创建文件', exact: true }).click()
+  await expect(page.locator('.document-inspector')).toContainText('0012')
+  expect(state.paid).toHaveLength(3)
+  expect(JSON.stringify(state.paid[2].chatOptions.messages)).toContain('0012,35.5')
+  expect(JSON.stringify(state.paid[2].chatOptions.messages)).not.toContain('987654321')
+  expect(state.plans).toHaveLength(1)
+  await page.getByRole('button', { name: '关闭文档工作区', exact: true }).click()
+  await send(page, '你好')
+  await expect(page.locator('.chat-message.assistant').last()).toContainText('这是普通聊天回答。')
+  expect(state.paid[3].chatOptions.max_tokens).toBe(4096)
+})
+
+test('retry preserves an uploaded read-only source without turning creation into an edit', async ({ page }) => {
+  const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page)
+  await page.getByLabel('添加附件', { exact: true }).setInputFiles({ name: '参考.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from([80,75,3,4,1]) })
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
+  await send(page, '参考附件新建一份Word文档')
+  await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '调整要求后重新生成', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('参考.docx')
+  await expect(page.getByRole('button', { name: '创建文件', exact: true })).toBeEnabled()
+  expect(state.paid).toHaveLength(1); state.responseText = undefined
+  await page.getByRole('button', { name: '创建文件', exact: true }).click()
+  await expect(page.locator('.document-inspector')).toBeVisible()
+  expect(state.paid).toHaveLength(2); expect(state.uploads).toBe(1)
+  expect(state.plans[0].request.sourceArtifactId).toBeUndefined()
+  expect(JSON.stringify(state.paid[1].chatOptions.messages)).toContain('交付日期为周五')
+})
+
+test('a missing retry source cannot silently become a newly charged empty document', async ({ page }) => {
+  const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page)
+  await page.getByLabel('添加附件', { exact: true }).setInputFiles({ name: '原件.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from([80,75,3,4,1]) })
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
+  await send(page, '修改附件Word文档的付款日期')
+  await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+  state.missingSource = true
+  await page.getByRole('button', { name: '调整要求后重新生成', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('原文件不存在')
+  await expect(page.getByRole('button', { name: '创建文件', exact: true })).toBeDisabled()
+  expect(state.paid).toHaveLength(1); expect(state.plans).toHaveLength(0)
+})
 test('deleting a file requires confirmation and removes its versions from the workspace', async ({ page }) => {
   const { state } = await fixture(page); await enable(page); await send(page, '制作一份 Word 项目计划文档')
   await page.getByRole('button', { name: '预览 / 继续修改', exact: true }).click(); await page.getByRole('button', { name: '删除文件', exact: true }).click()
@@ -152,6 +226,28 @@ test('dark document workspace retains readable controls', async ({ page }, info)
 
 test.describe('local internal boundary checks', () => {
   test.skip(process.env.DOCUMENT_INTERNAL_TESTS !== '1', 'Requires the local Vite source modules')
+  test('old saved parse failures and stale chat model names render correctly after reload', async ({ page }) => {
+    const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page); await send(page, '制作Excel练习表格')
+    await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    await page.evaluate(async () => {
+      const paths = performance.getEntriesByType('resource').map(entry => entry.name)
+      const { chats, saveChats } = await import(/* @vite-ignore */ paths.find(path => /\/src\/native-chat\.ts(?:\?|$)/.test(path))!)
+      const chat = chats.sessions.find((item: any) => item.id === chats.activeId), message = chat.messages.at(-1)
+      chat.model = 'gpt-image'; delete message.documentTask.modelContentError
+      message.error = message.documentTask.error = 'Unterminated string in JSON at position 5037 (line 1 column 5038)'
+      await saveChats(true)
+      const { creation } = await import(/* @vite-ignore */ paths.find(path => /\/src\/native-studio\.ts(?:\?|$)/.test(path))!)
+      creation.tasks = []
+    })
+    await expect(page.locator('.chat-message.assistant .message-heading strong').last()).toHaveText('gpt-5')
+    await expect(page.getByRole('region', { name: '文档任务' })).toContainText('内容不完整或格式有误')
+    await expect(page.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+    await page.reload()
+    await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    await expect(page.locator('body')).not.toContainText('Unterminated')
+    await expect(page.locator('.chat-message.assistant .message-heading strong').last()).toHaveText('gpt-5')
+    expect(state.paid).toHaveLength(1); expect(state.plans).toHaveLength(0)
+  })
   test('document model task is excluded from ordinary task publication and downloads', async ({ page }) => {
     const { state } = await fixture(page); await enable(page); await send(page, '制作一份 Word 文档')
     await expect(page.getByRole('button', { name: '下载 DOCX', exact: true })).toBeVisible()

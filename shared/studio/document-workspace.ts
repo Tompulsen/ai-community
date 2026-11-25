@@ -235,12 +235,30 @@ export type DocumentAsset = {
   hasPreview: boolean;
 };
 
-export function parseDocumentPlan(text: string) {
+export class DocumentResponseError extends Error {}
+
+function documentResponseData(text: string): unknown {
+  if (new TextEncoder().encode(text).length > DOCUMENT_MAX_PLAN_BYTES)
+    throw new DocumentResponseError("模型返回的文档内容过长，请缩小范围或拆分文件后重新生成。");
   const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(text);
   const raw = fenced ? fenced[1] : text;
-  if (new TextEncoder().encode(raw).length > DOCUMENT_MAX_PLAN_BYTES)
-    throw new Error("文档计划超过大小限制");
-  return documentPlan.parse(JSON.parse(raw));
+  try { return JSON.parse(raw); }
+  catch { throw new DocumentResponseError("模型返回的文档内容不完整或格式有误，尚未制作文件。请减少行数或拆分要求后重新生成。"); }
+}
+
+const clarificationSchema = z.object({ needsInput: z.string().min(1).max(300) }).strict();
+export function parseDocumentResponse(text: string): { plan: DocumentPlan; clarification?: never } | { clarification: string; plan?: never } {
+  const data = documentResponseData(text);
+  const clarification = clarificationSchema.safeParse(data);
+  if (clarification.success) return { clarification: clarification.data.needsInput };
+  const parsed = documentPlan.safeParse(data);
+  if (!parsed.success) throw new DocumentResponseError("模型返回的文档内容不符合文件要求，尚未制作文件。请调整要求后重新生成。");
+  return { plan: parsed.data };
+}
+export function parseDocumentPlan(text: string) {
+  const result = parseDocumentResponse(text);
+  if (!result.plan) throw new DocumentResponseError("请先补充文件要求。");
+  return result.plan;
 }
 
 export function documentPlanningPrompt(
@@ -255,17 +273,13 @@ export function documentPlanningPrompt(
     `修改：{"schemaVersion":1,"kind":"edit","sourceArtifactId":"明确附件ID","baseVersion":1,"operations":[{"op":"set_cell","sheetId":"sheet-0","address":"C12","expectedOldValue":{"type":"number","value":30},"value":{"type":"number","value":35.5}},{"op":"replace_text","paragraphId":"paragraph-0","start":0,"expectedText":"精确旧文字","text":"新文字"}]}。只写实际变化；expectedOldValue必须来自结构。start为UTF-16字符偏移。每段只改一个连续范围。无对应目标时询问，不猜测。\n` +
     `Word表格最多50行、20列，各行列数一致。仅修改editable=true的段落，不在局部文字替换中新增换行。预览为内容预览，不是完整分页。\n` +
     `可用公式：SUM,AVERAGE,MIN,MAX,COUNT,COUNTA,IF,AND,OR,NOT,ROUND,ROUNDUP,ROUNDDOWN,ABS,SUMIF,SUMIFS,COUNTIF,COUNTIFS,IFERROR；仅本工作簿引用。\n` +
+    `输出必须是完整闭合的 JSON，采用紧凑格式。未指定规模的练习、示例或模板默认一个工作表、5至10行数据和必要公式；省略未使用的空白单元格，不要展开大量重复样式或公式。用户明确指定的数据与规模不得静默删减；若无法在一次输出中完整表达，先用needsInput询问拆分范围。\n` +
     `任务（源ID和版本以此为准）：${JSON.stringify(
       request,
     )}\n附件实际结构：${JSON.stringify(structure ?? null)}`
   );
 }
 export function parseDocumentClarification(text: string): string | null {
-  const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(text);
-  const data = JSON.parse(fenced ? fenced[1] : text);
-  const parsed = z
-    .object({ needsInput: z.string().min(1).max(300) })
-    .strict()
-    .safeParse(data);
+  const parsed = clarificationSchema.safeParse(documentResponseData(text));
   return parsed.success ? parsed.data.needsInput : null;
 }

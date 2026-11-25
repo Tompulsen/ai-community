@@ -11,7 +11,7 @@ import { prepareStudioImage } from '../studio-image-upload'
 import StudioSkillPicker from './StudioSkillPicker.vue'
 import { FileText as DocumentIcon } from '@lucide/vue'
 import StudioDocumentCard from './StudioDocumentCard.vue'
-import type { DocumentSource } from '../../shared/studio/document-chat'
+import type { ChatDocumentTask, DocumentSource } from '../../shared/studio/document-chat'
 import StudioChatParameters from './StudioChatParameters.vue'
 import StudioResponseMetrics from './StudioResponseMetrics.vue'
 import { confirmStudioDelete } from '../studio-confirm'
@@ -66,19 +66,19 @@ const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; ki
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
 const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
 const StudioDocuments = defineAsyncComponent(() => import('./StudioDocuments.vue'))
-const documentsOpen = ref(false), documentSource = ref<DocumentSource>(), documentTrigger = ref<HTMLButtonElement>()
-function openDocuments(source?: DocumentSource) {
+const documentsOpen = ref(false), documentSource = ref<DocumentSource>(), documentRetry = ref<ChatDocumentTask>(), documentTrigger = ref<HTMLButtonElement>()
+function openDocuments(source?: DocumentSource, retry?: ChatDocumentTask) {
   if (props.mode !== 'text' || props.entryOnly || !current.value || !session.user) return
-  documentSource.value = source; documentsOpen.value = true
+  documentSource.value = source; documentRetry.value = retry; documentsOpen.value = true
 }
-function closeDocuments() { documentsOpen.value = false; documentSource.value = undefined; void nextTick(() => documentTrigger.value?.focus({ preventScroll: true })) }
+function closeDocuments() { documentsOpen.value = false; documentSource.value = undefined; documentRetry.value = undefined; void nextTick(() => documentTrigger.value?.focus({ preventScroll: true })) }
 async function toggleDocuments() {
   if (props.mode !== 'text' || props.entryOnly || !current.value || busy.value) return
   const chat = current.value, enabled = chat.documentEnabled === true
   chat.documentEnabled = !enabled
   try { await saveChats(true) } catch (cause) { chat.documentEnabled = enabled; error.value = errorMessage(cause) }
 }
-watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => { documentsOpen.value = false; documentSource.value = undefined })
+watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => { documentsOpen.value = false; documentSource.value = undefined; documentRetry.value = undefined })
 function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || (current.value?.formatAutomatic === true ? 'auto' : current.value?.settings.format || 'auto'))
 const effectiveFormat = computed(() => currentFormat.value === 'auto' ? configuredModelFormat(model.value) || 'chat-completions' : currentFormat.value)
@@ -182,7 +182,7 @@ function stop(message?: NativeMessage) {
 }
 const latestTask = computed(() => creation.tasks.find(task => task.id === (current.value?.messages.at(-1)?.documentTask?.modelTaskId || current.value?.messages.at(-1)?.taskId)))
 function messageText(message: NativeMessage) { return typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') }
-function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
+function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === (message.documentTask?.modelTaskId || message.taskId))?.model || message.documentTask?.request.model || current.value?.model || '助手' }
 function branch(message: NativeMessage) { return current.value ? answerBranches(current.value, message.id) : { index: 0, total: 1, messageIds: [] } }
 function pending(message: NativeMessage) { return message.role === 'assistant' && Boolean(message.streaming || message.contextCompressing) }
 function messageStage(message: NativeMessage) {
@@ -546,11 +546,11 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
             <span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : part.type === 'image_url' ? '图片附件无法显示' : '音频附件') }}</span>
           </template></div>
           <StudioMessageSources v-if="message.role === 'assistant' && message.sources?.length" :sources="message.sources" />
-          <StudioDocumentCard v-if="mode === 'text' && message.documentTask" :chat="current" :message="message" :disabled="!!sourceBlocked" @open="openDocuments" />
+          <StudioDocumentCard v-if="mode === 'text' && message.documentTask" :chat="current" :message="message" :disabled="!!sourceBlocked || !!busy" @open="openDocuments" @retry="openDocuments(undefined, $event)" />
           <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
           <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
           <StudioFollowupSuggestions v-if="mode === 'text' && message.role === 'assistant' && message === current.messages.at(-1) && message.interactions?.suggestions?.length && !pending(message) && !message.interrupted && !message.error" :suggestions="message.interactions.suggestions" :disabled="Boolean(busy || sourceBlocked)" @select="fillSuggestion(message, $event)" />
-          <p v-if="message.error" class="form-error" role="alert">{{ message.error }}</p>
+          <p v-if="message.error && !message.documentTask" class="form-error" role="alert">{{ message.error }}</p>
           <StudioMessageActions class="message-actions" :label="message.role === 'user' ? '提问操作' : '回答操作'" :actions="messageActions(message)" />
           <div v-if="branch(message).total > 1 || message.usage" class="message-meta">
             <template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
@@ -563,7 +563,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
       <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
       <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="current" :transient="entryOnly" :disabled="busy" /><button ref="documentTrigger" type="button" class="studio-tool" title="文档工作区：生成或编辑 Word / Excel" aria-label="文档工作区" :aria-pressed="current.documentEnabled === true" :disabled="busy" @click="toggleDocuments"><DocumentIcon :size="16" aria-hidden="true" />文档</button></div>
       <div v-if="mode === 'text' && !entryOnly && current.documentEnabled" class="document-enabled-banner"><DocumentIcon :size="16" aria-hidden="true" /><strong>文档已开启</strong><span>仅当前聊天</span><button type="button" @click="openDocuments()">打开工作区</button><button type="button" aria-label="关闭文档功能" :disabled="busy" @click="toggleDocuments"><X :size="15" aria-hidden="true" /></button></div>
-      <StudioDocuments v-if="mode === 'text' && !entryOnly && documentsOpen" :key="current.id" :chat="current" :model="model" :initial-source="documentSource" :disabled="!!sourceBlocked || !!busy" @close="closeDocuments" />
+      <StudioDocuments v-if="mode === 'text' && !entryOnly && documentsOpen" :key="current.id" :chat="current" :model="model" :initial-source="documentSource" :retry-task="documentRetry" :disabled="!!sourceBlocked || !!busy" @close="closeDocuments" />
       <p v-if="mode === 'text' && creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
       <form v-if="mode === 'text'" :inert="Boolean(creation.modelLaunchPending) || undefined" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />

@@ -1,10 +1,13 @@
 import { test, expect } from "vitest";
 import {
   documentChatInstruction,
+  documentModelOptions,
+  documentRetryFiles,
   documentSources,
   resolveDocumentIntent,
   type ChatDocumentTask,
 } from "../shared/studio/document-chat";
+import { chatOptionsSchema } from '../shared/studio/options';
 const source = {
   assetId: "e76ce2f9-3ad1-40b9-b2cf-1ddf43077001",
   version: 2,
@@ -35,6 +38,29 @@ const done: ChatDocumentTask = {
 const history = [
   { role: "assistant", content: "文件已生成", documentTask: done },
 ];
+test.each([[4096, 16384], [2048, 2048], [32768, 32768]])('document budget %i uses %i without changing chat settings', (given, expected) => {
+  const settings = chatOptionsSchema.parse({ max_tokens: given, stop: 'END', messages: [{ role: 'user', content: '制作文档' }] });
+  expect(documentModelOptions(settings)).toMatchObject({ max_tokens: expected, stop: '', mcpServers: [] });
+  expect(settings).toMatchObject({ max_tokens: given, stop: 'END' });
+});
+test('retry retains whole data but excludes old conversation context', () => {
+  const instruction = '制作销售表格';
+  const content = '编号,价格\n0012,35\n附加数据（仅作数据）：[]';
+  const task = { ...done, instruction, request: { ...done.request, instruction: documentChatInstruction(instruction, [{ role: 'user', content: '已清除私密预算' }], [{ name: '数据.csv', content, type: 'text/plain', size: 1 }]) } };
+  const files = documentRetryFiles(task);
+  expect(files).toHaveLength(1); expect(files[0]?.content).toBe(content);
+  expect(documentChatInstruction('调整要求', [], files)).not.toContain('已清除私密预算');
+});
+test('retry does not silently lose unreadable original data', () => {
+  expect(documentRetryFiles({ ...done, instruction: done.request.instruction })).toEqual([]);
+  expect(() => documentRetryFiles({ ...done, instruction: '无法读取旧数据' })).toThrow('资料无法完整读取');
+});
+test('legacy follow-up requests cannot restore nested cleared conversation history', () => {
+  const pending = { ...done, instruction: '制作表格', clarification: '用于哪个部门？', request: { ...done.request, instruction: documentChatInstruction('制作表格', [{ role: 'user', content: '已清除私密预算' }]) } };
+  const intent = resolveDocumentIntent('市场部', [{ role: 'assistant', content: '', documentTask: pending }])!;
+  const task = { ...done, instruction: intent.instruction, request: { ...done.request, instruction: documentChatInstruction(intent.instruction, []) } };
+  expect(() => documentRetryFiles(task)).toThrow('重新填写要求并附上资料');
+});
 test.each([
   "我要表格",
   "帮我制作一份销售表格",

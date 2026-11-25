@@ -1,8 +1,8 @@
 import { watch } from 'vue'
 import { api, session } from './state'
 import { creation, resumeCreation, submitCreation, type CreationTask } from './native-studio'
-import { documentPlanningPrompt, parseDocumentClarification, parseDocumentPlan, type DocumentAsset, type DocumentJob } from '../shared/studio/document-workspace'
-import { documentChatInstruction, type ChatDocumentTask, type ChatDocumentAttachment, type DocumentSource } from '../shared/studio/document-chat'
+import { DocumentResponseError, documentPlanningPrompt, parseDocumentResponse, type DocumentAsset, type DocumentJob } from '../shared/studio/document-workspace'
+import { documentChatInstruction, documentModelOptions, type ChatDocumentTask, type ChatDocumentAttachment, type DocumentSource } from '../shared/studio/document-chat'
 import type { ParsedFile } from '../shared/studio/file-upload'
 import type { NativeChat, NativeMessage } from './native-chat'
 import type { RequestMessage } from '../shared/studio/types'
@@ -83,13 +83,28 @@ export async function recoverDocumentContent(task: ChatDocumentTask, publish: ()
     if (!modelTask) throw new Error('未找到原模型请求，请在历史记录中查看。')
     await resumeCreation(modelTask); check()
     if (modelTask.phase !== 'complete') throw new Error(modelTask.error || '模型内容尚未生成完整，请稍后恢复。')
-    const clarification = parseDocumentClarification(modelTask.text)
-    if (clarification) { task.clarification = clarification; task.preparing = false; await publish(); return }
-    task.plan = parseDocumentPlan(modelTask.text); await publish(); check()
+    try { Object.assign(task, parseDocumentResponse(modelTask.text), { modelContentError: undefined, error: undefined, preparing: false }) }
+    catch (error) {
+      if (error instanceof DocumentResponseError) { task.modelContentError = error.message; task.error = error.message; task.preparing = false; await publish() }
+      throw error
+    }
+    await publish(); check()
+    if (task.clarification) return
   }
   task.job = await submitDocumentPlan(task, signal)
   check()
   task.error = undefined; task.preparing = false; await publish()
+}
+export function documentContentIssue(task: ChatDocumentTask): string | undefined {
+  if (task.plan || task.clarification || task.job) return
+  if (task.modelContentError) return task.modelContentError
+  const modelTask = creation.tasks.find(item => item.id === task.modelTaskId && item.owner === session.user?.id)
+  if (!modelTask && /Unterminated|Unexpected (?:end|token|non-whitespace)|JSON at position|not valid JSON/i.test(task.error || ''))
+    return '模型返回的文档内容不完整或格式有误，尚未制作文件。请调整要求后重新生成。'
+  if (modelTask?.phase === 'error') return modelTask.error || '原模型请求已失败，请调整要求后重新生成。'
+  if (modelTask?.phase !== 'complete') return
+  try { parseDocumentResponse(modelTask.text) }
+  catch (error) { if (error instanceof DocumentResponseError) return error.message }
 }
 export async function runDocumentGeneration(options: {
   chat: NativeChat; result: NativeMessage; task: ChatDocumentTask; files: ParsedFile[]; history: NativeMessage[];
@@ -117,7 +132,14 @@ export async function runDocumentGeneration(options: {
       source = sourceFromJob(job, /\.xlsx$/i.test(file.name) ? 'xlsx' : 'docx')
       if (!source) throw new Error(job.error || '原文件读取失败，请重新上传。')
     }
-    if (source) structure = await documentApi<DocumentStructure>(scope, `assets/${source.assetId}/${source.version}/structure`, { signal })
+    if (source) {
+      structure = await documentApi<DocumentStructure>(scope, `assets/${source.assetId}/${source.version}/structure`, { signal })
+      if (task.mode === 'edit') {
+        const { versions } = await documentApi<{ versions: DocumentAsset[] }>(scope, `assets/${source.assetId}/versions`, { signal })
+        if (versions[0]?.version !== source.version) throw new Error('原文件已有新版本，请在文档工作区选择最新版本后继续修改。')
+      }
+      task.referenceSource = source
+    }
     check()
     const dataFiles = files.map(file => {
       if (/\.(docx|xlsx)$/i.test(file.name) || file.isText) return file
@@ -132,7 +154,7 @@ export async function runDocumentGeneration(options: {
     if (new TextEncoder().encode(prompt).length > 512 * 1024) throw new Error('附件内容过长，请缩小文件范围后重试。')
     await save()
     let savedAt = 0
-    const modelTask = await submitCreation({ ...options.modelRequest, purpose: 'document', chatOptions: { ...options.modelRequest.chatOptions!, mcpServers: [], messages: [...options.prefix, { role: 'system', content: prompt }, { role: 'user', content: task.instruction || task.request.instruction }] } }, (modelTask: CreationTask) => {
+    const modelTask = await submitCreation({ ...options.modelRequest, purpose: 'document', chatOptions: { ...documentModelOptions(options.modelRequest.chatOptions!), messages: [...options.prefix, { role: 'system', content: prompt }, { role: 'user', content: task.instruction || task.request.instruction }] } }, (modelTask: CreationTask) => {
       check()
       const first = task.modelTaskId !== modelTask.id
       task.modelTaskId = modelTask.id; result.usage = modelTask.usage; result.reasoning = modelTask.reasoning
@@ -146,15 +168,15 @@ export async function runDocumentGeneration(options: {
     }, () => { try { check(); return true } catch { return false } })
     check(); task.modelTaskId = modelTask.id; result.usage = modelTask.usage
     if (modelTask.phase !== 'complete') throw new Error(modelTask.error || '文档内容未完整生成，可恢复原模型请求。')
-    const clarification = parseDocumentClarification(modelTask.text)
-    if (clarification) { task.clarification = clarification; task.preparing = false; result.content = clarification; await save(); return }
-    task.plan = parseDocumentPlan(modelTask.text); task.preparing = false
+    Object.assign(task, parseDocumentResponse(modelTask.text)); task.preparing = false
+    if (task.clarification) { result.content = task.clarification; await save(); return }
     result.content = '文档内容已生成，正在制作文件。'
     await save()
     const job = await submitDocumentPlan(task, signal)
     await waitDocumentJob(scope, job, signal, async job => { check(); task.job = job; result.content = job.status === 'ready' ? `已生成 ${job.fileName || '文档'}。` : documentPhases[job.status] || '文档处理中'; await save() })
     if (task.job?.status !== 'ready') throw new Error(task.job?.error || '文件未制作完成，可重试制作。')
   } catch (error) {
+    if (error instanceof DocumentResponseError) { task.modelContentError = error.message; await save() }
     if (signal.aborted) {
       for (const key of [uploadKey, task.plan ? task.key : undefined].filter(Boolean)) await documentApi(scope, `jobs/${key}`, { method: 'DELETE' }).catch(() => {})
     }
