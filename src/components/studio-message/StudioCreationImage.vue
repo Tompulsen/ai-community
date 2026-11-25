@@ -5,10 +5,10 @@ const dimensions = new Map<string, { width: number; height: number }>()
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { RotateCw } from '@lucide/vue'
+import { RotateCw, SquarePen } from '@lucide/vue'
 
-const props = defineProps<{ src: string; alt: string; label: string }>()
-const emit = defineEmits<{ open: [] }>()
+const props = defineProps<{ src: string; alt: string; label: string; editable?: boolean }>()
+const emit = defineEmits<{ open: []; edit: [] }>()
 const size = ref(dimensions.get(props.src))
 const loaded = ref(false), failed = ref(false), retrying = ref(false), replacement = ref('')
 let revision = 0
@@ -46,11 +46,15 @@ async function retry() {
     <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="loaded && emit('open')">
       <img :key="replacement || src" :src="replacement || src" :alt="alt" :width="size?.width" :height="size?.height" loading="lazy" decoding="async" @load="load" @error="failed = true" />
     </button>
+    <button v-if="editable && loaded && !failed" type="button" class="creation-canvas" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>
   </div>
 </template>
 
 <style scoped>
-.creation-image { min-width: 0; max-width: 100%; }
+.creation-image { position: relative; width: fit-content; min-width: 0; max-width: 100%; }
+.creation-canvas { display: none; position: absolute; right: 6px; bottom: 6px; width: 44px; height: 44px; border: 1px solid rgb(255 255 255 / 40%); border-radius: 8px; color: #fff; background: rgb(0 0 0 / 65%); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 150ms ease; }
+@media (hover: hover) and (pointer: fine) and (min-width: 640px) { .creation-canvas { display: grid; place-items: center; }.creation-image:hover .creation-canvas, .creation-image:focus-within .creation-canvas { opacity: 1; pointer-events: auto; }.creation-canvas:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; } }
+@media (prefers-reduced-motion: reduce) { .creation-canvas { transition: none; } }
 .creation-image-preview { position: relative; display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: zoom-in; }
 .creation-image-preview img { display: block; width: auto; height: auto; max-width: 100%; max-height: min(480px, 44dvh); object-fit: contain; }
 .creation-image-preview[aria-busy="true"] img { min-width: min(240px, 100%); min-height: 160px; }

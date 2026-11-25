@@ -106,3 +106,17 @@ are adapted from wuyoscar/GPT-Image2-Skill, `skills/get-prompt-from-image` and
 its analysis framework (MIT, Copyright (c) 2026 Wuyoscar). The product uses a
 Chinese generation prompt and reuses its existing account relay. The full MIT
 notice is retained in `public/assets/licenses/GPT-Image2-Skill-MIT.txt`.
+
+The community image canvas adapts QXChat (Tompulsen/Clodesen-jifen, main
+a95f9157320c9b1840a39cb4217163305df66225) `app/utils/image-canvas.ts` and
+`app/components/image-canvas-editor.tsx` / `image-canvas-references.tsx`
+under MIT, Copyright (c) 2023-2025 NextChat. The existing full MIT notice
+in THIRD_PARTY_NOTICES.md applies. Vue UI, authenticated media loading,
+account-scoped drafts and creation submission reuse the community implementation.
+
+The infinite canvas viewport and movable image nodes adapt
+`packages/workbench/src/components/canvas/infinite-canvas.tsx` and `canvas-node.tsx`
+from basketikun/infinite-canvas, supplied in `infinite-canvas-main.zip`.
+Copyright (c) 2026 basketikun, MIT. The complete license is distributed in
+`public/assets/licenses/infinite-canvas-MIT.txt`; the editor retains visible
+Infinite Canvas attribution. No upstream model service, plugin runtime or CLI is included.

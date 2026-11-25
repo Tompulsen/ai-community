@@ -33,6 +33,8 @@ import { studioPreferences } from '../studio-preferences'
 import { shouldSubmit } from '../../shared/studio/submit-key'
 import { createImeGuard } from '../../shared/studio/ime-input'
 import type { StudioEntry } from '../studio-entry'
+import { canvasRequestIssue, isCanvasEditPrompt, type CanvasEditDraft } from '../image-canvas'
+import type { CanvasSubmitOptions } from '../studio-canvas'
 
 const props = defineProps<{ kind: 'image' | 'video'; source?: Work | null; sourceBlocked?: boolean; remixPreparing?: boolean; entryOnly?: boolean; entryPending?: boolean }>()
 const emit = defineEmits<{ prices: []; keys: []; publish: [task: CreationTask, destination: CreationDestination]; source: [id?: string]; remixError: [message: string]; model: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string] }>()
@@ -105,7 +107,7 @@ const referenceLimitIssue = computed(() => {
   const ready = new Map([...data.images.map(file => [file.id, file.url] as const), ...data.files.map(file => [file.id, file.file.content] as const)])
   return creationReferenceIssue({ kind: props.kind, model: model.value, apiFormat: apiFormat.value,
     references: data.items.map(file => ({ name: file.name, url: ready.get(file.id) || file.id, type: file.type })),
-    ...(props.kind === 'video' ? { videoOptions } : { imageContext: currentConversation.value ? buildImageContext(currentConversation.value) : undefined }),
+    ...(props.kind === 'video' ? { videoOptions } : { imageContext: currentConversation.value && !isCanvasEditPrompt(prompt.value) ? buildImageContext(currentConversation.value) : undefined }),
   }, selectedModel.value)
 })
 const canGenerate = computed(() => composerReady.value && !referenceLimitIssue.value && !imageCountIssue.value && !busy.value && !props.sourceBlocked && (!props.source || sourceWorkId.value === props.source.id) && !videoParameterIssue.value && !submitting.value && !materials.failed.value && !restoringTask.value && !creation.modelLaunchPending && !creation.groupsLoading && !creation.groupSwitching && !creation.modelsLoading && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && (upscale.value ? !!sourceVideo.value : Boolean(prompt.value.trim())))
@@ -378,8 +380,14 @@ async function sendEntry() {
     if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false }
   }
 }
-async function submit(onRegistered?: () => void) {
-  if (!canGenerate.value) {
+async function submit(onRegistered?: () => void, canvasDraft?: CanvasEditDraft, canvasOptions?: CanvasSubmitOptions) {
+  if (canvasDraft) {
+    canvasOptions?.signal.throwIfAborted()
+    const issue = canvasRequestIssue(canvasDraft)
+    if (issue) throw new Error(issue)
+    if (props.kind !== 'image' || props.entryOnly || !session.user || !composerReady.value || busy.value || props.sourceBlocked || props.remixPreparing || submitting.value || restoringTask.value || creation.modelLaunchPending || creation.groupsLoading || creation.groupSwitching || creation.modelsLoading || !models.value.some(item => item.id === model.value) || imageCountIssue.value)
+      throw new Error(imageCountIssue.value || '图片模型尚未就绪或当前对话正在生成，请返回工作台确认后重试。')
+  } else if (!canGenerate.value) {
     if (onRegistered && !imageCountIssue.value && !videoParameterIssue.value) error.value = '生成配置尚未就绪，请在工作台确认模型、提示词和参考图后再生成。'
     return
   }
@@ -387,32 +395,39 @@ async function submit(onRegistered?: () => void) {
   const kind = props.kind, owner = session.user?.id
   const chat = currentConversation.value || ensureMediaConversation(props.kind)
   const scope = draftScope()
-  const selectedSkills = (chat.mediaSkills?.[kind] || []).map(skill => ({ ...skill }))
+  const canvasRequest = kind === 'image' && (Boolean(canvasDraft) || isCanvasEditPrompt(prompt.value))
+  const selectedSkills = canvasRequest ? [] : (chat.mediaSkills?.[kind] || []).map(skill => ({ ...skill }))
   const conversationId = chat.mediaConversationId || chat.id
-  let submittedPrompt = prompt.value
-  const branchId = branchTaskId.value, imageEditId = imageEditTaskId.value, initialReferenceUrls = imageReferences.value.map(file => file.url)
-  let submittedReferences = JSON.stringify(references.value)
-  const branchEdited = editing.value
+  let submittedPrompt = canvasDraft?.prompt ?? prompt.value
+  const branchId = canvasRequest ? undefined : branchTaskId.value, imageEditId = canvasRequest ? undefined : imageEditTaskId.value, initialReferenceUrls = imageReferences.value.map(file => file.url)
+  const canvasReferences = canvasDraft?.images.map((url, index) => ({ name: index === 0 ? '画布原图' : `画布图片 ${index + 1}`, url, type: /^data:([^;]+)/.exec(url)?.[1] || 'image/png' }))
+  let submittedReferences = JSON.stringify(canvasReferences || references.value)
+  const branchEdited = !canvasRequest && editing.value
   const preparation = new AbortController()
   materialSubmission = preparation
+  const abortCanvas = () => preparation.abort()
+  canvasOptions?.signal.addEventListener('abort', abortCanvas, { once: true })
+  const preparationValid = () => live && scope === draftScope() && owner === session.user?.id && !preparation.signal.aborted
   let preparing = true
   blank.value = false
   error.value = ''; submissions.value[kind] = true; chats.preparing[chat.id] = true
   try {
-    const fixedReferences = kind === 'image' && !usesGeminiImageChat(model.value, selectedApiFormat.value) ? pinnedImageReferences(chat) : []
-    const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: prompt.value, size: requestSize.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, references: references.value, sourceWorkId: sourceWorkId.value,
+    const fixedReferences = !canvasRequest && kind === 'image' && !usesGeminiImageChat(model.value, selectedApiFormat.value) ? pinnedImageReferences(chat) : []
+    const input: CreationInput = JSON.parse(JSON.stringify({ conversationId, kind: props.kind, model: model.value, prompt: submittedPrompt, size: requestSize.value, ...(manualSize.value && manualSize.value !== 'auto' ? { exactSize: true } : {}), aspect_ratio: ratio.value, n: props.kind === 'video' ? 1 : count.value, duration: duration.value, protocol: protocol.value, apiFormat: apiFormat.value, references: canvasReferences || references.value, sourceWorkId: sourceWorkId.value,
       accountGroup: creation.selectedGroup, accountTokenId: creation.modelTokenId,
-      ...(props.kind === 'image' ? { imageOptions, imageContext: buildImageContext(chat) } : { videoOptions }),
+      ...(props.kind === 'image' ? { imageOptions, ...(!canvasRequest ? { imageContext: buildImageContext(chat) } : {}) } : { videoOptions }),
       ...(kind === 'video' && branchId ? { mediaBranch: { taskId: branchId, edited: branchEdited } } : {}) }))
     const configuredModel = creation.models.find(item => item.id === input.model)
     const requestModel: typeof configuredModel = configuredModel ? JSON.parse(JSON.stringify(configuredModel)) : undefined
     const requestUpscale = kind === 'video' && requestModel?.video?.operation === 'upscale'
-    waitingForMaterials.value = true
-    try { await materials.wait(preparation.signal) }
-    finally { if (materialSubmission === preparation) waitingForMaterials.value = false }
-    if (!live || scope !== draftScope() || owner !== session.user?.id) return
-    submittedReferences = JSON.stringify(references.value)
-    input.references = JSON.parse(JSON.stringify(references.value))
+    if (!canvasDraft) {
+      waitingForMaterials.value = true
+      try { await materials.wait(preparation.signal) }
+      finally { if (materialSubmission === preparation) waitingForMaterials.value = false }
+      submittedReferences = JSON.stringify(references.value)
+      input.references = JSON.parse(submittedReferences)
+    }
+    if (!preparationValid()) return
     if (fixedReferences.length) {
       input.references = [...new Map([...(input.references || []), ...fixedReferences].map(file => [file.url, file])).values()]
     }
@@ -433,20 +448,22 @@ async function submit(onRegistered?: () => void) {
     }
     const skills = await resolveMediaSkills(selectedSkills, kind, owner)
     if (skills.length) input.skills = skills
-    if (!live || scope !== draftScope() || owner !== session.user?.id) return
+    if (!preparationValid()) return
     await saveChats(true)
-    if (owner !== session.user?.id || !chats.sessions.includes(chat)) return
+    if (!preparationValid() || !chats.sessions.includes(chat)) return
     let registered = false
     const result = await submitCreation(input, async task => {
       if (registered) return
-      registered = true
+      if (canvasDraft && !preparationValid()) throw new DOMException('画布已关闭或对话已切换', 'AbortError')
       await registerMediaTurn(chat, task, branchId, branchEdited)
-      if (owner === session.user?.id && live && scope === draftScope()) {
+      if (canvasDraft && !preparationValid()) throw new DOMException('画布已关闭或对话已切换', 'AbortError')
+      registered = true
+      if (!canvasDraft && owner === session.user?.id && live && scope === draftScope()) {
         if (prompt.value === submittedPrompt) prompt.value = ''
         if (JSON.stringify(references.value) === submittedReferences) references.value = []
         branchTaskId.value = undefined; imageEditTaskId.value = undefined; editing.value = false
         await saveChats(true)
-      } else if (owner === session.user?.id) {
+      } else if (!canvasDraft && owner === session.user?.id) {
         const draft = chat.mediaDrafts?.[kind]
         if (draft?.prompt === submittedPrompt) { draft.prompt = ''; if (draft.imageEditTaskId === imageEditId) delete draft.imageEditTaskId }
         if (draft && JSON.stringify(draft.references) === submittedReferences) draft.references = []
@@ -458,15 +475,18 @@ async function submit(onRegistered?: () => void) {
         materialSubmission = undefined; waitingForMaterials.value = false; submissions.value[kind] = false
       }
       onRegistered?.()
-    }, () => owner === session.user?.id && chats.sessions.some(item => item.id === chat.id))
-    if (result.phase === 'error' && creation.selectedId === result.id && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
+    }, () => owner === session.user?.id && chats.sessions.some(item => item.id === chat.id) && (!canvasDraft || registered || preparationValid()))
+    if (!canvasDraft && result.phase === 'error' && creation.selectedId === result.id && owner === session.user?.id && live && scope === draftScope() && !prompt.value && !references.value.length) {
       prompt.value = submittedPrompt; references.value = JSON.parse(submittedReferences)
       if (branchId) { branchTaskId.value = result.id; editing.value = branchEdited }
       imageEditTaskId.value = imageEditId
     }
     await syncMediaConversations()
-  } catch (cause) { if (owner === session.user?.id && live && scope === draftScope()) error.value = errorMessage(cause) }
-  finally {
+  } catch (cause) {
+    if (canvasDraft) throw cause
+    if (owner === session.user?.id && live && scope === draftScope()) error.value = errorMessage(cause)
+  } finally {
+    canvasOptions?.signal.removeEventListener('abort', abortCanvas)
     if (materialSubmission === preparation) { materialSubmission = undefined; waitingForMaterials.value = false; submissions.value[kind] = false }
     if (preparing && owner === session.user?.id) chats.preparing[chat.id] = false
   }
@@ -565,7 +585,7 @@ function openConversation() {
   blank.value = false
   loadDraft()
 }
-defineExpose({ newCreation, useTask, editTask, editImage, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
+defineExpose({ submitCanvas: (draft: CanvasEditDraft, options: CanvasSubmitOptions) => submit(options.onRegistered, draft, options), newCreation, useTask, editTask, editImage, regenerate, chooseReference, openConversation, applyRemix, applySourceReferences, referenceUrls, uploading, sourceWorkId, model, clearContext, generateBackground: submit, submissionIssue, restoringParameters, canGenerate })
 </script>
 
 <template>

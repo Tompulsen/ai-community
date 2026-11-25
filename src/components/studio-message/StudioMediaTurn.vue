@@ -20,7 +20,7 @@ const props = defineProps<{ task: CreationTask; conversation: NativeChat; role: 
 const emit = defineEmits<{
   action: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number]
   publish: [task: CreationTask, destination: CreationDestination]
-  preview: [task: CreationTask, index: number]
+  preview: [task: CreationTask, index: number, editor?: boolean]
 }>()
 const error = ref(''), now = ref(Date.now())
 const videoErrors = ref<Record<string, boolean>>({}), videoAttempts = ref<Record<string, number>>({})
@@ -168,7 +168,7 @@ async function remove() {
           <div v-if="videoErrors[url]" class="video-load-error" role="status"><p>视频加载失败</p><button class="studio-tool" type="button" @click="retryVideo(url)"><RefreshCw :size="16" />重新加载视频</button></div>
           <button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button>
         </template>
-        <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
+        <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" editable @open="emit('preview', task, index)" @edit="emit('preview', task, index, true)" />
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
       <StudioBrowserSave :task="task" />

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Eraser, Images, ListChecks, Menu, MoreVertical, Receipt, KeyRound, CircleDollarSign, Settings, SquarePen, Trash2, Undo2 } from '@lucide/vue'
-import { api, errorMessage, session, sessionStatus } from '../state'
+import { api, errorMessage, notify, session, sessionStatus } from '../state'
 import { chats, chatDeletion, loadChats, newChat, saveChats, undoRemovedChats, type Skill } from '../native-chat'
 import { armStudioEntryStart, claimStudioEntryStart, clearStudioEntry, readStudioEntry } from '../studio-entry'
 import { modelChoices, modelsForKind } from '../model-preferences'
@@ -25,6 +25,8 @@ import '../studio-composer.css'
 const StudioChat = defineAsyncComponent(() => import('../components/StudioChat.vue'))
 const StudioAccountTools = defineAsyncComponent(() => import('../components/StudioAccountTools.vue'))
 import type { StudioKind } from '../studio-state'
+import { studioCanvasKey } from '../studio-canvas'
+import { canvasRequestIssue } from '../image-canvas'
 const route = useRoute(), router = useRouter()
 const source = ref<Work | null>(null), error = ref('')
 const skillImportError = ref(''), skillImportLoading = ref(false), skillImportRetry = ref(0)
@@ -50,6 +52,34 @@ const remixReady = computed(() => !sourceLoading.value && !creation.groupsLoadin
 const publisher = ref<InstanceType<typeof StudioPublishDialog>>()
 const kind = computed<StudioKind>(() => route.params.kind === 'video' || route.params.kind === 'text' ? route.params.kind : 'image')
 const currentConversation = computed(() => chats.sessions.find(item => item.id === chats.activeId))
+const canvasScope = computed(() => `${session.user?.id}:${chats.activeId}:${kind.value}`)
+provide(studioCanvasKey, {
+  scope: canvasScope,
+  label: computed(() => kind.value === 'image' ? '交给 AI 修改' : '导入新的图片对话'),
+  model: computed(() => kind.value === 'image' ? workspace.value?.model || '' : ''),
+  async submit(draft, options) {
+    const owner = session.user?.id, accepted = canvasScope.value, acceptedRoute = route.fullPath
+    const current = () => owner === session.user?.id && accepted === canvasScope.value && !options.signal.aborted
+    if (!owner || options.scope !== accepted || !current() || sourceBlocked.value) throw new Error('账号或对话已变化，请重新打开画布。')
+    const issue = canvasRequestIssue(draft); if (issue) throw new Error(issue)
+    if (kind.value === 'image') {
+      if (!workspace.value) throw new Error('图片工作台尚未就绪，请稍后重试。')
+      await workspace.value.submitCanvas(draft, options)
+      return
+    }
+    await saveChats(true)
+    if (!current()) return
+    // A separate conversation preserves every existing composer draft and never auto-submits.
+    const conversation = newChat('image')
+    conversation.topic = '画布图片修改'
+    conversation.mediaDrafts = { image: { prompt: draft.prompt, references: draft.images.map((url, index) => ({ name: index === 0 ? '画布原图' : `画布图片 ${index + 1}`, url })) } }
+    await saveChats(true)
+    if (!entryLive || owner !== session.user?.id || chats.activeId !== conversation.id || route.fullPath !== acceptedRoute) return
+    await router.replace({ path: '/create/image', query: { conversation: conversation.id } })
+    if (owner === session.user?.id && chats.activeId === conversation.id) notify('画布要求已导入新图片对话，请确认模型后发送。')
+  },
+})
+
 const initialSaveIssue = computed(() => currentConversation.value && chats.initialSaving[currentConversation.value.id] ? chats.error : '')
 const retryingSave = ref(false)
 async function retryInitialSave() {

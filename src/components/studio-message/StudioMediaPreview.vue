@@ -1,8 +1,8 @@
 <!-- Adapted from octopus_chat app/components/gallery/lightbox.tsx (MIT). -->
 <!-- Zoom gestures also adapted from QXChat app/components/ui-lib.tsx (MIT, NextChat 2023–2025). -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, X } from '@lucide/vue'
+import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, SquarePen, X } from '@lucide/vue'
 import { copyMediaImage, mediaSource, readableMedia, readCreationImage } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
 import { imageDownload, imageDownloadUrl, jpegMediaUrl } from '../../image-download'
@@ -10,6 +10,11 @@ import { chooseImageDownloadFormat } from '../../image-download-choice'
 import type { ImageDownloadFormat } from '../../../shared/image-download'
 import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
+import { studioCanvasKey } from '../../studio-canvas'
+import { chats } from '../../native-chat'
+const StudioImageCanvas = defineAsyncComponent(() => import('../StudioImageCanvas.vue'))
+const canvas = inject(studioCanvasKey, undefined), editing = ref(false)
+const canvasScope = computed(() => canvas?.scope.value || `${session.user?.id}:${chats.activeId}`)
 const props = withDefaults(defineProps<{
   items: { id?: string; src?: string; previewSrc?: string; kind: 'image' | 'video'; alt?: string }[]
   label?: string
@@ -207,16 +212,16 @@ function release() {
 }
 function closed() {
   if (dialog.value?.open) return
-  opened.value = false; release()
+  opened.value = false; editing.value = false; release()
   if (!notified) { notified = true; emit('close') }
 }
 function close() {
   if (!opened.value && !dialog.value?.open) return
-  opened.value = false; release()
+  opened.value = false; editing.value = false; release()
   if (dialog.value?.open) dialog.value.close()
   else closed()
 }
-async function open(position = 0) {
+async function open(position = 0, editor = false) {
   if (!props.items.length) return
   const owner = session.user?.id
   stopVideo(); reset()
@@ -227,18 +232,28 @@ async function open(position = 0) {
     oldOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'
     window.addEventListener('blur', blur)
   }
+  editing.value = editor && current.value?.kind === 'image'
   opened.value = true; notified = false
   await nextTick()
   if (owner !== session.user?.id || !opened.value) return
   if (!dialog.value?.open) dialog.value?.showModal()
   observeStage()
 }
-defineExpose({ open, close, download: () => run('download') })
+async function editImage() {
+  if (current.value?.kind !== 'image' || !current.value.src) return
+  endPan(); releaseImage(); editing.value = true
+}
+async function backToPreview() {
+  editing.value = false; await nextTick(); observeStage()
+  dialog.value?.querySelector<HTMLButtonElement>('[aria-label="画布编辑"]')?.focus()
+}
+defineExpose({ open, close, openEditor: (position = 0) => open(position, true), download: () => run('download') })
 function choose(position: number) {
   if (position < 0 || position >= props.items.length || position === index.value) return
   stopVideo(); index.value = position
 }
 function keys(event: KeyboardEvent) {
+  if (editing.value) return
   if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLVideoElement) return
   if (event.key === 'ArrowLeft' && props.items.length > 1) { event.preventDefault(); choose(index.value - 1) }
   else if (event.key === 'ArrowRight' && props.items.length > 1) { event.preventDefault(); choose(index.value + 1) }
@@ -251,12 +266,13 @@ function keys(event: KeyboardEvent) {
 watch([index, () => current.value?.id || current.value?.src], () => {
   operation++; pending?.abort(); pending = undefined; action.value = undefined; actionError.value = ''
 })
-watch([opened, index, source, attempt], () => {
+watch([opened, editing, index, source, attempt], () => {
   stopVideo(); reset(); loading.value = true; failed.value = false
-  void loadImage()
+  if (editing.value) releaseImage(); else void loadImage()
 })
 watch(() => props.items.length, length => { if (!length) close(); else if (index.value >= length) choose(length - 1) })
 watch(() => session.user?.id, () => close())
+watch(canvasScope, () => close())
 onBeforeUnmount(() => { release(); dialog.value?.close() })
 async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number, format?: ImageDownloadFormat) {
   if (!item.src) throw new Error('文件正在加载，请稍后重试。')
@@ -293,9 +309,11 @@ async function run(kind: 'download' | 'copy') {
 
 <template>
   <Teleport to="body">
-    <dialog ref="dialog" class="media-lightbox" :class="{ 'has-sequence': items.length > 1 }" :aria-label="label" @cancel.prevent="close" @close="closed" @keydown="keys" @click.self="close">
-      <template v-if="opened">
+    <dialog ref="dialog" class="media-lightbox" :class="{ 'has-sequence': items.length > 1, 'is-editing': editing }" :aria-label="editing ? '图片画布' : label" @cancel.prevent="editing ? backToPreview() : close()" @close="closed" @keydown="keys" @click.self="close">
+      <StudioImageCanvas v-if="opened && editing && current?.src" :key="`${canvasScope}:${current.src}`" :src="current.src" :scope="canvasScope" :attachments="items" @back="backToPreview" @close="close" />
+      <template v-else-if="opened">
         <div class="lightbox-actions" role="group" aria-label="媒体操作">
+          <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="画布编辑" title="画布编辑" :disabled="!source || !!action" @click="editImage"><SquarePen :size="20" /></button>
           <button class="viewer-button" type="button" :aria-label="current?.kind === 'image' ? '下载图片' : '下载原文件'" :title="current?.kind === 'image' ? '选择图片下载格式' : '下载原文件'" :disabled="!source || !!action" @click="run('download')"><LoaderCircle v-if="action === 'download'" :size="20" /><Download v-else :size="20" /></button>
           <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="复制图片" title="复制图片" :disabled="!source || !!action" @click="run('copy')"><LoaderCircle v-if="action === 'copy'" :size="20" /><Copy v-else :size="20" /></button>
           <button class="viewer-button" type="button" :aria-label="closeLabel" :title="closeLabel" autofocus @click="close"><X :size="22" /></button>
@@ -323,6 +341,7 @@ async function run(kind: 'download' | 'copy') {
 
 <style scoped>
 .media-lightbox { position: fixed; inset: 0; box-sizing: border-box; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; overflow: hidden; background: rgb(0 0 0 / 94%); color: #fff; overscroll-behavior: contain; color-scheme: dark; }
+.media-lightbox.is-editing { background: var(--surface); color: var(--ink); color-scheme: normal; }
 .media-lightbox::backdrop { background: rgb(0 0 0 / 30%); }
 .lightbox-stage { position: absolute; inset: 64px 16px 84px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .lightbox-content { position: relative; display: flex; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }

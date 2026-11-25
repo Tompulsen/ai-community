@@ -1,6 +1,6 @@
 <!-- Thumbnail layout adapted from octopus_chat chat.module.scss (MIT). -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Music2, Play, X } from '@lucide/vue'
 import { mediaSource } from '../native-studio'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
@@ -21,7 +21,20 @@ function durationLabel(index: number) {
   const file = props.references[index]!, value = file.duration || durations.value[file.url]
   return value ? `${Number(value.toFixed(2))} 秒` : ''
 }
-function openPreview(index: number) { preview.value?.open(props.references.slice(0, index).filter(file => !file.type?.startsWith('audio/')).length) }
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+function openPreview(index: number, event?: MouseEvent) {
+  clearTimeout(previewTimer)
+  const position = props.references.slice(0, index).filter(file => !file.type?.startsWith('audio/')).length
+  if (!event?.detail || props.references[index]?.type?.startsWith('video/')) void preview.value?.open(position)
+  else previewTimer = setTimeout(() => void preview.value?.open(position), 280)
+}
+function openEditor(index: number) {
+  clearTimeout(previewTimer)
+  if (props.references[index]?.type?.startsWith('video/') || props.references[index]?.type?.startsWith('audio/')) return
+  void preview.value?.openEditor(props.references.slice(0, index).filter(file => !file.type?.startsWith('audio/')).length)
+}
+function removeReference(index: number) { clearTimeout(previewTimer); emit('remove', index) }
+onBeforeUnmount(() => clearTimeout(previewTimer))
 function mediaLabel(index: number) {
   const file = props.references[index]!
   return file.type?.startsWith('audio/') ? '参考音频' : file.type?.startsWith('video/') ? props.sourceVideo ? '源视频' : '参考视频' : `图片${props.references.slice(0, index + 1).filter(file => !file.type?.startsWith('video/') && !file.type?.startsWith('audio/')).length}`
@@ -37,22 +50,25 @@ watch(() => props.references.map(file => file.url).join('\n'), () => preview.val
           <div class="reference-audio-heading"><Music2 :size="16" aria-hidden="true" /><span class="reference-name" :title="file.name">{{ file.name }}</span><small>{{ mediaLabel(index) }}<template v-if="durationLabel(index)"> · {{ durationLabel(index) }}</template></small></div>
           <audio :src="mediaSource(file.url, false, 'video')" :aria-label="`参考音频：${file.name}`" controls preload="metadata" @loadedmetadata="loadedMedia(index, $event)" />
         </div>
-        <button v-else type="button" class="reference-preview reference-media-preview" :aria-label="file.type?.startsWith('video/') ? sourceVideo ? '预览源视频' : `预览参考视频 ${index + 1}` : `预览参考图 ${index + 1}`" @click="openPreview(index)">
+        <button v-else type="button" class="reference-preview reference-media-preview" :aria-label="file.type?.startsWith('video/') ? sourceVideo ? '预览源视频' : `预览参考视频 ${index + 1}` : `预览参考图 ${index + 1}`" @click="openPreview(index, $event)" @dblclick.stop.prevent="openEditor(index)">
           <span class="reference-thumbnail"><video v-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`${sourceVideo ? '源视频' : '参考视频'}：${file.name}`" width="72" height="72" playsinline muted preload="metadata" @loadedmetadata="loadedMedia(index, $event)" /><img v-else :src="mediaSource(file.url, true)" :alt="file.name" /><Play v-if="file.type?.startsWith('video/')" class="reference-play" :size="20" aria-hidden="true" /></span>
           <span class="reference-copy"><span class="reference-name" :title="file.name">{{ file.name }}</span><small>{{ mediaLabel(index) }}<template v-if="durationLabel(index)"> · {{ durationLabel(index) }}</template></small></span>
         </button>
       </template>
       <video v-else-if="file.type?.startsWith('video/')" :src="mediaSource(file.url, false, 'video')" :aria-label="`源视频：${file.name}`" width="240" height="135" controls playsinline preload="metadata" @loadedmetadata="loadedMedia(index, $event)" />
-      <button v-else class="reference-preview" type="button" :aria-label="`预览参考图 ${index + 1}`" :title="file.name" @click="preview?.open(index)">
+      <button v-else class="reference-preview" type="button" :aria-label="`预览参考图 ${index + 1}`" :title="file.name" @click="openPreview(index, $event)" @dblclick.stop.prevent="openEditor(index)">
         <img :src="mediaSource(file.url, true)" :alt="file.name" />
       </button>
-      <button class="reference-remove" type="button" :disabled="disabled" :aria-label="`移除${file.type?.startsWith('audio/') ? '参考音频' : file.type?.startsWith('video/') ? sourceVideo ? '源视频' : '参考视频' : '参考图'} ${index + 1}`" title="移除附件" @click="$emit('remove', index)"><X :size="14" /></button>
+      <button v-if="!file.type?.startsWith('video/') && !file.type?.startsWith('audio/')" class="reference-edit" type="button" :aria-label="`编辑参考图 ${index + 1}`" title="打开图片画布" @click.stop="openEditor(index)"><span class="reference-edit-desktop">双击编辑</span><span class="reference-edit-touch">编辑图片</span></button>
+      <button class="reference-remove" type="button" :disabled="disabled" :aria-label="`移除${file.type?.startsWith('audio/') ? '参考音频' : file.type?.startsWith('video/') ? sourceVideo ? '源视频' : '参考视频' : '参考图'} ${index + 1}`" title="移除附件" @click="removeReference(index)"><X :size="14" /></button>
     </li>
   </ul>
   <StudioMediaPreview ref="preview" :items="items" :label="compact ? '参考素材预览' : '参考图预览'" :close-label="compact ? '关闭参考素材预览' : '关闭参考图预览'" />
 </template>
 
 <style scoped>
+.reference-edit { position: absolute; bottom: 0; left: 0; width: 100%; min-height: 24px; padding: 2px; border: 0; color: #fff; background: rgb(0 0 0 / 65%); font: inherit; font-size: 11px; cursor: pointer; }.reference-edit-touch { display: none; }.compact-references .reference-edit { width: 72px; left: 4px; bottom: 4px; border-radius: 0 0 4px 4px; }
+@media (hover: none), (pointer: coarse) { .reference-edit { min-height: 44px; }.reference-edit-desktop { display: none; }.reference-edit-touch { display: inline; } }
 .reference-list { display: flex; flex-shrink: 0; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--border) transparent; list-style: none; gap: 8px; padding: 0 5px 4px; margin: 0 0 8px; }
 li { flex: 0 0 64px; width: 64px; height: 64px; position: relative; border-radius: 12px; overflow: hidden; }
 .reference-preview { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: var(--surface-soft); cursor: zoom-in; }

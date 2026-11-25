@@ -492,3 +492,21 @@ helper. Only published author references are offered; user images reuse the exis
 preparation, limits and compression. Vue dialog, model-group validation, new conversation drafts,
 video mention mapping and generation requests remain in the current native studio. No dependencies,
 iframe bridge, background generation service or database schema were added.
+
+The community image canvas adapts QXChat (Tompulsen/Clodesen-jifen, main
+a95f9157320c9b1840a39cb4217163305df66225) `app/utils/image-canvas.ts` and
+`app/components/image-canvas-editor.tsx` / `image-canvas-references.tsx`
+under MIT, Copyright (c) 2023-2025 NextChat. The existing full MIT notice
+in THIRD_PARTY_NOTICES.md applies. Vue UI, authenticated media loading,
+account-scoped drafts and creation submission reuse the community implementation.
+
+The viewport and movable image nodes reuse basketikun/infinite-canvas (MIT,
+Copyright (c) 2026 basketikun), from the user-supplied infinite-canvas-main.zip:
+`packages/workbench/src/components/canvas/infinite-canvas.tsx` / `canvas-node.tsx`.
+The Vue adaptation is `StudioCanvasBoard.vue` and `canvas-viewport.ts`. It retains
+pointer-anchored zoom, pan, drag, adds touch/keyboard movement and shares the
+community canvas undo/drafts. Full MIT notice ships in
+`public/assets/licenses/infinite-canvas-MIT.txt`, with editor attribution.
+Image-node positions organize the workspace only; original-pixel annotations,
+reference IDs and model attachment order remain independent of the viewport.
+No new dependencies, model backend or upstream plugin/CLI runtime are imported.

@@ -187,13 +187,13 @@ async function clearFailed() {
     if (current()) await loadPage()
   })
 }
-async function open(task: CreationTask, index = 0, library = false) {
+async function open(task: CreationTask, index = 0, library = false, editor = false) {
   const owner = session.user?.id, accepted = ++previewRevision, canonical = canonicalCreationTask(task)
   const indexes = library ? galleryOutputIndexes(canonical) : canonical.urls.map((_, position) => position)
   if (!indexes.includes(index)) return
   preview.value = { task: canonical, indexes }
   await nextTick()
-  if (owner === session.user?.id && accepted === previewRevision) await previewer.value?.open(indexes.indexOf(index))
+  if (owner === session.user?.id && accepted === previewRevision) await previewer.value?.open(indexes.indexOf(index), editor)
 }
 defineExpose({ open, cancelOperation })
 async function downloadPreview(index: number, format?: ImageDownloadFormat, signal?: AbortSignal) { if (preview.value) await downloadCreation(preview.value.task, preview.value.indexes[index]!, signal, undefined, format) }
