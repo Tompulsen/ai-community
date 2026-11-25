@@ -142,6 +142,68 @@ test('durable generation survives Redis loss and never replays dispatched reques
     assert.equal(f.calls.length, 1)
     assert(!(await readdir(path.join(filesRoot, '.creation-results'))).some(name => name.endsWith('.request.json')))
   })
+  for (const target of ['postgres', 'redis']) for (const failures of [1, 3]) await t.test(`worker result survives ${failures} ${target} save failures without querying the paid task again`, async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-worker-save-'))
+    t.after(() => rm(filesRoot, { recursive: true, force: true }))
+    const requestId = `worker-${target}-${failures}`
+    let remaining = failures, queries = 0
+    const storeDb = { query(sql, params) {
+      if (target === 'postgres' && sql.includes('SET record=$4') && JSON.parse(params[3]).result.status === 'succeeded' && remaining-- > 0)
+        throw new Error('Temporary PostgreSQL failure')
+      return db.query(sql, params)
+    } }
+    const f = fixture(t, { filesRoot, storeDb, groupToken: () => 73,
+      beforeRedisSet(key, value) {
+        if (target === 'redis' && key.endsWith(`:${requestId}`) && JSON.parse(value).result.status === 'succeeded' && remaining-- > 0)
+          throw new Error('Temporary Redis failure')
+      },
+      fetch(_url, init) {
+        if (init.method === 'POST') return Response.json({ id: requestId, status: 'queued' })
+        return Response.json(++queries === 1 ? { status: 'completed', data: [{ url: 'https://media.example/completed.png' }] } : { status: 'expired' })
+      },
+    })
+    await submit(f.app, { ...input, requestId, protocol: 'async' }, { prefer: 'respond-async' })
+    await drainCreations(f.redis)
+    const key = [...f.values.keys()].find(key => key.endsWith(`:${requestId}`))
+    await db.query('UPDATE community_creation_request SET next_poll=$1 WHERE key=$2', [Date.now() - 1, key])
+    await processCreationTasks(f.redis, f.services, storeDb)
+    await f.redis.zadd('community-next:creation:pending', 0, key)
+    await db.query("UPDATE community_creation_request SET next_poll=$1 WHERE key=$2 AND state<>'succeeded'", [Date.now() - 1, key])
+    await processCreationTasks(f.redis, f.services, storeDb)
+    const recovered = (await f.app.inject(`/api/creation/requests/${requestId}`)).json()
+    assert.equal(recovered.status, 'succeeded')
+    assert.equal(recovered.outputs[0].url, 'https://media.example/completed.png')
+    assert.equal((await db.query('SELECT state FROM community_creation_request WHERE key=$1', [key])).rows[0].state, 'succeeded')
+    assert.equal(queries, 1)
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+  await t.test('an outdated worker never writes a recovery file after losing its database owner', async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-worker-owner-'))
+    t.after(() => rm(filesRoot, { recursive: true, force: true }))
+    let updates = 0, moved = false
+    const storeDb = { query(sql, params) {
+      if (moved && sql.includes('SET record=$4')) updates++
+      return db.query(sql, params)
+    } }
+    const f = fixture(t, { filesRoot, storeDb, groupToken: () => 73,
+      async fetch(_url, init) {
+        if (init.method === 'POST') return Response.json({ id: 'owner-moved', status: 'queued' })
+        await db.query("UPDATE community_creation_request SET owner='another-worker',version=version+1 WHERE key LIKE '%:owner-moved'")
+        moved = true
+        return Response.json({ status: 'completed', data: [{ url: 'https://media.example/stale.png' }] })
+      },
+    })
+    await submit(f.app, { ...input, requestId: 'owner-moved', protocol: 'async' }, { prefer: 'respond-async' })
+    await drainCreations(f.redis)
+    const key = [...f.values.keys()].find(key => key.endsWith(':owner-moved'))
+    await db.query('UPDATE community_creation_request SET next_poll=$1 WHERE key=$2', [Date.now() - 1, key])
+    await processCreationTasks(f.redis, f.services, storeDb)
+    assert.equal(updates, 1)
+    const files = await readdir(path.join(filesRoot, '.creation-results')).catch(() => [])
+    assert(!files.some(file => file.endsWith('.request.json')))
+    assert.equal((await db.query('SELECT owner FROM community_creation_request WHERE key=$1', [key])).rows[0].owner, 'another-worker')
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
   await t.test('a synchronous v1 paid result repairs an uncertain terminal record from its late recovery file', async t => {
     const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-sync-recovery-'))
     t.after(() => rm(filesRoot, { recursive: true, force: true }))
@@ -328,7 +390,7 @@ function fixture(t, options = {}) {
     app.get('/api/uploads/:id', route)
     app.route({ method: ['GET', 'HEAD'], url: '/legacy-files/:id', handler: route })
   }
-  return { app, values, calls, credentialCalls, catalogueCalls, groupCalls, mediaCalls, redis, services }
+  return { app, values, due, calls, credentialCalls, catalogueCalls, groupCalls, mediaCalls, redis, services }
 }
 
 function submit(app, body = imageRequest, extraHeaders = {}) {
@@ -750,6 +812,156 @@ test('background media returns its request ID before the upstream responds and a
   assert.equal((await f.app.inject({ url: '/api/creation/requests/background-video', headers: { 'x-test-account': '18' } })).statusCode, 404)
   assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
 })
+test('background queries stop on permanent rejection without declaring generation failed or repeating a paid POST', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
+  for (const status of [400, 401, 403, 404, 410, 422]) await t.test(String(status), async t => {
+    const ready = deferred()
+    const f = fixture(t, {
+      afterRedisSet(key, value) { if (key.endsWith(':permanent-query') && JSON.parse(value).tracking) ready.resolve() },
+      fetch(_url, init) { return init.method === 'POST'
+        ? Response.json({ id: 'original-video', status: 'queued' }) : new Response('Unavailable task', { status }) },
+    })
+    const input = { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'permanent-query' }
+    await submit(f.app, input, { Prefer: 'respond-async' }); await ready.promise
+    const key = [...f.values.keys()].find(key => key.endsWith(':permanent-query'))
+    await processCreationTasks(f.redis, f.services)
+    const result = (await f.app.inject('/api/creation/requests/permanent-query')).json()
+    assert.equal(result.status, 'indeterminate')
+    assert.equal(result.errorStage, '任务查询')
+    assert.equal(result.errorStatus, status)
+    assert.equal(result.upstreamId, 'original-video')
+    assert.equal(result.tokenId, 71)
+    assert(!/自动重试/.test(result.error))
+    assert.equal(f.due.has(key), false)
+    await processCreationTasks(f.redis, f.services)
+    assert.equal(f.calls.length, 2)
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+})
+
+test('background queries respect Retry-After and recover temporary 408 errors using the original task', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
+  for (const [status, retryAfter, minimum] of [[429, '120', 120000], [429, 'date', 119000], [429, 'invalid', 30000], [503, '120', 120000], [408, '', 10000]]) await t.test(`${status}/${retryAfter}`, async t => {
+    const ready = deferred()
+    let completed = false
+    const f = fixture(t, {
+      afterRedisSet(key, value) { if (key.endsWith(':retry-query') && JSON.parse(value).tracking) ready.resolve() },
+      fetch(_url, init) {
+        if (init.method === 'POST') return Response.json({ id: 'original-video', status: 'queued' })
+        if (completed) return Response.json({ id: 'original-video', status: 'completed' })
+        return new Response('Temporarily unavailable', { status, headers: { 'Retry-After': retryAfter === 'date' ? new Date(Date.now() + 120000).toUTCString() : retryAfter } })
+      },
+    })
+    await submit(f.app, { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'retry-query' }, { Prefer: 'respond-async' })
+    await ready.promise
+    const key = [...f.values.keys()].find(key => key.endsWith(':retry-query'))
+    const now = Date.now()
+    await processCreationTasks(f.redis, f.services)
+    assert.equal(JSON.parse(f.values.get(key)).result.status, 'pending')
+    assert(f.due.get(key) >= now + minimum, `next query was scheduled too early: ${f.due.get(key) - now} ms`)
+    await processCreationTasks(f.redis, f.services)
+    assert.equal(f.calls.length, 2)
+    completed = true
+    await f.redis.zadd('community-next:creation:pending', 0, key)
+    await processCreationTasks(f.redis, f.services)
+    assert.equal((await f.app.inject('/api/creation/requests/retry-query')).json().status, 'succeeded')
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+})
+
+for (const failures of [1, 3]) test(`a worker preserves its completed result across ${failures} storage failures even if the next upstream read expires`, async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-worker-recovery-'))
+  t.after(async () => {
+    if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous
+    await rm(filesRoot, { recursive: true, force: true })
+  })
+  const ready = deferred()
+  let remaining = failures, queries = 0
+  const f = fixture(t, { filesRoot,
+    beforeRedisSet(key, value) {
+      if (key.endsWith(':worker-result') && JSON.parse(value).result.status === 'succeeded' && remaining-- > 0)
+        throw new Error('Temporary result storage failure')
+    },
+    afterRedisSet(key, value) { if (key.endsWith(':worker-result') && JSON.parse(value).tracking) ready.resolve() },
+    fetch(_url, init) {
+      if (init.method === 'POST') return Response.json({ id: 'original-video', status: 'queued' })
+      return Response.json({ id: 'original-video', status: ++queries === 1 ? 'completed' : 'expired' })
+    },
+  })
+  await submit(f.app, { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'worker-result' }, { Prefer: 'respond-async' })
+  await ready.promise
+  const key = [...f.values.keys()].find(key => key.endsWith(':worker-result'))
+  await processCreationTasks(f.redis, f.services)
+  await f.redis.zadd('community-next:creation:pending', 0, key)
+  await processCreationTasks(f.redis, f.services)
+  const result = (await f.app.inject('/api/creation/requests/worker-result')).json()
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.mediaPath, 'videos/original-video/content')
+  assert.equal(queries, 1)
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  assert.equal((await f.app.inject({ url: '/api/creation/requests/worker-result', headers: { 'x-test-account': '18' } })).statusCode, 404)
+})
+
+test('worker media ownership storage failure preserves the completed result and request reads repair ownership', async t => {
+  const previous = process.env.NEW_API_SESSION_SECRET
+  process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
+  t.after(() => { if (previous === undefined) delete process.env.NEW_API_SESSION_SECRET; else process.env.NEW_API_SESSION_SECRET = previous })
+  const ready = deferred()
+  let rejected = false, queries = 0
+  const f = fixture(t, {
+    beforeRedisSet(key) {
+      if (key.startsWith('community-next:creation:media:') && !rejected) {
+        rejected = true
+        throw new Error('Temporary media ownership storage failure')
+      }
+    },
+    afterRedisSet(key, value) { if (key.endsWith(':worker-owner') && JSON.parse(value).tracking) ready.resolve() },
+    fetch(_url, init) {
+      if (init.method === 'POST') return Response.json({ id: 'original-video', status: 'queued' })
+      return Response.json({ id: 'original-video', status: ++queries === 1 ? 'completed' : 'expired' })
+    },
+  })
+  await submit(f.app, { kind: 'video', model: 'sora-2', duration: 8, prompt: 'A test video', requestId: 'worker-owner' }, { Prefer: 'respond-async' })
+  await ready.promise
+  const key = [...f.values.keys()].find(key => key.endsWith(':worker-owner'))
+  await processCreationTasks(f.redis, f.services)
+  await f.redis.zadd('community-next:creation:pending', 0, key)
+  await processCreationTasks(f.redis, f.services)
+  const result = (await f.app.inject('/api/creation/requests/worker-owner')).json()
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.mediaPath, 'videos/original-video/content')
+  assert([...f.values.keys()].some(key => key.startsWith('community-next:creation:media:')))
+  assert.equal(queries, 1)
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+})
+
+test('synchronous image results survive exhausted Redis writes through the same disk fallback without replay', async t => {
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-sync-recovery-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  let remaining = 3
+  const f = fixture(t, { filesRoot,
+    beforeRedisSet(key, value) {
+      if (key.endsWith(':request-1') && JSON.parse(value).result.status === 'succeeded' && remaining-- > 0)
+        throw new Error('Temporary result storage failure')
+    },
+    fetch() { return Response.json({ data: [{ url: 'https://media.example/paid-result.png' }] }) },
+  })
+  const sent = await submit(f.app)
+  assert.equal(sent.statusCode, 200)
+  assert.equal(sent.json().status, 'succeeded')
+  const recovered = (await f.app.inject('/api/creation/requests/request-1')).json()
+  assert.equal(recovered.status, 'succeeded')
+  assert.equal(recovered.outputs[0].url, 'https://media.example/paid-result.png')
+  assert.equal((await submit(f.app)).json().status, 'succeeded')
+  assert.equal(f.calls.length, 1)
+})
+
 test('async video failure details survive polling, request reload and duplicate submission without replay', async t => {
   const previous = process.env.NEW_API_SESSION_SECRET
   process.env.NEW_API_SESSION_SECRET = 'fixture-async-error-secret-'.repeat(3)
@@ -1550,17 +1762,17 @@ test('custom video reference aliases cannot bypass configured zero reference lim
   assert.equal(f.values.size, 0)
 })
 
-test('upstream read throttling preserves HTTP 429 and Retry-After without replaying requests', async t => {
-  for (const retryAfter of ['7', 'Sun, 22 Nov 2026 12:00:00 GMT', undefined]) {
+test('upstream read throttling preserves Retry-After for HTTP 429 and 503 without replaying requests', async t => {
+  for (const status of [429, 503]) for (const retryAfter of ['7', 'Sun, 22 Nov 2026 12:00:00 GMT', undefined]) {
     const { app, calls } = fixture(t, { fetch(_url, init) {
       assert.notEqual(init.method, 'POST')
       return Response.json({ error: { code: 'rate_limited' } }, {
-        status: 429, headers: retryAfter ? { 'Retry-After': retryAfter } : {},
+        status, headers: retryAfter ? { 'Retry-After': retryAfter } : {},
       })
     } })
     for (const url of ['/api/creation/tasks/image/rate-limited?protocol=async&tokenId=71', '/api/creation/models']) {
       const response = await app.inject(url)
-      assert.equal(response.statusCode, 429)
+      assert.equal(response.statusCode, status === 429 ? 429 : 502)
       assert.equal(response.headers['retry-after'], retryAfter)
     }
     assert.equal(calls.length, 2)

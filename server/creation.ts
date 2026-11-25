@@ -31,7 +31,7 @@ import { readGenerationStream, GenerationStreamError, extractChatReasoning, extr
 import { createTextLifecycle } from './creation/text-lifecycle.ts'
 import { createEventWriter } from './creation/event-writer.ts'
 import { trackCreation, creationsClosing } from './creation/inflight.ts'
-import { textGenerationTimeouts, creationStreamProtocol } from '../shared/studio/creation-limits.ts'
+import { textGenerationTimeouts, creationStreamProtocol, creationRetryDelay } from '../shared/studio/creation-limits.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat } from '../shared/studio/model-types.ts'
@@ -105,6 +105,21 @@ async function saveRequestResult(redis: RequestContext['redis'], key: string, ca
   )
   if (filesRoot) await unlink(path.join(filesRoot, '.creation-results', hash(key) + '.request.json')).catch(() => {})
 }
+async function persistRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000, durable?: { db: Queryable; row: DurableRequest }) {
+  let failure: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await saveRequestResult(redis, key, cached, filesRoot, nextPoll, durable); return }
+    catch (error) {
+      if (error instanceof Error && error.message === 'Request record ownership changed') throw error
+      failure = error
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt))
+    }
+  }
+  if (!filesRoot) throw failure
+  const directory = path.join(filesRoot, '.creation-results')
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(cached), { mode: 0o600 })
+}
 async function requestFallback(cached: TrackedRequest, key: string) {
   if (!['pending', 'indeterminate', 'save_failed'].includes(cached.result.status) || !cached.filesRoot) return cached
   try {
@@ -146,7 +161,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
         await saveRequestResult(redis, key, cached, filesRoot)
         return
       }
-      const save = (delay = 5000) => saveRequestResult(redis, key, cached, filesRoot, delay, durable)
+      const save = (delay = 5000) => persistRequestResult(redis, key, cached, filesRoot, delay, durable)
       if (cached.result.status !== 'pending') {
         await save()
         return
@@ -172,9 +187,12 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
         queryStatus = response.status
         if (!response.ok) {
           await response.body?.cancel()
-          cached.result = { ...cached.result, errorStage: '任务查询', errorStatus: response.status,
-            error: stageError('任务查询', '网关暂未返回任务状态，后台将自动重试。', response.status) }
-          await save(response.status === 429 ? 30000 : 10000)
+          const permanent = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+          cached.result = { ...cached.result, ...(permanent ? { status: 'indeterminate' as const } : {}), errorStage: '任务查询', errorStatus: response.status,
+            error: stageError('任务查询', permanent ? '无法继续自动查询，请核对原任务，暂勿重复提交。' : '查询暂时失败，正在自动重试。', response.status) }
+          if (permanent) delete cached.tracking
+          const wait = creationRetryDelay(response.headers.get('Retry-After'), response.status === 429 ? 30000 : 10000)
+          await save(wait)
           return
         }
         result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
@@ -188,14 +206,15 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
         }
         cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
         if (result.status !== 'pending') delete cached.tracking
-        if (result.mediaPath) {
-          const namespace = /^community-next:creation:request:([a-f0-9]{64}):/.exec(key)?.[1]
-          if (!namespace) throw new Error('Invalid task namespace')
-          await redis.set(`community-next:creation:media:${namespace}:${hash(mediaPath(result.mediaPath))}`,
-            JSON.stringify({ tokenId: result.tokenId, protocol: result.protocol }), 'EX', taskTtl)
-        }
       }
       await save()
+      // Request reads repair ownership; a metadata outage must not discard the paid result.
+      if (cached.result.mediaPath) {
+        const namespace = /^community-next:creation:request:([a-f0-9]{64}):/.exec(key)?.[1]
+        if (!namespace) throw new Error('Invalid task namespace')
+        await redis.set(`community-next:creation:media:${namespace}:${hash(mediaPath(cached.result.mediaPath))}`,
+          JSON.stringify({ tokenId: cached.result.tokenId, protocol: cached.result.protocol }), 'EX', taskTtl).catch(() => {})
+      }
     } catch {
       await redis.zadd(pendingTasks, Date.now() + 15000, key)
     } finally {
@@ -303,9 +322,9 @@ async function upstreamJson(ctx: RequestContext, req: AccountRequest, credential
   })
   if (!response.ok) {
     await response.body?.cancel()
+    const retryAfter = response.headers.get('retry-after')
+    if (retryAfter) ctx.reply.header('Retry-After', retryAfter)
     if (response.status === 429) {
-      const retryAfter = response.headers.get('retry-after')
-      if (retryAfter) ctx.reply.header('Retry-After', retryAfter)
       throw httpError(429, '任务查询过于频繁，请稍后重试。')
     }
     throw Object.assign(httpError(response.status === 404 ? 404 : response.status === 401 || response.status === 403 ? 403 : 502,
@@ -676,8 +695,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const pending: TrackedRequest = { fingerprint, contractVersion: input.contractVersion ?? 1, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     ...(input.kind === 'text' ? { deadline } : {}),
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
-    deadline, ...(background ? { background: true } : {}),
-    ...(durable || background || input.kind === 'text' ? { filesRoot: ctx.filesRoot } : {}) }
+    deadline, ...(background ? { background: true } : {}), filesRoot: ctx.filesRoot }
   recoverable = true
   if (durable) durable.row = await dispatchDurableRequest(durable.db, durable.row, {
     issuer: getNewApiConfig().publicUrl, userId: credentials.userId, group, tokenId: credentials.tokenId,
@@ -778,16 +796,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     tracked.tracking = await sealData({ key, credentials, deadline: tracked.deadline, filesRoot: ctx.filesRoot } satisfies PollCredentials,
       { password: getNewApiConfig().secret, ttl: 86400 })
   }
-  let saved = false
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try { await saveRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0, durable); saved = true; break }
-    catch { if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt)) }
-  }
-  if (!saved && (durable || background || input.kind === 'text') && ctx.filesRoot) {
-    const directory = path.join(ctx.filesRoot, '.creation-results')
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(tracked), { mode: 0o600 })
-  } else if (!saved && !background) await ctx.redis.set(key, JSON.stringify(pending), 'EX', requestTtl)
+  await persistRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0, durable)
   return result
   }
   if (!background) return await finish()

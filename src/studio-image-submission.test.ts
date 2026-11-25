@@ -495,6 +495,24 @@ it('recovers a known task from a temporary read failure using GET without anothe
   expect(p.send).toHaveBeenCalledTimes(1)
   expect(vi.mocked(api).mock.calls.every(([path]) => path.includes('/tasks/image/known-task?'))).toBe(true)
 })
+for (const [status, retryAfter, wait] of [[408, undefined, 5000], [503, '120', 120000]] as const) it(`recovers an HTTP ${status} task query without resubmitting or ignoring Retry-After`, async () => {
+  const p = await fixture(), { api } = await import('./state')
+  p.send.mockImplementationOnce(async () => Response.json({ status: 'pending', protocol: 'async', upstreamId: 'known-task', outputs: [] }))
+  vi.mocked(api).mockRejectedValueOnce(Object.assign(new Error('查询暂时不可用'), { status, retryAfter }))
+    .mockResolvedValueOnce({ status: 'succeeded', outputs: [{ url: 'https://media.example/recovered.png' }] })
+  vi.useFakeTimers()
+  const pending = p.submitCreation(p.input)
+  await vi.waitFor(() => expect(p.creation.tasks[0]).toMatchObject({ phase: 'running', errorStatus: status }))
+  await vi.advanceTimersByTimeAsync(5000)
+  if (wait > 5000) {
+    expect(api).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(wait - 5000)
+  }
+  expect(await pending).toMatchObject({ phase: 'complete', upstreamId: 'known-task' })
+  expect(api).toHaveBeenCalledTimes(2)
+  expect(p.send).toHaveBeenCalledTimes(1)
+})
+
 it('keeps a worker query error visible until the automatic read recovers', async () => {
   const p = await fixture(), { api } = await import('./state')
   p.send.mockImplementationOnce(async (_url, init) => {

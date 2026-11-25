@@ -16,7 +16,7 @@ import { imageThumbnail } from './studio-media-previews'
 import { imageDownload, jpegDownload } from './image-download'
 import { chooseImageDownloadFormat } from './image-download-choice'
 import type { ImageDownloadFormat } from '../shared/image-download'
-import { creationStreamProtocol, textGenerationTimeouts } from '../shared/studio/creation-limits'
+import { creationStreamProtocol, creationRetryDelay, textGenerationTimeouts } from '../shared/studio/creation-limits'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -586,12 +586,6 @@ async function queryCreationTask(path: string, task: CreationTask, controller: A
     else activeTaskQueries--
   }
 }
-function taskRetryDelay(value: unknown, minimum: number) {
-  if (typeof value !== 'string' || !value.trim()) return minimum
-  const seconds = Number(value)
-  const duration = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now()
-  return Number.isFinite(duration) ? Math.max(minimum, duration) : minimum
-}
 async function poll(task: CreationTask, controller: AbortController, version: number) {
   let deadline = task.deadline ?? task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : task.kind === 'text' ? textGenerationTimeouts.total + textGenerationTimeouts.save : 30 * 60_000)
   let failures = 0, rateLimited = 0
@@ -609,7 +603,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     } catch (error) {
       if (epoch !== version || controller.signal.aborted) return
       const status = record(error) ? error.status : undefined
-      const permanent = typeof status === 'number' && status < 500 && status !== 429
+      const permanent = typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429
       task.phase = permanent ? 'attention' : 'running'
       const submissionError = status === 404 && !task.upstreamId ? task.submissionError : undefined
       if (submissionError) task.error = submissionError
@@ -624,9 +618,9 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
       let wait = 5000
       if (status === 429) {
         failures = 0
-        wait = taskRetryDelay(record(error) ? error.retryAfter : undefined, Math.min(60000, 5000 * 2 ** Math.min(rateLimited++, 4)))
+        wait = creationRetryDelay(record(error) ? error.retryAfter : undefined, Math.min(60000, 5000 * 2 ** Math.min(rateLimited++, 4)))
       } else if (permanent) return
-      else wait = Math.min(60000, 5000 * 2 ** Math.min(failures++, 4))
+      else wait = creationRetryDelay(record(error) ? error.retryAfter : undefined, Math.min(60000, 5000 * 2 ** Math.min(failures++, 4)))
       await delay(controller.signal, Math.min(wait, Math.max(0, deadline - Date.now())))
       continue
     }
