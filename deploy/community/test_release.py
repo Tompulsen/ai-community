@@ -180,7 +180,7 @@ class ReleaseHarness:
         return 200, {'x-content-type-options': 'nosniff', 'content-type': 'text/javascript',
                      'content-length': str(len(body))}, b'' if method == 'HEAD' else body
 
-    def run(self):
+    def run(self, request_flags=None):
         real_open = os.open
 
         def mapped_path(*parts):
@@ -203,13 +203,39 @@ class ReleaseHarness:
             stack.enter_context(patch.object(release.os, 'open', side_effect=lock_open))
             stack.enter_context(patch.dict('sys.modules', {'fcntl': SimpleNamespace(LOCK_EX=1, LOCK_NB=2, flock=lambda *_: None)}))
             stack.enter_context(redirect_stdout(io.StringIO()))
-            release.main(self.image)
+            release.main(self.image, request_flags)
 
     def report(self):
         return json.loads(next((self.root / 'releases').glob('*/result.json')).read_bytes())
 
 
 class ReleaseFlowTests(unittest.TestCase):
+    def test_v2_rollout_preserves_the_store_and_other_runtime_configuration(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root))
+            flags = {'COMMUNITY_REQUEST_STORE': '1', 'COMMUNITY_CREDENTIAL_MIGRATION_CONFIRMED': '1',
+                     'COMMUNITY_REQUEST_V2': '0', 'COMMUNITY_REQUEST_V2_ACCOUNTS': '3'}
+            for item in fixture.items.values():
+                item['Config']['Env'].extend(key + '=' + value for key, value in flags.items())
+            for service in ['web', 'unified_web']:
+                fixture.original['services'][service]['environment'].update(flags)
+            fixture.compose.write_text(json.dumps(fixture.original))
+            requested = {'COMMUNITY_REQUEST_V2_ACCOUNTS': '3,17'}
+            fixture.run(requested)
+            environment = release.environment(fixture.items[release.WEB])
+            self.assertEqual(environment['COMMUNITY_REQUEST_V2_ACCOUNTS'], '3,17')
+            self.assertEqual(environment['COMMUNITY_REQUEST_STORE'], '1')
+            self.assertEqual(environment['NEW_API_SESSION_SECRET'], 'unchanged-secret')
+            rollback = json.loads(next((fixture.root / 'releases').glob('*/rollback.compose.json')).read_bytes())
+            self.assertEqual(rollback['services']['web']['environment']['COMMUNITY_REQUEST_V2_ACCOUNTS'], '3')
+
+    def test_v2_rollout_rejects_unrelated_configuration_changes(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root))
+            with self.assertRaisesRegex(AssertionError, 'Only V2 rollout flags'):
+                fixture.run({'NEW_API_SESSION_SECRET': 'replacement'})
+            self.assertFalse(any(command[:2] == ('docker', 'compose') for command in fixture.commands))
+
     def test_success_retires_old_apps_after_checks_and_keeps_data_services(self):
         with tempfile.TemporaryDirectory() as root:
             fixture = ReleaseHarness(Path(root))

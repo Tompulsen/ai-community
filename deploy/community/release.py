@@ -260,7 +260,13 @@ def wait_request_drain(name, guard=None):
         time.sleep(min(1, remaining))
 
 
-def main(image):
+def main(image, request_flags=None):
+    if request_flags:
+        assert set(request_flags) <= {'COMMUNITY_REQUEST_V2', 'COMMUNITY_REQUEST_V2_ACCOUNTS'}, 'Only V2 rollout flags may change'
+        assert request_flags.get('COMMUNITY_REQUEST_V2', '0') in ('0', '1'), 'Invalid V2 switch'
+        accounts = request_flags.get('COMMUNITY_REQUEST_V2_ACCOUNTS', '')
+        assert isinstance(accounts, str) and re.fullmatch(r'(?:[1-9]\d*(?:,[1-9]\d*)*)?', accounts), 'Invalid V2 account list'
+        assert not accounts or len(accounts.split(',')) == len(set(accounts.split(','))), 'Duplicate V2 account'
     assert os.geteuid() == 0 and COMPOSE.is_file() and VHOST.is_file()
     assert re.fullmatch(r'ghcr\.io/tompulsen/ai-community@sha256:[a-f0-9]{64}', image), 'Use a published digest'
     lock = os.open('/opt/ai-community-next/deploy/.release.lock', os.O_CREAT | os.O_RDWR, 0o600)
@@ -292,6 +298,11 @@ def main(image):
         if key in desired_env:
             assert str(desired_env[key]) == value, f'Runtime configuration drift: {key}'
     desired_env.update(runtime_overrides)
+    if request_flags:
+        assert expected_env.get('COMMUNITY_REQUEST_STORE') == '1', 'Keep the durable request store enabled'
+        assert expected_env.get('COMMUNITY_CREDENTIAL_MIGRATION_CONFIRMED') == '1', 'Credential migration must be confirmed'
+        desired_env.update(request_flags)
+        runtime_overrides.update(request_flags)
     if 'TRUSTED_PROXY_CIDRS' not in desired_env:
         network = current['NetworkSettings']['Networks'].get(current['HostConfig']['NetworkMode'], {})
         gateway = network.get('Gateway')
