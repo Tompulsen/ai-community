@@ -26,6 +26,30 @@ test('a single-group account catalogue reads only account metadata and rejects u
 test('native credentials retain PostgreSQL provenance across concurrency, cache loss and uncertain writes', async t => {
   const db = await requestDatabase(t)
   environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1' })
+  const key = (f, group = 'images') => 'octopus:new-api:model-group:' + createHash('sha256')
+    .update(JSON.stringify(['https://token-reuse.test', f.credentials.user.id, group])).digest('hex')
+  const fresh = f => { const req = new AccountRequest(f.request.url, { headers: f.request.headers }); req.database = db; return req }
+  const bind = (f, binding, group = 'images') => db.query('INSERT INTO community_group_credential (key,binding) VALUES ($1,$2)',
+    [key(f, group) + ':native', JSON.stringify(binding)])
+  await t.test('a selected manual group token is reused unchanged across fresh requests', async t => {
+    const f = await fixture(t, [{ id: 40, name: 'personal', unlimited_quota: false, remain_quota: 100,
+      model_limits_enabled: true, model_limits: 'gpt-image-2', allow_ips: '192.0.2.1',
+      expired_time: Math.floor(Date.now() / 1000) + 3600 }], { selected: 40, capacity: 1 })
+    const before = structuredClone(f.items)
+    const fresh = () => { const req = new AccountRequest(f.request.url, { headers: f.request.headers }); req.database = db; return req }
+    assert.equal(await resolveModelGroup(fresh(), 'images'), 40)
+    globalThis.__octopusModelGroups.clear()
+    assert.equal(await resolveModelGroup(fresh(), 'images', false), 40)
+    assert.deepEqual(f.items, before)
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('existing unselected manual group tokens prevent duplicate creation', async t => {
+    const f = await fixture(t, [{ id: 42, name: 'personal' }], { capacity: 1 })
+    f.request.database = db
+    assert.equal(await resolveModelGroup(f.request, 'images'), 42)
+    assert.equal(f.writes().length, 0)
+    assert.equal(f.items.length, 1)
+  })
   await t.test('eight first sends create once, survive Redis loss, and ignore manual session selections', async t => {
     const f = await fixture(t, [{ id: 40, name: 'manual', group: 'manual' }], { selected: 40 })
     f.request.database = db
@@ -42,9 +66,133 @@ test('native credentials retain PostgreSQL provenance across concurrency, cache 
     assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
     assert.equal(f.items.find(item => item.id === 40).name, 'manual')
   })
-  await t.test('a system name cannot prove provenance', async t => {
+  await t.test('a same-name token is borrowed without claiming creation provenance', async t => {
     const f = await fixture(t, [{ id: 41 }]); f.request.database = db
-    await assert.rejects(resolveModelGroup(f.request, 'images'), error => error.code === 'NEW_API_CREDENTIAL_VERIFICATION_REQUIRED')
+    assert.equal(await resolveModelGroup(f.request, 'images'), 41)
+    const row = (await db.query('SELECT provenance FROM community_group_credential WHERE key=$1', [key(f) + ':native'])).rows[0]
+    assert.equal(row.provenance, 'account-reuse')
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('concurrent discovery borrows the oldest eligible manual token and persists it', async t => {
+    const f = await fixture(t, [{ id: 52, name: 'newer' }, { id: 51, name: 'older' }], { capacity: 2 })
+    const before = structuredClone(f.items)
+    assert.deepEqual(await Promise.all(Array.from({ length: 8 }, () => resolveModelGroup(fresh(f), 'images'))), Array(8).fill(51))
+    const stored = (await db.query('SELECT binding,provenance,version FROM community_group_credential WHERE key=$1', [key(f) + ':native'])).rows[0]
+    assert.deepEqual(stored, { binding: { tokenId: 51 }, provenance: 'account-reuse', version: 1 })
+    globalThis.__octopusModelGroups.clear()
+    assert.equal(await resolveModelGroup(fresh(f), 'images', false), 51)
+    assert.equal(f.lists().length, 1)
+    assert.deepEqual(f.items, before)
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('an explicit same-group selection takes priority over a different native binding', async t => {
+    const f = await fixture(t, [{ id: 61 }, { id: 62, name: 'personal' }], { selected: 62 })
+    await bind(f, { tokenId: 61 })
+    assert.equal(await resolveModelGroup(fresh(f), 'images'), 62)
+    const row = (await db.query('SELECT binding,provenance FROM community_group_credential WHERE key=$1', [key(f) + ':native'])).rows[0]
+    assert.deepEqual(row, { binding: { tokenId: 62 }, provenance: 'account-reuse' })
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('a legacy manual binding is borrowed without listing or modifying keys', async t => {
+    const f = await fixture(t, [{ id: 71, name: 'personal' }])
+    globalThis.__octopusModelGroups.set(key(f), JSON.stringify({ tokenId: 71 }))
+    assert.equal(await resolveModelGroup(fresh(f), 'images'), 71)
+    assert.equal(f.lists().length, 0)
+    assert.equal(f.writes().length, 0)
+    assert.equal(globalThis.__octopusModelGroups.get(key(f)), JSON.stringify({ tokenId: 71 }))
+  })
+  await t.test('a confirmed deleted legacy binding does not prevent borrowing another existing key', async t => {
+    const f = await fixture(t, [{ id: 81, name: 'personal' }])
+    globalThis.__octopusModelGroups.set(key(f), JSON.stringify({ tokenId: 80 }))
+    assert.equal(await resolveModelGroup(fresh(f), 'images'), 81)
+    assert.equal(await resolveModelGroup(fresh(f), 'images', false), 81)
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('a confirmed deleted legacy binding creates once only when no group keys remain', async t => {
+    const f = await fixture(t)
+    globalThis.__octopusModelGroups.set(key(f), JSON.stringify({ tokenId: 80 }))
+    assert.deepEqual(await Promise.all(Array.from({ length: 8 }, () => resolveModelGroup(fresh(f), 'images'))), Array(8).fill(1))
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+    assert.equal(globalThis.__octopusModelGroups.has(key(f)), false)
+  })
+  for (const legacy of [false, true]) await t.test('a selected key cannot overwrite a pending intent: legacy=' + legacy, async t => {
+    const f = await fixture(t, [{ id: 72, name: 'personal' }], { selected: 72 })
+    const pending = { pendingName: systemName + '-0000000000000000' }
+    if (legacy) globalThis.__octopusModelGroups.set(key(f), JSON.stringify(pending))
+    else await bind(f, pending)
+    await assert.rejects(resolveModelGroup(fresh(f), 'images'), { code: 'NEW_API_GROUP_TOKEN_PENDING' })
+    assert.equal(f.writes().length, 0)
+    if (!legacy) assert.deepEqual((await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [key(f) + ':native'])).rows[0].binding, pending)
+  })
+  await t.test('matching legacy and durable intents recover once and keep working on the next request', async t => {
+    const pendingName = systemName + '-0000000000000000'
+    const f = await fixture(t, [{ id: 72, name: 'personal' }, { id: 79, name: pendingName }], { selected: 72 })
+    await bind(f, { pendingName, createdTokenId: 79 })
+    globalThis.__octopusModelGroups.set(key(f), JSON.stringify({ pendingName }))
+    assert.equal(await resolveModelGroup(fresh(f), 'images'), 79)
+    assert.equal(globalThis.__octopusModelGroups.has(key(f)), false)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 0)
+    assert.deepEqual(f.writes().map(call => call.method), ['PUT'])
+    assert.equal(await resolveModelGroup(fresh(f), 'images', false), 79)
+  })
+  await t.test('conflicting pending token IDs are preserved even with the same temporary name', async t => {
+    const f = await fixture(t)
+    const pendingName = systemName + '-0000000000000000'
+    await bind(f, { pendingName, createdTokenId: 79 })
+    const old = { pendingName, createdTokenId: 80 }
+    globalThis.__octopusModelGroups.set(key(f), JSON.stringify(old))
+    await assert.rejects(resolveModelGroup(fresh(f), 'images'), { code: 'NEW_API_GROUP_TOKEN_PENDING' })
+    assert.equal(globalThis.__octopusModelGroups.get(key(f)), JSON.stringify(old))
+    assert.equal(f.writes().length, 0)
+  })
+  for (const changes of [{ status: 2 }, { expired_time: 1 }, { unlimited_quota: false, remain_quota: 0 },
+    { user_id: -1 }, { cross_group_retry: true }, { group: 'auto', auto_groups: ['images'] }]) {
+    await t.test('unusable existing keys never cause replacement creation: ' + JSON.stringify(changes), async t => {
+      const f = await fixture(t, [{ id: 73, name: 'personal', ...changes }])
+      const before = structuredClone(f.items)
+      await assert.rejects(resolveModelGroup(fresh(f), changes.group || 'images'), { code: 'NEW_API_GROUP_TOKEN_UNAVAILABLE' })
+      assert.deepEqual(f.items, before)
+      assert.equal(f.writes().length, 0)
+    })
+  }
+  for (const selected of [false, true]) await t.test('a disabled chosen key does not fall back to another key: selected=' + selected, async t => {
+    const f = await fixture(t, [{ id: 74, name: 'personal', status: 2 }, { id: 75 }], { selected: selected ? 74 : undefined })
+    if (!selected) await bind(f, { tokenId: 74 })
+    await assert.rejects(resolveModelGroup(fresh(f), 'images'), { code: 'NEW_API_GROUP_TOKEN_UNAVAILABLE' })
+    assert.equal(f.lists().length, 0)
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('candidate ownership is rechecked against token details before borrowing', async t => {
+    const f = await fixture(t, [{ id: 76, name: 'personal' }], { respond(call, { token, ok }) {
+      if (call.path === '/api/token/76') return ok(token(76, { user_id: -1 }))
+    } })
+    await assert.rejects(resolveModelGroup(fresh(f), 'images'), { code: 'NEW_API_GROUP_TOKEN_UNAVAILABLE' })
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('a manual candidate after the first page is reused without provisioning', async t => {
+    const f = await fixture(t, [], { respond(call, { token, ok }) {
+      if (call.path === '/api/token/' && call.method === 'GET')
+        return ok({ items: call.page === 1 ? [token(1, { group: 'manual' })] : [token(76, { name: 'personal' })], total: 2 })
+      if (call.path === '/api/token/76') return ok(token(76, { name: 'personal' }))
+    } })
+    assert.equal(await resolveModelGroup(fresh(f), 'images'), 76)
+    assert.equal(f.lists().length, 2)
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('incomplete discovery cannot prove that a group has no keys', async t => {
+    const f = await fixture(t, [], { respond(call, { ok }) {
+      if (call.path === '/api/token/' && call.method === 'GET') return ok({ items: [], total: 1 })
+    } })
+    await assert.rejects(resolveModelGroup(fresh(f), 'images'), { code: 'NEW_API_GROUP_TOKEN_PENDING' })
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('Auto search borrows Auto with its restrictions and ignores the selected other group', async t => {
+    const f = await fixture(t, [{ id: 77, name: 'chat' }, { id: 78, name: 'search', group: 'auto',
+      model_limits_enabled: true, model_limits: 'tavily-quick', allow_ips: '192.0.2.2' }], { selected: 77 })
+    const before = structuredClone(f.items)
+    assert.equal(await resolveSystemAutoToken(fresh(f)), 78)
+    assert.equal(await resolveModelGroup(fresh(f), 'auto'), 78)
+    assert.deepEqual(f.items, before)
     assert.equal(f.writes().length, 0)
   })
   await t.test('a lost create response only reconciles GET after restarting the resolver', async t => {
@@ -76,6 +224,16 @@ test('native credentials retain PostgreSQL provenance across concurrency, cache 
     f.items.length = 0
     return { ...f, key, fresh() { const req = new AccountRequest(f.request.url, { headers: f.request.headers }); req.database = db; return req } }
   }
+  await t.test('a deleted imported key reuses another existing manual key before creating', async t => {
+    const f = await deletedImportedToken(t)
+    f.items.push({ id: 831, user_id: f.credentials.user.id, name: 'personal', group: 'auto', status: 1,
+      expired_time: -1, unlimited_quota: true, cross_group_retry: false, auto_groups: [] })
+    const before = structuredClone(f.items)
+    assert.equal(await resolveModelGroup(f.fresh(), 'auto'), 831)
+    assert.equal(await resolveSystemAutoToken(f.fresh()), 831)
+    assert.deepEqual(f.items, before)
+    assert.equal(f.writes().length, 0)
+  })
   await t.test('a deleted imported Auto key is replaced once across concurrent fresh requests', async t => {
     const f = await deletedImportedToken(t)
     assert.equal(await resolveModelGroup(f.fresh(), 'auto', false), undefined)
@@ -91,7 +249,7 @@ test('native credentials retain PostgreSQL provenance across concurrency, cache 
     await t.test('a deleted imported key preserves conflicting legacy state: ' + JSON.stringify(conflict), async t => {
       const f = await deletedImportedToken(t)
       globalThis.__octopusModelGroups.set(f.key + ':web-search', JSON.stringify(conflict))
-      await assert.rejects(resolveModelGroup(f.fresh(), 'auto'), { code: 'NEW_API_CREDENTIAL_VERIFICATION_REQUIRED' })
+      await assert.rejects(resolveModelGroup(f.fresh(), 'auto'), { code: 'pendingName' in conflict ? 'NEW_API_GROUP_TOKEN_PENDING' : 'NEW_API_CREDENTIAL_VERIFICATION_REQUIRED' })
       assert.deepEqual((await db.query('SELECT binding FROM community_group_credential WHERE key=$1', [f.key + ':native'])).rows[0].binding, { tokenId: 830 })
       assert.equal(globalThis.__octopusModelGroups.get(f.key + ':web-search'), JSON.stringify(conflict))
       assert.equal(f.writes().length, 0)

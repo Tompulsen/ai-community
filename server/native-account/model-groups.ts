@@ -109,6 +109,7 @@ async function groupToken(
   tokenId: number,
   group: string,
   allowMissing = false,
+  userId?: number,
 ) {
   let token: any;
   try {
@@ -120,7 +121,8 @@ async function groupToken(
     }
     throw error;
   }
-  if (!usable(token, group)) throw unavailable();
+  if (token?.id !== tokenId || !usable(token, group)
+    || (userId !== undefined && (token.user_id !== userId || token.cross_group_retry === true))) throw unavailable();
   return tokenId;
 }
 
@@ -199,7 +201,7 @@ export async function resolveModelGroup(req: AccountRequest, group: string, crea
   return tokenId;
 }
 
-/** Search follows the user's system Auto key, never their current chat key. */
+/** Search uses Auto, never a selected key from another chat group. */
 export async function resolveSystemAutoToken(req: AccountRequest) {
   const tokenId = await resolveGroup(req, "auto", undefined, true);
   if (!tokenId) throw unavailable();
@@ -266,13 +268,13 @@ async function resolveGroup(
   const read = async (id: string) => durable
     ? (await durable.query<{ binding: Binding }>('SELECT binding FROM community_group_credential WHERE key=$1', [id])).rows[0]?.binding ?? null
     : readBinding(id);
-  const compare = async (id: string, before: Binding | null, after: Binding | null) => {
+  const compare = async (id: string, before: Binding | null, after: Binding | null, provenance?: string) => {
     if (!durable) return compareBinding(id, before, after);
     const result = before === null
-      ? await durable.query('INSERT INTO community_group_credential (key,binding) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key', [id, JSON.stringify(after)])
+      ? await durable.query("INSERT INTO community_group_credential (key,binding,provenance) VALUES ($1,$2,COALESCE($3,'native-create')) ON CONFLICT (key) DO NOTHING RETURNING key", [id, JSON.stringify(after), provenance ?? null])
       : after === null
       ? await durable.query('DELETE FROM community_group_credential WHERE key=$1 AND binding=$2::jsonb RETURNING key', [id, JSON.stringify(before)])
-      : await durable.query('UPDATE community_group_credential SET binding=$3,version=version+1,updated_at=now() WHERE key=$1 AND binding=$2::jsonb RETURNING key', [id, JSON.stringify(before), JSON.stringify(after)]);
+      : await durable.query('UPDATE community_group_credential SET binding=$3,provenance=COALESCE($4,provenance),version=version+1,updated_at=now() WHERE key=$1 AND binding=$2::jsonb RETURNING key', [id, JSON.stringify(before), JSON.stringify(after), provenance ?? null]);
     return result.rows.length === 1;
   };
   return withSessionLock(`model-group:${groupKey}`, async () => {
@@ -295,8 +297,20 @@ async function resolveGroup(
       }
       return tokenId;
     };
+    let binding = await read(key);
+    const legacy = durable && create ? await Promise.all([groupKey, `${groupKey}:web-search`].map(async key => ({ key, binding: await readBinding(key) }))) : [];
+    for (const entry of legacy) {
+      const old = entry.binding;
+      if (!old || !('pendingName' in old)) continue;
+      if (!binding || !('pendingName' in binding) || old.pendingName !== binding.pendingName
+        || (old.createdTokenId !== undefined && old.createdTokenId !== binding.createdTokenId)
+        || (old.replacedTokenId !== undefined && old.replacedTokenId !== binding.replacedTokenId)) throw uncertain();
+      // The durable intent survives while its matching legacy snapshot is retired.
+      if (!(await compareBinding(entry.key, old, null))) throw uncertain();
+      entry.binding = null;
+    }
     let selected: any;
-    if (!durable && !systemAuto && current.selectedTokenId) {
+    if (current.selectedTokenId && (durable ? create && !(binding && 'pendingName' in binding) : !systemAuto)) {
       try {
         ({ data: selected } = await request(
           `/api/token/${current.selectedTokenId}`,
@@ -306,7 +320,7 @@ async function resolveGroup(
           throw error;
       }
     }
-    let binding = await read(key);
+    if (durable && selected && (selected.id !== current.selectedTokenId || selected.user_id !== userId)) throw unavailable();
     // Idle preloading only reads confirmed keys; provisioning is a foreground action.
     if (!create && binding && "pendingName" in binding) return;
     if (binding && "pendingName" in binding) {
@@ -314,16 +328,17 @@ async function resolveGroup(
     }
     if (
       selected?.group === group &&
-      (group !== "auto" || !selected.auto_groups?.length)
+      (durable || group !== "auto" || !selected.auto_groups?.length)
     ) {
-      if (!usable(selected, group)) throw unavailable();
-      if (!(await compareBinding(key, binding, { tokenId: selected.id })))
+      if (!usable(selected, group) || (durable && selected.cross_group_retry === true)) throw unavailable();
+      if (!(binding && 'tokenId' in binding && binding.tokenId === selected.id)
+        && !(await compare(key, binding, { tokenId: selected.id }, 'account-reuse')))
         throw new NewApiError("分组正在切换，请重试", 409);
       return selected.id as number;
     }
     // Preserve the initial/current key for the group being left.
     if (
-      selected &&
+      !durable && selected &&
       typeof selected.group === "string" &&
       (selected.group !== "auto" || !selected.auto_groups?.length)
     ) {
@@ -337,12 +352,9 @@ async function resolveGroup(
         binding.tokenId,
         group,
         !login,
+        durable ? userId : undefined,
       );
       if (existing) {
-        if (durable) {
-          const { data: token } = await request(`/api/token/${existing}`);
-          if (!reusableSystemToken(token, userId, group)) throw unavailable();
-        }
         return rememberSystemToken(existing);
       }
       if (!create) return;
@@ -359,15 +371,31 @@ async function resolveGroup(
     if (!create) return;
     if (!binding || "tokenId" in binding) {
       const previous = binding;
-      const legacy = durable ? await Promise.all([groupKey, `${groupKey}:web-search`].map(async key => ({ key, binding: await readBinding(key) }))) : [];
-      if (legacy.some(({ binding }) => binding && !(replacedTokenId && Object.keys(binding).length === 1 && "tokenId" in binding && binding.tokenId === replacedTokenId)))
-        throw new NewApiError("旧分组密钥尚未核对，请联系管理员导入绑定；不会另建密钥", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
+      if (durable) {
+        if (new Set(legacy.flatMap(({ binding }) => binding && 'tokenId' in binding ? [binding.tokenId] : [])).size > 1)
+          throw new NewApiError("旧分组密钥记录存在冲突，请在管理密钥中选择后重试；不会另建密钥", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
+        for (const { binding: old } of legacy) {
+          if (!old || !('tokenId' in old)) continue;
+          const tokenId = await groupToken(request, old.tokenId, group, true, userId);
+          if (tokenId) {
+            if (!(await compare(key, binding, { tokenId }, 'account-reuse')))
+              throw new NewApiError("分组记录已更新，请重试", 409);
+            return tokenId;
+          }
+        }
+      }
       const tokens = await listTokens(request);
-      const matches = tokens.filter(
-        token => token.name === SYSTEM_TOKEN_NAME && token.group === group,
-      );
+      if (durable && tokens.some(token => token.user_id !== userId || typeof token.group !== 'string')) throw unavailable();
+      const matches = tokens.filter(token => token.group === group && (durable || token.name === SYSTEM_TOKEN_NAME));
       if (matches.length) {
-        if (durable) throw new NewApiError("已有系统同名密钥需要管理员核对来源；不会按名称接管或重复创建", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
+        if (durable) {
+          const candidate = matches.filter(token => token.user_id === userId && token.cross_group_retry !== true && usable(token, group)).sort((a, b) => a.id - b.id)[0];
+          if (!candidate) throw unavailable();
+          const tokenId = await groupToken(request, candidate.id, group, false, userId);
+          if (!(await compare(key, binding, { tokenId: tokenId! }, 'account-reuse')))
+            throw new NewApiError("分组记录已更新，请重试", 409);
+          return tokenId;
+        }
         const candidate = matches
           .filter(token => reusableSystemToken(token, userId, group))
           .sort((a, b) => a.id - b.id)[0];
