@@ -1,4 +1,5 @@
 import { getLines, getMessages } from "@fortaine/fetch-event-source/parse";
+import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from './insufficient-credits.ts';
 
 export function imageResultUrl(result: any): string | null {
   const item = result.data?.[0] ?? result;
@@ -54,9 +55,9 @@ export async function readImageStream(
       const type = event.type || message.event;
       if (event.error || type === "error" || type === "response.failed") {
         const error = event.response?.error ?? event.error ?? event;
-        throw new Error(
-          (typeof error === "string" ? error : error.message) || "流式生图失败",
-        );
+        throw Object.assign(new Error(
+          isInsufficientCredits(error) ? insufficientCreditsMessage : (typeof error === "string" ? error : error.message) || "流式生图失败",
+        ), { errorCode: isInsufficientCredits(error) ? insufficientCreditsCode : generationErrorCode });
       }
       if (type?.endsWith(".partial_image")) {
         const image = imageResultUrl({

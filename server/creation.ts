@@ -5,6 +5,7 @@
  * Reuses the Studio account relay, media import and generation protocol rules.
  */
 import { workSkillInstructions } from './content.ts'
+import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits.ts'
 import { chatOptionsSchema } from '../shared/studio/options.ts'
 import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -308,8 +309,10 @@ function responseResult(kind: CreationKind, value: unknown, credentials: Credent
   ownedResponse(value, credentials)
   const result = normalizeCreationTask(kind, value, id, protocol)
   if (result.error) {
+    result.errorCode ??= generationErrorCode
     result.errorStage ??= result.status === 'save_failed' ? '结果保存' : result.status === 'indeterminate' ? '网关响应处理' : '生成任务'
-    result.error = stageError(result.errorStage, hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey), result.errorStatus)
+    result.error = result.errorCode === insufficientCreditsCode ? insufficientCreditsMessage
+      : stageError(result.errorStage, hasWorkSkills ? workSkillError : message(result.error, credentials.apiKey), result.errorStatus)
   }
   return { ...result, tokenId: credentials.tokenId, protocol }
 }
@@ -735,6 +738,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     } else {
       const data = await readJson(response, 40 * MiB).catch(error => { if (response.ok) throw error; return null })
       if (!response.ok) {
+      const insufficient = isInsufficientCredits(data)
       const detail = record(data) && record(data.error) ? data.error.message : record(data) ? data.message : undefined
       const admission = payload.path === 'async-videos/v1/tasks' && record(data) && typeof data.detail === 'string'
         ? new Map([
@@ -744,7 +748,8 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
         ]).get(data.detail) : undefined
       const rejected = admission?.status === response.status ? admission.error : undefined
       result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
+        error: insufficient ? insufficientCreditsMessage : stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
+        errorCode: insufficient ? insufficientCreditsCode : generationErrorCode,
         errorStage: '网关提交', errorStatus: response.status,
         tokenId: credentials.tokenId, protocol }
       } else {
@@ -765,12 +770,14 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     }
   } catch (error) {
     const detail = lifecycle?.signal.aborted ? String(lifecycle.signal.reason.message)
+      : isInsufficientCredits(error) ? insufficientCreditsMessage
       : error instanceof GenerationStreamError ? error.message
       : record(error) && typeof error.statusCode === 'number' ? message(error, credentials.apiKey)
       : error instanceof Error && error.name === 'TimeoutError' ? '等待生成服务响应超时。'
       : responseReceived ? '读取生成结果失败。' : '生成服务连接异常，未能获取生成结果。'
     const stage = responseReceived ? '网关响应处理' : '网关提交'
     result = { ...uncertain, ...(error instanceof GenerationStreamError ? error.partial : {}), error: stageError(stage, detail, responseStatus), errorStage: stage,
+      ...(!lifecycle?.signal.aborted && isInsufficientCredits(error) ? { errorCode: insufficientCreditsCode } : {}),
       ...(responseStatus ? { errorStatus: responseStatus } : {}), tokenId: credentials.tokenId, protocol }
   } finally { lifecycle?.dispose() }
   if (input.kind === 'text') {
@@ -778,7 +785,9 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     if (result.status === 'indeterminate' && (result.outputs.some(output => output.text) || result.reasoning))
       result.error += ' 已保留部分回答，内容尚未完整生成。'
   }
-  if (hasWorkSkills && result.error)
+  if (result.error) result.errorCode ??= generationErrorCode
+  if (result.errorCode === insufficientCreditsCode) result.error = insufficientCreditsMessage
+  else if (hasWorkSkills && result.error)
     result.error = result.errorStage ? stageError(result.errorStage, workSkillError, result.errorStatus) : workSkillError
   if (result.error && !result.errorStage) {
     result.errorStage = result.status === 'save_failed' ? '结果保存' : result.status === 'failed' ? '生成任务' : '网关响应处理'

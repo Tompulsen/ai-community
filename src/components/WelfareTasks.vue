@@ -20,7 +20,7 @@ let clockOffset = 0, lastRefresh = 0, timer: ReturnType<typeof setInterval> | un
 const cooldown = computed(() => publication.value?.resetsAt ? Math.max(0, Math.ceil((Date.parse(publication.value.resetsAt) - currentTime.value) / 1000)) : 0)
 const cooldownText = computed(() => [Math.floor(cooldown.value / 3600), Math.floor(cooldown.value % 3600 / 60), cooldown.value % 60].map(value => String(value).padStart(2, '0')).join(':'))
 const resetLabel = computed(() => publication.value?.resetsAt ? new Date(publication.value.resetsAt).toLocaleString('zh-CN', { hour12: false }) : '')
-const inviteExpanded = ref(Boolean(route.query.aff || route.query.invite))
+const inviteExpanded = ref(Boolean(route.query.aff || route.query.invite || route.query.section === 'invite'))
 const icons = { invite: Users, publish: ImagePlus, upcoming: Gift }
 const hasInvite = computed(() => items.value.some(item => item.id === 'invite'))
 const points = (amount: number) => amount.toLocaleString('zh-CN', { maximumFractionDigits: 20 })

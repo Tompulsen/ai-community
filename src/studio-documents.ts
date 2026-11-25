@@ -82,7 +82,7 @@ export async function recoverDocumentContent(task: ChatDocumentTask, publish: ()
     const modelTask = creation.tasks.find(item => item.id === task.modelTaskId && item.owner === session.user?.id)
     if (!modelTask) throw new Error('未找到原模型请求，请在历史记录中查看。')
     await resumeCreation(modelTask); check()
-    if (modelTask.phase !== 'complete') throw new Error(modelTask.error || '模型内容尚未生成完整，请稍后恢复。')
+    if (modelTask.phase !== 'complete') throw Object.assign(new Error(modelTask.error || '模型内容尚未生成完整，请稍后恢复。'), { errorCode: modelTask.errorCode })
     try { Object.assign(task, parseDocumentResponse(modelTask.text), { modelContentError: undefined, error: undefined, preparing: false }) }
     catch (error) {
       if (error instanceof DocumentResponseError) { task.modelContentError = error.message; task.error = error.message; task.preparing = false; await publish() }
@@ -167,7 +167,7 @@ export async function runDocumentGeneration(options: {
       }
     }, () => { try { check(); return true } catch { return false } })
     check(); task.modelTaskId = modelTask.id; result.usage = modelTask.usage
-    if (modelTask.phase !== 'complete') throw new Error(modelTask.error || '文档内容未完整生成，可恢复原模型请求。')
+    if (modelTask.phase !== 'complete') throw Object.assign(new Error(modelTask.error || '文档内容未完整生成，可恢复原模型请求。'), { errorCode: modelTask.errorCode })
     Object.assign(task, parseDocumentResponse(modelTask.text)); task.preparing = false
     if (task.clarification) { result.content = task.clarification; await save(); return }
     result.content = '文档内容已生成，正在制作文件。'

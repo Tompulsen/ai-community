@@ -19,6 +19,8 @@ import StudioPopover from './StudioPopover.vue'
 import StudioModePicker from './StudioModePicker.vue'
 import StudioSearchPicker from './StudioSearchPicker.vue'
 import StudioBilling from './StudioBilling.vue'
+import StudioInsufficientCredits from './StudioInsufficientCredits.vue'
+import { isInsufficientCredits } from '../../shared/studio/insufficient-credits'
 import StudioModelPicker from './StudioModelPicker.vue'
 import StudioConversations from './StudioConversations.vue'
 import StudioConversationTitle from './StudioConversationTitle.vue'
@@ -532,7 +534,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <StudioMediaTurn v-for="role in (['user', 'assistant'] as const)" :key="role" :role="role" :task="mediaTask(message)!" :conversation="current" @action="(action, task, index) => emit('mediaAction', action, task, index)" @publish="(task, destination) => emit('publish', task, destination)" @preview="(task, index, editor) => mediaGallery?.open(task, index, false, editor)" />
         </div>
         <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :class="{ 'history-deferred': transcript.length > 80 && messageIndex < transcript.length - 12 && !pending(message) && edited?.id !== message.id }" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
-          <template #status><StudioAiStatus v-if="message.role === 'assistant' && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" /></template>
+          <template #status><StudioAiStatus v-if="message.role === 'assistant' && !isInsufficientCredits(message) && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" /></template>
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
           <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
           <Suspense v-if="message.reasoning"><StudioReasoningPanel :content="message.reasoning" :streaming="pending(message)" :has-answer="Boolean(messageText(message))" :interrupted="message.interrupted" /><template #fallback><div><p class="reasoning-loading">{{ message.reasoning }}</p><button v-if="reasoningRetry" type="button" class="icon-button" title="重新加载思考过程" aria-label="重新加载思考过程" @click="reasoningRetry?.()"><RefreshCw :size="16" /></button></div></template></Suspense>
@@ -550,7 +552,8 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
           <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
           <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
           <StudioFollowupSuggestions v-if="mode === 'text' && message.role === 'assistant' && message === current.messages.at(-1) && message.interactions?.suggestions?.length && !pending(message) && !message.interrupted && !message.error" :suggestions="message.interactions.suggestions" :disabled="Boolean(busy || sourceBlocked)" @select="fillSuggestion(message, $event)" />
-          <p v-if="message.error && !message.documentTask" class="form-error" role="alert">{{ message.error }}</p>
+          <StudioInsufficientCredits v-if="message.error && !message.documentTask && isInsufficientCredits(message)" />
+           <p v-else-if="message.error && !message.documentTask" class="form-error" role="alert">{{ message.error }}</p>
           <StudioMessageActions class="message-actions" :label="message.role === 'user' ? '提问操作' : '回答操作'" :actions="messageActions(message)" />
           <div v-if="branch(message).total > 1 || message.usage" class="message-meta">
             <template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>

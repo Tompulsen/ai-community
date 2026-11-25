@@ -13,6 +13,7 @@ import { selectedVideoSize } from '../shared/studio/video-size.ts'
 import { modelApiFormats, modelApiFormatSchema, type ModelApiFormat, type ModelTypeSetting, type VideoModelSetting } from '../shared/studio/model-types.ts'
 import { CHAT_API_FORMATS } from '../shared/studio/chat-api-format.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
+import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits.ts'
 import { buildChatCompletions } from '../shared/studio/chat-completions.ts'
 import { imageConversationPrompt, MAX_IMAGE_CONTEXT_IMAGES, MAX_IMAGE_CONTEXT_TEXT, MAX_IMAGE_CONTEXT_TURNS, type ImageConversationContext } from '../shared/studio/image-conversation.ts'
 import { maxSelectedSkills, type SkillReference } from '../shared/community-skills.ts'
@@ -53,6 +54,7 @@ export interface CreationTask {
   progress?: number
   outputs: CreationOutput[]
   error?: string
+  errorCode?: string
   errorStage?: string
   errorStatus?: number
   mediaPath?: string
@@ -618,13 +620,15 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
   }
   if (['save_failed', 'indeterminate', 'expired'].includes(state)) {
     result.status = state as CreationTask['status']
-    result.error = error || (state === 'save_failed' ? '生成已完成，但结果保存失败。'
+    if (state === 'indeterminate' && isInsufficientCredits(value)) result.errorCode = insufficientCreditsCode
+    result.error = result.errorCode === insufficientCreditsCode ? insufficientCreditsMessage : error || (state === 'save_failed' ? '生成已完成，但结果保存失败。'
       : state === 'expired' ? '任务或文件已过期。' : '获取生成结果失败。')
     return result
   }
   if (failedStates.has(state) || failedStates.has(envelopeState) || data.success === false || envelope.success === false || failure || reason) {
     result.status = 'failed'
-    result.error = error || '生成失败。'
+    if (isInsufficientCredits(value)) result.errorCode = insufficientCreditsCode
+    result.error = result.errorCode === insufficientCreditsCode ? insufficientCreditsMessage : error || '生成失败。'
     return result
   }
   if (kind === 'image' && (Array.isArray(data.candidates) || record(data.promptFeedback))) {
@@ -698,6 +702,9 @@ export function normalizeCreationTask(kind: CreationKind, value: unknown, taskId
 }
 
 export function normalizeNativeChat(format: ChatOptions['format'], value: unknown): CreationTask {
+  if (isInsufficientCredits(value)) return { status: 'failed', outputs: [], errorCode: insufficientCreditsCode, error: insufficientCreditsMessage }
+  const failure = record(value) ? value.error || (record(value.response) ? value.response.error : undefined) : undefined
+  if (failure) return { ...normalizeCreationTask('text', { error: failure }), errorCode: generationErrorCode }
   if (format === 'chat-completions') {
     const result = normalizeCreationTask('text', value)
     const data = value as { choices?: { message?: { tool_calls?: unknown[]; content?: unknown } }[] }

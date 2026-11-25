@@ -10,6 +10,8 @@ import { isConversationBusy } from '../../studio-conversations'
 import { deleteMediaTurns, mediaVersion, selectMediaVersion } from '../../studio-image-conversation'
 import { errorMessage, notify, session } from '../../state'
 import StudioMessageFrame from './StudioMessageFrame.vue'
+import StudioInsufficientCredits from '../StudioInsufficientCredits.vue'
+import { isInsufficientCredits } from '../../../shared/studio/insufficient-credits'
 import StudioAiStatus from './StudioAiStatus.vue'
 import StudioCreationImage from './StudioCreationImage.vue'
 import StudioBrowserSave from '../StudioBrowserSave.vue'
@@ -111,6 +113,7 @@ const menuItems = computed<StudioMenuAction[]>(() => {
 })
 watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
+const insufficient = computed(() => !working.value && !!props.task.error && isInsufficientCredits(props.task))
 const timedOut = computed(() => creationRequestTimedOut(props.task))
 const version = computed(() => props.task.kind === 'video' ? mediaVersion(props.conversation, props.task.id) : { index: 0, total: 1 })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成中', paused: '已停止等待', complete: '生成完成', error: '生成失败', attention: '请求异常' }
@@ -151,7 +154,7 @@ async function remove() {
           <StudioAiStatus class="task-status" :state="task.preview ? 'writing' : 'thinking'" :label="activityLabel" :timer="false" :elapsed="elapsed" />
           <button class="icon-button task-stop" type="button" title="停止本页等待，上游任务继续执行" aria-label="停止等待" @click="stopCreation(task)"><Square :size="14" aria-hidden="true" /></button>
         </span>
-        <template v-else><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' || task.phase === 'attention' }" :role="task.phase === 'error' || task.phase === 'attention' ? 'alert' : 'status'">{{ timedOut ? '请求超时' : phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
+        <template v-else-if="!insufficient"><span class="task-status" :class="{ 'studio-sr-only': task.phase === 'complete', 'task-error': task.phase === 'error' || task.phase === 'attention' }" :role="task.phase === 'error' || task.phase === 'attention' ? 'alert' : 'status'">{{ timedOut ? '请求超时' : phases[task.phase] }}</span><span v-if="elapsed" class="task-elapsed">{{ elapsed }}</span></template>
       </template>
     </template>
     <template v-if="role === 'user'">
@@ -159,7 +162,8 @@ async function remove() {
       <StudioMessageActions class="creation-turn-tools message-actions" label="提问操作" :actions="actions" />
     </template>
     <template v-else>
-      <p v-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
+      <StudioInsufficientCredits v-if="insufficient" />
+      <p v-else-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">

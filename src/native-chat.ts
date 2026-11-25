@@ -23,8 +23,10 @@ import { skillInstructions, resolveLegacySkillIds, type SkillKind, type SkillRef
 import { pinnedContext, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
 import { resolveDocumentIntent, type ChatDocumentTask, type DocumentSource } from '../shared/studio/document-chat'
 import { runDocumentGeneration } from './studio-documents'
+import { isInsufficientCredits } from '../shared/studio/insufficient-credits'
 export interface Skill { kind: SkillKind; id: string; authorId?: string; name: string; description: string; body: string; sha256: string; legacyId?: string | null; group?: string; model?: string }
 export interface NativeMessage extends ChatMessage {
+  errorCode?: string
   documentTask?: ChatDocumentTask
   taskId?: string
   sources?: { title: string; url: string; snippet: string }[]
@@ -319,7 +321,7 @@ export function loadChats() {
           const chat = newChat()
           chat.topic = task.prompt.slice(0, 40); chat.model = task.model
           chat.messages = [{ id: crypto.randomUUID(), role: 'user', content: task.prompt },
-            { id: crypto.randomUUID(), role: 'assistant', content: task.text, taskId: task.id, error: task.error, interrupted: task.phase !== 'complete' }]
+            { id: crypto.randomUUID(), role: 'assistant', content: task.text, taskId: task.id, error: task.error, errorCode: task.errorCode, interrupted: task.phase !== 'complete' }]
           initializeBranches(chat)
         }
         await saveChats(true)
@@ -444,7 +446,7 @@ export async function recoverMessage(message: NativeMessage) {
   await resumeCreation(task)
   if (version !== epoch || task.owner !== owner()) return
   applyAnswer(message, task.text, task.phase === 'complete' && !task.toolCalls?.length ? 'finish' : 'interrupted')
-  message.reasoning = task.reasoning ?? message.reasoning; message.error = task.error
+  message.reasoning = task.reasoning ?? message.reasoning; message.error = task.error; message.errorCode = task.errorCode
   message.interrupted = task.phase !== 'complete'; message.usage = task.usage ?? message.usage
   await saveChats(true).catch(() => {})
 }
@@ -458,6 +460,7 @@ watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as Nativ
     message.reasoning = task.reasoning; message.usage = task.usage
     message.streaming = ['submitting', 'running'].includes(task.phase)
     message.error = task.phase === 'complete' || message.streaming ? undefined : task.error
+    message.errorCode = message.error ? task.errorCode : undefined
     if (task.phase === 'complete') message.interrupted = false
   }
 }, { deep: true })
@@ -593,7 +596,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
         result.contextCompressing = true
         const task = await submitCreation({ kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, prompt: '总结历史对话', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
           chatOptions: { ...settings, mcpServers: [], stream: false, max_tokens: 2048, messages: [{ role: 'system', content: '将对话整理为准确简洁的历史摘要，不超过2000 tokens，保留用户目标、约束和关键事实。' }, ...messages.map(message => ({ role: message.role === 'tool' ? 'user' as const : message.role, content: message.content }))] } }, task => { if (current()) result.taskId = task.id }, current)
-        if (task.phase !== 'complete') throw new Error(task.error || '历史摘要生成失败。')
+        if (task.phase !== 'complete') throw Object.assign(new Error(task.error || '历史摘要生成失败。'), { errorCode: task.errorCode })
         return task.text
       },
     })
@@ -616,7 +619,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
         if (Date.now() - lastSave > 2000) { lastSave = Date.now(); void saveChats() }
       }, current)
       if (!current()) return accepted
-      result.taskId = task.id; applyAnswer(result, task.text, task.phase === 'complete' && !task.toolCalls?.length ? 'finish' : 'interrupted'); result.reasoning = task.reasoning; result.usage = task.usage; result.error = task.phase === 'complete' ? undefined : task.error; result.interrupted = task.phase !== 'complete'
+      result.taskId = task.id; applyAnswer(result, task.text, task.phase === 'complete' && !task.toolCalls?.length ? 'finish' : 'interrupted'); result.reasoning = task.reasoning; result.usage = task.usage; result.error = task.phase === 'complete' ? undefined : task.error; result.errorCode = result.error ? task.errorCode : undefined; result.interrupted = task.phase !== 'complete'
       result.generationProgress = task.generationProgress
       result.responseMetrics = task.responseMetrics
       if (!task.toolCalls?.length || task.phase !== 'complete') break
@@ -679,8 +682,8 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     }
     if (version === epoch && runs.has(runId)) {
       if (result.documentTask) { result.documentTask.error = errorMessage(error); result.content = '文档尚未完成，已保留原任务。' }
-      result.error = errorMessage(error); result.interrupted = true
-      chats.error = result.documentTask ? '' : errorMessage(error)
+      result.error = errorMessage(error); result.errorCode = (error as { errorCode?: string })?.errorCode; result.interrupted = true
+      chats.error = result.documentTask || isInsufficientCredits(error) ? '' : errorMessage(error)
       for (const tool of result.tools || []) if (tool.status === 'pending' || tool.status === 'running') { tool.status = 'stopped'; tool.error = '执行状态未确认，请核对原执行结果。' }
     }
   }

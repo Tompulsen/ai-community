@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { SkillReference } from '../shared/community-skills'
 import { reactive, watch } from 'vue'
+import { refreshAccountBalance } from './account-balance'
+import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits'
 import { accountApi, api, errorMessage, notify, session, uploadFile } from './state'
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
@@ -61,6 +63,7 @@ export interface CreationTask {
   galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
   error?: string
+  errorCode?: string
   errorStage?: string
   errorStatus?: number
   submissionError?: string
@@ -514,7 +517,10 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
-  const detail = typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
+  const insufficient = ['failed', 'error', 'indeterminate'].includes(status) && isInsufficientCredits(data)
+  if (insufficient && task.errorCode !== insufficientCreditsCode) void refreshAccountBalance(true)
+  task.errorCode = insufficient ? insufficientCreditsCode : typeof data.errorCode === 'string' ? generationErrorCode : undefined
+  const detail = insufficient ? insufficientCreditsMessage : typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
   task.errorStage = typeof data.errorStage === 'string' ? data.errorStage : undefined
   task.errorStatus = typeof data.errorStatus === 'number' ? data.errorStatus : undefined
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
@@ -763,7 +769,7 @@ export async function resumeCreation(task: CreationTask) {
   if (task.legacy && task.tokenId == null) { task.phase = 'attention'; task.error = '此历史任务缺少原始令牌编号，已保留记录，请先核对原任务。'; await persist(); return }
   if (!task.upstreamId && !task.serverTracked && task.error) task.submissionError ||= task.error
   const controller = new AbortController(), version = epoch
-  controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.settledAt = undefined
+  controllers.set(task.id, controller); task.phase = 'running'; task.error = ''; task.errorCode = undefined; task.settledAt = undefined
   try {
     await poll(task, controller, version)
   }
@@ -920,7 +926,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const detail = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || '社区提交接口未返回错误详情。'
       throw Object.assign(new Error(data.errorStage ? detail : `社区提交接口失败（HTTP ${response.status}）：${detail}`), {
         notAccepted: typeof data.notAccepted === 'boolean' ? data.notAccepted : [400, 401, 403, 413, 422, 429].includes(response.status),
-        code: data.error?.code || data.code,
+        code: data.errorCode || data.error?.code || data.code,
         errorStage: data.errorStage || '社区提交接口', errorStatus: data.errorStatus ?? response.status,
       })
     }
@@ -939,7 +945,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
           const status = event.errorStatus ?? event.statusCode
           const detail = event.error || '生成失败。'
           throw Object.assign(new Error(event.errorStage ? detail : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${detail}`), {
-            notAccepted: event.notAccepted === true, code: event.code, errorStage: stage, errorStatus: status,
+            notAccepted: event.notAccepted === true, code: event.errorCode || event.code, errorStage: stage, errorStatus: status,
           })
         }
         if (event.type === 'preview' && safeResultUrl(event.url)) { task.preview = event.url; task.phase = 'running' }
@@ -989,7 +995,10 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const detail = record(error) && typeof error.errorStage === 'string' ? errorMessage(error)
         : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${errorMessage(error)}`
       task.errorStage = stage; task.errorStatus = status
+      task.errorCode = !controller.signal.aborted && isInsufficientCredits(error) ? insufficientCreditsCode : generationErrorCode
+      if (task.errorCode === insufficientCreditsCode) void refreshAccountBalance(true)
       task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : detail
+      if (task.errorCode === insufficientCreditsCode) task.error = insufficientCreditsMessage
       if (!controller.signal.aborted && !notAccepted) {
         task.submissionError = detail
         await persist()

@@ -8,13 +8,15 @@ import type { CreationInput, CreationTask } from '../creation-contract.ts'
 import { toolCallSchema } from '../../shared/studio/options.ts'
 import { usesGeminiImageChat } from '../../shared/studio/image-params.ts'
 import { normalizeCreationTask } from '../creation-contract.ts'
+import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../../shared/studio/insufficient-credits.ts'
 
 export type CreationEvent = { type: string; [key: string]: unknown }
 export class GenerationStreamError extends Error {
   partial: CreationTask
   constructor(cause: unknown, partial: CreationTask) {
-    super('流式回答中断，已保留已生成内容，请先核对消费记录。', { cause })
+    super(isInsufficientCredits(cause) ? insufficientCreditsMessage : '流式回答中断，已保留已生成内容，请先核对消费记录。', { cause })
     this.partial = partial
+    this.partial.errorCode = isInsufficientCredits(cause) ? insufficientCreditsCode : generationErrorCode
   }
 }
 async function readChatImageStream(response: Response, emit: (event: CreationEvent) => void, native = false): Promise<CreationTask> {
@@ -28,7 +30,8 @@ async function readChatImageStream(response: Response, emit: (event: CreationEve
     if (!message.data) return
     if (message.data === '[DONE]') { if (!native) complete = true; return }
     const data = JSON.parse(message.data)
-    if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || '生成失败。')
+    const streamFailure = data.error || data.response?.error
+    if (streamFailure) throw Object.assign(new Error(isInsufficientCredits(streamFailure) ? insufficientCreditsMessage : typeof streamFailure === 'string' ? streamFailure : streamFailure.message || '生成失败。'), { errorCode: isInsufficientCredits(streamFailure) ? insufficientCreditsCode : generationErrorCode })
     let nativePreview = false
     if (native) {
       const candidate = data.candidates?.[0]
@@ -102,7 +105,8 @@ export async function readGenerationStream(response: Response, input: CreationIn
     if (!message.data || terminal) return
     if (message.data === '[DONE]') { if (!complete) options.progress?.(); complete = true; terminal = true; return }
     const data = JSON.parse(message.data)
-    if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || '生成失败。')
+    const streamFailure = data.error || data.response?.error
+    if (streamFailure) throw Object.assign(new Error(isInsufficientCredits(streamFailure) ? insufficientCreditsMessage : typeof streamFailure === 'string' ? streamFailure : streamFailure.message || '生成失败。'), { errorCode: isInsufficientCredits(streamFailure) ? insufficientCreditsCode : generationErrorCode })
     const previousText = text.length, previousReasoning = reasoning.length, previousUsage = usage, wasComplete = complete
     let toolProgress = false
     if (native) {

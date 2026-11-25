@@ -3,7 +3,10 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { Download, FileText, FolderOpen, RefreshCw } from '@lucide/vue'
 import { saveChats as persistChats, type NativeChat, type NativeMessage } from '../native-chat'
 import { documentApi, documentScope, documentPending, documentPhases, documentContentIssue, downloadDocument, recoverDocumentContent, sourceFromJob, waitDocumentJob } from '../studio-documents'
-import { errorMessage } from '../state'
+import { errorMessage, session } from '../state'
+import { creation } from '../native-studio'
+import StudioInsufficientCredits from './StudioInsufficientCredits.vue'
+import { isInsufficientCredits } from '../../shared/studio/insufficient-credits'
 import type { DocumentJob } from '../../shared/studio/document-workspace'
 import type { ChatDocumentTask, DocumentSource } from '../../shared/studio/document-chat'
 const props = defineProps<{ chat: NativeChat; message: NativeMessage; disabled?: boolean }>()
@@ -11,13 +14,18 @@ const emit = defineEmits<{ open: [source?: DocumentSource]; retry: [task: ChatDo
 const task = computed(() => props.message.documentTask!)
 const source = computed(() => task.value.job && sourceFromJob(task.value.job, task.value.request.format))
 const contentIssue = computed(() => documentContentIssue(task.value))
+const modelTask = computed(() => creation.tasks.find(item => item.id === task.value.modelTaskId && item.owner === session.user?.id))
 const working = ref(false), issue = ref('')
+const issueCode = ref<string>()
+const insufficient = computed(() => !task.value.plan && !!(issue.value || contentIssue.value || task.value.error) && isInsufficientCredits(issue.value
+  ? { error: issue.value, errorCode: issueCode.value }
+  : { error: contentIssue.value || task.value.error, errorCode: modelTask.value?.errorCode || props.message.errorCode }))
 const lifetime = new AbortController()
 onBeforeUnmount(() => lifetime.abort())
 async function perform(action: 'download' | 'recover' | 'refresh') {
   if (working.value) return
   const scope = documentScope(), original = task.value
-  working.value = true; issue.value = ''
+  working.value = true; issue.value = ''; issueCode.value = undefined
   const save = async () => { scope.assert(); lifetime.signal.throwIfAborted(); if (original !== task.value || props.chat.id !== original.request.sessionId) throw new Error('任务已切换。'); await persistChats(true) }
   try {
     if (action !== 'download' && props.chat.id !== original.request.sessionId) throw new Error('这是原聊天的文档任务，请回到原聊天恢复；也可在文档工作区新建文件。')
@@ -32,14 +40,15 @@ async function perform(action: 'download' | 'recover' | 'refresh') {
       })
       else if (original.clarification) { props.message.content = original.clarification; await save() }
     }
-  } catch (cause) { if (!lifetime.signal.aborted) issue.value = errorMessage(cause) }
+  } catch (cause) { if (!lifetime.signal.aborted) { issue.value = errorMessage(cause); issueCode.value = (cause as { errorCode?: string })?.errorCode } }
   finally { working.value = false }
 }
 </script>
 <template>
   <section class="document-result" aria-label="文档任务">
     <div class="document-result-heading"><span class="document-file-icon"><FileText :size="23" aria-hidden="true" /></span><div><strong>{{ source?.fileName || task.job?.fileName || (task.request.format === 'xlsx' ? 'Excel 表格' : 'Word 文档') }}</strong><p>{{ task.preparing ? '正在生成内容…' : task.job ? documentPhases[task.job.status] : task.clarification ? '请补充文件要求' : task.plan ? '内容已保存，可继续制作文件' : '文档任务' }}<template v-if="source"> · v{{ source.version }}</template></p></div></div>
-    <p v-if="contentIssue || task.error || issue" class="form-error" role="alert">{{ issue || contentIssue || task.error }}</p>
+    <StudioInsufficientCredits v-if="insufficient" />
+    <p v-else-if="contentIssue || task.error || issue" class="form-error" role="alert">{{ issue || contentIssue || task.error }}</p>
     <div class="document-result-actions">
       <button v-if="source" type="button" :disabled="working" @click="perform('download')"><Download :size="16" aria-hidden="true" />下载 {{ task.request.format.toUpperCase() }}</button>
       <button v-if="source" type="button" :disabled="disabled" @click="emit('open', source)"><FolderOpen :size="16" aria-hidden="true" />预览 / 继续修改</button>

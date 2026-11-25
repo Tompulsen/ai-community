@@ -513,6 +513,44 @@ async function relayRequestBody(init) {
     ? Object.fromEntries(await request.formData()) : await request.json()
 }
 
+test('wallet failures keep a safe classification across model kinds, streams and recovery', async t => {
+  for (const kind of ['text', 'image', 'video']) await t.test(kind, async t => {
+    const f = fixture(t, { fetch: () => Response.json({ error: { code: 'insufficient_user_quota', message: '用户额度不足, 剩余额度: 1' } }, { status: 403 }) })
+    const input = { kind, model: kind === 'text' ? 'chat-test' : kind === 'image' ? 'gpt-image-2' : 'sora-2', prompt: 'Test', duration: 8, requestId: `quota-${kind}` }
+    const response = await submit(f.app, input)
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().errorCode, 'INSUFFICIENT_CREDITS')
+    assert.equal(response.json().status, 'failed')
+    assert.equal((await f.app.inject(`/api/creation/requests/${input.requestId}`)).json().errorCode, 'INSUFFICIENT_CREDITS')
+    await submit(f.app, input)
+    assert.equal(f.calls.length, 1)
+  })
+  await t.test('partial streamed text stays uncertain and is never resubmitted', async t => {
+    const f = fixture(t, { fetch: () => new Response([
+      { choices: [{ delta: { content: '已保存的部分回答' } }] },
+      { error: { code: 'insufficient_user_quota', message: 'Insufficient user quota, remaining quota: 0' } },
+    ].map(value => `data: ${JSON.stringify(value)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } }) })
+    const input = { kind: 'text', model: 'chat-test', prompt: 'Test', requestId: 'quota-stream' }
+    const result = (await submit(f.app, input)).json()
+    assert.equal(result.errorCode, 'INSUFFICIENT_CREDITS')
+    assert.equal(result.status, 'indeterminate')
+    assert.equal(result.outputs[0].text, '已保存的部分回答')
+    await submit(f.app, input)
+    assert.equal(f.calls.length, 1)
+  })
+  for (const error of [
+    { code: 'insufficient_user_quota', message: '订阅额度不足或未配置订阅' },
+    { code: 'pre_consume_token_quota_failed', message: '用户额度不足, 剩余额度: 0' },
+    { code: 'insufficient_quota', message: 'Upstream quota exceeded' },
+    { code: 'access_denied', message: '无权使用模型' },
+  ]) await t.test(error.code + error.message, async t => {
+    const f = fixture(t, { fetch: () => Response.json({ error }, { status: 403 }) })
+    const response = await submit(f.app, { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'other-quota' })
+    assert.equal(response.json().errorCode, 'GENERATION_ERROR')
+    assert.match(response.json().error, new RegExp(error.message))
+  })
+})
+
 test('private work skills are resolved on the server, survive retries, and never expose the source in tracking or errors', async t => {
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-work-skill-'));
   t.after(() => rm(filesRoot, { recursive: true, force: true }));
@@ -520,7 +558,7 @@ test('private work skills are resolved on the server, survive retries, and never
   await writeFile(path.join(filesRoot, 'source-key'), source);
   const pack = await readSkillPackage('SKILL.md', source);
   const row = { id: 'work1', authorId: 'author1', status: 'approved', fileIds: ['source1'], generation: { skill: { sourceFileId: 'source1', sourceSha256: pack.sha256, sourcePublic: false } } };
-  let visible = true, reject = false;
+  let visible = true, reject = false, quotaReject = false;
   const { app, calls, values } = fixture(t, { filesRoot, workQuery(sql, params) {
     if (sql.includes('FROM community_submission s')) { assert.match(sql, /s\.status IN \('published', 'approved'\)/); return visible ? [row] : []; }
     assert.deepEqual(params, ['source1', 'author1']);
@@ -529,7 +567,8 @@ test('private work skills are resolved on the server, survive retries, and never
     const payload = JSON.parse(init.body);
     assert.equal(payload.messages[0].role, 'system'); assert.equal(payload.messages[0].content, 'Private instruction sentinel.');
     assert.equal(payload.messages.at(-1).content, 'hello');
-    return reject ? Response.json({ error: { message: 'Private instruction sentinel.' } }, { status: 400 })
+    return quotaReject ? Response.json({ error: { code: 'insufficient_user_quota', message: '用户额度不足, 剩余额度: 0. Private instruction sentinel.' } }, { status: 403 })
+      : reject ? Response.json({ error: { message: 'Private instruction sentinel.' } }, { status: 400 })
       : Response.json({ choices: [{ message: { role: 'assistant', content: 'Useful answer' } }] });
   } });
   const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'work-skill-1', skills: [{ id: 'work-work1', sha256: pack.sha256 }] };
@@ -544,8 +583,15 @@ test('private work skills are resolved on the server, survive retries, and never
   row.status = 'approved'; reject = true;
   const denied = await submit(app, { ...input, requestId: 'work-skill-4' });
   assert(!denied.payload.includes('Private instruction sentinel')); assert.equal(calls.length, 2);
+  quotaReject = true;
+  const insufficient = await submit(app, { ...input, requestId: 'work-skill-quota' });
+  assert.equal(insufficient.json().errorCode, 'INSUFFICIENT_CREDITS');
+  assert.match(insufficient.json().error, /当前可用积分不足以再次调用该模型/);
+  assert(!insufficient.payload.includes('Private instruction sentinel'));
+  assert.equal((await app.inject('/api/creation/requests/work-skill-quota')).json().errorCode, 'INSUFFICIENT_CREDITS');
+  assert.equal(calls.length, 3);
   await writeFile(path.join(filesRoot, 'source-key'), Buffer.concat([source, Buffer.from(' Changed after approval.')]));
-  assert.equal((await submit(app, { ...input, requestId: 'work-skill-5' })).statusCode, 409); assert.equal(calls.length, 2);
+  assert.equal((await submit(app, { ...input, requestId: 'work-skill-5' })).statusCode, 409); assert.equal(calls.length, 3);
 });
 
 test('typed media skills reach the actual model request; accepted results survive withdrawal', async t => {
