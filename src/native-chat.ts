@@ -21,8 +21,11 @@ import type { StudioToolActivity } from './studio-message-types'
 import { normalizeChatProjects, normalizeChatProjectSessions, type ChatProject } from '../shared/studio/chat-projects'
 import { skillInstructions, resolveLegacySkillIds, type SkillKind, type SkillReference } from '../shared/community-skills'
 import { pinnedContext, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
+import { resolveDocumentIntent, type ChatDocumentTask, type DocumentSource } from '../shared/studio/document-chat'
+import { runDocumentGeneration } from './studio-documents'
 export interface Skill { kind: SkillKind; id: string; authorId?: string; name: string; description: string; body: string; sha256: string; legacyId?: string | null; group?: string; model?: string }
 export interface NativeMessage extends ChatMessage {
+  documentTask?: ChatDocumentTask
   taskId?: string
   sources?: { title: string; url: string; snippet: string }[]
   searchMode?: 'quick' | 'deep'
@@ -35,6 +38,7 @@ export interface NativeMessage extends ChatMessage {
   tools?: StudioToolActivity[]
 }
 export interface NativeChat extends ChatSession {
+  documentEnabled?: boolean
   pinnedMessageIds?: string[]
   creationKind?: 'text' | 'image' | 'video'
   composerKind?: 'text' | 'image' | 'video'
@@ -218,7 +222,7 @@ export function conversationBusy(chat: NativeChat) {
   return Boolean(chats.preparing[chat.id])
 }
 function restoreMessage(message: NativeMessage): NativeMessage {
-  return { ...message, quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
+  return { ...message, ...(message.documentTask ? { documentTask: { ...message.documentTask, preparing: false } } : {}), quote: readMessageQuote(message.quote), interactions: readMessageInteractions(message.interactions), streaming: false, contextCompressing: false, interrupted: message.streaming || message.contextCompressing ? true : message.interrupted }
 }
 function modelMessage(message: NativeMessage): NativeMessage {
   if (message.role !== 'user' || !message.quote) return message
@@ -421,9 +425,10 @@ export function stopChat(chat: NativeChat, selected?: NativeMessage) {
   for (const message of branchMessages(chat) as NativeMessage[]) {
     if (selected && message.id !== selected.id) continue
     if (message.streaming || message.contextCompressing) {
-      const task = creation.tasks.find(task => task.id === message.taskId)
+      const task = creation.tasks.find(task => task.id === (message.documentTask?.modelTaskId || message.taskId))
       if (task) stopCreation(task)
       message.streaming = false; message.contextCompressing = false; message.interrupted = true
+      if (message.documentTask) { message.documentTask.preparing = false; message.documentTask.error = '已停止等待，可恢复原请求或查看已保存文件。' }
     }
     for (const tool of message.tools || []) {
       if (tool.status === 'pending' || tool.status === 'running') { tool.status = 'stopped'; tool.error = '已停止等待，执行状态未确认，请核对原执行结果。' }
@@ -446,7 +451,7 @@ export async function recoverMessage(message: NativeMessage) {
 watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as NativeMessage[]).map(message => [message.id, message.taskId, message.interrupted])]),
   creation.tasks.map(task => [task.id, task.phase, task.text, task.error])], () => {
   for (const chat of chats.sessions) for (const message of branchMessages(chat) as NativeMessage[]) {
-    if (!message.interrupted || message.role !== 'assistant') continue
+    if (!message.interrupted || message.role !== 'assistant' || message.documentTask) continue
     const task = creation.tasks.find(task => task.owner === owner() && task.id === message.taskId && task.kind === 'text')
     if (!task) continue
     applyAnswer(message, task.text, task.phase === 'complete' ? 'finish' : 'interrupted')
@@ -456,7 +461,7 @@ watch(() => [chats.sessions.map(chat => [chat.id, (branchMessages(chat) as Nativ
     if (task.phase === 'complete') message.interrupted = false
   }
 }, { deep: true })
-export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse }): Promise<boolean> {
+export async function sendChat(chat: NativeChat, text: string, files: ParsedFile[], model: string, regenerate?: NativeMessage, edited?: NativeMessage, options?: { quote?: MessageQuote; optionResponse?: MessageOptionResponse; document?: { format: 'docx' | 'xlsx'; source?: DocumentSource } }): Promise<boolean> {
   if (conversationBusy(chat) || !owner() || !registeredChat(chat)) return false
   if (regenerate) {
     regenerate = chat.messages.find(message => message.id === regenerate!.id && message.role === 'user')
@@ -477,8 +482,13 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   const tokenId = creation.modelTokenId
   const accountGroup = creation.selectedGroup
   const acceptedAccount = /^[1-9]\d*$/.test(owner()) ? owner() : session.user?.accountId
+  const acceptedComposerKind = chat.composerKind
+  const documentIntent = chat.documentEnabled && (chat.composerKind || chat.creationKind || 'text') === 'text'
+    ? options?.document ? { format: options.document.format, edit: !!options.document.source, source: options.document.source, instruction: text, clarification: undefined, attachment: undefined, candidates: undefined }
+      : resolveDocumentIntent(text, chat.messages.slice(chat.clearContextIndex || 0), files, chat.id) : null
   const previous = { messages: [...chat.messages], messageBranches: [...(chat.messageBranches || [])], branchSelections: { ...chat.branchSelections }, memoryPrompt: chat.memoryPrompt, lastSummarizeIndex: chat.lastSummarizeIndex, clearContextIndex: chat.clearContextIndex }
-  const content: RequestMessage['content'] = files.length ? [{ type: 'text', text }, ...files.filter(file => file.type.startsWith('image/')).map(file => ({ type: 'image_url' as const, image_url: { url: file.content } })), ...fileContentParts(files.filter(file => !file.type.startsWith('image/')))] : text
+  const content: RequestMessage['content'] = documentIntent ? text + (files.length ? `\n\n文档资料：${files.map(file => file.name).join('、')}` : '')
+    : files.length ? [{ type: 'text', text }, ...files.filter(file => file.type.startsWith('image/')).map(file => ({ type: 'image_url' as const, image_url: { url: file.content } })), ...fileContentParts(files.filter(file => !file.type.startsWith('image/')))] : text
   const user: NativeMessage = regenerate || { id: crypto.randomUUID(), role: 'user', content, createdAt: Date.now() }
   if (!regenerate) user.quote = readMessageQuote(options?.quote ?? edited?.quote)
   if (options?.optionResponse) user.optionResponse = options.optionResponse
@@ -503,12 +513,22 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   const history = [...chat.messages], contextIndex = chat.clearContextIndex, memory = chat.memoryPrompt, summarizeIndex = chat.lastSummarizeIndex
   try {
     const current = () => version === epoch && runs.has(runId) && registeredChat(chat)
+      && (!documentIntent || chat.composerKind === acceptedComposerKind && chats.activeId === chat.id)
       && (branchMessages(chat) as NativeMessage[]).some(message => message.id === answer.id)
     await saveChats(true)
     accepted = true
     if (!current()) return accepted
     if (chat.topic === '新对话' && !chat.renamed) chat.topic = (text || files[0]?.name || '附件对话').slice(0, 40)
     const prefix: RequestMessage[] = system.trim() ? [{ role: 'system', content: system }] : []
+    if (documentIntent) {
+      result.documentTask = { key: crypto.randomUUID(), mode: documentIntent.edit ? 'edit' : 'create', instruction: documentIntent.instruction,
+        request: { sessionId: chat.id, instruction: documentIntent.instruction, model, provider: 'community', format: documentIntent.format,
+          ...(documentIntent.source ? { sourceArtifactId: documentIntent.source.assetId, baseVersion: documentIntent.source.version } : {}) },
+        preparing: !documentIntent.clarification, clarification: documentIntent.clarification, candidates: documentIntent.candidates }
+      result.content = documentIntent.clarification || '正在准备文档内容…'
+      await saveChats(true)
+      if (documentIntent.clarification) return accepted
+    }
     const fixed = validatePinnedContext(pinnedContext(chat, creation.tasks, owner())).filter(entry => entry.message.id !== user.id)
     const fixedImages = new Set<string>()
     for (const { message, task, text } of fixed) {
@@ -521,7 +541,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       if (!current()) return accepted
       prefix.push({ role: message.role, content: images.length ? [{ type: 'text', text }, ...images] : text })
     }
-    prefix.push({ role: 'system', content: messageInteractionPrompt(answer.id) })
+    if (!documentIntent) prefix.push({ role: 'system', content: messageInteractionPrompt(answer.id) })
     if (skillIds.length) {
       const catalog = await api<{ items: Skill[] }>('/api/creation/skills/catalog', { expectedAccount: acceptedAccount })
       if (!current()) return accepted
@@ -550,6 +570,15 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
     }
     if (!current()) return accepted
     result.streaming = false
+    if (documentIntent && result.documentTask) {
+      const controller = new AbortController()
+      toolControllers.set(runId, controller); result.streaming = true
+      await runDocumentGeneration({ chat, result, task: result.documentTask, files, history: history.slice(contextIndex || 0).filter(item => item.id !== user.id && item.id !== answer.id), source: documentIntent.source, attachment: documentIntent.attachment,
+        modelRequest: { kind: 'text', model, apiFormat, accountTokenId: tokenId, accountGroup, sourceWorkId, skills: selectedSkills.filter(skill => skill.id.startsWith('work-')).map(({ id, sha256 }) => ({ id, sha256 })), prompt: text, size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8, chatOptions: { ...settings, messages: [] } },
+        prefix, signal: controller.signal, assertCurrent: () => { if (!current()) throw new Error('对话已切换，可在原会话恢复文档任务。') }, publish: () => saveChats(true) })
+      chat.lastUpdate = Date.now()
+      return accepted
+    }
     const userIndex = history.findIndex(message => message.id === user.id)
     const prepared = await prepareContext({
       prefix, history: history.slice(chat.sendMemory && memory ? Math.max(contextIndex || 0, summarizeIndex) : contextIndex || 0, userIndex).filter(message => !message.error && !message.streaming && !message.contextCompressing && !fixed.some(entry => entry.message.id === message.id)).flatMap(message => {
@@ -649,6 +678,7 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
       if (optionSource) optionSource.optionReceipt = undefined
     }
     if (version === epoch && runs.has(runId)) {
+      if (result.documentTask) { result.documentTask.error = errorMessage(error); result.content = '文档尚未完成，已保留原任务。' }
       result.error = errorMessage(error); result.interrupted = true
       chats.error = errorMessage(error)
       for (const tool of result.tools || []) if (tool.status === 'pending' || tool.status === 'running') { tool.status = 'stopped'; tool.error = '执行状态未确认，请核对原执行结果。' }
@@ -656,6 +686,11 @@ export async function sendChat(chat: NativeChat, text: string, files: ParsedFile
   }
   finally {
     result.contextCompressing = false
+    if (result.documentTask) {
+      const task = result.documentTask
+      task.preparing = false
+      if (!task.plan && !task.modelTaskId && !task.clarification && !task.error) task.error = '操作已停止，未调用模型。请回到文本工作区重新发送要求。'
+    }
     if (version === epoch && runs.has(runId)) {
       runs.delete(runId); toolControllers.get(runId)?.abort(); toolControllers.delete(runId)
       result.streaming = false; chats.busy[chat.id] = chatRunning(chat.id)

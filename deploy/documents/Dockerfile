@@ -14,6 +14,8 @@ RUN XLSX_SIDECAR_PATH=/native/xlsx-sidecar node test.mjs
 COPY services/documents/server.ts /source/services/documents/server.ts
 COPY shared/studio/document-workspace.ts /source/shared/studio/document-workspace.ts
 RUN ln -s /engine/node_modules /source/node_modules && ./node_modules/.bin/esbuild /source/services/documents/server.ts --bundle --platform=node --target=node24 --format=esm --outfile=/engine/dist/server.mjs
+COPY services/documents/server.test.mjs /source/services/documents/server.test.mjs
+RUN ln -s /engine/dist /source/services/documents/dist && cd /source && XLSX_SIDECAR_PATH=/native/xlsx-sidecar node services/documents/server.test.mjs
 COPY services/documents/QXChat-LICENSE /engine/dist/licenses/QXChat-LICENSE
 
 FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c

@@ -25,6 +25,7 @@ let word,sheet;
 try {
  for(let i=0;i<100;i++){try {if((await fetch(base+'/health')).ok)break;}catch{} if(child.exitCode!==null)throw Error(logs);await new Promise(r=>setTimeout(r,100));}
  await test('private service rejects missing auth and forged owners',async()=>{
+  const capabilities = (await json('capabilities')).data; assert.equal(capabilities.docx,true);assert.equal(capabilities.xlsx,true);assert.equal(capabilities.activeJobs,0);
   assert.equal((await fetch(base+'/assets')).status,401);assert.equal((await request('assets',{},'../escape')).status,401);
  });
  await test('Word generation, actual ZIP download, idempotency and account isolation',async()=>{
@@ -71,7 +72,19 @@ try {
   const pair=await Promise.all([json('jobs',post(plan,req('docx'))),json('jobs',post(plan,req('docx')))]);assert.deepEqual(pair.map(r=>r.status).sort(),[202,429]);
   const job=pair.find(r=>r.status===202).data;await json('jobs/'+job.id,{method:'DELETE'});const stopped=await done(job);assert.equal(stopped.status,'cancelled');assert.equal(stopped.assetId,null);
  });
+ await test('lists session jobs and deletion preserves cancellation against an old request replay',async()=>{
+  const listed=await json('jobs?sessionId=test-session');assert.ok(listed.data.jobs.some(j=>j.id===word.id));assert.ok(listed.data.jobs.every(j=>j.sessionId==='test-session'&&!j.plan));
+  assert.deepEqual((await json('jobs?sessionId=other-session')).data.jobs,[]);
+  assert.equal((await request(`assets/${word.assetId}`,{method:'DELETE'},2)).status,404);
+  assert.equal((await request(`assets/${word.assetId}`,{method:'DELETE'})).status,200);
+  assert.equal((await request(`assets/${word.assetId}/1/download`)).status,404);
+  assert.equal((await json(`jobs/${word.id}`)).data.status,'cancelled');
+  const plan={schemaVersion:1,kind:'create_word',fileName:'会议纪要.docx',blocks:[{type:'paragraph',text:'项目会议纪要',style:'title'},{type:'paragraph',text:'交付日期为周五。'}]};
+  assert.equal((await json('jobs',post(plan,req('docx'),word.id))).status,409);
+ });
  console.log(JSON.stringify({passed:results.length,tests:results}));
+} catch (error) {
+ console.error(logs); throw error;
 } finally {
  child.kill();await new Promise(resolve=>child.once('close',resolve));
  await rm(root,{recursive:true,force:true,maxRetries:3,retryDelay:100});

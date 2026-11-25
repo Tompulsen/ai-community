@@ -27,6 +27,7 @@ export interface CreationGroup { id: string; name: string; ratio?: number; descr
 interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null; contractVersion?: 1 | 2 }
 export interface CreationTask {
   id: string
+  purpose?: 'document'
   conversationId?: string
   mediaBranch?: { taskId: string; edited?: boolean }
   conversationPending?: boolean
@@ -73,6 +74,7 @@ export interface CreationTask {
   legacy?: boolean
 }
 export interface CreationInput {
+  purpose?: 'document'
   conversationId?: string
   mediaBranch?: { taskId: string; edited?: boolean }
   imageContext?: ImageConversationContext
@@ -864,7 +866,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (turn.references) turn.references = await Promise.all(turn.references.map(prepareImage))
   }
   const id = crypto.randomUUID()
-  const body = JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, accountContractVersion: undefined,
+  const body = JSON.stringify({ ...input, purpose: undefined, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, accountContractVersion: undefined,
     ...(contractVersion === 2 ? { contractVersion: 2, group: selectedGroup } : {}),
     references: undefined, referenceUrls: (input.references || []).map(file => file.url), requestId: id })
   const requestBytes = new TextEncoder().encode(body).byteLength
@@ -873,6 +875,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
   const previous = input.conversationId && creation.tasks.find(task => task.owner === owner && task.kind === input.kind && creationConversationId(task) === input.conversationId)
   const task: CreationTask = reactive({
+    ...(input.purpose === 'document' ? { purpose: 'document' as const } : {}),
     id, conversationId: previous ? creationConversationId(previous) : validId(input.conversationId) ? input.conversationId : id, owner, kind: input.kind, model: input.model, prompt: input.prompt.trim(),
     createdAt: Date.now(), phase: 'submitting', protocol: input.protocol === 'auto' ? 'openai' : input.protocol || 'openai', urls: [], text: '',
     sourceWorkId: input.sourceWorkId, references: input.references || [], ...(selectedGroup ? { group: selectedGroup } : {}),
@@ -1297,6 +1300,7 @@ async function autoDownloadCreation(task: CreationTask) {
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
 export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadFormat) {
+  if (task.purpose === 'document') throw new Error('请在文本聊天的文档卡片下载 Word / Excel 文件。')
   signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')
   task = creation.tasks.find(current => current.id === task.id && current.owner === task.owner) || task
@@ -1321,6 +1325,7 @@ export async function downloadCreation(task: CreationTask, index = 0, signal?: A
 }
 const sharing = new Set<string>()
 export async function publishCreation(task: CreationTask, title: string, destination: CreationDestination = 'community', text?: string, content?: string, details?: PublicationDetails) {
+  if (task.purpose === 'document') throw new Error('文档制作计划不能发布为社区作品。')
   const key = `${task.owner}:${task.id}`
   if (sharing.has(key)) throw new Error('这条作品正在提交，请稍后查看结果。')
   sharing.add(key)

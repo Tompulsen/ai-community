@@ -30,6 +30,7 @@ import { handleCreation, startCreationWorker } from './creation.ts'
 import { checkRequestSchema } from './creation/request-store.ts'
 import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
 import { handleStudioTools, closeMcpClients } from './studio-tools.ts'
+import { handleDocuments } from './documents.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { AppConfig, Database, RequestContext } from './types.ts'
 export { compareStreamIds } from './social.ts'
@@ -81,6 +82,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   app.addHook('onClose', closeMcpClients)
   app.addHook('onClose', closeNewApiRedis)
   const contexts = new WeakMap<FastifyRequest, RequestContext>()
+  let documentUploads = 0
   app.register(multipart, { limits: { files: 1, fields: 4, parts: 5, fieldSize: 4096, fileSize: 10 * 1024 ** 3 } })
   const parseJson = app.getDefaultJsonParser('error', 'error')
   app.removeContentTypeParser('application/json')
@@ -92,6 +94,13 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     let url: URL
     try { url = new URL(request.raw.url || '/', origin) } catch { throw httpError(400, '地址格式无效。') }
     if (url.pathname !== '/healthz') requireSameOrigin(request.raw, origin, url.pathname === '/api/uploads' && request.method === 'POST')
+    if (url.pathname === '/api/documents/upload' && request.method === 'POST') {
+      if (documentUploads >= 2) throw httpError(429, '文档上传繁忙，请稍后重试。')
+      documentUploads++
+      let released = false
+      const release = () => { if (!released) { released = true; documentUploads-- } }
+      reply.raw.once('finish', release); reply.raw.once('close', release)
+    }
   })
   const authenticateRequest = async (request: FastifyRequest, reply: FastifyReply) => {
     const url = new URL(request.raw.url || '/', origin)
@@ -141,6 +150,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
         ...(url.startsWith('/api/skills') || url.startsWith('/api/admin/skills') ? { bodyLimit: 8 * 1024 * 1024 } : {}),
         ...(url === '/api/works/feed' ? { bodyLimit: 24576 } : {}),
         ...(url === '/api/images/export' ? { bodyLimit: 44 * 1024 * 1024 } : {}),
+        ...(url.startsWith('/api/documents/') ? { bodyLimit: url === '/api/documents/upload' ? 28 * 1024 * 1024 : 610 * 1024 } : {}),
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && url !== '/api/uploads' ? { schema: { body: objectBody } } : {}),
         handler: async (request, reply) => {
           const ctx = contexts.get(request)
@@ -166,6 +176,11 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     ['POST', ['/api/creation/generate', '/api/creation/models', '/api/creation/preference-groups']],
   ])
   register(handleImageExport, [['POST', ['/api/images/export']]])
+  register(handleDocuments, [
+    ['GET', ['/api/documents/capabilities', '/api/documents/assets', '/api/documents/jobs', '/api/documents/jobs/:id', '/api/documents/assets/:id/versions', '/api/documents/assets/:id/:version/:action']],
+    ['POST', ['/api/documents/upload', '/api/documents/jobs', '/api/documents/jobs/:id/retry']],
+    ['DELETE', ['/api/documents/assets/:id', '/api/documents/jobs/:id']],
+  ])
   register(handleStudioTools, [
     ['GET', ['/api/creation/skills/catalog', '/api/creation/mcp/status', '/api/creation/mcp/tools']],
     ['POST', ['/api/creation/search', '/api/creation/mcp/config', '/api/creation/mcp/call']],

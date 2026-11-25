@@ -97,14 +97,14 @@ async function readFileData(file: Blob): Promise<string> {
   });
 }
 
-export async function parseFile(file: File): Promise<ParsedFile> {
+export async function parseFile(file: File, officeWorkspace = false): Promise<ParsedFile> {
   const ext = getFileExtension(file.name);
   if (!isSupportedFile(file)) throw new Error(`不支持的文件类型: ${ext}`);
   const type =
     (!file.type || file.type === "application/octet-stream"
       ? (SUPPORTED_FILE_TYPES as Record<string, string>)[ext]
       : file.type) || "application/octet-stream";
-  const maxSize = type.startsWith("video/") ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
+  const maxSize = type.startsWith("video/") || officeWorkspace && /\.(docx|xlsx)$/i.test(file.name) ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
   if (file.size > maxSize) {
     throw new Error(`文件大小超过限制（最大 ${maxSize / 1024 / 1024}MB）`);
   }

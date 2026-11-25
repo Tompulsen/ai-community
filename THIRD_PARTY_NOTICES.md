@@ -54,6 +54,10 @@ Copyright (c) 2023-2025 NextChat notice retained below.
 The workbench message toolbar adapts QXChat `app/components/chat.tsx` and
 `chat.module.scss`. Its seven base SVG icons in `src/assets/message-actions/`
 are copied from QXChat `app/icons/`, under the same MIT / NextChat notice.
+The native text document workspace adapts QXChat `app/utils/document-chat.ts`,
+document workflow components, and the retired Studio document proxy/client.
+`shared/studio/document-chat.ts` retains the QXChat intent and bounded context
+helpers. Its MIT / NextChat notice below applies to these adapted sources.
 
 MIT notice for the reused Studio sources, retained here so it is distributed
 with the community image after the root `studio/` directory was retired:

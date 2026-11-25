@@ -328,7 +328,7 @@ export async function getTaskStorageSize(owner: string) {
 }
 function taskFilters(options: TaskPageQuery) {
   const query = options.query?.trim().toLowerCase() || ''
-  const base = (task: CreationTask) => (!options.kind || task.kind === options.kind) && (!options.gallery || galleryOutputIndexes(task).length > 0)
+  const base = (task: CreationTask) => task.purpose !== 'document' && (!options.kind || task.kind === options.kind) && (!options.gallery || galleryOutputIndexes(task).length > 0)
   const matches = (task: CreationTask) => base(task) && (!options.phase || task.phase === options.phase) && (!options.model || task.model === options.model)
     && (!options.since || task.createdAt >= options.since) && (!query || `${task.prompt} ${task.model}`.toLowerCase().includes(query))
   return { base, matches }

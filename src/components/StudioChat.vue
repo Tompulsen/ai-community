@@ -9,6 +9,9 @@ import { answerBranches } from '../../shared/studio/chat-branches'
 import { getFileAccept, type ParsedFile } from '../../shared/studio/file-upload'
 import { prepareStudioImage } from '../studio-image-upload'
 import StudioSkillPicker from './StudioSkillPicker.vue'
+import { FileText as DocumentIcon } from '@lucide/vue'
+import StudioDocumentCard from './StudioDocumentCard.vue'
+import type { DocumentSource } from '../../shared/studio/document-chat'
 import StudioChatParameters from './StudioChatParameters.vue'
 import StudioResponseMetrics from './StudioResponseMetrics.vue'
 import { confirmStudioDelete } from '../studio-confirm'
@@ -62,13 +65,27 @@ const props = withDefaults(defineProps<{ mode?: 'text' | 'image' | 'video'; sour
 const emit = defineEmits<{ prices: []; keys: []; entry: [value: StudioEntry]; kind: [value: 'text' | 'image' | 'video', model: string]; publish: [task: CreationTask, destination: CreationDestination, content?: string]; source: [id?: string]; remixError: [message: string]; conversation: [id: string]; mediaAction: [action: 'editTask' | 'editImage' | 'regenerate' | 'useTask' | 'chooseReference', task: CreationTask, index?: number] }>()
 const entryChat = ref(props.entryOnly ? createEmptyChat() : undefined)
 const current = computed(() => props.entryOnly ? entryChat.value : chats.sessions.find(chat => chat.id === chats.activeId))
+const StudioDocuments = defineAsyncComponent(() => import('./StudioDocuments.vue'))
+const documentsOpen = ref(false), documentSource = ref<DocumentSource>(), documentTrigger = ref<HTMLButtonElement>()
+function openDocuments(source?: DocumentSource) {
+  if (props.mode !== 'text' || props.entryOnly || !current.value || !session.user) return
+  documentSource.value = source; documentsOpen.value = true
+}
+function closeDocuments() { documentsOpen.value = false; documentSource.value = undefined; void nextTick(() => documentTrigger.value?.focus({ preventScroll: true })) }
+async function toggleDocuments() {
+  if (props.mode !== 'text' || props.entryOnly || !current.value || busy.value) return
+  const chat = current.value, enabled = chat.documentEnabled === true
+  chat.documentEnabled = !enabled
+  try { await saveChats(true) } catch (cause) { chat.documentEnabled = enabled; error.value = errorMessage(cause) }
+}
+watch([() => current.value?.id, () => session.user?.id, () => props.mode], () => { documentsOpen.value = false; documentSource.value = undefined })
 function saveChats(required = false) { if (!props.entryOnly) return persistChats(required) }
 const currentFormat = computed(() => current.value?.formatOverride || modelFormat(model.value) || (current.value?.formatAutomatic === true ? 'auto' : current.value?.settings.format || 'auto'))
 const effectiveFormat = computed(() => currentFormat.value === 'auto' ? configuredModelFormat(model.value) || 'chat-completions' : currentFormat.value)
 const ready = computed(() => Boolean(current.value))
 const sourceWorkId = computed(() => current.value?.sourceWorkId)
 const prompt = ref(''), model = ref(''), files = ref<(ParsedFile & { sourceUrl?: string; fromWorkId?: string })[]>([]), error = ref(''), referenceLoading = ref(false), edited = ref<NativeMessage>(), messagesElement = ref<HTMLElement>(), composerElement = ref<HTMLTextAreaElement>()
-const materials = useStudioMaterials(files, computed(() => `${session.user?.id || ''}:${current.value?.id || ''}`))
+const materials = useStudioMaterials(files, computed(() => `${session.user?.id || ''}:${current.value?.id || ''}`), { officeWorkspace: computed(() => props.mode === 'text' && current.value?.documentEnabled === true) })
 const uploading = computed(() => referenceLoading.value || materials.pending.value)
 const waitingForMaterials = ref(false)
 let materialSubmission: AbortController | undefined
@@ -92,6 +109,10 @@ const menuItems = computed<StudioMenuAction[]>(() => {
   const chat = current.value, message = menuMessage.value
   if (!chat || !message || !chat.messages.includes(message)) return []
   const blocked = Boolean(busy.value || props.sourceBlocked)
+  if (message.documentTask) return [
+    { label: '复制消息', icon: Copy, run: () => copy(message) },
+    { label: '删除消息', icon: Trash2, danger: true, disabled: blocked || pending(message), run: () => removeMessage(chat, message) },
+  ]
   const quote = createMessageQuote(message, menuSelection.value || messageText(message))
   return [
     { label: menuSelection.value ? '复制选中文字' : '复制消息', icon: Copy, run: () => copy(message, menuSelection.value) },
@@ -159,7 +180,7 @@ function stop(message?: NativeMessage) {
   if (chats.busy[current.value.id]) stopChat(current.value)
   for (const task of mediaTasksForConversation(current.value)) if (['submitting', 'running'].includes(task.phase)) stopCreation(task)
 }
-const latestTask = computed(() => creation.tasks.find(task => task.id === current.value?.messages.at(-1)?.taskId))
+const latestTask = computed(() => creation.tasks.find(task => task.id === (current.value?.messages.at(-1)?.documentTask?.modelTaskId || current.value?.messages.at(-1)?.taskId)))
 function messageText(message: NativeMessage) { return typeof message.content === 'string' ? message.content : message.content.filter(part => part.type === 'text').map(part => part.text || '').join('\n') }
 function messageModel(message: NativeMessage) { return creation.tasks.find(task => task.id === message.taskId)?.model || current.value?.model || '助手' }
 function branch(message: NativeMessage) { return current.value ? answerBranches(current.value, message.id) : { index: 0, total: 1, messageIds: [] } }
@@ -425,6 +446,10 @@ async function pin(message: NativeMessage) {
 }
 function messageActions(message: NativeMessage): MessageAction[] {
   const chat = current.value!, pinned = !!chat.pinnedMessageIds?.includes(message.id), blocked = Boolean(busy.value || props.sourceBlocked)
+  if (message.documentTask) return [
+    { icon: 'copy', label: '复制消息', run: () => copy(message) },
+    { icon: 'delete', label: '删除消息', disabled: blocked || pending(message), run: () => removeMessage(chat, message) },
+  ]
   const task = creation.tasks.find(item => item.owner === session.user?.id && item.id === message.taskId)
   const items: MessageAction[] = [
     { icon: 'edit', label: message.role === 'user' ? '编辑提问' : '编辑回答', disabled: blocked || pending(message) || message.role === 'user' && !models.value.some(item => item.id === model.value), run: () => edit(message) },
@@ -521,6 +546,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
             <span v-else-if="part.type !== 'text'">{{ part.file?.filename || (part.type === 'video_url' ? '视频附件' : part.type === 'image_url' ? '图片附件无法显示' : '音频附件') }}</span>
           </template></div>
           <StudioMessageSources v-if="message.role === 'assistant' && message.sources?.length" :sources="message.sources" />
+          <StudioDocumentCard v-if="mode === 'text' && message.documentTask" :chat="current" :message="message" :disabled="!!sourceBlocked" @open="openDocuments" />
           <StudioToolActivity v-for="tool in message.tools || []" :key="tool.id" :tool="tool" :disabled="sourceBlocked || busy" :on-rerun="args => rerunMessageTool(current!, message, tool, args)" />
           <StudioMessageOptions v-if="message.role === 'assistant' && message.interactions?.options" :definition="message.interactions.options" :receipt="message.optionReceipt" :disabled="sourceBlocked || busy || message.interrupted || current.messages.at(-1)?.id !== message.id || !models.some(item => item.id === model)" :on-submit="ids => submitMessageOptions(current!, message, ids, model)" />
           <StudioFollowupSuggestions v-if="mode === 'text' && message.role === 'assistant' && message === current.messages.at(-1) && message.interactions?.suggestions?.length && !pending(message) && !message.interrupted && !message.error" :suggestions="message.interactions.suggestions" :disabled="Boolean(busy || sourceBlocked)" @select="fillSuggestion(message, $event)" />
@@ -535,7 +561,9 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>
       <StudioResponseMetrics v-if="mode === 'text' && !entryOnly" :key="current.id" :messages="current.messages" />
-      <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="current" :transient="entryOnly" :disabled="busy" /></div>
+      <div v-if="mode === 'text' && !entryOnly" class="studio-context-tools"><StudioModePicker v-if="!entryOnly" /><button v-if="!entryOnly" type="button" class="studio-tool" title="清除上下文" :disabled="busy" @click="clearContext"><Eraser :size="16" aria-hidden="true" />清除上下文</button><StudioSkillPicker :chat="current" :transient="entryOnly" :disabled="busy" /><button ref="documentTrigger" type="button" class="studio-tool" title="文档工作区：生成或编辑 Word / Excel" aria-label="文档工作区" :aria-pressed="current.documentEnabled === true" :disabled="busy" @click="toggleDocuments"><DocumentIcon :size="16" aria-hidden="true" />文档</button></div>
+      <div v-if="mode === 'text' && !entryOnly && current.documentEnabled" class="document-enabled-banner"><DocumentIcon :size="16" aria-hidden="true" /><strong>文档已开启</strong><span>仅当前聊天</span><button type="button" @click="openDocuments()">打开工作区</button><button type="button" aria-label="关闭文档功能" :disabled="busy" @click="toggleDocuments"><X :size="15" aria-hidden="true" /></button></div>
+      <StudioDocuments v-if="mode === 'text' && !entryOnly && documentsOpen" :key="current.id" :chat="current" :model="model" :initial-source="documentSource" :disabled="!!sourceBlocked || !!busy" @close="closeDocuments" />
       <p v-if="mode === 'text' && creation.modelLaunchPending" class="muted" role="status">正在准备所选模型，请稍候…</p>
       <form v-if="mode === 'text'" :inert="Boolean(creation.modelLaunchPending) || undefined" class="chat-composer studio-composer" :aria-label="entryOnly ? '快捷创作' : undefined" @submit.prevent="send">
         <StudioMessageQuote v-if="draftQuote" :quote="draftQuote" :on-remove="() => draftQuote = undefined" />
@@ -571,6 +599,8 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
   </div>
 </template>
 <style scoped>
+.document-enabled-banner { display:flex; align-items:center; gap:8px; margin:8px 0; padding:3px 8px 3px 12px; border:1px solid var(--border); border-radius:12px; background:var(--surface-soft); font-size:12px; flex-wrap:wrap; }.document-enabled-banner>svg { color:var(--blue); flex-shrink:0; }.document-enabled-banner>span { color:var(--muted); }.document-enabled-banner button { min-height:44px; padding:8px; border-radius:8px; }.document-enabled-banner button:first-of-type { margin-left:auto; color:var(--blue); }.studio-context-tools button[aria-pressed=true] { color:var(--blue); background:var(--blue-soft); }
+
 .markdown-loading, .reasoning-loading { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-loading { min-height: 28px; }
 .reasoning-loading { max-height: 320px; overflow: auto; color: var(--muted); }

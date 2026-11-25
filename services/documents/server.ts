@@ -12,7 +12,7 @@ import {
 	stat,
 	statfs,
 } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
 	documentPlan,
 	documentJobRequest,
@@ -27,6 +27,20 @@ if (!engine || secret.length < 32)
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const active = new Map<string, AbortController>();
 let occupied = false;
+let receiving = false;
+let stopping = false;
+const engineReady = new Promise<{ docx: boolean; xlsx: boolean }>(resolve => {
+  execFile(process.execPath, [engine!, 'health'], { windowsHide: true, timeout: 10000, maxBuffer: 16384 }, (error, stdout) => {
+    try {
+      const info = JSON.parse(stdout);
+      resolve({ docx: !error && info.words === true && info.evaluation === false, xlsx: !error && info.cells === true && info.evaluation === false });
+    } catch { resolve({ docx: false, xlsx: false }); }
+  });
+});
+async function capabilities() {
+  const { docx, xlsx } = await engineReady;
+  return { enabled: docx || xlsx, docx, xlsx, activeJobs: occupied ? 1 : 0, reason: docx ? undefined : '文档引擎暂未就绪，请稍后重试。' };
+}
 const cancelled = new Set<string>();
 const unsavedJobs = new Map<string, any>();
 const terminal = new Set(["ready", "failed", "cancelled"]);
@@ -66,7 +80,16 @@ async function jsonFile(file: string) {
 async function save(file: string, data: unknown) {
 	const tmp = file + "." + randomUUID() + ".tmp";
 	await writeFile(tmp, JSON.stringify(data), { mode: 0o600, flag: "wx" });
-	await rename(tmp, file);
+	try {
+		for (let attempt = 0; ; attempt++) {
+			try { await rename(tmp, file); break; }
+			catch (error) {
+				// Windows briefly locks the destination while another request reads it.
+				if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM' || attempt >= 3) throw error;
+				await new Promise(resolve => setTimeout(resolve, 20 * 3 ** attempt));
+			}
+		}
+	} finally { await rm(tmp, { force: true }).catch(() => {}); }
 }
 function send(res: http.ServerResponse, status: number, data: unknown) {
 	res.writeHead(status, {
@@ -77,6 +100,9 @@ function send(res: http.ServerResponse, status: number, data: unknown) {
 	res.end(JSON.stringify(data));
 }
 async function body(req: http.IncomingMessage, limit: number) {
+	check(!receiving, 429, '文档上传繁忙，请稍后重试。');
+	receiving = true;
+	try {
 	check(
 		Number(req.headers["content-length"] || 0) <= limit,
 		413,
@@ -90,6 +116,7 @@ async function body(req: http.IncomingMessage, limit: number) {
 		chunks.push(chunk);
 	}
 	return Buffer.concat(chunks);
+	} finally { receiving = false; }
 }
 function publicJob(job: any) {
 	const { plan, requestHash, sourcePath, ...result } = job;
@@ -119,10 +146,12 @@ async function asset(home: string, id: string, version: number) {
 async function jobFile(home: string, id: string) {
 	check(uuid.test(id), 400, "任务标识无效");
 	try {
-		return (
+		const job = (
 			unsavedJobs.get(home + id) ||
 			(await jsonFile(path.join(home, "jobs", id + ".json")))
 		);
+		return cancelled.has(home + id) && job.status === 'ready'
+			? { ...job, status: 'cancelled', plan: undefined, assetId: null, version: null, canRecover: false, error: '文件已删除或任务已取消。' } : job;
 	} catch {
 		throw new HttpError(404, "找不到此文档任务");
 	}
@@ -332,6 +361,8 @@ async function runJob(home: string, job: any, controller: AbortController) {
 			canRecover: false,
 		});
 	} catch (error) {
+		if (!(error instanceof HttpError) && !controller.signal.aborted)
+			console.error('Document processing failed', job.id, (error as NodeJS.ErrnoException)?.code || (error as Error)?.name, (error as NodeJS.ErrnoException)?.syscall, path.basename((error as NodeJS.ErrnoException & { path?: string })?.path || ''));
 		Object.assign(job, {
 			status: controller.signal.aborted ? "cancelled" : "failed",
 			error:
@@ -398,12 +429,11 @@ for (const owner of (await readdir(root)).filter((v) => /^user-\d+$/.test(v))) {
 export const server = http.createServer(async (req, res) => {
 	try {
 		const url = new URL(req.url || "/", "http://documents");
-		if (url.pathname === "/health" && req.method === "GET")
-			return send(res, 200, {
-				enabled: true,
-				docx: true,
-				xlsx: !!process.env.XLSX_SIDECAR_PATH,
-			});
+		check(!stopping || req.method === 'GET' || req.method === 'DELETE', 503, '文档服务正在更新，请稍后继续制作。');
+		if (url.pathname === "/health" && req.method === "GET") {
+			const status = await capabilities();
+			return send(res, status.enabled ? 200 : 503, status);
+		}
 		const token = Buffer.from(String(req.headers.authorization || "")),
 			expected = Buffer.from("Bearer " + secret);
 		check(
@@ -418,11 +448,45 @@ export const server = http.createServer(async (req, res) => {
 			await mkdir(path.join(home, folder), { recursive: true, mode: 0o700 });
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (req.method === "GET" && parts.join("/") === "capabilities")
-			return send(res, 200, {
-				enabled: true,
-				docx: true,
-				xlsx: !!process.env.XLSX_SIDECAR_PATH,
-			});
+			return send(res, 200, await capabilities());
+		if (req.method === 'GET' && parts.join('/') === 'jobs') {
+			const jobs = [];
+			for (const name of await readdir(path.join(home, 'jobs'))) {
+				if (!uuid.test(name.replace(/\.json$/, ''))) continue;
+				const item = await jobFile(home, name.slice(0, -5)).catch(() => null);
+				if (item && (!url.searchParams.get('sessionId') || item.sessionId === url.searchParams.get('sessionId'))) jobs.push(publicJob(item));
+			}
+			return send(res, 200, { jobs: jobs.sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100) });
+		}
+		if (req.method === 'DELETE' && parts[0] === 'assets' && parts.length === 2) {
+			check(uuid.test(parts[1]), 400, '文件标识无效');
+			check(!occupied, 409, '文档正在处理，请完成或取消后再删除文件。');
+			occupied = true;
+			try {
+				const id = parts[1], latest = (await versions(home, id))[0];
+				check(latest, 404, '文件不存在或已删除。');
+				const related = [];
+				for (const name of await readdir(path.join(home, 'jobs'))) {
+					if (!uuid.test(name.replace(/\.json$/, ''))) continue;
+					const job = await jobFile(home, name.slice(0, -5)).catch(() => null);
+					if (job?.assetId === id || job?.plan?.sourceArtifactId === id) {
+						// Keep the request key cancelled so an old browser cannot recreate a deleted file.
+						await writeFile(path.join(home, 'cancelled', job.id), '', { mode: 0o600 });
+						cancelled.add(home + job.id);
+						related.push({ name, id: job.id });
+					}
+				}
+				const retired = path.join(home, 'staging', 'deleted-' + id);
+				await rename(path.join(home, 'assets', id), retired);
+				// Failed cleanup stays outside the library and is removed during restart.
+				await rm(retired, { recursive: true, force: true }).catch(() => console.error('Document deletion cleanup pending', id));
+				for (const item of related) {
+					unsavedJobs.delete(home + item.id);
+					await rm(path.join(home, 'jobs', item.name), { force: true }).catch(() => console.error('Document job cleanup pending', item.id));
+				}
+				return send(res, 200, { ok: true });
+			} finally { occupied = false; }
+		}
 		if (parts[0] === "assets" && req.method === "GET") {
 			if (parts.length === 1) {
 				const result = [];
@@ -661,6 +725,7 @@ export const server = http.createServer(async (req, res) => {
 	}
 });
 server.requestTimeout = 120000;
+process.on('SIGTERM', () => { stopping = true; server.close(); });
 server.listen(
 	Number(process.env.PORT || 3010),
 	process.env.DOCUMENT_HOST || "0.0.0.0",

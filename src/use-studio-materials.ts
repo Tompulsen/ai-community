@@ -7,7 +7,7 @@ import type { WorkFile } from './data'
 import { referenceCountIssue, type resolveReferenceLimits } from '../shared/studio/model-types'
 
 export type StudioFile = ParsedFile & { sourceUrl?: string; fromWorkId?: string; referenceId?: string; duration?: number; durationSeconds?: number }
-export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<string>, options: { limit?: Ref<number>; referenceLimits?: Ref<ReturnType<typeof resolveReferenceLimits>>; imagesOnly?: boolean; videoOnly?: Ref<boolean>; mediaReferences?: Ref<boolean> } = {}) {
+export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<string>, options: { officeWorkspace?: Ref<boolean>; limit?: Ref<number>; referenceLimits?: Ref<ReturnType<typeof resolveReferenceLimits>>; imagesOnly?: boolean; videoOnly?: Ref<boolean>; mediaReferences?: Ref<boolean> } = {}) {
   const snapshot = shallowRef<MaterialUploadSnapshot>({ items: [], files: [], images: [], pending: 0 })
   const counts = computed(() => snapshot.value.items.reduce((counts, file) => {
     counts[file.type.startsWith('video/') ? 'videos' : file.type.startsWith('audio/') ? 'audios' : 'images']++
@@ -67,7 +67,7 @@ export function useStudioMaterials(files: Ref<StudioFile[]>, identity: Ref<strin
           } finally { if (activeUpload?.controller === controller) activeUpload = undefined }
         }
         if (options.imagesOnly) throw new Error('请选择 PNG、JPEG、WebP 或 HEIC 图片。')
-        return parseFile(file)
+        return parseFile(file, unref(options.officeWorkspace))
       },
       imageLimitError: `每轮最多添加 ${limit} 个附件。`, limit,
     }, { images: [], files: files.value })
