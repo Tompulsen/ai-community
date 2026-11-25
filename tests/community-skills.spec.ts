@@ -12,13 +12,13 @@ async function fixture(page: Page, loggedIn = true, admin = false) {
   const account = await mockUnifiedAccount(page, loggedIn)
   account.state.user.isAdmin = admin
   const state = { skills: [structuredClone(fixtureSkill)], delay: 0, conflict: false, failure: false }
-  const calls: { method: string; path: string; body: any }[] = []
+  const calls: { method: string; path: string; body: any; account: string | undefined }[] = []
   await page.route(/\/api\/(?:admin\/)?skills(?:[/?]|$)/, async route => {
     const request = route.request(), url = new URL(request.url()), method = request.method(), path = url.pathname
     const data = method === 'GET' ? {} : request.postDataJSON()
     const id = path.split('/').at(-1)!, management = path.includes('/admin/')
     if (state.failure) return route.fulfill({ status: 503, json: { error: { message: '技能服务暂时不可用' } } })
-    if (method !== 'GET') calls.push({ method, path, body: data })
+    if (method !== 'GET') calls.push({ method, path, body: data, account: request.headers()['x-new-api-user'] })
     if (id === 'inspect') {
       const delay = state.delay; if (delay) await new Promise(resolve => setTimeout(resolve, delay))
       return route.fulfill({ json: { body, name: 'composition', description: '分析画面并提供构图建议', files: fixtureSkill.files } })
@@ -139,6 +139,113 @@ test('admin reviews actual detail version, requires reasons and preserves confli
   await expect(dialog(page)).toBeHidden()
   expect(calls.at(-1)!.body).toEqual({ version: 2, action: 'remove', reason: '配套文件待修订' })
 })
+for (const [kind, width, theme] of [['text', 320, 'light'], ['image', 390, 'dark'], ['video', 1440, 'light']] as const) test(`admin card deletion confirms ${kind} skills at ${width} ${theme}`, async ({ page }, info) => {
+  const { state, account, calls } = await fixture(page, true, true)
+  Object.assign(state.skills[0]!, { kind, version: 3, legacyId: kind === 'text' ? 'brainstorming' : undefined, official: kind !== 'video', status: kind === 'video' ? 'pending' : 'published', filename: kind === 'text' ? 'SKILL.md' : 'composition.zip' })
+  await page.setViewportSize({ width, height: 900 }); await page.goto('/admin?tab=skills')
+  await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), theme)
+  await page.getByLabel('筛选类型').selectOption(kind)
+  await page.getByLabel('审核状态').selectOption(state.skills[0]!.status)
+  const remove = page.getByRole('button', { name: '删除技能：画面构图助手', exact: true })
+  await expect(remove).toBeVisible(); expect((await remove.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.community-skills').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`admin-delete-${width}-${theme}.png`), fullPage: true })
+  await remove.click()
+  const confirmation = page.getByRole('dialog', { name: '删除确认', exact: true })
+  await expect(confirmation).toContainText('画面构图助手'); await expect(confirmation).toContainText('无法撤销')
+  await expect(confirmation.getByRole('button', { name: '取消', exact: true })).toBeFocused()
+  expect(calls).toHaveLength(0)
+  expect((await new AxeBuilder({ page }).include('.studio-confirm-dialog[open]').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath(`delete-confirm-${width}-${theme}.png`), fullPage: true })
+  await page.keyboard.press('Escape'); await expect(remove).toBeFocused(); expect(calls).toHaveLength(0)
+  await remove.click(); await confirmation.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(page.locator('.skill-card')).toHaveCount(0)
+  expect(calls).toEqual([{ method: 'DELETE', path: '/api/admin/skills/skill01', body: { version: 3 }, account: account.state.user.id }])
+  await expect(page.getByLabel('筛选类型')).toHaveValue(kind)
+  await expect(page.getByLabel('审核状态')).toHaveValue(kind === 'video' ? 'pending' : 'published')
+  await page.reload(); await expect(page.locator('.skill-card')).toHaveCount(0)
+})
+
+test('deleting from the editor preserves a cancelled draft and clears it only after success', async ({ page }) => {
+  const { calls } = await fixture(page, true, true)
+  await page.goto('/admin?tab=skills'); await page.getByRole('button', { name: '编辑技能：画面构图助手' }).click()
+  await dialog(page).getByLabel('展示名称').fill('尚未保存的标题')
+  const remove = dialog(page).getByRole('button', { name: '删除技能', exact: true })
+  await remove.click()
+  const confirmation = page.getByRole('dialog', { name: '删除确认', exact: true })
+  await expect(confirmation).toContainText('尚未保存的修改')
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog(page).getByLabel('展示名称')).toHaveValue('尚未保存的标题'); expect(calls).toHaveLength(0)
+  await remove.click(); await confirmation.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(dialog(page)).toBeHidden(); await expect(page.locator('.skill-card')).toHaveCount(0)
+  await page.getByRole('button', { name: '管理概览', exact: true }).click()
+  await expect(page).toHaveURL(/tab=overview/); await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(calls.filter(call => call.method === 'DELETE')).toHaveLength(1)
+})
+
+for (const code of [403, 409, 503]) test(`failed card deletion (${code}) retains the skill and permits a fresh retry`, async ({ page }) => {
+  const { state, calls } = await fixture(page, true, true)
+  await page.goto('/admin?tab=skills')
+  const message = code === 409 ? '技能已变化，请刷新后再删除。' : code === 403 ? '没有删除权限。' : '技能服务暂时不可用。'
+  await page.route('**/api/admin/skills/skill01', route => route.request().method() === 'DELETE' ? route.fulfill({ status: code, json: { message } }) : route.fallback())
+  await page.getByRole('button', { name: '删除技能：画面构图助手' }).click()
+  await page.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(page.locator('.community-skills').getByRole('alert')).toContainText(message)
+  await expect(page.locator('.skill-card')).toHaveCount(1)
+  await page.unroute('**/api/admin/skills/skill01'); state.skills[0]!.version = 2
+  await page.getByRole('button', { name: '刷新技能广场' }).click()
+  await page.getByRole('button', { name: '删除技能：画面构图助手' }).click()
+  await page.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(page.locator('.skill-card')).toHaveCount(0)
+  expect(calls.at(-1)!.body).toEqual({ version: 2 })
+})
+
+test('deletion in progress is submitted once and blocks competing card actions', async ({ page }) => {
+  const { calls } = await fixture(page, true, true)
+  let release!: () => void, requested = false
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/admin/skills/skill01', async route => {
+    if (route.request().method() !== 'DELETE') return route.fallback()
+    requested = true; await pending; return route.fallback()
+  })
+  await page.goto('/admin?tab=skills')
+  const remove = page.getByRole('button', { name: '删除技能：画面构图助手' })
+  await remove.click(); await page.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect.poll(() => requested).toBe(true)
+  await expect(remove).toBeDisabled(); await expect(remove).toContainText('删除中')
+  await expect(page.getByRole('button', { name: '编辑技能：画面构图助手' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '上传技能', exact: true })).toBeDisabled()
+  release(); await expect(page.locator('.skill-card')).toHaveCount(0)
+  expect(calls.filter(call => call.method === 'DELETE')).toHaveLength(1)
+})
+
+test('account switching cancels a pending deletion confirmation without issuing a write', async ({ page }) => {
+  const { account, calls } = await fixture(page, true, true)
+  await page.goto('/admin?tab=skills'); await page.getByRole('button', { name: '删除技能：画面构图助手' }).click()
+  account.state.user = { ...account.state.user, id: 'changedUser', accountId: '18' }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.getByRole('dialog', { name: '删除确认', exact: true })).toBeHidden()
+  expect(calls).toHaveLength(0); await expect(page.locator('.skill-card')).toHaveCount(1)
+})
+
+test('ordinary users only see deletion for their own skills, including the detail entry', async ({ page }) => {
+  const { account, state, calls } = await fixture(page)
+  await page.goto('/skills')
+  await expect(page.getByRole('button', { name: /^删除技能/ })).toHaveCount(0)
+  await page.getByRole('button', { name: '查看技能', exact: true }).click()
+  await expect(dialog(page).getByRole('button', { name: '删除技能', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '关闭技能窗口' }).click()
+  state.skills[0]!.authorId = account.state.user.id
+  await page.getByRole('button', { name: '我的上传', exact: true }).click()
+  await expect(page.getByRole('button', { name: '删除技能：画面构图助手' })).toBeVisible()
+  await page.getByRole('button', { name: '查看技能', exact: true }).click()
+  await dialog(page).getByRole('button', { name: '删除技能', exact: true }).click()
+  await page.getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(dialog(page)).toBeHidden(); await expect(page.locator('.skill-card')).toHaveCount(0)
+  expect(calls.at(-1)!.path).toBe('/api/skills/skill01')
+})
+
 test('admin uploads and edits a skill directly, with an option to leave it pending', async ({ page }) => {
   const { calls } = await fixture(page, true, true)
   await page.goto('/admin?tab=skills'); await page.getByRole('button', { name: '上传技能', exact: true }).click()

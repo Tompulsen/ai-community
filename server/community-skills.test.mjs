@@ -164,6 +164,22 @@ test('skills moderation, privacy, idempotency and quotas in real PostgreSQL', { 
     await request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 3 })
     await fails(request('GET', `/api/admin/skills/${item.id}`, admin), 404)
   })
+  await t.test('deletion checks identity, permission and version, then removes the package and catalog entry atomically', async () => {
+    const item = (await request('POST', '/api/skills', alice, payload())).data
+    await request('POST', `/api/admin/skills/${item.id}/review`, admin, { action: 'approve', version: 1 })
+    await fails(request('DELETE', `/api/admin/skills/${item.id}`, alice, { version: 2 }), 403)
+    await fails(request('DELETE', `/api/skills/${item.id}`, bob, { version: 2 }), 404)
+    await fails(request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 2 }, { 'x-new-api-user': 'alice' }), 409)
+    await fails(request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 1 }), 409)
+    await fails(request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 0 }), 400)
+    assert.equal((await detail(item.id)).version, 2)
+    const deleted = await Promise.allSettled(Array.from({ length: 2 }, () => request('DELETE', `/api/admin/skills/${item.id}`, admin, { version: 2 })))
+    assert.equal(deleted.filter(value => value.status === 'fulfilled').length, 1)
+    assert.equal(deleted.find(value => value.status === 'rejected').reason.statusCode, 404)
+    assert(!(await approvedCommunitySkills(db)).some(skill => skill.id === `community-${item.id}`))
+    await fails(request('GET', `/api/skills/${item.id}/download`, alice), 404)
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM moderation_log WHERE type=$1 AND info->>\'id\'=$2', ['communitySkillDelete', item.id])).rows[0].n, 1)
+  })
   await t.test('type is mandatory, editable, filterable, and part of upload idempotency', async () => {
     for (const kind of [undefined, '', 'audio']) await fails(request('POST', '/api/skills', bob, { ...payload(), kind }), 400)
     for (const kind of ['text', 'image', 'video']) {
