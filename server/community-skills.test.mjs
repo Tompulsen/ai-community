@@ -8,10 +8,37 @@ import { readSkillPackage, skillDocument } from './skill-package.ts'
 import { approvedCommunitySkills, handleCommunitySkills, mediaSkillPrompt } from './community-skills.ts'
 import { readLegacySkillPackages, importLegacySkills } from './legacy-skills.mjs'
 import { fileURLToPath } from 'node:url'
-import { resolveLegacySkillIds } from '../shared/community-skills.ts'
+import { resolveLegacySkillIds, groupSkillChoices, countSkillChoices } from '../shared/community-skills.ts'
 
 const document = '---\nname: image-composition\ndescription: 构图建议\n---\n先分析主体，再给出构图建议。\n'
 const legacyPackages = () => readLegacySkillPackages(fileURLToPath(new URL('./skills/', import.meta.url)))
+
+test('skill choices group only matching authors, kinds and document versions while preserving references', () => {
+  const skill = { id: 'community-one', authorId: '25', kind: 'image', sha256: 'a'.repeat(64), legacyId: 'old-one' }
+  const work = { ...skill, id: 'work-two', legacyId: undefined }
+  const others = [
+    { ...work, id: 'other-author', authorId: '26' }, { ...work, id: 'other-kind', kind: 'text' },
+    { ...work, id: 'new-version', sha256: 'b'.repeat(64) }, { ...work, id: 'no-author', authorId: undefined },
+    { ...work, id: 'no-hash', sha256: '' }, { ...work, id: 'bad-hash', sha256: 'short' },
+    { ...work, id: 'no-kind', kind: undefined },
+  ]
+  const catalog = [skill, work, ...others]
+  const choices = groupSkillChoices(catalog, [work.id])
+  assert.equal(choices.length, 1 + others.length)
+  assert.equal(choices[0].skill, work)
+  assert.deepEqual(choices[0].items, [skill, work])
+  assert.equal(groupSkillChoices(catalog)[0].skill, skill)
+  assert.equal(countSkillChoices(['old-one', skill.id, work.id, 'removed'], catalog), 2)
+  assert.equal(countSkillChoices([skill.id, work.id], []), 2)
+})
+
+test('library catalog exposes the real author without skill contents', async () => {
+  const items = await approvedCommunitySkills({ query: async sql => {
+    assert(sql.includes('s."authorId",'))
+    return { rows: [{ id: 'one', authorId: '25', kind: 'image', sha256: 'a'.repeat(64) }] }
+  } })
+  assert.deepEqual(items, [{ id: 'community-one', authorId: '25', kind: 'image', sha256: 'a'.repeat(64), body: '' }])
+})
 
 test('early skills retain their instructions and license; historical selections resolve once', async () => {
   const packages = await legacyPackages()

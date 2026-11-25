@@ -4,12 +4,15 @@ import { ChevronDown, Play, Plug, RefreshCw } from '@lucide/vue'
 import { api, errorMessage, session } from '../state'
 import { chats, saveChats as persistChats, type NativeChat, type Skill } from '../native-chat'
 import { verifySkillDocument } from '../../shared/studio/catalog'
-import { skillKinds, maxSelectedSkills, resolveLegacySkillIds, type SkillKind } from '../../shared/community-skills'
+import { skillKinds, maxSelectedSkills, resolveLegacySkillIds, groupSkillChoices, countSkillChoices, type SkillKind } from '../../shared/community-skills'
 import { resolveCommunitySkill, selectedSkillIds, setSelectedSkillIds } from '../community-skill'
 const props = withDefaults(defineProps<{ chat: NativeChat; kind?: SkillKind; embedded?: boolean; transient?: boolean; disabled?: boolean }>(), { kind: 'text' })
 const selectedIds = computed(() => resolveLegacySkillIds(selectedSkillIds(props.chat, props.kind), chats.skills))
 const available = computed(() => chats.skills.filter(skill => (skill.kind || 'text') === props.kind))
-const filtered = computed(() => available.value.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.value.toLowerCase())))
+const choices = computed(() => groupSkillChoices(available.value, selectedIds.value))
+const count = computed(() => countSkillChoices(selectedIds.value, chats.skills))
+const filtered = computed(() => choices.value.filter(choice => choice.items.some(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query.value.toLowerCase()))))
+function selectedCount(items: Skill[]) { return items.filter(skill => selectedIds.value.includes(skill.id)).length }
 const selecting = ref(false)
 function saveChats(required = false) { if (!props.transient) return persistChats(required) }
 const loading = ref(false), error = ref(''), query = ref(''), enabled = ref(false), servers = ref<{ id: string; status: string }[]>([])
@@ -35,7 +38,8 @@ async function load() {
   finally { if (current === revision) loading.value = false }
 }
 watch([() => session.user?.id, () => props.chat.id, () => props.kind], () => { query.value = ''; result.value = ''; server.value = ''; tools.value = []; enabled.value = false; void load() }, { immediate: true })
-async function toggle(skill: Skill, event: Event) {
+async function toggle(choice: { key: string; skill: Skill; items: Skill[] }, event: Event) {
+  const { skill, items } = choice
   const input = event.target as HTMLInputElement
   if (props.disabled || selecting.value) return
   const chat = props.chat, owner = session.user?.id, kind = props.kind, current = revision
@@ -50,10 +54,10 @@ async function toggle(skill: Skill, event: Event) {
     }
     if (!active()) return
     const ids = resolveLegacySkillIds(selectedSkillIds(chat, kind), chats.skills)
-    setSelectedSkillIds(chat, kind, selected ? [...new Set([...ids, skill.id])] : ids.filter(id => id !== skill.id), [{ id: skill.id, sha256: skill.sha256 }])
+    setSelectedSkillIds(chat, kind, selected ? [...new Set([...ids, skill.id])] : ids.filter(id => !items.some(item => item.id === id)), [{ id: skill.id, sha256: skill.sha256 }])
     await saveChats(true)
   } catch (cause) { if (active()) error.value = errorMessage(cause) }
-  finally { input.checked = selectedIds.value.includes(skill.id); selecting.value = false }
+  finally { input.checked = selectedCount(choices.value.find(item => item.key === choice.key)?.items || []) > 0; selecting.value = false }
 }
 async function listTools() {
   tools.value = []; tool.value = ''; error.value = ''
@@ -83,13 +87,13 @@ async function saveConfig() {
 }
 </script>
 <template>
-  <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="selectedIds.length"> · {{ selectedIds.length }}</span></summary>
+  <details class="skills-panel" :class="{ embedded }" :open="embedded"><summary v-show="!embedded">技能与工具<span v-if="count"> · {{ count }}</span></summary>
     <div class="skills-heading"><input v-model="query" class="control" type="search" placeholder="搜索技能" aria-label="搜索技能" /><button class="icon-button" title="刷新技能" aria-label="刷新技能" :disabled="loading" @click="load"><RefreshCw :size="16" /></button></div>
     <p class="skill-empty muted">{{ skillKinds[kind] }}技能 · 勾选后应用于本模块的生成指令</p>
     <p class="skill-empty muted"><RouterLink to="/skills">浏览技能广场 / 上传技能</RouterLink><template v-if="session.user?.isAdmin"> · <RouterLink to="/admin?tab=skills">管理技能</RouterLink></template></p>
     <p v-if="loading" class="muted" role="status">正在读取技能…</p><p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="!loading && unavailable.length" class="skill-empty muted">{{ unavailable.length }} 个已选技能已更新、下架或不适用于当前模块。<button class="button subtle btn" :disabled="disabled || selecting" @click="removeUnavailable">移除失效技能</button></p>
-    <div class="skill-list"><label v-for="skill in filtered" :key="skill.id" class="skill-row"><span><strong>{{ skill.name }}</strong><span>{{ skill.description }}</span></span><input type="checkbox" :aria-label="skill.name" :checked="selectedIds.includes(skill.id)" :disabled="disabled || selecting || loading" @change="toggle(skill, $event)" /></label><p v-if="!loading && !filtered.length" class="muted skill-empty">{{ query ? '没有匹配的技能' : `暂无${skillKinds[kind]}技能，可前往技能广场上传` }}</p></div>
+    <div class="skill-list"><label v-for="choice in filtered" :key="choice.key" class="skill-row"><span><strong>{{ choice.skill.name }}</strong><span>{{ choice.skill.description }}</span><span v-if="selectedCount(choice.items) > 1">已保留 {{ selectedCount(choice.items) }} 条历史选择，取消时一并移除。</span></span><input type="checkbox" :aria-label="choice.skill.name" :checked="selectedCount(choice.items) > 0" :disabled="disabled || selecting || loading" @change="toggle(choice, $event)" /></label><p v-if="!loading && !filtered.length" class="muted skill-empty">{{ query ? '没有匹配的技能' : `暂无${skillKinds[kind]}技能，可前往技能广场上传` }}</p></div>
     <details v-if="kind === 'text'" class="mcp-section"><summary><Plug :size="18" /><span>MCP 工具</span><ChevronDown :size="15" /></summary><p v-if="!enabled" class="muted">当前账号未启用 MCP 工具。</p>
     <div class="model-tools" v-show="enabled"><label v-for="item in servers" :key="item.id" class="skill-row"><input v-model="chat.settings.mcpServers" type="checkbox" :value="item.id" :disabled="item.status === 'paused'" @change="saveChats()" /><span>允许模型使用 {{ item.id }}</span></label></div>
     <template v-if="enabled">

@@ -41,7 +41,7 @@ async function present(ctx: RequestContext, rows: SkillRow[], detail = false) {
   })
 }
 export async function approvedCommunitySkills(db: Queryable) {
-  const { rows } = await db.query('SELECT s.id,s.name,s.kind,s.description,s.sha256,s."legacyId" FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
+  const { rows } = await db.query('SELECT s.id,s."authorId",s.name,s.kind,s.description,s.sha256,s."legacyId" FROM community_skill s JOIN "user" u ON u.id=s."authorId" WHERE s.status=\'published\' AND NOT u."isDeleted" AND NOT u."isSuspended" ORDER BY s.id DESC')
   return rows.map(row => ({ ...row, id: `community-${row.id}`, body: '' }))
 }
 

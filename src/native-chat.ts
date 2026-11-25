@@ -21,7 +21,7 @@ import type { StudioToolActivity } from './studio-message-types'
 import { normalizeChatProjects, normalizeChatProjectSessions, type ChatProject } from '../shared/studio/chat-projects'
 import { skillInstructions, resolveLegacySkillIds, type SkillKind, type SkillReference } from '../shared/community-skills'
 import { pinnedContext, readPinnedMessageIds, validatePinnedContext } from './studio-pinned-context'
-export interface Skill { kind: SkillKind; id: string; name: string; description: string; body: string; sha256: string; legacyId?: string | null; group?: string; model?: string }
+export interface Skill { kind: SkillKind; id: string; authorId?: string; name: string; description: string; body: string; sha256: string; legacyId?: string | null; group?: string; model?: string }
 export interface NativeMessage extends ChatMessage {
   taskId?: string
   sources?: { title: string; url: string; snippet: string }[]

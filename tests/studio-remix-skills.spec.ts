@@ -17,7 +17,7 @@ async function fixture(page: Page, kind: Kind = 'image', model = { image: 'gpt-i
   account.state.user.id = '17'
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
   const state = { failCatalog: false, delayCatalog: 0, catalogReads: 0, skills: ['A', 'B'].map(letter => ({
-    id: `community-skill${letter}`, name: `技能${letter}`, description: '测试生成技能', kind, sha256, body, status: 'published',
+    id: `community-skill${letter}`, name: `技能${letter}`, description: '测试生成技能', kind, sha256, body, status: 'published', authorId: undefined as string | undefined,
   })) }
   state.skills.push({ ...state.skills[0]!, ...privateReference, name: '私密技能' })
   const source: any = { id: 'skillsource', title: '原作技能测试', authorId: '26', author: '原作者', avatar: '原',
@@ -95,6 +95,59 @@ async function importRemix(page: Page) {
   await dialog.getByRole('button', { name: '仅导入提示词', exact: true }).click()
   await expect(dialog).toBeHidden()
 }
+
+for (const width of [390, 1440]) test(`identical library and work skills share one searchable choice at ${width}px`, async ({ page }, info) => {
+  const result = await fixture(page)
+  result.state.skills[0]!.authorId = result.state.skills[2]!.authorId = '25'
+  result.state.skills[1]!.authorId = '26'
+  await page.setViewportSize({ width, height: 900 }); await page.goto('/create/image'); await picker(page).click()
+  await expect(page.locator('.skill-list .skill-row')).toHaveCount(2)
+  await page.getByRole('searchbox', { name: '搜索技能' }).fill('私密技能')
+  await expect(page.locator('.skill-list .skill-row')).toHaveCount(1)
+  await expect(page.getByLabel('技能A', { exact: true })).toBeVisible()
+  await page.getByLabel('技能A', { exact: true }).check()
+  await expect(picker(page)).toHaveText('技能 1')
+  await page.getByRole('searchbox', { name: '搜索技能' }).fill('技能A')
+  await expect(page.getByLabel('技能A', { exact: true })).toBeChecked()
+  await page.screenshot({ path: info.outputPath(`skill-group-${width}.png`) })
+  await page.getByRole('button', { name: '关闭技能与工具', exact: true }).click()
+  await send(page, 'image'); await expect.poll(() => result.generated.length).toBe(1)
+  expect(result.generated[0].skills).toEqual([reference])
+})
+
+test('historical duplicate selections stay intact until the grouped choice is explicitly cleared', async ({ page }) => {
+  const result = await fixture(page)
+  result.state.skills[0]!.authorId = result.state.skills[2]!.authorId = '25'
+  result.source.generation.parameters.skills.push(privateReference)
+  await importRemix(page); await page.reload(); await picker(page).click()
+  await expect(picker(page)).toHaveText('技能 1')
+  await expect(page.getByText('已保留 2 条历史选择，取消时一并移除。', { exact: true })).toBeVisible()
+  await page.getByLabel('技能A', { exact: true }).uncheck()
+  await expect(picker(page)).toHaveText('技能')
+  await page.getByRole('button', { name: '关闭技能与工具', exact: true }).click()
+  await page.reload(); await send(page, 'image'); await expect.poll(() => result.generated.length).toBe(1)
+  expect(result.generated[0].skills || []).toEqual([])
+})
+
+for (const kind of ['text', 'image'] as const) test(`${kind} grouped work selection retains its reference and cannot fall back after removal`, async ({ page }) => {
+  const result = await fixture(page, kind)
+  result.state.skills[0]!.authorId = result.state.skills[2]!.authorId = '25'
+  result.source.generation.parameters.skills = [privateReference]
+  await importRemix(page); await page.reload(); await picker(page).click()
+  await expect(page.getByLabel('私密技能', { exact: true })).toBeChecked()
+  await expect(page.getByLabel('技能A', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '关闭技能与工具', exact: true }).click()
+  await send(page, kind); await expect.poll(() => result.generated.length).toBe(1)
+  expect(result.generated[0].skills).toEqual([privateReference])
+  result.state.skills[2]!.status = 'removed'
+  await picker(page).click(); await page.getByRole('button', { name: '刷新技能', exact: true }).click()
+  await expect(page.getByRole('button', { name: '移除失效技能', exact: true })).toBeVisible()
+  await expect(page.getByLabel('技能A', { exact: true })).not.toBeChecked()
+  await page.getByRole('button', { name: '关闭技能与工具', exact: true }).click()
+  await send(page, kind)
+  await expect(page.getByText(/技能已(?:更新或下架|下架或不可用)/).last()).toBeVisible()
+  expect(result.generated).toHaveLength(1)
+})
 
 for (const [kind, model, width] of [['image', 'gpt-image-2', 390], ['image', 'gemini-3-pro-image-preview', 1440], ['video', 'sora-2', 1440]] as const) {
   test(`${model} publishes the generated skill snapshot after the selection changes at ${width}px`, async ({ page }) => {

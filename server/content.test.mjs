@@ -961,10 +961,10 @@ test('published skills accept matching image and video model types and retain mo
 
 
 test('approved work skill catalog keeps the published model kind and defaults legacy skills to text', async () => {
-  const rows = [undefined, 'text', 'image', 'video'].map((kind, index) => ({ id: String(index), title: 'Skill', text: 'Guide', model: 'model', generation: { skill: { kind, group: 'group', sourceSha256: 'a'.repeat(64) } } }));
-  const ctx = context({ user: { id: 'reader' }, query: async () => ({ rows }) });
+  const rows = [undefined, 'text', 'image', 'video'].map((kind, index) => ({ id: String(index), authorId: 'author', title: 'Skill', text: 'Guide', model: 'model', generation: { skill: { kind, group: 'group', sourceSha256: 'a'.repeat(64) } } }));
+  const ctx = context({ user: { id: 'reader' }, query: async sql => { assert(sql.includes('s."authorId",')); return { rows }; } });
   const items = await approvedWorkSkills(ctx);
   assert.deepEqual(items.map(item => item.kind), ['text', 'text', 'image', 'video']);
-  assert(items.every(item => item.body === '' && item.group === 'group'));
+  assert(items.every(item => item.body === '' && item.group === 'group' && item.authorId === 'author'));
   assert.throws(() => normalizeRevision({ kind: 'resource', title: 'Skill', skill: { kind: 'audio' } }), { statusCode: 400 });
 });

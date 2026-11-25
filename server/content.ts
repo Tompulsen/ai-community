@@ -633,11 +633,11 @@ export async function accessibleWork(ctx: RequestContext, workId: unknown, { loc
 }
 
 export async function approvedWorkSkills(ctx: RequestContext) {
-  const { rows } = await ctx.db.query<{ id: string; title: string; text: string; model: string; generation: Generation }>(
-    `SELECT s.id,s.title,s.text,s.model,s.generation FROM community_submission s JOIN "user" u ON u.id=s."authorId"
+  const { rows } = await ctx.db.query<{ id: string; authorId: string; title: string; text: string; model: string; generation: Generation }>(
+    `SELECT s.id,s."authorId",s.title,s.text,s.model,s.generation FROM community_submission s JOIN "user" u ON u.id=s."authorId"
      JOIN note n ON n.id=s."approvedNoteId" WHERE (${visibilitySql(ctx)}) AND s.status='approved'
      AND s.generation->'skill'->>'sourceSha256' ~ '^[a-f0-9]{64}$' AND s.generation->'skill'->>'sourceFileId' IS NOT NULL ORDER BY s.id DESC`, [viewer(ctx)]);
-  return rows.map(row => ({ id: 'work-' + row.id, name: row.title, kind: row.generation.skill!.kind || 'text', description: row.text.slice(0, 1000), body: '',
+  return rows.map(row => ({ id: 'work-' + row.id, authorId: row.authorId, name: row.title, kind: row.generation.skill!.kind || 'text', description: row.text.slice(0, 1000), body: '',
     sha256: row.generation.skill!.sourceSha256!, group: row.generation.skill!.group, model: row.model }));
 }
 
