@@ -168,6 +168,8 @@ for (const [kind, width, theme] of [['text', 320, 'light'], ['image', 390, 'dark
 })
 
 test('deleting from the editor preserves a cancelled draft and clears it only after success', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
   const { calls } = await fixture(page, true, true)
   await page.goto('/admin?tab=skills'); await page.getByRole('button', { name: '编辑技能：画面构图助手' }).click()
   await dialog(page).getByLabel('展示名称').fill('尚未保存的标题')
@@ -179,9 +181,10 @@ test('deleting from the editor preserves a cancelled draft and clears it only af
   await expect(dialog(page).getByLabel('展示名称')).toHaveValue('尚未保存的标题'); expect(calls).toHaveLength(0)
   await remove.click(); await confirmation.getByRole('button', { name: '确认删除', exact: true }).click()
   await expect(dialog(page)).toBeHidden(); await expect(page.locator('.skill-card')).toHaveCount(0)
-  await page.getByRole('button', { name: '管理概览', exact: true }).click()
-  await expect(page).toHaveURL(/tab=overview/); await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.getByRole('link', { name: '访问社区', exact: true }).click()
+  await expect(page).toHaveURL(/\/discover$/); await expect(page.getByRole('dialog')).toHaveCount(0)
   expect(calls.filter(call => call.method === 'DELETE')).toHaveLength(1)
+  expect(errors).toEqual([])
 })
 
 for (const code of [403, 409, 503]) test(`failed card deletion (${code}) retains the skill and permits a fresh retry`, async ({ page }) => {
