@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Megaphone, X } from '@lucide/vue'
 import { api } from '../state'
+import AnnouncementText from './AnnouncementText.vue'
 
 interface Notice { id: string; title: string; text: string; display: string }
 const route = useRoute(), dialog = ref<HTMLDialogElement>(), items = ref<Notice[]>([])
@@ -41,7 +42,7 @@ onBeforeUnmount(() => { controller.abort(); close() })
       <div class="announcement-popup-content" tabindex="0" aria-label="公告内容">
         <article v-for="item in items" :key="item.id">
           <h3>{{ item.title }}</h3>
-          <p>{{ item.text }}</p>
+          <AnnouncementText :text="item.text" />
         </article>
       </div>
       <div class="announcement-popup-footer">
