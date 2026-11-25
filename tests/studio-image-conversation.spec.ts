@@ -49,6 +49,7 @@ async function fixture(page: Page, kind = 'image') {
   })
   await page.goto(new URL(`/create/${kind}`, String(test.info().project.use.baseURL)).href)
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(kind === 'video' ? 'sora-2' : kind === 'text' ? 'gpt-5' : 'gpt-image-2')
+  await expect(page.locator('.studio-composer')).not.toHaveAttribute('inert')
   return { calls, uploads, image }
 }
 const imageReference = (image: Buffer, type = 'jpeg') => `data:image/${type};base64,${image.toString('base64')}`
@@ -345,6 +346,8 @@ test('editing the original prompt restores original attachments and reuse clears
 
 test('multi-image edit restores all outputs and the context menu selects the exact image', async ({ page }) => {
   const { image, calls } = await fixture(page)
+  const { default: sharp } = await import('sharp')
+  const newImage = await sharp(image).flop().jpeg().toBuffer()
   await page.route('**/api/creation/generate', route => {
     calls.push(route.request().postDataJSON())
     return route.fulfill({ json: { status: 'succeeded', outputs: [{ url: 'https://media.example/a.png' }, { url: 'https://media.example/b.png' }], tokenId: 41, protocol: 'sync' } })
@@ -360,12 +363,11 @@ test('multi-image edit restores all outputs and the context menu selects the exa
   await page.getByRole('menuitem', { name: '编辑这张图片', exact: true }).click()
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^blob:/)
-  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'new.jpg', mimeType: 'image/jpeg', buffer: image })
+  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'new.jpg', mimeType: 'image/jpeg', buffer: newImage })
   await expect(page.locator('.reference-list img')).toHaveCount(2)
   expect(calls).toHaveLength(1)
   await send(page, '使用第二张和新上传图', 2)
-  expect(calls[1].referenceUrls[0]).toBe(imageReference(image))
-  expect(calls[1].referenceUrls[1]).toMatch(/^data:image\/jpeg/)
+  expect(calls[1].referenceUrls).toEqual([imageReference(image), imageReference(newImage)])
 })
 
 test('an image edit survives deleting its source turn without pulling in unrelated context', async ({ page }) => {
@@ -542,23 +544,25 @@ test('restoring the inline clear boundary never reattaches unselected image hist
 
 test('upload, clipboard and drop references share the same attachment flow', async ({ page }) => {
   const { calls, uploads, image } = await fixture(page)
+  const { default: sharp } = await import('sharp')
+  const variants = [image, await sharp(image).flop().jpeg().toBuffer(), await sharp(image).rotate(90).jpeg().toBuffer()]
   await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'upload.jpg', mimeType: 'image/jpeg', buffer: image })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0))
     const data = new DataTransfer(); data.items.add(new File([bytes], 'pasted.jpg', { type: 'image/jpeg' }))
     element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
-  }, image.toString('base64'))
+  }, variants[1]!.toString('base64'))
   await expect(page.locator('.reference-list img')).toHaveCount(2)
   await page.locator('.studio-composer').evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0))
     const data = new DataTransfer(); data.items.add(new File([bytes], 'dropped.jpg', { type: 'image/jpeg' }))
     element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
-  }, image.toString('base64'))
+  }, variants[2]!.toString('base64'))
   await expect(page.locator('.reference-list img')).toHaveCount(3)
   await send(page, '使用这三张参考图', 1)
   expect(uploads).toHaveLength(0)
-  expect(calls[0].referenceUrls).toEqual(Array(3).fill(`data:image/jpeg;base64,${image.toString('base64')}`))
+  expect(calls[0].referenceUrls).toEqual(variants.map(value => imageReference(value)))
 })
 
 test('sending keeps uploaded images in the record but never reuses them for a new prompt', async ({ page }) => {
@@ -644,7 +648,7 @@ test('removing a ready thumbnail preserves pending files and failed items can be
 test('retrying a video image preserves the identity of numbered prompt references', async ({ page }) => {
   await controlledReader(page)
   const state = await fixture(page, 'video')
-  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles(['ready.jpg', 'retry.jpg', 'last.jpg'].map((name, index) => ({
+  await page.locator('.studio-composer').getByLabel('添加参考素材', { exact: true }).setInputFiles(['ready.jpg', 'retry.jpg', 'last.jpg'].map((name, index) => ({
     name, mimeType: 'image/jpeg', buffer: Buffer.concat([state.image, Buffer.from(String(index))]),
   })))
   await expect(page.locator('.reference-list img')).toHaveCount(2)
@@ -681,7 +685,7 @@ for (const kind of ['image', 'video', 'text']) {
   test(`${kind} waits for local image preparation after send and submits once`, async ({ page }) => {
     await controlledReader(page)
     const state = await fixture(page, kind)
-    await page.locator('.studio-composer').getByLabel(kind === 'text' ? '添加附件' : '添加参考图', { exact: true }).setInputFiles({ name: 'slow.jpg', mimeType: 'image/jpeg', buffer: state.image })
+    await page.locator('.studio-composer').getByLabel(kind === 'text' ? '添加附件' : kind === 'video' ? '添加参考素材' : '添加参考图', { exact: true }).setInputFiles({ name: 'slow.jpg', mimeType: 'image/jpeg', buffer: state.image })
     await expect(page.locator('.material-status li[data-file-status="processing"]')).toHaveCount(1)
     await page.getByRole('textbox', { name: kind === 'text' ? '消息' : '提示词', exact: true }).fill('使用这张图片')
     await page.getByRole('button', { name: kind === 'text' ? '发送' : '开始生成', exact: true }).click()

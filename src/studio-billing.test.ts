@@ -33,6 +33,20 @@ describe('invocation points', () => {
     for (const perSecond of [-1, Infinity, Number.MAX_VALUE]) expect(invocationPoints([{ ...videoRow, videoRates: [{ providerKey: '0', provider: 'broken', perSecond, perRequest: 0 }] }], '积分', video)).toBeUndefined()
     expect(invocationPoints([{ ...videoRow, videoRates: [{ providerKey: '0', provider: 'free', perSecond: 0, perRequest: 0 }] }], '积分', video)).toEqual({ min: 0, max: 0 })
   })
+  it('adds measured reference seconds only to C rates and preserves the output duration and price', () => {
+    const cRow = { ...videoRow, videoRates: [{ providerKey: '0', provider: 'C', perSecond: 750, perRequest: 100, billReferenceVideo: true }] }
+    const request = { ...video, duration: 6, hasReferenceVideo: true, referenceVideoDuration: 2.5 }
+    expect(invocationPoints([cRow], '积分', request)).toEqual({ min: 6475, max: 6475 })
+    expect(invocationPoints([videoRow], '积分', request)).toEqual({ min: 4500, max: 4500 })
+    expect(invocationPoints([videoRow, cRow], '积分', request)).toEqual({ min: 4500, max: 6475 })
+    expect(request.duration).toBe(6)
+    expect(cRow.videoRates[0]!.perSecond).toBe(750)
+    for (const referenceVideoDuration of [undefined, 0, -1, NaN, Infinity, 3600]) {
+      expect(invocationPoints([cRow], '积分', { ...request, referenceVideoDuration })).toBeUndefined()
+      expect(invocationPoints([videoRow], '积分', { ...request, referenceVideoDuration })).toEqual({ min: 4500, max: 4500 })
+    }
+    expect(invocationPoints([cRow], '积分', { ...video, duration: 6, hasReferenceVideo: false })).toEqual({ min: 4600, max: 4600 })
+  })
   it('multiplies ordinary fixed image pricing by n and preserves zero and fractional charges', () => {
     expect(invocationPoints([row], '积分', input)).toEqual({ min: 450, max: 450 })
     expect(invocationPoints([{ ...row, requestPrice: 0 }], '积分', input)).toEqual({ min: 0, max: 0 })

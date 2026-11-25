@@ -42,7 +42,7 @@ export interface CreationInput {
 }
 export interface CreationOutput { url?: string; b64_json?: string; text?: string }
 export interface CreationPayload { path: string; body: string | FormData; contentType?: 'application/json' }
-export interface CreationReference { blob: Blob; name?: string; mediaType?: 'image' | 'video'; durationSeconds?: number }
+export interface CreationReference { blob: Blob; name?: string; mediaType?: 'image' | 'video' | 'audio'; durationSeconds?: number }
 export interface CreationTask {
   id?: string
   upstreamId?: string
@@ -427,25 +427,37 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
   if (input.videoOptions) {
     const options = input.videoOptions
     if (options.openaiReferenceSource === 'file_id' && options.mode !== 'image-to-video') invalid('文件 ID 参考请使用图生视频，首尾帧请上传两张图片。')
+    const imageCount = preparedReferences.length ? preparedReferences.filter(file => !file.mediaType || file.mediaType === 'image').length : references.length
     const expected = options.mode === 'first-last-frame' ? 2 : options.mode === 'image-to-video' ? 1 : options.mode === 'reference-to-video' ? 1 : 0
-    if (options.openaiReferenceSource === 'upload' && (references.length < expected || options.mode === 'text-to-video' && references.length)) invalid('参考图数量与生成方式不一致。')
-    if (options.openaiReferenceSource === 'upload' && ['image-to-video', 'first-last-frame'].includes(options.mode) && references.length !== expected) invalid('请按生成方式选择正确数量的参考图。')
+    if (options.openaiReferenceSource === 'upload' && (references.length < expected || options.mode === 'text-to-video' && imageCount)) invalid('参考素材数量与生成方式不一致。')
+    if (options.openaiReferenceSource === 'upload' && ['image-to-video', 'first-last-frame'].includes(options.mode) && imageCount !== expected) invalid('请按生成方式选择正确数量的参考图。')
     const custom = options.customParameters.trim() ? (() => { try { return JSON.parse(options.customParameters) } catch { invalid('自定义参数必须是有效的 JSON。') } })() : {}
     if (!record(custom)) invalid('自定义参数必须是 JSON 对象。')
     const checkCustom = (value: unknown, depth = 0): void => {
       if (depth > 16) invalid('自定义参数嵌套过深。')
       if (typeof value === 'string' && /^https?:\/\//i.test(value)) invalid('自定义参数中的远程素材请通过参考图控件添加。')
-      if (value && typeof value === 'object') for (const item of Object.values(value)) checkCustom(item, depth + 1)
+      if (value && typeof value === 'object') for (const [key, item] of Object.entries(value)) {
+        checkCustom(item, depth + 1)
+        if (['image', 'images', 'image_url', 'image_urls', 'input_image', 'input_images', 'input_reference', 'reference_image', 'reference_images',
+          'first_frame', 'last_frame', 'first_frame_image', 'last_frame_image', 'keyframes', 'file_id', 'content', 'input_video', 'input_videos', 'reference_video', 'reference_videos', 'video_url',
+          'input_audio', 'input_audios', 'reference_audio', 'reference_audios', 'audio_url', '__c_reference_video_seconds']
+          .includes(key.toLowerCase().replace(/\[\]$/, ''))) invalid('自定义参数中的参考素材请通过上传控件添加。')
+        if (key === 'metadata' && typeof item === 'string') {
+          let metadata: unknown
+          try { metadata = JSON.parse(item) } catch {}
+          if (metadata !== undefined) checkCustom(metadata, depth + 1)
+        }
+      }
     }
     if (Object.keys(custom).some(key => ['model', 'prompt', 'stream', 'headers', 'api_key', 'authorization'].includes(key.toLowerCase()))) invalid('自定义参数包含受保护字段。')
     checkCustom(custom)
     const payload = buildVideoRequest({
       ...options, apiFormat: 'openai', model: input.model, prompt: input.prompt,
       aspectRatio: input.aspect_ratio ?? '16:9', duration: input.duration ?? 8, size: input.size ?? 'auto',
-      materials: references.map((url, index) => ({ id: String(index), name: `参考图 ${index + 1}`, type: 'image', url })),
+      materials: references.map((url, index) => ({ id: String(index), name: `参考素材 ${index + 1}`, type: preparedReferences[index]?.mediaType ?? 'image', url })),
       customParams: { openai: options.customParameters },
       protocolOptions: { openai: { seed: options.seed, generateAudio: options.generateAudio, personGeneration: options.personGeneration } },
-    }, input.model, videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto' ? videoSetting.parameterFormat : undefined, videoSetting)
+    }, input.model, videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto' ? videoSetting.parameterFormat : undefined, videoSetting, preparedReferences)
     const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
     if (sent.model !== input.model || sent.prompt !== input.prompt) invalid('自定义参数不能覆盖模型或提示词。')
     return { ...payload, path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', ...(typeof payload.body === 'string' ? { contentType: 'application/json' } as const : {}) }
@@ -457,6 +469,14 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
   const base = { model: input.model, prompt: input.prompt, seconds }
   const parameterFormat = videoSetting?.parameterFormat && videoSetting.parameterFormat !== 'auto'
     ? videoSetting.parameterFormat : videoParameterFormat('openai', input.model)
+  if (preparedReferences.some(file => file.mediaType === 'video' || file.mediaType === 'audio')) {
+    const payload = buildVideoRequest({ apiFormat: 'openai', model: input.model, prompt: input.prompt,
+      mode: 'reference-to-video', negativePrompt: '', size: input.size ?? 'auto', aspectRatio: ratio,
+      resolution: 'auto', duration: input.duration ?? 5,
+      materials: references.map((url, index) => ({ id: String(index), name: `参考素材 ${index + 1}`, type: preparedReferences[index]?.mediaType ?? 'image', url })),
+    }, input.model, parameterFormat, videoSetting, preparedReferences)
+    return { ...payload, path }
+  }
   if (parameterFormat === 'seedance') {
     return json(path, { ...base, metadata: { ratio,
       content: references.map(url => ({ type: 'image_url', image_url: { url }, role: 'reference_image' })) } })

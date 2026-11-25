@@ -352,7 +352,7 @@
 +            async def replay():
 +                return {"type": "http.request", "body": bytes(body), "more_body": False}
 +            raw_request = Request(request.scope, replay)
-+            async with raw_request.form(max_files=8, max_fields=128) as form:
++            async with raw_request.form(max_files=10, max_fields=128) as form:
 +                for field in ("model", "prompt", "n", "stream"):
 +                    if len(form.getlist(field)) > 1:
 +                        raise ValueError()

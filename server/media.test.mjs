@@ -5,13 +5,14 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdtemp, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { startMediaWorker, uploadLimitsFor, uploadMedia } from './media.ts';
+import { fileDto, startMediaWorker, uploadLimitsFor, uploadMedia } from './media.ts';
 import { privateMetadataFreeImage } from './image-privacy.ts';
 
 async function uploadFixture(t, mode = 'success') {
@@ -286,6 +287,65 @@ test('preview ratio describes the rotated thumbnail rather than original EXIF di
     const { data } = await sharp(bytes).raw().toBuffer({ resolveWithObject: true });
     assert(Math.abs(data[0] - 96) < 8 && Math.abs(data[1] - 118) < 8 && Math.abs(data[2] - 93) < 8);
   }
+});
+
+test('MP4 duration metadata stays bounded and optional while thumbnails publish successfully', async t => {
+  if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable');
+  for (const scenario of [
+    { name: 'fractional ready duration', size: 1, reads: 1, duration: 2.5 },
+    { name: '64 MiB boundary', size: 64 * 1024 * 1024, reads: 1, duration: 2.5 },
+    { name: 'over 64 MiB', size: 64 * 1024 * 1024 + 1, reads: 0 },
+    { name: 'zero bytes', size: 0, reads: 0 },
+    { name: 'optional source read fails', size: 1, reads: 1, readError: true },
+  ]) await t.test(scenario.name, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'community-video-duration-'));
+    const source = join(root, 'original');
+    await writeFile(source, await readFile(new URL('../tests/fixtures/poster-black-intro.mp4', import.meta.url)));
+    const actualReadFile = fsPromises.readFile;
+    let sourceReads = 0;
+    const readMock = t.mock.method(fsPromises, 'readFile', async (path, ...options) => {
+      if (path === source) {
+        sourceReads++;
+        if (scenario.readError) throw new Error('optional source read failed');
+      }
+      return actualReadFile(path, ...options);
+    });
+    syncBuiltinESMExports();
+    let stop = async () => {};
+    t.after(async () => {
+      await stop();
+      readMock.mock.restore();
+      syncBuiltinESMExports();
+      await Promise.all((await readdir(root)).map(name => unlink(join(root, name))));
+      await rmdir(root);
+    });
+    let claimed = false, completed;
+    const done = new Promise(resolve => { completed = resolve; });
+    const timeout = setTimeout(() => completed(null), 10000);
+    t.after(() => clearTimeout(timeout));
+    const db = { async query(sql, params) {
+      if (sql.includes('WITH candidate AS') && !claimed) {
+        claimed = true;
+        return { rows: [{ id: 'video1', name: 'Video', type: 'video/mp4', size: scenario.size,
+          accessKey: 'original', url: '/legacy-files/video1', lease: params[1], properties: { communityMedia: { attempts: 1 } } }] };
+      }
+      if (sql.includes('RETURNING id') && sql.includes('"thumbnailAccessKey"=$2')) {
+        completed(params[6]);
+        return { rows: [{ id: 'video1' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    } };
+    stop = startMediaWorker({ db, filesRoot: root });
+    const measured = await done;
+    assert(measured, 'video worker must finish successfully');
+    assert.equal(sourceReads, scenario.reads);
+    assert.equal(measured.durationSeconds, scenario.duration);
+    const file = { id: 'video1', type: 'video/mp4', name: 'Video', size: scenario.size, properties: { ...measured, communityMedia: { state: 'ready' } } };
+    assert.equal(fileDto(file).durationSeconds, scenario.duration);
+    assert.equal(fileDto({ ...file, properties: { ...measured, communityMedia: { state: 'processing' } } }).durationSeconds, undefined);
+    assert.equal(fileDto({ ...file, properties: { durationSeconds: Infinity } }).durationSeconds, undefined);
+    assert.equal(fileDto({ ...file, type: 'audio/wav' }).durationSeconds, undefined);
+  });
 });
 
 test('failed derivative processing never publishes safety markers or removes the original', async t => {

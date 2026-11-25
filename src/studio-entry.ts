@@ -14,7 +14,7 @@ const mediaEntrySchema = z.object({
     apiFormat: modelApiFormatSchema.optional(),
     protocol: z.enum(['auto', 'openai', 'sync', 'async']), imageOptions: imageOptionsSchema, videoOptions: videoOptionsSchema,
   }).optional(),
-  references: z.array(z.object({ name: z.string(), type: z.string().optional(), duration: z.number().positive().optional(),
+  references: z.array(z.object({ name: z.string(), type: z.string().optional(), size: z.number().nonnegative().optional(), duration: z.number().positive().optional(), durationSeconds: z.number().positive().optional(),
     url: z.string().refine(value => value.startsWith('data:image/') || /^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(value)) })).max(16),
 }).refine(value => Boolean(value.prompt || value.kind === 'video' && value.references.length === 1 && value.references[0]?.type?.startsWith('video/')), '请输入提示词或添加源视频。')
 const textEntrySchema = z.object({

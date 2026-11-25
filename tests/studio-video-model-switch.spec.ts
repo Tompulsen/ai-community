@@ -31,7 +31,8 @@ async function fixture(page: Page) {
   await page.route('https://media.example/**', route => route.fulfill({ status: 204 }))
   await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, currency: '积分', autoGroups: ['视频'], rows: models.map(model => ({
     model: model.id, group: '视频', billing: '视频任务 · 每秒', price: '积分/秒',
-    videoRates: [{ providerKey: '0', provider: '视频', perSecond: model.id.endsWith('720p') ? 3250 : 1600, perRequest: 0 }],
+    videoRates: [{ providerKey: '0', provider: '视频', perSecond: model.id.endsWith('720p') ? 3250 : 1600, perRequest: 0,
+      ...(model.id === 'c-reference-video' ? { billReferenceVideo: true } : {}) }],
   })) } } }))
   return { models, calls }
 }
@@ -275,9 +276,11 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeDisabled()
   expect(calls).toHaveLength(0)
   ready()
-  const source = page.getByLabel('源视频：source.mp4', { exact: true })
+  await page.getByRole('button', { name: '预览源视频', exact: true }).click()
+  const source = page.getByRole('dialog', { name: '参考素材预览', exact: true }).locator('video')
   await expect(source).toHaveAttribute('controls', '')
   await expect.poll(() => source.evaluate((element: HTMLVideoElement) => element.duration)).toBe(2.5)
+  await page.getByRole('button', { name: '关闭参考素材预览', exact: true }).click()
   await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeEnabled()
   expect(calls).toHaveLength(0)
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
@@ -292,6 +295,108 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   await expect.poll(() => calls.length).toBe(1)
   expect(calls[0]).toMatchObject({ model: 'DMC-video-upscale', prompt: '', size: 'auto', referenceUrls: ['/legacy-files/ownedupscalevideo'], videoOptions: { resolution: '2k' } })
   await expect(page.locator('.sent-references video')).toHaveCount(1)
+  await expect(page.locator('.sent-references img')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
+test('mixed video and audio references share one compact upload strip and include reference seconds in the quote', async ({ page }, info) => {
+  const { models, calls } = await fixture(page)
+  models.unshift({ id: 'c-reference-video', kinds: ['video'], video: { parameterFormat: 'openai', sendSize: false,
+    resolutions: ['720p'], autoResolution: '720p', durations: [6, 10], autoDuration: 6, aspectRatios: ['16:9'],
+    maxReferenceImages: 2, maxReferenceVideos: 1, maxReferenceAudios: 1 } })
+  models.push({ id: 'restricted-reference-video', kinds: ['video'], video: {
+    resolutions: ['720p'], durations: [6, 10], autoDuration: 6, aspectRatios: ['16:9'],
+    maxReferenceImages: 1, maxReferenceVideos: 0, maxReferenceAudios: 0,
+  } })
+  const video = await readFile('tests/fixtures/poster-black-intro.mp4')
+  const audio = Buffer.alloc(44 + 16000)
+  audio.write('RIFF', 0); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVEfmt ', 8)
+  audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22)
+  audio.writeUInt32LE(8000, 24); audio.writeUInt32LE(16000, 28); audio.writeUInt16LE(2, 32)
+  audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(16000, 40)
+  const media = [
+    { id: 'ownedreferencevideo', name: '镜头参考.mp4', type: 'video/mp4', bytes: video, durationSeconds: 2.5 },
+    { id: 'ownedreferenceaudio', name: '环境声音与节奏参考.wav', type: 'audio/wav', bytes: audio, durationSeconds: 1 },
+  ]
+  let uploads = 0
+  await page.route('**/api/uploads/limits', route => route.fulfill({ json: { maxFileSizeMb: 64, imagesMb: 20, videosMb: 64, filesMb: 64 } }))
+  await page.route('**/api/uploads', route => {
+    const index = route.request().postDataBuffer()?.includes(Buffer.from('video/mp4')) ? 0 : 1
+    const item = media[index]!
+    uploads++
+    return route.fulfill({ json: { file: { id: item.id, name: item.name, type: item.type, size: item.bytes.length,
+      url: `/legacy-files/${item.id}`, processing: 'pending' } } })
+  })
+  for (const item of media) {
+    await page.route(`**/api/uploads/${item.id}`, route => route.fulfill({ json: { file: {
+      id: item.id, name: item.name, type: item.type, size: item.bytes.length, url: `/legacy-files/${item.id}`,
+      processing: 'ready', durationSeconds: item.durationSeconds,
+    } } }))
+    await page.route(`**/legacy-files/${item.id}**`, route => route.fulfill({ body: item.bytes, contentType: item.type }))
+  }
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/create/video')
+  const picker = page.getByLabel('添加参考素材', { exact: true })
+  await expect(picker).toHaveAttribute('accept', /video\/mp4/)
+  await expect(picker).toHaveAttribute('accept', /audio/)
+  await picker.setInputFiles(media.map(item => ({ name: item.name, mimeType: item.type, buffer: item.bytes })))
+  await expect.poll(() => uploads).toBe(2)
+  const strip = page.getByRole('list', { name: '参考素材', exact: true })
+  await expect(strip.locator('li')).toHaveCount(2)
+  await expect(strip).toContainText('镜头参考.mp4')
+  await expect(strip).toContainText('环境声音与节奏参考.wav')
+  await picker.setInputFiles({ name: '额外音频.wav', mimeType: 'audio/wav', buffer: audio })
+  await expect(page.getByRole('alert')).toContainText('当前模型最多支持 1 个参考音频，已选 2 个。')
+  expect(uploads).toBe(2)
+  await expect(strip.locator('li')).toHaveCount(2)
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留镜头运动，参考音频节奏')
+  await choose(page, 'restricted-reference-video')
+  await expect(strip.locator('li')).toHaveCount(2)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留镜头运动，参考音频节奏')
+  await expect(page.getByRole('alert')).toContainText('当前模型不支持参考视频，已选 1 个。')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled()
+  await expect(picker).not.toHaveAttribute('accept', /video|audio/)
+  expect(calls).toHaveLength(0)
+  await choose(page, 'c-reference-video')
+  await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+  const sound = strip.locator('audio[controls]')
+  await expect.poll(() => sound.evaluate((element: HTMLAudioElement) => element.duration)).toBe(1)
+  await sound.evaluate(async (element: HTMLAudioElement) => { element.muted = true; await element.play() })
+  await expect.poll(() => sound.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0)
+  await sound.evaluate((element: HTMLAudioElement) => element.pause())
+  await page.getByRole('button', { name: '预览参考视频 1', exact: true }).click()
+  const videoPreview = page.getByRole('dialog', { name: '参考素材预览', exact: true }).locator('video[controls]')
+  await expect.poll(() => videoPreview.evaluate((element: HTMLVideoElement) => element.duration)).toBe(2.5)
+  await videoPreview.evaluate(async (element: HTMLVideoElement) => { element.muted = true; await element.play() })
+  await expect.poll(() => videoPreview.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0)
+  await page.getByRole('button', { name: '关闭参考素材预览', exact: true }).click()
+  await page.getByRole('textbox', { name: '提示词', exact: true }).fill('保留镜头运动，参考音频节奏')
+  await page.getByRole('button', { name: '模型价格', exact: true }).click()
+  await expect(page.locator('.billing-cost-value')).toHaveText('13,600 积分')
+  await page.keyboard.press('Escape')
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect(await strip.evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(100)
+    await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toBeEditable()
+    await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeEnabled()
+    await page.screenshot({ path: info.outputPath(`mixed-references-${width}.png`) })
+    await page.locator('.studio-composer').screenshot({ path: info.outputPath(`mixed-composer-${width}.png`) })
+  }
+  expect((await new AxeBuilder({ page }).include('.reference-list').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([])
+  await page.reload()
+  await expect(strip.locator('li')).toHaveCount(2)
+  await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('保留镜头运动，参考音频节奏')
+  await strip.getByRole('button', { name: '移除参考音频 2', exact: true }).click()
+  await expect(strip.locator('li')).toHaveCount(1)
+  await picker.setInputFiles({ name: media[1]!.name, mimeType: 'audio/wav', buffer: audio })
+  await expect(strip.locator('li')).toHaveCount(2)
+  await page.getByRole('button', { name: '开始生成', exact: true }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  expect(calls[0]).toMatchObject({ model: 'c-reference-video', duration: 6,
+    referenceUrls: ['/legacy-files/ownedreferencevideo', '/legacy-files/ownedreferenceaudio'] })
+  await expect(page.locator('.sent-references video')).toHaveCount(1)
+  await expect(page.locator('.sent-references audio')).toHaveCount(1)
   await expect(page.locator('.sent-references img')).toHaveCount(0)
   expect(errors).toEqual([])
 })

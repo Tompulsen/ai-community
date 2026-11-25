@@ -18,6 +18,7 @@ export interface WorkFile {
   url: string
   thumbnailUrl?: string
   processing?: 'pending' | 'processing' | 'ready' | 'failed'
+  durationSeconds?: number
 }
 
 export interface Work {

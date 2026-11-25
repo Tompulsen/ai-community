@@ -197,6 +197,52 @@ test('selected models save names, tags, interfaces and typed automatic parameter
   await expect(combo(page, '自动分辨率')).toHaveValue('2k')
 })
 
+test('model reference count settings preserve zero, validate bounds and restore defaults when cleared', async ({ page }, info) => {
+  const fixture = await modelsFixture(page)
+  await page.goto('/admin?tab=models')
+  await configure(page, 'custom/video').click()
+  const images = page.getByRole('spinbutton', { name: '参考图片上限', exact: true })
+  const videos = page.getByRole('spinbutton', { name: '参考视频上限', exact: true })
+  const audios = page.getByRole('spinbutton', { name: '参考音频上限', exact: true })
+  await expect(images).toHaveAttribute('min', '0')
+  await expect(images).toHaveAttribute('max', '10')
+  await expect(videos).toHaveAttribute('max', '10')
+  await expect(audios).toHaveAttribute('step', '1')
+  await images.fill('2'); await videos.fill('1'); await audios.fill('0')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video).toMatchObject({
+    maxReferenceImages: 2, maxReferenceVideos: 1, maxReferenceAudios: 0,
+  })
+  await page.reload()
+  await configure(page, 'custom/video').click()
+  await expect(images).toHaveValue('2')
+  await expect(videos).toHaveValue('1')
+  await expect(audios).toHaveValue('0')
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.locator('.model-reference-limits').screenshot({ path: info.outputPath(`model-reference-limits-${width}.png`) })
+  }
+  const writes = fixture.writes.length
+  for (const invalid of ['-1', '1.5', '11']) {
+    await videos.fill(invalid)
+    expect(await videos.evaluate((element: HTMLInputElement) => element.checkValidity())).toBe(false)
+    await save(page).click()
+    expect(fixture.writes).toHaveLength(writes)
+  }
+  await images.fill(''); await videos.fill(''); await audios.fill('')
+  await save(page).click()
+  await expect.poll(() => fixture.writes.length).toBe(writes + 1)
+  expect(item(fixture, 'custom/video')?.video).toBeUndefined()
+  await page.getByRole('button', { name: '返回模型列表', exact: true }).click()
+  await configure(page, 'custom/image').click()
+  await expect(images).toHaveAttribute('max', '16')
+  await expect(videos).toHaveCount(0)
+  await images.fill('0')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/image')?.image).toEqual({ maxReferenceImages: 0 })
+})
+
 test('video parameter definitions persist with modes, validate JSON and reset to backend defaults', async ({ page }, info) => {
   const fixture = await modelsFixture(page)
   const defaults = { resolutions: ['480p'], durations: [4, 8], autoDuration: 8, aspectRatios: ['16:9'] }
@@ -436,6 +482,7 @@ test('changing model kinds clears incompatible options while image chat preserve
   await combo(page, '接口格式').selectOption('chat-completions')
   await expect(combo(page, '自动分辨率')).toBeDisabled()
   await expect(combo(page, '自动画质')).toBeDisabled()
+  await expect(page.getByRole('spinbutton', { name: '参考图片上限', exact: true })).toBeEnabled()
   await expect(combo(page, '任务协议')).toHaveValue('auto')
   await expect(editor(page)).toContainText('图片对话接口的尺寸、画质和背景由上游决定。')
   await combo(page, '接口格式').selectOption('images')

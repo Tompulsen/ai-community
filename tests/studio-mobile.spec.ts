@@ -13,13 +13,14 @@ async function fixture(page: Page) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   let submissions = 0
+  const wallet = { enabled: true, currency: 'CNY', pointsPerCny: 5000, charityPoints: '2500', permanentPoints: '10000',
+    legacyApiQuota: 0, paidApiQuota: 1000000, totalApiQuota: 1250000, charityExpiringAt: null }
   const photo = await readFile('public/assets/brand/octopus-community.jpg')
-  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, currency: 'USD', rows: [{ model: 'fixture-image', group: 'auto', billing: '每次请求', price: 'USD 0.15' }] } } }))
-  await page.route('**/api/new-api/session', route => route.fulfill({ json: { success: true, data: { selectedTokenId: 41 } } }))
-  await page.route('**/api/new-api/groups', route => route.fulfill({ json: { success: true, data: [{ id: 'auto', name: 'Auto' }] } }))
+  await page.route('**/api/account', route => route.fulfill({ json: { linked: true, subject: '17', walletEnabled: true, points: wallet } }))
+  await page.route('**/api/new-api/model-pricing', route => route.fulfill({ json: { success: true, data: { userId: 17, currency: '积分', rows: [{ model: 'fixture-image', group: 'auto', billing: '每次请求', price: '750 积分', requestPrice: 750 }] } } }))
   await page.route('**/api/creation/**', route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/creation/models') return route.fulfill({ json: { items: [{ id: 'fixture-image', name: '图片模型', kinds: ['image'] }, { id: 'fixture-video', name: '视频模型', kinds: ['video'] }, { id: 'fixture-text', name: '对话模型', kinds: ['text'] }] } })
+    if (path === '/api/creation/models') return route.fulfill({ json: { tokenId: 41, items: [{ id: 'fixture-image', name: '图片模型', kinds: ['image'] }, { id: 'fixture-video', name: '视频模型', kinds: ['video'], video: { aspectRatios: ['16:9', '9:16'] } }, { id: 'fixture-text', name: '对话模型', kinds: ['text'] }] } })
     if (path === '/api/creation/media') return route.fulfill({ body: photo, contentType: 'image/jpeg' })
     if (path === '/api/creation/generate') {
       submissions++
@@ -27,7 +28,7 @@ async function fixture(page: Page) {
     }
     return route.fulfill({ json: { items: [] } })
   })
-  return { ...account, submissions: () => submissions }
+  return { ...account, wallet, submissions: () => submissions }
 }
 
 test('compact image workspace keeps input and actions usable at phone and keyboard heights', async ({ page }) => {
@@ -35,10 +36,11 @@ test('compact image workspace keeps input and actions usable at phone and keyboa
   await page.goto('/create/image')
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
   await prompt.fill('一只躺在窗边的小猫')
-  await expect(page.locator('.studio-billing')).not.toContainText('USD 0.15')
-  await expect(page.locator('.billing-balance')).toHaveText('可用 USD 12.50')
+  await expect(page.locator('.studio-billing')).not.toContainText('750 积分')
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
-  await expect(page.getByRole('dialog', { name: '模型价格', exact: true })).toContainText('USD 0.15')
+  const pricing = page.getByRole('dialog', { name: '模型价格', exact: true })
+  await expect(pricing.locator('.billing-full-price')).toHaveText('750 积分')
+  await expect(pricing.locator('.billing-wallet-value')).toHaveText('12,500 积分')
   await page.keyboard.press('Escape')
   await mkdir(screenshots, { recursive: true })
   for (const [width, height] of [[390, 844], [320, 568], [390, 420]]) {
@@ -103,18 +105,20 @@ test('mobile chat retains tools and navigation and pricing uses the actual accou
   await page.getByRole('button', { name: /^联网搜索：/ }).click()
   await page.getByRole('dialog', { name: '联网搜索', exact: true }).getByRole('button', { name: '快速搜索', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '对话参数', exact: true })).toBeVisible()
-  const skills = page.getByRole('dialog', { name: '对话参数', exact: true }).locator('.mobile-chat-tools > details > summary')
+  await page.keyboard.press('Escape')
+  const skills = page.getByRole('button', { name: '技能与工具', exact: true })
   await skills.click()
   await expect.poll(() => skillReads).toBe(1)
+  await page.keyboard.press('Escape')
   await skills.click()
-  await skills.click()
+  await expect(page.getByRole('dialog', { name: '技能与工具', exact: true })).toBeVisible()
   expect(skillReads).toBe(1)
   await page.keyboard.press('Escape')
   await expect(message).toHaveValue('想写一个海底故事')
   await mkdir(screenshots, { recursive: true })
   await page.screenshot({ path: `${screenshots}/chat-390.png`, fullPage: true })
   await menuAction(page, '模型价格')
-  await expect(page.getByRole('article', { name: 'fixture-image 模型价格', exact: true }).getByText('USD 0.15', { exact: true })).toBeVisible()
+  await expect(page.getByRole('article', { name: 'fixture-image 模型价格', exact: true }).getByText('750 积分', { exact: true })).toBeVisible()
   await menuAction(page, '返回创作')
   await expect(message).toHaveValue('想写一个海底故事')
   await menuAction(page, '模型价格')
@@ -147,6 +151,9 @@ test('mobile library restores parameters across image and video routes without r
   await page.getByRole('dialog', { name: '创作模式', exact: true }).getByRole('button', { name: '视频生成', exact: true }).click()
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('fixture-video')
   await prompt.fill('横幅小猫视频')
+  await page.getByRole('button', { name: '高级参数', exact: true }).click()
+  await page.getByRole('radiogroup', { name: '画面比例', exact: true }).getByRole('radio', { name: '16:9', exact: true }).check()
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.creation-turn').filter({ hasText: '横幅小猫视频' }).locator('.task-status')).toContainText('生成完成')
   for (const [kind, text, ratio] of [['image', '竖幅小猫图片', '9:16'], ['video', '横幅小猫视频', '16:9']]) {
@@ -167,17 +174,18 @@ test('mobile library restores parameters across image and video routes without r
 })
 
 test('missing pricing and balance are shown as unavailable, never as free', async ({ page }) => {
-  await fixture(page)
+  const state = await fixture(page)
   await page.route('**/api/account', route => route.fulfill({ status: 503, json: { message: '稍后重试' } }))
   await page.route('**/api/new-api/model-pricing', route => route.fulfill({ status: 503, json: { success: false, message: '稍后重试' } }))
   await page.goto('/create/image')
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
   const pricing = page.getByRole('dialog', { name: '模型价格', exact: true })
+  await expect(pricing.getByRole('alert')).toHaveText(['价格读取失败，请重试。', '积分读取失败，请重试。'])
+  await expect(pricing).not.toContainText(/免费|0 积分/)
+  await expect(pricing.locator('.billing-wallet')).toHaveText('可用总积分暂不可用')
+  await page.route('**/api/account', route => route.fulfill({ json: { linked: true, subject: '17', walletEnabled: true,
+    points: { ...state.wallet, charityPoints: '0', permanentPoints: '0', paidApiQuota: 0, totalApiQuota: 0 } } }))
+  await pricing.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(pricing.locator('.billing-wallet-value')).toHaveText('0 积分')
   await expect(pricing.getByRole('alert')).toHaveText('价格读取失败，请重试。')
-  await expect(pricing).not.toContainText(/免费|USD 0/)
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.billing-balance')).toHaveText('可用 —')
-  await page.route('**/api/account', route => route.fulfill({ json: { linked: true, subject: '17', balance: 0, currencySymbol: 'USD' } }))
-  await page.getByRole('button', { name: '刷新费用和额度', exact: true }).click()
-  await expect(page.locator('.billing-balance')).toHaveText('可用 USD 0.00')
 })

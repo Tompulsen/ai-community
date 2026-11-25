@@ -12,7 +12,7 @@ import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 import { imageExtensions, videoExtensions, publicImageName, privateMetadataFreeImage } from './image-privacy.ts';
-import { privateMetadataFreeVideo } from './video-privacy.ts';
+import { privateMetadataFreeVideo, videoDurationSeconds } from './video-privacy.ts';
 import { httpError, roleCondition } from './auth.ts';
 import type { Database, RequestContext } from './types.ts';
 
@@ -62,6 +62,10 @@ export function fileDto(file: MediaFile) {
     id: file.id, name: publicImageName(file), type: file.type, size: file.size, url: `/legacy-files/${file.id}`,
     thumbnailUrl: file.thumbnailAccessKey ? `/legacy-files/${file.id}?variant=thumbnail` : '',
     processing: mediaState(file.properties),
+    ...(file.type === 'video/mp4' && mediaState(file.properties) === 'ready'
+      && typeof file.properties?.durationSeconds === 'number' && Number.isFinite(file.properties.durationSeconds)
+      && file.properties.durationSeconds > 0 && file.properties.durationSeconds <= 3600
+      ? { durationSeconds: file.properties.durationSeconds } : {}),
   };
 }
 
@@ -329,7 +333,15 @@ async function processFile(db: Database, root: string, file: WorkerFile): Promis
       const sanitized = await privateMetadataFreeImage(webTemporary);
       await rename(webTemporary, webpublic);
       webType = sanitized.type;
-    } else await videoThumbnail(source, temporary);
+    } else {
+      await videoThumbnail(source, temporary);
+      if (file.type === 'video/mp4' && file.size > 0 && file.size <= 64 * MiB) {
+        // Preview metadata is optional; generation independently validates the source again.
+        try {
+          extra.durationSeconds = await videoDurationSeconds(await readFile(source), file.type, AbortSignal.timeout(15000));
+        } catch {}
+      }
+    }
     await privateMetadataFreeImage(temporary);
     // A buffer avoids Sharp holding a file lock across rename on Windows.
     const preview = await sharp(await readFile(temporary)).metadata();

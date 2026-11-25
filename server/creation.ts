@@ -30,7 +30,7 @@ import type { RequestContext } from './types.ts'
 import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
-import { readModelTypes, type ModelApiFormat } from '../shared/studio/model-types.ts'
+import { readModelTypes, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
 import { readAccountModelCatalogue, classifyModel } from './native-account/model-catalogue.ts'
@@ -38,6 +38,7 @@ import { resolveModelGroup } from './native-account/model-groups.ts'
 import { assertSameOrigin } from './native-account/client.ts'
 import { resolveVideoModelSetting } from './video-models.ts'
 import { videoDurationSeconds } from './video-privacy.ts'
+import { sniffType } from './media.ts'
 import type { VideoModelSetting } from '../shared/studio/model-types.ts'
 
 const MiB = 1024 * 1024
@@ -309,9 +310,12 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
   return result
 }
 
-async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices, videoSetting?: VideoModelSetting) {
+async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices, videoSetting?: VideoModelSetting,
+  limits?: ReturnType<typeof resolveReferenceLimits>, limitImageHistory = false) {
   if (input.kind === 'video' && videoSetting?.operation === 'upscale') {
     if (input.referenceUrls?.length !== 1) throw httpError(400, '视频超分需上传一个源视频。')
+    const issue = limits && referenceCountIssue({ images: 0, videos: 1, audios: 0 }, limits)
+    if (issue) throw httpError(400, issue)
     const source = new URL(input.referenceUrls[0]!, ctx.config.url)
     const fileId = /^\/legacy-files\/([A-Za-z0-9]{1,32})$/.exec(source.pathname)?.[1]
     if (source.origin !== new URL(ctx.config.url).origin || source.search || source.hash || source.username || source.password || !fileId)
@@ -341,7 +345,37 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
       mediaType: 'video' as const, durationSeconds }]
   }
   let total = 0
-  const prepared = new Map<string, { blob: Blob; url: string }>()
+  let mediaTotal = 0
+  const localHeads = new Map<string, { statusCode: number; type: string; length: number }>()
+  if (limits) {
+    const counts = { images: input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'file_id' ? 1 : 0, videos: 0, audios: 0 }
+    let sources = [...input.referenceUrls ?? []]
+    if (limitImageHistory && input.kind === 'image' && usesGeminiImageChat(input.model, input.apiFormat)) {
+      for (const turn of input.imageContext?.turns ?? []) sources.push(...turn.images, ...turn.references ?? [])
+      if (input.apiFormat === 'gemini') sources = [...new Set(sources)]
+    }
+    for (const source of sources) {
+      let kind: keyof typeof counts = 'images'
+      if (!source.startsWith('data:')) {
+        const url = new URL(source, ctx.config.url)
+        if (url.origin === new URL(ctx.config.url).origin && /^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(url.pathname)
+          && (!url.search || /^\?variant=(?:thumbnail|web)$/.test(url.search))) {
+          let head = localHeads.get(source)
+          if (!head) {
+            const response = await ctx.request.server.inject({ method: 'HEAD', url: `${url.pathname}${url.search}`,
+              headers: { cookie: String(ctx.req.headers.cookie || '') } })
+            head = { statusCode: response.statusCode, type: String(response.headers['content-type'] || ''), length: Number(response.headers['content-length']) }
+            localHeads.set(source, head)
+          }
+          kind = head.type.startsWith('video/') ? 'videos' : head.type.startsWith('audio/') ? 'audios' : 'images'
+        }
+      }
+      counts[kind]++
+    }
+    const issue = referenceCountIssue(counts, limits)
+    if (issue) throw httpError(400, issue)
+  }
+  const prepared = new Map<string, { blob: Blob; url: string; mediaType?: 'image' | 'video' | 'audio'; durationSeconds?: number }>()
   async function prepare(source: string) {
     const previous = prepared.get(source)
     if (previous) return previous
@@ -366,9 +400,40 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
           if (!/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(url.pathname) || url.search && !/^\?variant=(?:thumbnail|web)$/.test(url.search))
             throw httpError(400, '参考图地址无效。')
           const options = { headers: { cookie: String(ctx.req.headers.cookie || '') }, url: `${url.pathname}${url.search}` }
-          const head = await ctx.request.server.inject({ ...options, method: 'HEAD' })
-          if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(String(head.headers['content-type']))
-            || Number(head.headers['content-length']) > 20 * MiB) throw httpError(400, '参考图无法读取或超过 20 MB。')
+          let head = localHeads.get(source)
+          if (!head) {
+            const response = await ctx.request.server.inject({ ...options, method: 'HEAD' })
+            head = { statusCode: response.statusCode, type: String(response.headers['content-type'] || ''), length: Number(response.headers['content-length']) }
+          }
+          const type = head.type.split(';')[0]!
+          if (input.kind === 'video' && /^(?:video|audio)\//.test(type)) {
+            const fileId = /^\/legacy-files\/([A-Za-z0-9]{1,32})$/.exec(url.pathname)?.[1]
+            if (!fileId || url.search || url.hash || url.username || url.password) throw httpError(400, '视频和音频参考须为当前账号上传的文件。')
+            const owned = await ctx.request.server.inject({ method: 'GET', url: `/api/uploads/${fileId}`, headers: options.headers })
+            if (owned.statusCode !== 200) throw httpError(404, '参考素材不存在或不属于当前账号。')
+            const file: unknown = owned.json().file
+            if (!record(file) || file.id !== fileId || file.type !== type || file.processing !== 'ready'
+              || !['video/mp4', 'audio/mpeg', 'audio/wav', 'audio/flac', 'audio/ogg'].includes(type))
+              throw httpError(400, '参考素材尚未就绪或格式不受支持。')
+            const size = typeof file.size === 'string' && /^[1-9]\d*$/.test(file.size) ? Number(file.size) : file.size
+            const length = head.length
+            if (head.statusCode !== 200 || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || size > 64 * MiB
+              || !Number.isSafeInteger(length) || length < 1 || length > 64 * MiB || mediaTotal + length > 64 * MiB)
+              throw httpError(413, '参考素材须非空，单个及合计不超过 64 MB。')
+            const response = await ctx.request.server.inject({ ...options, method: 'GET' })
+            const bytes = response.rawPayload
+            if (response.statusCode !== 200 || String(response.headers['content-type'] || '').split(';')[0] !== type
+              || !bytes.length || bytes.length > 64 * MiB || mediaTotal + bytes.length > 64 * MiB || sniffType(bytes, type) !== type)
+              throw httpError(400, '参考素材内容或格式无效，请重新上传。')
+            const mediaType = type === 'video/mp4' ? 'video' as const : 'audio' as const
+            const durationSeconds = mediaType === 'video' ? await videoDurationSeconds(bytes, type, req.signal) : undefined
+            mediaTotal += bytes.length
+            const value = { blob: new Blob([new Uint8Array(bytes)], { type }), url: source, mediaType, durationSeconds }
+            prepared.set(source, value)
+            return value
+          }
+          if (head.statusCode !== 200 || !/^image\/(?:png|jpeg|webp|gif|avif)$/.test(head.type)
+            || head.length > 20 * MiB) throw httpError(400, '参考图无法读取或超过 20 MB。')
           const response = await ctx.request.server.inject({ ...options, method: 'GET' })
           if (response.statusCode !== 200) throw httpError(400, '参考图无法读取。')
           blob = new Blob([new Uint8Array(response.rawPayload)], { type: String(response.headers['content-type']) })
@@ -388,15 +453,19 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
       } catch { throw httpError(400, '参考图无法解码，请更换图片或重新上传。') }
     }
     total += Math.max(originalSize, blob.size)
+    mediaTotal += Math.max(originalSize, blob.size)
     if (blob.size > 20 * MiB || total > 24 * MiB) throw httpError(413, '参考图转换后过大，单张不超过 20 MB，总计不超过 24 MB。')
-    const value = { blob, url: `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}` }
+    if (input.kind === 'video' && mediaTotal > 64 * MiB) throw httpError(413, '参考素材合计不能超过 64 MB。')
+    const value = { blob, url: `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`,
+      mediaType: 'image' as const, durationSeconds: undefined }
     prepared.set(source, value)
     return value
   }
   const files: CreationReference[] = [], urls: string[] = []
   for (const [index, source] of (input.referenceUrls ?? []).entries()) {
     const value = await prepare(source)
-    files.push({ blob: value.blob, name: `reference-${index}.${value.blob.type.split('/')[1]}` })
+    files.push({ blob: value.blob, name: `reference-${index}.${value.blob.type === 'audio/mpeg' ? 'mp3' : value.blob.type.split('/')[1]}`,
+      mediaType: value.mediaType ?? 'image', ...(value.durationSeconds !== undefined ? { durationSeconds: value.durationSeconds } : {}) })
     urls.push(value.url)
   }
   if (input.kind === 'image' && usesGeminiImageChat(input.model, input.apiFormat) && input.imageContext) {
@@ -412,6 +481,7 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
     }
   }
   input.referenceUrls = urls
+  if (input.kind === 'video' && files.reduce((size, file) => size + file.blob.size, 0) > 64 * MiB) throw httpError(413, '参考素材合计不能超过 64 MB。')
   return files
 }
 
@@ -473,11 +543,21 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     input.videoOptions.openaiReferenceSource = 'upload'
   }
   errorStage = '参考素材准备'
-  const files = await references(ctx, req, input, svc, input.kind === 'video' ? resolveVideoModelSetting(input.model, setting?.video) : undefined)
+  const videoSetting = input.kind === 'video' ? resolveVideoModelSetting(input.model, setting?.video) : undefined
+  const limits = input.kind === 'text' ? undefined : resolveReferenceLimits(input.kind,
+    input.kind === 'image' ? setting?.image : videoSetting, videoSetting?.operation === 'upscale')
+  const files = await references(ctx, req, input, svc, videoSetting, limits, setting?.image?.maxReferenceImages !== undefined)
   errorStage = '工具准备'
   const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
   errorStage = '生成参数组装'
   const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })), setting?.video)
+  if (input.kind === 'video' && files.some(file => file.mediaType === 'video')
+    && resolveVideoModelSetting(input.model, setting?.video)?.operation !== 'upscale') {
+    const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
+    const seconds = Number(sent.seconds)
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds + files.reduce((sum, file) => sum + (file.mediaType === 'video' ? file.durationSeconds! : 0), 0) > 3600)
+      throw httpError(400, '参考视频与生成视频的合计时长不能超过 3600 秒。')
+  }
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   errorStage = '网关凭证准备'
   const credentials = await svc.credentials(req, payload.path)
@@ -488,6 +568,15 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   headers.set('Idempotency-Key', hash(`${accountNamespace(ctx)}:${input.requestId}`))
   errorStage = '请求签名'
   const signed = await signCommunityRequest(url, credentials.userId, headers, payload.body)
+  if (input.kind === 'video') {
+    if (signed.body instanceof FormData) {
+      const frozen = new Response(signed.body)
+      signed.body = await frozen.arrayBuffer()
+      signed.headers.set('Content-Type', frozen.headers.get('content-type')!)
+    }
+    const bytes = typeof signed.body === 'string' ? Buffer.byteLength(signed.body) : signed.body.byteLength
+    if (bytes > 65 * MiB) throw httpError(413, '视频请求超过 65 MB，请减少参考素材后重试。')
+  }
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
   errorStage = '任务登记'

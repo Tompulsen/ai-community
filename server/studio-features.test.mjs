@@ -64,6 +64,42 @@ test('upscale uses one verified video and measured duration with optional prompt
   assert.throws(() => buildCreationPayload({ ...base, model: 'unknown-video' }, [source]), /提示词/)
   assert.throws(() => resolveCreationModelSettings({ ...base, model: 'unknown-video' }), /提示词/)
 })
+
+test('mixed video references preserve image roles and append only prepared video and audio bytes', () => {
+  const videoBlob = new Blob(['mp4'], { type: 'video/mp4' })
+  const audioBlob = new Blob(['wav'], { type: 'audio/wav' })
+  const image = { blob: new Blob(['png'], { type: 'image/png' }), mediaType: 'image' }
+  const sources = [
+    { mediaType: 'video', blob: videoBlob, name: 'source.mp4', durationSeconds: 2.5 },
+    image,
+    { mediaType: 'audio', blob: audioBlob, name: 'source.wav' },
+    image,
+  ]
+  const input = validateCreationInput({ ...video, model: 'ordinary-video', referenceUrls: ['/legacy-files/video1', png, '/legacy-files/audio1', png],
+    videoOptions: { mode: 'first-last-frame' } })
+  const payload = buildCreationPayload(input, sources)
+  assert(payload.body instanceof FormData)
+  assert.equal(payload.body.get('seconds'), String(input.duration))
+  assert.equal(payload.body.getAll('input_videos').length, 1)
+  assert.equal(payload.body.get('input_videos').type, 'video/mp4')
+  assert.equal(payload.body.getAll('input_audios').length, 1)
+  assert.equal(payload.body.get('input_audios').type, 'audio/wav')
+  const metadata = JSON.parse(payload.body.get('metadata'))
+  assert.deepEqual(metadata.first_frame, { url: png })
+  assert.deepEqual(metadata.last_frame, { url: png })
+  assert(!payload.body.has('__c_reference_video_seconds'))
+  for (const mediaType of ['video', 'audio']) {
+    const blob = mediaType === 'video' ? videoBlob : audioBlob
+    const only = validateCreationInput({ ...video, model: 'ordinary-video', referenceUrls: [`/legacy-files/${mediaType}1`], videoOptions: { mode: 'text-to-video' } })
+    const sent = buildCreationPayload(only, [{ mediaType, blob, durationSeconds: mediaType === 'video' ? 2.5 : undefined }]).body
+    assert(sent instanceof FormData)
+    assert.equal(sent.getAll(mediaType === 'video' ? 'input_videos' : 'input_audios').length, 1)
+  }
+  for (const key of ['input_videos', 'reference_videos', 'input_audios', 'reference_audios', '__c_reference_video_seconds']) {
+    const custom = validateCreationInput({ ...video, videoOptions: { mode: 'text-to-video', customParameters: JSON.stringify({ metadata: { [key]: ['data:video/mp4;base64,AA=='] } }) } })
+    assert.throws(() => buildCreationPayload(custom), /上传控件/)
+  }
+})
 test('editable video parameters follow model and mode limits without changing the source snapshot', () => {
   const draft = { model: 'sd2.0-fast-720p', mode: 'text-to-video', resolution: '480p', duration: 8, aspectRatio: '16:9', size: '854x480' }
   const snapshot = structuredClone(draft)

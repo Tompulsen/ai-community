@@ -220,7 +220,32 @@ export function buildVideoRequest(
   model: string,
   parameterFormat?: VideoApiFormat,
   setting?: VideoModelSetting,
+  preparedReferences: readonly { blob: Blob; name?: string; mediaType?: 'image' | 'video' | 'audio' }[] = [],
 ): { path: string; body: string | FormData } {
+  if (draft.materials.some(item => item.type !== 'image')) {
+    if (draft.materials.length > MAX_VIDEO_REFERENCES) throw new Error(`参考素材不能超过 ${MAX_VIDEO_REFERENCES} 个`);
+    const images = draft.materials.filter(item => item.type === 'image');
+    const payload = buildVideoRequest({ ...draft, materials: images,
+      mode: images.length ? draft.mode : 'text-to-video',
+    }, model, parameterFormat, setting);
+    let body: FormData;
+    if (typeof payload.body === 'string') {
+      body = new FormData();
+      for (const [key, value] of Object.entries(JSON.parse(payload.body))) {
+        if (value !== undefined && value !== null) body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+      }
+    } else body = payload.body;
+    for (const [index, material] of draft.materials.entries()) {
+      if (material.type === 'image') continue;
+      const file = preparedReferences[index];
+      if (!file || file.mediaType !== material.type || !file.blob.size || file.blob.size > 64 * 1024 * 1024
+        || material.type === 'video' && file.blob.type !== 'video/mp4'
+        || material.type === 'audio' && !['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/ogg'].includes(file.blob.type))
+        throw new Error('请先上传并载入有效的视频或音频参考素材');
+      body.append(material.type === 'video' ? 'input_videos' : 'input_audios', file.blob, file.name ?? material.name);
+    }
+    return { ...payload, body };
+  }
   draft = {
     ...draft,
     ...videoDraftForFormat({ ...draft, model }, parameterFormat),

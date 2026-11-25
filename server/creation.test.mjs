@@ -92,6 +92,7 @@ function fixture(t, options = {}) {
   const credentialCalls = []
   const catalogueCalls = []
   const groupCalls = []
+  const mediaCalls = []
   const app = Fastify({ forceCloseConnections: true })
   t.after(() => app.close())
   const redis = {
@@ -151,6 +152,7 @@ function fixture(t, options = {}) {
     reply.code(error.statusCode || error.status || 500).send({ error: { message: error.message } })
   })
   const route = async (request, reply) => {
+    if (/^\/(?:legacy-files|api\/uploads)\//.test(request.raw.url)) mediaCalls.push({ method: request.method, url: request.raw.url })
     const accountId = String(request.headers['x-test-account'] || /(?:^|;\s*)fixture-account=(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || '17')
     const user = { id: `local-${accountId}`, accountId, username: 'root', isAdmin: options.isAdmin === true }
     const ctx = {
@@ -184,11 +186,17 @@ function fixture(t, options = {}) {
     app.get('/api/uploads/:id', route)
     app.route({ method: ['GET', 'HEAD'], url: '/legacy-files/:id', handler: route })
   }
-  return { app, values, calls, credentialCalls, catalogueCalls, groupCalls, redis, services }
+  return { app, values, calls, credentialCalls, catalogueCalls, groupCalls, mediaCalls, redis, services }
 }
 
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
+}
+
+async function relayRequestBody(init) {
+  const request = new Request('https://model.example/fixture', { ...init, method: 'POST' })
+  return request.headers.get('content-type')?.startsWith('multipart/form-data')
+    ? Object.fromEntries(await request.formData()) : await request.json()
 }
 
 test('private work skills are resolved on the server, survive retries, and never expose the source in tracking or errors', async t => {
@@ -235,8 +243,8 @@ test('typed media skills reach the actual model request; accepted results surviv
       reads++; assert.match(sql, /s.status='published'/); assert.match(sql, /NOT u."isSuspended"/)
       assert.deepEqual(params, [['visual']])
       return available ? [{ id: 'visual', kind, body, sha256 }] : []
-    }, fetch(url, init) {
-      const prompt = init.body instanceof FormData ? init.body.get('prompt') : JSON.parse(init.body).prompt
+    }, async fetch(url, init) {
+      const prompt = (await relayRequestBody(init)).prompt
       assert.match(prompt, /Use soft light/); assert.match(prompt, /My original prompt/); assert.doesNotMatch(prompt, /description: visual/)
       return kind === 'image' ? Response.json({ data: [{ url: 'https://media.example/result.png' }] }) : Response.json({ id: 'video-1', status: 'completed', url: 'https://media.example/result.mp4' })
     } })
@@ -741,8 +749,9 @@ test('configured model types reject mismatched creation requests before a paid c
 test('model catalogs publish only authorized public configuration and keep administrator remarks private', async t => {
   const modelTypes = [
     { id: 'configured-text', name: 'Configured text', tags: ['Reasoning'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private-text-remark' },
-    { id: 'configured-image', name: 'Configured image', tags: ['Edit'], kind: 'image', apiFormat: 'images', protocol: 'async', image: { autoQuality: 'high' }, remark: 'private-image-remark' },
-    { id: 'configured-video', name: 'Configured video', tags: [], kind: 'video', apiFormat: 'openai', protocol: 'sync', video: { autoResolution: '720p', parameterFormat: 'xai' }, remark: 'private-video-remark' },
+    { id: 'configured-image', name: 'Configured image', tags: ['Edit'], kind: 'image', apiFormat: 'images', protocol: 'async', image: { autoQuality: 'high', maxReferenceImages: 0 }, remark: 'private-image-remark' },
+    { id: 'configured-video', name: 'Configured video', tags: [], kind: 'video', apiFormat: 'openai', protocol: 'sync',
+      video: { autoResolution: '720p', parameterFormat: 'xai', maxReferenceImages: 0, maxReferenceVideos: 2, maxReferenceAudios: 1 }, remark: 'private-video-remark' },
     { id: 'not-in-group', name: 'private-unauthorized-display', tags: ['private-unauthorized-tag'], kind: 'text', apiFormat: 'claude', remark: 'private-unauthorized-remark' },
   ]
   const { app } = fixture(t, { modelTypes, fetch() {
@@ -971,7 +980,7 @@ test('automatic video resolution uses the administrator setting while explicit a
     assert.equal(response.statusCode, 200, response.payload)
     assert.equal(response.json().status, 'pending')
     assert.equal(calls.length, 1)
-    const body = typeof calls[0].init.body === 'string' ? JSON.parse(calls[0].init.body) : Object.fromEntries(calls[0].init.body.entries())
+    const body = await relayRequestBody(calls[0].init)
     const metadata = typeof body.metadata === 'string' ? JSON.parse(body.metadata) : body.metadata
     assert.equal(body.resolution ?? metadata?.resolution, expected)
     assert.equal(String(body.seconds), '8')
@@ -995,11 +1004,11 @@ test('changed video settings apply to new requests while original IDs only retur
   const next = await submit(app, { ...input, requestId: 'new-resolution' })
   assert.equal(next.statusCode, 200, next.payload)
   assert.equal(calls.length, 2)
-  const resolutions = calls.map(({ init }) => {
-    const body = typeof init.body === 'string' ? JSON.parse(init.body) : Object.fromEntries(init.body.entries())
+  const resolutions = await Promise.all(calls.map(async ({ init }) => {
+    const body = await relayRequestBody(init)
     const metadata = typeof body.metadata === 'string' ? JSON.parse(body.metadata) : body.metadata
     return body.resolution ?? metadata?.resolution
-  })
+  }))
   assert.deepEqual(resolutions, ['480p', '1080p'])
 })
 
@@ -1031,12 +1040,12 @@ for (const [label, video] of [
   const source = { id: 'source1', userId: 'local-17', name: 'private.mp4', type: 'video/mp4', size: String(bytes.length),
     accessKey: 'source-video', storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'source-video': 1 } } }
   const model = 'DMC 视频超分'
-  const f = fixture(t, { filesRoot, mediaFiles: [source], modelTypes: video ? [{ id: model, kind: 'video', video }] : [], fetch(_url, init) {
-    assert(init.body instanceof FormData)
-    assert.equal(init.body.get('seconds'), '3')
-    const metadata = JSON.parse(init.body.get('metadata'))
+  const f = fixture(t, { filesRoot, mediaFiles: [source], modelTypes: video ? [{ id: model, kind: 'video', video }] : [], async fetch(_url, init) {
+    const sent = await relayRequestBody(init)
+    assert.equal(sent.seconds, '3')
+    const metadata = JSON.parse(sent.metadata)
     assert.equal(metadata.operation, 'upscale')
-    const file = init.body.get('input_videos')
+    const file = sent.input_videos
     assert(file instanceof Blob)
     assert.equal(file.type, 'video/mp4')
     assert.equal(file.size, bytes.length)
@@ -1084,6 +1093,205 @@ test('video upscaling rejects unowned, external, oversized and invalid video sou
     const response = await submit(f.app, { kind: 'video', model, prompt: '', requestId: `upscale-invalid-${index}`,
       referenceUrls: references, videoOptions: { mode: 'reference-to-video', resolution: '1080p' } }, { cookie: 'fixture-account=17' })
     assert.equal(response.statusCode, expected, response.payload)
+  }
+  assert.equal(f.calls.length, 0)
+  assert.equal(f.credentialCalls.length, 0)
+  assert.equal(f.values.size, 0)
+})
+
+test('ordinary video generation forwards owned video and audio bytes without changing output duration', async t => {
+  if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable')
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-reference-media-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=16x16:r=4:d=2.5',
+    '-c:v', 'mpeg4', '-f', 'mp4', path.join(filesRoot, 'source-video')], { windowsHide: true, encoding: 'utf8' })
+  assert.equal(generated.status, 0, generated.stderr)
+  const video = await readFile(path.join(filesRoot, 'source-video'))
+  const generatedAudio = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+    '-t', '0.25', '-c:a', 'pcm_s16le', '-f', 'wav', path.join(filesRoot, 'source-audio')], { windowsHide: true, encoding: 'utf8' })
+  assert.equal(generatedAudio.status, 0, generatedAudio.stderr)
+  const audio = await readFile(path.join(filesRoot, 'source-audio'))
+  const image = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer()
+  await writeFile(path.join(filesRoot, 'source-image'), image)
+  const row = (id, type, accessKey, size) => ({ id, type, accessKey, size, userId: 'local-17', name: 'private', storedInternal: true, isLink: false,
+    properties: { communityVideoPrivacy: { [accessKey]: 1 }, communityImagePrivacy: { [accessKey]: 1 } } })
+  const mediaFiles = [row('video1', 'video/mp4', 'source-video', String(video.length)), row('audio1', 'audio/wav', 'source-audio', audio.length),
+    row('image1', 'image/png', 'source-image', image.length), row('image2', 'image/png', 'source-image', image.length)]
+  for (const [name, referenceUrls, mode, videoCount, audioCount] of [
+    ['video-only', ['/legacy-files/video1'], 'text-to-video', 1, 0],
+    ['audio-only', ['/legacy-files/audio1'], 'text-to-video', 0, 1],
+    ['mixed', ['/legacy-files/video1', '/legacy-files/image1', '/legacy-files/audio1', '/legacy-files/image2'], 'first-last-frame', 1, 1],
+  ]) await t.test(name, async t => {
+    const f = fixture(t, { filesRoot, mediaFiles,
+      modelTypes: [{ id: 'ordinary-video', kind: 'video', video: { maxReferenceImages: mode === 'first-last-frame' ? 2 : 0,
+        maxReferenceVideos: videoCount, maxReferenceAudios: audioCount } }],
+      async fetch(url, init) {
+      const wire = new Request(url, init)
+      assert.match(wire.headers.get('content-type'), /^multipart\/form-data;/)
+      const form = await wire.formData()
+      assert.equal(form.get('seconds'), '8')
+      assert.equal(form.getAll('input_videos').length, videoCount)
+      assert.equal(form.getAll('input_audios').length, audioCount)
+      if (videoCount) assert.deepEqual(Buffer.from(await form.get('input_videos').arrayBuffer()), video)
+      if (audioCount) assert.deepEqual(Buffer.from(await form.get('input_audios').arrayBuffer()), audio)
+      assert(!form.has('__c_reference_video_seconds'))
+      if (mode === 'first-last-frame') {
+        const metadata = JSON.parse(form.get('metadata'))
+        assert.match(metadata.first_frame.url, /^data:image\/png;base64,/)
+        assert.match(metadata.last_frame.url, /^data:image\/png;base64,/)
+      }
+      return Response.json({ id: 'mixed-reference-task', status: 'queued' })
+    } })
+    const input = { kind: 'video', model: 'ordinary-video', prompt: 'Waves', duration: 8, requestId: name, referenceUrls,
+      referenceVideoSeconds: 0.001, videoOptions: { mode } }
+    const response = await submit(f.app, input, { cookie: 'fixture-account=17' })
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().upstreamId, 'mixed-reference-task')
+    assert.equal((await submit(f.app, input, { cookie: 'fixture-account=17' })).statusCode, 200)
+    assert.equal(f.calls.length, 1)
+    const other = await submit(f.app, { ...input, requestId: `${name}-foreign` }, { cookie: 'fixture-account=18', 'x-test-account': '18' })
+    assert([400, 404].includes(other.statusCode), other.payload)
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.credentialCalls.length, 1)
+    if (videoCount) {
+      const tooLong = await submit(f.app, { ...input, duration: 3598, requestId: `${name}-too-long`, referenceVideoSeconds: 0 }, { cookie: 'fixture-account=17' })
+      assert.equal(tooLong.statusCode, 400, tooLong.payload)
+      assert.equal(tooLong.json().notAccepted, true)
+      assert.equal(f.calls.length, 1)
+    }
+  })
+  for (const [name, videoSetting, referenceUrls, model = 'ordinary-video'] of [
+    ['images-disabled', { maxReferenceImages: 0 }, ['/legacy-files/image1']],
+    ['videos-disabled', { maxReferenceVideos: 0 }, ['/legacy-files/video1']],
+    ['audios-disabled', { maxReferenceAudios: 0 }, ['/legacy-files/audio1']],
+    ['duplicate-images', { maxReferenceImages: 1 }, ['/legacy-files/image1', '/legacy-files/image1']],
+    ['duplicate-videos', { maxReferenceVideos: 1 }, ['/legacy-files/video1', '/legacy-files/video1']],
+    ['duplicate-audios', { maxReferenceAudios: 1 }, ['/legacy-files/audio1', '/legacy-files/audio1']],
+    ['upscale-disabled', { maxReferenceVideos: 0 }, ['/legacy-files/video1'], 'DMC 视频超分'],
+  ]) await t.test(name, async t => {
+    const f = fixture(t, { filesRoot, mediaFiles, modelTypes: [{ id: model, kind: 'video', video: videoSetting }] })
+    const response = await submit(f.app, { kind: 'video', model, prompt: 'Waves', duration: 8, requestId: name, referenceUrls,
+      referenceTypes: ['image'], videoOptions: { mode: 'reference-to-video' } }, { cookie: 'fixture-account=17', prefer: 'respond-async' })
+    assert.equal(response.statusCode, 400, response.payload)
+    assert.equal(response.json().notAccepted, true)
+    assert.match(response.json().error.message, /当前模型(?:不支持|最多支持)/)
+    assert.equal(f.calls.length, 0)
+    assert.equal(f.credentialCalls.length, 0)
+    assert.equal(f.mediaCalls.filter(call => call.method === 'GET').length, 0)
+    assert.equal(f.values.size, 0)
+  })
+  await writeFile(path.join(filesRoot, 'invalid-audio'), 'not a WAV file')
+  const invalid = fixture(t, { filesRoot, mediaFiles: [
+    mediaFiles[1],
+    row('bad1', 'audio/wav', 'invalid-audio', 14),
+    { ...mediaFiles[1], id: 'large1', size: 64 * 1024 * 1024 + 1 },
+    { ...mediaFiles[1], id: 'pending1', properties: { communityMedia: { state: 'processing' } } },
+  ] })
+  for (const [index, referenceUrls] of [
+    ['/legacy-files/bad1'], ['/legacy-files/large1'], ['/legacy-files/pending1'],
+    ['/legacy-files/audio1?variant=thumbnail'], ['data:audio/wav;base64,UklGRg=='],
+  ].entries()) {
+    const response = await submit(invalid.app, { kind: 'video', model: 'ordinary-video', prompt: 'Waves', duration: 8,
+      requestId: `invalid-media-${index}`, referenceUrls, videoOptions: { mode: 'text-to-video' } }, { cookie: 'fixture-account=17' })
+    assert([400, 404, 413].includes(response.statusCode), response.payload)
+  }
+  assert.equal(invalid.calls.length, 0)
+  assert.equal(invalid.credentialCalls.length, 0)
+  const paddedAudio = Buffer.alloc(33 * 1024 * 1024)
+  audio.copy(paddedAudio)
+  await writeFile(path.join(filesRoot, 'large-audio'), paddedAudio)
+  const oversized = fixture(t, { filesRoot, mediaFiles: [row('largea', 'audio/wav', 'large-audio', paddedAudio.length), row('largeb', 'audio/wav', 'large-audio', paddedAudio.length)] })
+  const rejected = await submit(oversized.app, { kind: 'video', model: 'ordinary-video', prompt: 'Waves', duration: 8,
+    requestId: 'combined-reference-budget', referenceUrls: ['/legacy-files/largea', '/legacy-files/largeb'], videoOptions: { mode: 'text-to-video' } }, { cookie: 'fixture-account=17' })
+  assert.equal(rejected.statusCode, 413, rejected.payload)
+  assert.equal(rejected.json().notAccepted, true)
+  assert.equal(oversized.calls.length, 0)
+  assert.equal(oversized.credentialCalls.length, 0)
+})
+
+test('model reference limits cover image URLs, file IDs and explicitly limited image history before media reads', async t => {
+  for (const scenario of [
+    { name: 'image-disabled', kind: 'image', limit: 0, referenceUrls: ['https://media.example/current.png'] },
+    { name: 'image-count', kind: 'image', limit: 1, referenceUrls: ['https://media.example/current.png', 'https://media.example/current.png'] },
+    { name: 'image-url-disabled', kind: 'video', limit: 0, videoOptions: { mode: 'image-to-video', openaiReferenceSource: 'image_url', openaiImageUrl: 'https://media.example/current.png' } },
+    { name: 'last-image-url-count', kind: 'video', limit: 1, videoOptions: { mode: 'first-last-frame', openaiReferenceSource: 'image_url',
+      openaiImageUrl: 'https://media.example/current.png', openaiLastImageUrl: 'https://media.example/last.png' } },
+    { name: 'file-id-disabled', kind: 'video', limit: 0, videoOptions: { mode: 'image-to-video', openaiReferenceSource: 'file_id', openaiFileId: 'file-upstream' } },
+    { name: 'history-images-disabled', kind: 'image', limit: 0, imageContext: { turns: [{ prompt: 'Previous', images: ['https://media.example/previous.png'] }] } },
+    { name: 'history-references-count', kind: 'image', limit: 1, referenceUrls: ['https://media.example/current.png'],
+      imageContext: { turns: [{ prompt: 'Previous', images: [], references: ['https://media.example/previous.png'] }] } },
+    { name: 'stream-image-disabled', kind: 'image', limit: 0, stream: true, referenceUrls: ['https://media.example/current.png'] },
+  ]) await t.test(scenario.name, async t => {
+    const model = scenario.kind === 'image' ? 'gemini-3.1-flash-image-preview' : 'ordinary-video'
+    let mediaReads = 0
+    const f = fixture(t, { modelTypes: [{ id: model, kind: scenario.kind, [scenario.kind]: { maxReferenceImages: scenario.limit } }],
+      publicMedia() { mediaReads++; throw new Error('Reference limits must reject before media bytes are read') } })
+    const response = await submit(f.app, { kind: scenario.kind, model, prompt: 'Waves', requestId: scenario.name,
+      ...(scenario.referenceUrls ? { referenceUrls: scenario.referenceUrls } : {}),
+      ...(scenario.videoOptions ? { videoOptions: scenario.videoOptions } : {}),
+      ...(scenario.imageContext ? { imageContext: scenario.imageContext } : {}),
+      ...(scenario.stream ? { imageOptions: { imageStream: true } } : {}) })
+    if (scenario.stream) {
+      assert.equal(response.statusCode, 200)
+      const event = JSON.parse(response.payload.trim().slice('data: '.length))
+      assert.equal(event.type, 'error')
+      assert.equal(event.statusCode, 400)
+      assert.equal(event.notAccepted, true)
+    } else {
+      assert.equal(response.statusCode, 400, response.payload)
+      assert.equal(response.json().notAccepted, true)
+    }
+    assert.match(response.payload, /当前模型(?:不支持|最多支持)/)
+    assert.equal(mediaReads, 0)
+    assert.equal(f.calls.length, 0)
+    assert.equal(f.credentialCalls.length, 0)
+    assert.equal(f.values.size, 0)
+  })
+  const image = `data:image/png;base64,${(await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer()).toString('base64')}`
+  for (const [name, imageSetting, apiFormat, historyCount] of [
+    ['default-history', {}, 'chat-completions', 16],
+    ['native-deduplicated-history', { maxReferenceImages: 1 }, 'gemini', 1],
+    ['zero-images-without-reference', { maxReferenceImages: 0 }, 'chat-completions', 0],
+  ]) await t.test(name, async t => {
+    const model = 'gemini-3.1-flash-image-preview'
+    const f = fixture(t, { modelTypes: [{ id: model, kind: 'image', apiFormat, image: imageSetting }], fetch(_url, init) {
+      const payload = JSON.parse(init.body)
+      if (name === 'default-history') assert.equal(payload.messages.reduce((count, message) => count
+        + (Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url').length : 0), 0), 17)
+      return apiFormat === 'gemini'
+        ? Response.json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'AQ==' } }] }, finishReason: 'STOP' }] })
+        : Response.json({ choices: [{ message: { content: '![Image](https://media.example/result.png)' } }] })
+    } })
+    const input = { kind: 'image', model, apiFormat, prompt: 'Waves', requestId: name,
+      ...(historyCount ? { referenceUrls: [image], imageContext: { turns: [{ prompt: 'Previous', images: Array(historyCount).fill(image) }] } } : {}) }
+    const response = await submit(f.app, input)
+    assert.equal(response.statusCode, 200, response.payload)
+    assert.equal(response.json().status, 'succeeded')
+    assert.equal((await submit(f.app, input)).statusCode, 200)
+    assert.equal(f.calls.length, 1)
+  })
+})
+
+test('custom video reference aliases cannot bypass configured zero reference limits', async t => {
+  const image = 'data:image/png;base64,AQ=='
+  const f = fixture(t, { modelTypes: [{ id: 'ordinary-video', kind: 'video', video: {
+    maxReferenceImages: 0, maxReferenceVideos: 0, maxReferenceAudios: 0,
+  } }] })
+  for (const [index, custom] of [
+    { images: [image] }, { input_reference: { file_id: 'untracked-file' } },
+    { metadata: { content: [{ type: 'image_url', image_url: { url: image } }] } },
+    { metadata: { first_frame: { url: image } } }, { metadata: { last_frame: { url: image } } },
+    { metadata: { first_frame_image: image } }, { metadata: { last_frame_image: image } },
+    { metadata: { reference_images: [{ url: image }] } }, { metadata: { keyframes: [{ url: image }] } },
+    { metadata: JSON.stringify({ images: [image] }) }, { metadata: JSON.stringify({ first_frame_image: image }) },
+    { metadata: { 'input_videos[]': ['data:video/mp4;base64,AQ=='] } },
+    { metadata: { input_audios: ['data:audio/wav;base64,AQ=='] } },
+  ].entries()) {
+    const response = await submit(f.app, { kind: 'video', model: 'ordinary-video', prompt: 'Waves', requestId: `custom-reference-${index}`,
+      videoOptions: { mode: 'text-to-video', customParameters: JSON.stringify(custom) } })
+    assert.equal(response.statusCode, 400, response.payload)
+    assert.equal(response.json().notAccepted, true)
+    assert.match(response.json().error.message, /参考素材.*上传控件/)
   }
   assert.equal(f.calls.length, 0)
   assert.equal(f.credentialCalls.length, 0)
@@ -1759,9 +1967,9 @@ test('private image and video work skills combine with community skills in order
     const f = fixture(t, { filesRoot, workQuery(sql) {
       if (sql.includes('FROM community_submission s')) return visible ? [row] : [];
       return [{ name: 'SKILL.md', accessKey: 'source-key', storedInternal: true, isLink: false }];
-    }, skillRows(sql, params) { assert.deepEqual(params, [['visual']]); return [{ id: 'visual', kind, body, sha256 }]; }, fetch(_url, init) {
-      const prompt = init.body instanceof FormData ? init.body.get('prompt') : JSON.parse(init.body).prompt;
-      assert.equal(prompt, `${body}\n\n${secret}\n\n本次创作要求：\nA scene`);
+    }, skillRows(sql, params) { assert.deepEqual(params, [['visual']]); return [{ id: 'visual', kind, body, sha256 }]; }, async fetch(_url, init) {
+      const prompt = (await relayRequestBody(init)).prompt;
+      assert.equal(prompt.replaceAll('\r\n', '\n'), `${body}\n\n${secret}\n\n本次创作要求：\nA scene`);
       if (failed) return Response.json({ status: 'failed', error: { message: secret } });
       return kind === 'image' ? Response.json({ data: [{ url: 'https://media.example/result.png' }] }) : Response.json({ id: 'video-1', status: 'completed', url: 'https://media.example/result.mp4' });
     } });

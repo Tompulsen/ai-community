@@ -257,11 +257,12 @@ test('model interfaces, automatic parameters and private remarks round-trip thro
   const communityModelTypes = [
     { id: 'chat-model', name: '对话模型', tags: ['推理', '文本'], kind: 'text', apiFormat: 'responses', text: { autoReasoningEffort: 'high' }, remark: 'private chat routing note' },
     { id: 'image-model', kind: 'image', apiFormat: 'images', protocol: 'async',
-      image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent' }, remark: 'private image routing note' },
+      image: { autoResolution: '2k', autoQuality: 'high', autoAspectRatio: '16:9', autoBackground: 'transparent', maxReferenceImages: 0 }, remark: 'private image routing note' },
     { id: 'native-image', kind: 'image', apiFormat: 'gemini', protocol: 'sync',
       image: { autoResolution: '2k', autoAspectRatio: '16:9' } },
     { id: 'video-model', kind: 'video', apiFormat: 'openai', protocol: 'sync',
-      video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai' }, remark: 'private video routing note' },
+      video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai',
+        maxReferenceImages: 0, maxReferenceVideos: 2, maxReferenceAudios: 1 }, remark: 'private video routing note' },
   ]
   const saved = await f.request(path, 'PATCH', { items: communityModelTypes, version: before.version })
   assert.deepEqual(saved.items, communityModelTypes)
@@ -441,6 +442,10 @@ test('model type settings reject duplicates, invalid types, control characters a
     null, {}, [{ id: '', kind: 'image' }], [{ id: ' alias ', kind: 'image' }],
     [{ id: 'a\nb', kind: 'image' }], [{ id: 'a'.repeat(201), kind: 'image' }],
     [{ id: 'alias', kind: 'auto' }], [{ id: 'alias', kind: 'image', extra: true }],
+    [{ id: 'alias', kind: 'image', image: { maxReferenceImages: -1 } }],
+    [{ id: 'alias', kind: 'image', image: { maxReferenceImages: 17 } }],
+    [{ id: 'alias', kind: 'video', video: { maxReferenceVideos: 1.5 } }],
+    [{ id: 'alias', kind: 'video', video: { maxReferenceAudios: 11 } }],
     [{ id: 'alias', kind: 'image' }, { id: 'alias', kind: 'video' }],
     Array.from({ length: 501 }, (_, index) => ({ id: String(index), kind: 'text' })),
   ]) {

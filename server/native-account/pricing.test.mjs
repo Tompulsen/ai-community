@@ -34,6 +34,19 @@ test('video resolution tiers keep their group multiplier, zero prices and fixed 
   ])
 })
 
+test('reference video billing follows the executing plugin key without changing unit prices', () => {
+  const expression = 'tier("base", u("seconds") * 0.15)'
+  const variants = [
+    { ...provider(expression, 'C兼容'), plugin_key: 'c-compatible' },
+    { ...provider(expression, 'C兼容'), plugin_key: 'another-video' },
+  ]
+  const rates = modelPriceRows(videoCatalog(variants), status).rows[0].videoRates
+  assert.deepEqual(rates, [
+    { providerKey: '0', provider: 'C兼容', billReferenceVideo: true, perSecond: 750, perRequest: 0 },
+    { providerKey: '1', provider: 'C兼容', perSecond: 750, perRequest: 0 },
+  ])
+})
+
 test('unsupported or malformed provider charges never leave a partial video quote', () => {
   for (const expression of [
     'tier("base", u("seconds") * -1)', 'tier("base", u("seconds") * 0.15 + u("input_images") * 0.2)',

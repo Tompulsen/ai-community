@@ -428,7 +428,7 @@ test('video request builder errors become safe actionable 400 responses', () => 
   const input = validateCreationInput({ kind: 'video', model: 'seedance-2-0', prompt: 'Video', duration: 8,
     videoOptions: { mode: 'text-to-video', resolution: '720p', customParameters: '{"input_reference":"unsupported"}' } })
   assert.throws(() => buildCreationPayload(input), {
-    statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: 'Seedance 兼容格式请使用参考素材或 metadata.content 传入参考图',
+    statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: '自定义参数中的参考素材请通过上传控件添加。',
   })
   const malformed = validateCreationInput({ ...input, model: 'sora-2',
     videoOptions: { mode: 'text-to-video', resolution: '720p', customParameters: '{"metadata":"not-json"}' } })

@@ -9,7 +9,7 @@ import { kindLabels, searchModels } from '../../shared/studio/model-catalog'
 import ContentSkeleton from './ContentSkeleton.vue'
 
 const props = defineProps<{ confirmLeave: () => boolean | Promise<boolean> }>()
-type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string; durationInput: string; defaultDurationInput: string | number; ratioInput: string; sizesInput: string; unsupportedInput: string; resolutionValuesInput: string }
+type Draft = ModelTypeSetting & { tagsInput: string; resolutionInput: string; durationInput: string; defaultDurationInput: string | number; referenceImagesInput: string | number; referenceVideosInput: string | number; referenceAudiosInput: string | number; ratioInput: string; sizesInput: string; unsupportedInput: string; resolutionValuesInput: string }
 type Row = CreationModel & { available: boolean; setting?: ModelTypeSetting }
 const models = ref<CreationModel[]>([]), settings = ref<ModelTypeSetting[]>([])
 const groups = ref<CreationGroup[]>([]), groupFilter = ref('')
@@ -56,6 +56,8 @@ function edit(item: Row) {
   draft.value = { ...setting, tagsInput: setting.tags?.join(', ') || '',
     resolutionInput: video?.resolutions?.join(', ') || '',
     durationInput: video?.durations?.join(', ') || '', defaultDurationInput: video?.autoDuration?.toString() || '',
+    referenceImagesInput: (setting.kind === 'image' ? setting.image : video)?.maxReferenceImages ?? '',
+    referenceVideosInput: video?.maxReferenceVideos ?? '', referenceAudiosInput: video?.maxReferenceAudios ?? '',
     ratioInput: video?.aspectRatios?.join(', ') || '', sizesInput: video?.sizes ? JSON.stringify(video.sizes, null, 2) : '',
     unsupportedInput: video?.unsupportedParameters?.join(', ') || '',
     resolutionValuesInput: video?.resolutionValues ? JSON.stringify(video.resolutionValues, null, 2) : '',
@@ -137,6 +139,7 @@ function changeKind() {
   if (item.apiFormat && item.apiFormat !== 'auto' && !(modelApiFormats[item.kind] as readonly string[]).includes(item.apiFormat)) delete item.apiFormat
   if (item.kind === 'text') { item.text ||= {}; delete item.protocol } else delete item.text
   if (item.kind === 'image') item.image ||= {}; else delete item.image
+  item.referenceImagesInput = ''; item.referenceVideosInput = ''; item.referenceAudiosInput = ''
   if (item.kind === 'video') item.video ||= {}; else {
     delete item.video
     item.resolutionInput = ''; item.durationInput = ''; item.defaultDurationInput = ''; item.ratioInput = ''; item.sizesInput = ''; item.unsupportedInput = ''; item.resolutionValuesInput = ''
@@ -148,6 +151,17 @@ function normalized(): ModelTypeSetting {
   const image = item.kind === 'image' ? { ...item.image } : undefined
   const text = item.kind === 'text' ? { ...item.text } : undefined
   const video = item.kind === 'video' ? { ...item.video } : undefined
+  const references = image || video
+  if (references) {
+    if (String(item.referenceImagesInput).trim()) references.maxReferenceImages = Number(item.referenceImagesInput)
+    else delete references.maxReferenceImages
+  }
+  if (video) {
+    if (String(item.referenceVideosInput).trim()) video.maxReferenceVideos = Number(item.referenceVideosInput)
+    else delete video.maxReferenceVideos
+    if (String(item.referenceAudiosInput).trim()) video.maxReferenceAudios = Number(item.referenceAudiosInput)
+    else delete video.maxReferenceAudios
+  }
   for (const options of [image, video]) {
     if (!options) continue
     const ratio = options.autoAspectRatio?.trim().toLowerCase()
@@ -225,6 +239,7 @@ async function save() {
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!
     error.value = issue.path.includes('tags') ? '模型标签最多 12 个，每个最多 32 字符，不能重复。'
+      : issue.path.some(key => ['maxReferenceImages', 'maxReferenceVideos', 'maxReferenceAudios'].includes(String(key))) ? '参考素材上限须为整数：图片模型 0 到 16，视频模型 0 到 10；0 表示禁用。'
       : issue.path.includes('durations') || issue.path.includes('autoDuration') ? '请检查视频时长：使用 1 到 3600 的整数秒，可选值不能重复，默认值须包含在可选值中。'
       : issue.path.includes('aspectRatios') ? '请检查可选画面比例：使用 16:9 等有效比例，不能重复。'
       : issue.path.includes('sizes') ? issue.message.includes('不发送') ? issue.message : '精确尺寸须按可选分辨率和画面比例完整配置，宽高短边须匹配分辨率。'
@@ -312,6 +327,15 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
                 <label class="field"><span>自动背景</span><select :value="draft.image.autoBackground || 'auto'" class="control" :disabled="draft.apiFormat === 'gemini'" @change="setOption(draft.image, 'autoBackground', $event)"><option v-for="background in imageBackgrounds" :key="background" :value="background">{{ backgroundNames[background] }}</option></select></label>
               </fieldset>
               <p v-if="geminiImage && draft.apiFormat !== 'gemini'" class="form-note">图片对话接口的尺寸、画质和背景由上游决定。</p>
+              <fieldset v-if="draft.kind !== 'text'" class="fieldset model-reference-limits">
+                <legend class="sr-only">参考素材数量</legend>
+                <div class="model-field-pair">
+                  <label class="field"><span>参考图片上限</span><input v-model="draft.referenceImagesInput" class="control" type="number" min="0" :max="draft.kind === 'image' ? 16 : 10" step="1" aria-describedby="model-reference-limits-help" /></label>
+                  <label v-if="draft.kind === 'video'" class="field"><span>参考视频上限</span><input v-model="draft.referenceVideosInput" class="control" type="number" min="0" max="10" step="1" aria-describedby="model-reference-limits-help" /></label>
+                  <label v-if="draft.kind === 'video'" class="field"><span>参考音频上限</span><input v-model="draft.referenceAudiosInput" class="control" type="number" min="0" max="10" step="1" aria-describedby="model-reference-limits-help" /></label>
+                </div>
+                <p id="model-reference-limits-help" class="form-note">留空使用默认，0 禁用；{{ draft.kind === 'image' ? '参考图片合计最多 16 张。' : '参考素材合计最多 10 个，视频超分最多 1 个源视频。' }}</p>
+              </fieldset>
               <template v-if="draft.kind === 'video' && draft.video">
                 <div class="model-field-pair">
                   <label class="field"><span>视频处理</span><select :value="draft.video.operation || 'generate'" class="control" @change="draft.video.operation = ($event.target as HTMLSelectElement).value as 'generate' | 'upscale'"><option value="generate">视频生成</option><option value="upscale">视频超分</option></select></label>
@@ -402,6 +426,7 @@ onBeforeUnmount(() => { active = false; controller.abort(); resetDialog.value?.c
 .model-parameters { display: grid; gap: 16px; padding-top: 20px; border-top: 1px solid var(--border); }
 .model-parameters h4 { font-size: 14px; font-weight: 500; }
 .model-parameters .form-note { margin: 0; }
+.model-reference-limits { display: grid; gap: 12px; }
 .model-fields textarea { min-height: 96px; resize: vertical; }
 .model-savebar { display: flex; align-items: center; gap: 8px; padding-block: 16px; margin-top: 16px; flex-wrap: wrap; }
 .model-savebar > span { flex: 1; display: flex; align-items: center; gap: 4px; }

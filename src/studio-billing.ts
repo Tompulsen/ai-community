@@ -10,7 +10,7 @@ export function selectedModelPrices(pricing: ModelPricing | undefined, model: st
 /** Preview complete known charges; New API owns routing and settlement. */
 export function invocationPoints(rows: ModelPriceRow[], currency: string | undefined, input: {
   kind: 'text' | 'image' | 'video'; model: string; quantity?: number; protocol?: string; apiFormat?: string;
-  duration?: number; resolution?: string; customParameters?: string; size?: string;
+  duration?: number; resolution?: string; customParameters?: string; size?: string; hasReferenceVideo?: boolean; referenceVideoDuration?: number;
 }): { min: number; max: number } | undefined {
   if (currency !== '积分' || !rows.length) return
   if (input.kind === 'video') {
@@ -27,7 +27,9 @@ export function invocationPoints(rows: ModelPriceRow[], currency: string | undef
       if (!rates.length || row.videoRates!.some(rate => !rates.some(candidate => candidate.providerKey === rate.providerKey))) return
       for (const rate of rates) {
         if (![rate.perSecond, rate.perRequest].every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return
-        const total = rate.perSecond * seconds! + rate.perRequest
+        const referenceSeconds = rate.billReferenceVideo && input.hasReferenceVideo ? input.referenceVideoDuration : 0
+        if (!Number.isFinite(referenceSeconds) || referenceSeconds! < 0 || input.hasReferenceVideo && rate.billReferenceVideo && referenceSeconds === 0 || seconds! + referenceSeconds! > 3600) return
+        const total = rate.perSecond * (seconds! + referenceSeconds!) + rate.perRequest
         if (!Number.isFinite(total)) return
         totals.push(total)
       }

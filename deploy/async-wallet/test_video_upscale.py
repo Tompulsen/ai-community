@@ -1,6 +1,8 @@
 """Signed DMC upscale admission preserves the original wire; no live models."""
 import asyncio
 import base64
+from email import policy
+from email.parser import BytesParser
 import itertools
 import json
 import sys
@@ -205,3 +207,74 @@ def test_ordinary_generation_keeps_existing_nonempty_prompt_limit(service):
     for prompt in (None, "", "a" * 32001):
         body = json.dumps({"model": "ordinary-video", "prompt": prompt}).encode()
         assert post(api, body, signed=False, idem="invalid-generation-request").status_code == 422
+
+
+def test_signed_generation_preserves_mixed_reference_wire_and_worker_signature(service):
+    api, core = service
+    audio = b"RIFF\x00\x00\x00\x00WAVEreference-audio\x00\xff"
+    image = b"\x89PNG\r\n\x1a\nreference-image"
+    body, content_type = multipart(
+        prompt="Generate with the supplied media", model="ordinary-video",
+        metadata={"aspect_ratio": "16:9"},
+        extras=[("seconds", (None, "6")),
+                ("input_audios", ("reference.wav", audio, "audio/wav")),
+                ("input_reference", ("reference.png", image, "image/png"))],
+    )
+    response = post(api, body, content_type)
+    assert response.status_code == 202, response.text
+    row = api.video_row(response.json()["id"])
+    saved = core.unseal(row["payload"])
+    assert saved["request"] == {"model": "ordinary-video", "prompt": "Generate with the supplied media"}
+    assert saved["wallet"]["user"] == "17"
+    assert base64.b64decode(saved["wire"]["body"]) == body
+    assert saved["wire"]["content_type"] == content_type
+
+    calls = []
+    def upstream(request):
+        calls.append(request)
+        assert request.url.path == "/v1/videos"
+        forwarded = request.read()
+        assert forwarded == body
+        assert request.headers["Content-Type"] == content_type
+        assert request.headers["Authorization"] == "Bearer " + TOKEN
+        assert request.headers["X-Community-User"] == "17"
+        assert request.headers["X-Community-Signature"] == signature(request.headers, "/v1/videos", forwarded)
+        message = BytesParser(policy=policy.default).parsebytes(
+            b"Content-Type: " + content_type.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + forwarded)
+        parts = {part.get_param("name", header="content-disposition"): part for part in message.iter_parts()}
+        assert parts["model"].get_payload(decode=True) == b"ordinary-video"
+        assert parts["prompt"].get_payload(decode=True) == b"Generate with the supplied media"
+        assert parts["seconds"].get_payload(decode=True) == b"6"
+        assert json.loads(parts["metadata"].get_payload(decode=True)) == {"aspect_ratio": "16:9"}
+        for field, filename, data, media_type in (
+            ("input_videos", "source.mp4", MP4, "video/mp4"),
+            ("input_audios", "reference.wav", audio, "audio/wav"),
+            ("input_reference", "reference.png", image, "image/png"),
+        ):
+            assert parts[field].get_filename() == filename
+            assert parts[field].get_content_type() == media_type
+            assert parts[field].get_payload(decode=True) == data
+        return httpx.Response(202, json={"id": "mixed-upstream-id", "status": "queued"})
+
+    async def run():
+        async with RealAsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            claimed, claim = api.claim_video()
+            await api.process_video(client, claimed, claim)
+    asyncio.run(run())
+    assert api.video_row(row["id"])["status"] == "generating"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("file_count,expected_status", [(10, 202), (11, 400)])
+def test_signed_generation_enforces_ten_reference_file_limit(service, file_count, expected_status):
+    api, core = service
+    files = [("input_videos", (f"clip-{index}.mp4", MP4, "video/mp4"))
+             for index in range(file_count - 2)]
+    files.extend([("input_audios", ("reference.wav", b"RIFFfixtureWAVE", "audio/wav")),
+                  ("input_reference", ("reference.png", b"\x89PNG\r\n\x1a\n", "image/png"))])
+    body, content_type = multipart(prompt="Generate", model="ordinary-video",
+                                   metadata={"aspect_ratio": "16:9"}, videos=files)
+    response = post(api, body, content_type)
+    assert response.status_code == expected_status, response.text
+    with core.db() as connection:
+        assert connection.execute("SELECT count(*) FROM video_jobs").fetchone()[0] == (expected_status == 202)

@@ -11,6 +11,7 @@ export const modelApiFormats = {
 } as const
 const automaticAspectRatio = z.string().regex(/^(?:auto|[1-9]\d{0,2}:[1-9]\d{0,2})$/)
 export const imageModelSettingSchema = z.object({
+  maxReferenceImages: z.number().int().min(0).max(16).optional(),
   autoResolution: imageOptionsSchema.shape.resolution.removeDefault().optional(),
   autoQuality: imageOptionsSchema.shape.quality.removeDefault().optional(),
   autoAspectRatio: automaticAspectRatio.optional(),
@@ -36,6 +37,9 @@ const videoSizeSchema = z.string().regex(/^[1-9]\d{0,4}x[1-9]\d{0,4}$/)
   .refine(value => value.split('x').every(dimension => Number(dimension) <= 65534 && Number(dimension) % 2 === 0),
     { message: '视频精确宽高须为 2 至 65534 的偶数。' })
 export const videoModelSettingSchema = z.object({
+  maxReferenceImages: z.number().int().min(0).max(10).optional(),
+  maxReferenceVideos: z.number().int().min(0).max(10).optional(),
+  maxReferenceAudios: z.number().int().min(0).max(10).optional(),
   operation: z.enum(['generate', 'upscale']).optional(),
   sendSize: z.boolean().optional(),
   resolutionValues: z.record(videoResolutionSchema, z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/))
@@ -89,6 +93,29 @@ export const videoModelSettingSchema = z.object({
   .refine(value => value.sendSize !== false || !value.sizes,
     { message: '不发送像素尺寸时，请清空精确尺寸配置。', path: ['sizes'] })
 export type VideoModelSetting = z.infer<typeof videoModelSettingSchema>
+
+export function resolveReferenceLimits(kind: 'image' | 'video', setting?: {
+  maxReferenceImages?: number; maxReferenceVideos?: number; maxReferenceAudios?: number;
+}, upscale = false) {
+  const sourceVideo = kind === 'video' && upscale
+  const total = sourceVideo ? 1 : kind === 'video' ? 10 : 16
+  return {
+    images: sourceVideo ? 0 : Math.min(total, setting?.maxReferenceImages ?? total),
+    videos: kind === 'image' ? 0 : Math.min(total, setting?.maxReferenceVideos ?? total),
+    audios: kind === 'image' || sourceVideo ? 0 : Math.min(total, setting?.maxReferenceAudios ?? total),
+    total,
+  }
+}
+
+export function referenceCountIssue(counts: { images: number; videos: number; audios: number }, limits: ReturnType<typeof resolveReferenceLimits>) {
+  for (const [key, name, unit] of [['images', '图片', '张'], ['videos', '视频', '个'], ['audios', '音频', '个']] as const) {
+    if (counts[key] <= limits[key]) continue
+    return limits[key] === 0 ? `当前模型不支持参考${name}，已选 ${counts[key]} ${unit}。`
+      : `当前模型最多支持 ${limits[key]} ${unit}参考${name}，已选 ${counts[key]} ${unit}。`
+  }
+  const total = counts.images + counts.videos + counts.audios
+  return total > limits.total ? `参考素材合计不能超过 ${limits.total} 个，已选 ${total} 个。` : ''
+}
 
 export const modelTypesSchema = z.array(z.object({
   id: z.string().min(1).max(200).refine(id => id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)),

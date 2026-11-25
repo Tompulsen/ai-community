@@ -5,7 +5,7 @@ import { accountApi, api, errorMessage, notify, session, uploadFile } from './st
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
 import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/options'
-import { modelApiFormatSchema, modelTypesSchema, type ModelApiFormat, type ModelTypeSetting } from '../shared/studio/model-types'
+import { modelApiFormatSchema, modelTypesSchema, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat, type ModelTypeSetting } from '../shared/studio/model-types'
 import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatResponseMetrics } from '../shared/studio/types'
 import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
@@ -62,7 +62,7 @@ export interface CreationTask {
   errorStatus?: number
   submissionError?: string
   sourceWorkId?: string
-  references: { name: string; url: string; id?: string; fromWorkId?: string; type?: string; duration?: number }[]
+  references: { name: string; url: string; id?: string; fromWorkId?: string; type?: string; size?: number; duration?: number; durationSeconds?: number }[]
   publicationFiles?: string[]
   publicationReferences?: string[]
   publications?: Partial<Record<CreationDestination, { title: string; text: string; content?: string; details?: PublicationDetails; files?: string[]; work?: Work }>>
@@ -771,6 +771,29 @@ export function stopCreation(task: CreationTask) {
   void persist()
 }
 export function creationConversationId(task: CreationTask) { return task.conversationId || task.id }
+export function creationReferenceIssue(input: Pick<CreationInput, 'kind' | 'model' | 'apiFormat' | 'references' | 'imageContext' | 'videoOptions'>, configuredModel?: CreationModel) {
+  if (input.kind === 'text') return ''
+  const setting = input.kind === 'image' ? configuredModel?.image : configuredModel?.video
+  const limits = resolveReferenceLimits(input.kind, setting, input.kind === 'video' && configuredModel?.video?.operation === 'upscale')
+  const imageFormat = input.apiFormat === 'auto' ? configuredModel?.apiFormat : input.apiFormat
+  const imageChat = input.kind === 'image' && usesGeminiImageChat(input.model, imageFormat)
+  const compactImageContext = input.kind === 'image' && (input.apiFormat !== 'auto' || configuredModel !== undefined) && !imageChat
+  let references: { url: string; type?: string }[] = [...input.references || []]
+  if (input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'image_url') {
+    references = [{ url: input.videoOptions.openaiImageUrl || '' }, ...(input.videoOptions.mode === 'first-last-frame' ? [{ url: input.videoOptions.openaiLastImageUrl || '' }] : [])]
+  }
+  if (input.kind === 'image' && (compactImageContext || imageChat && configuredModel?.image?.maxReferenceImages !== undefined)) {
+    for (const turn of input.imageContext?.turns || []) {
+      references.push(...[...turn.images, ...turn.references || []].map(url => ({ url })))
+    }
+    if (!imageChat || imageFormat === 'gemini') references = [...new Map(references.map(file => [file.url, file])).values()]
+  }
+  const counts = references.reduce((counts, file) => {
+    counts[file.type?.startsWith('video/') ? 'videos' : file.type?.startsWith('audio/') ? 'audios' : 'images']++
+    return counts
+  }, { images: input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'file_id' ? 1 : 0, videos: 0, audios: 0 })
+  return referenceCountIssue(counts, limits)
+}
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void | Promise<void>, isCurrent: () => boolean = () => true) {
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
   const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
@@ -810,8 +833,13 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     input.references = [...references.values()]
     input.imageContext = { turns: input.imageContext.turns.map(turn => ({ prompt: turn.prompt, images: [] })) }
   }
+  const referenceIssue = creationReferenceIssue(input, configuredModel)
+  if (referenceIssue) throw new Error(referenceIssue)
   for (const file of input.references || []) {
-    if (upscale && file.type?.startsWith('video/')) continue
+    if (file.type?.startsWith('video/') || file.type?.startsWith('audio/')) {
+      if (input.kind !== 'video' || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(file.url)) throw new Error('视频和音频参考需要上传到当前账号。')
+      continue
+    }
     file.url = await prepareImage(file.url)
   }
   if (compactImageContext) input.references = [...new Map((input.references || []).map(file => [file.url, file])).values()]
@@ -1331,7 +1359,7 @@ async function preparePublication(task: CreationTask, title: string, destination
   }
   if (destination === 'community') {
     task.publicationReferences ??= []
-    const references = (publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references).filter(file => !file.type?.startsWith('video/'))
+    const references = (publication.details?.referenceIndices.map(index => task.references[index]!) ?? task.references).filter(file => !file.type?.startsWith('video/') && !file.type?.startsWith('audio/'))
     for (let index = task.publicationReferences.length; index < references.length; index++) {
       task.publicationReferences.push(await uploadMedia(references[index]!.url, 'image', `reference-${index + 1}`))
       await persist(true); checkOwner()

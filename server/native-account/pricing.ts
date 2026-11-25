@@ -5,7 +5,7 @@ export type ModelPriceRow = {
   price: string;
   requestPrice?: number;
   imageCountMultiplier?: boolean;
-  videoRates?: { providerKey: string; provider: string; resolution?: string; perSecond: number; perRequest: number }[];
+  videoRates?: { providerKey: string; provider: string; resolution?: string; perSecond: number; perRequest: number; billReferenceVideo?: boolean }[];
   details?: {
     unit: "request" | "tokens";
     tiers: {
@@ -39,6 +39,7 @@ type CatalogModel = {
   billing_expr?: unknown;
   billing_usage_schema?: unknown;
   billing_plugin_variants?: unknown;
+  plugin_key?: unknown;
 };
 const positive = (n: unknown): n is number =>
   typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -218,14 +219,15 @@ function videoPriceRates(model: CatalogModel, multiplier: number): ModelPriceRow
     if (!resolutions.length || resolutions.length > 16 || resolutions.some(value => value !== undefined && (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,20}$/.test(value)))) return;
     const provider = typeof candidate.plugin_name === "string" ? candidate.plugin_name.slice(0, 80) : "视频任务";
     const providerKey = String(index);
+    const referenceBilling = candidate.plugin_key === "c-compatible" ? { billReferenceVideo: true } : {};
     const parsed = resolutions.map(resolution => {
       const rate = videoRate(expression, schema, resolution);
-      return rate ? { providerKey, provider, ...(resolution ? { resolution } : {}), perSecond: rate.perSecond * multiplier, perRequest: rate.perRequest * multiplier } : null;
+      return rate ? { providerKey, provider, ...referenceBilling, ...(resolution ? { resolution } : {}), perSecond: rate.perSecond * multiplier, perRequest: rate.perRequest * multiplier } : null;
     });
     if (parsed.some(rate => !rate || !positive(rate.perSecond) || !positive(rate.perRequest))) return;
     const valid = parsed as NonNullable<ModelPriceRow["videoRates"]>;
     if (valid.every(rate => rate.perSecond === valid[0].perSecond && rate.perRequest === valid[0].perRequest)) {
-      rates.push({ providerKey, provider, perSecond: valid[0].perSecond, perRequest: valid[0].perRequest });
+      rates.push({ providerKey, provider, ...referenceBilling, perSecond: valid[0].perSecond, perRequest: valid[0].perRequest });
     } else rates.push(...valid);
   }
   return rates.length ? rates : undefined;

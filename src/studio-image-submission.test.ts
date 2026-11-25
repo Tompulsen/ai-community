@@ -33,6 +33,24 @@ async function restoreTasks(p: Awaited<ReturnType<typeof fixture>>, tasks: Creat
   p.session.user = user
   await p.initializeCreation()
 }
+it('checks effective image references, video URL frames, file IDs and explicit Gemini history limits', async () => {
+  const p = await fixture()
+  const { videoOptionsSchema } = await import('../shared/studio/options')
+  const image = 'https://media.example/shared.png'
+  const gemini = { ...p.input, model: 'gemini-3.1-flash-image-preview', references: [{ name: 'current', url: image }], imageContext: { turns: [{ prompt: 'Previous', images: [image] }] } }
+  expect(p.creationReferenceIssue({ ...gemini, apiFormat: 'gemini' }, { id: gemini.model, image: { maxReferenceImages: 1 } })).toBe('')
+  expect(p.creationReferenceIssue({ ...gemini, apiFormat: 'chat-completions' }, { id: gemini.model, image: { maxReferenceImages: 1 } }))
+    .toBe('当前模型最多支持 1 张参考图片，已选 2 张。')
+  expect(p.creationReferenceIssue({ ...gemini, apiFormat: 'chat-completions', imageContext: { turns: [{ prompt: 'Previous', images: Array.from({ length: 16 }, () => image) }] } }, { id: gemini.model })).toBe('')
+  const video = { kind: 'video' as const, model: 'video-model', videoOptions: videoOptionsSchema.parse({ mode: 'first-last-frame', openaiReferenceSource: 'image_url', openaiImageUrl: image, openaiLastImageUrl: 'https://media.example/last.png' }), references: [{ name: 'ignored', url: '/legacy-files/video1', type: 'video/mp4' }] }
+  expect(p.creationReferenceIssue(video, { id: video.model, video: { maxReferenceImages: 1, maxReferenceVideos: 0 } }))
+    .toBe('当前模型最多支持 1 张参考图片，已选 2 张。')
+  expect(p.creationReferenceIssue({ ...video, references: [], videoOptions: videoOptionsSchema.parse({ mode: 'image-to-video', openaiReferenceSource: 'file_id', openaiFileId: 'file-reference' }) }, { id: video.model, video: { maxReferenceImages: 0 } }))
+    .toBe('当前模型不支持参考图片，已选 1 张。')
+  p.creation.models.push({ id: p.input.model, image: { maxReferenceImages: 0 } })
+  await expect(p.submitCreation(p.input)).rejects.toThrow('当前模型不支持参考图片，已选 1 张。')
+  expect(p.send).not.toHaveBeenCalled()
+})
 it('display previews use the image proxy without changing original media, videos or local assets', async () => {
   const p = await fixture()
   vi.stubGlobal('location', new URL('https://community.example/create/image'))
