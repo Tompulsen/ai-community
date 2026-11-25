@@ -1,15 +1,15 @@
 <!-- Pan/zoom and movable nodes adapted from basketikun/infinite-canvas (MIT, 2026). -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Focus, Minus, Plus, Trash2, Upload } from '@lucide/vue'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Focus, Minus, Plus, Scan, Trash2, Upload } from '@lucide/vue'
 import { canvasWorldPoint, fitCanvasNodes, zoomCanvasAt, CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM, type CanvasNode, type CanvasPosition, type CanvasViewport } from '../canvas-viewport'
 import { mediaSource } from '../native-studio'
 
-const props = defineProps<{ nodes: CanvasNode[]; selected: string; pan: boolean; disabled: boolean; viewport?: CanvasViewport; dimensions: string }>()
+const props = defineProps<{ nodes: CanvasNode[]; selected: string; editingReference?: string; pan: boolean; disabled: boolean; viewport?: CanvasViewport; dimensions: string }>()
 const emit = defineEmits<{
   select: [id: string]; move: [id: string, position: CanvasPosition]; begin: []; end: [cancel: boolean]
   viewport: [value: CanvasViewport]; remove: [id: string]; upload: []; files: [files: File[], position: CanvasPosition]
-  cancelDrawing: []
+  cancelDrawing: []; editReference: [id: string]
 }>()
 const stage = ref<HTMLElement>(), view = ref<CanvasViewport>(props.viewport || { x: 0, y: 0, k: 1 })
 const space = ref(false), dragging = ref(false), dropping = ref(false)
@@ -146,10 +146,10 @@ defineExpose({ reveal, finish })
       @wheel="wheel" @pointerdown.capture="capture" @pointerdown="start($event)" @pointermove="move" @pointerup="up" @pointercancel="up" @lostpointercapture="drag?.pointer === $event.pointerId && finish(true)"
       @dragover.prevent="dropping = !disabled" @dragleave.self="dropping = false" @drop="drop">
       <div class="canvas-world" :style="{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }">
-        <div v-for="node in nodes" :key="node.id" class="canvas-node" :class="{ 'is-selected': selected === node.id }" :data-canvas-node="node.id" :style="{ width: `${node.width}px`, height: `${node.height}px`, transform: `translate(${node.x}px, ${node.y}px)` }" @pointerdown.stop="start($event, node.id)">
-          <div class="canvas-node-heading" :style="{ transform: `scale(${1 / view.k})`, width: `${node.width * view.k}px` }"><span>{{ node.label }}</span><button v-if="node.id !== 'source'" type="button" :aria-label="`删除${node.label}`" :disabled="disabled" @click.stop="emit('remove', node.id)"><Trash2 :size="16" /></button></div>
+        <div v-for="node in nodes" :key="node.id" class="canvas-node" :class="{ 'is-selected': selected === node.id || editingReference === node.id }" :data-canvas-node="node.id" :style="{ width: `${node.width}px`, height: `${node.height}px`, transform: `translate(${node.x}px, ${node.y}px)` }" @pointerdown.stop="start($event, node.id)">
+          <div class="canvas-node-heading" :style="{ transform: `scale(${1 / view.k})`, width: `${node.width * view.k}px` }"><span>{{ node.label }}</span><template v-if="node.id !== 'source'"><button type="button" :aria-label="`框选${node.label}素材`" :aria-pressed="editingReference === node.id" :disabled="disabled" @click.stop="emit('editReference', node.id)"><Scan :size="16" /></button><button type="button" :aria-label="`删除${node.label}`" :disabled="disabled" @click.stop="emit('remove', node.id)"><Trash2 :size="16" /></button></template></div>
           <slot v-if="node.id === 'source'" />
-          <img v-else :src="mediaSource(node.src, true)" :alt="node.label" draggable="false" />
+          <slot v-else name="reference" :node="node"><img :src="mediaSource(node.src, true)" :alt="node.label" draggable="false" /></slot>
         </div>
       </div>
       <div class="board-actions"><button type="button" :disabled="disabled || nodes.length >= 15" @click="emit('upload')"><Upload :size="17" />添加参考图</button></div>

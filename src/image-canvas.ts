@@ -20,7 +20,31 @@ export type CanvasAnnotation = {
 };
 
 export type CanvasEditDraft = { prompt: string; images: string[] };
-export type CanvasReferenceImage = { id: string; src: string };
+export type CanvasReferenceRegion = { x: number; y: number; width: number; height: number };
+export type CanvasReferenceImage = { id: string; src: string; region?: CanvasReferenceRegion };
+
+export function canvasReferenceCrop(region: CanvasReferenceRegion, width: number, height: number) {
+  assertSize(width, height);
+  if (![region.x, region.y, region.width, region.height].every(Number.isFinite) || region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 || region.x + region.width > 1.000001 || region.y + region.height > 1.000001) {
+    throw new Error('参考图选区无效，请重新框选素材范围');
+  }
+  const x = Math.floor(region.x * width), y = Math.floor(region.y * height);
+  return { x, y, width: Math.min(width, Math.ceil((region.x + region.width) * width)) - x, height: Math.min(height, Math.ceil((region.y + region.height) * height)) - y };
+}
+
+/** Export only the selected donor pixels; never bake selection borders into model input. */
+export async function renderCanvasReference(image: HTMLImageElement, region: CanvasReferenceRegion): Promise<Blob> {
+  const crop = canvasReferenceCrop(region, image.naturalWidth, image.naturalHeight);
+  if (crop.width > MAX_CANVAS_DIMENSION || crop.height > MAX_CANVAS_DIMENSION || crop.width * crop.height > MAX_CANVAS_PIXELS) throw new Error('参考选区过大，请缩小范围后重试');
+  const canvas = document.createElement('canvas');
+  canvas.width = crop.width; canvas.height = crop.height;
+  try {
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('当前浏览器无法创建图片画布');
+    context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('参考图选区导出失败，请重试')), 'image/png'));
+  } finally { canvas.width = 0; canvas.height = 0; }
+}
 
 export const CANVAS_EDIT_PROMPT_HEADER = "请根据图片画布中的修改要求编辑图片。";
 // Reserve one attachment for the source and one for a later annotation guide.
@@ -156,6 +180,7 @@ export function buildCanvasEditPrompt(
   const referenceIds = new Set<string>();
   const referenceSources = new Set<string>();
   for (const reference of references) {
+    if (reference.region) canvasReferenceCrop(reference.region, 1000, 1000);
     if (!reference.id?.trim() || !reference.src?.trim()) {
       throw new Error("参考图信息无效，请删除后重新添加");
     }
@@ -211,10 +236,10 @@ export function buildCanvasEditPrompt(
       ? [
           "多图参考合成：仅图 1 是待编辑主图，其余素材参考图不是待编辑图片，也不是要并排拼接的画面。",
           ...references.map(
-            (_, index) =>
+            (reference, index) =>
               `参考图 ${index + 1} 对应附件图 ${
                 index + (annotations.length ? 3 : 2)
-              }，只提供明确指定的人物或物品素材。`,
+              }，${reference.region ? '该附件已从参考原图框选区域裁出，仅包含选中的素材（不含选框），只借用此区域内物品的样式与细节，禁止还原或引入参考原图的其他内容' : '只提供明确指定的人物或物品素材'}。`,
           ),
           "仅在明确指定的主图区域使用对应参考图中的人物或物品；保留该人物的身份特征或物品的外观细节，使其姿态、大小、透视与光照适配主图。不得混合不同参考图的身份，不得擅自复制参考图的背景、文字、构图或宽高比。主图的尺寸、构图和未指定修改区域优先于所有素材参考图。",
         ]

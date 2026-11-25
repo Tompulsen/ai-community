@@ -2,9 +2,10 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
 import { ArrowLeft, ArrowUpRight, Circle, Download, Hand, Images, LoaderCircle, MousePointer2, Pencil, Redo2, Square, Trash2, Type, Undo2, Upload, X } from '@lucide/vue'
-import { buildCanvasEditPrompt, canvasImageData, canvasRequestIssue, loadCanvasImage, MAX_CANVAS_REFERENCE_IMAGES, moveCanvasAnnotation, normalizeCanvasRect, renderCanvasImage, type CanvasAnnotation, type CanvasPoint, type CanvasReferenceImage } from '../image-canvas'
+import { buildCanvasEditPrompt, canvasImageData, canvasRequestIssue, loadCanvasImage, MAX_CANVAS_REFERENCE_IMAGES, moveCanvasAnnotation, normalizeCanvasRect, renderCanvasImage, renderCanvasReference, type CanvasAnnotation, type CanvasPoint, type CanvasReferenceImage, type CanvasReferenceRegion } from '../image-canvas'
 import { readCanvasDraft, saveCanvasDraft, studioCanvasKey } from '../studio-canvas'
 import StudioCanvasBoard from './StudioCanvasBoard.vue'
+import StudioCanvasReference from './StudioCanvasReference.vue'
 import type { CanvasNode, CanvasPosition, CanvasViewport } from '../canvas-viewport'
 import { mediaSource, prepareCreationHistory } from '../native-studio'
 import { galleryOutputIndexes, getTaskPage } from '../studio-task-store'
@@ -21,6 +22,37 @@ const original = shallowRef<Awaited<ReturnType<typeof loadCanvasImage>>>()
 const loading = ref(true), error = ref(''), busy = ref<'save' | 'submit' | 'upload'>(), selectedId = ref(saved?.annotations.at(-1)?.id || '')
 const tool = ref<CanvasAnnotation['kind'] | 'select' | 'pan'>('select'), color = ref('#ef4444'), stroke = ref(4)
 const positions = ref<Record<string, CanvasPosition>>(saved?.positions || {}), viewport = ref<CanvasViewport | undefined>(saved?.viewport), selectedNode = ref('')
+const editingReference = ref(''), referenceCancel = ref(0), referenceSizes = ref<Record<string, { width: number; height: number }>>({})
+const activeReference = computed(() => references.value.find(item => item.id === editingReference.value))
+const activeReferenceIndex = computed(() => references.value.findIndex(item => item.id === editingReference.value) + 1)
+const regionFields = [{ key: 'x', label: '左侧' }, { key: 'y', label: '顶部' }, { key: 'width', label: '宽度' }, { key: 'height', label: '高度' }] as const
+function reference(id: string) { return references.value.find(item => item.id === id) }
+function editReference(id: string) {
+  if (busy.value) return
+  finishGesture(); board.value?.finish(); referenceCancel.value++; selectedNode.value = ''; editingReference.value = id; tool.value = 'rect'
+  void board.value?.reveal(id)
+}
+function cancelDrawing() { finishGesture(true); referenceCancel.value++ }
+function updateReference(id: string, region?: CanvasReferenceRegion) {
+  if (busy.value || !references.value.some(item => item.id === id)) return
+  checkpoint(); references.value = references.value.map(item => item.id === id ? { ...item, region: region && { ...region } } : item)
+}
+function regionNumber(key: keyof CanvasReferenceRegion, event: Event) {
+  const item = activeReference.value; if (!item?.region) return
+  const value = Number((event.target as HTMLInputElement).value) / 100
+  if (!Number.isFinite(value)) return
+  const region = { ...item.region }
+  if (key === 'x') region.x = Math.max(0, Math.min(1 - region.width, value))
+  if (key === 'y') region.y = Math.max(0, Math.min(1 - region.height, value))
+  if (key === 'width') region.width = Math.max(.005, Math.min(1 - region.x, value))
+  if (key === 'height') region.height = Math.max(.005, Math.min(1 - region.y, value))
+  updateReference(item.id, region)
+}
+function bindReference() {
+  if (!selected.value || !activeReference.value?.region || busy.value) return
+  update({ target: 'object', referenceImageId: activeReference.value.id, instruction: selected.value.instruction.trim() || '将此主图选区内的物品样式改成参考图所选素材的样式，保留主图中的位置、大小、透视与光照，其余区域保持原样。' })
+  editingReference.value = ''; tool.value = 'select'; void board.value?.reveal()
+}
 type Snapshot = { annotations: CanvasAnnotation[]; references: CanvasReferenceImage[]; positions: Record<string, CanvasPosition> }
 const undo = ref<Snapshot[]>([]), redo = ref<Snapshot[]>([])
 const svg = ref<SVGSVGElement>(), board = ref<InstanceType<typeof StudioCanvasBoard>>(), back = ref<HTMLButtonElement>(), input = ref<HTMLInputElement>()
@@ -28,7 +60,7 @@ const markerId = useId()
 const width = computed(() => original.value?.image.naturalWidth || 1), height = computed(() => original.value?.image.naturalHeight || 1)
 const nodes = computed<CanvasNode[]>(() => [
   { id: 'source', label: '主图 · 标注在此图中绘制', src: props.src, width: 600, height: 600 * height.value / width.value, ...(positions.value.source || { x: 0, y: 0 }) },
-  ...references.value.map((item, index) => ({ id: item.id, label: `参考图 ${index + 1}`, src: item.src, width: 260, height: 200, ...(positions.value[item.id] || { x: 680 + (index % 3) * 300, y: Math.floor(index / 3) * 280 }) })),
+  ...references.value.map((item, index) => ({ id: item.id, label: `参考图 ${index + 1}`, src: item.src, width: 360, height: referenceSizes.value[item.id] ? 360 * referenceSizes.value[item.id]!.height / referenceSizes.value[item.id]!.width : 270, ...(positions.value[item.id] || { x: 680 + (index % 3) * 300, y: Math.floor(index / 3) * 280 }) })),
 ])
 const selected = computed(() => annotations.value.find(item => item.id === selectedId.value))
 const tools = [
@@ -61,9 +93,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => { finishGesture(true); board.value?.finish(true); clearTimeout(persistTimer); persist(); live = false; loadController.abort(); operation?.abort(); original.value?.dispose(); clearTimeout(searchTimer) })
 function snapshot(): Snapshot {
-  return { annotations: clone(annotations.value), references: references.value.map(item => ({ ...item })), positions: Object.fromEntries(Object.entries(positions.value).map(([id, point]) => [id, { ...point }])) }
+  return { annotations: clone(annotations.value), references: references.value.map(item => ({ ...item, region: item.region && { ...item.region } })), positions: Object.fromEntries(Object.entries(positions.value).map(([id, point]) => [id, { ...point }])) }
 }
-function restore(value: Snapshot) { annotations.value = clone(value.annotations); references.value = value.references.map(item => ({ ...item })); positions.value = Object.fromEntries(Object.entries(value.positions).map(([id, point]) => [id, { ...point }])) }
+function restore(value: Snapshot) { annotations.value = clone(value.annotations); references.value = value.references.map(item => ({ ...item, region: item.region && { ...item.region } })); positions.value = Object.fromEntries(Object.entries(value.positions).map(([id, point]) => [id, { ...point }])) }
 function checkpoint(before = snapshot()) { undo.value = [...undo.value.slice(-49), before]; redo.value = [] }
 let layoutBefore: Snapshot | undefined
 function beginLayout() { finishGesture(true); layoutBefore = snapshot() }
@@ -74,24 +106,26 @@ function endLayout(cancel: boolean) {
   else if (JSON.stringify(previous.positions) !== JSON.stringify(positions.value)) checkpoint(previous)
 }
 function moveNode(id: string, point: CanvasPosition) { positions.value = { ...positions.value, [id]: point } }
-function selectNode(id: string) { selectedNode.value = id; if (id) selectedId.value = '' }
-function selectAnnotation(id: string) { selectedId.value = id; selectedNode.value = ''; tool.value = 'select' }
+function selectNode(id: string) { selectedNode.value = id; if (id) { selectedId.value = ''; editingReference.value = '' } }
+function selectAnnotation(id: string) { selectedId.value = id; selectedNode.value = ''; tool.value = 'select'; editingReference.value = '' }
 function removeReference(id: string) {
   if (busy.value || !references.value.some(item => item.id === id)) return
   board.value?.finish(); finishGesture()
   checkpoint(); references.value = references.value.filter(item => item.id !== id)
   const { [id]: removed, ...rest } = positions.value; positions.value = rest
   if (selectedNode.value === id) selectedNode.value = ''
+  if (editingReference.value === id) editingReference.value = ''
 }
-function chooseTool(id: typeof tool.value) { finishGesture(); board.value?.finish(); tool.value = id; selectedNode.value = '' }
+function chooseTool(id: typeof tool.value) { finishGesture(); board.value?.finish(); tool.value = id; selectedNode.value = ''; if (id !== 'rect') editingReference.value = '' }
 function history(direction: 'undo' | 'redo') {
   if (busy.value) return
-  finishGesture(true); board.value?.finish(true)
+  cancelDrawing(); board.value?.finish(true)
   const from = direction === 'undo' ? undo : redo, to = direction === 'undo' ? redo : undo
   const value = from.value.at(-1)
   if (!value) return
   to.value = [...to.value.slice(-49), snapshot()]; from.value = from.value.slice(0, -1); restore(value)
   if (!nodes.value.some(item => item.id === selectedNode.value)) selectedNode.value = ''
+  if (!activeReference.value) editingReference.value = ''
   if (!annotations.value.some(item => item.id === selectedId.value)) selectedId.value = ''
 }
 function update(patch: Partial<CanvasAnnotation>) {
@@ -121,7 +155,7 @@ function down(event: PointerEvent) {
   const existing = tool.value === 'select' && annotations.value.find(item => item.id === id)
   if (tool.value === 'select' && !existing) { selectedId.value = ''; return }
   if (!existing && annotations.value.length >= 40) { error.value = '每张图片最多添加 40 个标注。'; return }
-  event.preventDefault(); event.stopPropagation(); selectedNode.value = ''; svg.value!.focus({ preventScroll: true })
+  event.preventDefault(); event.stopPropagation(); editingReference.value = ''; selectedNode.value = ''; svg.value!.focus({ preventScroll: true })
   const start = point(event), before = clone(annotations.value)
   const annotation = existing ? clone([existing])[0]! : makeAnnotation(tool.value as CanvasAnnotation['kind'], [start, start])
   if (!existing) annotations.value = [...annotations.value, annotation]
@@ -215,7 +249,7 @@ watch(query, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => v
 async function openLibrary() { library.value = true; await loadLibrary(); await nextTick() }
 async function run(action: 'save' | 'submit') {
   if (!current() || !original.value || busy.value) return
-  finishGesture(); board.value?.finish()
+  cancelDrawing(); board.value?.finish()
   const source = original.value, controller = new AbortController()
   operation = controller; busy.value = action; error.value = ''
   try {
@@ -234,7 +268,7 @@ async function run(action: 'save' | 'submit') {
     for (const reference of references.value) {
       controller.signal.throwIfAborted()
       const loaded = await loadCanvasImage(reference.src, controller.signal)
-      try { images.push(await canvasImageData(/^image\/(png|jpeg|webp)$/.test(loaded.blob.type) ? loaded.blob : await renderCanvasImage(loaded.image, []), controller.signal)) }
+      try { images.push(await canvasImageData(reference.region ? await renderCanvasReference(loaded.image, reference.region) : /^image\/(png|jpeg|webp)$/.test(loaded.blob.type) ? loaded.blob : await renderCanvasImage(loaded.image, []), controller.signal)) }
       finally { loaded.dispose() }
       const issue = canvasRequestIssue({ prompt, images }); if (issue) throw new Error(issue)
     }
@@ -251,7 +285,7 @@ async function run(action: 'save' | 'submit') {
   <section class="image-canvas" aria-label="图片画布编辑器" @keydown.stop="keys">
     <header class="canvas-header">
       <button ref="back" type="button" class="canvas-button" @click="emit('back')"><ArrowLeft :size="18" /><span>返回预览</span></button>
-      <div class="canvas-heading"><h2>图片画布</h2><p>拖动图片自由排列，标注主图并使用参考图修改</p></div>
+      <div class="canvas-heading"><h2>图片画布</h2><p>① 框选主图目标　② 框选参考素材　③ 绑定并修改</p></div>
       <button type="button" class="canvas-button canvas-save" :disabled="!original || !!busy" @click="run('save')"><LoaderCircle v-if="busy === 'save'" :size="18" /><Download v-else :size="18" /><span>保存标注图片</span></button>
       <button type="button" class="canvas-button canvas-close" aria-label="关闭画布" title="关闭画布" @click="emit('close')"><X :size="20" /></button>
     </header>
@@ -265,8 +299,9 @@ async function run(action: 'save' | 'submit') {
       <div class="canvas-main">
         <div v-if="loading" class="canvas-load" role="status"><LoaderCircle :size="28" />正在加载原图…</div>
         <div v-else-if="!original" class="canvas-load"><p role="alert">{{ error }}</p><button type="button" class="canvas-button" @click="load">重新加载原图</button></div>
-        <StudioCanvasBoard v-else ref="board" :nodes="nodes" :selected="selectedNode" :pan="tool === 'pan'" :disabled="!!busy" :viewport="viewport" :dimensions="`${width} × ${height}`"
-          @select="selectNode" @move="moveNode" @begin="beginLayout" @end="endLayout" @viewport="viewport = $event" @remove="removeReference" @upload="input?.click()" @files="uploadFiles" @cancel-drawing="finishGesture(true)">
+        <StudioCanvasBoard v-else ref="board" :nodes="nodes" :selected="selectedNode" :editing-reference="editingReference" :pan="tool === 'pan'" :disabled="!!busy" :viewport="viewport" :dimensions="`${width} × ${height}`"
+          @select="selectNode" @move="moveNode" @begin="beginLayout" @end="endLayout" @viewport="viewport = $event" @remove="removeReference" @upload="input?.click()" @files="uploadFiles" @cancel-drawing="cancelDrawing" @edit-reference="editReference">
+          <template #reference="{ node }"><StudioCanvasReference :src="node.src" :label="node.label" :region="reference(node.id)?.region" :editable="editingReference === node.id || tool === 'rect'" :disabled="!!busy" :cancel="referenceCancel" @change="updateReference(node.id, $event)" @dimensions="referenceSizes[node.id] = $event" @select="editingReference = node.id; selectedNode = ''" /></template>
           <div class="canvas-sheet">
             <svg ref="svg" :viewBox="`0 0 ${width} ${height}`" tabindex="0" role="img" aria-label="图片标注画布，可用右侧添加中心选区及方向键操作" :style="{ cursor: tool === 'select' ? 'grab' : 'crosshair' }" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up" @lostpointercapture="finishGesture(true)">
               <defs><marker :id="markerId" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="context-stroke" stroke-width="2" /></marker></defs>
@@ -282,15 +317,15 @@ async function run(action: 'save' | 'submit') {
             </svg>
           </div>
         </StudioCanvasBoard>
-        <p class="canvas-help">选择工具拖动图片；空白处拖动平移，滚轮 / 双指缩放。框选主图后填写修改要求。<a href="https://github.com/basketikun/infinite-canvas" target="_blank" rel="noopener noreferrer">Infinite Canvas</a></p>
+        <p class="canvas-help">选择工具拖动图片；空白处拖动平移，滚轮 / 双指缩放。主图和参考图都能框选；点击参考图顶部框选按钮可放大编辑。<a href="https://github.com/basketikun/infinite-canvas" target="_blank" rel="noopener noreferrer">Infinite Canvas</a></p>
       </div>
       <aside class="canvas-properties" aria-label="画布修改要求">
         <fieldset :disabled="!!busy">
           <section class="canvas-section">
             <h3>参考图合成 <small>{{ references.length }} / 14</small></h3>
-            <p>拖入图片或点击添加。位置仅用于整理画布；修改时在主图上标注并指定参考图。</p>
+            <p>先框选主图要替换的物品，再框选参考图要借用的样式，绑定后提交。已框选的参考图仅发送选中范围，未框选时发送整张。</p>
             <button v-if="original" type="button" class="canvas-source" @click="selectNode('source'); board?.reveal('source')"><img :src="original.image.src" alt="主图" /><div><strong>主图</strong><small>点击定位主图</small></div></button>
-            <div v-if="references.length" class="canvas-references"><div v-for="(item, index) in references" :key="item.id"><button type="button" class="canvas-reference-locate" :aria-label="`定位参考图 ${index + 1}`" @click="selectNode(item.id); board?.reveal(item.id)"><img :src="mediaSource(item.src, true)" :alt="`参考图 ${index + 1}`" /><span>参考图 {{ index + 1 }}</span></button><button type="button" class="canvas-button" :aria-label="`移除画布参考图 ${index + 1}`" @click="removeReference(item.id)"><X :size="16" /></button></div></div>
+            <div v-if="references.length" class="canvas-references"><div v-for="(item, index) in references" :key="item.id"><button type="button" class="canvas-reference-locate" :aria-label="`定位参考图 ${index + 1} · ${item.region ? '已框选' : '整张'}`" @click="selectNode(item.id); board?.reveal(item.id)"><img :src="mediaSource(item.src, true)" :alt="`参考图 ${index + 1}`" /><span>参考图 {{ index + 1 }} · {{ item.region ? '已框选' : '整张' }}</span></button><button type="button" class="canvas-reference-edit" :aria-label="`框选素材：参考图 ${index + 1}`" @click="editReference(item.id)">框选素材</button><button type="button" class="canvas-button" :aria-label="`移除画布参考图 ${index + 1}`" @click="removeReference(item.id)"><X :size="16" /></button></div></div>
             <button class="canvas-button canvas-wide" type="button" :disabled="!owner || references.length >= 14" @click="openLibrary"><Images :size="16" />从作品库选择</button>
             <button class="canvas-button canvas-wide" type="button" :disabled="references.length >= 14" @click="input?.click()"><Upload :size="16" />上传本地参考图</button>
             <input ref="input" class="canvas-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/heic,image/heif,.heic,.heif" multiple aria-label="上传画布参考图" @change="upload" />
@@ -304,6 +339,16 @@ async function run(action: 'save' | 'submit') {
               <button v-if="more" type="button" class="canvas-button canvas-wide" :disabled="libraryLoading" @click="loadLibrary(true)">加载更多</button>
             </section>
           </section>
+          <section v-if="activeReference" class="canvas-section canvas-reference-properties" aria-label="参考素材范围">
+            <h3>参考图 {{ activeReferenceIndex }} · 来源选区</h3>
+            <p>拖动框选要借用的物品；拖动选框或四角调整。选框外的背景和其他物品不会随附件发送。</p>
+            <button type="button" class="canvas-button canvas-wide" @click="updateReference(activeReference!.id, { x: .25, y: .25, width: .5, height: .5 })">添加参考图中心选区</button>
+            <div v-if="activeReference.region" class="canvas-region-fields"><label v-for="field in regionFields" :key="field.key">{{ field.label }} (%)<input type="number" :aria-label="`参考范围${field.label}百分比`" min="0" max="100" step=".5" :value="Number((activeReference.region[field.key] * 100).toFixed(2))" @change="regionNumber(field.key, $event)" /></label></div>
+            <label class="canvas-bind-target">替换主图选区<select v-model="selectedId" aria-label="替换主图选区"><option value="">先在主图添加选区</option><option v-for="(item, index) in annotations" :key="item.id" :value="item.id">选区 {{ index + 1 }} · {{ labels[item.kind] }}</option></select></label>
+            <button type="button" class="canvas-button canvas-wide canvas-primary" :disabled="!selected || !activeReference.region" @click="bindReference">将参考素材用于主图选区{{ selected ? ` ${annotations.findIndex(item => item.id === selectedId) + 1}` : '' }}</button>
+            <button type="button" class="canvas-button canvas-wide" :disabled="!activeReference.region" @click="updateReference(activeReference!.id)">清除范围，使用整张参考图</button>
+            <button type="button" class="canvas-button canvas-wide" @click="editingReference = ''; tool = 'select'; board?.reveal()">完成参考图框选</button>
+          </section>
           <section class="canvas-section">
             <h3>标注与选区 <small>{{ annotations.length }} / 40</small></h3><p>框选和圈选默认修改原图文字；添加参考图后，新选区默认修改物品或画面。</p>
             <div class="canvas-style"><label>颜色<input :value="selected?.color || color" type="color" @input="color = ($event.target as HTMLInputElement).value; update({ color })" /></label><label>线宽<input :value="selected?.strokeWidth || stroke" type="number" min="1" max="80" @change="stroke = Math.max(1, Math.min(80, Number(($event.target as HTMLInputElement).value) || 4)); update({ strokeWidth: stroke })" /></label></div>
@@ -315,6 +360,7 @@ async function run(action: 'save' | 'submit') {
               <label>修改目标<select :value="selected.target" @change="update({ target: ($event.target as HTMLSelectElement).value as 'text' | 'object' })"><option value="text">原图文字</option><option value="object">物品 / 画面</option></select></label>
               <template v-if="selected.target === 'text'"><label>原图文字<input :value="selected.sourceText" maxlength="2000" placeholder="例如：恐龙" @input="update({ sourceText: ($event.target as HTMLInputElement).value })" /></label><label>替换成的文字<input :value="selected.replacement" maxlength="2000" placeholder="例如：小猫" @input="update({ replacement: ($event.target as HTMLInputElement).value })" /></label></template>
               <label v-else>使用参考图<select :value="selected.referenceImageId || ''" @change="update({ referenceImageId: ($event.target as HTMLSelectElement).value || undefined })"><option value="">不指定参考图</option><option v-if="selected.referenceImageId && !references.some(item => item.id === selected!.referenceImageId)" :value="selected.referenceImageId" disabled>已移除，请重新选择</option><option v-for="(item, index) in references" :key="item.id" :value="item.id">参考图 {{ index + 1 }}</option></select></label>
+              <p v-if="selected.target === 'object' && selected.referenceImageId && reference(selected.referenceImageId)" class="canvas-binding-status">已绑定参考图 {{ references.findIndex(item => item.id === selected!.referenceImageId) + 1 }} · {{ reference(selected.referenceImageId)?.region ? '仅使用框选素材' : '使用整张图片' }}<button type="button" class="canvas-button canvas-wide" @click="editReference(selected!.referenceImageId!)">调整参考素材范围</button></p>
               <label>此标注的修改要求<textarea :value="selected.instruction" rows="3" maxlength="5000" placeholder="说明这个区域要如何修改" @input="update({ instruction: ($event.target as HTMLTextAreaElement).value })" /></label>
               <button type="button" class="canvas-button canvas-wide canvas-delete" @click="remove"><Trash2 :size="16" />删除此标注</button>
             </div>
@@ -323,7 +369,7 @@ async function run(action: 'save' | 'submit') {
         </fieldset>
         <p v-if="error && original" class="canvas-error" role="alert">{{ error }}</p>
         <button type="button" class="canvas-button canvas-primary" :disabled="!original || !!busy || !context" @click="run('submit')"><LoaderCircle v-if="busy === 'submit' || busy === 'upload'" :size="18" />{{ busy === 'submit' ? '正在准备修改…' : context?.label.value || '请从创作对话中使用 AI 修改' }}</button>
-        <p class="canvas-note">{{ context?.model.value ? `使用当前图片模型 ${context.model.value}，按现有规则计费。` : '导入图片对话后，选择支持改图的模型再发送。' }}主图、标注图和参考图一同提交，生成结果返回对话。局部修改效果取决于模型。</p>
+        <p class="canvas-note">{{ context?.model.value ? `使用当前图片模型 ${context.model.value}，按现有规则计费。` : '导入图片对话后，选择支持改图的模型再发送。' }}主图、标注图和参考素材一同提交，生成结果返回对话。局部修改效果取决于模型。</p>
         <p class="canvas-note">保存标注图片会下载原尺寸 PNG，不调用 AI。动图会以当前画面作为静态图片编辑。</p>
       </aside>
     </div>
@@ -339,7 +385,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .canvas-layout { flex: 1; display: grid; grid-template-columns: 74px minmax(0, 1fr) 300px; min-height: 0; }.canvas-tools { display: flex; flex-direction: column; gap: 8px; padding: 12px 8px; border-right: 1px solid var(--border); overflow-y: auto; }.canvas-tools .canvas-button { flex-direction: column; gap: 4px; min-height: 62px; padding: 8px 2px; font-size: 12px; }.canvas-tool-divider { border-top: 1px solid var(--border); margin: 2px 0; }
 .canvas-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }.canvas-sheet { width: 100%; height: 100%; }.canvas-sheet > svg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; }.selected-annotation { filter: drop-shadow(0 0 2px rgb(0 0 0 / 40%)); }.canvas-help { flex: none; padding: 10px 14px; margin: 0; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }.canvas-help a { color: var(--muted); margin-left: 6px; text-underline-offset: 2px; }
 .canvas-load { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; min-height: 180px; text-align: center; }.canvas-properties { min-height: 0; overflow: auto; overscroll-behavior: contain; border-left: 1px solid var(--border); padding: 0 16px 20px; }.canvas-properties fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }.canvas-section { padding: 16px 0; border-bottom: 1px solid var(--border); }.canvas-section h3 { display: flex; align-items: center; justify-content: space-between; font-size: 14px; margin: 0 0 8px; }.canvas-section h3 small { font-size: 12px; font-weight: 400; color: var(--muted); }.canvas-section p, .canvas-note { font-size: 12px; color: var(--muted); margin: 8px 0; }.canvas-note { overflow-wrap: anywhere; }.canvas-wide { width: 100%; margin-top: 8px; }.canvas-source { width: 100%; font: inherit; color: var(--ink); background: var(--surface); text-align: left; cursor: pointer; display: flex; gap: 10px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; }.canvas-source img { width: 54px; height: 54px; object-fit: cover; border-radius: 4px; }.canvas-source div { display: flex; flex-direction: column; justify-content: center; gap: 3px; }.canvas-source small { color: var(--muted); }
-.canvas-file { display: none; }.canvas-reference-locate { width: 100%; padding: 0; background: var(--surface); color: var(--ink); border: 0; cursor: pointer; text-align: left; }.canvas-references { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }.canvas-references > div { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; }.canvas-references img { display: block; width: 100%; height: 90px; object-fit: cover; }.canvas-references span { display: block; padding: 4px; font-size: 12px; }.canvas-references .canvas-button { position: absolute; top: 0; right: 0; min-height: 32px; min-width: 32px; padding: 4px; border-radius: 0 0 0 8px; }
+.canvas-reference-edit { width: 100%; min-height: 44px; border: 0; border-top: 1px solid var(--border); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }.canvas-reference-properties { border-left: 3px solid var(--accent, #1593a8); padding-left: 10px; }.canvas-region-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }.canvas-region-fields label, .canvas-bind-target { display: flex; flex-direction: column; gap: 4px; }.canvas-region-fields input { width: 100%; }.canvas-bind-target { margin-top: 12px; }.canvas-file { display: none; }.canvas-reference-locate { width: 100%; padding: 0; background: var(--surface); color: var(--ink); border: 0; cursor: pointer; text-align: left; }.canvas-references { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }.canvas-references > div { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; }.canvas-references img { display: block; width: 100%; height: 90px; object-fit: cover; }.canvas-references span { display: block; padding: 4px; font-size: 12px; }.canvas-references .canvas-button { position: absolute; top: 0; right: 0; min-height: 32px; min-width: 32px; padding: 4px; border-radius: 0 0 0 8px; }
 .canvas-style { display: flex; align-items: center; gap: 16px; }.canvas-style label { display: flex; align-items: center; gap: 6px; }.canvas-style input { width: 52px; min-height: 40px; padding: 4px; }.canvas-annotation-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }.canvas-annotation-list button { padding: 4px 8px; }.canvas-fields { display: grid; gap: 10px; margin-top: 14px; }.canvas-fields label, .canvas-overall { display: flex; flex-direction: column; gap: 6px; }.canvas-properties input, .canvas-properties textarea, .canvas-properties select { box-sizing: border-box; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; padding: 8px; min-height: 40px; }.canvas-properties textarea { resize: vertical; }.canvas-properties select { width: 100%; }.canvas-properties input::placeholder, .canvas-properties textarea::placeholder { color: var(--muted); }.canvas-delete, .canvas-error { color: var(--danger, #b91c1c); }.canvas-error { overflow-wrap: anywhere; }
 .canvas-primary { width: 100%; margin-top: 14px; background: #087f95; color: white; border-color: #087f95; font-weight: 600; }.canvas-primary:hover:not(:disabled) { background: #066778; }.canvas-close { padding: 8px; min-width: 44px; }.canvas-library { margin-top: 12px; }.canvas-library-heading { display: flex; justify-content: space-between; align-items: center; }.canvas-library input { width: 100%; }.canvas-library-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; max-height: 260px; overflow: auto; }.canvas-library-grid button { border: 1px solid var(--border); border-radius: 6px; padding: 0; overflow: hidden; background: var(--surface-soft); cursor: pointer; }.canvas-library-grid button:disabled { opacity: .3; cursor: default; }.canvas-library-grid img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
 @media (max-width: 800px) { .canvas-header { flex-wrap: wrap; gap: 8px; padding: 10px; }.canvas-heading { order: -1; flex-basis: calc(100% - 52px); }.canvas-heading p { font-size: 11px; }.canvas-close { order: -1; }.canvas-save { margin-left: auto; }.canvas-layout { display: flex; flex-direction: column; overflow: auto; }.canvas-tools { flex-direction: row; overflow-x: auto; overflow-y: hidden; flex: none; border-right: 0; border-bottom: 1px solid var(--border); gap: 6px; padding: 6px 8px; }.canvas-tools .canvas-button { flex: 0 0 48px; min-height: 52px; padding: 5px; }.canvas-tool-divider { border-left: 1px solid var(--border); border-top: 0; }.canvas-main { flex: none; height: 62dvh; min-height: 440px; }.canvas-help { font-size: 11px; }.canvas-properties { flex: none; overflow: visible; border-left: 0; border-top: 1px solid var(--border); padding-bottom: max(24px, env(safe-area-inset-bottom)); }.canvas-references { grid-template-columns: repeat(3, minmax(0, 1fr)); }.canvas-references .canvas-button { min-height: 44px; min-width: 44px; }.canvas-properties input, .canvas-properties textarea, .canvas-properties select { font-size: 16px; min-height: 44px; } }

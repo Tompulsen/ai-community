@@ -1,6 +1,6 @@
 // Adapted from QXChat image-canvas.test.ts (MIT, NextChat 2023-2025).
 import { describe, it, expect } from 'vitest'
-import { normalizeCanvasRect, moveCanvasAnnotation, buildCanvasEditPrompt, parseTextReplacementInstruction, MAX_CANVAS_REFERENCE_IMAGES, CANVAS_EDIT_GUIDE_MARKER, CANVAS_EDIT_NO_GUIDE_MARKER, canvasRequestIssue, isCanvasEditPrompt, type CanvasAnnotation, type CanvasReferenceImage } from './image-canvas'
+import { normalizeCanvasRect, moveCanvasAnnotation, buildCanvasEditPrompt, parseTextReplacementInstruction, MAX_CANVAS_REFERENCE_IMAGES, CANVAS_EDIT_GUIDE_MARKER, CANVAS_EDIT_NO_GUIDE_MARKER, canvasRequestIssue, isCanvasEditPrompt, canvasReferenceCrop, type CanvasAnnotation, type CanvasReferenceImage } from './image-canvas'
 
 function annotation(
   overrides: Partial<CanvasAnnotation> = {},
@@ -25,6 +25,19 @@ function annotation(
 }
 
 describe("canvas image coordinates and editing brief", () => {
+  it('maps donor region to original pixels and rejects invalid selections', () => {
+    expect(canvasReferenceCrop({ x: .5, y: .1, width: .4, height: .6 }, 2500, 1000)).toEqual({ x: 1250, y: 100, width: 1000, height: 600 })
+    expect(canvasReferenceCrop({ x: .3333, y: .25, width: .2, height: .5 }, 333, 200)).toEqual({ x: 110, y: 50, width: 68, height: 100 })
+    for (const region of [{ x: -.1, y: 0, width: .5, height: 1 }, { x: .7, y: 0, width: .5, height: 1 }, { x: 0, y: 0, width: 0, height: 1 }, { x: NaN, y: 0, width: .5, height: 1 }]) expect(() => canvasReferenceCrop(region, 800, 600)).toThrow('选区无效')
+  })
+  it('identifies selected donor material without renumbering the original image or guide', () => {
+    const prompt = buildCanvasEditPrompt([annotation({ referenceImageId: 'crop', instruction: '把主图盒子换成参考素材样式' })], 1200, 800, '', [{ id: 'crop', src: 'local-image://crop', region: { x: .5, y: .1, width: .4, height: .6 } }])
+    expect(prompt).toContain(CANVAS_EDIT_GUIDE_MARKER)
+    expect(prompt).toContain('参考图 1 对应附件图 3')
+    expect(prompt).toContain('已从参考原图框选区域裁出')
+    expect(prompt).toContain('本标注绑定参考图 1（附件图 3）')
+    expect(() => buildCanvasEditPrompt([], 1200, 800, '替换', [{ id: 'crop', src: 'local-image://crop', region: { x: .8, y: 0, width: 1, height: 1 } }])).toThrow('选区无效')
+  })
   const references: CanvasReferenceImage[] = [
     { id: "person", src: "local-image://person" },
     { id: "cat", src: "local-image://cat" },
