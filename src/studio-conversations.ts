@@ -36,7 +36,7 @@ export function attachMediaTask(chat: NativeChat, task: CreationTask) {
   if (chat.deletedMediaTaskIds?.includes(task.id) || branchMessages(chat).some(message => (message as NativeMessage).taskId === task.id && message.role === 'assistant')) return false
   const question: NativeMessage = { id: `media-user:${task.id}`, role: 'user', content: task.prompt, createdAt: task.createdAt, taskId: task.id }
   const answer: NativeMessage = { id: `media-assistant:${task.id}`, role: 'assistant', content: '', taskId: task.id, parentId: question.id, createdAt: task.createdAt }
-  if (task.mediaBranch) {
+  if (task.kind === 'video' && task.mediaBranch) {
     const oldAnswer = chat.messages.find(message => message.role === 'assistant' && message.taskId === task.mediaBranch!.taskId)
     const oldQuestion = oldAnswer && chat.messages.find(message => message.id === oldAnswer.parentId && message.role === 'user')
     if (!oldQuestion) return false

@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2 } from '@lucide/vue'
 import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
+import { branchMessages } from '../../../shared/studio/chat-branches'
 import { confirmStudioDelete } from '../../studio-confirm'
 import { chooseImageDownloadFormat } from '../../image-download-choice'
 import { isConversationBusy } from '../../studio-conversations'
@@ -39,7 +40,7 @@ let downloadController: AbortController | undefined
 onUnmounted(() => downloadController?.abort())
 watch(() => props.task.id, () => downloadController?.abort())
 const pinMessageId = computed(() => {
-  const answer = props.conversation.messages.find(message => message.role === 'assistant' && message.taskId === props.task.id)
+  const answer = branchMessages(props.conversation).find(message => message.role === 'assistant' && 'taskId' in message && message.taskId === props.task.id)
   return props.role === 'assistant' ? answer?.id : answer?.parentId
 })
 const pinned = computed(() => !!pinMessageId.value && !!props.conversation.pinnedMessageIds?.includes(pinMessageId.value))
@@ -111,7 +112,7 @@ const menuItems = computed<StudioMenuAction[]>(() => {
 watch(() => [session.user?.id, props.conversation.id, props.task.id], () => menu.value?.close())
 const working = computed(() => ['submitting', 'running'].includes(props.task.phase))
 const timedOut = computed(() => creationRequestTimedOut(props.task))
-const version = computed(() => mediaVersion(props.conversation, props.task.id))
+const version = computed(() => props.task.kind === 'video' ? mediaVersion(props.conversation, props.task.id) : { index: 0, total: 1 })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成中', paused: '已停止等待', complete: '生成完成', error: '生成失败', attention: '请求异常' }
 const activityLabel = computed(() => props.task.phase === 'submitting' ? phases.submitting
   : props.task.stage === 'downloading' ? '下载中' : phases.running)

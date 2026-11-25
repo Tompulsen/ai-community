@@ -45,7 +45,7 @@ async function fixture(page: Page) {
   })
   await page.route('**/api/creation/**', route => {
     const request = route.request(), path = new URL(request.url()).pathname
-    if (path === '/api/creation/models') return route.fulfill({ json: { items: [
+    if (path === '/api/creation/models') return route.fulfill({ json: { tokenId: 41, items: [
       { id: 'fixture-image', name: '图片测试模型', kinds: ['image'], protocol: 'openai' },
       { id: 'sora-2', name: '视频测试模型', kinds: ['video'], protocol: 'openai' },
       { id: 'fixture-text', name: '文本测试模型', kinds: ['text'], protocol: 'openai' },
@@ -529,14 +529,12 @@ test('a failed generation keeps its request and allows an explicit edited retry 
   expect(submissions).toBe(1)
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('小猫和海边的阳光')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.task-status')).toHaveCount(1)
-  await expect(page.locator('.task-status')).toContainText('生成完成')
-  await expect(page.locator('.creation-versions output')).toHaveText('2 / 2')
-  await page.getByRole('button', { name: '上一个版本', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('生成失败')
-  await expect(page.locator('.creation-request')).toContainText('小猫和阳光')
-  await page.getByRole('button', { name: '下一个版本', exact: true }).click()
-  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.locator('.task-status')).toHaveCount(2)
+  await expect(page.locator('.task-status').last()).toContainText('生成完成')
+  await expect(page.locator('.creation-versions')).toHaveCount(0)
+  await expect(page.locator('.task-status').first()).toContainText('生成失败')
+  await expect(page.locator('.creation-request').first()).toContainText('小猫和阳光')
+  await expect(page.locator('.creation-request').last()).toContainText('小猫和海边的阳光')
   await expect(page.locator('.studio-sidebar .studio-record[data-kind="image"]')).toHaveCount(1)
   expect(submissions).toBe(2)
   await expect(page.locator('html')).toHaveAttribute('data-color-scheme', 'light')

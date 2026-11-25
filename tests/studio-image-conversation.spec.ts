@@ -4,7 +4,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-async function fixture(page: Page, kind = 'image') {
+async function fixture(page: Page, kind = 'image', legacyVersions = false) {
   const account = await mockUnifiedAccount(page, true)
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
@@ -36,7 +36,7 @@ async function fixture(page: Page, kind = 'image') {
     }
     return route.fulfill({ json: {} })
   })
-  await page.addInitScript(() => {
+  await page.addInitScript((legacyVersions) => {
     if (sessionStorage.getItem('image-conversation-fixture')) return
     sessionStorage.setItem('image-conversation-fixture', '1')
     localStorage.setItem('octopus:user-17:native-media-settings', JSON.stringify({ autoDownload: false, autoSaveGallery: true }))
@@ -46,7 +46,21 @@ async function fixture(page: Page, kind = 'image') {
         { id: 'image-b', mediaConversationId: 'image-b', creationKind: 'image', topic: '另一图片对话', model: 'gpt-image-2', lastUpdate: Date.now() - 1, settings: {}, skillIds: [], messages: [] },
       ],
     } }))
-  })
+    if (legacyVersions) {
+      const saved = JSON.parse(localStorage.getItem('octopus:user-17:native-chat')!)
+      const chat = saved.state.sessions[0], start = Date.now() - 30000
+      const question = { id: 'legacy-question', role: 'user', content: '旧版海报', taskId: 'legacy-1', createdAt: start, branchOrder: 0 }
+      const answers = [1, 2, 3].map(index => ({ id: `legacy-answer-${index}`, role: 'assistant', content: '', taskId: `legacy-${index}`, parentId: question.id, createdAt: start + index * 1000, branchOrder: index }))
+      chat.messages = [question, answers[2]]; chat.messageBranches = answers.slice(0, 2)
+      chat.branchSelections = { __root__: question.id, [question.id]: answers[2]!.id }
+      localStorage.setItem('octopus:user-17:native-chat', JSON.stringify(saved))
+      localStorage.setItem('octopus:user-17:native-creation-history:fallback', JSON.stringify(answers.map((answer, index) => ({
+        id: answer.taskId, conversationId: 'image-a', owner: '17', kind: 'image', phase: 'complete', protocol: 'sync', model: 'gpt-image-2',
+        prompt: '旧版海报', text: '', urls: [`https://media.example/legacy-${index + 1}.png`], references: [], createdAt: answer.createdAt, settledAt: answer.createdAt + 500,
+        ...(index ? { mediaBranch: { taskId: 'legacy-1' } } : {}), request: { size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8 },
+      }))))
+    }
+  }, legacyVersions)
   await page.goto(new URL(`/create/${kind}`, String(test.info().project.use.baseURL)).href)
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue(kind === 'video' ? 'sora-2' : kind === 'text' ? 'gpt-5' : 'gpt-image-2')
   await expect(page.locator('.studio-composer')).not.toHaveAttribute('inert')
@@ -332,7 +346,7 @@ test('editing the original prompt restores original attachments and reuse clears
   const response = page.locator('.creation-response').first()
   await response.getByRole('button', { name: '编辑图片', exact: true }).click()
   await response.getByRole('button', { name: '编辑原提问', exact: true }).click()
-  await expect(page.locator('.creation-editing')).toContainText('编辑原提问')
+  await expect(page.locator('.creation-editing')).toContainText('修改提示词 · 发送后追加新图片')
   await expect(page.locator('.reference-list img')).toHaveAttribute('src', /^data:image\/jpeg/)
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('原提问')
   expect(calls).toHaveLength(1)
@@ -466,27 +480,91 @@ test('new prompts keep independent images and drafts within one session', async 
   await expect(page.locator('.creation-turn')).toHaveCount(2)
 })
 
-test('regeneration and edited prompts preserve alternate versions without attaching the branch to new prompts', async ({ page }) => {
+for (const width of [320, 1440]) test(`saved image versions expand independently at ${width}px and deleting one keeps the others`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { calls } = await fixture(page, 'image', true)
+  const turns = page.locator('.creation-turn')
+  await expect(turns).toHaveCount(3)
+  expect(await turns.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-task-id')))).toEqual(['legacy-1', 'legacy-2', 'legacy-3'])
+  await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.creation-media figure')).toHaveCount(3)
+  for (const turn of await turns.all()) {
+    await turn.locator('.creation-media').scrollIntoViewIfNeeded()
+    await expect.poll(() => turn.locator('.creation-media img').evaluateAll(images => images.some(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect((await new AxeBuilder({ page }).include('.native-chat').analyze()).violations).toEqual([])
+  await page.locator('.chat-messages').evaluate(element => { element.scrollTop = 0 })
+  await page.screenshot({ path: info.outputPath(`expanded-images-${width}.png`), fullPage: true })
+  await turns.first().locator('.creation-response').getByRole('button', { name: '删除生成记录', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(turns).toHaveCount(2)
+  await page.reload()
+  await expect(turns).toHaveCount(2)
+  expect(await turns.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-task-id')))).toEqual(['legacy-2', 'legacy-3'])
+  await turns.first().locator('.creation-request').getByRole('button', { name: '固定到上下文', exact: true }).click()
+  await expect(turns.first().locator('.creation-request').getByRole('button', { name: '取消固定', exact: true })).toBeVisible()
+  await send(page, '继续生成新海报', 3)
+  expect(calls).toHaveLength(1)
+  expect(calls[0].imageContext.turns).toEqual([{ prompt: '旧版海报', images: [] }])
+  expect(calls[0].referenceUrls).toEqual([])
+})
+
+test('deleting the active legacy image preserves the restore-context boundary', async ({ page }) => {
+  await fixture(page, 'image', true)
+  const turns = page.locator('.creation-turn'), marker = page.locator('.chat-transcript .clear-context-divider')
+  await expect(turns).toHaveCount(3)
+  await page.getByRole('button', { name: '清除上下文', exact: true }).click()
+  await expect(marker).toBeVisible()
+  await turns.last().locator('.creation-response').getByRole('button', { name: '删除生成记录', exact: true }).click()
+  await page.getByRole('dialog', { name: '删除确认', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click()
+  await expect(turns).toHaveCount(2)
+  await expect(marker).toBeVisible()
+  await page.reload()
+  await expect(turns).toHaveCount(2)
+  await expect(marker).toBeVisible()
+  expect(await marker.evaluate(element => element.previousElementSibling?.getAttribute('data-task-id'))).toBe('legacy-2')
+  await page.route('**/api/creation/generate', route => route.fulfill({ json: { status: 'succeeded', text: '接下来的文字回答', outputs: [] } }))
+  await page.getByRole('button', { name: '创作模式：图片生成', exact: true }).click()
+  await page.getByRole('group', { name: '创作类型', exact: true }).getByRole('button', { name: '对话', exact: true }).click()
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('继续文字对话')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.chat-message.assistant')).toContainText('接下来的文字回答')
+  expect(await marker.evaluate(element => element.previousElementSibling?.getAttribute('data-task-id'))).toBe('legacy-2')
+  await expect(marker.locator('..').locator('.chat-message.user')).toContainText('继续文字对话')
+  await marker.click()
+  await expect(marker).toHaveCount(0)
+})
+
+test('regeneration and edited prompts append independent images and retain every previous result', async ({ page }, info) => {
   const { calls } = await fixture(page)
   await send(page, '一只白猫', 1)
   await page.getByRole('button', { name: '重新生成此轮', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止等待', exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveText('2 / 2')
-  await expect(page.locator('.creation-turn')).toHaveCount(1)
-  await page.getByRole('button', { name: '上一个版本', exact: true }).click()
-  await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveText('1 / 2')
-  await send(page, '戴上帽子', 2)
+  await expect(page.locator('.creation-turn')).toHaveCount(2)
+  await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.creation-response .creation-media figure')).toHaveCount(2)
+  expect(calls).toHaveLength(2)
+  expect(calls[1].referenceUrls).toEqual([])
+  expect(calls[1].requestId).not.toBe(calls[0].requestId)
+  await send(page, '戴上帽子', 3)
   expect(calls[2].referenceUrls).toEqual([])
   expect(calls[2].imageContext.turns).toEqual([])
   await page.getByRole('button', { name: '编辑并重新生成', exact: true }).first().click()
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('一只黑猫')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.creation-turn')).toHaveCount(1)
-  await expect(page.locator('.creation-request')).toContainText('一只黑猫')
+  await expect(page.locator('.creation-turn')).toHaveCount(4)
+  await expect(page.locator('.creation-request').last()).toContainText('一只黑猫')
   expect(calls[3].imageContext.turns).toEqual([])
   await page.reload()
-  await expect(page.locator('.creation-turn')).toHaveCount(1)
-  await expect(page.locator('.creation-request')).toContainText('一只黑猫')
+  await expect(page.locator('.creation-turn')).toHaveCount(4)
+  await expect(page.locator('.creation-request').first()).toContainText('一只白猫')
+  await expect(page.locator('.creation-request').nth(2)).toContainText('戴上帽子')
+  await expect(page.locator('.creation-request').last()).toContainText('一只黑猫')
+  await expect(page.getByLabel('当前生成版本', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.creation-response .creation-media figure')).toHaveCount(4)
+  expect(calls).toHaveLength(4)
+  await page.screenshot({ path: info.outputPath('independent-image-results.png'), fullPage: true })
 })
 
 test('new results never become automatic references; clearing and deleting turns keep gallery data', async ({ page }) => {

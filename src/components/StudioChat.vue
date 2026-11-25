@@ -43,7 +43,7 @@ import { createImeGuard } from '../../shared/studio/ime-input'
 import { useStudioMaterials, type StudioFile } from '../use-studio-materials'
 import { createMessageQuote, type MessageQuote } from '../../shared/studio/message-quote'
 import { isConversationBusy, mediaTasksForConversation } from '../studio-conversations'
-import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks } from '../studio-image-conversation'
+import { clearMediaContext, restoreMediaContext, deleteMediaTurns, visibleMediaTasks, visibleConversationMessages } from '../studio-image-conversation'
 import { configuredModelFormat, modelFormat, modelsForKind, setModelFormat, takeModelChoice } from '../model-preferences'
 import { CHAT_API_FORMATS, type ChatApiFormat } from '../../shared/studio/chat-api-format'
 import { readRemixParameters } from '../../shared/studio/remix-parameters'
@@ -122,11 +122,18 @@ const busy = computed(() => props.entryPending || restoringTask.value || props.s
 const canSend = computed(() => Boolean(current.value && props.mode === 'text' && !busy.value && !props.sourceBlocked && !referenceLoading.value && !waitingForMaterials.value && !materials.failed.value && (props.entryOnly && !session.user || models.value.some(item => item.id === model.value)) && !creation.modelLaunchPending && !creation.groupSwitching && !creation.modelsLoading && !creation.groupsLoading && (prompt.value.trim() || files.value.length || materials.snapshot.value.items.length)))
 const canStop = computed(() => current.value && !chats.preparing[current.value.id] && (chats.busy[current.value.id] || mediaTasksForConversation(current.value).some(task => ['submitting', 'running'].includes(task.phase))))
 const mediaTasks = computed(() => current.value ? visibleMediaTasks(current.value) : [])
+const transcript = computed(() => current.value ? visibleConversationMessages(current.value) : [])
+const clearContextMessageId = computed(() => {
+  const boundary = current.value?.messages[(current.value.clearContextIndex || 0) - 1]
+  if (!boundary) return undefined
+  return transcript.value.find(message => message.id === boundary.id)?.id
+    || transcript.value.filter(message => message.parentId === boundary.id && mediaByMessage.value.get(message.id)?.kind === 'image').at(-1)?.id
+})
 const mediaByMessage = computed(() => {
   const tasks = new Map(mediaTasks.value.map(task => [task.id, task])), result = new Map<string, CreationTask>()
-  for (const message of current.value?.messages || []) {
+  for (const message of transcript.value) {
     const task = message.role === 'assistant' && message.taskId && tasks.get(message.taskId)
-    if (task) { result.set(message.id, task); if (message.parentId) result.set(message.parentId, task) }
+    if (task) { result.set(message.id, task); if (task.kind === 'video' && message.parentId) result.set(message.parentId, task) }
   }
   return result
 })
@@ -487,19 +494,19 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
     <div v-if="dragging" class="attachment-drop-hint" role="status"><Plus :size="24" />添加附件</div>
     <section v-if="current" class="chat-main">
       <Teleport v-if="!entryOnly" defer to="#studio-header-conversation">
-        <header v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="20" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="20" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" :disabled="busy" @click="duplicate"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></header>
+        <div v-show="headerVisible" class="chat-toolbar"><StudioConversationTitle :conversation="current" /><div class="chat-toolbar-actions"><StudioPopover ref="historyMenu" label="历史对话"><template #trigger><History :size="20" /></template><StudioConversations class="chat-history" @select="selectChat" /></StudioPopover><button class="studio-tool" title="新建对话" aria-label="新建对话" @click="createChat"><Plus :size="20" /></button><StudioPopover label="对话菜单" :width="240"><template #trigger><MoreHorizontal :size="20" /></template><button class="studio-command" :disabled="busy" @click="duplicate"><Copy :size="16" />复制对话</button><button class="studio-command danger" :disabled="busy" @click="remove"><Trash2 :size="16" />删除对话</button></StudioPopover></div></div>
       </Teleport>
       <div v-if="selecting" class="creation-selection" role="group" aria-label="消息多选操作"><label><input type="checkbox" aria-label="全选当前消息" :checked="!!mediaTasks.length && selectedTurns.length === mediaTasks.length" @change="selectedTurns = ($event.target as HTMLInputElement).checked ? mediaTasks.map(task => task.id) : []" />全选</label><span role="status">已选 {{ selectedTurns.length }} 轮</span><button class="icon-button" type="button" :disabled="!selectedTurns.length || busy" aria-label="删除所选消息" title="删除所选消息" @click="removeTurns"><Trash2 :size="17" /></button><button class="icon-button" type="button" aria-label="退出消息多选" title="退出多选" @click="selecting = false; selectedTurns = []"><X :size="17" /></button></div>
       <p v-if="creation.groupsError || creation.modelsError" class="form-error" role="alert">{{ creation.groupsError || creation.modelsError }}</p>
       <div v-if="!entryOnly" class="chat-messages-wrap"><div ref="messagesElement" class="chat-messages" tabindex="0" aria-label="对话消息" aria-live="polite" aria-relevant="additions" @scroll.passive="trackScroll">
-        <div v-if="!current.messages.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
+        <div v-if="!transcript.length" class="chat-empty"><img src="/assets/brand/octopus-community.jpg" width="40" height="40" alt="" /><p>开始新的对话</p></div>
         <div v-else ref="messagesContent" class="chat-transcript">
-        <template v-for="(message, messageIndex) in current.messages" :key="message.id">
-        <div v-if="mediaTask(message) && message.role === 'user'" class="creation-turn">
+        <template v-for="(message, messageIndex) in transcript" :key="message.id">
+        <div v-if="mediaTask(message) && message.role === (mediaTask(message)!.kind === 'image' ? 'assistant' : 'user')" class="creation-turn" :data-task-id="mediaTask(message)!.id">
           <label v-if="selecting" class="creation-select-turn"><input v-model="selectedTurns" type="checkbox" :value="mediaTask(message)!.id" :aria-label="`选择消息：${mediaTask(message)!.prompt}`" /><span class="studio-sr-only">选择此轮</span></label>
           <StudioMediaTurn v-for="role in (['user', 'assistant'] as const)" :key="role" :role="role" :task="mediaTask(message)!" :conversation="current" @action="(action, task, index) => emit('mediaAction', action, task, index)" @publish="(task, destination) => emit('publish', task, destination)" @preview="(task, index) => mediaGallery?.open(task, index)" />
         </div>
-        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :class="{ 'history-deferred': current.messages.length > 80 && messageIndex < current.messages.length - 12 && !pending(message) && edited?.id !== message.id }" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
+        <StudioMessageFrame v-else-if="!mediaTask(message)" class="chat-message" :class="{ 'history-deferred': transcript.length > 80 && messageIndex < transcript.length - 12 && !pending(message) && edited?.id !== message.id }" :role="message.role === 'system' ? 'system' : message.role === 'user' ? 'user' : 'assistant'" :model="messageModel(message)" :created-at="message.createdAt" data-quotable-message :data-message-id="message.id" :data-message-role="message.role" tabindex="-1" @contextmenu="openMessageMenu($event, message)">
           <template #status><StudioAiStatus v-if="message.role === 'assistant' && !message.contextCompressing && (pending(message) || message.interrupted || message.error)" :state="messageStage(message)" :label="statusLabel(message)" :timer="pending(message)" /></template>
           <StudioMessageQuote v-if="message.quote" :quote="message.quote" />
           <p v-if="message.contextCompressing || message.contextCompressed" class="context-compression-notice" role="status" :data-compressing="message.contextCompressing">{{ message.contextCompressing ? '上下文正在压缩 · 可能需要几分钟' : '上下文已自动压缩' }}</p>
@@ -523,7 +530,7 @@ defineExpose({ createChat, useTask, ready, applyRemix, applySourceReferences, re
             <template v-if="branch(message).total > 1"><button class="icon-button" title="上一个分支" aria-label="上一个分支" :disabled="busy || branch(message).index <= 0" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index - 1]!)"><ChevronLeft :size="16" /></button><span>{{ branch(message).index + 1 }} / {{ branch(message).total }}</span><button class="icon-button" title="下一个分支" aria-label="下一个分支" :disabled="busy || branch(message).index >= branch(message).total - 1" @click="switchBranch(current, message.id, branch(message).messageIds[branch(message).index + 1]!)"><ChevronRight :size="16" /></button></template><span v-if="message.usage" class="message-usage">输入 {{ message.usage.inputTokens ?? '—' }} · 输出 {{ message.usage.outputTokens ?? '—' }}</span>
           </div>
         </StudioMessageFrame>
-        <StudioClearContext v-if="messageIndex + 1 === current.clearContextIndex" :disabled="Boolean(busy)" @restore="restoreContext" />
+        <StudioClearContext v-if="message.id === clearContextMessageId" :disabled="Boolean(busy)" @restore="restoreContext" />
         </template>
         </div>
       </div><StudioQuoteSelection :container="messagesElement" :disabled="Boolean(busy || contextMenu?.visible)" @quote="quoteSelection" /><button v-if="!nearBottom" class="icon-button jump-latest" title="回到最新消息" aria-label="回到最新消息" @click="scrollToBottom"><ArrowDown :size="18" /></button></div>

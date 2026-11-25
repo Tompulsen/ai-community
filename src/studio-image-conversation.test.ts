@@ -199,45 +199,118 @@ it('includes only original attachments when a user pins the question, then its r
     prompt: 'one', images: ['https://example.test/one.png'], references: ['/legacy-files/reference1'],
   })
 })
-it('reuses answer branches, switches with their later turns, and does not duplicate archived tasks during sync', async () => {
+it('appends regenerated images without hiding earlier or later turns, including after sync', async () => {
   const p = await fixture()
   const regenerated = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })
   p.creation.tasks.push(regenerated)
   await p.registerMediaTurn(p.thread, regenerated)
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
-  expect(p.mediaVersion(p.thread, 'two-v2')).toMatchObject({ index: 1, total: 2 })
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three', 'two-v2'])
+  expect(p.mediaVersion(p.thread, 'two-v2')).toMatchObject({ index: 0, total: 1 })
   await p.syncMediaConversations()
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
-  await p.selectMediaVersion(p.thread, 'two-v2', -1)
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
-  await p.selectMediaVersion(p.thread, 'two', 1)
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two-v2'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three', 'two-v2'])
 })
-it('edits a historical prompt as a separate version without overwriting the old prompt or branch', async () => {
+it('appends edited image prompts without overwriting or hiding any previous result', async () => {
   const p = await fixture()
   const edited = task('two-edited', p.thread.id, 4, { prompt: '把背景改成蓝色', mediaBranch: { taskId: 'two', edited: true } })
   p.creation.tasks.push(edited)
   await p.registerMediaTurn(p.thread, edited)
-  expect(p.visibleMediaTasks(p.thread).map(task => task.prompt)).toEqual(['one', '把背景改成蓝色'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.prompt)).toEqual(['one', 'two', 'three', '把背景改成蓝色'])
   expect(p.creation.tasks.find(task => task.id === 'two')?.prompt).toBe('two')
-  expect(p.mediaVersion(p.thread, 'two-edited')).toMatchObject({ index: 1, total: 2 })
-  await p.selectMediaVersion(p.thread, 'two-edited', -1)
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three'])
+  expect(p.mediaVersion(p.thread, 'two-edited')).toMatchObject({ index: 0, total: 1 })
 })
-it('removes selected turns and their versions, retains subsequent turns and gallery data, and cannot resurrect them on sync', async () => {
+it('removes only selected image results, retains regenerated results and gallery data, and cannot resurrect deleted turns', async () => {
   const p = await fixture()
   const regenerated = task('two-v2', p.thread.id, 4, { prompt: 'two', mediaBranch: { taskId: 'two' } })
   p.creation.tasks.push(regenerated)
   await p.registerMediaTurn(p.thread, regenerated)
-  await p.selectMediaVersion(p.thread, 'two-v2', -1)
   await p.deleteMediaTurns(p.thread, ['one', 'two'])
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three', 'two-v2'])
   expect(p.creation.tasks).toHaveLength(4)
-  expect(p.thread.deletedMediaTaskIds?.sort()).toEqual(['one', 'two', 'two-v2'])
+  expect(p.thread.deletedMediaTaskIds?.sort()).toEqual(['one', 'two'])
   await p.syncMediaConversations()
-  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three'])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['three', 'two-v2'])
   const persisted = storage.write.mock.calls.at(-1)![1]
-  expect(persisted.state.sessions[0].deletedMediaTaskIds).toContain('two-v2')
+  expect(persisted.state.sessions[0].deletedMediaTaskIds).not.toContain('two-v2')
+})
+it('expands legacy image answers in order without changing stored history or hiding an active text answer', async () => {
+  const p = await fixture(), { createAnswerBranch } = await import('../shared/studio/chat-branches')
+  const legacy = task('two-old-version', p.thread.id, 4)
+  p.creation.tasks.push(legacy)
+  expect(createAnswerBranch(p.thread, 'media-user:two', {
+    id: 'legacy-answer', role: 'assistant', content: '', taskId: legacy.id, createdAt: 4,
+  } as any, true)).toBe(true)
+  const before = JSON.stringify(p.thread)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three', legacy.id])
+  expect(p.visibleConversationMessages(p.thread).map(message => message.id)).toEqual(['media-assistant:one', 'media-assistant:two', 'media-assistant:three', 'legacy-answer'])
+  expect(JSON.stringify(p.thread)).toBe(before)
+  expect(storage.write).not.toHaveBeenCalled()
+  expect(createAnswerBranch(p.thread, 'media-user:two', {
+    id: 'text-answer', role: 'assistant', content: '文字回答', createdAt: 5,
+  }, true)).toBe(true)
+  expect(p.visibleConversationMessages(p.thread).map(message => message.id)).toContain('media-user:two')
+  expect(p.visibleConversationMessages(p.thread).at(-1)?.id).toBe('text-answer')
+  expect(p.buildImageContext(p.thread).turns).toEqual([])
+  p.session.user = { id: '18' } as any
+  expect(p.visibleMediaTasks(p.thread)).toEqual([])
+})
+it('orders old image messages by task time when message timestamps are missing', async () => {
+  const p = await fixture(), { createAnswerBranch, branchMessages } = await import('../shared/studio/chat-branches')
+  const legacy = task('legacy', p.thread.id, 4)
+  p.creation.tasks.push(legacy)
+  createAnswerBranch(p.thread, 'media-user:two', {
+    id: 'legacy-answer', role: 'assistant', content: '', taskId: legacy.id,
+  } as any, true)
+  for (const message of branchMessages(p.thread)) delete message.createdAt
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'two', 'three', 'legacy'])
+})
+it('keeps an image question pinnable when an older video shares the same question', async () => {
+  const p = await fixture(), { createAnswerBranch } = await import('../shared/studio/chat-branches')
+  const video = task('old-video', p.thread.id, 4, { kind: 'video' }), image = task('old-image', p.thread.id, 5, { prompt: 'two' })
+  p.creation.tasks.push(video, image)
+  for (const item of [video, image]) createAnswerBranch(p.thread, 'media-user:two', {
+    id: `answer:${item.id}`, role: 'assistant', content: '', taskId: item.id, createdAt: item.createdAt,
+  } as any, true)
+  await p.deleteMediaTurns(p.thread, ['two'])
+  await p.togglePinnedMessage(p.thread, 'media-user:two')
+  expect(p.thread.messages.find(message => message.id === 'media-user:two')?.taskId).toBe(image.id)
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'two', images: [] }])
+})
+it('deletes a legacy image independently and keeps its shared question pinnable for the remaining result', async () => {
+  const p = await fixture(), { createAnswerBranch } = await import('../shared/studio/chat-branches')
+  const legacy = task('two-old-version', p.thread.id, 4, { prompt: 'two' })
+  p.creation.tasks.push(legacy)
+  createAnswerBranch(p.thread, 'media-user:two', {
+    id: 'legacy-answer', role: 'assistant', content: '', taskId: legacy.id, createdAt: 4,
+  } as any, true)
+  await p.togglePinnedMessage(p.thread, 'media-user:two')
+  const before = JSON.stringify(p.thread)
+  storage.write.mockRejectedValueOnce(new Error('disk full'))
+  await expect(p.deleteMediaTurns(p.thread, ['two'])).rejects.toThrow('disk full')
+  expect(JSON.stringify(p.thread)).toBe(before)
+  await p.deleteMediaTurns(p.thread, ['two'])
+  expect(p.thread.messages.find(message => message.id === 'media-user:two')?.taskId).toBe(legacy.id)
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'three', legacy.id])
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'two', images: [] }])
+  await p.togglePinnedMessage(p.thread, 'legacy-answer')
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'two', images: legacy.urls }])
+  await p.syncMediaConversations()
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'three', legacy.id])
+  await p.deleteMediaTurns(p.thread, [legacy.id])
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'three'])
+  expect(p.thread.pinnedMessageIds).toEqual([])
+  expect(p.creation.tasks).toHaveLength(4)
+})
+it('deleting a legacy image keeps a shared active text question and answer', async () => {
+  const p = await fixture(), { createAnswerBranch } = await import('../shared/studio/chat-branches')
+  createAnswerBranch(p.thread, 'media-user:two', {
+    id: 'text-answer', role: 'assistant', content: '文字回答', createdAt: 4,
+  }, true)
+  await p.deleteMediaTurns(p.thread, ['two'])
+  expect(p.thread.messages.find(message => message.id === 'media-user:two')).toMatchObject({ content: 'two', taskId: undefined })
+  expect(p.thread.messages.at(-1)?.id).toBe('text-answer')
+  expect(p.visibleMediaTasks(p.thread).map(task => task.id)).toEqual(['one', 'three'])
+  await p.togglePinnedMessage(p.thread, 'media-user:two')
+  expect(p.buildImageContext(p.thread).turns).toEqual([{ prompt: 'two', images: [] }])
 })
 it('rolls back failed mutations without losing the current draft', async () => {
   const p = await fixture()
@@ -310,8 +383,8 @@ for (const kind of ['image', 'video'] as const) {
       await p.syncMediaConversations()
       expect(original.messages).toEqual(originalMessages)
       expect(p.visibleMediaTasks(original).map(task => task.id)).toEqual([source.id])
-      expect(p.visibleMediaTasks(copy).map(task => task.id)).toEqual([generated.id])
-      expect(p.mediaVersion(copy, generated.id)).toMatchObject({ index: 1, total: 2 })
+      expect(p.visibleMediaTasks(copy).map(task => task.id)).toEqual(kind === 'image' ? [source.id, generated.id] : [generated.id])
+      expect(p.mediaVersion(copy, generated.id)).toMatchObject(kind === 'image' ? { index: 0, total: 1 } : { index: 1, total: 2 })
     })
   }
 }
