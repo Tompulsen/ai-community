@@ -9,6 +9,7 @@ COPY src ./src
 COPY public ./public
 COPY server ./server
 COPY shared ./shared
+COPY migration ./migration
 RUN npm test && npm run test:server && npm run build
 
 FROM node:24-alpine AS runtime
