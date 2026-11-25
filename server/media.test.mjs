@@ -300,7 +300,9 @@ test('MP4 duration metadata stays bounded and optional while thumbnails publish 
   ]) await t.test(scenario.name, async t => {
     const root = await mkdtemp(join(tmpdir(), 'community-video-duration-'));
     const source = join(root, 'original');
-    await writeFile(source, await readFile(new URL('../tests/fixtures/poster-black-intro.mp4', import.meta.url)));
+    const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=16x16:r=4:d=2.5',
+      '-c:v', 'mpeg4', '-f', 'mp4', source], { windowsHide: true, encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
     const actualReadFile = fsPromises.readFile;
     let sourceReads = 0;
     const readMock = t.mock.method(fsPromises, 'readFile', async (path, ...options) => {
