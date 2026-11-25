@@ -37,6 +37,16 @@ slow request can therefore exceed this window. The script never escalates a
 production stop to SIGKILL or sends a second SIGTERM after a stop timeout.
 Nginx must also allow its previous workers to exit naturally.
 
+Text streams allow 180 seconds for response headers, 300 seconds without model
+progress, and 30 minutes overall. The request record adds one minute for saving.
+Current images track accepted generation and polling work even after HTTP clients
+disconnect: shutdown stops admission and waits for persistence before closing
+storage. Container stop grace is 32 minutes and `docker wait` allows 1940 seconds;
+deployments which preserve an existing Compose definition must update its web
+`stop_grace_period` too. An upgrade from an older image still requires draining
+its accepted work before stopping it; the new tracking cannot protect the old
+process retroactively.
+
 Old `/assets/` files are kept under
 `/opt/1panel/www/sites/zaiduyu.top/community-assets/assets`. OpenResty tries the
 current application first and reads this directory only after an asset 404.

@@ -27,7 +27,11 @@ import { acquireImageRead, imagePreview, releaseImageRead } from './creation/ima
 import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
-import { readGenerationStream, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
+import { readGenerationStream, GenerationStreamError, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
+import { createTextLifecycle } from './creation/text-lifecycle.ts'
+import { createEventWriter } from './creation/event-writer.ts'
+import { trackCreation, creationsClosing } from './creation/inflight.ts'
+import { textGenerationTimeouts, creationStreamProtocol } from '../shared/studio/creation-limits.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
 import { readModelTypes, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat } from '../shared/studio/model-types.ts'
@@ -50,7 +54,7 @@ const uncertain: CreationTask = { status: 'indeterminate', outputs: [], error: '
 const workSkillError = '生成服务未能完成本次技能调用，请核对任务与使用记录。'
 const preparationErrors = new Set(['NEW_API_GROUP_TOKEN_UNAVAILABLE', 'NEW_API_TOKEN_REQUIRED', 'COMMUNITY_WALLET_CONFIG'])
 type Credentials = Awaited<ReturnType<typeof resolveRelayCredentials>>
-type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string }
+type Result = CreationTask & { tokenId: number; protocol: CreationTaskProtocol; apiFormat?: Exclude<ModelApiFormat, 'auto'>; requestId?: string; deadline?: number }
 interface TrackedRequest {
   fingerprint: string
   hasWorkSkills?: boolean
@@ -88,8 +92,8 @@ async function saveRequestResult(redis: RequestContext['redis'], key: string, ca
     await writeFile(path.join(directory, file), JSON.stringify(cached.result), { mode: 0o600 })
     stored = { ...cached, result: { ...cached.result, ...uncertain }, file }
   }
-  if (!cached.background) { await redis.set(key, JSON.stringify(stored), 'EX', requestTtl); return }
-  await redis.eval(
+  if (!cached.background) await redis.set(key, JSON.stringify(stored), 'EX', requestTtl)
+  else await redis.eval(
     'redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2]); if ARGV[3]=="" then redis.call("ZREM",KEYS[2],ARGV[4]) else redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]) end; return "OK"',
     2, key, pendingTasks, JSON.stringify(stored), requestTtl,
     cached.result.status === 'pending' ? String(Date.now() + nextPoll) : '', key,
@@ -177,7 +181,7 @@ export function startCreationWorker(redis: RequestContext['redis']) {
   const run = async () => {
     if (running || stopped) return
     running = true
-    try { await processCreationTasks(redis) } catch { /* Durable tasks remain queued for the next pass. */ }
+    try { await trackCreation(redis, processCreationTasks(redis)) } catch { /* Durable tasks remain queued for the next pass. */ }
     finally { running = false }
   }
   void run()
@@ -501,8 +505,9 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
   }
   if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline) {
     const stage = cached.tracking ? '任务查询' : '网关提交'
-    result = { ...result, ...uncertain, errorStage: stage, error: stageError(stage, '等待结果超时。', result.errorStatus) }
+    result = { ...result, status: 'indeterminate', errorStage: stage, error: stageError(stage, '等待结果超时。', result.errorStatus) }
   }
+  if (cached.kind === 'text' && typeof cached.deadline === 'number') result = { ...result, deadline: cached.deadline }
   if (result.status === 'indeterminate' && result.error === '请求已提交，结果尚无法确认。请保留记录并核对使用记录，勿重复生成。')
     result = { ...result, error: uncertain.error }
   if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
@@ -582,10 +587,13 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   errorStage = '任务登记'
   if (background && getNewApiConfig().secret.length < 32)
     throw Object.assign(httpError(503, '任务服务配置不完整，请联系管理员。'), { notAccepted: true })
+  const textStream = input.kind === 'text' && input.chatOptions?.stream
+  const deadline = Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : textStream ? textGenerationTimeouts.total + textGenerationTimeouts.save : 195000)
   const pending: TrackedRequest = { fingerprint, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
+    ...(input.kind === 'text' ? { deadline } : {}),
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
-    deadline: Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : 195000),
-    ...(background ? { background: true, filesRoot: ctx.filesRoot } : {}) }
+    deadline, ...(background ? { background: true } : {}),
+    ...(background || input.kind === 'text' ? { filesRoot: ctx.filesRoot } : {}) }
   recoverable = true
   const accepted = background ? await ctx.redis.eval(
     'if redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2],"NX") then redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]); return "OK" end; return false',
@@ -599,20 +607,24 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     return await cachedResult(ctx, cached, key)
   }
   errorStage = '结果保存'
+  if (textStream) emit({ type: 'accepted', requestId: input.requestId, deadline })
   const finish = async () => {
   let result: Result
   let responseReceived = false
   let responseStatus: number | undefined
+  const lifecycle = textStream ? createTextLifecycle() : undefined
   try {
     // Keep a paid request alive after the browser stops waiting, and never replay it.
     const response = await svc.fetch(url, {
       method: 'POST', ...signed, redirect: 'error', cache: 'no-store',
-      signal: AbortSignal.timeout(input.kind === 'image' ? 600000 : input.kind === 'video' ? 360000 : 180000),
+      signal: lifecycle?.signal ?? AbortSignal.timeout(input.kind === 'image' ? 600000 : input.kind === 'video' ? 360000 : 180000),
     })
+    lifecycle?.receivedResponse()
     responseReceived = true
     responseStatus = response.status
     if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
-      result = { ...await readGenerationStream(response, input, emit), tokenId: credentials.tokenId, protocol }
+      result = { ...await readGenerationStream(response, input, emit, { signal: lifecycle?.signal, progress: lifecycle?.progress,
+        intervalMs: ctx.req.headers['x-creation-stream'] === creationStreamProtocol ? 75 : 300 }), tokenId: credentials.tokenId, protocol }
     } else {
       const data = await readJson(response, 40 * MiB).catch(error => { if (response.ok) throw error; return null })
       if (!response.ok) {
@@ -645,12 +657,19 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       }
     }
   } catch (error) {
-    const detail = record(error) && typeof error.statusCode === 'number' ? message(error, credentials.apiKey)
+    const detail = lifecycle?.signal.aborted ? String(lifecycle.signal.reason.message)
+      : error instanceof GenerationStreamError ? error.message
+      : record(error) && typeof error.statusCode === 'number' ? message(error, credentials.apiKey)
       : error instanceof Error && error.name === 'TimeoutError' ? '等待生成服务响应超时。'
       : responseReceived ? '读取生成结果失败。' : '生成服务连接异常，未能获取生成结果。'
     const stage = responseReceived ? '网关响应处理' : '网关提交'
-    result = { ...uncertain, error: stageError(stage, detail, responseStatus), errorStage: stage,
+    result = { ...uncertain, ...(error instanceof GenerationStreamError ? error.partial : {}), error: stageError(stage, detail, responseStatus), errorStage: stage,
       ...(responseStatus ? { errorStatus: responseStatus } : {}), tokenId: credentials.tokenId, protocol }
+  } finally { lifecycle?.dispose() }
+  if (input.kind === 'text') {
+    result.deadline = deadline
+    if (result.status === 'indeterminate' && (result.outputs.some(output => output.text) || result.reasoning))
+      result.error += ' 已保留部分回答，内容尚未完整生成。'
   }
   if (hasWorkSkills && result.error)
     result.error = result.errorStage ? stageError(result.errorStage, workSkillError, result.errorStatus) : workSkillError
@@ -675,7 +694,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     try { await saveRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0); saved = true; break }
     catch { if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt)) }
   }
-  if (!saved && background && ctx.filesRoot) {
+  if (!saved && (background || input.kind === 'text') && ctx.filesRoot) {
     const directory = path.join(ctx.filesRoot, '.creation-results')
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(tracked), { mode: 0o600 })
@@ -683,7 +702,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   return result
   }
   if (!background) return await finish()
-  void finish().catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
+  void trackCreation(ctx.redis, finish()).catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
   return pending.result
   } catch (error) {
     throw Object.assign(error instanceof Error ? error : new Error('创作服务暂时不可用。'), { errorStage, notAccepted: !recoverable })
@@ -794,15 +813,16 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
   try {
     if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
       await rateLimit(ctx, 'generate', 12)
+      if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
       const input = validateCreationInput(ctx.body)
       const background = input.kind !== 'text' && String(ctx.req.headers.prefer || '').split(',').some(value => value.trim() === 'respond-async')
       if (!background && (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream)) {
         // A disconnected browser stops receiving events; the paid job still finishes and is recoverable.
         ctx.reply.hijack()
         ctx.res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' })
-        const emit = (event: CreationEvent) => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(`data: ${JSON.stringify(event)}\n\n`) }
-        const heartbeat = setInterval(() => { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.write(': keepalive\n\n') }, 15000)
-        try { emit({ type: 'result', ...await generate(ctx, req, svc, emit) as object }) }
+        const writer = createEventWriter(ctx.res, ctx.req.headers['x-creation-stream'] === creationStreamProtocol, input.kind === 'text' ? 256 * 1024 : 40 * MiB)
+        const emit = writer.emit
+        try { emit({ type: 'result', ...await trackCreation(ctx.redis, generate(ctx, req, svc, emit)) as object }) }
         catch (error) {
           const statusCode = record(error) ? Number(error.statusCode ?? error.status) : 0
           const stage = record(error) && typeof error.errorStage === 'string' ? error.errorStage : '请求校验'
@@ -814,8 +834,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
             ...(error instanceof NewApiError ? { code: error.code } : {}),
             ...(notAccepted ? { statusCode, notAccepted: true } : {}) })
         }
-        finally { clearInterval(heartbeat); if (!ctx.res.destroyed) ctx.res.end() }
-      } else ctx.json(background ? 202 : 200, await generate(ctx, req, svc, undefined, background))
+        finally { writer.end() }
+      } else ctx.json(background ? 202 : 200, await trackCreation(ctx.redis, generate(ctx, req, svc, undefined, background)))
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
       await rateLimit(ctx, 'tasks', 180)
       const id = ctx.url.pathname.split('/').pop()!

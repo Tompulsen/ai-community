@@ -16,6 +16,7 @@ import { imageThumbnail } from './studio-media-previews'
 import { imageDownload, jpegDownload } from './image-download'
 import { chooseImageDownloadFormat } from './image-download-choice'
 import type { ImageDownloadFormat } from '../shared/image-download'
+import { creationStreamProtocol, textGenerationTimeouts } from '../shared/studio/creation-limits'
 
 export type CreationKind = 'image' | 'video' | 'text'
 export type CreationPhase = 'submitting' | 'running' | 'paused' | 'complete' | 'error' | 'attention'
@@ -35,6 +36,7 @@ export interface CreationTask {
   prompt: string
   createdAt: number
   settledAt?: number
+  deadline?: number
   phase: CreationPhase
   stage?: 'downloading'
   protocol: string
@@ -494,6 +496,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
   const status = String(data.status || data.state || '').toLowerCase()
+  if (typeof data.deadline === 'number' && Number.isFinite(data.deadline)) task.deadline = data.deadline
   task.stage = status === 'pending' && data.stage === 'downloading' ? 'downloading' : undefined
   task.serverTracked = data.requestId === task.id
   if (typeof data.tokenId === 'number') task.tokenId = data.tokenId
@@ -501,6 +504,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   const apiFormat = modelApiFormatSchema.safeParse(data.apiFormat).data
   if (apiFormat && apiFormat !== 'auto') task.apiFormat = apiFormat
   const urls = resultUrls(data, task), text = resultText(data)
+  if (task.kind === 'text' && text) task.text = text
   const id = data.upstreamId || data.task_id || data.id || data.taskId
   if (task.serverTracked || validUpstreamId(id) || status || urls.length || text || task.toolCalls?.length) task.submissionError = undefined
   if (validUpstreamId(id) && (status || !urls.length && !text)) task.upstreamId = id
@@ -510,6 +514,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   task.errorStage = typeof data.errorStage === 'string' ? data.errorStage : undefined
   task.errorStatus = typeof data.errorStatus === 'number' ? data.errorStatus : undefined
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
+    task.toolCalls = undefined
     task.phase = 'attention'
     task.error = detail || '获取生成结果失败。'
     if (status === 'indeterminate' && creationRequestTimedOut(task)) {
@@ -518,6 +523,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     return true
   }
   if (['failed', 'cancelled', 'canceled', 'error'].includes(status)) {
+    task.toolCalls = undefined
     task.phase = 'error'
     task.error = detail || '上游任务未成功完成。'
     return true
@@ -583,7 +589,7 @@ function taskRetryDelay(value: unknown, minimum: number) {
   return Number.isFinite(duration) ? Math.max(minimum, duration) : minimum
 }
 async function poll(task: CreationTask, controller: AbortController, version: number) {
-  const deadline = task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : 30 * 60_000)
+  let deadline = task.deadline ?? task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : task.kind === 'text' ? textGenerationTimeouts.total + textGenerationTimeouts.save : 30 * 60_000)
   let failures = 0, rateLimited = 0
   let firstRead = true
   while (!controller.signal.aborted && epoch === version && (firstRead || Date.now() < deadline)) {
@@ -622,6 +628,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
     }
     if (epoch !== version || controller.signal.aborted) return
     const finished = applyResult(task, data)
+    deadline = task.deadline ?? deadline
     await persist()
     if (finished) { if (task.phase === 'complete') notify('生成完成，可在创作台查看结果。'); return }
     if (Date.now() >= deadline) break
@@ -894,7 +901,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
+      headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : { 'X-Creation-Stream': creationStreamProtocol }), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
         ...(selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
@@ -929,10 +936,14 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
           })
         }
         if (event.type === 'preview' && safeResultUrl(event.url)) { task.preview = event.url; task.phase = 'running' }
+        if (event.type === 'accepted' && event.requestId === task.id && typeof event.deadline === 'number') {
+          task.deadline = event.deadline; task.serverTracked = true; task.phase = 'running'
+        }
         if (event.type === 'delta') {
-          task.text = typeof event.text === 'string' ? event.text : task.text
-          task.reasoning = typeof event.reasoning === 'string' ? event.reasoning : ''
-          task.usage = event.usage; task.phase = 'running'
+          if (typeof event.text === 'string') task.text = event.append === true ? task.text + event.text : event.text
+          if (typeof event.reasoning === 'string') task.reasoning = event.append === true ? (task.reasoning || '') + event.reasoning : event.reasoning
+          if (event.usage) task.usage = event.usage
+          task.phase = 'running'
           const measured = progress(task.text, task.reasoning || '', performance.now())
           if (measured) task.generationProgress = measured
         }

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac } from 'node:crypto'
 import { get as httpGet } from 'node:http'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -18,6 +18,7 @@ import { httpError } from './auth.ts'
 import { NewApiError } from './native-account/config.ts'
 import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
 import { handleContent } from './content.ts'
+import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -192,6 +193,116 @@ function fixture(t, options = {}) {
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
+
+test('text partial results remain recoverable across protocols, duplicate submission and a final Redis outage', async t => {
+  const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-text-recovery-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  let savingFails = true, failedSaves = 0
+  const f = fixture(t, { filesRoot,
+    beforeRedisSet(key, value) {
+      if (savingFails && key.includes(':request:') && JSON.parse(value).result.status !== 'pending') {
+        failedSaves++; throw new Error('fixture Redis outage')
+      }
+    },
+    fetch() { return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: '已生成的🌊正文', reasoning_content: '推理内容',
+      tool_calls: [{ index: 0, id: 'tool-1', function: { name: 'unfinished', arguments: '{' } }] } }],
+      usage: { prompt_tokens: 7, completion_tokens: 8 } }) + '\n\n', { headers: { 'Content-Type': 'text/event-stream' } }) },
+  })
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'partial-text', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  const sent = await submit(f.app, input, { 'X-Creation-Stream': 'append-v1' })
+  const events = sent.payload.split('\n\n').filter(value => value.startsWith('data: ')).map(value => JSON.parse(value.slice(6)))
+  const final = events.at(-1)
+  assert.equal(final.status, 'indeterminate')
+  assert.equal(final.outputs[0].text, '已生成的🌊正文')
+  assert.equal(final.reasoning, '推理内容')
+  assert.deepEqual(final.usage, { inputTokens: 7, outputTokens: 8 })
+  assert.equal(final.toolCalls, undefined)
+  assert.match(final.error, /部分回答/)
+  assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), final.outputs[0].text)
+  assert.equal(failedSaves, 3)
+  const recovered = (await f.app.inject('/api/creation/requests/partial-text')).json()
+  assert.equal(recovered.status, 'indeterminate')
+  assert.deepEqual(recovered.outputs, final.outputs)
+  assert.equal((await f.app.inject({ url: '/api/creation/requests/partial-text', headers: { 'x-test-account': '18' } })).statusCode, 404)
+  savingFails = false
+  const again = await submit(f.app, input)
+  assert.match(again.payload, /"status":"indeterminate"/)
+  assert.match(again.payload, /已生成的🌊正文/)
+  assert.equal(f.calls.length, 1)
+  assert.equal((await readdir(path.join(filesRoot, '.creation-results'))).filter(name => name.endsWith('.request.json')).length, 0)
+})
+
+test('text request recovery follows its accepted deadline beyond 195 seconds and shutdown waits for persistence', async t => {
+  const started = deferred(), upstream = deferred()
+  const f = fixture(t, { fetch() { started.resolve(); return upstream.promise } })
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'long-text', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  const sending = submit(f.app, input).then(value => value)
+  await started.promise
+  const now = Date.now()
+  t.mock.method(Date, 'now', () => now + 4 * 60_000)
+  const pending = (await f.app.inject('/api/creation/requests/long-text')).json()
+  assert.equal(pending.status, 'pending')
+  assert(pending.deadline > Date.now() + 26 * 60_000)
+  stopAcceptingCreations(f.redis)
+  let drained = false
+  const stopping = drainCreations(f.redis).then(() => { drained = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(drained, false)
+  const rejected = await submit(f.app, { ...input, requestId: 'during-shutdown' })
+  assert.equal(rejected.statusCode, 503)
+  assert.equal(rejected.json().notAccepted, true)
+  upstream.resolve(new Response('data: {"choices":[{"delta":{"content":"completed"}}]}\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } }))
+  await sending; await stopping
+  assert.equal(drained, true)
+  const saved = (await f.app.inject('/api/creation/requests/long-text')).json()
+  assert.equal(saved.status, 'succeeded')
+  assert.equal(saved.outputs[0].text, 'completed')
+  assert.equal(saved.deadline, pending.deadline)
+  assert.equal(f.calls.length, 1)
+})
+
+test('a disconnected HTTP stream still persists before shutdown closes its storage', async t => {
+  const started = deferred(), upstream = deferred()
+  const f = fixture(t, { fetch() { started.resolve(); return upstream.promise } })
+  let closed = false
+  f.app.addHook('preClose', async () => { stopAcceptingCreations(f.redis) })
+  f.app.addHook('onClose', async () => { await drainCreations(f.redis); closed = true })
+  await f.app.listen({ port: 0, host: '127.0.0.1' })
+  const address = 'http://127.0.0.1:' + f.app.server.address().port
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'disconnected-stream', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  const response = await fetch(address + '/api/creation/generate', { method: 'POST', headers, body: JSON.stringify(input) })
+  const reader = response.body.getReader()
+  assert.match(new TextDecoder().decode((await reader.read()).value), /accepted/)
+  await reader.cancel(); await started.promise
+  const stopping = f.app.close()
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(closed, false)
+  upstream.resolve(new Response('data: {"choices":[{"delta":{"content":"saved after disconnect"}}]}\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } }))
+  await stopping
+  assert.equal(closed, true)
+  const saved = JSON.parse([...f.values].find(([key]) => key.endsWith(':disconnected-stream'))[1])
+  assert.equal(saved.result.status, 'succeeded')
+  assert.equal(saved.result.outputs[0].text, 'saved after disconnect')
+  assert.equal(f.calls.length, 1)
+})
+
+test('oversized final text detaches HTTP output but the original request recovers the whole answer once', async t => {
+  const text = '长回答🌊'.repeat(40_000)
+  const f = fixture(t, { async fetch() {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+  } })
+  await f.app.listen({ port: 0, host: '127.0.0.1' })
+  const address = 'http://127.0.0.1:' + f.app.server.address().port
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'large-stream', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  const response = await fetch(address + '/api/creation/generate', { method: 'POST', headers: { ...headers, 'X-Creation-Stream': 'append-v1' }, body: JSON.stringify(input) })
+  await assert.rejects(response.text())
+  await drainCreations(f.redis)
+  const recovered = (await f.app.inject('/api/creation/requests/large-stream')).json()
+  assert.equal(recovered.status, 'succeeded')
+  assert.equal(recovered.outputs[0].text, text)
+  assert.equal(f.calls.length, 1)
+})
 
 async function relayRequestBody(init) {
   const request = new Request('https://model.example/fixture', { ...init, method: 'POST' })

@@ -10,6 +10,13 @@ import { usesGeminiImageChat } from '../../shared/studio/image-params.ts'
 import { normalizeCreationTask } from '../creation-contract.ts'
 
 export type CreationEvent = { type: string; [key: string]: unknown }
+export class GenerationStreamError extends Error {
+  partial: CreationTask
+  constructor(cause: unknown, partial: CreationTask) {
+    super('流式回答中断，已保留已生成内容，请先核对消费记录。', { cause })
+    this.partial = partial
+  }
+}
 async function readChatImageStream(response: Response, emit: (event: CreationEvent) => void, native = false): Promise<CreationTask> {
   if (!response.body) throw new Error('生图流式响应为空。')
   let text = '', complete = false, bytes = 0
@@ -65,7 +72,8 @@ async function readChatImageStream(response: Response, emit: (event: CreationEve
   } catch (error) { await reader.cancel().catch(() => {}); throw error }
   finally { reader.releaseLock() }
 }
-export async function readGenerationStream(response: Response, input: CreationInput, emit: (event: CreationEvent) => void): Promise<CreationTask> {
+export async function readGenerationStream(response: Response, input: CreationInput, emit: (event: CreationEvent) => void,
+  options: { signal?: AbortSignal; progress?: () => void; intervalMs?: number } = {}): Promise<CreationTask> {
   if (input.kind === 'image') {
     if (usesGeminiImageChat(input.model, input.apiFormat)) return readChatImageStream(response, emit, input.apiFormat === 'gemini')
     let images: string[] = []
@@ -74,15 +82,29 @@ export async function readGenerationStream(response: Response, input: CreationIn
   }
   if (!response.body) throw new Error('流式响应为空。')
   const format = input.chatOptions?.format ?? 'chat-completions'
-  let text = '', reasoning = '', complete = false, usage: CreationTask['usage'], bytes = 0
+  let text = '', reasoning = '', complete = false, terminal = false, usage: CreationTask['usage'], bytes = 0
   const native = format !== 'chat-completions' ? createChatStreamParser(format, value => { usage = value }) : undefined
   const thinking = createReasoningStream()
   const toolCalls = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>()
+  let timer: ReturnType<typeof setTimeout> | undefined, dirty = false, emitted = false
+  const flush = () => {
+    clearTimeout(timer); timer = undefined
+    if (!dirty) return
+    dirty = false; emitted = true
+    emit({ type: 'delta', text, reasoning, usage })
+  }
+  const changed = () => {
+    dirty = true
+    if (!emitted) flush()
+    else timer ??= setTimeout(flush, options.intervalMs ?? 75)
+  }
   const parser = getLines(getMessages(message => {
-    if (!message.data) return
-    if (message.data === '[DONE]') { complete = true; return }
+    if (!message.data || terminal) return
+    if (message.data === '[DONE]') { if (!complete) options.progress?.(); complete = true; terminal = true; return }
     const data = JSON.parse(message.data)
     if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || '生成失败。')
+    const previousText = text.length, previousReasoning = reasoning.length, previousUsage = usage, wasComplete = complete
+    let toolProgress = false
     if (native) {
       const delta = native(message.data)
       if (delta.error) throw new Error(delta.error)
@@ -90,8 +112,13 @@ export async function readGenerationStream(response: Response, input: CreationIn
       else text += delta.content
       reasoning += delta.reasoning ?? ''
       if (delta.done) complete = true
+      terminal = delta.done === true
+      if (data.type === 'response.incomplete') throw new Error('模型未能完整生成回答。')
+      toolProgress = data.type === 'response.function_call_arguments.delta' && typeof data.delta === 'string' && !!data.delta
+        || data.delta?.type === 'input_json_delta' && typeof data.delta.partial_json === 'string' && !!data.delta.partial_json
     } else {
       const choice = data.choices?.[0], delta = choice?.delta
+      toolProgress = typeof delta?.content === 'string' && !!delta.content
       for (const call of delta?.tool_calls || []) {
         if (!Number.isSafeInteger(call.index) || call.index < 0 || call.index >= 32) throw new Error('工具调用序号无效。')
         const previous = toolCalls.get(call.index) || { id: '', type: 'function' as const, function: { name: '', arguments: '' } }
@@ -99,6 +126,7 @@ export async function readGenerationStream(response: Response, input: CreationIn
         previous.function.name += typeof call.function?.name === 'string' ? call.function.name : ''
         previous.function.arguments += typeof call.function?.arguments === 'string' ? call.function.arguments : ''
         toolCalls.set(call.index, previous)
+        toolProgress ||= !!(call.id || call.function?.name || call.function?.arguments)
       }
       if (choice?.finish_reason) complete = true
       const separated = thinking.push(typeof delta?.content === 'string' ? delta.content : '')
@@ -106,27 +134,40 @@ export async function readGenerationStream(response: Response, input: CreationIn
       reasoning += (delta?.reasoning_content || delta?.reasoning || '') + separated.reasoning
       usage = extractResponseUsage(format, data) ?? usage
     }
-    emit({ type: 'delta', text, reasoning, usage })
+    if (text.length !== previousText || reasoning.length !== previousReasoning || toolProgress || complete !== wasComplete) options.progress?.()
+    if (text.length !== previousText || reasoning.length !== previousReasoning || usage !== previousUsage) changed()
   }))
   const reader = response.body.getReader()
+  const abort = () => { void reader.cancel(options.signal?.reason).catch(() => {}) }
+  options.signal?.addEventListener('abort', abort, { once: true })
   try {
+    options.signal?.throwIfAborted()
     for (;;) {
       const chunk = await reader.read()
+      options.signal?.throwIfAborted()
       if (chunk.done) break
       bytes += chunk.value.byteLength
       if (bytes > 40 * 1024 ** 2) throw new Error('流式内容超过限制。')
       parser(chunk.value)
+      if (terminal) { await reader.cancel().catch(() => {}); break }
     }
     parser(new TextEncoder().encode('\n\n'))
     if (!complete) throw new Error('流式响应中断，已保留当前内容，请先核对消费记录。')
     const tail = thinking.finish()
     text += tail.content; reasoning += tail.reasoning
-    emit({ type: 'delta', text, reasoning, usage })
+    dirty = true; flush()
     return { status: 'succeeded', outputs: [{ text }], reasoning, usage,
       ...(toolCalls.size ? { toolCalls: [...toolCalls.values()].map(call => toolCallSchema.parse(call)) } : {}) }
   } catch (error) {
     await reader.cancel().catch(() => {})
-    throw error
-  } finally { reader.releaseLock() }
+    const tail = thinking.finish()
+    text += tail.content; reasoning += tail.reasoning
+    dirty = true; flush()
+    throw new GenerationStreamError(error, { status: 'indeterminate', outputs: text ? [{ text }] : [], reasoning, usage })
+  } finally {
+    clearTimeout(timer)
+    options.signal?.removeEventListener('abort', abort)
+    reader.releaseLock()
+  }
 }
 export { extractChatReasoning, extractResponseUsage }

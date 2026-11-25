@@ -67,7 +67,7 @@ def definition(original, image):
     service['image'] = image
     service['pull_policy'] = 'never'
     service['ports'] = copy.deepcopy(result['services']['web']['ports'])
-    service['stop_grace_period'] = '10m'
+    service['stop_grace_period'] = '32m'
     for key in WORKER_FLAGS:
         service['environment'].pop(key, None)
     service['labels'] = {k: v for k, v in service.get('labels', {}).items()
@@ -218,7 +218,7 @@ def wait_proxy_html(name):
 def graceful_stop(name):
     execute(['docker', 'kill', '--signal', 'SIGTERM', name])
     # A timed-out client must never escalate to SIGKILL on production work.
-    code = execute(['docker', 'wait', name], timeout=620).decode().strip()
+    code = execute(['docker', 'wait', name], timeout=1940).decode().strip()
     assert code == '0', f'{name} did not exit gracefully (exit {code})'
 
 

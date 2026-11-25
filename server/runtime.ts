@@ -27,6 +27,7 @@ import { startMediaWorker } from './media.ts'
 import { handleAccountRequest } from './native-account/index.ts'
 import { closeNewApiRedis } from './native-account/session.ts'
 import { handleCreation, startCreationWorker } from './creation.ts'
+import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
 import { handleStudioTools, closeMcpClients } from './studio-tools.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { AppConfig, Database, RequestContext } from './types.ts'
@@ -272,9 +273,11 @@ export async function start(): Promise<FastifyInstance> {
   const stopWorker = process.env.DISABLE_LOTTERY_WORKER === '1' ? () => {} : startPendingWorker({ db, config, newId })
   const stopMedia = process.env.DISABLE_MEDIA_WORKER === '1' ? async () => {} : startMediaWorker({ db, filesRoot: process.env.FILES_ROOT || '/app/files' })
   const stopCreation = startCreationWorker(redis)
+  app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
   app.addHook('onClose', async () => {
     stopWorker()
     stopCreation()
+    await drainCreations(redis)
     await stopMedia()
     await Promise.allSettled([db.end(), redis.quit()])
   })
