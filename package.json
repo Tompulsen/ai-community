@@ -10,7 +10,7 @@
     "typecheck:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "start": "node server/runtime.ts",
-    "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs",
+    "test:server": "node --test server/*.test.mjs server/native-account/*.test.mjs server/creation/*.test.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },
@@ -47,6 +47,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
+    "@electric-sql/pglite": "^0.6.0",
     "@playwright/test": "^1.65.0",
     "@types/katex": "0.16.8",
     "@types/node": "^24.19.2",

@@ -3,7 +3,7 @@ import { modelCategories, modelDescription, modelVendor, searchModels } from '..
 
 vi.mock('./state', async () => {
   const { reactive } = await import('vue')
-  return { session: reactive({ user: null as any }) }
+  return { session: reactive({ user: null as any, accountUrl: 'https://accounts.example' }), api: vi.fn() }
 })
 vi.mock('./native-studio', async () => {
   const { reactive } = await import('vue')
@@ -34,17 +34,54 @@ it('recognizes slash-prefixed vendors, searches descriptions and sorts category 
   expect(modelDescription({ id: 'proxy/TAVILY-DEEP' }, 'text')).toContain('高相关')
   expect(modelDescription({ id: 'gpt-5', description: '账号提供的说明' }, 'text')).toBe('账号提供的说明')
 })
-it('isolates preferences by account and token and restores them for the original identity', async () => {
+it('isolates preferences by account and group while surviving token changes', async () => {
   const p = await fixture()
   p.toggleModelFavorite('alias'); p.setModelType('alias', 'image'); p.setModelFormat('alias', 'responses')
   p.creation.modelTokenId = 52
+  expect(p.favoriteModel('alias')).toBe(true)
+  p.creation.selectedGroup = 'images'
   expect(p.favoriteModel('alias')).toBe(false); expect(p.modelFormat('alias')).toBeUndefined()
   p.creation.modelTokenId = 41
+  p.creation.selectedGroup = 'auto'
   expect(p.modelKind({ id: 'alias', kinds: ['text'] })).toBe('image')
   p.session.user = { id: 'creator-a', accountId: '18' } as any
   expect(p.favoriteModel('alias')).toBe(false)
   p.session.user = { id: 'creator-a', accountId: '17' } as any
   expect(p.favoriteModel('alias')).toBe(true); expect(p.modelFormat('alias')).toBe('responses')
+})
+it('allows favorites and settings for an account without model keys', async () => {
+  const p = await fixture()
+  p.creation.modelTokenId = null as any
+  p.toggleModelFavorite('alias'); p.setModelType('alias', 'image'); p.setModelFormat('alias', 'responses')
+  expect(p.favoriteModel('alias')).toBe(true)
+  expect(p.modelKind({ id: 'alias' })).toBe('image')
+  expect(p.modelFormat('alias')).toBe('responses')
+})
+it('migrates only verified unambiguous token/group preferences and preserves conflicting originals', async () => {
+  const p = await fixture(), { api } = await import('./state')
+  const old = (token: number) => JSON.stringify(['account', token, 'alias'])
+  Object.assign(p.modelPreferences, { favorites: [old(41), old(52), old(99)], overrides: { [old(41)]: 'image', [old(52)]: 'video' }, apiFormats: { [old(41)]: 'responses' } })
+  vi.mocked(api).mockResolvedValue({ issuer: 'https://accounts.example', mappings: { 41: 'auto', 52: 'auto' } })
+  await p.migrateModelPreferences()
+  p.creation.modelTokenId = null as any
+  expect(p.favoriteModel('alias')).toBe(true)
+  expect(p.modelFormat('alias')).toBe('responses')
+  expect(p.modelType('alias')).toBe('auto')
+  expect(p.modelPreferences.overrides[old(41)]).toBe('image')
+  expect(p.modelPreferences.overrides[old(52)]).toBe('video')
+  expect(p.modelPreferences.favorites).toContain(old(99))
+  expect(p.modelPreferences.error).toContain('无法确认')
+})
+it('legacy catalogues keep their verified token preferences readable and editable if migration is unavailable', async () => {
+  const p = await fixture(), old = JSON.stringify(['account', 41, 'alias'])
+  Object.assign(p.modelPreferences, { favorites: [old], overrides: { [old]: 'image' }, apiFormats: { [old]: 'responses' } })
+  expect(p.favoriteModel('alias')).toBe(true)
+  expect(p.modelType('alias')).toBe('image')
+  expect(p.modelFormat('alias')).toBe('responses')
+  p.toggleModelFavorite('alias'); p.setModelType('alias', 'auto'); p.setModelFormat('alias', 'auto')
+  expect(p.favoriteModel('alias')).toBe(false)
+  expect(p.modelType('alias')).toBe('auto')
+  expect(p.modelFormat('alias')).toBeUndefined()
 })
 it('reads configured chat formats without treating image formats as chat overrides', async () => {
   const p = await fixture()

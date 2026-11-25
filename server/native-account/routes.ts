@@ -1,4 +1,5 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
+import { nativeRequestsEnabled } from '../creation/request-store.ts';
 import { readModelPricing } from "./model-pricing.ts";
 import { readUsage } from "./usage.ts";
 import { readWallet, quoteWallet, createWalletPayment, redeemWallet } from "./wallet.ts";
@@ -220,6 +221,7 @@ async function singleDefaultSelection(
   req: AccountRequest,
   bundle: ReturnType<typeof authBundle>,
 ) {
+  if (nativeRequestsEnabled(bundle.user.id)) return {};
   // A newly registered account can use its sole default key regardless of its
   // name. Empty accounts get one Auto key through the shared provisioning flow.
   try {
@@ -715,7 +717,7 @@ export async function handle(
       const { session } = await getAuthenticatedSession(req);
       const [{ data: groups }, token] = await Promise.all([
         accountRequest(req, "/api/user/self/groups"),
-        session.selectedTokenId
+        !nativeRequestsEnabled(session.user?.id) && session.selectedTokenId
           ? accountRequest(req, `/api/token/${session.selectedTokenId}`)
               .then(({ data }) => data)
               .catch((error) => {
@@ -729,6 +731,7 @@ export async function handle(
         typeof token?.group === "string" ? token.group : null;
       return ok({
         selectedGroup,
+        contractVersion: nativeRequestsEnabled(session.user?.id) ? 2 : 1,
         selectedAutoGroups:
           token?.group === "auto" ? token.auto_groups ?? [] : [],
         groups: [

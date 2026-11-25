@@ -4,9 +4,69 @@ import test from 'node:test'
 import { AccountRequest } from './http.ts'
 import { saveSession, removeSessionById } from './session.ts'
 import { resolveModelGroup, resolveSystemAutoToken, initializeLoginAuto } from './model-groups.ts'
+import { requestDatabase, environment } from '../creation/test-database.mjs'
+import { readAccountModelCatalogue } from './model-catalogue.ts'
+import { resolveRelayCredentials } from './relay.ts'
 
 const systemName = '\u7cfb\u7edf\u521b\u5efa'
 let nextUser = 5000
+
+test('a single-group account catalogue reads only account metadata and rejects unauthorized groups', async t => {
+  const f = await fixture(t, [], { respond(call, { ok }) {
+    if (call.path === '/api/user/models') return ok(['gpt-image-2'])
+  } })
+  const catalogue = await readAccountModelCatalogue(f.request, 'images')
+  assert.deepEqual(catalogue.items, [{ id: 'gpt-image-2', groups: ['images'] }])
+  assert.equal(f.calls.filter(call => call.path === '/api/user/models').length, 1)
+  assert.equal(f.calls.filter(call => call.path.startsWith('/api/token')).length, 0)
+  await assert.rejects(readAccountModelCatalogue(f.request, 'unavailable'), error => error.status === 403)
+  assert.equal(f.writes().length, 0)
+})
+
+test('native credentials retain PostgreSQL provenance across concurrency, cache loss and uncertain writes', async t => {
+  const db = await requestDatabase(t)
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1' })
+  await t.test('eight first sends create once, survive Redis loss, and ignore manual session selections', async t => {
+    const f = await fixture(t, [{ id: 40, name: 'manual', group: 'manual' }], { selected: 40 })
+    f.request.database = db
+    const ids = await Promise.all(Array.from({ length: 8 }, () => resolveModelGroup(f.request, 'images')))
+    assert.equal(new Set(ids).size, 1)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+    globalThis.__octopusModelGroups.clear()
+    const next = new AccountRequest(f.request); next.database = db
+    const reads = f.calls.filter(call => call.path === `/api/token/${ids[0]}`).length
+    assert.equal(await resolveModelGroup(next, 'images'), ids[0])
+    next.headers.set('x-new-api-token', String(ids[0])); next.headers.set('x-new-api-group', 'images')
+    assert.equal((await resolveRelayCredentials(next, 'v1/images/generations')).tokenId, ids[0])
+    assert.equal(f.calls.filter(call => call.path === `/api/token/${ids[0]}`).length - reads, 1)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+    assert.equal(f.items.find(item => item.id === 40).name, 'manual')
+  })
+  await t.test('a system name cannot prove provenance', async t => {
+    const f = await fixture(t, [{ id: 41 }]); f.request.database = db
+    await assert.rejects(resolveModelGroup(f.request, 'images'), error => error.code === 'NEW_API_CREDENTIAL_VERIFICATION_REQUIRED')
+    assert.equal(f.writes().length, 0)
+  })
+  await t.test('a lost create response only reconciles GET after restarting the resolver', async t => {
+    let ambiguous = true
+    const f = await fixture(t, [], { respond(call) {
+      if (call.method === 'POST' && call.path === '/api/token/' && ambiguous) throw new Error('lost creation response')
+    } }); f.request.database = db
+    await assert.rejects(resolveModelGroup(f.request, 'images'), /不会重复创建/)
+    ambiguous = false
+    globalThis.__octopusModelGroups.clear()
+    await assert.rejects(resolveModelGroup(f.request, 'images'), /不会重复创建/)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+    const row = (await db.query("SELECT binding FROM community_group_credential WHERE binding ? 'pendingName' ORDER BY updated_at DESC LIMIT 1")).rows[0]
+    assert.ok(row.binding.pendingName)
+  })
+  await t.test('search Auto and ordinary Auto share a verified native binding', async t => {
+    const f = await fixture(t); f.request.database = db
+    const ordinary = await resolveModelGroup(f.request, 'auto')
+    assert.equal(await resolveSystemAutoToken(f.request), ordinary)
+    assert.equal(f.writes().filter(call => call.method === 'POST').length, 1)
+  })
+})
 
 async function fixture(t, entries = [], options = {}) {
   const environment = {

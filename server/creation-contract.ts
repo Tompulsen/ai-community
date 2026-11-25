@@ -21,6 +21,8 @@ export type CreationKind = 'image' | 'video' | 'text'
 export type CreationProtocol = 'auto' | 'openai' | 'sync' | 'async'
 export type CreationTaskProtocol = Exclude<CreationProtocol, 'auto'> | 'legacy' | 'plugin' | 'seedance' | 'gemini' | 'xai'
 export interface CreationInput {
+  contractVersion?: 2
+  group?: string
   kind: CreationKind
   model: string
   prompt: string
@@ -176,6 +178,12 @@ export function validateCreationInput(value: unknown): CreationInput {
     if (typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.requestId)) invalid('请求编号无效。')
     result.requestId = value.requestId
   }
+  if (value.contractVersion !== undefined) {
+    if (value.contractVersion !== 2) invalid('生成契约版本无效。')
+    if (typeof value.group !== 'string' || !value.group || value.group !== value.group.trim() || value.group.length > 128 || /[\u0000-\u001f\u007f]/u.test(value.group)) invalid('请选择有效的模型分组。')
+    result.contractVersion = 2
+    result.group = value.group
+  } else if (value.group !== undefined) invalid('显式分组需要使用生成契约 v2。')
   if (value.protocol !== undefined) {
     if (!['auto', 'openai', 'sync', 'async'].includes(String(value.protocol))) invalid('生成协议无效。')
     if (result.kind === 'text' && value.protocol === 'async') invalid('文本生成不支持此异步接口。')

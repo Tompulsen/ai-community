@@ -44,6 +44,9 @@ import { resolveVideoModelSetting } from './video-models.ts'
 import { videoDurationSeconds } from './video-privacy.ts'
 import { sniffType } from './media.ts'
 import type { VideoModelSetting } from '../shared/studio/model-types.ts'
+import { requestStoreEnabled, nativeRequestsEnabled, readDurableRequest, registerDurableRequest,
+  dispatchDurableRequest, saveDurableRequest, dueDurableRequests, claimDurablePoll, type DurableRequest } from './creation/request-store.ts'
+import type { Queryable } from './types.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -65,6 +68,7 @@ interface TrackedRequest {
   file?: string
   background?: boolean
   filesRoot?: string
+  contractVersion?: number
 }
 interface PollCredentials {
   key: string
@@ -83,7 +87,7 @@ interface CreationServices {
 }
 const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, groupToken: resolveModelGroup, fetch, publicMedia: fetchPublicMedia }
 
-async function saveRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000) {
+async function saveRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000, durable?: { db: Queryable; row: DurableRequest }) {
   let stored = cached
   if (JSON.stringify(cached).length > MiB) {
     if (!filesRoot) throw new Error('Result storage is unavailable')
@@ -92,6 +96,7 @@ async function saveRequestResult(redis: RequestContext['redis'], key: string, ca
     await writeFile(path.join(directory, file), JSON.stringify(cached.result), { mode: 0o600 })
     stored = { ...cached, result: { ...cached.result, ...uncertain }, file }
   }
+  if (durable) await saveDurableRequest(durable.db, durable.row, stored, cached.result.status === 'pending' ? Date.now() + nextPoll : null)
   if (!cached.background) await redis.set(key, JSON.stringify(stored), 'EX', requestTtl)
   else await redis.eval(
     'redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2]); if ARGV[3]=="" then redis.call("ZREM",KEYS[2],ARGV[4]) else redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]) end; return "OK"',
@@ -101,27 +106,49 @@ async function saveRequestResult(redis: RequestContext['redis'], key: string, ca
   if (filesRoot) await unlink(path.join(filesRoot, '.creation-results', hash(key) + '.request.json')).catch(() => {})
 }
 async function requestFallback(cached: TrackedRequest, key: string) {
-  if (cached.result.status !== 'pending' || !cached.filesRoot) return cached
+  if (!['pending', 'indeterminate', 'save_failed'].includes(cached.result.status) || !cached.filesRoot) return cached
   try {
     const fallback = JSON.parse(await readFile(path.join(cached.filesRoot, '.creation-results', hash(key) + '.request.json'), 'utf8')) as TrackedRequest
-    if (fallback.fingerprint === cached.fingerprint && fallback.kind === cached.kind) return fallback
+    if (fallback.fingerprint === cached.fingerprint && fallback.kind === cached.kind
+      && (cached.result.status === 'pending' || fallback.result.status !== 'pending')) return fallback
   } catch { /* The Redis record remains authoritative when no recovery file exists. */ }
   return cached
 }
 // Only GET credentials survive a restart; the paid POST is never replayed.
-export async function processCreationTasks(redis: RequestContext['redis'], overrides: Partial<CreationServices> = {}) {
+export async function processCreationTasks(redis: RequestContext['redis'], overrides: Partial<CreationServices> = {}, database?: Queryable) {
   const svc = { ...services, ...overrides }
+  const db = database && requestStoreEnabled() ? database : undefined
+  if (db) for (const row of await dueDurableRequests(db)) {
+    await redis.set(row.key, JSON.stringify(row.record), 'EX', requestTtl)
+    await redis.zadd(pendingTasks, Date.now(), row.key)
+  }
   const keys = await redis.zrangebyscore(pendingTasks, 0, Date.now(), 'LIMIT', 0, 4)
   await Promise.all(keys.map(async key => {
     const lease = randomUUID(), lock = `${key}:poll`
     if (await redis.set(lock, lease, 'PX', 120000, 'NX') !== 'OK') return
     try {
-      const stored = await redis.get(key)
+      let durable: { db: Queryable; row: DurableRequest } | undefined
+      if (db) {
+        const row = await readDurableRequest(db, key)
+        if (row) {
+          const claimed = await claimDurablePoll(db, row)
+          if (!claimed) { await redis.zrem(pendingTasks, key); return }
+          durable = { db, row: claimed }
+        }
+      }
+      const stored = durable ? JSON.stringify(durable.row.record) : await redis.get(key)
       if (!stored) { await redis.zrem(pendingTasks, key); return }
       const cached = await requestFallback(JSON.parse(stored) as TrackedRequest, key)
       let filesRoot = cached.filesRoot
-      if (cached.result.status !== 'pending') {
+      if (durable?.row.state === 'preparing') {
+        cached.result = { ...cached.result, status: 'failed', errorStage: '生成准备', error: '生成准备已中断，未向生成网关提交请求。' }
+        await saveDurableRequest(db!, durable.row, cached, null, true)
         await saveRequestResult(redis, key, cached, filesRoot)
+        return
+      }
+      const save = (delay = 5000) => saveRequestResult(redis, key, cached, filesRoot, delay, durable)
+      if (cached.result.status !== 'pending') {
+        await save()
         return
       }
       if (!cached.deadline || Date.now() >= cached.deadline) {
@@ -147,7 +174,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
           await response.body?.cancel()
           cached.result = { ...cached.result, errorStage: '任务查询', errorStatus: response.status,
             error: stageError('任务查询', '网关暂未返回任务状态，后台将自动重试。', response.status) }
-          await saveRequestResult(redis, key, cached, filesRoot, response.status === 429 ? 30000 : 10000)
+          await save(response.status === 429 ? 30000 : 10000)
           return
         }
         result = responseResult(cached.kind, await readJson(response, 40 * MiB), credentials.credentials,
@@ -156,7 +183,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
           cached.result = { ...cached.result, errorStage: '任务查询', errorStatus: queryStatus,
             error: stageError('任务查询', '读取网关任务状态失败，后台将自动重试。', queryStatus) }
           logCreationFailure(key.split(':').pop(), '任务查询', queryStatus)
-          await saveRequestResult(redis, key, cached, filesRoot, 15000)
+          await save(15000)
           return
         }
         cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
@@ -168,7 +195,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
             JSON.stringify({ tokenId: result.tokenId, protocol: result.protocol }), 'EX', taskTtl)
         }
       }
-      await saveRequestResult(redis, key, cached, filesRoot)
+      await save()
     } catch {
       await redis.zadd(pendingTasks, Date.now() + 15000, key)
     } finally {
@@ -176,12 +203,12 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
     }
   }))
 }
-export function startCreationWorker(redis: RequestContext['redis']) {
+export function startCreationWorker(redis: RequestContext['redis'], db?: Queryable) {
   let running = false, stopped = false
   const run = async () => {
     if (running || stopped) return
     running = true
-    try { await trackCreation(redis, processCreationTasks(redis)) } catch { /* Durable tasks remain queued for the next pass. */ }
+    try { await trackCreation(redis, processCreationTasks(redis, {}, db)) } catch { /* Durable tasks remain queued for the next pass. */ }
     finally { running = false }
   }
   void run()
@@ -495,7 +522,8 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
     const recovered = await requestFallback(original, key)
     if (recovered !== original) {
       cached = recovered as unknown as Record<string, unknown>
-      await saveRequestResult(ctx.redis, key, recovered, ctx.filesRoot, 0).catch(() => {})
+      const row = requestStoreEnabled() ? await readDurableRequest(ctx.db, key) : undefined
+      await saveRequestResult(ctx.redis, key, recovered, ctx.filesRoot, 0, row ? { db: ctx.db, row } : undefined).catch(() => {})
     }
   }
   let result = cached.result as Result
@@ -515,20 +543,70 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
   }
   return result
 }
+function requestFingerprint(ctx: RequestContext) {
+  return hash(JSON.stringify({ body: ctx.body, group: ctx.req.headers['x-new-api-group'] ?? null, token: ctx.req.headers['x-new-api-token'] ?? null }))
+}
+async function readRequest(ctx: RequestContext, key: string) {
+  if (requestStoreEnabled()) {
+    const row = await readDurableRequest(ctx.db, key)
+    if (row) return row.record
+  }
+  const stored = await ctx.redis.get(key)
+  if (!stored) return
+  const cached = JSON.parse(stored) as TrackedRequest
+  if (requestStoreEnabled()) return (await registerDurableRequest(ctx.db, key, cached.fingerprint, cached, cached.contractVersion ?? 1, true)).row.record
+  return cached as unknown as Record<string, unknown>
+}
+async function duplicateRequest(ctx: RequestContext) {
+  const id = record(ctx.body) ? ctx.body.requestId : undefined
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return
+  const key = `community-next:creation:request:${accountNamespace(ctx)}:${id}`
+  const cached = await readRequest(ctx, key)
+  if (!cached) return
+  // Legacy records predate explicit groups; return their original result without reinterpreting them.
+  if (cached.fingerprint !== requestFingerprint(ctx) && cached.fingerprint !== hash(JSON.stringify(ctx.body)))
+    throw Object.assign(httpError(409, '请求编号已被使用，请先核对原任务。'), { notAccepted: false, errorStage: '请求记录读取' })
+  return cachedResult(ctx, cached, key)
+}
 async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationServices, emit: (event: CreationEvent) => void = () => {}, background = false) {
   let errorStage = '请求校验', recoverable = false
+  let durable: { db: Queryable; row: DurableRequest } | undefined
+  let dispatched = false
   try {
   let input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
   const key = `community-next:creation:request:${accountNamespace(ctx)}:${input.requestId}`
-  const fingerprint = hash(JSON.stringify(ctx.body))
+  const fingerprint = requestFingerprint(ctx)
   errorStage = '请求记录读取'; recoverable = true
-  const existing = await ctx.redis.get(key)
+  const existing = await readRequest(ctx, key)
   recoverable = Boolean(existing)
   if (existing) {
-    const cached: unknown = JSON.parse(existing)
+    const cached: unknown = existing
     if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return await cachedResult(ctx, cached, key)
+  }
+  if (input.contractVersion === 2) {
+    if (!nativeRequestsEnabled(ctx.user?.accountId)) throw httpError(503, '此账号暂未启用新版请求，请刷新模型目录后重试。')
+    if (req.headers.has('x-new-api-token') || req.headers.has('x-new-api-group')
+      || record(ctx.body) && ['tokenId', 'accountTokenId', 'accountGroup'].some(field => ctx.body[field] !== undefined))
+      throw httpError(400, '新版请求不能同时指定旧版密钥或分组字段。')
+  }
+  let group = input.group
+  if (group === undefined && req.headers.has('x-new-api-group')) {
+    try { group = decodeURIComponent(req.headers.get('x-new-api-group')!) }
+    catch { throw httpError(400, '请求分组无效。') }
+    if (!group || group !== group.trim() || group.length > 200 || /[\u0000-\u001f\u007f]/u.test(group)) throw httpError(400, '请求分组无效。')
+  }
+  if (requestStoreEnabled()) {
+    const preparing: TrackedRequest = { fingerprint, contractVersion: input.contractVersion ?? 1, kind: input.kind,
+      result: { status: 'pending', outputs: [], requestId: input.requestId, tokenId: 0, protocol: 'sync' },
+      deadline: Date.now() + 180000, filesRoot: ctx.filesRoot, background: true }
+    const registration = await registerDurableRequest(ctx.db, key, fingerprint, preparing, input.contractVersion ?? 1)
+    if (!registration.inserted) {
+      if (registration.row.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
+      return await cachedResult(ctx, registration.row.record, key)
+    }
+    durable = { db: ctx.db, row: registration.row }
   }
   errorStage = '技能准备'
   const workSkills = input.skills?.filter(skill => skill.id.startsWith('work-')) || []
@@ -565,6 +643,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   }
   if (!creationRelayPath('POST', payload.path)) throw httpError(400, '生成接口无效。')
   errorStage = '网关凭证准备'
+  if (group && (input.contractVersion === 2 || !req.headers.has('x-new-api-token'))) {
+    const tokenId = await svc.groupToken(req, group)
+    if (!Number.isSafeInteger(tokenId) || !tokenId || tokenId < 1) throw httpError(502, '模型分组暂不可用，请重试。')
+    req.headers.set('x-new-api-token', String(tokenId))
+    req.headers.set('x-new-api-group', encodeURIComponent(group))
+  }
   const credentials = await svc.credentials(req, payload.path)
   const url = new URL(`/${payload.path}`, credentials.baseUrl)
   const headers = relayHeaders(req, credentials.apiKey)
@@ -585,16 +669,21 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const protocol: CreationTaskProtocol = input.protocol === 'async' ? 'async' : input.kind === 'video' ? 'openai' : 'sync'
   const apiFormat = input.apiFormat && input.apiFormat !== 'auto' ? input.apiFormat : undefined
   errorStage = '任务登记'
-  if (background && getNewApiConfig().secret.length < 32)
+  if ((background || durable) && getNewApiConfig().secret.length < 32)
     throw Object.assign(httpError(503, '任务服务配置不完整，请联系管理员。'), { notAccepted: true })
   const textStream = input.kind === 'text' && input.chatOptions?.stream
   const deadline = Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : textStream ? textGenerationTimeouts.total + textGenerationTimeouts.save : 195000)
-  const pending: TrackedRequest = { fingerprint, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
+  const pending: TrackedRequest = { fingerprint, contractVersion: input.contractVersion ?? 1, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     ...(input.kind === 'text' ? { deadline } : {}),
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
     deadline, ...(background ? { background: true } : {}),
-    ...(background || input.kind === 'text' ? { filesRoot: ctx.filesRoot } : {}) }
+    ...(durable || background || input.kind === 'text' ? { filesRoot: ctx.filesRoot } : {}) }
   recoverable = true
+  if (durable) durable.row = await dispatchDurableRequest(durable.db, durable.row, {
+    issuer: getNewApiConfig().publicUrl, userId: credentials.userId, group, tokenId: credentials.tokenId,
+    model: input.model, protocol, apiFormat, configRevision: hash(JSON.stringify(options?.communityModelTypes ?? [])),
+  }, pending)
+  dispatched = !!durable
   const accepted = background ? await ctx.redis.eval(
     'if redis.call("SET",KEYS[1],ARGV[1],"EX",ARGV[2],"NX") then redis.call("ZADD",KEYS[2],ARGV[3],ARGV[4]); return "OK" end; return false',
     2, key, pendingTasks, JSON.stringify(pending), requestTtl, pending.deadline!, key,
@@ -684,17 +773,17 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
   await remember(ctx, input.kind, result, hasWorkSkills).catch(() => {})
   const tracked = { ...pending, result }
-  if (background && result.status === 'pending' && result.upstreamId) {
+  if ((background || durable) && result.status === 'pending' && result.upstreamId) {
     tracked.deadline = Date.now() + (input.kind === 'video' ? 7200000 : 1800000)
     tracked.tracking = await sealData({ key, credentials, deadline: tracked.deadline, filesRoot: ctx.filesRoot } satisfies PollCredentials,
       { password: getNewApiConfig().secret, ttl: 86400 })
   }
   let saved = false
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { await saveRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0); saved = true; break }
+    try { await saveRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0, durable); saved = true; break }
     catch { if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt)) }
   }
-  if (!saved && (background || input.kind === 'text') && ctx.filesRoot) {
+  if (!saved && (durable || background || input.kind === 'text') && ctx.filesRoot) {
     const directory = path.join(ctx.filesRoot, '.creation-results')
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(tracked), { mode: 0o600 })
@@ -705,6 +794,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   void trackCreation(ctx.redis, finish()).catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
   return pending.result
   } catch (error) {
+    if (durable && !dispatched) {
+      const cached = durable.row.record as unknown as TrackedRequest
+      cached.result = { ...cached.result, status: 'failed', errorStage, error: stageError(errorStage, message(error)) }
+      await saveDurableRequest(durable.db, durable.row, cached, null, true).catch(() => {})
+      recoverable = false
+    }
     throw Object.assign(error instanceof Error ? error : new Error('创作服务暂时不可用。'), { errorStage, notAccepted: !recoverable })
   }
 }
@@ -820,11 +915,30 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
   const expected = ctx.req.headers['x-new-api-user']
   if (expected !== undefined && expected !== user.accountId) throw httpError(409, '账号已切换，请重新操作。')
   const req = new AccountRequest(applicationRequest(ctx.request, ctx.reply, new URL(ctx.config.url).origin))
+  req.database = ctx.db
   req.headers.set('x-new-api-user', user.accountId)
   try {
-    if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
+    if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/preference-groups') {
+      assertSameOrigin(req)
+      await rateLimit(ctx, 'models', 60)
+      const ids = record(ctx.body) ? ctx.body.tokenIds : undefined
+      if (!Array.isArray(ids) || ids.length > 128 || ids.some(id => !Number.isSafeInteger(id) || id < 1)) throw httpError(400, '旧模型设置标识无效。')
+      const { accountRequest } = await import('./native-account/client.ts')
+      const { data: groups } = await accountRequest(req, '/api/user/self/groups', { reuseRequestSession: true })
+      const mappings: Record<string, string> = {}
+      const unique = [...new Set(ids)]
+      for (let offset = 0; offset < unique.length; offset += 4) await Promise.all(unique.slice(offset, offset + 4).map(async id => {
+        try {
+          const { data: token } = await accountRequest(req, `/api/token/${id}`, { reuseRequestSession: true })
+          if (token?.id === id && String(token.user_id) === user.accountId && typeof token.group === 'string' && token.group && Object.hasOwn(groups || {}, token.group)) mappings[id] = token.group
+        } catch (error) { if (!(error instanceof NewApiError) || error.status !== 404) throw error }
+      }))
+      ctx.json(200, { issuer: getNewApiConfig().publicUrl, mappings })
+    } else if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
       await rateLimit(ctx, 'generate', 12)
       if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
+      const duplicate = await duplicateRequest(ctx)
+      if (duplicate) { ctx.json(200, duplicate); return true }
       const input = validateCreationInput(ctx.body)
       const background = input.kind !== 'text' && String(ctx.req.headers.prefer || '').split(',').some(value => value.trim() === 'respond-async')
       if (!background && (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream)) {
@@ -850,14 +964,17 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
       await rateLimit(ctx, 'tasks', 180)
       const id = ctx.url.pathname.split('/').pop()!
-      const stored = await ctx.redis.get(`community-next:creation:request:${accountNamespace(ctx)}:${id}`)
+      const stored = await readRequest(ctx, `community-next:creation:request:${accountNamespace(ctx)}:${id}`)
       if (!stored) throw httpError(404, '没有找到此请求记录。')
-      ctx.json(200, await cachedResult(ctx, JSON.parse(stored), `community-next:creation:request:${accountNamespace(ctx)}:${id}`))
+      ctx.json(200, await cachedResult(ctx, stored, `community-next:creation:request:${accountNamespace(ctx)}:${id}`))
     } else if (['GET', 'POST'].includes(ctx.req.method || '') && ctx.url.pathname === '/api/creation/models') {
       const management = ctx.url.searchParams.get('management') === '1'
       if (management) ctx.requireAdmin()
       await rateLimit(ctx, 'models', 60)
       const allGroups = ctx.url.searchParams.get('scope') === 'all'
+      const group = ctx.req.method === 'GET' && !management && !allGroups ? ctx.url.searchParams.get('group') : null
+      if (group !== null && (!group || group !== group.trim() || group.length > 128 || /[\u0000-\u001f\u007f]/u.test(group) || ctx.url.searchParams.getAll('group').length !== 1))
+        throw httpError(400, '请选择有效的模型分组。')
       if (ctx.req.method === 'POST') {
         // Resolving a group can provision its token; validate origin before any mutation.
         assertSameOrigin(req)
@@ -872,13 +989,16 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         req.headers.set('x-new-api-token', String(tokenId))
         req.headers.set('x-new-api-group', encodeURIComponent(group))
       }
-      const catalogue = management || allGroups ? await svc.modelCatalogue(req) : undefined
+      const catalogue = management || allGroups || group !== null ? await svc.modelCatalogue(req, group ?? undefined) : undefined
       const credentials = catalogue ? undefined : await svc.credentials(req, 'v1/models')
       const data = credentials ? await upstreamJson(ctx, req, credentials, 'v1/models', svc) : undefined
       const items: unknown[] = catalogue?.items ?? (record(data) && Array.isArray(data.data) ? data.data : [])
       const options = (await ctx.db.query<{ clientOptions: Record<string, unknown> }>('SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')).rows[0]?.clientOptions
       const types = new Map(readModelTypes(options?.communityModelTypes).map(item => [item.id, item]))
-      ctx.json(200, { ...(catalogue ? { groups: catalogue.groups } : { tokenId: credentials!.tokenId }), items: items.flatMap(item => {
+      ctx.json(200, { ...(catalogue ? { groups: catalogue.groups } : { tokenId: credentials!.tokenId }),
+        contractVersion: nativeRequestsEnabled(user.accountId) ? 2 : 1,
+        ...(group !== null ? { group, fetchedAt: Date.now(), configRevision: hash(JSON.stringify(options?.communityModelTypes ?? [])), contractVersion: nativeRequestsEnabled(user.accountId) ? 2 : 1 } : {}),
+        items: items.flatMap(item => {
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const configured = types.get(id), configuredKind = configured?.kind
         const valid = id.length > 0 && id.length <= 200 && id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)

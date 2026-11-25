@@ -352,6 +352,19 @@ export function publicSession(session: AccountSession | null) {
   };
 }
 
+const requestTokens = new WeakMap<AccountRequest, Map<number, ReturnType<typeof accountRequest>>>();
+export function forgetAccountToken(req: AccountRequest, id: number) { requestTokens.get(req)?.delete(id); }
+export function readAccountToken(req: AccountRequest, id: number) {
+  let tokens = requestTokens.get(req);
+  if (!tokens) { tokens = new Map(); requestTokens.set(req, tokens); }
+  let pending = tokens.get(id);
+  if (!pending) {
+    pending = accountRequest(req, `/api/token/${id}`, { reuseRequestSession: true });
+    tokens.set(id, pending);
+  }
+  return pending;
+}
+
 export function assertSameOrigin(req: AccountRequest) {
   const origin = req.headers.get("origin");
   let valid = false;

@@ -5,8 +5,9 @@ import { accountRequest, sanitizeUser } from "./client.ts"
 import { getNewApiConfig, NewApiError } from "./config.ts"
 import { SESSION_COOKIE } from "./session.ts"
 
-export async function handleAccountRequest(request: Request): Promise<Response> {
+export async function handleAccountRequest(request: Request, database?: import('../types.ts').Queryable): Promise<Response> {
   const req = request instanceof AccountRequest ? request : new AccountRequest(request)
+  req.database = database
   const prefix = /^\/(?:studio\/)?api\/new-api\/(.+?)\/?$/.exec(req.nextUrl.pathname)
   if (!prefix) return AccountResponse.json({ success: false, message: "接口不存在" }, { status: 404 })
   return handle(req, prefix[1]!.split("/"))

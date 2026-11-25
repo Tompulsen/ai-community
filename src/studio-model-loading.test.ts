@@ -26,16 +26,16 @@ async function fixture() {
   const groups = ['auto', 'images', 'video'].map(id => ({ id, name: id }))
   vi.mocked(state.accountApi).mockImplementation(async (route, body) => {
     if (route === 'model-groups/select') { selectedGroup = (body as any).group; return { group: selectedGroup, selectedTokenId: 41 } }
-    return { groups, selectedGroup, selectedTokenId: 41 }
+    return { groups, selectedGroup, selectedTokenId: 41, contractVersion: 2 }
   })
   const catalogue = (group: string) => ({ tokenId: group === 'auto' ? 41 : group === 'images' ? 42 : 43,
     items: [{ id: `${group}-model`, kinds: ['image'] }] })
-  vi.mocked(state.api).mockImplementation(async (_path, options) => catalogue((options?.body as any)?.group || selectedGroup))
+  vi.mocked(state.api).mockImplementation(async path => catalogue(new URL(path, 'https://fixture.test').searchParams.get('group') || selectedGroup))
   await studio.loadCreationGroups()
   return { ...state, ...studio, catalogue }
 }
 
-it('selects a group immediately and prepares its token and models with one request without changing the shared selection', async () => {
+it('selects a group immediately and reads its catalogue without changing the shared selection', async () => {
   const p = await fixture(), read = deferred<any>()
   vi.mocked(p.api).mockReturnValueOnce(read.promise)
   const selected = p.selectCreationGroup('images')
@@ -46,7 +46,8 @@ it('selects a group immediately and prepares its token and models with one reque
   expect(p.creation.modelTokenId).toBe(42)
   expect(p.creation.models[0]?.id).toBe('images-model')
   expect(p.api).toHaveBeenCalledTimes(1)
-  expect(p.api).toHaveBeenCalledWith('/api/creation/models', expect.objectContaining({ method: 'POST', body: { group: 'images' }, expectedAccount: '17' }))
+  expect(p.api).toHaveBeenCalledWith('/api/creation/models?group=images', expect.objectContaining({ expectedAccount: '17' }))
+  expect(p.api).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ method: 'POST' }))
   expect(p.accountApi).not.toHaveBeenCalledWith('model-groups/select', expect.anything(), expect.anything())
 })
 
@@ -81,7 +82,7 @@ it('keeps prepared models usable during a background refresh and preserves them 
 
 it('allows a newer group selection to finish before an older request without leaking its models', async () => {
   const p = await fixture(), first = deferred<any>()
-  vi.mocked(p.api).mockImplementation(async (_path, options) => (options?.body as any)?.group === 'images' ? first.promise : p.catalogue('video'))
+  vi.mocked(p.api).mockImplementation(async path => path.endsWith('group=images') ? first.promise : p.catalogue('video'))
   const older = p.selectCreationGroup('images')
   await p.selectCreationGroup('video'); await p.waitCreationGroup()
   expect(p.creation.selectedGroup).toBe('video')
@@ -134,19 +135,20 @@ it('does not make a cached group wait for background revalidation before sending
   await p.loadCreationModels(true)
 })
 
-it('uses low-priority preloading and upgrades an unprepared group only on entry', async () => {
+it('coalesces low-priority catalogue preloading and foreground entry without preparing a key', async () => {
   const p = await fixture(), read = deferred<any>()
   vi.mocked(p.api).mockReturnValueOnce(read.promise)
   const preload = p.preloadCreationModels()
   await Promise.resolve()
-  expect(p.api).toHaveBeenCalledWith('/api/creation/models', expect.objectContaining({ priority: 'low', body: { group: 'auto', preload: true } }))
+  expect(p.api).toHaveBeenCalledWith('/api/creation/models?group=auto', expect.objectContaining({ priority: 'low' }))
   expect(p.creation.modelsLoading).toBe(false)
   const entered = p.loadCreationModels()
-  read.resolve({ prepared: false, items: [] })
+  read.resolve({ group: 'auto', contractVersion: 2, items: [{ id: 'auto-model', kinds: ['image'] }] })
   await Promise.all([preload, entered])
-  expect(p.api).toHaveBeenCalledTimes(2)
-  expect(p.api).toHaveBeenLastCalledWith('/api/creation/models', expect.objectContaining({ body: { group: 'auto' } }))
-  expect(p.creation.modelTokenId).toBe(41)
+  expect(p.api).toHaveBeenCalledTimes(1)
+  expect(p.creation.modelsLoaded).toBe(true)
+  expect(p.creation.modelTokenId).toBeNull()
+  expect(p.creation.requestContractVersion).toBe(2)
 })
 
 it('does not restore an invalidated catalogue from an older pending response', async () => {

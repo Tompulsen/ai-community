@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 import assert from 'node:assert/strict'
-import { createHash, createHmac } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { get as httpGet } from 'node:http'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -19,6 +19,146 @@ import { NewApiError } from './native-account/config.ts'
 import { videoModelSettingSchema } from '../shared/studio/model-types.ts'
 import { handleContent } from './content.ts'
 import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
+import { requestDatabase, environment } from './creation/test-database.mjs'
+import { saveSession, removeSessionById } from './native-account/session.ts'
+
+test('preference migration returns only token ownership/group mappings and never reveals secrets', async t => {
+  const id = randomBytes(32).toString('base64url'), now = Math.floor(Date.now() / 1000)
+  t.after(() => removeSessionById(id))
+  environment(t, { NODE_ENV: 'test', NEW_API_BASE_URL: 'https://metadata.example', NEW_API_PUBLIC_URL: 'https://metadata.example',
+    NEW_API_SESSION_SECRET: 'preference-metadata-secret-'.repeat(3), NEW_API_REDIS_URL: '' })
+  await saveSession(id, { user: { id: 17, username: 'fixture' }, accessToken: 'fixture-access', refreshToken: 'fixture-refresh',
+    upstreamSessionId: 'fixture-sid', accessExpiresAt: now + 3600, createdAt: now, expiresAt: now + 3600, version: 1 })
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url).pathname; calls.push(path)
+    assert(!path.endsWith('/key'))
+    const data = path === '/api/user/self/groups' ? { auto: {} } : path === '/api/user/self' ? { id: 17, username: 'fixture' }
+      : { id: Number(path.split('/').pop()), user_id: path.endsWith('/42') ? 18 : 17, group: path.endsWith('/43') ? 'forbidden' : 'auto', key: 'must-not-leak' }
+    return Response.json({ success: true, data })
+  })
+  const f = fixture(t)
+  const response = await f.app.inject({ method: 'POST', url: '/api/creation/preference-groups',
+    headers: { ...headers, host: 'community.example', cookie: `octopus_new_api_session=${id}` }, payload: { tokenIds: [41, 42, 43, 41] } })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.deepEqual(response.json().mappings, { 41: 'auto' })
+  assert.doesNotMatch(response.payload, /must-not-leak|fixture-access/)
+  assert.equal(calls.filter(path => path === '/api/token/41').length, 1)
+})
+
+test('native group catalogues never prepare a model key and retain configured model metadata', async t => {
+  const f = fixture(t, { modelCatalogue: () => ({ groups: [{ id: 'images', name: 'images' }], items: [{ id: 'alias', groups: ['images'] }] }),
+    modelTypes: [{ id: 'alias', kind: 'image', name: 'Configured image', apiFormat: 'images', image: { maxReferenceImages: 4 } }] })
+  const response = await f.app.inject('/api/creation/models?group=images')
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().group, 'images')
+  assert.equal(response.json().tokenId, undefined)
+  assert.equal(response.json().items[0].apiFormat, 'images')
+  assert.equal(f.groupCalls.length, 0); assert.equal(f.credentialCalls.length, 0); assert.equal(f.calls.length, 0)
+  assert.equal((await f.app.inject('/api/creation/models?group=images&group=auto')).statusCode, 400)
+})
+
+test('durable generation survives Redis loss and never replays dispatched requests', async t => {
+  const db = await requestDatabase(t)
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'durable-request-secret-'.repeat(3) })
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'durable', contractVersion: 2, group: 'images' }
+  await t.test('eight concurrent retries, different groups and v1/v2 ID collisions', async t => {
+    const f = fixture(t, { storeDb: db, groupToken: () => 71, fetch: () => Response.json({ data: [{ url: 'https://media.example/saved.png' }] }) })
+    const responses = await Promise.all(Array.from({ length: 8 }, () => submit(f.app, input)))
+    assert(responses.every(response => response.statusCode === 200), responses.map(response => response.payload).join('\n'))
+    assert.equal(f.calls.length, 1); assert.equal(f.groupCalls.length, 1)
+    f.values.clear()
+    assert.equal((await f.app.inject('/api/creation/requests/durable')).json().status, 'succeeded')
+    assert.equal((await submit(f.app, { ...input, group: 'auto' })).statusCode, 409)
+    const { contractVersion, group, ...legacy } = input
+    assert.equal((await submit(f.app, legacy)).statusCode, 409)
+    assert.equal(f.calls.length, 1)
+    process.env.COMMUNITY_REQUEST_V2 = '0'
+    assert.equal((await submit(f.app, input)).json().status, 'succeeded')
+    assert.equal((await f.app.inject({ url: '/api/creation/requests/durable', headers: { 'x-test-account': '18' } })).statusCode, 404)
+    process.env.COMMUNITY_REQUEST_V2 = '1'
+  })
+  await t.test('conflicting legacy headers are rejected before credential preparation', async t => {
+    const f = fixture(t, { storeDb: db })
+    const response = await submit(f.app, { ...input, requestId: 'conflict' }, { 'x-new-api-token': '71' })
+    assert.equal(response.statusCode, 400); assert.equal(f.groupCalls.length, 0); assert.equal(f.calls.length, 0)
+  })
+  await t.test('lost gateway response remains uncertain after Redis loss and retry', async t => {
+    const f = fixture(t, { storeDb: db, groupToken: () => 72, fetch() { throw new Error('response lost') } })
+    const body = { ...input, requestId: 'lost-response' }
+    assert.equal((await submit(f.app, body)).json().status, 'indeterminate')
+    f.values.clear()
+    assert.equal((await submit(f.app, body)).json().status, 'indeterminate')
+    assert.equal(f.calls.length, 1)
+  })
+  await t.test('a crash during preparation is bounded and cannot be dispatched by recovery', async t => {
+    const f = fixture(t, { storeDb: db })
+    const { registerDurableRequest } = await import('./creation/request-store.ts')
+    const namespace = createHash('sha256').update('http://localhost:17').digest('hex')
+    const key = `community-next:creation:request:${namespace}:crashed`
+    await registerDurableRequest(db, key, 'hash', { kind: 'image', deadline: Date.now() - 10, result: { status: 'pending', tokenId: 0, protocol: 'sync', outputs: [] } })
+    await processCreationTasks(f.redis, f.services, db)
+    assert.equal((await f.app.inject('/api/creation/requests/crashed')).json().status, 'failed')
+    assert.equal((await db.query('SELECT state FROM community_creation_request WHERE key=$1', [key])).rows[0].state, 'failed_before_dispatch')
+    assert.equal(f.calls.length, 0)
+  })
+  await t.test('pending jobs rebuild their GET-only queue after Redis loss', async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-poll-'))
+    t.after(() => rm(filesRoot, { recursive: true, force: true }))
+    const f = fixture(t, { storeDb: db, filesRoot, groupToken: () => 73, fetch(url, init) {
+      if (init.method === 'POST') return Response.json({ id: 'original-job', status: 'queued' })
+      assert.equal(new Headers(init.headers).get('authorization'), `Bearer ${apiKey}`)
+      return Response.json({ status: 'completed', url: 'https://media.example/finished.png' })
+    } })
+    const response = await submit(f.app, { ...input, requestId: 'pending-job', protocol: 'async' }, { prefer: 'respond-async' })
+    assert.equal(response.statusCode, 202)
+    await drainCreations(f.redis)
+    f.values.clear()
+    await db.query('UPDATE community_creation_request SET next_poll=$1 WHERE record->\'result\'->>\'upstreamId\'=$2', [Date.now() - 1, 'original-job'])
+    await processCreationTasks(f.redis, f.services, db)
+    const recovered = await f.app.inject('/api/creation/requests/pending-job')
+    assert.equal(recovered.json().status, 'succeeded', recovered.payload)
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  })
+  await t.test('a paid result saved to a recovery file repairs PostgreSQL before removing the file', async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-recovery-'))
+    t.after(() => rm(filesRoot, { recursive: true, force: true }))
+    let unavailable = false
+    const storeDb = { query(sql, params) {
+      if (unavailable && sql.includes('SET record=$4')) throw new Error('database disconnected')
+      return db.query(sql, params)
+    } }
+    const f = fixture(t, { storeDb, filesRoot, groupToken: () => 74, fetch() {
+      unavailable = true
+      return Response.json({ data: [{ url: 'https://media.example/recovered.png' }] })
+    } })
+    await submit(f.app, { ...input, requestId: 'fallback' }, { prefer: 'respond-async' })
+    await drainCreations(f.redis)
+    unavailable = false; f.values.clear()
+    for (let read = 0; read < 2; read++) {
+      const recovered = await f.app.inject('/api/creation/requests/fallback')
+      assert.equal(recovered.json().status, 'succeeded', recovered.payload)
+    }
+    assert.equal(f.calls.length, 1)
+    assert(!(await readdir(path.join(filesRoot, '.creation-results'))).some(name => name.endsWith('.request.json')))
+  })
+  await t.test('a synchronous v1 paid result repairs an uncertain terminal record from its late recovery file', async t => {
+    const filesRoot = await mkdtemp(path.join(tmpdir(), 'durable-sync-recovery-'))
+    t.after(() => rm(filesRoot, { recursive: true, force: true }))
+    let unavailable = false
+    const f = fixture(t, { filesRoot, storeDb: { query(sql, params) {
+      if (unavailable && sql.includes('SET record=$4')) throw new Error('database disconnected')
+      return db.query(sql, params)
+    } }, fetch() { unavailable = true; return Response.json({ data: [{ url: 'https://media.example/late.png' }] }) } })
+    const result = await submit(f.app, { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'fallback-sync' })
+    assert.equal(result.json().status, 'succeeded')
+    unavailable = false; f.values.clear()
+    await db.query(`UPDATE community_creation_request SET state='indeterminate', version=version+1,
+      record=jsonb_set(record,'{result,status}','"indeterminate"') WHERE key LIKE '%:fallback-sync'`)
+    for (let read = 0; read < 2; read++) assert.equal((await f.app.inject('/api/creation/requests/fallback-sync')).json().status, 'succeeded')
+    assert.equal(f.calls.length, 1)
+  })
+})
 
 const origin = 'https://community.example'
 const headers = { origin, 'content-type': 'application/json' }
@@ -159,6 +299,7 @@ function fixture(t, options = {}) {
     const ctx = {
       req: request.raw, res: reply.raw, request, reply, redis, user,
       db: { async query(sql, params) {
+        if (options.storeDb && sql.includes('community_creation_request')) return options.storeDb.query(sql, params)
         if (options.mediaFiles && sql.includes('FROM drive_file')) {
           if (sql.includes('WITH visible_file')) {
             const file = options.mediaFiles.find(file => file.id === params[1] && file.userId === params[0])

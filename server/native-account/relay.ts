@@ -1,6 +1,7 @@
 import { AccountRequest, AccountResponse } from "./http.ts";
 import {
   accountRequest,
+  readAccountToken,
   assertSameOrigin,
   getAuthenticatedSession,
   upstreamRequestHints,
@@ -57,7 +58,7 @@ function requestedGroup(req: AccountRequest) {
 
 async function relayTokenKey(req: AccountRequest, session: AccountSession, tokenId: number, group?: string) {
   if (group !== undefined || tokenId !== session.selectedTokenId || !session.selectedKey) {
-    const { data: token } = await accountRequest(req, `/api/token/${tokenId}`, { reuseRequestSession: true });
+    const { data: token } = await readAccountToken(req, tokenId);
     if (!session.user || token?.id !== tokenId || token?.user_id !== session.user.id)
       throw new NewApiError("无法读取此请求的密钥", 403);
     // Secrets may be cached; the actual billing group must be checked on every new send.

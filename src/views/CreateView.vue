@@ -309,7 +309,7 @@ watch([() => route.query.entry, () => session.user?.id, () => chats.ready, () =>
       return
     }
     if (creation.modelsError) { failedEntry = `${owner}:${id}`; throw new Error(creation.modelsError) }
-    if (parameters?.tokenId && parameters.tokenId !== creation.modelTokenId) throw new Error('模型密钥已改变，请返回首页确认模型后重新发送。')
+    if (parameters?.tokenId && creation.modelTokenId && parameters.tokenId !== creation.modelTokenId) throw new Error('模型密钥已改变，请返回首页确认模型后重新发送。')
     if (parameters?.model && !modelsForKind(entry.kind).some(model => model.id === parameters.model)) throw new Error('首页所选模型当前不可用，请返回首页重新选择。')
     if (parameters?.model) modelChoices[entry.kind] = ''
     const next = newChat(entry.kind)

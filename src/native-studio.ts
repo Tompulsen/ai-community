@@ -24,7 +24,7 @@ export type CreationDestination = 'community' | 'source-comment'
 export interface PublicationDetails { tagIds: string[]; prompt: string; sourceUrl: string; license: string; referenceIndices: number[] }
 export interface CreationModel { id: string; name?: string; tags?: string[]; groups?: string[]; description?: string; provider?: string; kinds?: CreationKind[]; configuredKind?: CreationKind; apiFormat?: ModelApiFormat; protocol?: 'auto' | 'openai' | 'sync' | 'async'; image?: ModelTypeSetting['image']; text?: ModelTypeSetting['text']; video?: ModelTypeSetting['video'] }
 export interface CreationGroup { id: string; name: string; ratio?: number; description?: string }
-interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null }
+interface CreationGroups { groups: CreationGroup[]; selectedGroup: string | null; contractVersion?: 1 | 2 }
 export interface CreationTask {
   id: string
   conversationId?: string
@@ -78,6 +78,7 @@ export interface CreationInput {
   imageContext?: ImageConversationContext
   accountTokenId?: number | null
   accountGroup?: string | null
+  accountContractVersion?: 1 | 2
   kind: CreationKind
   model: string
   prompt: string
@@ -98,6 +99,7 @@ export interface CreationInput {
 export const creation = reactive({
   models: [] as CreationModel[], modelsLoading: false, modelsLoaded: false, modelsError: '',
   groups: [] as CreationGroup[], selectedGroup: null as string | null, modelTokenId: null as number | null,
+  requestContractVersion: 1 as 1 | 2,
   groupsLoading: false, groupSwitching: false, groupsError: '', modelLaunchPending: undefined as Promise<void> | undefined,
   tasks: [] as CreationTask[], selectedId: '', loaded: false, storageError: '', historyRevision: 0,
 })
@@ -113,7 +115,7 @@ const mediaLoads = new Map<string, Promise<string | undefined>>()
 let owner = '', epoch = 0, booting: Promise<void> | undefined
 let modelRevision = 0
 let groupRead: Promise<void> | undefined, groupSelection: Promise<void> | undefined
-type ModelCatalogue = { items: CreationModel[]; tokenId: number; fetchedAt: number }
+type ModelCatalogue = { items: CreationModel[]; tokenId: number | null; contractVersion: 1 | 2; fetchedAt: number }
 const modelCatalogues = new Map<string, ModelCatalogue>()
 const modelReads = new Map<string, { promise: Promise<ModelCatalogue | undefined>; preload: boolean }>()
 const catalogueFreshFor = 60000, catalogueUsableFor = 5 * 60000
@@ -638,6 +640,7 @@ async function poll(task: CreationTask, controller: AbortController, version: nu
 }
 function applyCatalogue(catalogue: ModelCatalogue) {
   creation.models = catalogue.items; creation.modelTokenId = catalogue.tokenId
+  creation.requestContractVersion = catalogue.contractVersion
   creation.modelsLoaded = true; creation.modelsLoading = false; creation.groupSwitching = false
 }
 export function loadCreationModels(force = false, background = false, preload = false): Promise<void> {
@@ -654,12 +657,14 @@ export function loadCreationModels(force = false, background = false, preload = 
     const account = session.user.accountId || session.user.id
     let promise!: Promise<ModelCatalogue | undefined>
     promise = (async () => {
-      const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number; prepared?: boolean }>('/api/creation/models', {
-        ...(group ? { method: 'POST' as const, body: { group, ...(preload ? { preload: true } : {}) } } : {}),
+      const native = creation.requestContractVersion === 2
+      const result = await api<{ items?: CreationModel[]; data?: CreationModel[]; tokenId?: number; prepared?: boolean; group?: string; contractVersion?: number }>(`/api/creation/models${group && native ? `?group=${encodeURIComponent(group)}` : ''}`, {
+        ...(!native && group ? { method: 'POST' as const, body: { group, ...(preload ? { preload: true } : {}) } } : {}),
         expectedAccount: account, signal: AbortSignal.timeout(20000), ...(background ? { priority: 'low' as const } : {}),
       })
       if (version !== epoch || identity !== accountIdentity() || generation !== catalogueVersion || modelReads.get(key)?.promise !== promise || result.prepared === false) return
-      if (!Number.isSafeInteger(result.tokenId) || result.tokenId! <= 0 || !Array.isArray(result.items || result.data)) throw new Error('模型分组尚未就绪，请重新读取。')
+      const accountCatalogue = result.group === group && [1, 2].includes(result.contractVersion ?? 0)
+      if ((!accountCatalogue && (!Number.isSafeInteger(result.tokenId) || result.tokenId! <= 0)) || !Array.isArray(result.items || result.data)) throw new Error('模型分组尚未就绪，请重新读取。')
       const items = (result.items || result.data || []).filter(item => item && typeof item.id === 'string').map(item => {
       const { id, name, tags, description, provider, kinds, configuredKind } = item
       const kind = configuredKind || kinds?.[0]
@@ -670,7 +675,9 @@ export function loadCreationModels(force = false, background = false, preload = 
         tags: setting.tags, apiFormat: setting.apiFormat, protocol: setting.protocol, image: setting.image, text: setting.text, video: setting.video,
       } : {}) }
       })
-      const catalogue = { items, tokenId: result.tokenId!, fetchedAt: Date.now() }
+      const catalogue: ModelCatalogue = { items, tokenId: accountCatalogue ? null : result.tokenId!, contractVersion: result.contractVersion === 2 ? 2 : 1, fetchedAt: Date.now() }
+      await (await import('./model-preferences')).migrateModelPreferences()
+      if (version !== epoch || identity !== accountIdentity() || generation !== catalogueVersion) return
       modelCatalogues.delete(key); modelCatalogues.set(key, catalogue)
       while (modelCatalogues.size > 8) modelCatalogues.delete(modelCatalogues.keys().next().value!)
       return catalogue
@@ -709,6 +716,7 @@ export function loadCreationGroups(force = false, followSession = false): Promis
     if (version !== epoch || identity !== accountIdentity()) return
     if (!Array.isArray(result?.groups)) throw new Error('模型分组返回无效，请重试。')
     creation.groups = result.groups
+    creation.requestContractVersion = result.contractVersion === 2 ? 2 : 1
     groupsReadAt = Date.now()
     if (followSession) { invalidateCreationModels(); creation.selectedGroup = result.selectedGroup }
     else if (!creation.selectedGroup) {
@@ -803,8 +811,9 @@ export function creationReferenceIssue(input: Pick<CreationInput, 'kind' | 'mode
 }
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void | Promise<void>, isCurrent: () => boolean = () => true) {
   if (creation.groupSwitching || creation.groupsLoading || creation.modelsLoading) throw new Error('模型分组正在更新，请稍后再生成。')
-  const selectedTokenId = input.accountTokenId ?? creation.modelTokenId
+  const selectedTokenId = input.accountTokenId === undefined ? creation.modelTokenId : input.accountTokenId
   const selectedGroup = input.accountGroup === undefined ? creation.selectedGroup : input.accountGroup
+  const contractVersion = input.accountContractVersion ?? creation.requestContractVersion
   const configuredModel = selectedGroup === creation.selectedGroup && selectedTokenId === creation.modelTokenId
     ? creation.models.find(model => model.id === input.model) : undefined
   const imageFormat = input.apiFormat === 'auto' ? configuredModel?.apiFormat : input.apiFormat
@@ -855,7 +864,8 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     if (turn.references) turn.references = await Promise.all(turn.references.map(prepareImage))
   }
   const id = crypto.randomUUID()
-  const body = JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined,
+  const body = JSON.stringify({ ...input, mediaBranch: undefined, conversationId: undefined, accountTokenId: undefined, accountGroup: undefined, accountContractVersion: undefined,
+    ...(contractVersion === 2 ? { contractVersion: 2, group: selectedGroup } : {}),
     references: undefined, referenceUrls: (input.references || []).map(file => file.url), requestId: id })
   const requestBytes = new TextEncoder().encode(body).byteLength
   if (requestBytes > 27 * 1024 ** 2)
@@ -903,8 +913,8 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : { 'X-Creation-Stream': creationStreamProtocol }), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
-        ...(selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
-        ...(selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
+        ...(contractVersion !== 2 && selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
+        ...(contractVersion !== 2 && selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
       body,
     })
     responseReceived = true; responseStatus = response.status

@@ -100,7 +100,7 @@ async function launch(row: ModelPriceRow) {
     await loadCreationModels(true)
     if (!current() || chats.activeId !== activeId) return
     const model = creation.models.find(item => item.id === row.model)
-    if (creation.modelsError || creation.selectedGroup !== row.group || !creation.modelsLoaded || !creation.modelTokenId || !model) throw new Error('此分组下的模型暂不可用，请刷新模型广场后重试。')
+    if (creation.modelsError || creation.selectedGroup !== row.group || !creation.modelsLoaded || !model) throw new Error('此分组下的模型暂不可用，请刷新模型广场后重试。')
     const targetKind = modelKind(model)
     modelChoices[targetKind] = ''
     draft = createEmptyChat(targetKind)

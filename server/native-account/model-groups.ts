@@ -2,6 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import type { AccountRequest } from "./http.ts";
 import {
   accountRequest,
+  readAccountToken,
+  forgetAccountToken,
   authBundle,
   getAuthenticatedSession,
   upstream,
@@ -9,6 +11,7 @@ import {
 } from "./client.ts";
 import { NewApiError, requireNewApiConfig } from "./config.ts";
 import { getNewApiRedis, withSessionLock } from "./session.ts";
+import { nativeRequestsEnabled } from '../creation/request-store.ts';
 
 type Binding =
   | { tokenId: number }
@@ -159,7 +162,7 @@ async function matchingTokens(
     .map(token => token.id as number);
 }
 
-function reusableSystemToken(token: any, userId: number, group: string) {
+export function reusableSystemToken(token: any, userId: number, group: string) {
   return (
     usable(token, group) &&
     token.user_id === userId &&
@@ -243,6 +246,7 @@ async function resolveGroup(
     ? { session: login }
     : await getAuthenticatedSession(req, true);
   const userId = session.user!.id;
+  const durable = req.database && nativeRequestsEnabled(userId) ? req.database : undefined;
   const request: GroupRequest = login
     ? (path, options) =>
         upstream(path, {
@@ -250,13 +254,27 @@ async function resolveGroup(
           accessToken: login.accessToken,
           ...upstreamRequestHints(req),
         })
-    : (path, options) => accountRequest(req, path, { ...options, reuseRequestSession: true });
+    : (path, options) => durable && !options?.method && /^\/api\/token\/[1-9]\d*$/.test(path)
+      ? readAccountToken(req, Number(path.split('/').pop()))
+      : accountRequest(req, path, { ...options, reuseRequestSession: true });
   // Verify available groups even when a key was bound on a previous visit.
   const { data: groups } = await request("/api/user/self/groups");
   if (group && !Object.prototype.hasOwnProperty.call(groups || {}, group))
     throw new NewApiError("该分组不可用，请刷新分组列表");
   const groupKey = bindingKey(userId, group);
-  const key = systemAuto ? `${groupKey}:web-search` : groupKey;
+  const key = durable ? `${groupKey}:native` : systemAuto ? `${groupKey}:web-search` : groupKey;
+  const read = async (id: string) => durable
+    ? (await durable.query<{ binding: Binding }>('SELECT binding FROM community_group_credential WHERE key=$1', [id])).rows[0]?.binding ?? null
+    : readBinding(id);
+  const compare = async (id: string, before: Binding | null, after: Binding | null) => {
+    if (!durable) return compareBinding(id, before, after);
+    const result = before === null
+      ? await durable.query('INSERT INTO community_group_credential (key,binding) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key', [id, JSON.stringify(after)])
+      : after === null
+      ? await durable.query('DELETE FROM community_group_credential WHERE key=$1 AND binding=$2::jsonb RETURNING key', [id, JSON.stringify(before)])
+      : await durable.query('UPDATE community_group_credential SET binding=$3,version=version+1,updated_at=now() WHERE key=$1 AND binding=$2::jsonb RETURNING key', [id, JSON.stringify(before), JSON.stringify(after)]);
+    return result.rows.length === 1;
+  };
   return withSessionLock(`model-group:${groupKey}`, async () => {
     const { session: current } = login
       ? { session: { ...login, selectedTokenId: undefined } }
@@ -265,7 +283,7 @@ async function resolveGroup(
       throw new NewApiError("账号已变化，请刷新", 409);
     let replacedTokenId: number | undefined;
     const rememberSystemToken = async (tokenId: number | undefined) => {
-      if (systemAuto && tokenId) {
+      if (!durable && systemAuto && tokenId) {
         const chatBinding = await readBinding(groupKey);
         // Reuse a provisioned system key when returning to Auto; preserve manual bindings.
         if (
@@ -278,7 +296,7 @@ async function resolveGroup(
       return tokenId;
     };
     let selected: any;
-    if (!systemAuto && current.selectedTokenId) {
+    if (!durable && !systemAuto && current.selectedTokenId) {
       try {
         ({ data: selected } = await request(
           `/api/token/${current.selectedTokenId}`,
@@ -288,7 +306,7 @@ async function resolveGroup(
           throw error;
       }
     }
-    let binding = await readBinding(key);
+    let binding = await read(key);
     // Idle preloading only reads confirmed keys; provisioning is a foreground action.
     if (!create && binding && "pendingName" in binding) return;
     if (binding && "pendingName" in binding) {
@@ -320,23 +338,32 @@ async function resolveGroup(
         group,
         !login,
       );
-      if (existing) return rememberSystemToken(existing);
+      if (existing) {
+        if (durable) {
+          const { data: token } = await request(`/api/token/${existing}`);
+          if (!reusableSystemToken(token, userId, group)) throw unavailable();
+        }
+        return rememberSystemToken(existing);
+      }
       if (!create) return;
       // Explicit switching and system search may replace a confirmed deleted key.
       // Disabled, expired, edited and ambiguous keys keep their binding.
       replacedTokenId = binding.tokenId;
-      if (!(await compareBinding(key, binding, null)))
+      if (!(await compare(key, binding, null)))
         throw new NewApiError("分组记录已更新，请重试", 409);
       binding = null;
     }
 
     if (!create) return;
     if (!binding) {
+      if (durable && (await readBinding(groupKey) || await readBinding(`${groupKey}:web-search`)))
+        throw new NewApiError("旧分组密钥尚未核对，请联系管理员导入绑定；不会另建密钥", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
       const tokens = await listTokens(request);
       const matches = tokens.filter(
         token => token.name === SYSTEM_TOKEN_NAME && token.group === group,
       );
       if (matches.length) {
+        if (durable) throw new NewApiError("已有系统同名密钥需要管理员核对来源；不会按名称接管或重复创建", 409, "NEW_API_CREDENTIAL_VERIFICATION_REQUIRED");
         const candidate = matches
           .filter(token => reusableSystemToken(token, userId, group))
           .sort((a, b) => a.id - b.id)[0];
@@ -355,7 +382,7 @@ async function resolveGroup(
         pendingName: `${SYSTEM_TOKEN_NAME}-${randomBytes(8).toString("hex")}`,
         ...(systemAuto && replacedTokenId ? { replacedTokenId } : {}),
       };
-      if (!(await compareBinding(key, null, binding)))
+      if (!(await compare(key, null, binding)))
         throw new NewApiError("分组正在准备，请重试", 409);
       try {
         await request("/api/token/", {
@@ -382,7 +409,7 @@ async function resolveGroup(
           error.status < 500 &&
           ![408, 409].includes(error.status)
         ) {
-          await compareBinding(key, binding, null);
+          await compare(key, binding, null);
           throw error;
         }
       }
@@ -394,12 +421,14 @@ async function resolveGroup(
     // another creation or make the temporary name impossible to recover.
     if (!binding.createdTokenId) {
       const created = { ...binding, createdTokenId: tokenId };
-      if (!(await compareBinding(key, binding, created)))
+      if (!(await compare(key, binding, created)))
         throw new NewApiError("分组记录已更新，请重试", 409);
       binding = created;
     }
     const { data: token } = await request(`/api/token/${tokenId}`);
     if (!usable(token, group)) throw unavailable();
+    if (durable && (token.id !== tokenId || !reusableSystemToken({ ...token, name: SYSTEM_TOKEN_NAME }, userId, group)
+      || ![SYSTEM_TOKEN_NAME, binding.pendingName].includes(token.name))) throw unavailable();
     if (token.name === binding.pendingName) {
       await request("/api/token/", {
         method: "PUT",
@@ -418,8 +447,9 @@ async function resolveGroup(
           auto_groups: token.auto_groups ?? [],
         },
       });
+      if (durable) forgetAccountToken(req, tokenId);
     }
-    if (!(await compareBinding(key, binding, { tokenId })))
+    if (!(await compare(key, binding, { tokenId })))
       throw new NewApiError("分组记录已更新，请重试", 409);
     return rememberSystemToken(await groupToken(request, tokenId, group));
   });

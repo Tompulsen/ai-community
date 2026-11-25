@@ -70,6 +70,7 @@ export async function handleStudioTools(ctx: RequestContext, overrides: { retrie
   if (!user.accountId) throw httpError(409, '请先用章鱼账号登录。')
   if (ctx.req.headers['x-new-api-user'] !== undefined && ctx.req.headers['x-new-api-user'] !== user.accountId) throw httpError(409, '账号已切换，请重新操作。')
   const req = new AccountRequest(applicationRequest(ctx.request, ctx.reply, ctx.config.url))
+  req.database = ctx.db
   req.headers.set('x-new-api-user', user.accountId)
   if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/skills/catalog') {
     await limited(ctx, 'catalog', 20)

@@ -11,7 +11,7 @@ import StudioBilling from './StudioBilling.vue'
 
 const props = defineProps<{ source: Work; disabled?: boolean }>()
 const emit = defineEmits<{ 'update:prompt': [value: string]; busy: [value: boolean] }>()
-const catalogue = ref<{ groups: CreationGroup[]; items: CreationModel[] }>({ groups: [], items: [] })
+const catalogue = ref<{ groups: CreationGroup[]; items: CreationModel[]; contractVersion?: 1 | 2 }>({ groups: [], items: [] })
 const group = ref(''), model = ref(''), fileId = ref(''), draft = ref(''), issue = ref('')
 const loading = ref(false), preparing = ref(false), recovering = ref(false)
 const owner = session.user?.id, account = session.user?.accountId || owner
@@ -55,13 +55,15 @@ async function start() {
   const signal = AbortSignal.any([controller.signal, lifetime.signal, AbortSignal.timeout(90000)])
   try {
     const content = await reversePromptContent(selected.file, signal)
-    const access = await api<{ items: CreationModel[]; tokenId: number }>('/api/creation/models', { method: 'POST', body: { group: selected.group }, expectedAccount: account, signal })
+    const native = catalogue.value.contractVersion === 2
+    const access = await api<{ items: CreationModel[]; tokenId?: number; contractVersion: 1 | 2 }>(`/api/creation/models${native ? `?group=${encodeURIComponent(selected.group)}` : ''}`, {
+      ...(!native ? { method: 'POST', body: { group: selected.group } } : {}), expectedAccount: account, signal,
+    })
     if (!valid()) return
-    if (!Number.isSafeInteger(access.tokenId) || access.tokenId < 1) throw new Error('文本分组未就绪，请重试。')
     if (!access.items.some(item => item.id === selected.model && (item.configuredKind ? item.configuredKind === 'text' : item.kinds?.includes('text')))) throw new Error('所选文本模型已不可用，请重新读取模型。')
     await submitCreation({
       kind: 'text', model: selected.model, prompt: '根据源作品反推可复现的生成提示词。', conversationId: conversationId.value,
-      sourceWorkId: props.source.id, accountTokenId: access.tokenId, accountGroup: selected.group,
+      sourceWorkId: props.source.id, accountTokenId: access.tokenId ?? null, accountGroup: selected.group, accountContractVersion: access.contractVersion ?? 1,
       apiFormat: 'auto', size: 'auto', aspect_ratio: 'auto', n: 1, duration: 8,
       chatOptions: chatOptionsSchema.parse({ messages: [
         { role: 'system', content: reversePromptInstruction(props.source.kind) },

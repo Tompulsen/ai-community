@@ -2,7 +2,7 @@ import type { AccountRequest } from "./http.ts";
 import { accountRequest } from "./client.ts";
 import { NewApiError } from "./config.ts";
 
-export async function readAccountModelCatalogue(req: AccountRequest) {
+export async function readAccountModelCatalogue(req: AccountRequest, group?: string) {
   const options = { reuseRequestSession: true, requireSuccess: true, maxResponseBytes: 2 * 1024 * 1024 };
   const { data } = await accountRequest(req, "/api/user/self/groups", options);
   const unavailable = () => new NewApiError("账号模型目录返回无效，请重新拉取。", 502);
@@ -11,9 +11,11 @@ export async function readAccountModelCatalogue(req: AccountRequest) {
   if (ids.length > 128 || ids.some(id => id !== id.trim() || id.length > 128 || /[\u0000-\u001f\u007f]/u.test(id)))
     throw unavailable();
   const groups = ids.map(id => ({ id, name: id }));
+  if (group !== undefined && !ids.includes(group)) throw new NewApiError("该分组不可用，请刷新分组列表", 403);
+  const selected = group === undefined ? groups : groups.filter(item => item.id === group);
   const models = new Map<string, { id: string; groups: string[] }>();
-  for (let offset = 0; offset < groups.length; offset += 4) {
-    const batch = await Promise.all(groups.slice(offset, offset + 4).map(async group => {
+  for (let offset = 0; offset < selected.length; offset += 4) {
+    const batch = await Promise.all(selected.slice(offset, offset + 4).map(async group => {
       const { data: items } = await accountRequest(req, `/api/user/models?group=${encodeURIComponent(group.id)}`, options);
       if (!Array.isArray(items) || items.some(item => typeof item !== "string")) throw unavailable();
       return { group, items: items as string[] };

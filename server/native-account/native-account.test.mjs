@@ -382,6 +382,32 @@ test("native login reuses password and verification protocol and sets the existi
   await removeSessionById(id)
 })
 
+test('native v2 login never lists, reveals or provisions model keys', async t => {
+  configure(t)
+  const previous = { store: process.env.COMMUNITY_REQUEST_STORE, native: process.env.COMMUNITY_REQUEST_V2 }
+  process.env.COMMUNITY_REQUEST_STORE = '1'; process.env.COMMUNITY_REQUEST_V2 = '1'
+  t.after(() => {
+    for (const [key, value] of [['COMMUNITY_REQUEST_STORE', previous.store], ['COMMUNITY_REQUEST_V2', previous.native]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+    }
+  })
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url).pathname
+    if (path === '/api/status') return envelope({ password_login_enabled: true })
+    assert.equal(path, '/api/user/login')
+    return envelope({ user, access_token: 'login-access', access_expires_at: Date.now() / 1000 + 3600,
+      session: { sid: 'login-sid' } }, { 'Set-Cookie': 'new_api_refresh=login-refresh; HttpOnly' })
+  })
+  const response = await handleAccountRequest(request('/api/new-api/login', {
+    method: 'POST', body: JSON.stringify({ username: 'creator', password: 'fixture-password' }),
+  }))
+  assert.equal(response.status, 200)
+  const id = response.headers.getSetCookie().find(value => value.startsWith('octopus_new_api_session=')).match(/^octopus_new_api_session=([^;]+)/)[1]
+  const saved = await readSessionById(id)
+  assert.equal(saved.selectedTokenId, undefined); assert.equal(saved.selectedKey, undefined)
+  await removeSessionById(id)
+})
+
 test("logout removes native sessions even when the upstream account service is unavailable", async t => {
   configure(t)
   const fixture = await session(t)

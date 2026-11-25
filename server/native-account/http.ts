@@ -1,4 +1,7 @@
+import type { Queryable } from '../types.ts'
+
 export class AccountRequest extends Request {
+  database?: Queryable
   get nextUrl() { return new URL(this.url) }
   get cookies() {
     return {

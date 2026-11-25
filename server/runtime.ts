@@ -27,6 +27,7 @@ import { startMediaWorker } from './media.ts'
 import { handleAccountRequest } from './native-account/index.ts'
 import { closeNewApiRedis } from './native-account/session.ts'
 import { handleCreation, startCreationWorker } from './creation.ts'
+import { checkRequestSchema } from './creation/request-store.ts'
 import { drainCreations, stopAcceptingCreations } from './creation/inflight.ts'
 import { handleStudioTools, closeMcpClients } from './studio-tools.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
@@ -157,12 +158,12 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
   }
   app.route({ method: ['GET', 'HEAD'], url: '/healthz', handler: health })
   for (const url of ['/api/new-api/*', '/studio/api/new-api/*']) app.all(url, async (request, reply) =>
-    sendWebResponse(reply, await handleAccountRequest(applicationRequest(request, reply, origin))))
+    sendWebResponse(reply, await handleAccountRequest(applicationRequest(request, reply, origin), db)))
   for (const url of ['/studio', '/studio/*']) app.route({ method: ['GET', 'HEAD'], url,
     handler: async (_request, reply) => reply.redirect('/create', 302) })
   register(handleCreation, [
     ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media', '/api/creation/requests/:id']],
-    ['POST', ['/api/creation/generate', '/api/creation/models']],
+    ['POST', ['/api/creation/generate', '/api/creation/models', '/api/creation/preference-groups']],
   ])
   register(handleImageExport, [['POST', ['/api/images/export']]])
   register(handleStudioTools, [
@@ -269,10 +270,11 @@ export async function start(): Promise<FastifyInstance> {
   db.on('error', () => console.error('Database connection interrupted'))
   redis.on('error', () => console.error('Redis connection interrupted'))
   await Promise.all([db.query('SELECT 1'), redis.ping()])
+  await checkRequestSchema(db)
   const app = createApplication({ db, redis, config, filesRoot: process.env.FILES_ROOT || '/app/files' })
   const stopWorker = process.env.DISABLE_LOTTERY_WORKER === '1' ? () => {} : startPendingWorker({ db, config, newId })
   const stopMedia = process.env.DISABLE_MEDIA_WORKER === '1' ? async () => {} : startMediaWorker({ db, filesRoot: process.env.FILES_ROOT || '/app/files' })
-  const stopCreation = startCreationWorker(redis)
+  const stopCreation = startCreationWorker(redis, db)
   app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
   app.addHook('onClose', async () => {
     stopWorker()
