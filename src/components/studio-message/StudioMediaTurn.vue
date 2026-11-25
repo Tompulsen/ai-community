@@ -22,6 +22,17 @@ const emit = defineEmits<{
   preview: [task: CreationTask, index: number]
 }>()
 const error = ref(''), now = ref(Date.now())
+const videoErrors = ref<Record<string, boolean>>({}), videoAttempts = ref<Record<string, number>>({})
+const videoSizes = ref<Record<string, { width: number; height: number }>>({})
+watch(() => [session.user?.id, props.task.id], () => { videoErrors.value = {}; videoAttempts.value = {}; videoSizes.value = {} })
+function videoMetadata(url: string, event: Event) {
+  const video = event.target as HTMLVideoElement
+  if (video.videoWidth && video.videoHeight) videoSizes.value[url] = { width: video.videoWidth, height: video.videoHeight }
+}
+function retryVideo(url: string) {
+  videoErrors.value[url] = false
+  videoAttempts.value[url] = (videoAttempts.value[url] || 0) + 1
+}
 const busy = computed(() => isConversationBusy(props.conversation))
 const downloading = ref(false)
 let downloadController: AbortController | undefined
@@ -150,8 +161,12 @@ async function remove() {
       <p v-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
-      <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url">
-        <template v-if="task.kind === 'video'"><video :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" @dblclick="emit('preview', task, index)" /><button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button></template>
+      <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">
+        <template v-if="task.kind === 'video'">
+          <video :key="`${url}:${videoAttempts[url] || 0}`" :src="mediaSource(url, false, 'video')" :width="videoSizes[url]?.width || 640" :height="videoSizes[url]?.height || 360" :aria-label="`生成视频 ${index + 1}`" controls playsinline preload="metadata" @loadedmetadata="videoMetadata(url, $event)" @loadeddata="videoErrors[url] = false" @error="videoErrors[url] = true" @dblclick="emit('preview', task, index)" />
+          <div v-if="videoErrors[url]" class="video-load-error" role="status"><p>视频加载失败</p><button class="studio-tool" type="button" @click="retryVideo(url)"><RefreshCw :size="16" />重新加载视频</button></div>
+          <button class="icon-button video-expand" type="button" title="放大视频" aria-label="放大视频" @click="emit('preview', task, index)"><Maximize :size="17" /></button>
+        </template>
         <StudioCreationImage v-else :src="mediaSource(url, true) || ''" :alt="task.prompt" :label="`查看大图：预览生成图片 ${index + 1}`" @open="emit('preview', task, index)" />
       </figure></div>
       <div v-else-if="task.text" class="creation-text"><pre>{{ task.text }}</pre></div>
@@ -181,11 +196,13 @@ async function remove() {
 .stream-preview { display: block; max-width: 100%; max-height: 480px; }
 .creation-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px; width: min(880px, 100%); }
 .creation-media figure { position: relative; margin: 0; min-width: 0; }.video-expand { position: absolute; top: 8px; right: 8px; color: white; background: rgb(0 0 0 / 65%); }
-.video-results { display: flex; align-items: flex-start; flex-wrap: wrap; width: fit-content; max-width: 100%; }
-.video-results figure { max-width: 100%; }
-.creation-media video { width: auto; height: auto; aspect-ratio: auto 16 / 9; max-width: min(100%, 640px); max-height: min(360px, 36dvh); display: block; object-fit: contain; }
+.video-results { --video-max-height: min(360px, 36dvh); display: flex; align-items: flex-start; flex-wrap: wrap; width: min(640px, 100%); max-width: 100%; }
+.video-results figure { width: min(100%, calc(var(--video-max-height) * var(--video-ratio))); max-width: 100%; }
+.creation-media video { width: 100%; height: auto; aspect-ratio: auto 16 / 9; max-width: 100%; max-height: var(--video-max-height); display: block; object-fit: contain; }
+.video-load-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: var(--surface-soft); color: var(--ink); font-size: 14px; }
+.video-load-error p { margin: 0; }
 .creation-text pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 28px; margin: 0; max-width: 72ch; }
 @media (min-width: 1000px) { .creation-media { gap: 4px; } }
-@media (max-width: 639px) { .creation-media video { max-height: 32dvh; } }
+@media (max-width: 639px) { .video-results { --video-max-height: 32dvh; } }
 @media (pointer: coarse), (max-width: 639px) { .task-stop { min-height: 44px; width: 44px; } }
 </style>
