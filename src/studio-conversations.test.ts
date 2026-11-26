@@ -28,7 +28,7 @@ async function fixture() {
   creation.tasks = []; creation.selectedId = ''; creation.loaded = true
   return { ...logic, ...management, session, creation }
 }
-function task(id: string, kind: 'image' | 'video' = 'image', conversationId = id, createdAt = 1): CreationTask {
+function task(id: string, kind: 'image' | 'video' | 'text' = 'image', conversationId = id, createdAt = 1): CreationTask {
   return {
     id, owner: '17', kind, conversationId, createdAt, settledAt: createdAt + 1, phase: 'complete',
     model: `fixture-${kind}`, prompt: `prompt-${id}`, urls: [`data:image/png;base64,${'A'.repeat(100)}`], text: '',
@@ -95,6 +95,77 @@ it('persists tombstones so reloading cannot recreate a deleted media conversatio
   await p.loadChats(); await p.syncMediaConversations()
   expect(p.chats.sessions.some(chat => p.conversationKind(chat) === 'image')).toBe(false)
   expect(p.chats.deletedMediaConversationIds).toContain('image:image-thread')
+})
+it('persists explicit text and document task dismissals after deleting their conversation without touching retained tasks', async () => {
+  const p = await seed(), chat = p.chats.sessions.find(chat => chat.id === 'text')!
+  const retained = [
+    { ...task('text-live', 'text'), phase: 'running' as const },
+    { ...task('text-branch', 'text'), phase: 'attention' as const },
+    { ...task('document-model', 'text'), phase: 'paused' as const },
+    { ...task('already-removed', 'text'), phase: 'attention' as const },
+    { ...task('reverse-prompt', 'text'), phase: 'running' as const },
+    { ...task('foreign', 'text'), owner: '18' },
+  ]
+  p.creation.tasks.push(...retained)
+  chat.messages = [
+    { id: 'question', role: 'user', content: '生成' },
+    { id: 'answer', role: 'assistant', content: '', parentId: 'question', taskId: 'text-live' },
+    { id: 'document', role: 'assistant', content: '', documentTask: { key: 'document', modelTaskId: 'document-model',
+      request: { sessionId: chat.id, instruction: '生成文档', model: 'model', provider: 'community', format: 'docx' } } },
+    { id: 'foreign-reference', role: 'assistant', content: '', taskId: 'foreign' },
+  ]
+  chat.messageBranches = [{ id: 'alternate', role: 'assistant', content: '', parentId: 'question', taskId: 'text-branch' }]
+  chat.deletedMediaTaskIds = ['already-removed']
+  await p.removeChats([chat.id])
+  const expected = ['text:already-removed', 'text:document-model', 'text:text-branch', 'text:text-live']
+  expect(p.chats.deletedMediaConversationIds.sort()).toEqual(expected)
+  expect(p.creation.tasks.slice(-retained.length)).toEqual(retained)
+  const snapshot = storage.write.mock.calls.at(-1)![1]
+  p.session.user = { id: '18' } as any
+  expect(p.chats.deletedMediaConversationIds).toEqual([])
+  p.session.user = { id: '17' } as any; storage.read.mockResolvedValue(snapshot)
+  await p.loadChats()
+  expect(p.chats.deletedMediaConversationIds.sort()).toEqual(expected)
+})
+it('undo removes the text notification tombstone while retaining the original running request', async () => {
+  const p = await seed(), chat = p.chats.sessions.find(chat => chat.id === 'text')!
+  p.creation.tasks.push({ ...task('text-live', 'text'), phase: 'running' })
+  chat.messages = [{ id: 'answer', role: 'assistant', content: '', taskId: 'text-live' }]
+  await p.removeChats([chat.id])
+  expect(p.chats.deletedMediaConversationIds).toContain('text:text-live')
+  await p.undoRemovedChats()
+  expect(p.chats.deletedMediaConversationIds).not.toContain('text:text-live')
+  expect(p.chats.sessions.find(item => item.id === chat.id)?.messages[0]?.taskId).toBe('text-live')
+  expect(p.creation.tasks.find(item => item.id === 'text-live')?.phase).toBe('running')
+})
+it('marks removed text and document message tasks without hiding a surviving answer branch', async () => {
+  const p = await seed(), chat = p.chats.sessions.find(chat => chat.id === 'text')!
+  p.creation.tasks.push(task('removed-text', 'text'), task('document-model', 'text'), task('kept-text', 'text'))
+  chat.messages = [
+    { id: 'question', role: 'user', content: '提问' },
+    { id: 'removed-answer', role: 'assistant', content: '', parentId: 'question', taskId: 'removed-text',
+      documentTask: { key: 'document', modelTaskId: 'document-model',
+        request: { sessionId: chat.id, instruction: '生成文档', model: 'model', provider: 'community', format: 'docx' } } },
+  ]
+  chat.messageBranches = [{ id: 'kept-answer', role: 'assistant', content: '保留回答', parentId: 'question', taskId: 'kept-text' }]
+  p.removeMessage(chat, chat.messages[1]!)
+  await p.flushChats()
+  expect(chat.deletedMediaTaskIds?.sort()).toEqual(['document-model', 'removed-text'])
+  expect(chat.messages.some(message => message.taskId === 'kept-text')).toBe(true)
+  expect(p.creation.tasks.filter(item => ['removed-text', 'document-model', 'kept-text'].includes(item.id))).toHaveLength(3)
+  const saved = storage.write.mock.calls.at(-1)![1]
+  expect(saved.state.sessions.find((item: { id: string }) => item.id === chat.id).deletedMediaTaskIds.sort()).toEqual(['document-model', 'removed-text'])
+})
+it('does not dismiss a text task still referenced by another answer branch', async () => {
+  const p = await seed(), chat = p.chats.sessions.find(chat => chat.id === 'text')!
+  p.creation.tasks.push(task('shared-text', 'text'))
+  chat.messages = [{ id: 'question', role: 'user', content: '提问' },
+    { id: 'removed-answer', role: 'assistant', content: '', parentId: 'question', taskId: 'shared-text' }]
+  chat.messageBranches = [{ id: 'kept-answer', role: 'assistant', content: '保留回答', parentId: 'question', taskId: 'shared-text' }]
+  p.removeMessage(chat, chat.messages[1]!)
+  await p.flushChats()
+  expect(chat.deletedMediaTaskIds).toEqual([])
+  expect(chat.messages.some(message => message.taskId === 'shared-text')).toBe(true)
 })
 it('reopens a deleted media conversation only when the owner explicitly selects its retained gallery item', async () => {
   const p = await seed(), image = p.chats.sessions.find(chat => p.conversationKind(chat) === 'image')!

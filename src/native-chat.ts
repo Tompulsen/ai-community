@@ -331,6 +331,10 @@ export function loadChats() {
   })().finally(() => { if (version === epoch) loading = undefined })
   return loading
 }
+function chatTaskIds(chat: NativeChat) {
+  return new Set((branchMessages(chat) as NativeMessage[]).flatMap(message =>
+    [message.taskId, message.documentTask?.modelTaskId].filter((id): id is string => typeof id === 'string' && !!id)))
+}
 export async function removeChat(chat: NativeChat) {
   return removeChats([chat.id])
 }
@@ -347,10 +351,15 @@ export async function removeChats(ids: string[]) {
   if (fallback) remaining.push(fallback)
   const nextId = remaining.some(chat => chat.id === activeId) ? activeId : remaining[Math.min(remainingBefore, remaining.length - 1)]!.id
   const previousTombstones = chats.deletedMediaConversationIds
-  const tombstones = removed.flatMap(({ chat }) => [
-    ...(chat.creationKind === 'image' || chat.creationKind === 'video' ? [`${chat.creationKind}:${chat.mediaConversationId || chat.id}`] : []),
-    ...conversationMediaTasks(chat).map(task => `${task.kind}:${task.conversationId || task.id}`),
-  ])
+  const tombstones = removed.flatMap(({ chat }) => {
+    const references = new Set([...chatTaskIds(chat), ...(chat.deletedMediaTaskIds || [])])
+    return [
+      ...(chat.creationKind === 'image' || chat.creationKind === 'video' ? [`${chat.creationKind}:${chat.mediaConversationId || chat.id}`] : []),
+      ...conversationMediaTasks(chat).map(task => `${task.kind}:${task.conversationId || task.id}`),
+      ...creation.tasks.filter(task => task.owner === owner() && task.kind === 'text' && references.has(task.id))
+        .map(task => `${task.kind}:${task.conversationId || task.id}`),
+    ]
+  })
   chats.deletedMediaConversationIds = [...new Set([...previousTombstones, ...tombstones])]
   chats.sessions = remaining; chats.activeId = nextId
   const next = chats.sessions
@@ -412,12 +421,12 @@ export function cloneChat(chat: NativeChat) {
 export function switchBranch(chat: NativeChat, source: string, target: string) { if (conversationBusy(chat)) return; selectAnswerBranch(chat, source, target, true); void saveChats() }
 export function removeMessage(chat: NativeChat, message: NativeMessage) {
   if (conversationBusy(chat)) return
-  const before = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
+  const before = chatTaskIds(chat)
   deleteBranchMessage(chat, message.id)
   chat.pinnedMessageIds = readPinnedMessageIds(chat.pinnedMessageIds).filter(id => branchMessages(chat).some(message => message.id === id))
-  const remaining = new Set((branchMessages(chat) as NativeMessage[]).flatMap(item => item.taskId ? [item.taskId] : []))
+  const remaining = chatTaskIds(chat)
   chat.deletedMediaTaskIds = [...new Set([...(chat.deletedMediaTaskIds || []),
-    ...creation.tasks.filter(task => task.owner === owner() && task.kind !== 'text' && before.has(task.id) && !remaining.has(task.id)).map(task => task.id)])]
+    ...creation.tasks.filter(task => task.owner === owner() && before.has(task.id) && !remaining.has(task.id)).map(task => task.id)])]
   void saveChats(true).catch(() => {})
 }
 export function stopChat(chat: NativeChat, selected?: NativeMessage) {

@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus } from '@lucide/vue'
-import { creation, mediaSource, type CreationTask } from '../native-studio'
+import { ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Grip, LoaderCircle, Minus, X } from '@lucide/vue'
+import { creation, initializeCreation, mediaSource, type CreationTask } from '../native-studio'
 import { errorMessage, session } from '../state'
 
 const route = useRoute(), router = useRouter()
@@ -15,19 +15,39 @@ const position = computed(() => point.value ? { left: `${point.value.x}px`, top:
 const studioPage = computed(() => route.path === '/create' || route.path.startsWith('/create/'))
 const active = (phase: string) => ['submitting', 'running'].includes(phase)
 const labels = { submitting: '正在提交', running: '正在生成', complete: '生成完成', error: '生成失败', paused: '已停止等待', attention: '请求异常' }
+const chatState = shallowRef<typeof import('../native-chat').chats>()
+watch(() => session.user?.id, async owner => {
+  chatState.value = undefined
+  if (!owner) return
+  await initializeCreation()
+  if (owner !== session.user?.id) return
+  const { chats, loadChats } = await import('../native-chat')
+  if (owner !== session.user?.id) return
+  await loadChats()
+  if (owner === session.user?.id) chatState.value = chats
+}, { immediate: true })
+const deletedTasks = computed(() => new Set(chatState.value?.sessions.flatMap(chat => chat.deletedMediaTaskIds || [])))
+const deletedConversations = computed(() => new Set(chatState.value?.deletedMediaConversationIds))
+function visible(value: CreationTask) {
+  return chatState.value?.ready && !deletedTasks.value.has(value.id)
+    && !deletedConversations.value.has(`${value.kind}:${value.conversationId || value.id}`)
+}
 watch(() => ({
   owner: session.user?.id, studio: studioPage.value,
   phases: new Map(creation.tasks.filter(item => item.owner === session.user?.id).map(item => [item.id, item.phase])),
+  restoring: new Set(creation.restoringTaskIds),
 }), (current, previous) => {
   if (current.owner !== previous?.owner) { hidden.value = false; point.value = undefined; error.value = ''; stopDrag() }
   if (!current.owner || current.owner !== previous?.owner || current.studio) unread.value = []
   else {
-    const settled = [...current.phases].filter(([id, phase]) => !active(phase) && active(previous?.phases.get(id) || '')).map(([id]) => id)
+    const settled = [...current.phases].filter(([id, phase]) => !active(phase) && !current.restoring.has(id)
+      && (active(previous?.phases.get(id) || '') || phase === 'complete' && previous?.restoring.has(id))).map(([id]) => id)
     unread.value = [...new Set([...unread.value, ...settled])].filter(id => current.phases.has(id))
   }
   index.value = 0
 }, { immediate: true, flush: 'sync' })
-const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && (active(item.phase) || unread.value.includes(item.id))))
+const tasks = computed(() => creation.tasks.filter(item => item.owner === session.user?.id && visible(item)
+  && !creation.restoringTaskIds.has(item.id) && (active(item.phase) || unread.value.includes(item.id))))
 const task = computed(() => tasks.value[Math.min(index.value, tasks.value.length - 1)])
 const progress = computed(() => typeof task.value?.progress === 'number' && Number.isFinite(task.value.progress) ? Math.max(0, Math.min(100, task.value.progress)) : undefined)
 async function open(value: CreationTask) {
@@ -36,7 +56,7 @@ async function open(value: CreationTask) {
   try {
     const [{ chats, loadChats }, { ensureMediaConversation, syncMediaConversations }] = await Promise.all([import('../native-chat'), import('../studio-conversations')])
     await loadChats(); await syncMediaConversations()
-    if (!owner || owner !== session.user?.id || value.owner !== owner) return
+    if (!owner || owner !== session.user?.id || value.owner !== owner || !visible(value)) return
     creation.selectedId = value.id
     const conversation = value.kind === 'text' ? chats.sessions.find(chat => chat.messages.some(message => message.taskId === value.id)) : ensureMediaConversation(value.kind, value)
     await router.push({ path: `/create/${value.kind}`, query: conversation ? { conversation: conversation.id } : { reuse: value.id } })
@@ -73,6 +93,11 @@ function moveByKey(event: KeyboardEvent) {
   event.preventDefault(); point.value = clamp(rect.left + step[0], rect.top + step[1])
 }
 async function toggle() { hidden.value = !hidden.value; stopDrag(); await nextTick(); resize(); handle.value?.focus() }
+async function dismiss(value: CreationTask) {
+  unread.value = unread.value.filter(id => id !== value.id)
+  index.value = 0; error.value = ''; stopDrag()
+  await nextTick(); handle.value?.focus()
+}
 const observer = new ResizeObserver(resize)
 watch(dock, element => { observer.disconnect(); if (element) observer.observe(element) }, { flush: 'post' })
 onMounted(() => { window.addEventListener('resize', resize); window.visualViewport?.addEventListener('resize', resize); window.visualViewport?.addEventListener('scroll', resize) })
@@ -84,7 +109,7 @@ onBeforeUnmount(() => { stopDrag(); observer.disconnect(); window.removeEventLis
     <div class="dock-heading">
       <button ref="handle" class="icon-button dock-drag" aria-label="拖动生成小窗" title="拖动移动，也可用方向键移动" @pointerdown="startDrag" @pointermove="moveDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @keydown="moveByKey"><Grip :size="18" /></button>
       <button v-if="hidden" class="dock-restore" aria-label="展开生成任务" @click="toggle"><span>{{ labels[task.phase] }}</span><span class="caption-5">{{ tasks.length }} 个任务</span></button>
-      <template v-else><strong>后台生成 · {{ index + 1 }}/{{ tasks.length }}</strong><button class="icon-button" aria-label="收起生成任务" title="隐藏小窗，生成继续" @click="toggle"><Minus :size="18" /></button></template>
+      <template v-else><strong>后台生成 · {{ index + 1 }}/{{ tasks.length }}</strong><button v-if="active(task.phase)" class="icon-button" aria-label="收起生成任务" title="隐藏小窗，生成继续" @click="toggle"><Minus :size="18" /></button><button v-else class="icon-button" aria-label="关闭此提醒" title="关闭提醒，任务记录仍可在创作台查看" @click="dismiss(task)"><X :size="18" /></button></template>
     </div>
     <template v-if="!hidden">
       <div class="dock-content" role="status" aria-live="polite"><CheckCircle2 v-if="task.phase === 'complete'" :size="20" /><LoaderCircle v-else-if="active(task.phase)" :size="20" /><CircleAlert v-else :size="20" /><div><strong>{{ labels[task.phase] }}<span v-if="progress !== undefined && task.phase === 'running'"> · {{ Math.round(progress) }}%</span></strong><p>{{ task.prompt || task.model }}</p><span class="caption-5 muted">{{ task.model }}</span></div></div>

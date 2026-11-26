@@ -33,6 +33,29 @@ async function fixture(page: Page) {
   await page.goto('/__task-store-check')
 }
 
+test('clearing failed task records survives a fresh page while preserving completed work and other accounts', async ({ page }) => {
+  await fixture(page)
+  const beforeReload = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const complete = { id: 'completed-neighbor', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: '保留图片', urls: ['https://media.example/keep.png'] }
+    const failed = { ...complete, id: 'failed-old', createdAt: 2, phase: 'error', error: '旧错误', urls: [] }
+    await store.saveTaskSnapshot('17', [complete, failed, { ...failed, id: 'failed-new', createdAt: 3 }])
+    await store.saveTaskSnapshot('18', [{ ...failed, owner: '18' }])
+    const before = (await store.getTaskPage('17', { phase: 'error' })).total
+    await store.deleteTaskRecords('17', ['failed-old', 'failed-new'])
+    return { before, after: (await store.getTaskPage('17', { phase: 'error' })).total }
+  })
+  expect(beforeReload).toEqual({ before: 2, after: 0 })
+  await page.reload()
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    return { own: (await store.readTaskSnapshot('17'))?.map(task => task.id),
+      errors: (await store.getTaskPage('17', { phase: 'error' })).total,
+      foreign: (await store.readTaskSnapshot('18'))?.map(task => task.id) }
+  })
+  expect(result).toEqual({ own: ['completed-neighbor'], errors: 0, foreign: ['failed-old'] })
+})
+
 test('originals commit with task pointers and survive concurrent per-output snapshots and deleted tasks', async ({ page }) => {
   await fixture(page)
   const result = await page.evaluate(async () => {
