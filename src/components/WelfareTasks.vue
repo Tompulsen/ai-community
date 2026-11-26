@@ -17,9 +17,9 @@ const items = ref<WelfareTask[]>([]), loading = ref(true), error = ref('')
 const invitation = ref<ReferralStatus | null>(null)
 const publication = ref<PublicationStatus | null>(null), currentTime = ref(Date.now())
 let clockOffset = 0, lastRefresh = 0, timer: ReturnType<typeof setInterval> | undefined
-const cooldown = computed(() => publication.value?.resetsAt ? Math.max(0, Math.ceil((Date.parse(publication.value.resetsAt) - currentTime.value) / 1000)) : 0)
-const cooldownText = computed(() => [Math.floor(cooldown.value / 3600), Math.floor(cooldown.value % 3600 / 60), cooldown.value % 60].map(value => String(value).padStart(2, '0')).join(':'))
-const resetLabel = computed(() => publication.value?.resetsAt ? new Date(publication.value.resetsAt).toLocaleString('zh-CN', { hour12: false }) : '')
+const resetSeconds = computed(() => publication.value?.resetsAt ? Math.max(0, Math.ceil((Date.parse(publication.value.resetsAt) - currentTime.value) / 1000)) : 0)
+const resetText = computed(() => [Math.floor(resetSeconds.value / 3600), Math.floor(resetSeconds.value % 3600 / 60), resetSeconds.value % 60].map(value => String(value).padStart(2, '0')).join(':'))
+const awardedToday = computed(() => Boolean(publication.value?.rewardedAt) && resetSeconds.value > 0)
 const inviteExpanded = ref(Boolean(route.query.aff || route.query.invite || route.query.section === 'invite'))
 const icons = { invite: Users, publish: ImagePlus, upcoming: Gift }
 const hasInvite = computed(() => items.value.some(item => item.id === 'invite'))
@@ -59,8 +59,9 @@ function publish() {
 }
 function tick() {
   if (document.visibilityState === 'hidden') return
+  const beforeReset = resetSeconds.value > 0
   currentTime.value = Date.now() + clockOffset
-  if (Date.now() - lastRefresh >= 30000) void load(true)
+  if ((beforeReset && resetSeconds.value === 0) || Date.now() - lastRefresh >= 30000) void load(true)
 }
 function resume() { if (document.visibilityState !== 'hidden') void load(true) }
 watch(() => session.user?.id, () => { void load() }, { flush: 'sync' })
@@ -94,19 +95,17 @@ defineExpose({ refresh: load })
               <div v-if="item.publicationReward" class="publication-task">
                 <template v-if="item.publicationReward.enabled">
                   <p class="task-award">发布 <strong>{{ item.publicationReward.threshold }}</strong> 个作品，获得 <strong>{{ item.publicationReward.tickets }}</strong> 次抽奖机会</p>
-                  <p class="task-condition">达标自动到账，每轮限领一次；到账后满 24 小时重置，冷却期间发布不计入下一轮。</p>
+                  <p class="task-condition">每天北京时间 00:00 与活动抽奖同步重置，每日限领一次。仅累计当天发布的作品，未完成进度不结转。</p>
                   <template v-if="session.user && publication">
-                    <template v-if="cooldown > 0">
-                      <p class="publication-progress">本轮已到账 {{ publication.rewardTickets }} 次抽奖机会</p>
-                      <p class="task-condition">距离下一轮 {{ cooldownText }} · {{ resetLabel }} 可重新参与（本地时间）</p>
-                    </template>
-                    <p v-else class="publication-progress">本轮进度：{{ publication.resetsAt ? 0 : publication.count }} / {{ item.publicationReward.threshold }} 个作品</p>
+                    <p v-if="awardedToday" class="publication-progress">今日已到账 {{ publication.rewardTickets }} 次抽奖机会</p>
+                    <p v-else class="publication-progress">今日进度：{{ resetSeconds > 0 ? publication.count : 0 }} / {{ item.publicationReward.threshold }} 个作品</p>
+                    <p v-if="resetSeconds > 0" class="task-condition">距离重置 {{ resetText }} · 下次重置：北京时间 00:00</p>
                   </template>
                   <p v-else-if="!session.user" class="task-condition">登录后查看你的任务进度。</p>
                   <p v-else class="task-condition">任务进度暂时无法读取，请刷新后重试。</p>
                   <p class="task-condition">仅计首次公开的社区作品；待审核作品通过后计入。编辑、重新上架和历史作品不重复计数。抽奖仍需满足活动参与条件。</p>
                 </template>
-                <p v-else class="task-condition">发作品送抽奖次数已暂停，已到账的次数与冷却记录保留。</p>
+                <p v-else class="task-condition">发作品送抽奖次数已暂停，已到账的次数保留。重新开放后按北京时间每日任务规则参与。</p>
               </div>
               <p v-if="rulesLoading" class="task-condition" role="status">正在读取作品福利规则…</p>
               <p v-else-if="!lottery" class="task-condition">作品福利规则暂时无法读取，可刷新后重试。你仍可以发布作品。</p>

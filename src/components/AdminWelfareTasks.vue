@@ -64,13 +64,13 @@ onBeforeUnmount(() => { sequence++; controller?.abort() })
         <div v-if="item.id === 'publish' && item.publicationReward" class="publication-editor">
           <label class="task-visible"><input v-model="item.publicationReward.enabled" type="checkbox" />启用发作品送抽奖次数</label>
           <div class="task-editor-fields">
-            <label class="field"><span>每轮需发布作品数</span><input v-model.number="item.publicationReward.threshold" class="control" type="number" min="1" max="1000000" step="1" required aria-describedby="publication-reward-help" /></label>
-            <label class="field"><span>每轮奖励抽奖次数</span><input v-model.number="item.publicationReward.tickets" class="control" type="number" min="1" max="1000" step="1" required aria-describedby="publication-reward-help" /></label>
+            <label class="field"><span>每日需发布作品数</span><input v-model.number="item.publicationReward.threshold" class="control" type="number" min="1" max="1000000" step="1" required aria-describedby="publication-reward-help" /></label>
+            <label class="field"><span>每日奖励抽奖次数</span><input v-model.number="item.publicationReward.tickets" class="control" type="number" min="1" max="1000" step="1" required aria-describedby="publication-reward-help" /></label>
           </div>
           <p v-if="valid" class="reward-preview">{{ item.publicationReward.enabled ? `发布 ${item.publicationReward.threshold} 个作品，获得 ${item.publicationReward.tickets} 次抽奖机会` : '发作品奖励已暂停' }}</p>
           <p v-else class="form-error" role="alert">作品数量须为 1–1,000,000 的整数，抽奖次数须为 1–1,000 的整数；请同时检查任务名称与说明。</p>
-          <p id="publication-reward-help" class="form-note">达标自动到账，每轮仅奖励一次。到账后满 24 小时开始新一轮，冷却期发布的作品不计入下一轮。仅计首次公开的社区作品；待审核作品通过后计入，编辑与重新上架不重复计数。</p>
-          <p class="form-note">保存后，未完成的进度会保留，后续新发表作品按新门槛和奖励判断；已到账的次数与冷却时间不变。隐藏展示不会关闭发奖，停发请关闭上方奖励开关。</p>
+          <p id="publication-reward-help" class="form-note">达标自动到账，每日仅奖励一次。每天北京时间 00:00 与活动抽奖同步重置，当日未完成进度和领奖后发布的作品不结转。仅计首次公开的社区作品；待审核作品通过后计入，编辑与重新上架不重复计数。已到账的抽奖次数不受任务重置影响。</p>
+          <p class="form-note">保存后，当日未完成的进度会保留，后续新发表作品按新门槛和奖励判断；已到账的次数与当日领奖状态不变。隐藏展示不会关闭发奖，停发请关闭上方奖励开关。</p>
         </div>
         <div class="task-editor-fields"><label class="field"><span>{{ labels[item.id] }}名称</span><input v-model="item.title" class="control" required maxlength="40" /></label><label class="field"><span>{{ labels[item.id] }}按钮文字</span><input v-model="item.buttonText" class="control" required maxlength="24" /></label></div>
         <label class="field"><span>{{ labels[item.id] }}补充说明</span><textarea v-model="item.description" class="control" rows="2" maxlength="240" /></label>

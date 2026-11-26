@@ -3,19 +3,26 @@ import { expect, test, type Page } from '@playwright/test'
 import { defaultWelfareTasks } from '../shared/welfare-tasks'
 import { defaultLotterySettings } from '../server/business/lottery'
 import { mockUnifiedAccount } from './helpers/account-fixture'
+import { lotteryDay } from '../shared/lottery-daily'
 
 test.use({ reducedMotion: 'reduce', serviceWorkers: 'block' })
 async function fixture(page: Page, authenticated = true) {
   const account = await mockUnifiedAccount(page, authenticated)
   account.state.user.isAdmin = true
   const state = { items: defaultWelfareTasks(), version: 1, catalogFailure: false, ruleFailure: false, conflict: false, adminFailure: false,
-    publication: { count: 0, rewardedAt: null as string | null, rewardTickets: 0, resetsAt: null as string | null, serverTime: new Date().toISOString() },
+    serverNow: null as number | null, publicationReads: 0,
+    publication: { count: 0, rewardedAt: null as string | null, rewardTickets: 0, resetsAt: lotteryDay(new Date()).end.toISOString(), serverTime: new Date().toISOString() },
     lottery: { settings: { ...defaultLotterySettings(), enabled: true }, counts: { likes: 27, bestWorkLikes: 14, followers: 9 } },
     referral: { config: { version: 1, enabled: true, inviterPoints: 7200, inviteePoints: 3600, inviterQuota: 720000, inviteeQuota: 360000, minTopupCny: 0, updatedAt: 0 },
       code: 'testCode', inviteUrl: 'https://community.test/activities?aff=testCode', invited: 0, credited: 0, pending: 0, waiting: 0, earnedPoints: 0,
       earnedQuota: 0, legacyInvited: 0, asInvitee: null, items: [], nextCursor: 0 }, writes: [] as any[] }
   state.lottery.settings.likes.enabled = false; state.lottery.settings.followers.enabled = false
-  await page.route('**/api/welfare/tasks', route => route.fulfill(state.catalogFailure ? { status: 503, json: { error: '任务暂时不可用' } } : { json: { items: state.items.filter(item => item.enabled), publication: authenticated ? { ...state.publication, serverTime: new Date().toISOString() } : null } }))
+  await page.route('**/api/welfare/tasks', route => {
+    state.publicationReads++
+    return route.fulfill(state.catalogFailure ? { status: 503, json: { error: '任务暂时不可用' } } : { json: {
+      items: state.items.filter(item => item.enabled), publication: authenticated ? { ...state.publication, serverTime: new Date(state.serverNow ?? Date.now()).toISOString() } : null,
+    } })
+  })
   await page.route('**/api/admin/welfare/tasks', route => {
     if (state.adminFailure) return route.fulfill({ status: 503, json: { error: '配置暂时不可用' } })
     if (route.request().method() === 'PATCH') {
@@ -45,8 +52,9 @@ for (const mode of ['light', 'dark']) for (const width of [320, 390, 1440]) test
   await expect(list).toContainText('你得 7,200 · 好友得 3,600 永久积分')
   await expect(list).toContainText('任意一笔充值实际支付大于 0')
   await expect(list).toContainText('发布 1 个作品，获得 1 次抽奖机会')
-  await expect(list).toContainText('本轮进度：0 / 1 个作品')
-  await expect(list).toContainText('到账后满 24 小时重置')
+  await expect(list).toContainText('今日进度：0 / 1 个作品')
+  await expect(list).toContainText('每天北京时间 00:00 与活动抽奖同步重置')
+  await expect(list).not.toContainText('满 24 小时')
   await expect(list.getByRole('button', { name: '敬请期待', exact: true })).toBeDisabled()
   const toggle = list.getByRole('button', { name: '查看邀请福利', exact: true })
   await toggle.focus(); await page.keyboard.press('Enter')
@@ -154,10 +162,12 @@ for (const width of [320, 390, 1440]) test(`admin edits, reorders and hides task
 test('publication reward controls validate, save and appear in the user task', async ({ page }) => {
   const { state } = await fixture(page)
   await page.goto('/admin?tab=welfare')
-  await page.getByLabel('每轮需发布作品数', { exact: true }).fill('0')
+  await page.getByLabel('每日需发布作品数', { exact: true }).fill('0')
   await expect(page.getByRole('button', { name: '保存福利任务', exact: true })).toBeDisabled()
-  await page.getByLabel('每轮需发布作品数', { exact: true }).fill('3')
-  await page.getByLabel('每轮奖励抽奖次数', { exact: true }).fill('5')
+  await page.getByLabel('每日需发布作品数', { exact: true }).fill('3')
+  await page.getByLabel('每日奖励抽奖次数', { exact: true }).fill('5')
+  await expect(page.locator('#publication-reward-help')).toContainText('每天北京时间 00:00 与活动抽奖同步重置')
+  await expect(page.locator('#publication-reward-help')).toContainText('已到账的抽奖次数不受任务重置影响')
   await expect(page.locator('.reward-preview')).toHaveText('发布 3 个作品，获得 5 次抽奖机会')
   await page.getByRole('button', { name: '保存福利任务', exact: true }).click()
   await expect(page.getByText('已保存，福利中心会自动同步最新规则。', { exact: true })).toBeVisible()
@@ -165,25 +175,51 @@ test('publication reward controls validate, save and appear in the user task', a
   state.publication.count = 2
   await page.goto('/activities?tab=tasks')
   await expect(page.locator('[data-task="publish"]')).toContainText('发布 3 个作品，获得 5 次抽奖机会')
-  await expect(page.locator('[data-task="publish"]')).toContainText('本轮进度：2 / 3 个作品')
+  await expect(page.locator('[data-task="publish"]')).toContainText('今日进度：2 / 3 个作品')
 })
 
-test('earned reward keeps its snapshot, countdown expires, and open pages sync changed rules', async ({ page }) => {
+test('earned reward keeps its snapshot and open pages sync changed rules', async ({ page }) => {
   const { state } = await fixture(page)
   const time = Date.now()
-  state.publication = { count: 1, rewardTickets: 1, rewardedAt: new Date(time - 86400000 + 3000).toISOString(), resetsAt: new Date(time + 3000).toISOString(), serverTime: new Date(time).toISOString() }
+  state.publication = { count: 1, rewardTickets: 1, rewardedAt: new Date(time).toISOString(), resetsAt: lotteryDay(new Date(time)).end.toISOString(), serverTime: new Date(time).toISOString() }
   await page.goto('/activities?tab=tasks')
   const work = page.locator('[data-task="publish"]')
-  await expect(work).toContainText('本轮已到账 1 次抽奖机会')
-  await expect(work).toContainText('距离下一轮')
-  await expect(work).toContainText('本轮进度：0 / 1 个作品', { timeout: 10000 })
+  await expect(work).toContainText('今日已到账 1 次抽奖机会')
+  await expect(work).toContainText('下次重置：北京时间 00:00')
   state.items[1]!.publicationReward = { enabled: true, threshold: 2, tickets: 4 }
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(work).toContainText('发布 2 个作品，获得 4 次抽奖机会')
+  await expect(work).toContainText('今日已到账 1 次抽奖机会')
   state.items[1]!.publicationReward.enabled = false
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(work).toContainText('发作品送抽奖次数已暂停')
   await expect(work).not.toContainText('发布 2 个作品，获得 4 次抽奖机会')
+})
+
+for (const timezone of ['UTC', 'America/Los_Angeles']) for (const rewarded of [false, true]) test(`Beijing midnight refreshes ${rewarded ? 'awarded' : 'unfinished'} tasks in ${timezone}`, async ({ browser }) => {
+  const context = await browser.newContext({ timezoneId: timezone })
+  try {
+    const page = await context.newPage()
+    // Browser clock and timezone differ from the server; countdown must follow server time.
+    await page.clock.install({ time: new Date('2026-11-26T00:00:00.000Z') })
+    const { state } = await fixture(page)
+    state.serverNow = Date.parse('2026-11-26T15:59:59.000Z')
+    state.items[1]!.publicationReward = { enabled: true, threshold: 3, tickets: 2 }
+    state.publication = { count: rewarded ? 3 : 2, rewardedAt: rewarded ? '2026-11-26T08:16:04.000Z' : null, rewardTickets: rewarded ? 2 : 0, resetsAt: '2026-11-26T16:00:00.000Z', serverTime: new Date(state.serverNow).toISOString() }
+    await page.goto('/activities?tab=tasks')
+    const work = page.locator('[data-task="publish"]')
+    await expect(work).toContainText(rewarded ? '今日已到账 2 次抽奖机会' : '今日进度：2 / 3 个作品')
+    await expect(work).toContainText('下次重置：北京时间 00:00')
+    await expect(work).not.toContainText('本地时间')
+    const reads = state.publicationReads
+    state.serverNow = Date.parse('2026-11-26T16:00:00.000Z')
+    state.publication = { count: 0, rewardedAt: null, rewardTickets: 0, resetsAt: '2026-11-27T16:00:00.000Z', serverTime: new Date(state.serverNow).toISOString() }
+    await page.clock.runFor(1500)
+    await expect(work).toContainText('今日进度：0 / 3 个作品')
+    await expect.poll(() => state.publicationReads).toBeGreaterThan(reads)
+    await expect(work).not.toContainText('今日已到账')
+    expect(state.writes).toEqual([])
+  } finally { await context.close() }
 })
 
 test('admin conflicts preserve drafts and refresh/navigation both require deliberate discard', async ({ page }) => {

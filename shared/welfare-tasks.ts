@@ -5,8 +5,7 @@ export const publicationRewardSchema = z.object({
   enabled: z.boolean(), threshold: z.number().int().min(1).max(1000000), tickets: z.number().int().min(1).max(1000),
 }).strict()
 export const defaultPublicationReward = () => ({ enabled: true, threshold: 1, tickets: 1 })
-export const publicationCooldownMs = 24 * 60 * 60 * 1000
-export type PublicationProgress = { count: number; rewardedAt: string | null; rewardTickets: number }
+export type PublicationProgress = { date?: string; count: number; rewardedAt: string | null; rewardTickets: number }
 export type PublicationStatus = PublicationProgress & { resetsAt: string | null; serverTime: string }
 export const welfareTaskSchema = z.object({
   id: z.enum(['invite', 'publish', 'upcoming']), enabled: z.boolean(),

@@ -1,15 +1,17 @@
 import { emptyLotteryProgress } from './business/lottery.ts'
-import { publicationCooldownMs, readWelfareTasks, type PublicationProgress, type PublicationStatus } from '../shared/welfare-tasks.ts'
+import { readWelfareTasks, type PublicationProgress, type PublicationStatus } from '../shared/welfare-tasks.ts'
+import { lotteryDay } from '../shared/lottery-daily.ts'
 import type { Queryable } from './types.ts'
 
 type Account = { balance: number; progress: Record<string, unknown> & { publication?: PublicationProgress } }
 const emptyProgress = (): PublicationProgress => ({ count: 0, rewardedAt: null, rewardTickets: 0 })
 
 export function publicationStatus(progress: PublicationProgress = emptyProgress(), now = new Date()): PublicationStatus {
-  const reset = progress.rewardedAt ? new Date(progress.rewardedAt).getTime() + publicationCooldownMs : null
-  const cooling = reset !== null && now.getTime() < reset
-  return { ...progress, count: reset !== null && !cooling ? 0 : progress.count,
-    resetsAt: cooling ? new Date(reset).toISOString() : null, serverTime: now.toISOString() }
+  const day = lotteryDay(now)
+  // Old rewarded records have no date; their award timestamp identifies the Beijing day.
+  const date = progress.date ?? (progress.rewardedAt ? lotteryDay(new Date(progress.rewardedAt)).date : null)
+  return { ...(date === day.date ? progress : emptyProgress()), date: day.date,
+    resetsAt: day.end.toISOString(), serverTime: now.toISOString() }
 }
 
 export async function readPublicationStatus(db: Queryable, userId?: string): Promise<PublicationStatus | null> {
@@ -34,8 +36,8 @@ export async function rewardPublication(db: Queryable, workId: string, userId: s
   if (!account) throw new Error('Publication reward account unavailable')
   // Read the clock after acquiring the account lock, including when another publication made us wait.
   const time = now(), status = publicationStatus(account.progress.publication, time)
-  if (status.resetsAt) return
-  const progress: PublicationProgress = { count: status.count + 1, rewardedAt: null, rewardTickets: 0 }
+  if (status.rewardedAt) return
+  const progress: PublicationProgress = { date: status.date, count: status.count + 1, rewardedAt: null, rewardTickets: 0 }
   const awarded = progress.count >= rule.threshold ? rule.tickets : 0
   if (account.balance + awarded > 2147483647) throw Object.assign(new Error('抽奖次数已达上限，请联系管理员后重试。'), { statusCode: 409 })
   if (awarded) { progress.rewardedAt = time.toISOString(); progress.rewardTickets = awarded }
@@ -43,5 +45,5 @@ export async function rewardPublication(db: Queryable, workId: string, userId: s
   await db.query('UPDATE community_lottery_account SET balance=$2,progress=$3::jsonb WHERE "userId"=$1', [userId, account.balance + awarded, JSON.stringify(account.progress)])
   if (awarded) await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4::jsonb)',
     [newId(), userId, 'communityPublicationReward', JSON.stringify({ submissionId: workId, threshold: rule.threshold, tickets: awarded,
-      rewardedAt: progress.rewardedAt, resetsAt: new Date(time.getTime() + publicationCooldownMs).toISOString() })])
+      rewardedAt: progress.rewardedAt, resetsAt: status.resetsAt })])
 }
