@@ -11,6 +11,70 @@ const input = { kind: 'text', model: 'test', prompt: 'hello', chatOptions: { str
 const frame = value => new TextEncoder().encode(`data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`)
 const content = text => ({ choices: [{ delta: { content: text } }] })
 
+for (const format of ['chat-completions', 'responses', 'claude']) {
+  test(`${format} preserves a queue rejection inside HTTP 200 SSE`, async () => {
+    const error = { code: 'gateway_queue_full', message: 'Too many pending requests, please retry later' }
+    const body = Buffer.concat([Buffer.from(': heartbeat\n\n'), frame(format === 'responses' ? { response: { error } } : { error }), frame('[DONE]')])
+    await assert.rejects(readGenerationStream(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }),
+      { ...input, chatOptions: { ...input.chatOptions, format } }, () => {}), error => {
+      assert(error instanceof GenerationStreamError)
+      assert.equal(error.partial.errorCode, 'MODEL_BUSY')
+      assert.equal(error.partial.errorStatus, 429)
+      assert.equal(error.partial.status, 'failed')
+      assert.match(error.message, /模型服务繁忙/)
+      assert.doesNotMatch(error.message, /已保留已生成内容/)
+      return true
+    })
+  })
+}
+
+test('queue errors after partial text preserve uncertainty and usage', async () => {
+  const body = Buffer.concat([frame({ ...content('{"schemaVersion":'), usage: { completion_tokens: 7 } }),
+    frame({ error: { code: 'gateway_queue_full', message: 'Too many pending requests, please retry later' } })])
+  await assert.rejects(readGenerationStream(new Response(body), input, () => {}), error => {
+    assert.equal(error.partial.status, 'indeterminate')
+    assert.equal(error.partial.outputs[0].text, '{"schemaVersion":')
+    assert.equal(error.partial.usage.outputTokens, 7)
+    assert.equal(error.partial.errorCode, 'MODEL_BUSY')
+    return true
+  })
+})
+
+test('an empty interrupted stream does not claim saved content or a queue rejection', async () => {
+  await assert.rejects(readGenerationStream(new Response(': heartbeat\n\n'), input, () => {}), error => {
+    assert.equal(error.partial.status, 'indeterminate')
+    assert.equal(error.partial.errorCode, 'GENERATION_ERROR')
+    assert.doesNotMatch(error.message, /已保留已生成内容/)
+    assert.match(error.message, /未收到完整回答/)
+    return true
+  })
+})
+
+test('queue rejection after tool progress stays uncertain and never exposes an unfinished tool call', async () => {
+  const body = Buffer.concat([frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'build', arguments: '{' } }] } }] }),
+    frame({ error: { code: 'gateway_queue_full' } })])
+  await assert.rejects(readGenerationStream(new Response(body), input, () => {}), error => {
+    assert.equal(error.partial.status, 'indeterminate')
+    assert.equal(error.partial.errorCode, 'MODEL_BUSY')
+    assert.equal(error.partial.toolCalls, undefined)
+    assert.deepEqual(error.partial.outputs, [])
+    return true
+  })
+})
+
+for (const [format, delta] of [
+  ['responses', { type: 'response.function_call_arguments.delta', delta: '{' }],
+  ['claude', { type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{' } }],
+]) test(`${format} keeps earlier tool-only progress uncertain after an idle event and queue failure`, async () => {
+  const body = Buffer.concat([frame(delta), frame({ type: 'ping' }), frame({ error: { code: 'gateway_queue_full' } })])
+  await assert.rejects(readGenerationStream(new Response(body), { ...input, chatOptions: { ...input.chatOptions, format } }, () => {}), error => {
+    assert.equal(error.partial.status, 'indeterminate')
+    assert.equal(error.partial.errorCode, 'MODEL_BUSY')
+    assert.equal(error.partial.toolCalls, undefined)
+    return true
+  })
+})
+
 function live(t, request = input) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const lifecycle = createTextLifecycle()

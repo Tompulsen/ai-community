@@ -3,6 +3,7 @@ import type { SkillReference } from '../shared/community-skills'
 import { reactive, watch } from 'vue'
 import { refreshAccountBalance } from './account-balance'
 import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits'
+import { isModelBusy, modelBusyCode, modelBusyMessage } from '../shared/studio/model-busy'
 import { accountApi, api, errorMessage, notify, session, uploadFile } from './state'
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
@@ -39,6 +40,7 @@ export interface CreationTask {
   prompt: string
   createdAt: number
   settledAt?: number
+  resultStatus?: 'pending' | 'succeeded' | 'failed' | 'indeterminate' | 'save_failed' | 'expired'
   deadline?: number
   phase: CreationPhase
   stage?: 'downloading'
@@ -503,6 +505,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   if (record(data.usage)) task.usage = data.usage as ChatResponseUsage
   if (Array.isArray(data.toolCalls)) task.toolCalls = data.toolCalls as StudioToolCall[]
   const status = String(data.status || data.state || '').toLowerCase()
+  task.resultStatus = ['pending', 'succeeded', 'failed', 'indeterminate', 'save_failed', 'expired'].includes(status) ? status as CreationTask['resultStatus'] : undefined
   if (typeof data.deadline === 'number' && Number.isFinite(data.deadline)) task.deadline = data.deadline
   task.stage = status === 'pending' && data.stage === 'downloading' ? 'downloading' : undefined
   task.serverTracked = data.requestId === task.id
@@ -518,9 +521,11 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   const progress = typeof data.progress === 'string' ? Number(data.progress.replace('%', '')) : data.progress
   if (typeof progress === 'number' && Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
   const insufficient = ['failed', 'error', 'indeterminate'].includes(status) && isInsufficientCredits(data)
+  const busy = ['failed', 'error', 'indeterminate'].includes(status) && isModelBusy(data)
   if (insufficient && task.errorCode !== insufficientCreditsCode) void refreshAccountBalance(true)
-  task.errorCode = insufficient ? insufficientCreditsCode : typeof data.errorCode === 'string' ? generationErrorCode : undefined
-  const detail = insufficient ? insufficientCreditsMessage : typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
+  task.errorCode = insufficient ? insufficientCreditsCode : busy ? modelBusyCode : typeof data.errorCode === 'string' ? generationErrorCode : undefined
+  const detail = insufficient ? insufficientCreditsMessage : busy ? modelBusyMessage + (status === 'indeterminate' ? ' 本次未完整生成，请先核对消费记录。' : '')
+    : typeof data.error === 'string' ? data.error : record(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
   task.errorStage = typeof data.errorStage === 'string' ? data.errorStage : undefined
   task.errorStatus = typeof data.errorStatus === 'number' ? data.errorStatus : undefined
   if (['save_failed', 'indeterminate', 'expired'].includes(status)) {
@@ -761,8 +766,12 @@ export async function preloadCreationModels() {
   await loadCreationGroups()
   if (identity === accountIdentity() && creation.selectedGroup && !creation.groupsError) await loadCreationModels(false, true, true)
 }
+export function documentModelEnded(task: CreationTask) {
+  return task.purpose === 'document' && task.kind === 'text' && task.phase === 'attention'
+    && ['indeterminate', 'expired', 'succeeded'].includes(task.resultStatus || '')
+}
 export async function resumeCreation(task: CreationTask) {
-  if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error') return
+  if (task.owner !== activeOwner() || controllers.has(task.id) || task.phase === 'complete' || task.phase === 'error' || documentModelEnded(task)) return
   if (creationRequestTimedOut(task) && !task.serverTracked) return
   if (!task.upstreamId && task.legacy) return
   if (task.customApiBase) { task.phase = 'attention'; task.error = '此历史任务使用自定义接口，已保留原记录，请到原服务核对结果。'; return }
@@ -995,10 +1004,11 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       const detail = record(error) && typeof error.errorStage === 'string' ? errorMessage(error)
         : `${stage}失败${status ? `（HTTP ${status}）` : ''}：${errorMessage(error)}`
       task.errorStage = stage; task.errorStatus = status
-      task.errorCode = !controller.signal.aborted && isInsufficientCredits(error) ? insufficientCreditsCode : generationErrorCode
+      task.errorCode = !controller.signal.aborted && isInsufficientCredits(error) ? insufficientCreditsCode : !controller.signal.aborted && isModelBusy(error) ? modelBusyCode : generationErrorCode
       if (task.errorCode === insufficientCreditsCode) void refreshAccountBalance(true)
       task.error = controller.signal.aborted ? task.upstreamId ? '已停止本页等待，上游任务可能仍在执行。' : '已停止本页等待，上游可能已受理，请先核对使用记录。' : detail
       if (task.errorCode === insufficientCreditsCode) task.error = insufficientCreditsMessage
+      else if (task.errorCode === modelBusyCode) task.error = modelBusyMessage
       if (!controller.signal.aborted && !notAccepted) {
         task.submissionError = detail
         await persist()

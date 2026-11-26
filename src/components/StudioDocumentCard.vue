@@ -7,6 +7,7 @@ import { errorMessage, session } from '../state'
 import { creation } from '../native-studio'
 import StudioInsufficientCredits from './StudioInsufficientCredits.vue'
 import { isInsufficientCredits } from '../../shared/studio/insufficient-credits'
+import { isModelBusy } from '../../shared/studio/model-busy'
 import type { DocumentJob } from '../../shared/studio/document-workspace'
 import type { ChatDocumentTask, DocumentSource } from '../../shared/studio/document-chat'
 const props = defineProps<{ chat: NativeChat; message: NativeMessage; disabled?: boolean }>()
@@ -15,6 +16,7 @@ const task = computed(() => props.message.documentTask!)
 const source = computed(() => task.value.job && sourceFromJob(task.value.job, task.value.request.format))
 const contentIssue = computed(() => documentContentIssue(task.value))
 const modelTask = computed(() => creation.tasks.find(item => item.id === task.value.modelTaskId && item.owner === session.user?.id))
+const busy = computed(() => isModelBusy(modelTask.value || { error: task.value.error }))
 const savedContentRecovered = computed(() => !!task.value.modelContentError && modelTask.value?.phase === 'complete' && !contentIssue.value && !task.value.plan && !task.value.job && !task.value.clarification)
 const working = ref(false), issue = ref('')
 const issueCode = ref<string>()
@@ -35,7 +37,7 @@ async function perform(action: 'download' | 'recover' | 'refresh') {
       if (action === 'recover') await recoverDocumentContent(original, save, lifetime.signal)
       else original.job = await documentApi<DocumentJob>(scope, `jobs/${original.key}`, { signal: lifetime.signal })
       if (original.job) await waitDocumentJob(scope, original.job, lifetime.signal, async job => {
-        original.job = job; original.error = job.error || undefined; props.message.interrupted = false; props.message.error = undefined
+        original.job = job; original.error = job.error || undefined; props.message.interrupted = false; props.message.error = undefined; props.message.errorCode = undefined
         props.message.content = job.status === 'ready' ? `已生成 ${job.fileName || '文档'}。` : documentPhases[job.status] || '文档处理中'
         await save()
       })
@@ -55,11 +57,11 @@ async function perform(action: 'download' | 'recover' | 'refresh') {
       <button v-if="source" type="button" :disabled="working" @click="perform('download')"><Download :size="16" aria-hidden="true" />下载 {{ task.request.format.toUpperCase() }}</button>
       <button v-if="source" type="button" :disabled="disabled" @click="emit('open', source)"><FolderOpen :size="16" aria-hidden="true" />预览 / 继续修改</button>
       <button v-else-if="documentPending(task.job) && !message.streaming" type="button" :disabled="working" @click="perform('refresh')"><RefreshCw :size="16" aria-hidden="true" />刷新任务</button>
-      <button v-else-if="contentIssue && !message.streaming && !task.preparing" type="button" :disabled="working || disabled" @click="emit('retry', task)"><RefreshCw :size="16" aria-hidden="true" />调整要求后重新生成</button>
+      <button v-else-if="contentIssue && !message.streaming && !task.preparing" type="button" :disabled="working || disabled" @click="emit('retry', task)"><RefreshCw :size="16" aria-hidden="true" />{{ busy ? '重新准备生成' : '调整要求后重新生成' }}</button>
       <button v-else-if="!task.preparing && !task.clarification && !message.streaming && (task.plan || task.modelTaskId)" type="button" :disabled="working" @click="perform('recover')"><RefreshCw :size="16" aria-hidden="true" />{{ working ? '正在恢复…' : savedContentRecovered ? '继续制作文件' : task.plan ? '重试制作文件' : '恢复原模型请求' }}</button>
       <button v-for="candidate in task.candidates || []" :key="candidate.assetId" type="button" :disabled="disabled" @click="emit('open', candidate)">{{ candidate.fileName }}</button>
     </div>
-    <small v-if="contentIssue">原请求已结束，无法继续恢复。确认创建后会发起新请求，按当前模型计费。</small>
+    <small v-if="contentIssue">{{ modelTask?.resultStatus === 'indeterminate' ? '原请求未返回完整内容，请先核对消费记录。' : '原请求已结束，无法继续恢复。' }}确认创建后会发起新请求，按当前模型计费。</small>
     <small v-else-if="!source && (task.plan || task.modelTaskId)">恢复沿用原请求与已保存内容，不会重新调用模型。</small>
   </section>
 </template>

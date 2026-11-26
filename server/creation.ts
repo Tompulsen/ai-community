@@ -6,6 +6,7 @@
  */
 import { workSkillInstructions } from './content.ts'
 import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits.ts'
+import { isModelBusy, modelBusyCode, modelBusyMessage } from '../shared/studio/model-busy.ts'
 import { chatOptionsSchema } from '../shared/studio/options.ts'
 import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -747,9 +748,10 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
           ['video_queue_full', { status: 429, error: '视频生成队列已满，本次请求未提交至模型，请稍后重试。' }],
         ]).get(data.detail) : undefined
       const rejected = admission?.status === response.status ? admission.error : undefined
+      const busy = !rejected && isModelBusy(data, response.status)
       result = { status: rejected ? 'failed' : response.status >= 500 ? 'indeterminate' : 'failed', outputs: [],
-        error: insufficient ? insufficientCreditsMessage : stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
-        errorCode: insufficient ? insufficientCreditsCode : generationErrorCode,
+        error: insufficient ? insufficientCreditsMessage : busy ? modelBusyMessage : stageError('网关提交', message(rejected || (!hasWorkSkills && typeof detail === 'string' ? detail : '网关返回错误响应，是否已转发上游尚未确认。'), credentials.apiKey), response.status),
+        errorCode: insufficient ? insufficientCreditsCode : busy ? modelBusyCode : generationErrorCode,
         errorStage: '网关提交', errorStatus: response.status,
         tokenId: credentials.tokenId, protocol }
       } else {
@@ -776,9 +778,10 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       : error instanceof Error && error.name === 'TimeoutError' ? '等待生成服务响应超时。'
       : responseReceived ? '读取生成结果失败。' : '生成服务连接异常，未能获取生成结果。'
     const stage = responseReceived ? '网关响应处理' : '网关提交'
-    result = { ...uncertain, ...(error instanceof GenerationStreamError ? error.partial : {}), error: stageError(stage, detail, responseStatus), errorStage: stage,
+    const failureStatus = error instanceof GenerationStreamError ? error.partial.errorStatus ?? responseStatus : responseStatus
+    result = { ...uncertain, ...(error instanceof GenerationStreamError ? error.partial : {}), error: stageError(stage, detail, failureStatus), errorStage: stage,
       ...(!lifecycle?.signal.aborted && isInsufficientCredits(error) ? { errorCode: insufficientCreditsCode } : {}),
-      ...(responseStatus ? { errorStatus: responseStatus } : {}), tokenId: credentials.tokenId, protocol }
+      ...(failureStatus ? { errorStatus: failureStatus } : {}), tokenId: credentials.tokenId, protocol }
   } finally { lifecycle?.dispose() }
   if (input.kind === 'text') {
     result.deadline = deadline
@@ -787,6 +790,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   }
   if (result.error) result.errorCode ??= generationErrorCode
   if (result.errorCode === insufficientCreditsCode) result.error = insufficientCreditsMessage
+  else if (result.errorCode === modelBusyCode) result.error = modelBusyMessage + (result.status === 'indeterminate' ? ' 本次未完整生成，请先核对消费记录。' : '')
   else if (hasWorkSkills && result.error)
     result.error = result.errorStage ? stageError(result.errorStage, workSkillError, result.errorStatus) : workSkillError
   if (result.error && !result.errorStage) {

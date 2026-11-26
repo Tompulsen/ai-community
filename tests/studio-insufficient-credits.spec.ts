@@ -147,7 +147,7 @@ test('notice fits small screens and supports both themes and keyboard navigation
   await expect(notice(page).getByRole('link').first()).toBeFocused()
 })
 
-test('recovering an interrupted document retains the notice without another model call', async ({ page }) => {
+test('an ended document retains the credit notice without an endless recovery or another model call', async ({ page }) => {
   const { state } = await setup(page)
   state.stream = true
   state.error = { ...failure, status: 'indeterminate' }
@@ -156,8 +156,9 @@ test('recovering an interrupted document retains the notice without another mode
   await send(page, 'text', '生成一个 Word 文档，内容是项目计划。')
   const card = page.locator('.document-result')
   await expect(card.locator('.credits-notice')).toBeVisible()
-  await card.getByRole('button', { name: '恢复原模型请求', exact: true }).click()
-  await expect(card.getByRole('button', { name: '恢复原模型请求', exact: true })).toBeEnabled()
+  await expect(card.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+  await page.reload()
+  await expect(card.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
   await expect(card.locator('.credits-notice')).toBeVisible()
   await expect(card.getByRole('link')).toHaveCount(3)
   expect(state.requests).toBe(1)

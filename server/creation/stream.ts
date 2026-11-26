@@ -9,14 +9,22 @@ import { toolCallSchema } from '../../shared/studio/options.ts'
 import { usesGeminiImageChat } from '../../shared/studio/image-params.ts'
 import { normalizeCreationTask } from '../creation-contract.ts'
 import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../../shared/studio/insufficient-credits.ts'
+import { isModelBusy, modelBusyCode, modelBusyMessage } from '../../shared/studio/model-busy.ts'
 
 export type CreationEvent = { type: string; [key: string]: unknown }
 export class GenerationStreamError extends Error {
   partial: CreationTask
-  constructor(cause: unknown, partial: CreationTask) {
-    super(isInsufficientCredits(cause) ? insufficientCreditsMessage : '流式回答中断，已保留已生成内容，请先核对消费记录。', { cause })
+  constructor(cause: unknown, partial: CreationTask, toolProgress = false) {
+    const busy = isModelBusy(cause)
+    const hasContent = partial.outputs.some(output => output.text) || partial.reasoning
+    super(isInsufficientCredits(cause) ? insufficientCreditsMessage : busy ? modelBusyMessage
+      : hasContent ? '流式回答中断，已保留已生成内容，请先核对消费记录。' : '流式回答中断，未收到完整回答，请先核对消费记录。', { cause })
     this.partial = partial
-    this.partial.errorCode = isInsufficientCredits(cause) ? insufficientCreditsCode : generationErrorCode
+    this.partial.errorCode = isInsufficientCredits(cause) ? insufficientCreditsCode : busy ? modelBusyCode : generationErrorCode
+    if (busy) {
+      this.partial.errorStatus = 429
+      if (!hasContent && !partial.usage?.outputTokens && !toolProgress) this.partial.status = 'failed'
+    }
   }
 }
 async function readChatImageStream(response: Response, emit: (event: CreationEvent) => void, native = false): Promise<CreationTask> {
@@ -85,7 +93,7 @@ export async function readGenerationStream(response: Response, input: CreationIn
   }
   if (!response.body) throw new Error('流式响应为空。')
   const format = input.chatOptions?.format ?? 'chat-completions'
-  let text = '', reasoning = '', complete = false, terminal = false, usage: CreationTask['usage'], bytes = 0
+  let text = '', reasoning = '', complete = false, terminal = false, usage: CreationTask['usage'], bytes = 0, toolProgressSeen = false
   const native = format !== 'chat-completions' ? createChatStreamParser(format, value => { usage = value }) : undefined
   const thinking = createReasoningStream()
   const toolCalls = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>()
@@ -106,7 +114,7 @@ export async function readGenerationStream(response: Response, input: CreationIn
     if (message.data === '[DONE]') { if (!complete) options.progress?.(); complete = true; terminal = true; return }
     const data = JSON.parse(message.data)
     const streamFailure = data.error || data.response?.error
-    if (streamFailure) throw Object.assign(new Error(isInsufficientCredits(streamFailure) ? insufficientCreditsMessage : typeof streamFailure === 'string' ? streamFailure : streamFailure.message || '生成失败。'), { errorCode: isInsufficientCredits(streamFailure) ? insufficientCreditsCode : generationErrorCode })
+    if (streamFailure) throw Object.assign(new Error(isInsufficientCredits(streamFailure) ? insufficientCreditsMessage : typeof streamFailure === 'string' ? streamFailure : streamFailure.message || '生成失败。'), { errorCode: isInsufficientCredits(streamFailure) ? insufficientCreditsCode : isModelBusy(streamFailure) ? modelBusyCode : generationErrorCode })
     const previousText = text.length, previousReasoning = reasoning.length, previousUsage = usage, wasComplete = complete
     let toolProgress = false
     if (native) {
@@ -138,6 +146,7 @@ export async function readGenerationStream(response: Response, input: CreationIn
       reasoning += (delta?.reasoning_content || delta?.reasoning || '') + separated.reasoning
       usage = extractResponseUsage(format, data) ?? usage
     }
+    toolProgressSeen ||= toolProgress
     if (text.length !== previousText || reasoning.length !== previousReasoning || toolProgress || complete !== wasComplete) options.progress?.()
     if (text.length !== previousText || reasoning.length !== previousReasoning || usage !== previousUsage) changed()
   }))
@@ -167,7 +176,7 @@ export async function readGenerationStream(response: Response, input: CreationIn
     const tail = thinking.finish()
     text += tail.content; reasoning += tail.reasoning
     dirty = true; flush()
-    throw new GenerationStreamError(error, { status: 'indeterminate', outputs: text ? [{ text }] : [], reasoning, usage })
+    throw new GenerationStreamError(error, { status: 'indeterminate', outputs: text ? [{ text }] : [], reasoning, usage }, toolProgressSeen || toolCalls.size > 0)
   } finally {
     clearTimeout(timer)
     options.signal?.removeEventListener('abort', abort)

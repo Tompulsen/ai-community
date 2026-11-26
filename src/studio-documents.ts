@@ -1,6 +1,6 @@
 import { watch } from 'vue'
 import { api, session } from './state'
-import { creation, resumeCreation, submitCreation, type CreationTask } from './native-studio'
+import { creation, documentModelEnded, resumeCreation, submitCreation, type CreationTask } from './native-studio'
 import { DocumentResponseError, documentPlanningPrompt, parseDocumentResponse, type DocumentAsset, type DocumentJob } from '../shared/studio/document-workspace'
 import { documentChatInstruction, documentModelOptions, type ChatDocumentTask, type ChatDocumentAttachment, type DocumentSource } from '../shared/studio/document-chat'
 import type { ParsedFile } from '../shared/studio/file-upload'
@@ -81,7 +81,8 @@ export async function recoverDocumentContent(task: ChatDocumentTask, publish: ()
   if (!task.plan && task.modelTaskId) {
     const modelTask = creation.tasks.find(item => item.id === task.modelTaskId && item.owner === session.user?.id)
     if (!modelTask) throw new Error('未找到原模型请求，请在历史记录中查看。')
-    await resumeCreation(modelTask); check()
+    if (!documentContentIssue(task)) await resumeCreation(modelTask)
+    check()
     if (modelTask.phase !== 'complete') throw Object.assign(new Error(modelTask.error || '模型内容尚未生成完整，请稍后恢复。'), { errorCode: modelTask.errorCode })
     try { Object.assign(task, parseDocumentResponse(modelTask.text), { modelContentError: undefined, error: undefined, preparing: false }) }
     catch (error) {
@@ -106,6 +107,8 @@ export function documentContentIssue(task: ChatDocumentTask): string | undefined
   if (!modelTask && /Unterminated|Unexpected (?:end|token|non-whitespace)|JSON at position|not valid JSON/i.test(task.error || ''))
     return '模型返回的文档内容不完整或格式有误，尚未制作文件。请调整要求后重新生成。'
   if (modelTask?.phase === 'error') return modelTask.error || '原模型请求已失败，请调整要求后重新生成。'
+  if (modelTask && documentModelEnded(modelTask))
+    return modelTask.error || '原请求未返回完整文档内容，请先核对消费记录，再决定是否重新生成。'
 }
 export async function runDocumentGeneration(options: {
   chat: NativeChat; result: NativeMessage; task: ChatDocumentTask; files: ParsedFile[]; history: NativeMessage[];

@@ -397,6 +397,24 @@ function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
 
+for (const streaming of [false, true]) test(`queue rejection survives ${streaming ? 'HTTP 200 SSE' : 'HTTP 429'} and GET recovery without a paid retry`, async t => {
+  const error = { code: 'gateway_queue_full', message: 'Too many pending requests, please retry later' }
+  const f = fixture(t, { fetch: () => streaming
+    ? new Response(`: heartbeat\n\ndata: ${JSON.stringify({ error })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+    : Response.json({ error }, { status: 429 }) })
+  const input = { kind: 'text', model: 'chat-test', prompt: 'hello', requestId: 'queue-full', chatOptions: { messages: [{ role: 'user', content: 'hello' }], stream: true } }
+  await submit(f.app, input)
+  const result = (await f.app.inject('/api/creation/requests/queue-full')).json()
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'MODEL_BUSY')
+  assert.equal(result.errorStatus, 429)
+  assert.match(result.error, /模型服务繁忙/)
+  assert.doesNotMatch(result.error, /HTTP 200|已保留已生成内容/)
+  assert.equal(result.outputs.length, 0)
+  await submit(f.app, input)
+  assert.equal(f.calls.length, 1)
+})
+
 test('text partial results remain recoverable across protocols, duplicate submission and a final Redis outage', async t => {
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-text-recovery-'))
   t.after(() => rm(filesRoot, { recursive: true, force: true }))

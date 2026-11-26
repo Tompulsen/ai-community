@@ -7,7 +7,7 @@ const wordPlan = { schemaVersion: 1, kind: 'create_word', fileName: '项目计�
 const sheetPlan = { schemaVersion: 1, kind: 'create_workbook', fileName: '销售.xlsx', sheets: [{ name: '销售', cells: [{ address: 'A1', value: { type: 'text', value: '0012' } }, { address: 'B1', value: { type: 'number', value: 20 } }, { address: 'C1', value: { type: 'formula', value: '=B1*3' } }] }] }
 const expressionResponse = JSON.stringify({ ...sheetPlan, help: { type: 'text', value: '' } }).replace('"value":20}', '"value":21-1}')
 
-async function fixture(page: Page, options: { busy?: boolean; unavailable?: boolean; interrupted?: boolean; failFile?: boolean; responseText?: string } = {}) {
+async function fixture(page: Page, options: { busy?: boolean; unavailable?: boolean; interrupted?: boolean; failFile?: boolean; responseText?: string; modelResult?: Record<string, unknown>; pendingReads?: number } = {}) {
   const account = await mockUnifiedAccount(page, true); account.state.user.id = '17'
   const state = { paid: [] as any[], headers: [] as any[], plans: [] as any[], jobs: new Map<string, any>(), assets: [] as any[], formats: new Map<string, string>(), busy: !!options.busy, failFile: !!options.failFile, responseText: options.responseText, missingSource: false, modelQueries: 0, uploads: 0, deleted: 0, lastPlan: wordPlan as any }
   await page.route('**/api/creation/**', async route => {
@@ -20,11 +20,12 @@ async function fixture(page: Page, options: { busy?: boolean; unavailable?: bool
       const document = input.chatOptions.messages.some((message: any) => typeof message.content === 'string' && message.content.includes('schemaVersion'))
       state.lastPlan = input.chatOptions.messages.some((message: any) => typeof message.content === 'string' && /"format"\s*:\s*"xlsx"/.test(message.content)) ? sheetPlan : wordPlan
       const text = document ? state.responseText ?? JSON.stringify(state.lastPlan) : '这是普通聊天回答。'
-      const events = [{ type: 'accepted', requestId: input.requestId, deadline: Date.now() + 180000 }, { type: 'delta', append: true, text: options.interrupted ? '{' : text }]
-      if (!options.interrupted) events.push({ type: 'result', status: 'succeeded', outputs: [{ text }], usage: { outputTokens: state.responseText ? 4096 : 32 } } as any)
+      const events = [{ type: 'accepted', requestId: input.requestId, deadline: Date.now() + 180000 }, { type: 'delta', append: true, text: options.modelResult ? '' : options.interrupted ? '{' : text }]
+      if (!options.interrupted) events.push({ type: 'result', ...options.modelResult || { status: 'succeeded', outputs: [{ text }], usage: { outputTokens: state.responseText ? 4096 : 32 } } } as any)
       return route.fulfill({ contentType: 'text/event-stream', body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') })
     }
-    if (path.includes('/requests/')) { state.modelQueries++; return route.fulfill({ json: { requestId: path.split('/').at(-1), status: 'succeeded', outputs: [{ text: state.responseText ?? JSON.stringify(state.lastPlan) }] } }) }
+    if (path.includes('/requests/')) { state.modelQueries++; return route.fulfill({ json: { requestId: path.split('/').at(-1),
+      ...(state.modelQueries <= (options.pendingReads || 0) ? { status: 'pending', outputs: [] } : options.modelResult || { status: 'succeeded', outputs: [{ text: state.responseText ?? JSON.stringify(state.lastPlan) }] }) } }) }
     return route.fulfill({ json: { items: [] } })
   })
   await page.route('**/api/documents/**', async route => {
@@ -131,6 +132,64 @@ test('cleared history is not reintroduced into the document model prompt', async
 test('interrupted model content is recovered by GET without a duplicate paid request', async ({ page }) => {
   const { state } = await fixture(page, { interrupted: true }); await enable(page); await send(page, '制作一份 Word 项目计划文档')
   await expect(page.getByRole('button', { name: '下载 DOCX', exact: true })).toBeVisible(); expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBeGreaterThan(0)
+})
+
+test('pending document requests continue GET recovery until completion without another POST', async ({ page }) => {
+  const { state } = await fixture(page, { interrupted: true, pendingReads: 1 }); await enable(page); await send(page, '生成劳动合同excel')
+  await expect(page.getByRole('button', { name: '下载 XLSX', exact: true })).toBeVisible({ timeout: 15000 })
+  expect(state.modelQueries).toBe(2); expect(state.paid).toHaveLength(1)
+})
+
+for (const width of [390, 1440]) test(`queue rejection at ${width}px gives a useful notice and no automatic paid retry`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  const { state } = await fixture(page, { modelResult: { status: 'failed', outputs: [], errorCode: 'MODEL_BUSY', errorStatus: 429,
+    error: '模型服务繁忙，请稍后重试，或手动选择其他模型。原请求不会自动重新提交。' } })
+  await enable(page); await send(page, '生成劳动合同excel')
+  const card = page.getByRole('region', { name: '文档任务' })
+  await expect(card).toContainText('模型服务繁忙')
+  await expect(card.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+  await page.reload(); await expect(card.getByRole('button', { name: '重新准备生成', exact: true })).toBeVisible()
+  await card.getByRole('button', { name: '重新准备生成', exact: true }).click()
+  await expect(page.getByLabel('文件要求', { exact: true })).toHaveValue('生成劳动合同excel')
+  await expect(page.getByRole('button', { name: 'Excel XLSX 表格', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBe(0); expect(state.plans).toHaveLength(0)
+  await page.getByRole('button', { name: '关闭文档工作区', exact: true }).click()
+  await page.screenshot({ path: info.outputPath(`model-busy-${width}.png`), fullPage: true })
+})
+
+for (const text of ['', '{"schemaVersion":1,']) test(`terminal interrupted document with ${text ? 'partial' : 'no'} content stops repeated recovery after reload`, async ({ page }) => {
+  const { state } = await fixture(page, { modelResult: { status: 'indeterminate', outputs: text ? [{ text }] : [], errorCode: 'GENERATION_ERROR',
+    error: '流式回答中断，未收到完整回答，请先核对消费记录。' } })
+  await enable(page); await send(page, '生成劳动合同excel')
+  const retry = page.getByRole('button', { name: '调整要求后重新生成', exact: true })
+  await expect(retry).toBeVisible()
+  await expect(page.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+  await page.reload(); await expect(retry).toBeVisible()
+  expect(state.paid).toHaveLength(1); expect(state.plans).toHaveLength(0); expect(state.modelQueries).toBe(0)
+})
+
+test('a direct HTTP 429 rejection has the same notice and does not query or resubmit a rejected request', async ({ page }) => {
+  const { state } = await fixture(page)
+  await page.route('**/api/creation/generate', route => {
+    state.paid.push(route.request().postDataJSON())
+    return route.fulfill({ status: 429, json: { error: { code: 'gateway_queue_full', message: 'Too many pending requests, please retry later' } } })
+  })
+  await enable(page); await send(page, '生成劳动合同excel')
+  const card = page.getByRole('region', { name: '文档任务' })
+  await expect(card).toContainText('模型服务繁忙')
+  await page.reload(); await expect(card.getByRole('button', { name: '重新准备生成', exact: true })).toBeVisible()
+  expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBe(0)
+})
+
+test('a queue failure after partial generation retains the check-consumption warning across reload', async ({ page }) => {
+  const { state } = await fixture(page, { modelResult: { status: 'indeterminate', outputs: [{ text: '{"schemaVersion":1,' }],
+    errorCode: 'MODEL_BUSY', errorStatus: 429, error: '模型服务繁忙' } })
+  await enable(page); await send(page, '生成劳动合同excel')
+  const card = page.getByRole('region', { name: '文档任务' })
+  await expect(card).toContainText('本次未完整生成，请先核对消费记录')
+  await page.reload(); await expect(card.getByRole('button', { name: '重新准备生成', exact: true })).toBeVisible()
+  await expect(card.getByRole('button', { name: '恢复原模型请求', exact: true })).toHaveCount(0)
+  expect(state.paid).toHaveLength(1); expect(state.modelQueries).toBe(0); expect(state.plans).toHaveLength(0)
 })
 
 for (const width of [390, 1440]) test(`complete numeric expression response at ${width}px creates an Excel file without regenerating`, async ({ page }, info) => {
@@ -240,6 +299,22 @@ test('dark document workspace retains readable controls', async ({ page }, info)
 
 test.describe('local internal boundary checks', () => {
   test.skip(process.env.DOCUMENT_INTERNAL_TESTS !== '1', 'Requires the local Vite source modules')
+  test('legacy unknown status is queried once on reload, then the terminal result is retained', async ({ page }) => {
+    const { state } = await fixture(page, { modelResult: { status: 'indeterminate', outputs: [], error: '流式回答中断' } })
+    await enable(page); await send(page, '生成劳动合同excel')
+    await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    await page.evaluate(async () => {
+      const paths = performance.getEntriesByType('resource').map(entry => entry.name)
+      const { creation } = await import(/* @vite-ignore */ paths.find(path => /\/src\/native-studio\.ts(?:\?|$)/.test(path))!)
+      const { saveTaskSnapshot } = await import(/* @vite-ignore */ paths.find(path => /\/src\/studio-task-store\.ts(?:\?|$)/.test(path))!)
+      delete creation.tasks[0].resultStatus
+      await saveTaskSnapshot('17', [...creation.tasks])
+    })
+    await page.reload(); await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    expect(state.modelQueries).toBe(1)
+    await page.reload(); await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
+    expect(state.modelQueries).toBe(1); expect(state.paid).toHaveLength(1)
+  })
   test('a completed legacy response with a stale parse error recovers under its original key without another model request', async ({ page }) => {
     const { state } = await fixture(page, { responseText: '{"schemaVersion":1,"fileName":"' }); await enable(page); await send(page, '生成练手excel')
     await expect(page.getByRole('button', { name: '调整要求后重新生成', exact: true })).toBeVisible()
