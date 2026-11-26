@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import {
   availableLotteryPrizes, chooseLotteryPrize, defaultLotterySettings,
   emptyLotteryProgress, lotteryCreditReceipt, lotteryCredits, normalizeLotterySettings,
@@ -14,6 +14,7 @@ import type {
 import type { AppConfig, Database, Queryable, RequestContext } from './types.ts'
 import { communityQuotaPerPoint } from './native-account/community-wallet.ts'
 import { lotteryDay } from '../shared/lottery-daily.ts'
+import { defaultCheckin, type WelfarePool, type WelfareStatus } from '../shared/welfare-points.ts'
 import type { PublicLotteryDraw, PublicLotteryPage } from '../shared/lottery-public.ts'
 import { lotteryPointUnits, lotteryPointsFromUnits, type PublicLotteryParticipant, type PublicLotterySummary, type PublicLotteryRange, type PublicLotteryPeriod } from '../shared/lottery-public.ts'
 
@@ -115,6 +116,14 @@ export function validateLotterySettings(input: unknown): LotterySettingsInput {
     || input.minSupportCnyFen < 0 || input.minSupportCnyFen > 100000000)) fail('LOTTERY_INVALID')
   if (input.rewardValidityHours !== undefined && (typeof input.rewardValidityHours !== 'number' || !Number.isInteger(input.rewardValidityHours)
     || input.rewardValidityHours < 1 || input.rewardValidityHours > 8760)) fail('LOTTERY_INVALID')
+  if (input.dailyBudgetPoints !== undefined && (typeof input.dailyBudgetPoints !== 'number' || !Number.isSafeInteger(input.dailyBudgetPoints)
+    || input.dailyBudgetPoints < 1 || input.dailyBudgetPoints > 1000000000)) fail('LOTTERY_INVALID')
+  if (input.checkin !== undefined) {
+    const item = input.checkin
+    if (!isRecord(item) || typeof item.enabled !== 'boolean' || typeof item.minPoints !== 'number' || typeof item.maxPoints !== 'number'
+      || !Number.isSafeInteger(item.minPoints) || !Number.isSafeInteger(item.maxPoints) || item.minPoints < 1 || item.maxPoints < item.minPoints
+      || item.maxPoints > 1000000) fail('LOTTERY_INVALID')
+  }
   const ids = new Set<string>()
   const prizes: unknown[] = input.prizes
   for (const prize of prizes) {
@@ -146,18 +155,19 @@ function storedCreditReceipt(row: PublicDrawSource, index: number): LotteryCredi
   const prize = row.prizes[index]!, receipt = prize.creditReceipt
   const subject = row.creditSubject
   if (typeof subject !== 'string' || !/^[1-9]\d{0,15}$/.test(subject) || !Number.isSafeInteger(Number(subject))
-    || !Number.isSafeInteger(prize.amountCents) || prize.amountCents <= 0 || !isRecord(receipt)) throw new Error('LOTTERY_CREDIT_RESPONSE')
+    || !Number.isSafeInteger(prize.amountCents) || (prize.rewardPoints === undefined ? prize.amountCents <= 0 : prize.amountCents < 0) || !isRecord(receipt)) throw new Error('LOTTERY_CREDIT_RESPONSE')
   const reference = `community_lottery_${row.id}_${index}`, userId = Number(subject)
-  return lotteryCreditReceipt({ credited: true, reference, user_id: userId, amount_cents: prize.amountCents, receipt: {
+  return lotteryCreditReceipt({ credited: true, reference, user_id: userId, amount_cents: prize.rewardPoints === undefined ? prize.amountCents : 0, receipt: {
     id: receipt.id, quota_added: receipt.quotaAdded, quota_per_usd: receipt.quotaPerUsd,
     reward_kind: receipt.rewardKind, validity_hours: receipt.validityHours, expires_at: receipt.expiresAt,
-    points: receipt.points, lot_id: receipt.lotId, credited_at: receipt.creditedAt, quota_per_point: receipt.quotaPerPoint,
+    points: receipt.points, lot_id: receipt.lotId, credited_at: receipt.creditedAt, quota_per_point: receipt.quotaPerPoint, requested_points: receipt.requestedPoints,
   } }, reference, userId, prize.amountCents, prize)
 }
 
 export function packLotteryDraw(row: PublicDrawSource, username = '') {
   return {
     id: row.id, userId: row.userId ?? '', username,
+    ...(row.prizes.some(prize => prize.source === 'checkin') ? { source: 'checkin' as const } : {}),
     createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)).toISOString(), creditAttempts: row.creditAttempts,
     prizes: row.prizes.map(({ fulfilledBy: _actor, creditReceipt, creditBlocked: _blocked, ...prize }, index) => {
       let receipt: LotteryCreditReceipt | null = null
@@ -185,15 +195,15 @@ export async function readPublicLotteryRecords(db: Queryable, query: URLSearchPa
   if ([...query.keys()].some(key => !['cursor', 'snapshot'].includes(key) || query.getAll(key).length !== 1)
     || [cursor, requestedSnapshot].some(value => value !== null && !/^[a-zA-Z0-9]{1,32}$/.test(value))
     || cursor && (!requestedSnapshot || cursor > requestedSnapshot)) fail('LOTTERY_INVALID')
-  const snapshot = requestedSnapshot ?? (await db.query<{ id: string }>('SELECT id FROM community_lottery_draw ORDER BY id DESC LIMIT 1')).rows[0]?.id ?? null
+  const snapshot = requestedSnapshot ?? (await db.query<{ id: string }>(`SELECT id FROM community_lottery_draw WHERE NOT (prizes @> '[{"source":"checkin"}]'::jsonb) ORDER BY id DESC LIMIT 1`)).rows[0]?.id ?? null
   if (!snapshot) return { items: [], nextCursor: null, snapshot: null }
   // Reuse the draw and user indexes; only page participants need cumulative counts.
   const { rows } = await db.query<LotteryDrawRow & { displayName: string | null; redacted: boolean | null; totalDrawCount: string | null }>(`
     WITH page AS MATERIALIZED (
-      SELECT d.* FROM community_lottery_draw d WHERE d.id <= $1 AND ($2::varchar IS NULL OR d.id < $2) ORDER BY d.id DESC LIMIT 21
+      SELECT d.* FROM community_lottery_draw d WHERE d.id <= $1 AND ($2::varchar IS NULL OR d.id < $2) AND NOT (d.prizes @> '[{"source":"checkin"}]'::jsonb) ORDER BY d.id DESC LIMIT 21
     ), counts AS (
       SELECT d."userId",sum(jsonb_array_length(d.prizes))::text AS total FROM community_lottery_draw d
-      WHERE d.id <= $1 AND d."userId" IN (SELECT "userId" FROM page) GROUP BY d."userId"
+      WHERE d.id <= $1 AND d."userId" IN (SELECT "userId" FROM page) AND NOT (d.prizes @> '[{"source":"checkin"}]'::jsonb) GROUP BY d."userId"
     )
     SELECT p.*,COALESCE(u.name,u.username) AS "displayName",(u."isDeleted" OR u."isSuspended") AS redacted,counts.total AS "totalDrawCount"
     FROM page p LEFT JOIN "user" u ON u.id=p."userId" LEFT JOIN counts ON counts."userId"=p."userId" ORDER BY p.id DESC`, [snapshot, cursor])
@@ -278,6 +288,7 @@ async function buildPublicLotterySummary(db: Database): Promise<LotterySummarySn
         FROM community_lottery_draw d LEFT JOIN "user" u ON u.id=d."userId"
         WHERE ($1::varchar IS NULL OR d.id > $1) ORDER BY d.id ASC LIMIT 500`, [cursor])
       for (const row of rows) {
+        if (row.prizes.some(prize => prize.source === 'checkin')) continue
         const key = row.userId ?? ''
         let participant = participants.get(key)
         if (!participant) {
@@ -403,6 +414,18 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     } catch { return null }
   }
 
+  function exactPointsRate(response: Record<string, unknown>): number | null {
+    const quota = charityQuotaPerPoint(response)
+    return quota && response.exact_points === true && typeof response.quota_per_usd === 'number'
+      && Number.isSafeInteger(response.quota_per_usd) && response.quota_per_usd > 0 ? response.quota_per_usd / quota : null
+  }
+
+  function prizePoints(cents: number, rate: number | null): number {
+    const points = rate === null ? NaN : cents * rate / 100
+    if (!Number.isSafeInteger(points) || points < 1 || points > 1000000000) fail('WELFARE_UNAVAILABLE', 503)
+    return points
+  }
+
   async function creditRequest(issuer: string | null, body?: Record<string, unknown>, signal = AbortSignal.timeout(8000), accountSubject?: string): Promise<Record<string, unknown>> {
     const settings = creditConfig()
     if (!settings || settings.issuer !== issuer) throw Object.assign(new Error('LOTTERY_CREDIT_CONFIG'), { permanent: true })
@@ -443,7 +466,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       || !Number.isSafeInteger(response.support_cny_fen) || response.support_cny_fen < 0
       || (!response.has_support && response.support_cny_fen > 0)) throw new Error('LOTTERY_SUPPORT_RESPONSE')
     return { hasSupport: response.has_support, amountCnyFen: response.support_cny_fen,
-      charityReady: charityQuotaPerPoint(response) !== null, checkedAt: Date.now() }
+      charityReady: charityQuotaPerPoint(response) !== null, pointsPerUsd: exactPointsRate(response), checkedAt: Date.now() }
   }
 
   async function configuration(client: Queryable, lock = false) {
@@ -512,7 +535,8 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
           }
           const response = await creditRequest(row.creditIssuer, {
             client_id: new URL(config.url).origin, user_id: Number(row.creditSubject),
-            reference, amount_cents: prize.amountCents,
+            reference, amount_cents: prize.rewardPoints === undefined ? prize.amountCents : 0,
+            ...(prize.rewardPoints === undefined ? {} : { points: prize.rewardPoints }),
             ...(prize.rewardKind === 'charity' ? { reward_kind: 'charity', validity_hours: prize.validityHours } : {}),
           }, signal)
           try { prize.creditReceipt = lotteryCreditReceipt(response, reference, Number(row.creditSubject), prize.amountCents, prize) }
@@ -520,7 +544,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
           prize.status = 'fulfilled'
           row.creditAttempts = 0
           prize.fulfilledAt = new Date().toISOString()
-          prize.note = `${(prize.amountCents / 100).toFixed(2)} USD`
+          prize.note = prize.rewardPoints === undefined ? `${(prize.amountCents / 100).toFixed(2)} USD` : `${prize.rewardPoints} 积分`
         } catch (error) {
           const permanent = isRecord(error) && error.permanent === true
           logger.warn?.(`Credit pending for draw ${row.id}: ${permanent ? 'blocked receipt or upstream rejection' : 'transport or temporary error'}.`)
@@ -555,6 +579,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       if (userId) await actor(client, userId)
       const { settings } = await configuration(client)
       const daily = settings.dailyLimit ? await dailyPool(client, settings, userId, now()) : null
+      const welfare = settings.welfarePointsReady ? await welfareState(client, settings, userId, now()) : null
       const result = userId ? await sync(client, userId, settings) : null
       const progress = result?.account.progress ?? emptyLotteryProgress()
       const { rows } = userId && credit ? await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
@@ -563,6 +588,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         subject: rows[0]?.subject,
         settings: { ...settings, prizes: (daily?.prizes ?? settings.prizes).filter(prize => prize.enabled) },
         daily: daily?.summary ?? null,
+        welfare,
         balance: result?.account.balance ?? 0,
         earned: { invites: progress.invites, likes: progress.likes, followers: progress.followers },
         counts: {
@@ -574,14 +600,155 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       }
     })
     let support = { checked: false, eligible: false, amountCnyFen: null as number | null }
+    let pointsPerUsd: number | null = null
     if (credit && typeof subject === 'string' && /^[1-9]\d{0,14}$/.test(subject)) {
       try {
         const checked = await readSupport(credit.issuer, subject)
         result.creditReady = checked.charityReady
+        pointsPerUsd = checked.pointsPerUsd
         support = { checked: true, eligible: checked.hasSupport && checked.amountCnyFen >= result.settings.minSupportCnyFen, amountCnyFen: checked.amountCnyFen }
       } catch { /* Task opportunities remain available when support verification is temporarily unavailable. */ }
     }
+    if (result.welfare) {
+      if (pointsPerUsd === null && credit) {
+        const health = await creditRequest(credit.issuer).catch(() => null)
+        pointsPerUsd = health ? exactPointsRate(health) : null
+      }
+      result.creditReady = pointsPerUsd !== null
+      const pool = result.welfare.pool!
+      result.settings.prizes = result.settings.prizes.map(prize => {
+        const amount = prize.kind === 'empty' ? 0 : pointsPerUsd === null ? Infinity : prizePoints(prize.amountCents, pointsPerUsd)
+        return pool.ready && amount <= pool.remaining ? prize : { ...prize, stock: 0, weight: 0 }
+      })
+      setLotteryRange(result.welfare, result.settings, pointsPerUsd)
+    }
     return { ...result, support }
+  }
+
+  async function welfarePool(client: Queryable, settings: LotterySettings, time: Date): Promise<WelfarePool> {
+    const day = lotteryDay(time)
+    const { rows } = await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "createdAt">=$1 AND "createdAt"<$2', [day.start, day.end])
+    let delivered = 0, reserved = 0, ready = true
+    for (const row of rows) for (const [index, award] of row.prizes.entries()) {
+      if (award.status === 'empty') continue
+      let points = award.rewardPoints
+      if (points === undefined) {
+        try {
+          const receipt = award.status === 'fulfilled' ? storedCreditReceipt(row, index) : null
+          points = receipt?.rewardKind === 'charity' ? Number(receipt.points) : undefined
+        } catch { /* Unverified historical awards block new allocations instead of inventing a balance. */ }
+      }
+      if (!Number.isSafeInteger(points) || points! < 1) { ready = false; continue }
+      if (award.status === 'fulfilled') delivered += points!
+      else reserved += points!
+    }
+    const claimed = delivered + reserved, limit = settings.dailyBudgetPoints ?? 600000
+    if (!Number.isSafeInteger(claimed)) fail('WELFARE_UNAVAILABLE', 503)
+    return { date: day.date, resetsAt: day.end.toISOString(), serverTime: time.toISOString(), limit, claimed, delivered, reserved,
+      remaining: ready ? Math.max(0, limit - claimed) : 0, ready }
+  }
+
+  async function todayCheckin(client: Queryable, userId: string | undefined, time: Date, issuer?: string, subject?: string) {
+    if (!userId) return null
+    const day = lotteryDay(time)
+    const { rows } = await client.query<LotteryDrawRow>(`SELECT * FROM community_lottery_draw
+      WHERE ("userId"=$1 OR ("creditIssuer"=$4 AND "creditSubject"=$5)) AND "createdAt">=$2 AND "createdAt"<$3
+      AND prizes @> '[{"source":"checkin"}]'::jsonb ORDER BY id LIMIT 1`, [userId, day.start, day.end, issuer ?? null, subject ?? null])
+    return rows[0] ?? null
+  }
+
+  async function welfareState(client: Queryable, settings: LotterySettings, userId: string | undefined, time: Date, rate: number | null = null): Promise<WelfareStatus> {
+    const pool = await welfarePool(client, settings, time), checkin = await todayCheckin(client, userId, time)
+    const daily = settings.dailyLimit ? await dailyPool(client, settings, userId, time) : null
+    const state: WelfareStatus = { pool, checkin: { ...(settings.checkin ?? defaultCheckin()), claimed: !!checkin,
+      points: checkin?.prizes[0]?.rewardPoints ?? null, drawId: checkin?.id ?? null,
+      status: checkin?.prizes[0]?.status === 'fulfilled' ? 'fulfilled' : checkin ? 'pending' : null },
+      lottery: { enabled: settings.enabled, minPoints: null, maxPoints: null, participated: daily?.summary.participated ?? false } }
+    setLotteryRange(state, { ...settings, prizes: daily?.prizes ?? settings.prizes }, rate)
+    return state
+  }
+
+  function setLotteryRange(state: WelfareStatus, settings: LotterySettings, rate: number | null) {
+    if (rate === null) return
+    const points = settings.prizes.filter(prize => prize.enabled && prize.kind === 'balance' && prize.stock !== 0 && prize.weight > 0)
+      .map(prize => prizePoints(prize.amountCents, rate)).filter(points => points <= (state.pool?.remaining ?? 0))
+    state.lottery.minPoints = points.length ? Math.min(...points) : null
+    state.lottery.maxPoints = points.length ? Math.max(...points) : null
+  }
+
+  async function welfare(userId: string) {
+    const credit = creditConfig()
+    const health = credit ? await creditRequest(credit.issuer).catch(() => null) : null
+    return transaction(db, async client => {
+      await actor(client, userId)
+      const { settings } = await configuration(client)
+      if (!settings.welfarePointsReady) return { pool: null, checkin: { ...(settings.checkin ?? defaultCheckin()), enabled: false, claimed: false, points: null, drawId: null, status: null },
+        lottery: { enabled: settings.enabled, minPoints: null, maxPoints: null, participated: false } }
+      const state = await welfareState(client, settings, userId, now(), health ? exactPointsRate(health) : null)
+      return state
+    })
+  }
+
+  async function checkin(userId: string, requestId: unknown) {
+    if (typeof requestId !== 'string' || !requestPattern.test(requestId)) fail('LOTTERY_INVALID')
+    const preflight = await transaction(db, async client => {
+      await actor(client, userId)
+      const previous = (await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "userId"=$1 AND "requestId"=$2', [userId, requestId])).rows[0]
+      if (previous) {
+        if (previous.prizes[0]?.source !== 'checkin') fail('LOTTERY_CONFLICT', 409)
+        return { receipt: packLotteryDraw(previous), issuer: '', subject: '' }
+      }
+      const credit = creditConfig()
+      const subject = credit ? (await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId])).rows[0]?.subject : undefined
+      if (!credit || !subject || !/^[1-9]\d{0,14}$/.test(subject)) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
+      return { receipt: null, issuer: credit.issuer, subject }
+    })
+    if (preflight.receipt) { void processPending(); return preflight.receipt }
+    const health = await creditRequest(preflight.issuer).catch(() => null)
+    const receipt = await transaction(db, async client => {
+      await actor(client, userId)
+      const { settings } = await configuration(client, true)
+      const previous = (await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "userId"=$1 AND "requestId"=$2', [userId, requestId])).rows[0]
+      if (previous) {
+        if (previous.prizes[0]?.source !== 'checkin') fail('LOTTERY_CONFLICT', 409)
+        return packLotteryDraw(previous)
+      }
+      const subject = (await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [preflight.issuer, userId])).rows[0]?.subject
+      if (subject !== preflight.subject) fail('LOTTERY_ACCOUNT_REQUIRED', 409)
+      const createdAt = now(), prior = await todayCheckin(client, userId, createdAt, preflight.issuer, subject)
+      if (prior) return packLotteryDraw(prior)
+      const rule = settings.checkin ?? defaultCheckin()
+      if (!settings.welfarePointsReady || !rule.enabled) fail('WELFARE_CHECKIN_DISABLED', 409)
+      if (!health || exactPointsRate(health) === null) fail('WELFARE_UNAVAILABLE', 503)
+      const pool = await welfarePool(client, settings, createdAt)
+      if (!pool.ready) fail('WELFARE_UNAVAILABLE', 503)
+      if (pool.remaining < rule.minPoints) fail('WELFARE_POOL_EXHAUSTED', 409)
+      const points = randomInt(rule.minPoints, Math.min(rule.maxPoints, pool.remaining) + 1)
+      const prizes: LotteryAward[] = [{ source: 'checkin', prizeId: 'daily-checkin', name: '每日签到奖励', description: '到账后 24 小时有效', amountCents: 0,
+        rewardPoints: points, rewardKind: 'charity', validityHours: 24, status: 'pending', fulfilledAt: null, fulfilledBy: null, note: '' }]
+      const row = { id: newId(), userId, requestId, prizes, createdAt, creditAttempts: 0 }
+      await client.query(`INSERT INTO community_lottery_draw (id,"userId","requestId",prizes,"createdAt","creditIssuer","creditSubject","creditPending","creditAttempts","creditRetryAt")
+        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,true,0,NULL)`, [row.id, userId, requestId, JSON.stringify(prizes), createdAt, preflight.issuer, subject])
+      return packLotteryDraw(row)
+    })
+    void processPending()
+    return receipt
+  }
+
+  // Deployment-only activation: never expose this gate through the administrator PATCH route.
+  async function activateWelfare() {
+    const credit = creditConfig(), health = credit ? await creditRequest(credit.issuer) : null
+    if (!health || exactPointsRate(health) === null) fail('WELFARE_UNAVAILABLE', 503)
+    return transaction(db, async client => {
+      const current = await configuration(client, true)
+      const pool = await welfarePool(client, current.settings, now())
+      if (!pool.ready) fail('WELFARE_UNVERIFIED_LEGACY_AWARDS', 409)
+      if (!current.settings.welfarePointsReady) {
+        current.settings.welfarePointsReady = true
+        await client.query('UPDATE community_lottery_config SET version=version+1,settings=$2::jsonb WHERE id=$1', ['default', JSON.stringify(current.settings)])
+      }
+      return { activated: true, pool }
+    })
   }
 
   async function dailyPool(client: Queryable, settings: LotterySettings, userId: string | undefined, time: Date) {
@@ -589,7 +756,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     const { rows } = await client.query<{ prizeId: string; used: number; participated: boolean }>(`
       SELECT award->>'prizeId' AS "prizeId",COUNT(*)::integer AS used,BOOL_OR(d."userId"=$3) AS participated
       FROM community_lottery_draw d CROSS JOIN LATERAL jsonb_array_elements(d.prizes) award
-      WHERE d."createdAt">=$1 AND d."createdAt"<$2 GROUP BY award->>'prizeId'`, [day.start, day.end, userId ?? null])
+      WHERE d."createdAt">=$1 AND d."createdAt"<$2 AND NOT (d.prizes @> '[{"source":"checkin"}]'::jsonb) GROUP BY award->>'prizeId'`, [day.start, day.end, userId ?? null])
     const used = rows.reduce((sum, row) => sum + row.used, 0)
     const prizes = settings.prizes.map(prize => {
       const stock = Math.max(0, prize.stock - (rows.find(row => row.prizeId === prize.id)?.used ?? 0))
@@ -606,7 +773,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       await actor(client, userId)
       const { rows: existing } = await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "userId"=$1 AND "requestId"=$2', [userId, requestId])
       if (existing[0]) {
-        if (existing[0].prizes.length !== count) fail('LOTTERY_CONFLICT', 409)
+        if (existing[0].prizes.length !== count || existing[0].prizes[0]?.source === 'checkin') fail('LOTTERY_CONFLICT', 409)
         return { kind: 'receipt' as const, receipt: packLotteryDraw(existing[0]) }
       }
       const credit = creditConfig()
@@ -627,7 +794,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       const { rows: existing } = await client.query<LotteryDrawRow>('SELECT * FROM community_lottery_draw WHERE "userId"=$1 AND "requestId"=$2', [userId, requestId])
       const previous = existing[0]
       if (previous) {
-        if (previous.prizes.length !== count) fail('LOTTERY_CONFLICT', 409)
+        if (previous.prizes.length !== count || previous.prizes[0]?.source === 'checkin') fail('LOTTERY_CONFLICT', 409)
         return packLotteryDraw(previous)
       }
       // Take the day after acquiring the config lock, including requests waiting across midnight.
@@ -638,7 +805,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
         if (daily.summary.participated) fail('LOTTERY_DAILY_USED', 409)
         if (!daily.summary.remaining) fail('LOTTERY_DAILY_EXHAUSTED', 409)
       }
-      const available = daily?.prizes ?? pool.settings.prizes
+      let available = daily?.prizes ?? pool.settings.prizes
       if (!pool.settings.enabled || !availableLotteryPrizes(available).length) fail('LOTTERY_UNAVAILABLE', 409)
       const credit = creditConfig()
       const { rows } = credit ? await client.query<{ subject: string }>('SELECT subject FROM external_account WHERE issuer=$1 AND "userId"=$2', [credit.issuer, userId]) : { rows: [] }
@@ -648,14 +815,24 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       if (!support || Date.now() - support.checkedAt > 60000) fail('LOTTERY_SUPPORT_UNAVAILABLE', 503)
       if (!support.charityReady) fail('LOTTERY_UNAVAILABLE', 409)
       if (!support.hasSupport || support.amountCnyFen < pool.settings.minSupportCnyFen) fail('LOTTERY_SUPPORT_REQUIRED', 409)
+      const welfare = pool.settings.welfarePointsReady ? await welfarePool(client, pool.settings, createdAt) : null
+      if (welfare && (!welfare.ready || support.pointsPerUsd === null)) fail('WELFARE_UNAVAILABLE', 503)
+      let remainingPoints = welfare?.remaining ?? 0
       const { account } = await sync(client, userId, pool.settings)
       if (account.balance < count) fail('LOTTERY_INSUFFICIENT', 409)
       const prizes: LotteryAward[] = []
       for (let index = 0; index < count; index++) {
+        if (welfare) {
+          available = available.filter(prize => prize.kind === 'empty' || prizePoints(prize.amountCents, support.pointsPerUsd) <= remainingPoints)
+          if (!availableLotteryPrizes(available).some(prize => prize.kind === 'balance')) fail('WELFARE_POOL_EXHAUSTED', 409)
+        }
         const prize = chooseLotteryPrize(available)
         if (!prize) fail('LOTTERY_UNAVAILABLE', 409)
         if (prize.stock > 0) prize.stock--
+        const rewardPoints = welfare && prize.kind === 'balance' ? prizePoints(prize.amountCents, support.pointsPerUsd) : undefined
+        if (rewardPoints !== undefined) remainingPoints -= rewardPoints
         prizes.push({ amountCents: prize.amountCents, prizeId: prize.id, name: prize.name, description: prize.description,
+          ...(rewardPoints === undefined ? {} : { rewardPoints }),
           status: prize.kind === 'empty' ? 'empty' : 'pending', fulfilledAt: null, fulfilledBy: null, note: '',
           ...(prize.kind === 'balance' ? { rewardKind: 'charity', validityHours: pool.settings.rewardValidityHours } : {}) })
       }
@@ -720,7 +897,9 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
       const current = await configuration(client, true)
       if (version !== current.version) fail('LOTTERY_CONFLICT', 409)
       const settings = normalizeLotterySettings({ ...normalized, minSupportCnyFen: normalized.minSupportCnyFen ?? current.settings.minSupportCnyFen,
-        rewardValidityHours: normalized.rewardValidityHours ?? current.settings.rewardValidityHours, wheel: normalized.wheel ?? current.settings.wheel })
+        rewardValidityHours: normalized.rewardValidityHours ?? current.settings.rewardValidityHours, wheel: normalized.wheel ?? current.settings.wheel,
+        dailyBudgetPoints: normalized.dailyBudgetPoints ?? current.settings.dailyBudgetPoints,
+        checkin: normalized.checkin ?? current.settings.checkin, welfarePointsReady: current.settings.welfarePointsReady })
       settings.invites.enabled = false
       for (const key of ['title', 'subtitle', 'buttonText', 'rulesText'] as const) settings.wheel[key] = settings.wheel[key].trim()
       settings.wheel.buttonText ||= 'GO'
@@ -778,7 +957,7 @@ export function createLotteryService({ db, config, fetcher = fetch, newId = () =
     return deliver(drawId)
   }
 
-  return { status, draw, records, getConfig, updateConfig, adjustChances, account, retry, deliver, processPending }
+  return { status, draw, records, getConfig, updateConfig, adjustChances, account, retry, deliver, processPending, welfare, checkin, activateWelfare }
 }
 
 function service(ctx: ServiceContext) {
@@ -824,9 +1003,15 @@ export async function handleLottery(ctx: RequestContext): Promise<boolean> {
     if ((path === '/api/admin/lottery/account' || path === '/api/admin/lottery/chances') && expected !== undefined && expected !== actor.id) fail('LOTTERY_ACCOUNT_CHANGED', 409)
   }
   else if (path !== '/api/lottery/status') ctx.requireUser()
+  if (path === '/api/lottery/checkin' || path === '/api/lottery/welfare') {
+    const expected = ctx.req.headers?.['x-new-api-user']
+    if (expected !== undefined && expected !== ctx.requireUser().id) fail('LOTTERY_ACCOUNT_CHANGED', 409)
+  }
   let result: unknown
   if (method === 'GET' && path === '/api/lottery/status') result = await api.status(ctx.user?.id)
   else if (method === 'POST' && path === '/api/lottery/draw') result = await api.draw(ctx.requireUser().id, ctx.body.requestId, ctx.body.count)
+  else if (method === 'POST' && path === '/api/lottery/checkin') result = await api.checkin(ctx.requireUser().id, ctx.body.requestId)
+  else if (method === 'GET' && path === '/api/lottery/welfare') result = await api.welfare(ctx.requireUser().id)
   else if (method === 'GET' && path.endsWith('/records')) result = await api.records(ctx.requireUser().id, admin, ctx.url.searchParams.get('cursor'), ctx.url.searchParams.get('drawId'), { userId: ctx.url.searchParams.get('userId'), status: ctx.url.searchParams.get('status') })
   else if (method === 'GET' && path === '/api/admin/lottery/config') result = await api.getConfig()
   else if (method === 'PATCH' && path === '/api/admin/lottery/config') result = await api.updateConfig(ctx.body.version, ctx.body.settings)

@@ -11,6 +11,6 @@
     "erasableSyntaxOnly": true,
     "noEmit": true
   },
-  "include": ["server/**/*.ts"],
+  "include": ["server/**/*.ts", "tools/activate-welfare.ts"],
   "exclude": ["server/**/*.test.ts"]
 }

@@ -5,12 +5,14 @@ import type { LotteryCreditReceipt, LotterySettings, LotteryPrize } from '../../
 import { api, errorMessage, notify, queryString } from '../state'
 import { defaultDailyLotteryPrizes, lotteryPointsToCents } from '../../shared/lottery-daily'
 import { formatPoints } from '../../shared/studio/community-wallet'
+import { defaultCheckin } from '../../shared/welfare-points'
 
 interface Config { version: number; settings: LotterySettings }
 type DeliveryStatus = 'pending' | 'fulfilled' | 'empty' | 'blocked'
 interface Award {
   name: string; amountCents: number; status: 'pending' | 'fulfilled' | 'empty'; note: string
   rewardKind?: 'charity'; validityHours?: number
+  rewardPoints?: number; source?: 'checkin'
   reference: string; deliveryStatus: DeliveryStatus; blockedReason: 'UPSTREAM_REJECTED_OR_INVALID_RECEIPT' | 'RETRY_LIMIT' | null
   receiptStatus: 'verified' | 'missing' | 'invalid' | 'not-required'; creditReceipt: LotteryCreditReceipt | null; amountMatches: true | null
 }
@@ -69,6 +71,8 @@ function message(cause: unknown) {
   return ({ LOTTERY_DAILY_QUOTA_INVALID: '启用奖项的每日名额合计必须等于每日总人数上限。', LOTTERY_CONFLICT: '配置或次数已变化，请重新读取后再提交。', LOTTERY_INVALID: '奖项、概率或次数参数无效，请检查后重试。', LOTTERY_UNAVAILABLE: '奖励发放服务暂不可用，请检查章鱼账号的发放配置。' } as Record<string, string>)[value] || value
 }
 function setDraft(value: Config) {
+  value.settings.checkin ??= defaultCheckin()
+  value.settings.dailyBudgetPoints ??= 600000
   draft.value = value
   minSupportCny.value = (value.settings.minSupportCnyFen ?? 0) / 100
   const hours = value.settings.rewardValidityHours ?? 168
@@ -144,6 +148,12 @@ async function saveConfig() {
     return
   }
   value.settings.rewardValidityHours = hours
+  const checkin = value.settings.checkin!, budget = value.settings.dailyBudgetPoints!
+  if (!Number.isSafeInteger(budget) || budget < 1 || budget > 1000000000
+    || !Number.isSafeInteger(checkin.minPoints) || !Number.isSafeInteger(checkin.maxPoints) || checkin.minPoints < 1
+    || checkin.maxPoints < checkin.minPoints || checkin.maxPoints > 1000000) {
+    error.value = '请输入有效的每日总额度和签到积分范围，最高积分不能低于最低积分。'; return
+  }
   if (dailyMode.value) {
     if (dailyQuota.value !== value.settings.dailyLimit) { error.value = '启用奖项的每日名额合计必须等于每日总人数上限。'; return }
     for (const prize of value.settings.prizes) prize.weight = Math.max(1, prize.stock)
@@ -220,6 +230,16 @@ onMounted(() => { void loadConfig(); void loadRecords() })
             </div>
             <p id="lottery-validity-help" class="form-note">抽奖发放限时福利积分，从首次到账起计时。修改有效期仅影响新中奖奖励。</p>
           </div>
+          <h3 class="config-title">每日签到与福利积分池</h3>
+          <p v-if="!draft.settings.welfarePointsReady" class="form-note">新福利功能等待版本发布完成后启用，当前可先保存配置。</p>
+          <label class="field"><span>每日福利积分总额度</span><input v-model.number="draft.settings.dailyBudgetPoints" class="control" type="number" inputmode="numeric" min="1" max="1000000000" step="1" required /></label>
+          <p class="form-note">签到与抽奖共同扣减此额度；已领取和待到账奖励均占用额度。北京时间每天 00:00 重置，编辑不会清除当天已领取的记录。剩余额度不足时暂停相应发奖。</p>
+          <template v-if="draft.settings.checkin">
+            <label class="check-label"><input v-model="draft.settings.checkin.enabled" type="checkbox" />开启每日签到</label>
+            <div class="fields"><label class="field"><span>签到最低积分</span><input v-model.number="draft.settings.checkin.minPoints" class="control" type="number" inputmode="numeric" min="1" max="1000000" step="1" required /></label>
+              <label class="field"><span>签到最高积分</span><input v-model.number="draft.settings.checkin.maxPoints" class="control" type="number" inputmode="numeric" :min="draft.settings.checkin.minPoints" max="1000000" step="1" required /></label></div>
+            <p class="form-note">在范围内随机发放整数积分，每人每天签到一次，无需消耗抽奖机会或满足支持金额条件。签到所得为限时福利积分，首次到账后 24 小时有效。</p>
+          </template>
           <h3 class="config-title">任务奖励</h3>
           <div class="rule-grid"><div v-for="(label, key) in ruleNames" :key="key" class="stack"><label class="check-label"><input v-model="draft.settings[key].enabled" type="checkbox" />{{ label }}</label><div class="fields"><label class="field"><span>达成数量</span><input v-model.number="draft.settings[key].threshold" class="control" type="number" min="1" max="1000000" step="1" required /></label><label class="field"><span>奖励次数</span><input v-model.number="draft.settings[key].tickets" class="control" type="number" min="1" max="1000" step="1" required /></label></div></div></div>
           <label class="field"><span>获赞统计</span><select v-model="draft.settings.likesMode" class="control"><option value="work">单件作品累计</option><option value="total">所有作品累计</option></select></label>
@@ -228,7 +248,7 @@ onMounted(() => { void loadConfig(); void loadRecords() })
           <template v-if="dailyMode">
             <label class="field"><span>每日总人数上限</span><input v-model.number="draft.settings.dailyLimit" class="control" type="number" min="1" max="1000000" step="1" required /></label>
             <p class="form-note">每天北京时间 00:00，所有用户的每日参与资格与奖池名额统一重置。每次消耗 1 次抽奖机会，概率按剩余名额自动计算。修改奖项不会退还当天已用名额。</p>
-            <p class="probability-total" role="status">每日名额合计 <strong>{{ dailyQuota }} 名</strong><span> · 每日奖池 <strong>{{ dailyPoints === null ? '待核对' : dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) }} 积分</strong></span></p>
+            <p class="probability-total" role="status">每日名额合计 <strong>{{ dailyQuota }} 名</strong><span> · 抽奖配置总额 <strong>{{ dailyPoints === null ? '待核对' : dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) }} 积分</strong></span></p>
           </template>
           <div class="section-heading prize-heading"><h3>奖项独立配置</h3><button type="button" class="button subtle btn" :disabled="draft.settings.prizes.length >= 30" @click="addPrize"><Plus :size="16" />添加奖项</button></div>
           <p class="form-note">名称、单次奖励和名额均可单独编辑。{{ pointsPerUsd ? `当前奖励每 ${pointsPerUsd / 100} 积分调整，按实际账户兑换比例发放。` : '积分兑换比例暂不可用，当前显示原奖励金额。' }}</p>
@@ -264,7 +284,7 @@ onMounted(() => { void loadConfig(); void loadRecords() })
         <tbody role="rowgroup"><template v-for="item in records" :key="item.id">
           <tr :data-draw-id="item.id" class="record-summary-row" role="row">
             <td role="cell">{{ dateTime(item.createdAt) }}<p class="caption-5">@{{ item.username || item.userId }}</p><p class="caption-5">用户编号 {{ item.userId || '已删除' }}</p></td>
-            <td role="cell"><div v-for="(award, i) in item.prizes" :key="i" class="record-award">{{ award.name }}<span v-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td>
+            <td role="cell"><div v-for="(award, i) in item.prizes" :key="i" class="record-award">{{ award.name }}<span v-if="award.rewardPoints"> · {{ award.rewardPoints.toLocaleString('zh-CN') }} 积分</span><span v-else-if="award.amountCents"> · ${{ (award.amountCents / 100).toFixed(2) }}</span></div></td>
             <td role="cell"><div v-for="(award, i) in item.prizes" :key="i" class="record-award"><span class="status" :class="{ pending: award.deliveryStatus === 'pending', rejected: award.deliveryStatus === 'blocked', published: award.deliveryStatus === 'fulfilled' }">{{ awardLabels[award.deliveryStatus] }}</span><p v-if="award.note" class="caption-5">{{ award.note }}</p></div></td>
             <td role="cell"><div class="record-actions">
               <button class="button subtle btn" :aria-label="`查看对账：${item.id}`" :aria-expanded="expandedRecord === item.id" :aria-controls="`lottery-record-${item.id}`" @click="expandedRecord = expandedRecord === item.id ? '' : item.id"><component :is="expandedRecord === item.id ? ChevronUp : ChevronDown" :size="16" />查看对账</button>
@@ -284,12 +304,12 @@ onMounted(() => { void loadConfig(); void loadRecords() })
               <ol class="receipt-list"><li v-for="(award, index) in item.prizes" :key="index">
                 <div class="receipt-heading"><h3>{{ award.name }}</h3><span class="status" :class="{ published: award.receiptStatus === 'verified', rejected: award.receiptStatus === 'invalid' }">{{ receiptLabels[award.receiptStatus] }}</span></div>
                 <dl class="receipt-data">
-                  <div><dt>奖励金额</dt><dd>${{ (award.amountCents / 100).toFixed(2) }} USD</dd></div>
+                  <div><dt>奖励额度</dt><dd v-if="award.rewardPoints">{{ award.rewardPoints.toLocaleString('zh-CN') }} 福利积分</dd><dd v-else>${{ (award.amountCents / 100).toFixed(2) }} USD</dd></div>
                   <div v-if="award.status !== 'empty'" class="receipt-reference"><dt>原始发放参考号</dt><dd><code>{{ award.reference }}</code></dd></div>
                   <template v-if="award.creditReceipt">
                     <div><dt>到账凭证编号</dt><dd>{{ award.creditReceipt.id }}</dd></div>
                     <div><dt>实际添加额度</dt><dd>{{ award.creditReceipt.quotaAdded.toLocaleString('en-US') }} quota</dd></div>
-                    <div class="receipt-ratio"><dt>发放时兑换比例</dt><dd>{{ award.creditReceipt.quotaPerUsd }} quota / USD</dd></div>
+                    <div class="receipt-ratio"><dt>发放时兑换比例</dt><dd v-if="award.rewardPoints">{{ award.creditReceipt.quotaPerPoint }} quota / 积分</dd><dd v-else>{{ award.creditReceipt.quotaPerUsd }} quota / USD</dd></div>
                     <template v-if="award.creditReceipt.rewardKind === 'charity'">
                       <div><dt>积分类型</dt><dd>限时福利积分</dd></div>
                       <div><dt>到账福利积分</dt><dd>{{ formatPoints(award.creditReceipt.points ?? '') }} 积分</dd></div>
@@ -297,7 +317,7 @@ onMounted(() => { void loadConfig(); void loadRecords() })
                       <div><dt>到期时间</dt><dd>{{ award.creditReceipt.expiresAt ? dateTime(new Date(award.creditReceipt.expiresAt * 1000).toISOString()) : '未确认' }}</dd></div>
                     </template>
                   </template>
-                  <div><dt>金额核对</dt><dd>{{ award.amountMatches === true ? '金额与凭证兑换比例一致' : award.receiptStatus === 'not-required' ? '无需核对' : '无法确认实际到账金额' }}</dd></div>
+                  <div><dt>奖励核对</dt><dd>{{ award.amountMatches === true ? (award.rewardPoints ? '积分与到账凭证一致' : '金额与凭证兑换比例一致') : award.receiptStatus === 'not-required' ? '无需核对' : '无法确认实际到账额度' }}</dd></div>
                 </dl>
                 <p v-if="award.receiptStatus === 'missing'" class="receipt-note">此记录未保存到账凭证，无法核对实际额度。</p>
                 <p v-else-if="award.receiptStatus === 'invalid'" class="receipt-note receipt-invalid">已保存的凭证未通过校验，无法确认到账金额。</p>

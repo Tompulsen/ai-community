@@ -23,6 +23,7 @@ COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY shared ./shared
 COPY THIRD_PARTY_NOTICES.md REUSE.md LICENSE ./
+COPY tools/activate-welfare.ts ./tools/activate-welfare.ts
 USER community
 EXPOSE 3000
 HEALTHCHECK --interval=5s --timeout=8s --retries=6 --start-period=20s CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"

@@ -4,6 +4,7 @@ import { defaultLotterySettings } from '../server/business/lottery'
 import { defaultDailyLotteryPrizes, lotteryDay } from '../shared/lottery-daily'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 import { defaultWelfareTasks } from '../shared/welfare-tasks'
+import type { WelfareStatus } from '../shared/welfare-points'
 
 async function welfareFixture(page: Page, authenticated = true) {
   const account = await mockUnifiedAccount(page, authenticated)
@@ -12,6 +13,7 @@ async function welfareFixture(page: Page, authenticated = true) {
   const config = { version: 1, settings: { ...defaultLotterySettings(), enabled: true, dailyLimit: 200, prizes: defaultDailyLotteryPrizes(5000) } }
   const day = lotteryDay(new Date())
   const state = { participated: false, remaining: 200, balance: 3, failAfterDraw: false, failBeforeDraw: false,
+    welfare: null as WelfareStatus | null, checkinFailure: false, daily: true,
     date: day.date, resetsAt: day.end.toISOString(), statusReads: 0, failStatus: false, statusDelay: Promise.resolve(),
     support: { checked: authenticated, eligible: authenticated, amountCnyFen: authenticated ? 1000 : null as number | null }, drawSupportError: '' }
   const writes: { path: string; body: any }[] = [], draws = new Map<string, object>()
@@ -42,6 +44,20 @@ async function welfareFixture(page: Page, authenticated = true) {
   })
   await page.route('**/api/lottery/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
+    if (path.endsWith('/welfare')) return route.fulfill({ json: state.welfare ?? { pool: null } })
+    if (path.endsWith('/checkin')) {
+      const body = request.postDataJSON(); writes.push({ path, body })
+      expect(request.headers()['x-new-api-user']).toBe(account.state.user.id)
+      if (!draws.has(body.requestId)) {
+        const award = { prizeId: 'daily-checkin', source: 'checkin', name: '每日签到奖励', description: '', amountCents: 0,
+          rewardPoints: 617, status: 'pending', rewardKind: 'charity', validityHours: 24 }
+        draws.set(body.requestId, { id: 'checkin1', source: 'checkin', createdAt: new Date().toISOString(), prizes: [award] })
+        if (state.welfare?.pool) { state.welfare.pool.remaining -= 617; state.welfare.pool.claimed += 617; state.welfare.pool.reserved += 617
+          Object.assign(state.welfare.checkin, { claimed: true, points: 617, drawId: 'checkin1', status: 'pending' }) }
+      }
+      if (state.checkinFailure) { state.checkinFailure = false; return route.abort('failed') }
+      return route.fulfill({ json: draws.get(body.requestId) })
+    }
     if (path.endsWith('/public-records')) return route.fulfill({ json: { items: [], nextCursor: null, snapshot: null } })
     if (path.endsWith('/status')) {
       state.statusReads++
@@ -49,7 +65,8 @@ async function welfareFixture(page: Page, authenticated = true) {
       if (state.failStatus) return route.fulfill({ status: 503, json: { error: 'LOTTERY_UNAVAILABLE' } })
       return route.fulfill({ json: {
       settings: { ...config.settings, prizes: config.settings.prizes.filter(p => p.enabled).map((p, i) => ({ ...p, dailyQuota: p.stock, stock: p.stock - (state.participated && i === 3 ? 1 : 0), weight: p.stock - (state.participated && i === 3 ? 1 : 0) })) },
-      daily: { date: state.date, timezone: 'Asia/Shanghai', resetsAt: state.resetsAt, limit: config.settings.dailyLimit, remaining: state.remaining, used: 200 - state.remaining, participated: state.participated },
+      daily: state.daily ? { date: state.date, timezone: 'Asia/Shanghai', resetsAt: state.resetsAt, limit: config.settings.dailyLimit, remaining: state.remaining, used: 200 - state.remaining, participated: state.participated } : null,
+      welfare: state.welfare,
       balance: state.balance, creditReady: true, accountLinked: authenticated, inviteUrl: 'http://localhost/activities?invite=17',
       support: state.support,
       counts: { invites: 0, followers: 0, likes: 0, bestWorkLikes: 0 }, earned: { invites: 0, followers: 0, likes: 0 },
@@ -73,6 +90,142 @@ async function welfareFixture(page: Page, authenticated = true) {
   })
   return { state, writes, config, referral, account, draws }
 }
+
+function dailyWelfare(time = new Date()): WelfareStatus {
+  const day = lotteryDay(time)
+  return { pool: { date: day.date, resetsAt: day.end.toISOString(), serverTime: time.toISOString(), limit: 600000,
+    remaining: 600000, claimed: 0, reserved: 0, delivered: 0, ready: true },
+    checkin: { enabled: true, minPoints: 500, maxPoints: 700, claimed: false, points: null, drawId: null, status: null },
+    lottery: { enabled: true, minPoints: 1000, maxPoints: 6000, participated: false } }
+}
+
+for (const [width, scheme] of [[1440, 'light'], [390, 'light'], [320, 'dark']] as const) {
+  test(`daily check-in and shared pool at ${width}px ${scheme}`, async ({ page }, info) => {
+    const fixture = await welfareFixture(page); fixture.state.welfare = dailyWelfare()
+    fixture.state.support = { checked: true, eligible: false, amountCnyFen: 0 }
+    await page.setViewportSize({ width, height: 1000 })
+    await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode, light: 'paper', dark: 'sage' })), scheme)
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+    await page.goto('/activities')
+    await expect(page.locator('.welfare-pool strong')).toHaveText('600,000')
+    await expect(page.locator('.checkin-card')).toContainText('500–700')
+    await expect(page.locator('.checkin-card')).toContainText('24 小时')
+    Object.assign(fixture.state.welfare.pool!, { remaining: 599000, claimed: 1000, delivered: 1000 })
+    await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+    await expect(page.locator('.welfare-pool strong')).toHaveText('599,000')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`daily-welfare-${width}-${scheme}.png`), fullPage: true })
+    expect((await new AxeBuilder({ page }).include('.daily-overview').include('.checkin-card').analyze()).violations).toEqual([])
+    await page.getByRole('button', { name: '立即签到', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '签到成功，奖励发放中' })
+    await expect(dialog).toBeVisible(); await expect(dialog).toContainText('617 福利积分')
+    await expect(dialog).toContainText('尚未到账'); expect(fixture.state.balance).toBe(3)
+    expect((await new AxeBuilder({ page }).include('.lottery-feedback').analyze()).violations).toEqual([])
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('button', { name: '查看签到奖励', exact: true })).toBeFocused()
+    Object.assign(fixture.state.welfare.pool!, { remaining: 0, claimed: 600000, delivered: 599383 })
+    fixture.state.welfare.checkin.claimed = false
+    await page.getByRole('button', { name: '刷新活动', exact: true }).click()
+    await expect(page.locator('.pool-empty')).toContainText('明日 00:00')
+    await page.getByRole('button', { name: '立即签到', exact: true }).click()
+    await expect(page.locator('.checkin-error')).toContainText('次日 00:00')
+    expect(fixture.writes.filter(write => write.path.endsWith('/checkin'))).toHaveLength(1)
+    expect(errors).toEqual([])
+  })
+}
+
+test('check-in recovers an unknown result without a new request and displays confirmed wallet credit', async ({ page }) => {
+  const fixture = await welfareFixture(page); fixture.state.welfare = dailyWelfare(); fixture.state.checkinFailure = true
+  await page.route('**/api/account', route => route.fulfill({ json: wallet('617') }))
+  await page.goto('/activities')
+  await page.getByRole('button', { name: '立即签到', exact: true }).click()
+  await expect(page.locator('.checkin-error')).toContainText('结果尚未确认')
+  await page.reload()
+  await page.getByRole('button', { name: '核对签到结果', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '签到成功，奖励发放中' })).toBeVisible()
+  expect(fixture.writes[0]!.body.requestId).toBe(fixture.writes[1]!.body.requestId)
+  const record = [...fixture.draws.values()][0] as any
+  Object.assign(record.prizes[0], { status: 'fulfilled', points: '617', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+  await page.getByRole('button', { name: '刷新到账状态', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('恭喜获得积分')
+  await expect(page.locator('.feedback-total')).toContainText('5,617')
+  await expect(page.locator('.feedback-award')).toContainText('有效至')
+  await page.getByRole('button', { name: '查看奖励记录', exact: true }).click()
+  await expect(page.locator('.records-section .data-table')).toContainText('617 福利积分')
+  expect(fixture.draws.size).toBe(1)
+})
+
+test('admin saves the check-in toggle, custom integer range and shared cap', async ({ page }) => {
+  const fixture = await welfareFixture(page)
+  await page.goto('/admin?tab=lottery')
+  await page.getByLabel('签到最低积分', { exact: true }).fill('617')
+  await page.getByLabel('签到最高积分', { exact: true }).fill('619')
+  await page.getByLabel('每日福利积分总额度', { exact: true }).fill('750000')
+  await page.getByLabel('开启每日签到', { exact: true }).uncheck()
+  await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
+  await expect(page.locator('.config-actions')).toContainText('已保存')
+  expect(fixture.writes[0]!.body.settings.checkin).toEqual({ enabled: false, minPoints: 617, maxPoints: 619 })
+  expect(fixture.writes[0]!.body.settings.dailyBudgetPoints).toBe(750000)
+  await page.reload(); await expect(page.getByLabel('开启每日签到', { exact: true })).not.toBeChecked()
+  await page.getByLabel('签到最高积分', { exact: true }).fill('616')
+  await page.getByRole('button', { name: '保存抽奖配置', exact: true }).click()
+  expect(await page.getByLabel('签到最高积分', { exact: true }).evaluate((e: HTMLInputElement) => e.validity.valid)).toBe(false)
+  expect(fixture.writes).toHaveLength(1)
+})
+
+test('check-in-only status refreshes at server midnight with a skewed device clock', async ({ page }) => {
+  const server = new Date('2026-11-26T15:59:59Z')
+  await page.clock.install({ time: new Date('2026-11-26T01:00:00Z') })
+  const fixture = await welfareFixture(page); fixture.state.welfare = dailyWelfare(server); fixture.state.daily = false
+  Object.assign(fixture.state.welfare.checkin, { claimed: true, points: 617, drawId: 'yesterday', status: 'fulfilled' })
+  await page.goto('/activities'); await expect(page.locator('.checkin-card')).toContainText('今日已签到')
+  fixture.state.welfare = dailyWelfare(new Date('2026-11-26T16:00:02Z'))
+  await page.clock.fastForward(4000)
+  await expect(page.getByRole('button', { name: '立即签到', exact: true })).toBeVisible()
+})
+
+test('daily invitation shows rewards, navigates directly and deduplicates per account and server date', async ({ page }, info) => {
+  await page.clock.install({ time: new Date('2026-11-26T03:00:00Z') })
+  const fixture = await welfareFixture(page); fixture.state.welfare = dailyWelfare(new Date('2026-11-26T03:00:00Z'))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/discover')
+  const dialog = page.getByRole('dialog', { name: '新的一天，来领积分' })
+  await expect(dialog).toBeVisible(); await expect(dialog).toContainText('500–700'); await expect(dialog).toContainText('1,000–6,000')
+  expect((await new AxeBuilder({ page }).include('.welfare-reminder').analyze()).violations).toEqual([])
+  await page.screenshot({ path: info.outputPath('welfare-reminder-mobile.png') })
+  await dialog.getByRole('link', { name: '前往福利中心' }).click()
+  await expect(page).toHaveURL(/\/activities$/); await expect(dialog).not.toBeVisible()
+  await page.goto('/discover'); await page.clock.fastForward(5000); await expect(dialog).not.toBeVisible()
+  fixture.account.state.user.id = 'secondAccount'
+  await page.reload(); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape')
+  fixture.state.welfare = dailyWelfare(new Date('2026-11-27T03:00:00Z'))
+  await page.clock.setSystemTime(new Date('2026-11-27T03:00:00Z'))
+  await page.reload(); await expect(dialog).toBeVisible()
+  expect(fixture.writes).toHaveLength(0)
+})
+
+test('invitation queues behind dialogs, refreshes across midnight and survives unavailable storage', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-26T15:59:58Z') })
+  const fixture = await welfareFixture(page); fixture.state.welfare = dailyWelfare(new Date('2026-11-26T15:59:58Z'))
+  await page.addInitScript(() => {
+    const get = Storage.prototype.getItem, set = Storage.prototype.setItem
+    Storage.prototype.getItem = function (key) { if (key.startsWith('community:welfare-reminder')) throw new Error('storage disabled'); return get.call(this, key) }
+    Storage.prototype.setItem = function (key, value) { if (key.startsWith('community:welfare-reminder')) throw new Error('storage disabled'); set.call(this, key, value) }
+    document.addEventListener('DOMContentLoaded', () => { const overlay = document.createElement('dialog'); overlay.id = 'test-overlay'; overlay.textContent = 'Existing dialog'; document.body.append(overlay); overlay.showModal() })
+  })
+  await page.goto('/discover')
+  const reminder = page.getByRole('dialog', { name: '新的一天，来领积分' })
+  await page.clock.fastForward(1300); await expect(reminder).not.toBeVisible()
+  fixture.state.welfare = dailyWelfare(new Date('2026-11-26T16:00:02Z')); fixture.state.welfare.checkin.minPoints = 650
+  await page.clock.fastForward(4000)
+  await page.evaluate(() => (document.querySelector('#test-overlay') as HTMLDialogElement).close())
+  await page.clock.fastForward(3000)
+  await expect(reminder).toBeVisible(); await expect(reminder).toContainText('650–700')
+  await page.keyboard.press('Escape')
+  await page.evaluate(() => (document.querySelector('#app') as any).__vue_app__.config.globalProperties.$router.push('/latest'))
+  await page.clock.fastForward(35000); await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.clock.fastForward(2000); await expect(reminder).not.toBeVisible()
+})
 
 test('daily limit feedback explains the next Beijing reset without consuming another chance', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-11-25T10:00:00Z'))
@@ -647,7 +800,8 @@ test('midnight reset retries stale or failed status without polling rapidly and 
 
 for (const [width, scheme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']] as const) {
   test(`welfare wheel and daily pool at ${width}px ${scheme}`, async ({ page }, info) => {
-    await welfareFixture(page)
+    const fixture = await welfareFixture(page)
+    fixture.state.welfare = dailyWelfare()
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
     await page.setViewportSize({ width, height: 1000 })
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' })

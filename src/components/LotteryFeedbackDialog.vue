@@ -3,8 +3,9 @@ export interface LotteryAward {
   prizeId: string; name: string; description: string; amountCents: number
   status: 'pending' | 'fulfilled' | 'empty'; note?: string; legacyPoints?: string | null
   rewardKind?: 'charity'; validityHours?: number; points?: string | null; expiresAt?: number | null
+  rewardPoints?: number; source?: 'checkin'
 }
-export interface LotteryDraw { id: string; createdAt: string; prizes: LotteryAward[] }
+export interface LotteryDraw { id: string; createdAt: string; prizes: LotteryAward[]; source?: 'checkin' }
 export interface LotteryNotice {
   title: string; message: string; resetsAt?: string
   supportAmount?: string; shortfall?: string
@@ -31,7 +32,7 @@ const checking = ref(false), receiptError = ref(''), walletReady = ref(false), w
 const pending = computed(() => props.draw?.prizes.some(award => award.status === 'pending'))
 const won = computed(() => props.draw?.prizes.some(award => award.status !== 'empty'))
 const title = computed(() => props.draw
-  ? !props.draw.prizes.length ? '抽奖结果待核对' : won.value ? pending.value ? '恭喜抽中奖励' : '恭喜获得积分' : '本次抽奖结果'
+  ? !props.draw.prizes.length ? '奖励结果待核对' : won.value ? pending.value ? props.draw.source === 'checkin' ? '签到成功，奖励发放中' : '恭喜抽中奖励' : '恭喜获得积分' : '本次抽奖结果'
   : props.notice?.title)
 const resetLabel = computed(() => {
   const time = Date.parse(props.notice?.resetsAt ?? '')
@@ -107,7 +108,7 @@ onBeforeUnmount(() => {
       <header class="feedback-heading">
         <span class="feedback-icon" aria-hidden="true"><Gift v-if="draw && won" :size="28" /><Clock3 v-else-if="notice?.resetsAt" :size="28" /><Check v-else :size="28" /></span>
         <h2 :id="`${id}-title`" aria-live="polite">{{ title }}</h2>
-        <button ref="closing" type="button" class="icon-button" aria-label="关闭抽奖提示" @click="close"><X :size="20" aria-hidden="true" /></button>
+        <button ref="closing" type="button" class="icon-button" :aria-label="draw?.source === 'checkin' ? '关闭签到提示' : '关闭抽奖提示'" @click="close"><X :size="20" aria-hidden="true" /></button>
       </header>
       <div class="feedback-body">
         <template v-if="draw">
@@ -120,7 +121,7 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="!draw.prizes.length">抽奖凭证已保存，请刷新结果或查看奖励记录。</p>
           </div>
-          <p v-if="pending" class="feedback-note">奖励已记录，到账可能需要一点时间。无需再次抽奖，可稍后在奖励记录中查看。</p>
+          <p v-if="pending" class="feedback-note">奖励已记录，到账可能需要一点时间。无需再次{{ draw.source === 'checkin' ? '签到' : '抽奖' }}，可稍后在奖励记录中查看。</p>
           <p v-if="receiptError" role="status" class="feedback-note">{{ receiptError }}</p>
           <section class="feedback-wallet" :aria-labelledby="`${id}-balance`" aria-live="polite" :aria-busy="walletLoading || accountBalance.loading">
             <h3 :id="`${id}-balance`">当前可用积分</h3>

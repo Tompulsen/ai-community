@@ -9,6 +9,8 @@ import { Gift, RefreshCw } from '@lucide/vue'
 import '../welfare-tokens.css'
 import { api, errorMessage, loadSession, queryString, session } from '../state'
 import WelfareTasks from '../components/WelfareTasks.vue'
+import WelfareCheckin from '../components/WelfareCheckin.vue'
+import type { WelfareStatus } from '../../shared/welfare-points'
 import LotteryFeedbackDialog, { type LotteryAward as Award, type LotteryDraw as Draw, type LotteryNotice } from '../components/LotteryFeedbackDialog.vue'
 import { isClownPrize } from '../../shared/lottery-public'
 import { refreshLotteryBalance, updateLotteryBalance } from '../lottery-balance'
@@ -19,6 +21,7 @@ interface Rule { enabled: boolean; threshold: number; tickets: number }
 interface Prize { id: string; name: string; description: string; amountCents: number; kind: 'balance' | 'empty'; weight: number; stock: number; enabled: boolean; dailyQuota?: number }
 interface PendingDraw { requestId: string; count: 1 | 3 | 5 }
 interface LotteryStatus {
+  welfare?: WelfareStatus | null
   settings: { enabled: boolean; minSupportCnyFen: number; rewardValidityHours?: number; prizes: Prize[]; invites: Rule; followers: Rule; likes: Rule; likesMode: string; wheel: { theme: 'teal' | 'violet' | 'sunset'; title: string; subtitle: string; buttonText: string; rulesText: string } }
   balance: number; counts: { invites: number; followers: number; likes: number; bestWorkLikes: number }
   earned: { invites: number; followers: number; likes: number }; accountLinked: boolean; creditReady: boolean; inviteUrl: string
@@ -47,6 +50,7 @@ function rewardAmount(value: Prize | Award) {
   const charity = !('status' in value) || value.rewardKind === 'charity'
   if ('status' in value && value.status === 'fulfilled' && charity) return value.points
     ? `${formatPoints(value.points)} 福利积分` : '福利积分，数额待核对'
+  if ('rewardPoints' in value && value.rewardPoints) return `${formatPoints(String(value.rewardPoints))} 福利积分`
   if (pointDisplay.value?.currencySymbol !== '积分') return pointDisplay.value ? `$${(value.amountCents / 100).toFixed(2)}` : '积分待核对'
   if ('status' in value && value.status === 'fulfilled') return value.legacyPoints
     ? `${formatPoints(value.legacyPoints)} 积分` : '积分数额待核对'
@@ -68,14 +72,13 @@ function rewardExpiry(award: Award) {
 const count = ref<1 | 3 | 5>(1), pending = ref<PendingDraw | null>(null), wheelRotation = ref(0)
 const allDrawCounts = [1, 3, 5] as const
 const drawCounts = computed(() => status.value?.daily ? [1] as const : allDrawCounts)
-const dailyPoints = computed(() => pointDisplay.value?.pointsPerUsd && status.value?.daily
-  ? status.value.settings.prizes.reduce((sum, prize) => sum + (prize.dailyQuota ?? 0) * prize.amountCents / 100 * pointDisplay.value!.pointsPerUsd!, 0) : null)
 const drawStorageKey = computed(() => `ai-community-next:lottery-draw:${session.user?.id}`)
 const awardLabels = { pending: '待发放', fulfilled: '已到账', empty: '未中奖' }
 const appearance = computed(() => status.value?.settings.wheel ?? { theme: 'teal', title: '', subtitle: '', buttonText: 'GO', rulesText: '' })
 const drawTitle = computed(() => !appearance.value.title || appearance.value.title === '每日幸运转盘' ? '活动抽奖' : appearance.value.title)
 const currentTime = ref(Date.now())
-const resetAt = computed(() => Date.parse(status.value?.daily?.resetsAt ?? ''))
+let clockOffset = 0
+const resetAt = computed(() => Date.parse(status.value?.welfare?.pool?.resetsAt ?? status.value?.daily?.resetsAt ?? ''))
 const supportChecked = computed(() => status.value?.support?.checked === true)
 const supportEligible = computed(() => supportChecked.value && status.value?.support.eligible === true)
 const participationStatus = computed(() => {
@@ -85,6 +88,8 @@ const participationStatus = computed(() => {
   if (statusFailed.value) return '参与状态更新失败，请刷新后重试'
   if (!value?.settings.enabled) return '活动暂未开放'
   if (!value.accountLinked) return '请先连接章鱼账号'
+  if (value.welfare?.pool && !value.welfare.pool.ready) return '今日福利积分正在核对，请稍后再来'
+  if (value.welfare?.pool && !value.welfare.pool.remaining) return '今日福利积分已领完，北京时间次日 00:00 重置'
   if (value.daily?.participated) return '今日已参与，下次北京时间 00:00 统一重置'
   if (value.daily && !value.daily.remaining) return '今日名额已领完，下次北京时间 00:00 统一重置'
   if (!availablePrizes.value.length) return '奖池暂无可用奖项'
@@ -114,6 +119,11 @@ const drawBlocker = computed<LotteryNotice | null>(() => {
   const unavailable: LotteryNotice = { title: '暂时无法参与抽奖', message: participationStatus.value, action: 'refresh' }
   if (statusFailed.value || !value?.settings.enabled) return unavailable
   if (!value.accountLinked) return { title: '请先连接章鱼账号', message: '连接账号后可核验参与资格，并将中奖积分发放至你的积分账户。', action: 'account' }
+  if (value.welfare?.pool && !value.welfare.pool.ready) return unavailable
+  if (value.welfare?.pool && (!value.welfare.pool.remaining || !availablePrizes.value.some(prize => prize.kind === 'balance'))) return {
+    title: value.welfare.pool.remaining ? '今日福利积分不足' : '今日福利积分已领完',
+    message: `今日剩余 ${value.welfare.pool.remaining.toLocaleString('zh-CN')} 积分，暂时无法发放本次抽奖奖励。签到与抽奖共用每日额度，请在重置后再来。`, resetsAt: value.welfare.pool.resetsAt,
+  }
   if (value.daily && Number.isFinite(resetAt.value) && currentTime.value >= resetAt.value) return {
     title: '请更新今日参与资格', message: '已到北京时间的每日重置时间，请重新核验今日资格与剩余名额。', action: 'refresh',
   }
@@ -165,6 +175,8 @@ const wheelSegments = computed(() => wheelSlots.value.map((prize, index, slots) 
 }))
 function drawMessage(cause: unknown) {
   const value = errorMessage(cause)
+  if (value === 'WELFARE_POOL_EXHAUSTED') return '今日剩余福利积分不足以发放本次奖励，北京时间次日 00:00 重置后再来。'
+  if (value === 'WELFARE_UNAVAILABLE') return '今日福利额度或发放服务正在核对，请稍后刷新。'
   return ({ LOTTERY_DAILY_USED: '今天已参与，下次北京时间 00:00 统一重置。', LOTTERY_DAILY_SINGLE: '每日福利每人每天限抽 1 次。', LOTTERY_DAILY_EXHAUSTED: '今日名额已领完，北京时间 00:00 后再来。', LOTTERY_INSUFFICIENT: '抽奖次数不足。', LOTTERY_ACCOUNT_REQUIRED: '请先连接章鱼账号。', LOTTERY_SUPPORT_REQUIRED: '累计支持未满足参与条件，请刷新后查看。', LOTTERY_SUPPORT_UNAVAILABLE: '累计支持暂时无法核验，请使用原凭证重新核对。', LOTTERY_UNAVAILABLE: '活动或奖励发放暂不可用。', LOTTERY_INVALID: '本次抽奖参数无效，请重新参与。', LOTTERY_CONFLICT: '本次抽奖凭证与原请求不一致，请刷新后核对。', LOTTERY_FORBIDDEN: '当前账号暂不能参与活动。' } as Record<string, string>)[value] || value
 }
 async function loadRecords(append = false) {
@@ -205,6 +217,8 @@ async function load() {
     const lottery = await api<LotteryStatus>('/api/lottery/status')
     if (!current()) return
     status.value = lottery; statusFailed.value = false; if (lottery.daily) count.value = 1
+    const serverTime = Date.parse(lottery.welfare?.pool?.serverTime ?? '')
+    clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0
     if (session.user) updateLotteryBalance(session.user.id, lottery.balance)
     restorePending(); scheduleReset()
   }
@@ -252,7 +266,7 @@ watch(identity, () => { drawRevision++; feedback.value = null; serverNotice.valu
 let resetTimer: ReturnType<typeof setInterval> | undefined
 function updateActivityClock() {
   if (!active || document.visibilityState === 'hidden') return
-  currentTime.value = Date.now()
+  currentTime.value = Date.now() + clockOffset
   if (Number.isFinite(resetAt.value) && currentTime.value >= resetAt.value + 1000
     && (tab.value === 'draw' || tab.value === 'tasks') && !loading.value && !drawing.value && currentTime.value - lastResetAttempt >= 15000) {
     lastResetAttempt = currentTime.value
@@ -261,7 +275,7 @@ function updateActivityClock() {
 }
 function scheduleReset() {
   clearInterval(resetTimer)
-  currentTime.value = Date.now()
+  currentTime.value = Date.now() + clockOffset
   if (active && (Number.isFinite(resetAt.value) || records.value.some(record => record.prizes.some(award => award.expiresAt))
     || result.value?.prizes.some(award => award.expiresAt))) resetTimer = setInterval(updateActivityClock, 1000)
 }
@@ -281,7 +295,7 @@ async function draw() {
   const owner = identity(), request = ++drawRevision
   const current = () => active && owner === identity() && request === drawRevision
   serverNotice.value = null
-  if (!pending.value && Number.isFinite(resetAt.value) && Date.now() >= resetAt.value) {
+  if (!pending.value && Number.isFinite(resetAt.value) && Date.now() + clockOffset >= resetAt.value) {
     await load()
     if (current()) feedback.value = 'blocked'
     return
@@ -334,14 +348,20 @@ async function draw() {
     <div class="page-heading"><div><h1>福利中心</h1></div><button type="button" class="icon-button" :aria-label="refreshLabel" :title="refreshLabel" :disabled="refreshing" @click="refresh"><RefreshCw :size="18" aria-hidden="true" /></button></div>
     <div class="tabs" aria-label="活动分类"><button v-for="item in tabs" :key="item.id" type="button" class="tab" :class="{ active: tab === item.id }" :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }}</button></div>
     <p v-if="error && (tab === 'draw' || tab === 'tasks')" class="notice-inline" role="alert">{{ error }}</p>
+    <section v-if="status && (status.daily || status.welfare?.pool) && (tab === 'draw' || tab === 'tasks')" class="daily-overview" aria-label="今日福利">
+      <dl><div v-if="status.daily"><dt>今日剩余抽奖名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div>
+        <div v-if="status.welfare?.pool" class="welfare-pool" aria-live="polite"><dt>今日剩余福利积分</dt><dd><strong>{{ status.welfare.pool.ready ? status.welfare.pool.remaining.toLocaleString('zh-CN') : '核对中' }}</strong><span> / {{ status.welfare.pool.limit.toLocaleString('zh-CN') }}</span></dd><dd>
+          <progress v-if="status.welfare.pool.ready" :value="status.welfare.pool.remaining" :max="status.welfare.pool.limit" aria-label="今日剩余福利积分占比" />
+          <small>签到与抽奖共用 · 已领取 {{ status.welfare.pool.claimed.toLocaleString('zh-CN') }}<template v-if="status.welfare.pool.reserved">（含 {{ status.welfare.pool.reserved.toLocaleString('zh-CN') }} 待到账预留）</template></small>
+          <p v-if="status.welfare.pool.ready && !status.welfare.pool.remaining" class="pool-empty" role="status">今日福利积分已领完，明日 00:00 恢复发放。</p>
+        </dd></div></dl>
+      <p class="reset-schedule"><strong>每天 00:00 统一重置</strong><span>北京时间 · 所有用户同步</span></p>
+    </section>
+    <WelfareCheckin v-if="status?.welfare?.pool && (tab === 'draw' || tab === 'tasks')" :welfare="status.welfare" :chances="status.balance" @refresh="load" @records="tab = 'records'" />
     <WelfareTasks v-if="tab === 'tasks'" :key="session.user?.id ?? 'guest'" ref="tasks" :lottery="loading || statusFailed ? null : status" :rules-loading="loading" />
     <div v-else-if="loading && !status && tab === 'draw'" class="activity-loading" role="status" aria-label="正在加载活动"><div class="skeleton" /><div class="skeleton" /></div>
     <template v-else-if="status || tab === 'records'">
       <p v-if="loading && status && tab === 'draw'" class="muted" role="status" aria-label="正在加载活动">正在更新活动…</p>
-      <section v-if="status?.daily && tab === 'draw'" class="daily-overview" aria-label="今日福利">
-        <dl><div><dt>今日剩余名额</dt><dd><strong>{{ status.daily.remaining }}</strong><span> / {{ status.daily.limit }} 名</span></dd></div><div v-if="dailyPoints !== null"><dt>每日奖池积分</dt><dd><strong>{{ dailyPoints.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</strong></dd></div></dl>
-        <p class="reset-schedule"><strong>每天 00:00 统一重置</strong><span>北京时间 · 所有用户同步</span></p>
-      </section>
       <div v-if="tab === 'draw' && status" class="activity-layout lottery-layout">
         <section class="panel-section draw-section" :class="`theme-${appearance.theme}`">
           <div class="draw-console">
@@ -431,7 +451,7 @@ async function draw() {
             <tbody><template v-for="record in records" :key="record.id"><tr v-for="(award, index) in record.prizes" :key="`${record.id}:${index}`">
               <td data-label="时间">{{ new Date(record.createdAt).toLocaleString('zh-CN') }}</td>
               <td data-label="奖励">{{ award.name }}</td>
-              <td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents ? rewardAmount(award) : '--' }}</td>
+              <td :data-label="pointDisplay?.currencySymbol === '积分' ? '折合积分' : '奖励额度'">{{ award.amountCents || award.rewardPoints ? rewardAmount(award) : '--' }}</td>
               <td data-label="状态"><span class="status" :class="{ pending: award.status === 'pending' }">{{ awardLabels[award.status] }}</span><p v-if="award.rewardKind === 'charity'" class="reward-expiry"><time v-if="award.expiresAt" :datetime="new Date(award.expiresAt * 1000).toISOString()" role="timer" aria-label="奖励到期倒计时" aria-live="off">{{ rewardExpiry(award) }}</time><span v-else>{{ rewardExpiry(award) }}</span></p></td>
             </tr></template></tbody>
           </table>
@@ -465,6 +485,11 @@ async function draw() {
 .daily-overview strong { font-size: 28px; line-height: 36px; font-weight: 600; }
 .daily-overview dd span, .daily-overview p { color: var(--muted); font-size: 12px; line-height: 20px; }
 .daily-overview p { margin: 0; }
+.welfare-pool { min-width: 0; }
+.welfare-pool progress { display: block; width: min(100%, 300px); height: 6px; margin: 10px 0 6px; accent-color: var(--accent); }
+.welfare-pool small { display: block; max-width: 420px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.daily-overview .pool-empty { margin-top: 6px; color: var(--ink); }
+@media (max-width: 600px) { .daily-overview dl > .welfare-pool { flex-basis: 100%; padding: 12px 0 0; border-inline: 0; border-top: 1px solid var(--border); } }
 .reset-schedule { display: grid; gap: 4px; }
 .reset-schedule strong { color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 500; }
 .reward-expiry { margin: var(--space-label) 0 0; color: var(--muted); font-size: var(--font-size-help); line-height: var(--line-height-help); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
