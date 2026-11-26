@@ -40,6 +40,132 @@ async function configureSkill(form: Locator, image: Buffer) {
   await expect(form.getByText('SKILL.md', { exact: true })).toBeVisible()
 }
 
+async function prepareModerationSubmission(page: Page, image: Buffer) {
+  await page.goto('/discover?publish=1')
+  const form = editor(page)
+  await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'photo.jpg', mimeType: 'image/jpeg', buffer: image })
+  await form.getByLabel('作品标题', { exact: true }).fill('等待修改的作品')
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+  return form
+}
+
+for (const width of [390, 1440]) test(`moderation rejection preserves a new work and requires correction before retry at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  await page.addInitScript(mode => localStorage.setItem('ai-community-next:appearance:v1', JSON.stringify({ mode })), width === 390 ? 'dark' : 'light')
+  const state = await fixture(page)
+  await page.route('**/api/works', route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    const body = route.request().postDataJSON(); state.writes.push(body)
+    return state.writes.length === 1
+      ? route.fulfill({ status: 422, json: { error: { code: 'WORK_MODERATION_REJECTED', message: '检测到疑似色情或裸露内容，暂不能发布。请修改后重试，或联系管理员复核。' } } })
+      : route.fulfill({ json: { work: { id: 'submitted', title: body.title, status: 'pending' } } })
+  })
+  const form = await prepareModerationSubmission(page, state.image)
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  const notice = form.getByRole('alert', { name: '发布被拦截', exact: true })
+  await expect(notice).toContainText('作品违规，无法发布')
+  await expect(notice).toContainText('本次提交已被拦截，作品未公开。')
+  await expect(notice).toContainText('检测到疑似色情或裸露内容')
+  await expect(notice).toBeFocused()
+  await expect(notice).toBeInViewport()
+  await expect(form.getByLabel('作品标题', { exact: true })).toHaveValue('等待修改的作品')
+  await expect(form.getByLabel('作品标题', { exact: true })).toBeEnabled()
+  await expect(form.locator('.attachment-preview img')).toHaveCount(1)
+  await expect(form.getByRole('button', { name: '提交审核', exact: true })).toBeDisabled()
+  await form.locator('form').evaluate((element: HTMLFormElement) => element.requestSubmit())
+  expect(state.writes).toHaveLength(1)
+  expect((await new AxeBuilder({ page }).include('.editor-dialog[open]').analyze()).violations).toEqual([])
+  expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.screenshot({ path: test.info().outputPath(`moderation-new-work-${width}.png`) })
+  await notice.getByRole('button', { name: '修改作品信息', exact: true }).click()
+  await expect(notice).toHaveCount(0)
+  await expect(form.getByLabel('作品标题', { exact: true })).toBeFocused()
+  await form.getByLabel('作品标题', { exact: true }).fill('修改后的作品')
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form).not.toBeVisible()
+  await expect(page).toHaveURL(/\/library\?tab=pending$/)
+  await expect(page.getByText('作品已提交审核。', { exact: true })).toBeVisible()
+  expect(state.writes).toHaveLength(2)
+  expect(state.writes[1]).toMatchObject({ title: '修改后的作品', idempotencyKey: state.writes[0]!.idempotencyKey, fileIds: state.writes[0]!.fileIds })
+})
+
+test('moderation rejection on a published edit preserves original work and clears after editing', async ({ page }) => {
+  const state = await fixture(page)
+  const work = { id: 'moderatededit', title: '原来的公开作品', authorId: state.state.user.id, author: '测试创作者', avatar: '测', version: 4,
+    kind: 'image', status: 'published', files: [{ id: 'original', name: 'original.jpg', type: 'image/jpeg', url: '/simple-preview.jpg' }],
+    fileIds: ['original'], tags: ['摄影'], tagIds: ['imagetag0'], body: '原简介', prompt: '原提示词', model: '', owned: true, likes: 0, date: '2026-11-27', cover: '/simple-preview.jpg' }
+  await page.route('**/api/library**', route => route.fulfill({ json: { items: [work], nextCursor: null } }))
+  await page.route('**/api/works/moderatededit', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { work } })
+    state.writes.push(route.request().postDataJSON())
+    return route.fulfill({ status: 422, json: { error: { code: 'WORK_MODERATION_REJECTED', message: '作品文字或图片文字包含社区禁止发布的内容，请修改后重试，或联系管理员复核。' } } })
+  })
+  await page.goto('/library')
+  await page.getByRole('button', { name: '编辑作品：原来的公开作品', exact: true }).click()
+  const form = page.getByRole('dialog', { name: '编辑作品', exact: true })
+  await form.getByLabel('作品标题', { exact: true }).fill('本次修改的作品')
+  await form.getByRole('button', { name: '保存修改', exact: true }).click()
+  const notice = form.getByRole('alert', { name: '发布被拦截', exact: true })
+  await expect(notice).toContainText('修改内容违规，无法发布')
+  await expect(notice).toContainText('本次修改未发布，原作品保持不变。')
+  await expect(notice).not.toContainText('作品未公开')
+  await expect(notice).toBeFocused()
+  await expect(form.getByLabel('作品标题', { exact: true })).toHaveValue('本次修改的作品')
+  await expect(form.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled()
+  await page.screenshot({ path: test.info().outputPath('moderation-published-edit.png') })
+  await form.getByLabel('作品标题', { exact: true }).fill('重新修改的作品')
+  await expect(notice).toHaveCount(0)
+  await expect(form.getByRole('button', { name: '保存修改', exact: true })).toBeEnabled()
+  expect(state.writes).toHaveLength(1)
+  expect(work.title).toBe('原来的公开作品')
+})
+
+test('ordinary errors and changed moderation rules never appear as a rejected work', async ({ page }) => {
+  const state = await fixture(page)
+  let failure = { status: 404, code: 'WORK_MODERATION_REJECTED', message: '记录不存在，请刷新后重试。' }
+  await page.route('**/api/works', route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    state.writes.push(route.request().postDataJSON())
+    return route.fulfill({ status: failure.status, json: { error: { code: failure.code, message: failure.message } } })
+  })
+  const form = await prepareModerationSubmission(page, state.image)
+  for (const scenario of [failure, { status: 409, code: 'WORK_MODERATION_CHANGED', message: '审核规则已更新，请重新提交作品。' },
+    { status: 503, code: 'INTERNAL_ERROR', message: '服务暂时不可用，请稍后重试。' }, { status: 422, code: 'OTHER_VALIDATION', message: '请检查作品资料。' }]) {
+    failure = scenario
+    await form.getByRole('button', { name: '提交审核', exact: true }).click()
+    await expect(form.getByRole('alert')).toHaveText(scenario.message)
+    await expect(form.locator('.work-moderation-notice')).toHaveCount(0)
+    await expect(form.getByLabel('作品标题', { exact: true })).toHaveValue('等待修改的作品')
+    await expect(form.getByRole('button', { name: '提交审核', exact: true })).toBeEnabled()
+  }
+  expect(state.writes).toHaveLength(4)
+})
+
+test('moderation rejection clears when the editor closes or the account changes', async ({ page }) => {
+  const state = await fixture(page)
+  await page.route('**/api/works', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 422, json: { error: { code: 'WORK_MODERATION_REJECTED', message: '测试审核拒绝。' } } }) : route.fallback())
+  let form = await prepareModerationSubmission(page, state.image)
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.locator('.work-moderation-notice')).toBeVisible()
+  await form.getByRole('button', { name: '关闭作品编辑', exact: true }).click()
+  await page.getByRole('dialog', { name: '保留作品修改？', exact: true }).getByRole('button', { name: '放弃修改', exact: true }).click()
+  await expect(form).not.toBeVisible()
+  await page.getByRole('link', { name: '投稿', exact: true }).click()
+  form = editor(page)
+  await expect(form).toBeVisible()
+  await expect(form.locator('.work-moderation-notice')).toHaveCount(0)
+  await form.getByLabel('添加作品文件', { exact: true }).setInputFiles({ name: 'photo.jpg', mimeType: 'image/jpeg', buffer: state.image })
+  await form.getByLabel('作品标题', { exact: true }).fill('再次提交')
+  await form.getByRole('checkbox', { name: '摄影', exact: true }).check()
+  await form.getByRole('button', { name: '提交审核', exact: true }).click()
+  await expect(form.locator('.work-moderation-notice')).toBeVisible()
+  state.state.user.id = 'another-account'
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(form).not.toBeVisible()
+  await expect(page.locator('.work-moderation-notice')).toHaveCount(0)
+})
+
 for (const width of [320, 390, 800, 1440]) {
   test(`simple editor keeps upload, title and submission visible at ${width}px`, async ({ page }) => {
     const state = await fixture(page)

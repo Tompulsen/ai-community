@@ -8,7 +8,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
   account.state.user.id = '17'
   const image = await readFile('public/assets/brand/octopus-community.jpg')
   const submissions: any[] = [], uploads: string[] = []
-  let reject = 0, rejectCode = '', failTags = false, removedTag = ''
+  let reject = 0, rejectCode = '', rejectMessage = '', failTags = false, removedTag = ''
   const category = kind === 'text' ? 'resource' : kind
   await page.route('**/api/tags**', route => failTags ? route.fulfill({ status: 503, json: { message: '标签暂时不可用' } }) : route.fulfill({ json: { items: (catalog ?? ['动物', '摄影', '插画', '风景'].map((name, i) => ({ id: `tag${i}`, name, category }))).filter(tag => tag.id !== removedTag && (!new URL(route.request().url()).searchParams.get('kind') || tag.category === new URL(route.request().url()).searchParams.get('kind'))) } }))
   await page.route('**/api/creation/**', route => {
@@ -24,7 +24,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
   })
   await page.route('**/api/works', route => {
     const body = route.request().postDataJSON(); submissions.push(body)
-    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { code: rejectCode, message: rejectCode === 'WORK_MODERATION_REJECTED' ? '作品包含敏感词，请修改后重新提交。' : status === 400 ? '所选标签已失效' : '连接中断，请重试' } }) }
+    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { code: rejectCode, message: rejectMessage || (rejectCode === 'WORK_MODERATION_REJECTED' ? '作品包含敏感词，请修改后重新提交。' : status === 400 ? '所选标签已失效' : '连接中断，请重试') } }) }
     return route.fulfill({ json: { work: { id: 'published1', title: body.title, status: 'pending' } } })
   })
   await page.addInitScript(({ kind, legacy }) => {
@@ -51,7 +51,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
       await component.value.open((await readTaskSnapshot('17')).find(task => task.id === 'publication-case'))
     })
   }
-  return { submissions, uploads, rejectNext: (status: number, code = '') => { reject = status; rejectCode = code }, failTags: (value: boolean) => { failTags = value }, removeTag: (id: string) => { removedTag = id } }
+  return { submissions, uploads, rejectNext: (status: number, code = '', message = '') => { reject = status; rejectCode = code; rejectMessage = message }, failTags: (value: boolean) => { failTags = value }, removeTag: (id: string) => { removedTag = id } }
 }
 const dialog = (page: Page) => page.getByRole('dialog', { name: '发布作品', exact: true })
 async function choose(page: Page) {
@@ -124,6 +124,11 @@ test('confirmed moderation rejection keeps publication fields editable and permi
   state.rejectNext(422, 'WORK_MODERATION_REJECTED')
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
   await expect(form.getByRole('alert')).toContainText('作品包含敏感词')
+  await expect(form.getByRole('alert')).toBeFocused()
+  await expect(form.getByRole('heading', { name: '作品违规，无法发布' })).toBeVisible()
+  await expect(form.getByText('本次提交已被拦截，作品未公开。')).toBeVisible()
+  await expect(form.getByRole('button', { name: '提交作品', exact: true })).toHaveCount(0)
+  await form.getByRole('button', { name: '修改发布信息', exact: true }).click()
   await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toBeEnabled()
   await expect(form.getByRole('textbox', { name: '生成提示词（选填）', exact: true })).toBeEnabled()
   await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toHaveValue('需要修改的标题')
@@ -134,6 +139,32 @@ test('confirmed moderation rejection keeps publication fields editable and permi
   expect(state.submissions[1].title).toBe('修改后的安全标题')
   expect(state.submissions[1].fileIds).toEqual(state.submissions[0].fileIds)
   expect(state.submissions[1].idempotencyKey).toBe(state.submissions[0].idempotencyKey)
+})
+
+test('image moderation explains rejection accessibly and returning to creation does not publish', async ({ page }) => {
+  const state = await fixture(page)
+  const form = dialog(page)
+  await choose(page)
+  state.rejectNext(422, 'WORK_MODERATION_REJECTED', '检测到疑似色情或裸露内容，暂不能发布。请修改后重试，或联系管理员复核。')
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toBeFocused()
+  await expect(form.getByRole('alert')).toContainText('检测到疑似色情或裸露内容')
+  await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveCount(0)
+  for (const [mode, width] of [['dark', 1440], ['dark', 390], ['light', 390]] as const) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(mode => (window as any).communityAppearance.set({ mode }), mode)
+    await form.evaluate(async element => { await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))) })
+    expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    expect((await new AxeBuilder({ page }).include('.studio-publish-dialog[open]').analyze()).violations).toEqual([])
+    await form.screenshot({ path: test.info().outputPath(`moderation-rejected-${mode}-${width}.png`) })
+  }
+  await form.getByRole('button', { name: '返回修改作品', exact: true }).click()
+  await expect(form).not.toBeVisible()
+  expect(state.submissions).toHaveLength(1)
+  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await expect(form.getByRole('heading', { name: '作品违规，无法发布' })).toHaveCount(0)
+  await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toBeEnabled()
+  expect(state.submissions).toHaveLength(1)
 })
 
 test('a missing cached submission hides its success receipt and retries only the status query', async ({ page }) => {
@@ -154,6 +185,8 @@ test('a missing cached submission hides its success receipt and retries only the
   await page.reload()
   await page.getByRole('button', { name: '发布作品', exact: true }).click()
   await expect(form.getByRole('alert')).toHaveText('暂时无法访问这条提交记录，请确认账号后重试。')
+  await expect(form.getByText('记录可能已被删除，或当前账号没有查看权限。此提示不代表作品被判定违规。')).toBeVisible()
+  await expect(form.getByRole('heading', { name: '作品违规，无法发布' })).toHaveCount(0)
   await expect(form.getByText('作品已提交审核。', { exact: true })).toHaveCount(0)
   await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveCount(0)
   await expect(form.getByRole('button', { name: '提交作品', exact: true })).toHaveCount(0)
@@ -341,7 +374,7 @@ test('more publication tags searches every admin category and submits the exact 
   await expect(form.getByRole('searchbox', { name: '搜索全部标签', exact: true })).toBeFocused()
   expect(state.submissions).toHaveLength(0)
   await form.getByRole('button', { name: '提交作品', exact: true }).click()
-  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  await expect(form.getByRole('status').filter({ hasText: '作品已提交审核。' })).toBeVisible()
   expect(state.submissions[0].tagIds).toEqual(['video-photo', 'resource-last', 'image0'])
 })
 

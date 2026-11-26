@@ -5,12 +5,14 @@ import { ChevronDown, Send, SlidersHorizontal, Upload, X } from '@lucide/vue'
 import { api, errorMessage, notify, session } from '../state'
 import type { Work, WorkTag } from '../data'
 import PublicationTagPicker from './PublicationTagPicker.vue'
+import WorkModerationNotice from './WorkModerationNotice.vue'
 import { refreshLotteryBalance } from '../lottery-balance'
 import { mediaSource, publishCreation, type PublicationDetails, type CreationDestination, type CreationTask } from '../native-studio'
 import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
 const resultUnavailable = ref(false)
+const moderationReason = ref(''), moderationNotice = ref<InstanceType<typeof WorkModerationNotice>>()
 const tags = ref<WorkTag[]>([]), tagIds = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const prompt = ref(''), sourceUrl = ref(''), license = ref(''), rights = ref(false), referenceIndices = ref<number[]>([])
@@ -24,7 +26,7 @@ const resultLink = computed(() => sourceCommentLink.value ? `/work/${task.value?
 const resultMessage = computed(() => result.value?.status === 'pending' ? direct.value ? '评论已提交审核。' : '作品已提交审核。' : published.value ? direct.value ? '已发送到源作品评论区。' : '作品已公开。' : result.value?.status === 'rejected' ? '未通过审核或已撤回，请查看提交记录。' : '已保存提交记录。')
 let revision = 0
 onBeforeUnmount(() => revision++)
-watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; resultUnavailable.value = false; error.value = ''; busy.value = false })
+watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; resultUnavailable.value = false; moderationReason.value = ''; error.value = ''; busy.value = false })
 async function loadTags() {
   const current = revision
   tagsLoading.value = true; tagsError.value = ''
@@ -47,7 +49,7 @@ function revealInvalid(event: Event) {
 async function open(value: CreationTask, target: CreationDestination = 'community', currentText?: string) {
   if (busy.value || value.phase !== 'complete' || value.owner !== session.user?.id) return
   const current = ++revision
-  task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined; resultUnavailable.value = false
+  task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined; resultUnavailable.value = false; moderationReason.value = ''
   const previous = value.publications?.[target]
   title.value = previous?.title || (target === 'source-comment' ? '我的同款作品' : value.prompt.slice(0, 50))
   text.value = previous?.text ?? (value.kind === 'text' ? currentText ?? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : '').slice(0, 2500)
@@ -77,7 +79,7 @@ async function refreshResult(previous: Work) {
   } finally { if (current === revision) busy.value = false }
 }
 async function submit() {
-  if (!task.value || busy.value || result.value) return
+  if (!task.value || busy.value || result.value || moderationReason.value) return
   error.value = ''; tagValidation.value = ''
   if (!direct.value && !locked.value) {
     tagValidation.value = tagsLoading.value ? '标签正在加载，请稍后再提交。'
@@ -101,8 +103,27 @@ async function submit() {
     result.value = response.work
     if (!direct.value) void refreshLotteryBalance(true)
     notify(resultMessage.value)
-  } catch (cause) { if (current === revision) { error.value = errorMessage(cause); if (!direct.value && !locked.value) { if (extra.value) extra.value.open = true; if ((cause as { status?: number }).status === 400) void loadTags() } } }
+  } catch (cause) {
+    if (current !== revision) return
+    const failure = cause as { status?: number; code?: string }
+    if (failure.status === 422 && failure.code === 'WORK_MODERATION_REJECTED') {
+      moderationReason.value = errorMessage(cause)
+      await nextTick()
+      if (current === revision) moderationNotice.value?.focus()
+    } else {
+      error.value = errorMessage(cause)
+      if (!direct.value && !locked.value) { if (extra.value) extra.value.open = true; if (failure.status === 400) void loadTags() }
+    }
+  }
   finally { if (current === revision) busy.value = false }
+}
+async function editPublication() {
+  const current = revision
+  moderationReason.value = ''
+  await nextTick()
+  if (current !== revision) return
+  if (extra.value) extra.value.open = true
+  dialog.value?.querySelector<HTMLInputElement>('input[maxlength="100"]')?.focus()
 }
 defineExpose({ open })
 </script>
@@ -110,6 +131,11 @@ defineExpose({ open })
   <Teleport to="body"><dialog ref="dialog" class="compact-dialog studio-publish-dialog" aria-labelledby="studio-publish-title" @cancel="busy && $event.preventDefault()">
     <div class="dialog-heading"><h2 id="studio-publish-title">{{ heading }}</h2><button class="icon-button" aria-label="关闭发布作品" :disabled="busy" @click="dialog?.close()"><X :size="18" /></button></div>
     <form v-if="task" class="dialog-body stack" @submit.prevent="submit" @invalid.capture="revealInvalid">
+      <WorkModerationNotice v-if="moderationReason" ref="moderationNotice" :reason="moderationReason">
+        <button type="button" class="button primary btn" @click="dialog?.close()">返回修改作品</button>
+        <button type="button" class="button subtle btn" @click="editPublication">修改发布信息</button>
+      </WorkModerationNotice>
+      <template v-else>
       <div v-if="task.urls.length" class="publish-preview"><template v-for="url in task.urls" :key="url"><video v-if="task.kind === 'video'" :src="mediaSource(url, false, 'video')" controls playsinline preload="metadata" /><img v-else :src="mediaSource(url, true)" :alt="task.prompt" /></template></div>
       <p v-if="direct" class="form-note">发送到<RouterLink :to="`/work/${task.sourceWorkId}`" @click="dialog?.close()">源作品评论区</RouterLink>，按社区审核设置公开。</p>
       <template v-if="!result">
@@ -139,9 +165,10 @@ defineExpose({ open })
         <p v-if="busy" class="form-note" role="status">正在提交并检查内容，请稍候…</p>
         <button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button>
       </template>
-      <div v-else-if="resultUnavailable" class="stack"><button type="button" class="button primary btn" :disabled="busy" @click="refreshResult(result)">{{ busy ? '正在检查状态…' : '重新检查状态' }}</button></div>
+      <div v-else-if="resultUnavailable" class="stack publication-unavailable"><h3>提交记录暂时无法访问</h3><p class="form-note">记录可能已被删除，或当前账号没有查看权限。此提示不代表作品被判定违规。</p><button type="button" class="button primary btn" :disabled="busy" @click="refreshResult(result)">{{ busy ? '正在检查状态…' : '重新检查状态' }}</button></div>
       <div v-else class="stack"><p role="status">{{ resultMessage }}</p><RouterLink :to="resultLink" class="button primary btn" @click="dialog?.close()">{{ sourceCommentLink ? '查看源作品评论' : '查看提交' }}</RouterLink></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+      </template>
     </form>
   </dialog></Teleport>
 </template>
@@ -151,6 +178,7 @@ defineExpose({ open })
 .publish-preview img, .publish-preview video { width: min(220px, 70vw); max-height: 200px; object-fit: contain; border-radius: 8px; background: var(--surface); }
 .form-note a { color: var(--blue); }
 .publish-context { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
+.publication-unavailable h3 { margin: 0; font-size: 18px; }
 .studio-publish-dialog .dialog-body > .button { position: sticky; bottom: 0; flex: none; }
 .publish-tags, .publish-references { border: 0; padding: 0; margin: 0; min-width: 0; }
 .publish-tags legend, .publish-references legend { padding: 0; margin-bottom: 8px; }

@@ -5,6 +5,7 @@ import { ChevronDown, FileCode, ImagePlus, Plus, Save, SlidersHorizontal, Upload
 import WorkAttachments from './WorkAttachments.vue'
 import PublicationTagPicker from './PublicationTagPicker.vue'
 import PublicationParameters from './PublicationParameters.vue'
+import WorkModerationNotice from './WorkModerationNotice.vue'
 import { publicationFields, publicationParameters } from '../publication-parameters'
 import { skillKinds } from '../../shared/community-skills'
 import { type SkillDetails } from '../../shared/publication'
@@ -77,6 +78,8 @@ const references = ref<UploadFile[]>([])
 const uploads = useFileUploads(() => props.work && session.user?.isAdmin && props.work.authorId !== session.user.id ? props.work.id : undefined)
 const version = ref(0)
 const error = ref('')
+const moderationReason = ref(''), moderationNotice = ref<InstanceType<typeof WorkModerationNotice>>()
+const titleInput = ref<HTMLInputElement>()
 const loading = ref(false), loadFailed = ref(false)
 const uploading = uploads.uploading
 const saving = ref(false)
@@ -92,9 +95,11 @@ const snapshot = () => JSON.stringify({ ...draft, types: publicationTypes.map(({
   return state ? { ...state, cover: state.cover?.id, files: state.files.map(file => file.id), references: state.references.map(file => file.id) } : null
 }) })
 const dirty = computed(() => props.open && snapshot() !== baseline.value)
+watch(snapshot, () => { moderationReason.value = '' })
 
 function fill(work?: Work | null) {
   uploads.reset()
+  moderationReason.value = ''
   sourceComment.value = work?.destination === 'source-comment'
   Object.assign(draft, { title: work?.title || '', kind: work?.kind || 'image', body: work?.body || '', prompt: work?.prompt || '', tags: [...(work?.tags || [])], tagIds: work?.tagIds ? [...work.tagIds] : undefined, model: work?.model || '', sourceUrl: work?.sourceUrl || '', license: work?.license || '' })
   legacyResource.value = work?.kind === 'resource' && !work.generation?.skill
@@ -126,7 +131,7 @@ async function loadWork() {
 }
 watch(() => [props.open, props.work?.id] as const, ([open]) => {
   if (open) void loadWork()
-  else { loadId++; uploads.reset(); dialog.value?.close() }
+  else { loadId++; moderationReason.value = ''; uploads.reset(); dialog.value?.close() }
 }, { immediate: true })
 
 async function loadTags() {
@@ -150,7 +155,7 @@ function selectKind(kind: WorkKind) {
   files.value = [...(saved?.files || [])]; references.value = [...(saved?.references || [])]
   parameters.value = saved ? { ...saved.parameters } : publicationFields()
   skill.value = saved ? { ...saved.skill } : { kind: 'text', platform: '', version: '', installation: '', sourcePublic: true }
-  error.value = ''; tagValidation.value = ''
+  error.value = ''; tagValidation.value = ''; moderationReason.value = ''
 }
 function showUpload() { fileInput.value?.click() }
 function invalidField(event: Event) {
@@ -224,7 +229,7 @@ function removeFile(index: number, reference = false) {
   if (removed) uploads.remove(removed)
 }
 async function save(status: 'draft' | 'pending') {
-  if (saving.value || loading.value || loadFailed.value) return
+  if (saving.value || loading.value || loadFailed.value || moderationReason.value) return
   if (!draft.title.trim()) { error.value = '请填写作品标题。'; return }
   if (draft.sourceUrl.trim() && !safeExternalUrl(draft.sourceUrl.trim())) { if (extra.value) extra.value.open = true; error.value = '来源请填写完整的 http 或 https 链接。'; return }
   if (status !== 'draft' && draft.kind !== 'resource' && !files.value.some(file => file.type.startsWith(`${draft.kind}/`))) { error.value = `请至少添加一个${draft.kind === 'image' ? '图片' : '视频'}作品文件。`; return }
@@ -272,7 +277,17 @@ async function save(status: 'draft' | 'pending') {
     notify(result.work.revisionPending || result.work.status === 'pending' ? '作品已提交审核。' : result.work.status === 'draft' ? '草稿已保存。' : '作品已保存。')
     requestId.value = crypto.randomUUID()
     emit('close')
-  } catch (cause) { if (current === loadId) { error.value = errorMessage(cause); if (extra.value) extra.value.open = true } }
+  } catch (cause) {
+    if (current === loadId && session.user?.id === owner) {
+      if (extra.value) extra.value.open = true
+      const failure = cause as { status?: number; code?: string }
+      if (failure.status === 422 && failure.code === 'WORK_MODERATION_REJECTED') {
+        moderationReason.value = errorMessage(cause)
+        await nextTick()
+        if (current === loadId && session.user?.id === owner && props.open) moderationNotice.value?.focus()
+      } else error.value = errorMessage(cause)
+    }
+  }
   finally { if (current === loadId) saving.value = false }
 }
 onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); window.removeEventListener('beforeunload', beforeUnload); resolveLeave?.(false) })
@@ -283,6 +298,9 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
     <div class="dialog-heading"><h2 id="work-editor-heading">{{ work ? '编辑作品' : '发布作品' }}</h2><button class="icon-button" aria-label="关闭作品编辑" :disabled="saving || uploading" @click="close"><X :size="20" /></button></div>
     <form class="editor-form" @submit.prevent="save('pending')" @invalid.capture="invalidField">
       <div class="editor-scroll" tabindex="0" role="region" aria-label="作品信息">
+        <WorkModerationNotice v-if="moderationReason" ref="moderationNotice" class="editor-moderation" :reason="moderationReason" :is-edit="Boolean(work)">
+          <button type="button" class="button subtle btn" :disabled="saving" @click="moderationReason = ''; titleInput?.focus()">修改作品信息</button>
+        </WorkModerationNotice>
         <p v-if="loading" role="status">正在加载作品…</p>
         <fieldset :disabled="loading || saving || loadFailed" class="editor-fields editor-layout">
           <legend class="editor-sr-only">作品信息</legend>
@@ -306,7 +324,7 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
             </section>
           </section>
           <div class="editor-content">
-          <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
+          <label class="field editor-title"><span><span>作品标题</span><small aria-hidden="true">{{ draft.title.length }}/100</small></span><input ref="titleInput" v-model="draft.title" class="control" aria-label="作品标题" maxlength="100" required placeholder="为作品起个名字" /></label>
           <fieldset v-if="!sourceComment" ref="tagField" class="editor-tags" tabindex="-1" :aria-invalid="Boolean(tagValidation)" :aria-describedby="tagValidation ? 'editor-tags-hint editor-tags-error' : 'editor-tags-hint'">
             <legend>作品标签（必选）<span>{{ selectedTagIds.length }}/3</span></legend>
             <p id="editor-tags-hint" class="form-note">选择 1–3 个标签，方便搜索和发现同类作品。</p>
@@ -350,7 +368,7 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
         </fieldset>
       </div>
       <div class="editor-feedback"><p v-if="uploading" role="status">{{ saving ? '已安排提交，上传完成后自动保存。' : '文件正在上传，可继续填写作品信息。' }}</p><p v-else-if="saving" role="status">{{ savingDraft ? '正在保存草稿…' : '正在提交并检查内容，请稍候…' }}</p><p v-if="error" class="form-error" role="alert">{{ error }} <button v-if="loadFailed" type="button" class="text-link" @click="loadWork">重新加载作品</button></p></div>
-      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || loadFailed" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || loadFailed"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
+      <div class="dialog-footer"><span v-if="work?.revisionPending" class="caption-5">本次保存将更新待审核修改。</span><div><button v-if="!work || work.status === 'draft'" type="button" class="button subtle btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)" @click="save('draft')"><Save :size="16" />存为草稿</button><button class="button primary btn" :disabled="loading || saving || loadFailed || Boolean(moderationReason)"><Upload :size="16" />{{ saving ? '正在保存…' : work ? '保存修改' : '提交审核' }}</button></div></div>
     </form>
   </dialog>
   <dialog ref="leaveDialog" class="compact-dialog" aria-labelledby="work-discard-heading" @cancel.prevent="finishLeave(false)">
@@ -366,6 +384,7 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
 .editor-dialog > .dialog-heading .icon-button { width: 44px; height: 44px; }
 .editor-form { display: flex; flex-direction: column; min-height: 0; }
 .editor-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.editor-moderation { margin: 20px 24px 0; }
 .editor-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
 .editor-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 0; }
@@ -417,6 +436,7 @@ onBeforeUnmount(() => { skillLoad++; loadId++; tagLoadId++; removeGuard(); windo
   .editor-dialog > .dialog-heading { padding: 12px 16px; }
   .editor-layout { grid-template-columns: minmax(0, 1fr); }
   .editor-media, .editor-content { padding: 16px; }
+  .editor-moderation { margin: 16px 16px 0; }
   .publication-types { order: -1; margin: 0; padding: 0; }
   .editor-content { gap: 16px; }
   .upload-area { min-height: 180px; gap: 12px; }
