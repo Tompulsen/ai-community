@@ -164,7 +164,7 @@ test('poster routes retain account and token authorization before cached protect
     return handleCreation({
       req: request.raw, res: reply.raw, request, reply, user, sessionHash: 'test-session',
       url: new URL(request.url, 'https://community.example'), config: { url: 'https://community.example' },
-      redis: { async get(key) { return values.get(key) || null }, async eval() { return 1 } },
+      redis: { async get(key) { return values.get(key) || null }, async eval(script) { return script.includes('community-video-media-budget-v1') ? [1, 0] : 1 } },
       body: {}, requireUser() { return user },
       json(status, value) { reply.code(status).send(value) },
     }, {

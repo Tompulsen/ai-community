@@ -66,7 +66,7 @@ function fakeStores() {
     async ping() { return 'PONG' },
     async incr() { return 1 },
     async expire() { return 1 },
-    async eval() { return 1 },
+    async eval(script) { return script.includes('community-video-media-budget-v1') ? [1, 0] : 1 },
     async xrevrange() { return [] },
   }
   return { db, redis, queries, media, denyMedia() { allowMedia = false }, failMediaUpdate() { failUpdate = true } }

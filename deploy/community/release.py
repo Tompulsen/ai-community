@@ -3,6 +3,7 @@ import copy
 import datetime
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -260,7 +261,7 @@ def wait_request_drain(name, guard=None):
         time.sleep(min(1, remaining))
 
 
-def main(image, request_flags=None):
+def main(image, request_flags=None, proxy_gateway=None):
     if request_flags:
         assert set(request_flags) <= {'COMMUNITY_REQUEST_V2', 'COMMUNITY_REQUEST_V2_ACCOUNTS'}, 'Only V2 rollout flags may change'
         assert request_flags.get('COMMUNITY_REQUEST_V2', '0') in ('0', '1'), 'Invalid V2 switch'
@@ -275,6 +276,17 @@ def main(image, request_flags=None):
     before = inspect(execute(['docker', 'ps', '-a', '--format', '{{.Names}}']).decode().splitlines())
     current_name = next((n for n, x in before.items() if n.startswith('ai-community-unified-login-') and x['State']['Running']), WEB)
     current = before[current_name]
+    proxy_flags = {}
+    if proxy_gateway is not None:
+        try:
+            address = ipaddress.ip_address(proxy_gateway)
+            gateways = {network.get('Gateway') for network in current['NetworkSettings']['Networks'].values()}
+            assert str(address) in gateways, 'Proxy must be an observed container network gateway'
+            proxy_flags = {'TRUSTED_PROXY_CIDRS': 'loopback,' + str(address) + '/' + str(address.max_prefixlen),
+                           'NEW_API_TRUST_PROXY': 'true'}
+        except (ValueError, AssertionError):
+            os.close(lock)
+            raise
     assert before[WEB]['State']['Running'] and current['State'].get('Health', {}).get('Status') == 'healthy'
     target = json.loads(execute(['docker', 'image', 'inspect', image]))[0]
     revision = target['Config'].get('Labels', {}).get('org.opencontainers.image.revision', '')
@@ -298,6 +310,8 @@ def main(image, request_flags=None):
         if key in desired_env:
             assert str(desired_env[key]) == value, f'Runtime configuration drift: {key}'
     desired_env.update(runtime_overrides)
+    desired_env.update(proxy_flags)
+    runtime_overrides.update(proxy_flags)
     if request_flags:
         assert expected_env.get('COMMUNITY_REQUEST_STORE') == '1', 'Keep the durable request store enabled'
         assert expected_env.get('COMMUNITY_CREDENTIAL_MIGRATION_CONFIRMED') == '1', 'Credential migration must be confirmed'

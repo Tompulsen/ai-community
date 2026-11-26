@@ -12,6 +12,12 @@ The image must already be pulled and its revision label must identify the intend
 commit. Confirm that commit before running the command. The script validates the
 image source, tests a candidate with workers disabled, and archives assets.
 Host loopback port `43000` must be available for the temporary candidate.
+When a verified host proxy reaches web through its Docker gateway, a reviewed
+Python deployment driver can call `main(image, proxy_gateway='172.21.0.1')`.
+The address must match a live container network gateway; the release trusts only
+that single address plus loopback and enables `NEW_API_TRUST_PROXY`. Verify that
+the ingress overwrites visitor-supplied forwarding headers first. This option is
+not exposed by the command-line entry point. Rollback restores the previous flags.
 The current vhost is `/opt/1panel/www/conf.d/zhangyu-community.conf`.
 For its 1Panel include layout, only `proxy/root.conf` may exist in the proxy
 directory. Production keeps the original include, limits and root directives.
@@ -80,6 +86,24 @@ Check script behavior locally with:
 ```sh
 python -m unittest discover -s deploy/community -p 'test_*.py'
 ```
+
+## Video transfer limits
+
+Video reads share a Redis budget per upstream account across web instances and
+sessions. `COMMUNITY_VIDEO_MEDIA_CONCURRENCY` defaults to 2 simultaneous transfers;
+`COMMUNITY_VIDEO_MEDIA_BYTES` defaults to 1073741824 bytes (1 GiB) per
+`COMMUNITY_VIDEO_MEDIA_WINDOW_SECONDS` (600 seconds by default). A window starts
+with the first charged bytes and is fixed, so a transfer spanning its expiry can
+use the remaining old budget and then the next window's allowance.
+
+Each chunk is charged before forwarding. Range retries, interrupted reads, poster
+source downloads and poster responses count; cancellation does not refund bytes.
+Shared poster jobs retain their own lease independently of individual viewers.
+The per-transfer size cap, image protections and historical URL reads still apply.
+Redis errors stop the transfer. Account limits return HTTP 429 with `Retry-After`
+before streaming starts; exhaustion after headers closes the stream. Invalid
+configuration fails closed. Test with an isolated Redis service using
+`MEDIA_BUDGET_TEST_REDIS_URL` and `node --test server/creation/media-budget.test.mjs`.
 
 ## Account network isolation
 

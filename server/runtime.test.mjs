@@ -5,8 +5,48 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { authServices, getUser, hash, publicUser, readCookies, roleCondition } from './auth.ts'
 import { compareStreamIds, createApplication, requireSameOrigin, staticPath } from './runtime.ts'
+
+test('unexpected server failures hide internal codes and correlate with server logs', async t => {
+  const logged = []
+  t.mock.method(console, 'error', value => logged.push(JSON.parse(value)))
+  const app = createApplication({ config: { url: 'https://community.example' }, filesRoot: 'unused',
+    db: { async query() { throw Object.assign(new Error('private database detail'), { code: 'XX000' }) } },
+    redis: { async ping() { return 'PONG' } },
+  })
+  t.after(() => app.close())
+  const response = await app.inject('/healthz?private=query')
+  assert.equal(response.statusCode, 500)
+  const error = response.json().error
+  assert.equal(error.code, 'INTERNAL_ERROR')
+  assert.equal(error.message, '服务暂时不可用，请稍后重试。')
+  assert.equal(typeof error.requestId, 'string')
+  assert(error.requestId.length > 0)
+  assert(!/private|XX000|stack/.test(response.body))
+  assert.equal(logged[0].requestId, error.requestId)
+  assert.equal(logged[0].code, 'XX000')
+  assert.equal(logged[0].path, '/healthz')
+})
+
+test('a media stream rejected before its first chunk returns a bounded Retry-After', async t => {
+  const app = createApplication({ config: { url: 'https://community.example' }, filesRoot: 'unused', db: {}, redis: {} })
+  t.after(() => app.close())
+  let retryAfter = 60
+  app.get('/test-budget-stream', (_request, reply) => reply.header('Content-Type', 'video/mp4').header('Content-Length', '4')
+    .send(Readable.fromWeb(new ReadableStream({ start(controller) {
+      controller.error(Object.assign(new Error('video budget exhausted'), { statusCode: 429, retryAfter }))
+    } }))))
+  for (const seconds of [60, 0, -1, 1.5, Infinity]) {
+    retryAfter = seconds
+    const response = await app.inject('/test-budget-stream')
+    assert.equal(response.statusCode, 429)
+    assert.equal(response.headers['retry-after'], seconds === 60 ? '60' : undefined)
+    assert.equal(response.json().error.message, 'video budget exhausted')
+    assert.equal(Number(response.headers['content-length']), Buffer.byteLength(response.body))
+  }
+})
 
 test('visitor view keys use forwarded IPs only through trusted proxies', async t => {
   const origin = 'https://community.example'

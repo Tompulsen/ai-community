@@ -300,6 +300,7 @@ function fixture(t, options = {}) {
   t.after(() => app.close())
   const redis = {
     async eval(script, _count, key, ...args) {
+      if (script.includes('community-video-media-budget-v1')) return [1, 0]
       if (script.includes('"ZADD"')) {
         const [, value, ttl, score, member] = args
         if (script.includes('"NX"') && values.has(key)) return null

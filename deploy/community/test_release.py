@@ -180,7 +180,7 @@ class ReleaseHarness:
         return 200, {'x-content-type-options': 'nosniff', 'content-type': 'text/javascript',
                      'content-length': str(len(body))}, b'' if method == 'HEAD' else body
 
-    def run(self, request_flags=None):
+    def run(self, request_flags=None, proxy_gateway=None):
         real_open = os.open
 
         def mapped_path(*parts):
@@ -203,13 +203,33 @@ class ReleaseHarness:
             stack.enter_context(patch.object(release.os, 'open', side_effect=lock_open))
             stack.enter_context(patch.dict('sys.modules', {'fcntl': SimpleNamespace(LOCK_EX=1, LOCK_NB=2, flock=lambda *_: None)}))
             stack.enter_context(redirect_stdout(io.StringIO()))
-            release.main(self.image, request_flags)
+            release.main(self.image, request_flags, proxy_gateway)
 
     def report(self):
         return json.loads(next((self.root / 'releases').glob('*/result.json')).read_bytes())
 
 
 class ReleaseFlowTests(unittest.TestCase):
+    def test_verified_proxy_gateway_enables_forwarding_and_preserves_rollback(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = ReleaseHarness(Path(root), trusted_proxy='loopback')
+            fixture.run(proxy_gateway='172.18.0.1')
+            environment = release.environment(fixture.items[release.WEB])
+            self.assertEqual(environment['TRUSTED_PROXY_CIDRS'], 'loopback,172.18.0.1/32')
+            self.assertEqual(environment['NEW_API_TRUST_PROXY'], 'true')
+            self.assertEqual(environment['NEW_API_SESSION_SECRET'], 'unchanged-secret')
+            rollback = json.loads(next((fixture.root / 'releases').glob('*/rollback.compose.json')).read_bytes())
+            self.assertEqual(rollback['services']['web']['environment']['TRUSTED_PROXY_CIDRS'], 'loopback')
+            self.assertNotIn('NEW_API_TRUST_PROXY', rollback['services']['web']['environment'])
+
+    def test_proxy_update_rejects_unknown_gateway_and_broad_cidr(self):
+        for gateway in ['203.0.113.1', '172.18.0.0/16', '0.0.0.0/0']:
+            with self.subTest(gateway=gateway), tempfile.TemporaryDirectory() as root:
+                fixture = ReleaseHarness(Path(root))
+                with self.assertRaises((AssertionError, ValueError)):
+                    fixture.run(proxy_gateway=gateway)
+                self.assertFalse(any(command[:2] == ('docker', 'compose') for command in fixture.commands))
+
     def test_v2_rollout_preserves_the_store_and_other_runtime_configuration(self):
         with tempfile.TemporaryDirectory() as root:
             fixture = ReleaseHarness(Path(root))

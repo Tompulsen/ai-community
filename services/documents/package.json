@@ -8,10 +8,10 @@
     "test": "node test.mjs"
   },
   "dependencies": {
-    "fast-xml-parser": "5.10.1",
+    "fast-xml-parser": "5.12.1",
     "jszip": "3.10.1",
     "numfmt": "3.2.6",
-    "undici": "6.21.3",
+    "undici": "6.29.1",
     "utif2": "4.1.0",
     "zod": "4.6.7"
   },

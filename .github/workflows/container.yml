@@ -31,8 +31,16 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       FOLLOWING_TEST_DATABASE_URL: postgresql://community_test:community_test@postgres:5432/community_follow_test
+      MEDIA_BUDGET_TEST_REDIS_URL: redis://redis:6379/0
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -42,6 +50,9 @@ jobs:
 
       - name: Run PostgreSQL integration tests
         run: node --test server/following.test.mjs server/lottery-daily.test.mjs server/lottery-public.test.mjs server/lottery-summary.test.mjs server/publication-reward.test.mjs server/account-session.test.mjs server/discovery.test.mjs server/admin-users.test.mjs server/content-performance.test.mjs server/lottery-status.test.mjs server/media-visibility.test.mjs server/community-skills.test.mjs server/welfare-points.test.mjs
+
+      - name: Verify media budgets against Redis
+        run: node --test server/creation/media-budget.test.mjs
 
   container:
     needs: following-postgres

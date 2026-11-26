@@ -27,6 +27,7 @@ import { fetchPublicMedia, PublicImageError, videoRangeHeaders, videoResponseHea
 import { createProxyLifecycle } from './creation/proxy-lifecycle.ts'
 import { acquireImageRead, imagePreview, releaseImageRead } from './creation/image-preview.ts'
 import { videoPoster, videoPosterSourceLimit } from './creation/video-poster.ts'
+import { acquireVideoMediaBudget, budgetVideoSource, type VideoMediaBudget } from './creation/media-budget.ts'
 import { applicationRequest, sendWebResponse } from './web-request.ts'
 import type { RequestContext } from './types.ts'
 import { readGenerationStream, GenerationStreamError, extractChatReasoning, extractResponseUsage, type CreationEvent } from './creation/stream.ts'
@@ -828,6 +829,14 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
 
 
 async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServices) {
+  const video = ctx.url.searchParams.has('path') || ctx.url.searchParams.get('kind') === 'video'
+  if (!video || ctx.url.searchParams.get('variant') === 'poster') return readMedia(ctx, req, svc)
+  const budget = await acquireVideoMediaBudget(ctx.redis, ctx.user!.accountId!, req.signal)
+  try { await readMedia(ctx, req, svc, budget) }
+  finally { await budget.release() }
+}
+
+async function readMedia(ctx: RequestContext, req: AccountRequest, svc: CreationServices, budget?: VideoMediaBudget) {
   const path = ctx.url.searchParams.get('path')
   const kind = ctx.url.searchParams.get('kind') === 'video' ? 'video' : 'image'
   const variant = ctx.url.searchParams.get('variant')
@@ -836,6 +845,7 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
       variant === 'preview' && !ctx.url.searchParams.has('path') && (!ctx.url.searchParams.has('kind') || ctx.url.searchParams.get('kind') === 'image'))))
     throw httpError(400, '媒体预览地址无效。')
   let response: Response
+  const signal = budget?.signal ?? req.signal
   const ranges = videoRangeHeaders((path || kind === 'video') && variant !== 'poster' ? req.headers : undefined)
   if (path) {
     const normalized = mediaPath(path)
@@ -882,8 +892,9 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
       } catch (error) { lifecycle.dispose(); throw error }
     }
     response = variant === 'poster'
-      ? await videoPoster(hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${credentials.tokenId}:${normalized}`), load, req.signal)
-      : await load(req.signal)
+      ? await videoPoster(hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${credentials.tokenId}:${normalized}`),
+        sourceSignal => budgetVideoSource(ctx.redis, ctx.user!.accountId!, sourceSignal, load), req.signal)
+      : await load(signal)
   } else {
     const url = ctx.url.searchParams.get('url')
     if (!url || url.length > 8192) throw httpError(400, '生成文件地址无效。')
@@ -915,8 +926,15 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
     response = variant === 'preview' ? await imagePreview(url, svc.publicMedia, req.signal)
       : variant === 'poster' ? await videoPoster(
         hash(`${ctx.user!.id}:${accountNamespace(ctx)}:${ctx.sessionHash || ''}:${req.headers.get('x-new-api-token') || ''}:${url}`),
-        signal => svc.publicMedia(url, 'video', videoPosterSourceLimit, signal), req.signal)
-        : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, req.signal, ranges)
+        sourceSignal => budgetVideoSource(ctx.redis, ctx.user!.accountId!, sourceSignal,
+          limitedSignal => svc.publicMedia(url, 'video', videoPosterSourceLimit, limitedSignal)), req.signal)
+        : await svc.publicMedia(url, kind, kind === 'image' ? 32 * MiB : 512 * MiB, signal, ranges)
+  }
+  // Poster source downloads share a separate job lease; cache hits still count their returned bytes.
+  let outputBudget = budget
+  if (variant === 'poster') {
+    try { outputBudget = await acquireVideoMediaBudget(ctx.redis, ctx.user!.accountId!, req.signal) }
+    catch (error) { await response.body?.cancel(); throw error }
   }
   response.headers.set('Cache-Control', 'private, no-store')
   response.headers.set('X-Content-Type-Options', 'nosniff')
@@ -926,7 +944,17 @@ async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServ
     const length = response.headers.get('content-length')
     if (length !== null) ctx.reply.header('Content-Length', length)
   }
-  await sendWebResponse(ctx.reply, response)
+  if (!outputBudget) { await sendWebResponse(ctx.reply, response); return }
+  const completed = finished(ctx.res, { cleanup: true }).catch(() => {})
+  const abortOutput = () => { ctx.res.destroy() }
+  outputBudget.signal.addEventListener('abort', abortOutput, { once: true })
+  try { outputBudget.signal.throwIfAborted(); await sendWebResponse(ctx.reply, outputBudget.measure(response)) }
+  catch (error) { ctx.res.destroy(); throw error }
+  finally {
+    await completed
+    outputBudget.signal.removeEventListener('abort', abortOutput)
+    if (variant === 'poster') await outputBudget.release()
+  }
 }
 
 export async function handleCreation(ctx: RequestContext, overrides: Partial<CreationServices> = {}): Promise<boolean> {
@@ -1056,6 +1084,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       : /^\/api\/creation\/(?:requests|tasks)\//.test(route) ? '任务查询' : undefined
     if (stage) {
       const failure = record(error) ? error : {}
+      if (Number.isSafeInteger(failure.retryAfter) && Number(failure.retryAfter) > 0) ctx.reply.header('Retry-After', String(failure.retryAfter))
       const status = Number(failure.statusCode ?? failure.status) || 500
       const errorStatus = Number(failure.errorStatus) || status
       const detail = status < 500 || error instanceof NewApiError || error instanceof PublicImageError || failure.code === 'ORIGINAL_IMAGE_READ_FAILED'

@@ -129,10 +129,12 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     })
   }
   app.setErrorHandler((error, request, reply) => {
-    const failure = error as Error & { status?: number; statusCode?: number; code?: string; validation?: unknown }
+    const failure = error as Error & { status?: number; statusCode?: number; code?: string; validation?: unknown; retryAfter?: number }
     const status = failure.code === '23505' ? 409 : failure.statusCode || failure.status || 500
-    if (status >= 500) console.error(JSON.stringify({ path: request.url.split('?')[0], code: failure.code || failure.name, at: failure.stack?.split('\n').slice(1, 3).join(' ') }))
+    if (status >= 500) console.error(JSON.stringify({ requestId: request.id, path: request.url.split('?')[0], code: failure.code || failure.name, at: failure.stack?.split('\n').slice(1, 3).join(' ') }))
     if (reply.raw.headersSent) { if (!reply.raw.writableEnded) reply.raw.destroy(); return }
+    if (status === 429 && Number.isSafeInteger(failure.retryAfter) && Number(failure.retryAfter) > 0)
+      reply.header('Retry-After', String(failure.retryAfter))
     const message = status >= 500 ? '服务暂时不可用，请稍后重试。'
       : failure.code === '23505' ? '记录已经存在，请刷新后重试。'
       : failure.validation || failure.code?.startsWith('FST_ERR_CTP_INVALID_JSON') || failure.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ? '请求内容格式无效。'
@@ -141,7 +143,8 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
       .header('Content-Type', 'application/json; charset=utf-8')
       .header('Cache-Control', 'private, no-store')
       .header('X-Content-Type-Options', 'nosniff')
-      .send({ error: { message, code: failure.code || undefined } })
+      .send({ error: { message, code: status >= 500 ? 'INTERNAL_ERROR' : failure.code || undefined,
+        ...(status >= 500 ? { requestId: request.id } : {}) } })
   })
   const register = (handler: ModuleHandler, groups: RouteGroup[]) => {
     for (const [methods, urls] of groups) for (const method of Array.isArray(methods) ? methods : [methods]) for (const url of urls) {
