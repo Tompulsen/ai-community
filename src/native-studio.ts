@@ -43,7 +43,8 @@ export interface CreationTask {
   resultStatus?: 'pending' | 'succeeded' | 'failed' | 'indeterminate' | 'save_failed' | 'expired'
   deadline?: number
   phase: CreationPhase
-  stage?: 'downloading'
+  stage?: 'preparing' | 'queued' | 'generating' | 'saving' | 'downloading'
+  stageStartedAt?: number
   protocol: string
   apiFormat?: Exclude<ModelApiFormat, 'auto'>
   upstreamId?: string
@@ -318,7 +319,7 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
   }
   if (url.startsWith('/api/creation/')) {
     const direct = new URL(url, 'https://community.invalid')
-    if (preview && kind === 'image' && direct.pathname === '/api/creation/media' && direct.searchParams.has('url')
+    if (preview && kind === 'image' && direct.pathname === '/api/creation/media' && (direct.searchParams.has('url') || direct.searchParams.has('requestId'))
       && !direct.searchParams.has('path') && direct.searchParams.get('kind') !== 'video') direct.searchParams.set('variant', 'preview')
     return direct.pathname + direct.search + direct.hash
   }
@@ -508,6 +509,10 @@ function resultText(data: Record<string, unknown>): string {
   const choice = Array.isArray(data.choices) ? data.choices[0] : undefined
   return record(choice) && record(choice.message) && typeof choice.message.content === 'string' ? choice.message.content : ''
 }
+function applyStage(task: CreationTask, data: Record<string, unknown>) {
+  task.stage = data.status === 'pending' && ['preparing', 'queued', 'generating', 'saving', 'downloading'].includes(String(data.stage)) ? data.stage as CreationTask['stage'] : undefined
+  task.stageStartedAt = task.stage && typeof data.stageStartedAt === 'number' && Number.isFinite(data.stageStartedAt) ? data.stageStartedAt : undefined
+}
 function applyResult(task: CreationTask, value: unknown): boolean {
   const data = resultData(value)
   task.settledAt = Date.now()
@@ -518,7 +523,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
   const status = String(data.status || data.state || '').toLowerCase()
   task.resultStatus = ['pending', 'succeeded', 'failed', 'indeterminate', 'save_failed', 'expired'].includes(status) ? status as CreationTask['resultStatus'] : undefined
   if (typeof data.deadline === 'number' && Number.isFinite(data.deadline)) task.deadline = data.deadline
-  task.stage = status === 'pending' && data.stage === 'downloading' ? 'downloading' : undefined
+  applyStage(task, { ...data, status })
   task.serverTracked = data.requestId === task.id
   if (typeof data.tokenId === 'number') task.tokenId = data.tokenId
   if (typeof data.protocol === 'string' && ['openai', 'sync', 'async', 'legacy', 'plugin', 'seedance', 'gemini', 'xai'].includes(data.protocol)) task.protocol = data.protocol
@@ -581,7 +586,7 @@ function delay(signal: AbortSignal, duration: number) {
 // Waiting between polls must leave capacity for every restored task.
 let activeTaskQueries = 0
 const waitingTaskQueries: (() => void)[] = []
-async function queryCreationTask(path: string, task: CreationTask, controller: AbortController, version: number) {
+async function queryCreationTask(path: string, task: CreationTask, controller: Pick<AbortController, 'signal'>, version: number) {
   const signal = controller.signal
   const check = () => {
     if (signal.aborted || epoch !== version || task.owner !== activeOwner()) throw new DOMException('Stopped', 'AbortError')
@@ -607,6 +612,31 @@ async function queryCreationTask(path: string, task: CreationTask, controller: A
     if (next) next()
     else activeTaskQueries--
   }
+}
+function monitorSubmission(task: CreationTask, controller: AbortController, version: number) {
+  const stopped = new AbortController(), monitoring = { signal: AbortSignal.any([controller.signal, stopped.signal]) }
+  void (async () => {
+    await delay(monitoring.signal, 2000)
+    while (!monitoring.signal.aborted && epoch === version && task.owner === activeOwner()) {
+      let wait = 5000
+      try {
+        const value = await queryCreationTask(`/api/creation/requests/${encodeURIComponent(task.id)}`, task, monitoring, version)
+        if (monitoring.signal.aborted || epoch !== version || task.owner !== activeOwner()) return
+        const data = resultData(value)
+        // The POST remains authoritative; this read only reveals its preparation stage.
+        if (data.requestId === task.id && data.status === 'pending') {
+          applyStage(task, data)
+          task.serverTracked = true
+          await persist()
+        }
+      } catch (error) {
+        if (monitoring.signal.aborted || epoch !== version) return
+        wait = creationRetryDelay(record(error) ? error.retryAfter : undefined, 5000)
+      }
+      await delay(monitoring.signal, wait)
+    }
+  })().catch(() => {})
+  return () => stopped.abort()
 }
 async function poll(task: CreationTask, controller: AbortController, version: number) {
   let deadline = task.deadline ?? task.createdAt + (task.kind === 'video' ? 2 * 60 * 60_000 : task.kind === 'text' ? textGenerationTimeouts.total + textGenerationTimeouts.save : 30 * 60_000)
@@ -801,6 +831,15 @@ export async function resumeCreation(task: CreationTask) {
     }
   } finally { if (controllers.get(task.id) === controller) controllers.delete(task.id) }
 }
+export async function retryCreationSave(task: CreationTask) {
+  if (task.owner !== activeOwner() || controllers.has(task.id) || !task.serverTracked || task.resultStatus !== 'save_failed') return
+  const version = epoch
+  const data = await api<unknown>(`/api/creation/requests/${encodeURIComponent(task.id)}/save`, { method: 'POST', body: {} })
+  if (version !== epoch || task.owner !== activeOwner()) return
+  const finished = applyResult(task, data)
+  await persist()
+  if (!finished) await resumeCreation(task)
+}
 export function stopCreation(task: CreationTask) {
   if (task.owner !== activeOwner() || !['submitting', 'running'].includes(task.phase)) return
   controllers.get(task.id)?.abort()
@@ -932,6 +971,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
     return task
   }
   let responseReceived = false, responseStatus: number | undefined
+  const stopMonitoring = task.kind === 'image' ? monitorSubmission(task, controller, version) : () => {}
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
@@ -940,7 +980,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
         ...(contractVersion !== 2 && selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
         ...(contractVersion !== 2 && selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
       body,
-    })
+    }).finally(stopMonitoring)
     responseReceived = true; responseStatus = response.status
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
@@ -1028,6 +1068,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
       }
     }
   } finally {
+    stopMonitoring()
     if (epoch === version) await persist()
     if (controllers.get(task.id) === controller) controllers.delete(task.id)
   }

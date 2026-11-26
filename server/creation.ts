@@ -10,7 +10,7 @@ import { isModelBusy, modelBusyCode, modelBusyMessage } from '../shared/studio/m
 import { chatOptionsSchema } from '../shared/studio/options.ts'
 import { mediaSkillPrompt } from './community-skills.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
+import { mkdir, readFile, unlink, open, rename } from 'node:fs/promises'
 import { finished } from 'node:stream/promises'
 import path from 'node:path'
 import sharp from 'sharp'
@@ -48,8 +48,10 @@ import { videoDurationSeconds } from './video-privacy.ts'
 import { sniffType } from './media.ts'
 import type { VideoModelSetting } from '../shared/studio/model-types.ts'
 import { requestStoreEnabled, nativeRequestsEnabled, readDurableRequest, registerDurableRequest,
-  dispatchDurableRequest, saveDurableRequest, dueDurableRequests, claimDurablePoll, type DurableRequest } from './creation/request-store.ts'
+  dispatchDurableRequest, savePreparingRequest, saveDurableRequest, dueDurableRequests, claimDurablePoll, type DurableRequest } from './creation/request-store.ts'
 import type { Queryable } from './types.ts'
+import { imageSubmissions } from './creation/image-submissions.ts'
+import { saveImageOutputs, readSavedImage } from './creation/image-results.ts'
 
 const MiB = 1024 * 1024
 const taskTtl = 90 * 86400
@@ -72,6 +74,9 @@ interface TrackedRequest {
   background?: boolean
   filesRoot?: string
   contractVersion?: number
+  retainImages?: boolean
+  imageSaving?: boolean
+  timings?: { acceptedAt: number; queuedAt?: number; submittedAt?: number; upstreamCompletedAt?: number; savedAt?: number }
 }
 interface PollCredentials {
   key: string
@@ -90,13 +95,26 @@ interface CreationServices {
 }
 const services: CreationServices = { credentials: resolveRelayCredentials, modelCatalogue: readAccountModelCatalogue, groupToken: resolveModelGroup, fetch, publicMedia: fetchPublicMedia }
 
+async function writeResultFile(filename: string, value: unknown) {
+  const temporary = `${filename}.${randomUUID()}.tmp`
+  try {
+    const file = await open(temporary, 'wx', 0o600)
+    try { await file.writeFile(JSON.stringify(value)); await file.sync() } finally { await file.close() }
+    await rename(temporary, filename)
+    if (process.platform !== 'win32') {
+      const directory = await open(path.dirname(filename), 'r')
+      try { await directory.sync() } finally { await directory.close() }
+    }
+  } finally { await unlink(temporary).catch(() => {}) }
+}
 async function saveRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000, durable?: { db: Queryable; row: DurableRequest }) {
-  let stored = cached
+  let stored = { ...cached }
+  delete stored.file
   if (JSON.stringify(cached).length > MiB) {
     if (!filesRoot) throw new Error('Result storage is unavailable')
-    const directory = path.join(filesRoot, '.creation-results'), file = hash(key) + '.json'
+    const directory = path.join(filesRoot, '.creation-results'), file = hash(key + JSON.stringify(cached.result)) + '.json'
     await mkdir(directory, { recursive: true, mode: 0o700 })
-    await writeFile(path.join(directory, file), JSON.stringify(cached.result), { mode: 0o600 })
+    await writeResultFile(path.join(directory, file), cached.result)
     stored = { ...cached, result: { ...cached.result, ...uncertain }, file }
   }
   if (durable) await saveDurableRequest(durable.db, durable.row, stored, cached.result.status === 'pending' ? Date.now() + nextPoll : null)
@@ -107,6 +125,33 @@ async function saveRequestResult(redis: RequestContext['redis'], key: string, ca
     cached.result.status === 'pending' ? String(Date.now() + nextPoll) : '', key,
   )
   if (filesRoot) await unlink(path.join(filesRoot, '.creation-results', hash(key) + '.request.json')).catch(() => {})
+}
+async function hydrateImageResult(cached: TrackedRequest, filesRoot?: string) {
+  if (cached.imageSaving && cached.file && /^[a-f0-9]{64}\.json$/.test(cached.file) && filesRoot)
+    cached.result = JSON.parse(await readFile(path.join(filesRoot, '.creation-results', cached.file), 'utf8'))
+}
+async function saveGeneratedImages(redis: RequestContext['redis'], key: string, cached: TrackedRequest,
+  filesRoot: string, svc: CreationServices, durable?: { db: Queryable; row: DurableRequest }) {
+  await hydrateImageResult(cached, filesRoot)
+  cached.imageSaving = true
+  if (cached.timings) cached.timings.upstreamCompletedAt ??= Date.now()
+  cached.deadline = Date.now() + 120000
+  cached.result = { ...cached.result, status: 'pending', stage: 'saving', stageStartedAt: Date.now(), error: undefined, errorStage: undefined, errorCode: undefined, errorStatus: undefined }
+  // Persist the original result before downloading; an interrupted save is recovered without another generation.
+  await persistRequestResult(redis, key, cached, filesRoot, 120000, durable)
+  try {
+    const outputs = await saveImageOutputs(filesRoot, key, cached.result.outputs, svc.publicMedia)
+    cached.result = { ...cached.result, status: 'succeeded', stage: undefined, outputs }
+    cached.imageSaving = false
+    if (cached.timings) cached.timings.savedAt = Date.now()
+  } catch {
+    cached.result = { ...cached.result, status: 'save_failed', stage: undefined, errorStage: '结果保存',
+      error: '图片已生成，原图保存未完成，请重试保存。', errorCode: generationErrorCode }
+  }
+  await persistRequestResult(redis, key, cached, filesRoot, 0, durable)
+}
+function visibleResult(cached: TrackedRequest): Result {
+  return cached.imageSaving ? { ...cached.result, outputs: [] } : cached.result
 }
 async function persistRequestResult(redis: RequestContext['redis'], key: string, cached: TrackedRequest, filesRoot?: string, nextPoll = 5000, durable?: { db: Queryable; row: DurableRequest }) {
   let failure: unknown
@@ -121,7 +166,7 @@ async function persistRequestResult(redis: RequestContext['redis'], key: string,
   if (!filesRoot) throw failure
   const directory = path.join(filesRoot, '.creation-results')
   await mkdir(directory, { recursive: true, mode: 0o700 })
-  await writeFile(path.join(directory, hash(key) + '.request.json'), JSON.stringify(cached), { mode: 0o600 })
+  await writeResultFile(path.join(directory, hash(key) + '.request.json'), cached)
 }
 async function requestFallback(cached: TrackedRequest, key: string) {
   if (!['pending', 'indeterminate', 'save_failed'].includes(cached.result.status) || !cached.filesRoot) return cached
@@ -158,6 +203,7 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
       if (!stored) { await redis.zrem(pendingTasks, key); return }
       const cached = await requestFallback(JSON.parse(stored) as TrackedRequest, key)
       let filesRoot = cached.filesRoot
+      await hydrateImageResult(cached, filesRoot)
       if (durable?.row.state === 'preparing') {
         cached.result = { ...cached.result, status: 'failed', errorStage: '生成准备', error: '生成准备已中断，未向生成网关提交请求。' }
         await saveDurableRequest(db!, durable.row, cached, null, true)
@@ -165,6 +211,10 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
         return
       }
       const save = (delay = 5000) => persistRequestResult(redis, key, cached, filesRoot, delay, durable)
+      if (cached.imageSaving && cached.result.status === 'pending' && filesRoot) {
+        await saveGeneratedImages(redis, key, cached, filesRoot, svc, durable)
+        return
+      }
       if (cached.result.status !== 'pending') {
         await save()
         return
@@ -207,10 +257,14 @@ export async function processCreationTasks(redis: RequestContext['redis'], overr
           await save(15000)
           return
         }
-        cached.result = { ...result, requestId: cached.result.requestId, ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
+        cached.result = { ...result, requestId: cached.result.requestId,
+          ...(cached.kind === 'image' && result.status === 'pending' ? { stage: 'generating', stageStartedAt: cached.result.stageStartedAt ?? Date.now() } : {}),
+          ...(cached.result.apiFormat ? { apiFormat: cached.result.apiFormat } : {}) }
         if (result.status !== 'pending') delete cached.tracking
       }
-      await save()
+      if (cached.retainImages && cached.kind === 'image' && cached.result.status === 'succeeded' && filesRoot) {
+        await saveGeneratedImages(redis, key, cached, filesRoot, svc, durable)
+      } else await save()
       // Request reads repair ownership; a metadata outage must not discard the paid result.
       if (cached.result.mediaPath) {
         const namespace = /^community-next:creation:request:([a-f0-9]{64}):/.exec(key)?.[1]
@@ -441,6 +495,10 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
       let url = new URL(source, ctx.config.url)
       if (url.origin === new URL(ctx.config.url).origin) {
         if (url.pathname === '/api/creation/media') {
+          if (url.searchParams.has('requestId')) {
+            const response = await savedImageResponse({ ...ctx, url })
+            blob = await response.blob()
+          } else {
           const target = url.searchParams.get('url')
           if (!target || target.length > 8192 || url.searchParams.getAll('url').length !== 1
             || [...url.searchParams.keys()].some(key => !['url', 'kind'].includes(key))
@@ -451,6 +509,7 @@ async function references(ctx: RequestContext, req: AccountRequest, input: Creat
             || url.origin === new URL(ctx.config.url).origin) throw httpError(400, '参考图地址无效。')
           const response = await svc.publicMedia(url.href, 'image', 20 * MiB, req.signal)
           blob = await response.blob()
+          }
         } else {
           if (!/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(url.pathname) || url.search && !/^\?variant=(?:thumbnail|web)$/.test(url.search))
             throw httpError(400, '参考图地址无效。')
@@ -555,7 +614,7 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
     try { result = JSON.parse(await readFile(path.join(ctx.filesRoot, '.creation-results', cached.file), 'utf8')) }
     catch { /* Keep the saved request state when its result file is unavailable. */ }
   }
-  if (result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline) {
+  if (!cached.imageSaving && result.status === 'pending' && typeof cached.deadline === 'number' && Date.now() >= cached.deadline) {
     const stage = cached.tracking ? '任务查询' : '网关提交'
     result = { ...result, status: 'indeterminate', errorStage: stage, error: stageError(stage, '等待结果超时。', result.errorStatus) }
   }
@@ -565,10 +624,20 @@ async function cachedResult(ctx: RequestContext, cached: Record<string, unknown>
   if (cached.kind === 'image' || cached.kind === 'video' || cached.kind === 'text') {
     await remember(ctx, cached.kind, result, cached.hasWorkSkills === true).catch(() => {})
   }
-  return result
+  return cached.imageSaving ? { ...result, outputs: [] } : result
+}
+function canonicalIntent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalIntent)
+  if (record(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalIntent(value[key])]))
+  return value
 }
 function requestFingerprint(ctx: RequestContext) {
-  return hash(JSON.stringify({ body: ctx.body, group: ctx.req.headers['x-new-api-group'] ?? null, token: ctx.req.headers['x-new-api-token'] ?? null }))
+  return hash(JSON.stringify(canonicalIntent({ body: ctx.body, group: ctx.req.headers['x-new-api-group'] ?? null, token: ctx.req.headers['x-new-api-token'] ?? null })))
+}
+function matchesRequest(ctx: RequestContext, fingerprint: unknown) {
+  return fingerprint === requestFingerprint(ctx)
+    || fingerprint === hash(JSON.stringify({ body: ctx.body, group: ctx.req.headers['x-new-api-group'] ?? null, token: ctx.req.headers['x-new-api-token'] ?? null }))
+    || fingerprint === hash(JSON.stringify(ctx.body))
 }
 async function readRequest(ctx: RequestContext, key: string) {
   if (requestStoreEnabled()) {
@@ -588,7 +657,7 @@ async function duplicateRequest(ctx: RequestContext) {
   const cached = await readRequest(ctx, key)
   if (!cached) return
   // Legacy records predate explicit groups; return their original result without reinterpreting them.
-  if (cached.fingerprint !== requestFingerprint(ctx) && cached.fingerprint !== hash(JSON.stringify(ctx.body)))
+  if (!matchesRequest(ctx, cached.fingerprint))
     throw Object.assign(httpError(409, '请求编号已被使用，请先核对原任务。'), { notAccepted: false, errorStage: '请求记录读取' })
   return cachedResult(ctx, cached, key)
 }
@@ -596,6 +665,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   let errorStage = '请求校验', recoverable = false
   let durable: { db: Queryable; row: DurableRequest } | undefined
   let dispatched = false
+  let ticket: ReturnType<typeof imageSubmissions.reserve> | undefined, finishStarted = false
   try {
   let input = validateCreationInput(ctx.body)
   if (!input.requestId) throw httpError(400, '缺少防止重复提交的请求编号。')
@@ -606,7 +676,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   recoverable = Boolean(existing)
   if (existing) {
     const cached: unknown = existing
-    if (!record(cached) || cached.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
+    if (!record(cached) || !matchesRequest(ctx, cached.fingerprint)) throw httpError(409, '请求编号已被使用，请先核对原任务。')
     return await cachedResult(ctx, cached, key)
   }
   if (input.contractVersion === 2) {
@@ -623,15 +693,18 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   }
   if (requestStoreEnabled()) {
     const preparing: TrackedRequest = { fingerprint, contractVersion: input.contractVersion ?? 1, kind: input.kind,
-      result: { status: 'pending', outputs: [], requestId: input.requestId, tokenId: 0, protocol: 'sync' },
+      ...(input.kind === 'image' ? { timings: { acceptedAt: Date.now() } } : {}),
+      result: { status: 'pending', outputs: [], requestId: input.requestId, tokenId: 0, protocol: 'sync',
+        ...(input.kind === 'image' ? { stage: 'preparing', stageStartedAt: Date.now() } : {}) },
       deadline: Date.now() + 180000, filesRoot: ctx.filesRoot, background: true }
     const registration = await registerDurableRequest(ctx.db, key, fingerprint, preparing, input.contractVersion ?? 1)
     if (!registration.inserted) {
-      if (registration.row.fingerprint !== fingerprint) throw httpError(409, '请求编号已被使用，请先核对原任务。')
+      if (!matchesRequest(ctx, registration.row.fingerprint)) throw httpError(409, '请求编号已被使用，请先核对原任务。')
       return await cachedResult(ctx, registration.row.record, key)
     }
     durable = { db: ctx.db, row: registration.row }
   }
+  if (input.kind === 'image') { errorStage = '等待提交'; ticket = imageSubmissions.reserve(accountNamespace(ctx)) }
   errorStage = '技能准备'
   const workSkills = input.skills?.filter(skill => skill.id.startsWith('work-')) || []
   const instructions = await workSkillInstructions(ctx, workSkills, input.kind)
@@ -673,7 +746,26 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     req.headers.set('x-new-api-token', String(tokenId))
     req.headers.set('x-new-api-group', encodeURIComponent(group))
   }
-  const credentials = await svc.credentials(req, payload.path)
+  let credentials = await svc.credentials(req, payload.path)
+  if (ticket) {
+    errorStage = '等待提交'
+    if (durable) {
+      const preparing = durable.row.record as unknown as TrackedRequest
+      preparing.result = { ...preparing.result, stage: 'queued', stageStartedAt: Date.now() }
+      if (preparing.timings) preparing.timings.queuedAt = Date.now()
+      await savePreparingRequest(durable.db, durable.row, preparing)
+    }
+    await ticket.enter()
+    if (ticket.waited) {
+      const fresh = new AccountRequest(req.url, { method: 'GET', headers: req.headers })
+      fresh.database = ctx.db
+      fresh.headers.set('x-new-api-token', String(credentials.tokenId))
+      const verified = await svc.credentials(fresh, payload.path)
+      if (verified.tokenId !== credentials.tokenId || verified.userId !== credentials.userId || verified.baseUrl !== credentials.baseUrl)
+        throw httpError(409, '原请求身份已改变，未提交生成，请重新选择模型分组。')
+      credentials = verified
+    }
+  }
   const url = new URL(`/${payload.path}`, credentials.baseUrl)
   const headers = relayHeaders(req, credentials.apiKey)
   headers.delete('content-type')
@@ -699,12 +791,17 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   const deadline = Date.now() + (input.kind === 'image' ? 615000 : input.kind === 'video' ? 375000 : textStream ? textGenerationTimeouts.total + textGenerationTimeouts.save : 195000)
   const pending: TrackedRequest = { fingerprint, contractVersion: input.contractVersion ?? 1, kind: input.kind, ...(hasWorkSkills ? { hasWorkSkills: true } : {}), result: { status: 'pending', outputs: [], requestId: input.requestId,
     ...(input.kind === 'text' ? { deadline } : {}),
+    ...(input.kind === 'image' ? { stage: 'generating', stageStartedAt: Date.now() } : {}),
     tokenId: credentials.tokenId, protocol, ...(apiFormat ? { apiFormat } : {}) },
-    deadline, ...(background ? { background: true } : {}), filesRoot: ctx.filesRoot }
+    deadline, ...(background ? { background: true } : {}), filesRoot: ctx.filesRoot,
+    ...(input.kind === 'image' && durable && ctx.filesRoot ? { retainImages: true,
+      timings: { ...(durable.row.record as unknown as TrackedRequest).timings!, submittedAt: Date.now() } } : {}) }
   recoverable = true
   if (durable) durable.row = await dispatchDurableRequest(durable.db, durable.row, {
     issuer: getNewApiConfig().publicUrl, userId: credentials.userId, group, tokenId: credentials.tokenId,
     model: input.model, protocol, apiFormat, configRevision: hash(JSON.stringify(options?.communityModelTypes ?? [])),
+    ...(input.kind === 'image' ? { resolved: { size: input.size, aspect_ratio: input.aspect_ratio, n: input.n, imageOptions: input.imageOptions },
+      materialHash: hash(JSON.stringify({ referenceUrls: input.referenceUrls, imageContext: input.imageContext })) } : {}),
   }, pending)
   dispatched = !!durable
   const accepted = background ? await ctx.redis.eval(
@@ -783,7 +880,7 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     result = { ...uncertain, ...(error instanceof GenerationStreamError ? error.partial : {}), error: stageError(stage, detail, failureStatus), errorStage: stage,
       ...(!lifecycle?.signal.aborted && isInsufficientCredits(error) ? { errorCode: insufficientCreditsCode } : {}),
       ...(failureStatus ? { errorStatus: failureStatus } : {}), tokenId: credentials.tokenId, protocol }
-  } finally { lifecycle?.dispose() }
+  } finally { lifecycle?.dispose(); ticket?.release() }
   if (input.kind === 'text') {
     result.deadline = deadline
     if (result.status === 'indeterminate' && (result.outputs.some(output => output.text) || result.reasoning))
@@ -802,6 +899,9 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
   if (result.error) logCreationFailure(input.requestId, result.errorStage || '网关响应处理', result.errorStatus)
   if (apiFormat) result.apiFormat = apiFormat
   if (background) result.requestId = input.requestId
+  if (input.kind === 'image' && result.status === 'pending') {
+    result.stage = 'generating'; result.stageStartedAt = pending.result.stageStartedAt
+  }
   // A metadata outage must not discard an accepted paid result; cached reads repair ownership.
   await remember(ctx, input.kind, result, hasWorkSkills).catch(() => {})
   const tracked = { ...pending, result }
@@ -810,9 +910,12 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     tracked.tracking = await sealData({ key, credentials, deadline: tracked.deadline, filesRoot: ctx.filesRoot } satisfies PollCredentials,
       { password: getNewApiConfig().secret, ttl: 86400 })
   }
-  await persistRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0, durable)
-  return result
+  if (tracked.retainImages && result.status === 'succeeded')
+    await saveGeneratedImages(ctx.redis, key, tracked, ctx.filesRoot, svc, durable)
+  else await persistRequestResult(ctx.redis, key, tracked, ctx.filesRoot, 0, durable)
+  return visibleResult(tracked)
   }
+  finishStarted = true
   if (!background) return await finish()
   void trackCreation(ctx.redis, finish()).catch(() => { /* Keep the durable request boundary; never repeat the POST. */ })
   return pending.result
@@ -824,9 +927,48 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
       recoverable = false
     }
     throw Object.assign(error instanceof Error ? error : new Error('创作服务暂时不可用。'), { errorStage, notAccepted: !recoverable })
-  }
+  } finally { if (!finishStarted) ticket?.release() }
 }
 
+async function savedImageResponse(ctx: RequestContext): Promise<Response> {
+  const parameters = ctx.url.searchParams, id = parameters.get('requestId') || '', index = parameters.get('index') || '0'
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !/^[0-9]$/.test(index)
+    || [...parameters.keys()].some(key => !['requestId', 'index', 'variant'].includes(key))
+    || parameters.getAll('requestId').length !== 1 || parameters.getAll('index').length > 1
+    || parameters.getAll('variant').length > 1 || parameters.has('variant') && parameters.get('variant') !== 'preview')
+    throw httpError(400, '原图读取地址无效。')
+  const key = `community-next:creation:request:${accountNamespace(ctx)}:${id}`
+  const cached = await readRequest(ctx, key)
+  if (!cached || cached.kind !== 'image') throw httpError(404, '没有找到此图片记录。')
+  const read = () => readSavedImage(ctx.filesRoot, key, Number(index))
+  const response = parameters.get('variant') === 'preview'
+    ? await imagePreview(ctx.url.href, read, new AbortController().signal) : await read()
+  response.headers.set('Cache-Control', 'private, no-store')
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  return response
+}
+async function retryImageSave(ctx: RequestContext, svc: CreationServices) {
+  const id = ctx.url.pathname.split('/').at(-2)!, key = `community-next:creation:request:${accountNamespace(ctx)}:${id}`
+  const row = requestStoreEnabled() ? await readDurableRequest(ctx.db, key) : undefined
+  const stored = row?.record ?? await readRequest(ctx, key)
+  if (!stored || stored.kind !== 'image') throw httpError(404, '没有找到此图片记录。')
+  const cached = await requestFallback(stored as unknown as TrackedRequest, key)
+  await hydrateImageResult(cached, ctx.filesRoot)
+  if (!cached.imageSaving || cached.result.status !== 'save_failed') { ctx.json(200, await cachedResult(ctx, cached as unknown as Record<string, unknown>, key)); return }
+  if (!row) throw httpError(409, '原图片记录无法继续保存。')
+  cached.deadline = Date.now() + 120000
+  cached.result = { ...cached.result, status: 'pending', stage: 'saving', stageStartedAt: Date.now(), error: undefined, errorStage: undefined }
+  try { await saveDurableRequest(ctx.db, row, cached, cached.deadline) }
+  catch (error) {
+    if (!(error instanceof Error) || error.message !== 'Request record ownership changed') throw error
+    const latest = await readRequest(ctx, key)
+    if (!latest) throw error
+    ctx.json(202, await cachedResult(ctx, latest, key)); return
+  }
+  void trackCreation(ctx.redis, saveGeneratedImages(ctx.redis, key, cached, ctx.filesRoot, svc, { db: ctx.db, row }))
+    .catch(() => { /* The persisted saving phase remains recoverable by GET maintenance. */ })
+  ctx.json(202, visibleResult(cached))
+}
 
 async function media(ctx: RequestContext, req: AccountRequest, svc: CreationServices) {
   const video = ctx.url.searchParams.has('path') || ctx.url.searchParams.get('kind') === 'video'
@@ -987,10 +1129,10 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       }))
       ctx.json(200, { issuer: getNewApiConfig().publicUrl, mappings })
     } else if (ctx.req.method === 'POST' && ctx.url.pathname === '/api/creation/generate') {
-      await rateLimit(ctx, 'generate', 12)
-      if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
       const duplicate = await duplicateRequest(ctx)
       if (duplicate) { ctx.json(200, duplicate); return true }
+      await rateLimit(ctx, 'generate', 12)
+      if (creationsClosing(ctx.redis)) throw Object.assign(httpError(503, '服务正在更新，请稍后提交。'), { notAccepted: true, errorStage: '请求校验' })
       const input = validateCreationInput(ctx.body)
       const background = input.kind !== 'text' && String(ctx.req.headers.prefer || '').split(',').some(value => value.trim() === 'respond-async')
       if (!background && (input.imageOptions?.imageStream || input.kind === 'text' && input.chatOptions?.stream)) {
@@ -1013,6 +1155,11 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         }
         finally { writer.end() }
       } else ctx.json(background ? 202 : 200, await trackCreation(ctx.redis, generate(ctx, req, svc, undefined, background)))
+    } else if (ctx.req.method === 'POST' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}\/save$/.test(ctx.url.pathname)) {
+      assertSameOrigin(req)
+      await rateLimit(ctx, 'tasks', 180)
+      if (creationsClosing(ctx.redis)) throw httpError(503, '服务正在更新，请稍后重试保存。')
+      await retryImageSave(ctx, svc)
     } else if (ctx.req.method === 'GET' && /^\/api\/creation\/requests\/[A-Za-z0-9_-]{1,128}$/.test(ctx.url.pathname)) {
       await rateLimit(ctx, 'tasks', 180)
       const id = ctx.url.pathname.split('/').pop()!
@@ -1068,7 +1215,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       }) })
     } else if (ctx.req.method === 'GET' && ctx.url.pathname === '/api/creation/media') {
       await rateLimit(ctx, 'media', 120)
-      await media(ctx, req, svc)
+      if (ctx.url.searchParams.has('requestId')) await sendWebResponse(ctx.reply, await savedImageResponse(ctx))
+      else await media(ctx, req, svc)
     } else {
       const match = /^\/api\/creation\/tasks\/(image|video)\/([^/]+)$/.exec(ctx.url.pathname)
       if (ctx.req.method !== 'GET' || !match) return false
@@ -1091,7 +1239,7 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
       const errorStatus = Number(failure.errorStatus) || status
       const detail = status < 500 || error instanceof NewApiError || error instanceof PublicImageError || failure.code === 'ORIGINAL_IMAGE_READ_FAILED'
         || failure.notAccepted === true && status === 503 ? message(error) : '服务暂时不可用。'
-      const requestId = record(ctx.body) && ctx.body.requestId || /^\/api\/creation\/requests\//.test(route) && route.split('/').pop()
+      const requestId = record(ctx.body) && ctx.body.requestId || /^\/api\/creation\/requests\//.test(route) && route.split('/')[4]
       logCreationFailure(requestId, stage, errorStatus, failure.code, typeof failure.notAccepted === 'boolean' ? failure.notAccepted : undefined)
       ctx.json(status, { error: { code: failure.code, message: stageError(stage, detail, errorStatus) + (failure.notAccepted === true ? ' 未向生成网关提交请求。' : '') }, errorStage: stage, errorStatus,
         ...(typeof failure.notAccepted === 'boolean' ? { notAccepted: failure.notAccepted } : {}) })

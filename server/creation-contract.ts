@@ -50,7 +50,8 @@ export interface CreationTask {
   id?: string
   upstreamId?: string
   status: 'pending' | 'succeeded' | 'failed' | 'indeterminate' | 'save_failed' | 'expired'
-  stage?: 'downloading'
+  stage?: 'preparing' | 'queued' | 'generating' | 'saving' | 'downloading'
+  stageStartedAt?: number
   progress?: number
   outputs: CreationOutput[]
   error?: string
@@ -104,6 +105,10 @@ function referenceUrl(value: unknown): value is string {
   if (/^\/legacy-files\/[A-Za-z0-9_-]{1,200}(?:\?variant=(?:thumbnail|web))?$/.test(value)) return true
   if (value.startsWith('/api/creation/media?')) {
     const url = new URL(value, 'https://community.invalid')
+    if (url.searchParams.has('requestId')) return /^[A-Za-z0-9_-]{1,128}$/.test(url.searchParams.get('requestId') || '')
+      && /^[0-9]$/.test(url.searchParams.get('index') || '0')
+      && [...url.searchParams.keys()].every(key => ['requestId', 'index'].includes(key))
+      && url.searchParams.getAll('requestId').length === 1 && url.searchParams.getAll('index').length <= 1
     try {
       const target = new URL(url.searchParams.get('url') || '')
       return url.pathname === '/api/creation/media' && url.searchParams.getAll('url').length === 1

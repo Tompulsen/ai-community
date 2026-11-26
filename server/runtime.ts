@@ -176,7 +176,7 @@ export function createApplication({ db, redis, config, filesRoot, distRoot = pat
     handler: async (_request, reply) => reply.redirect('/create', 302) })
   register(handleCreation, [
     ['GET', ['/api/creation/models', '/api/creation/tasks/:kind/:id', '/api/creation/media', '/api/creation/requests/:id']],
-    ['POST', ['/api/creation/generate', '/api/creation/models', '/api/creation/preference-groups']],
+    ['POST', ['/api/creation/generate', '/api/creation/models', '/api/creation/preference-groups', '/api/creation/requests/:id/save']],
   ])
   register(handleImageExport, [['POST', ['/api/images/export']]])
   register(handleDocuments, [

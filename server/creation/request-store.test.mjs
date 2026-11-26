@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { requestDatabase, environment } from './test-database.mjs'
 import { checkRequestSchema, registerDurableRequest, readDurableRequest, dispatchDurableRequest,
-  saveDurableRequest, claimDurablePoll, nativeRequestsEnabled } from './request-store.ts'
+  saveDurableRequest, savePreparingRequest, claimDurablePoll, nativeRequestsEnabled } from './request-store.ts'
 
 test('PostgreSQL enforces one request owner, dispatch fencing and persistent terminal tombstones', async t => {
   const db = await requestDatabase(t), key = 'account:request'
@@ -30,6 +30,17 @@ test('a reclaimed expired preparation fences its original dispatcher and cannot 
   await assert.rejects(dispatchDurableRequest(db, row, {}, record), /ownership/)
   await saveDurableRequest(db, claimed, { ...record, result: { status: 'failed' } }, null, true)
   assert.equal((await readDurableRequest(db, 'expired')).state, 'failed_before_dispatch')
+})
+
+test('stage updates retain preparing state and expired ownership cannot advance it', async t => {
+  const db = await requestDatabase(t)
+  const record = { kind: 'image', deadline: Date.now() + 60000, result: { status: 'pending', stage: 'preparing' } }
+  const { row } = await registerDurableRequest(db, 'stage', 'hash', record)
+  await savePreparingRequest(db, row, { ...record, result: { status: 'pending', stage: 'queued' } })
+  assert.equal(row.state, 'preparing'); assert.equal(row.record.result.stage, 'queued')
+  await db.query('UPDATE community_creation_request SET next_poll=0 WHERE key=$1', [row.key])
+  await assert.rejects(savePreparingRequest(db, row, record), /ownership/)
+  await assert.rejects(dispatchDurableRequest(db, row, {}, record), /ownership/)
 })
 
 test('rollout requires schema and migration acknowledgement; zero means disabled', async t => {

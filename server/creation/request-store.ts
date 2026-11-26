@@ -54,6 +54,14 @@ export async function dispatchDurableRequest(db: Queryable, row: DurableRequest,
   if (!updated.rows[0]) throw new Error('Request preparation ownership expired')
   return updated.rows[0]
 }
+export async function savePreparingRequest(db: Queryable, row: DurableRequest, record: object) {
+  const updated = await db.query<DurableRequest>(`UPDATE community_creation_request SET record=$4,
+    version=version+1, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3
+    AND state='preparing' AND next_poll>$5 RETURNING *`,
+  [row.key, row.owner, row.version, JSON.stringify(record), Date.now()])
+  if (!updated.rows[0]) throw new Error('Request preparation ownership expired')
+  Object.assign(row, updated.rows[0])
+}
 export async function saveDurableRequest(db: Queryable, row: DurableRequest, record: object, next: number | null, beforeDispatch = false) {
   const result = await db.query<DurableRequest>(`UPDATE community_creation_request SET record=$4, state=$5,
     next_poll=$6, version=version+1, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3 RETURNING *`,

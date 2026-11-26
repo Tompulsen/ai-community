@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2 } from '@lucide/vue'
-import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, retryCreationSave, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
 import { branchMessages } from '../../../shared/studio/chat-branches'
 import { confirmStudioDelete } from '../../studio-confirm'
@@ -117,13 +117,13 @@ const insufficient = computed(() => !working.value && !!props.task.error && isIn
 const timedOut = computed(() => creationRequestTimedOut(props.task))
 const version = computed(() => props.task.kind === 'video' ? mediaVersion(props.conversation, props.task.id) : { index: 0, total: 1 })
 const phases: Record<string, string> = { submitting: '正在提交', running: '正在生成中', paused: '已停止等待', complete: '生成完成', error: '生成失败', attention: '请求异常' }
-const activityLabel = computed(() => props.task.phase === 'submitting' ? phases.submitting
-  : props.task.stage === 'downloading' ? '下载中' : phases.running)
+const stages: Record<string, string> = { preparing: '准备素材中', queued: '等待提交', generating: '正在生成中', saving: '正在保存图片', downloading: '下载中' }
+const activityLabel = computed(() => stages[props.task.stage || ''] || (props.task.phase === 'submitting' ? phases.submitting : phases.running))
 const elapsed = computed(() => {
   if (timedOut.value || props.task.phase === 'paused' || props.task.phase === 'attention') return ''
   const end = working.value ? now.value : props.task.settledAt
   if (!Number.isFinite(end)) return ''
-  const seconds = Math.max(0, Math.floor((end! - props.task.createdAt) / 1000))
+  const seconds = Math.max(0, Math.floor((end! - (props.task.stageStartedAt ?? props.task.createdAt)) / 1000))
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 })
 let timer: ReturnType<typeof setInterval> | undefined
@@ -165,6 +165,7 @@ async function remove() {
       <StudioInsufficientCredits v-if="insufficient" />
       <p v-else-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
+      <div v-if="task.kind === 'image' && (task.phase === 'attention' || task.phase === 'paused')" class="creation-recovery"><button class="button subtle btn" @click="perform(() => task.serverTracked && task.resultStatus === 'save_failed' ? retryCreationSave(task) : resumeCreation(task))"><RefreshCw :size="15" />{{ task.serverTracked && task.resultStatus === 'save_failed' ? '重试保存' : '查询原结果' }}</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">
         <template v-if="task.kind === 'video'">

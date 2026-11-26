@@ -172,7 +172,7 @@ test('durable generation survives Redis loss and never replays dispatched reques
     await processCreationTasks(f.redis, f.services, storeDb)
     const recovered = (await f.app.inject(`/api/creation/requests/${requestId}`)).json()
     assert.equal(recovered.status, 'succeeded')
-    assert.equal(recovered.outputs[0].url, 'https://media.example/completed.png')
+    assert.equal(recovered.outputs[0].url, `/api/creation/media?requestId=${requestId}&index=0`)
     assert.equal((await db.query('SELECT state FROM community_creation_request WHERE key=$1', [key])).rows[0].state, 'succeeded')
     assert.equal(queries, 1)
     assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
@@ -350,7 +350,12 @@ function fixture(t, options = {}) {
       if (!options.fetch) throw new Error('Unexpected upstream request')
       return options.fetch(url, init)
     },
-    ...(options.publicMedia ? { publicMedia: options.publicMedia } : {}),
+    ...(options.publicMedia ? { publicMedia: options.publicMedia } : options.storeDb && options.filesRoot ? {
+      async publicMedia() {
+        const bytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#2468ac' } }).png().toBuffer()
+        return new Response(bytes, { headers: { 'Content-Type': 'image/png' } })
+      },
+    } : {}),
   }
   app.setErrorHandler((error, _request, reply) => {
     reply.code(error.statusCode || error.status || 500).send({ error: { message: error.message } })
@@ -375,6 +380,7 @@ function fixture(t, options = {}) {
         if (options.skillRows && sql.includes('FROM community_skill')) return { rows: await options.skillRows(sql, params) }
         assert.equal(sql, 'SELECT "clientOptions" FROM meta ORDER BY id LIMIT 1')
         if (options.modelReadError) throw options.modelReadError
+        await options.beforeModelRead?.()
         return { rows: [{ clientOptions: { communityModelTypes: options.modelTypes ?? [] } }] }
       } },
       config: { url: origin }, filesRoot: options.filesRoot,
@@ -397,6 +403,104 @@ function fixture(t, options = {}) {
 function submit(app, body = imageRequest, extraHeaders = {}) {
   return app.inject({ method: 'POST', url: '/api/creation/generate', headers: { ...headers, ...extraHeaders }, payload: body })
 }
+
+test('current image flow exposes preparation and canonical retries bypass new submission limits', async t => {
+  const db = await requestDatabase(t), ready = deferred(), release = deferred()
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-stage-secret-'.repeat(3) })
+  const f = fixture(t, { storeDb: db, groupToken: () => 71,
+    async beforeModelRead() { ready.resolve(); await release.promise },
+    fetch: () => Response.json({ data: [{ url: 'https://media.example/canonical.png' }] }) })
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'canonical-stage', contractVersion: 2, group: 'images' }
+  const pending = submit(f.app, input).then(value => value)
+  await ready.promise
+  const preparing = (await f.app.inject('/api/creation/requests/canonical-stage')).json()
+  assert.equal(preparing.stage, 'preparing'); assert.equal(preparing.status, 'pending')
+  assert.equal(typeof preparing.stageStartedAt, 'number')
+  release.resolve()
+  assert.equal((await pending).json().status, 'succeeded')
+  const evalOriginal = f.redis.eval
+  f.redis.eval = async (script, ...args) => {
+    assert(!script.includes('INCR'), 'duplicate reads must not consume the submission rate limit')
+    return evalOriginal(script, ...args)
+  }
+  for (let retry = 0; retry < 14; retry++) {
+    const reordered = Object.fromEntries(Object.entries(input).reverse())
+    assert.equal((await submit(f.app, reordered)).json().status, 'succeeded')
+  }
+  assert.equal(f.calls.length, 1)
+  assert.equal((await submit(f.app, { ...input, group: 'other' })).statusCode, 409)
+})
+
+test('image partial save retries only missing originals and private media remains account scoped', async t => {
+  const db = await requestDatabase(t), filesRoot = await mkdtemp(path.join(tmpdir(), 'current-image-save-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-save-secret-'.repeat(3) })
+  const bytes = await sharp({ create: { width: 13, height: 9, channels: 4, background: '#348aac80' } }).png().toBuffer()
+  let fail = true
+  const downloads = []
+  const f = fixture(t, { storeDb: db, filesRoot, groupToken: () => 71,
+    fetch: () => Response.json({ data: [{ url: 'https://media.example/one.png' }, { url: 'https://media.example/two.png' }] }),
+    async publicMedia(source) {
+      downloads.push(source)
+      if (fail && source.endsWith('/two.png')) throw new Error('fixture save failure')
+      return new Response(bytes, { headers: { 'Content-Type': 'image/png' } })
+    } })
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', n: 2, requestId: 'partial-save', contractVersion: 2, group: 'images' }
+  const first = await submit(f.app, input)
+  assert.equal(first.json().status, 'save_failed', first.payload)
+  assert.deepEqual(first.json().outputs, [])
+  fail = false
+  const retries = await Promise.all([1, 2].map(() => f.app.inject({ method: 'POST', url: '/api/creation/requests/partial-save/save', headers: { ...headers, host: new URL(origin).host }, payload: {} })))
+  assert(retries.every(item => [200, 202].includes(item.statusCode)), retries.map(item => item.payload).join('\n'))
+  await drainCreations(f.redis)
+  const result = (await f.app.inject('/api/creation/requests/partial-save')).json()
+  assert.equal(result.status, 'succeeded')
+  assert.equal(downloads.filter(source => source.endsWith('/one.png')).length, 1)
+  assert.equal(downloads.filter(source => source.endsWith('/two.png')).length, 2)
+  assert.equal(f.calls.length, 1)
+  const original = await f.app.inject(result.outputs[0].url)
+  assert.equal(original.statusCode, 200, original.payload)
+  assert.deepEqual(original.rawPayload, bytes)
+  const preview = await f.app.inject(result.outputs[0].url + '&variant=preview')
+  assert.equal(preview.statusCode, 200); assert.equal(preview.headers['content-type'], 'image/webp')
+  assert.equal((await f.app.inject({ url: result.outputs[0].url, headers: { 'x-test-account': '18' } })).statusCode, 404)
+  assert.equal((await f.app.inject(result.outputs[0].url + '&index=1')).statusCode, 400)
+  await submit(f.app, input)
+  assert.equal(f.calls.length, 1)
+})
+
+test('queued image submission rechecks a fresh request identity without blocking task GETs', async t => {
+  const db = await requestDatabase(t), started = deferred(), release = deferred(), queued = deferred()
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-queue-secret-'.repeat(3) })
+  const checked = []
+  const f = fixture(t, { storeDb: db, groupToken: () => 71,
+    credentials(req) {
+      checked.push(req)
+      if (req.headers.get('x-new-api-user') === '18') queued.resolve()
+      return { baseUrl: 'https://model.example', apiKey, tokenId: 71, userId: Number(req.headers.get('x-new-api-user')) }
+    },
+    async fetch() {
+      if (f.calls.length === 2) started.resolve()
+      await release.promise
+      return Response.json({ error: { message: 'fixture rejection' } }, { status: 400 })
+    } })
+  const base = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', contractVersion: 2, group: 'images' }
+  const requests = [submit(f.app, { ...base, requestId: 'occupied-1' }).then(value => value),
+    submit(f.app, { ...base, requestId: 'occupied-2' }).then(value => value)]
+  try {
+    await started.promise
+    requests.push(submit(f.app, { ...base, requestId: 'waiting' }, { 'x-test-account': '18' }).then(value => value))
+    await queued.promise
+    const current = await f.app.inject({ url: '/api/creation/requests/waiting', headers: { 'x-test-account': '18' } })
+    assert.equal(current.json().stage, 'queued', current.payload)
+    assert.equal(f.calls.length, 2)
+  } finally { release.resolve(); await Promise.all(requests) }
+  const identityChecks = checked.filter(req => req.headers.get('x-new-api-user') === '18')
+  assert.equal(identityChecks.length, 2)
+  assert.notEqual(identityChecks[0], identityChecks[1])
+  assert.equal(identityChecks[1].headers.get('x-new-api-token'), '71')
+  assert.equal(f.calls.length, 3)
+})
 
 for (const streaming of [false, true]) test(`queue rejection survives ${streaming ? 'HTTP 200 SSE' : 'HTTP 429'} and GET recovery without a paid retry`, async t => {
   const error = { code: 'gateway_queue_full', message: 'Too many pending requests, please retry later' }
