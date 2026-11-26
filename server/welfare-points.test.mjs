@@ -109,7 +109,9 @@ test('shared welfare pool, check-in delivery and Beijing rollover on PostgreSQL'
   })
   await t.test('same request, competing requests and alias accounts all receive one daily award', async () => {
     await reset()
-    const key = randomUUID(), results = await Promise.all([claim(1, key), claim(1, key), claim(1), claim(1)])
+    // Establish the persisted request ID before racing alternative IDs for the daily award.
+    const key = randomUUID(), sameRequest = await Promise.all([claim(1, key), claim(1, key)])
+    const results = [...sameRequest, ...await Promise.all([claim(1), claim(1)])]
     assert.equal(new Set(results.map(r => r.id)).size, 1)
     await pool.query("UPDATE external_account SET subject='1' WHERE \"userId\"='2'")
     assert.equal((await claim(2)).id, results[0].id)
