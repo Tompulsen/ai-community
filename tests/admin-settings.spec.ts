@@ -12,6 +12,7 @@ async function adminFixture(page: Page) {
   const state = {
     settings: { brand: '旧站点名称', logoUrl: '', registrationOpen: false, defaultModels: { image: 'kept-model' } },
     config: { communityPublicationMode: 'before', communityAutoBanEnabled: true, communityViolationThreshold: 3,
+      communityModeration: { enabled: false, sensitiveWords: [] as string[], reviewThreshold: 0.65, rejectThreshold: 0.95 },
       communityModelTypes: [] as ModelTypeSetting[],
       communityFeedMode: 'shuffle', communityFeedPoolSize: 200, communityPullToRefresh: true,
       communityFeedWeights: { interest: 60, fresh: 25, explore: 15 },
@@ -328,6 +329,7 @@ test('review settings save publishing, suspension and refresh options without ov
   await expect(settings.getByRole('status')).toContainText('修改已保存')
   expect(fixture.writes[0]!.body).toEqual({ version: 'version-1', communityPublicationMode: 'after', communityAutoBanEnabled: false,
     communityViolationThreshold: 5, communityFeedMode: 'latest', communityFeedPoolSize: 300, communityPullToRefresh: false,
+    communityModeration: { enabled: false, sensitiveWords: [], reviewThreshold: 0.65, rejectThreshold: 0.95 },
     communityFeedWeights: { interest: 60, fresh: 25, explore: 15 } })
   expect(fixture.state.config.communityModelTypes).toEqual([{ id: 'keep-model', kind: 'video' }])
   expect(fixture.state.config.uploadLimits.image).toBe(20)
@@ -343,6 +345,64 @@ test('review settings save publishing, suspension and refresh options without ov
   await openTab(page, '社区设置')
   await expect(page.getByRole('combobox', { name: '内容发布方式', exact: true })).toHaveValue('before')
   await expect(page.getByLabel('违规次数阈值', { exact: true })).toHaveValue('5')
+})
+
+test('automatic moderation settings save literal words, validate bounds and retain conflicting edits', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  await page.goto('/admin?tab=review')
+  const settings = page.getByRole('region', { name: '审核设置', exact: true })
+  const words = settings.getByRole('textbox', { name: '敏感词（每行一个）', exact: true })
+  const save = settings.getByRole('button', { name: '保存审核设置', exact: true })
+  await expect(words).toHaveValue('')
+  await settings.getByRole('switch', { name: '启用自动内容审核' }).check()
+  await words.fill('  ＡＢＣ  \nabc\n测试词\na.*b')
+  await save.click()
+  await expect(settings.getByRole('status')).toContainText('修改已保存')
+  expect(fixture.writes[0]!.body.communityModeration).toEqual({ enabled: true, sensitiveWords: ['abc', '测试词', 'a.*b'], reviewThreshold: 0.65, rejectThreshold: 0.95 })
+  await expect(words).toHaveValue('abc\n测试词\na.*b')
+  await page.reload()
+  await expect(settings.getByRole('switch', { name: '启用自动内容审核' })).toBeChecked()
+  await expect(words).toHaveValue('abc\n测试词\na.*b')
+  await words.fill('字'.repeat(65))
+  await expect(words).toHaveAttribute('aria-invalid', 'true')
+  await expect(save).toBeDisabled()
+  await expect(settings.getByRole('alert')).toContainText('敏感词数量和长度')
+  await words.fill('新的未保存词')
+  fixture.state.conflict = true
+  await save.click()
+  await expect(settings.getByRole('alert')).toContainText('你的输入仍保留')
+  await expect(words).toHaveValue('新的未保存词')
+  expect(fixture.state.config.communityModeration.sensitiveWords).toEqual(['abc', '测试词', 'a.*b'])
+})
+
+test('model moderation thresholds validate ordering, persist values and retain conflicting edits', async ({ page }) => {
+  const fixture = await adminFixture(page)
+  fixture.state.config.communityModeration.enabled = true
+  fixture.state.config.communityModeration.sensitiveWords = ['保留词']
+  await page.goto('/admin?tab=review')
+  const settings = page.getByRole('region', { name: '审核设置', exact: true })
+  const review = settings.getByLabel('疑似转人工阈值', { exact: true }), reject = settings.getByLabel('拒绝发布阈值', { exact: true })
+  const save = settings.getByRole('button', { name: '保存审核设置', exact: true })
+  await expect(review).toHaveValue('0.65'); await expect(reject).toHaveValue('0.95')
+  await expect(settings.getByText(/分数越高风险越高，阈值越低越严格/)).toBeVisible()
+  for (const [reviewValue, rejectValue] of [['0', '0.95'], ['0.65', '1.01'], ['0.95', '0.95'], ['0.9', '0.8'], ['', '0.95']]) {
+    await review.fill(reviewValue!); await reject.fill(rejectValue!)
+    await expect(review).toHaveAttribute('aria-invalid', 'true')
+    await expect(settings.getByRole('alert')).toContainText('疑似转人工阈值 < 拒绝发布阈值')
+    await expect(save).toBeDisabled()
+  }
+  expect(fixture.writes).toHaveLength(0)
+  await review.fill('0.4'); await reject.fill('0.8'); await save.click()
+  await expect(settings.getByRole('status')).toContainText('修改已保存')
+  expect(fixture.writes[0]!.body.communityModeration).toEqual({ enabled: true, sensitiveWords: ['保留词'], reviewThreshold: 0.4, rejectThreshold: 0.8 })
+  await page.reload()
+  await expect(review).toHaveValue('0.4'); await expect(reject).toHaveValue('0.8')
+  await review.fill('0.2'); await reject.fill('0.6')
+  fixture.state.conflict = true
+  await save.click()
+  await expect(settings.getByRole('alert')).toContainText('你的输入仍保留')
+  await expect(review).toHaveValue('0.2'); await expect(reject).toHaveValue('0.6')
+  expect(fixture.state.config.communityModeration).toEqual({ enabled: true, sensitiveWords: ['保留词'], reviewThreshold: 0.4, rejectThreshold: 0.8 })
 })
 
 test('delayed review settings saves cannot update a switched or demoted account', async ({ page }) => {

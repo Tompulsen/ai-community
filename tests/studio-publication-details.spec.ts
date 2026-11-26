@@ -24,7 +24,7 @@ async function fixture(page: Page, kind: 'image' | 'video' | 'text' = 'image', l
   })
   await page.route('**/api/works', route => {
     const body = route.request().postDataJSON(); submissions.push(body)
-    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { code: rejectCode, message: status === 400 ? '所选标签已失效' : '连接中断，请重试' } }) }
+    if (reject) { const status = reject; reject = 0; return route.fulfill({ status, json: { code: rejectCode, message: rejectCode === 'WORK_MODERATION_REJECTED' ? '作品包含敏感词，请修改后重新提交。' : status === 400 ? '所选标签已失效' : '连接中断，请重试' } }) }
     return route.fulfill({ json: { work: { id: 'published1', title: body.title, status: 'pending' } } })
   })
   await page.addInitScript(({ kind, legacy }) => {
@@ -114,6 +114,26 @@ test('failed response freezes new publication metadata for reload retries withou
   await expect(dialog(page).getByRole('status')).toHaveText('作品已提交审核。')
   expect(state.submissions[1]).toEqual(state.submissions[0])
   expect(state.uploads).toHaveLength(2)
+})
+
+test('confirmed moderation rejection keeps publication fields editable and permits a corrected retry', async ({ page }) => {
+  const state = await fixture(page)
+  const form = dialog(page)
+  await choose(page)
+  await form.getByRole('textbox', { name: '作品标题', exact: true }).fill('需要修改的标题')
+  state.rejectNext(422, 'WORK_MODERATION_REJECTED')
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toContainText('作品包含敏感词')
+  await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toBeEnabled()
+  await expect(form.getByRole('textbox', { name: '生成提示词（选填）', exact: true })).toBeEnabled()
+  await expect(form.getByRole('textbox', { name: '作品标题', exact: true })).toHaveValue('需要修改的标题')
+  await form.getByRole('textbox', { name: '作品标题', exact: true }).fill('修改后的安全标题')
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toContainText('作品已提交审核')
+  expect(state.submissions).toHaveLength(2)
+  expect(state.submissions[1].title).toBe('修改后的安全标题')
+  expect(state.submissions[1].fileIds).toEqual(state.submissions[0].fileIds)
+  expect(state.submissions[1].idempotencyKey).toBe(state.submissions[0].idempotencyKey)
 })
 
 test('old publication retries retain the old payload without requiring new fields', async ({ page }) => {

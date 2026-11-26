@@ -1417,9 +1417,9 @@ async function preparePublication(task: CreationTask, title: string, destination
   } })
   } catch (cause) {
     checkOwner()
-    // Missing-tag rejection confirms no saved work, including retries from an older client.
+    // Definitive validation rejections leave no saved work; uncertain requests keep their retry payload.
     const failure = cause as { status?: number; code?: string }
-    if (failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
+    if (failure.status === 422 && failure.code === 'WORK_MODERATION_REJECTED' || failure.status === 400 && (!previous && publication.details || destination === 'community' && failure.code === 'WORK_TAGS_REQUIRED')) {
       delete task.publications[destination]
       task.publicationReferences = []
       await persist()

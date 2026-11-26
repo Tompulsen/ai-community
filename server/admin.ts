@@ -9,7 +9,7 @@ import { httpError, roleCondition } from './auth.ts'
 import { accountCenter } from './account-session.ts'
 import { communityAdKeys, normalizeCommunityAd, type CommunityAd } from './business/ads.ts'
 import { legacyIdTime } from './content.ts'
-import { readSiteSettings, validateSiteBranding, validateSiteSettings } from './settings.ts'
+import { readModerationSettings, readSiteSettings, validateModerationSettings, validateSiteBranding, validateSiteSettings, type ModerationSettings } from './settings.ts'
 import { readPublicIdentities, type PublicIdentity } from './public-identity.ts'
 import { modelTypesSchema, readModelTypes } from '../shared/studio/model-types.ts'
 import { feedWeightsSchema, readFeedWeights } from '../shared/recommendation.ts'
@@ -40,7 +40,7 @@ interface ReportRow {
   contentKey: string | null; contentSnapshot: string | null; moderationNote: string
   targetUsername?: string; reporterUsername?: string
 }
-const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits'] as const
+const configKeys = ['communityPublicationMode', 'communityAutoBanEnabled', 'communityViolationThreshold', 'communityModeration', 'communityFeedMode', 'communityFeedPoolSize', 'communityFeedWeights', 'communityPullToRefresh', 'uploadLimits'] as const
 const uploadKinds = ['image', 'video', 'audio', 'document', 'other'] as const
 const userColumns = 'u.id,u.username,u.name,u.host,u."createdAt",u."lastActiveDate",u."avatarId",u."bannerId",u."isSuspended",u."isDeleted",u."isLocked",u."isBot",u."isCat",u."isExplorable",u."followersCount",u."followingCount",u."notesCount",u."communityViolationCount",u."communityViolationBaseline"'
 const reportColumns = 'r.id,r."targetUserId",r."reporterId",r."assigneeId",r.resolved,r."resolvedAs",r.comment,r."contentKey",r."contentSnapshot",r."moderationNote"'
@@ -97,6 +97,7 @@ function publicConfig(options: Body) {
   }))
   return {
     communityPublicationMode: options.communityPublicationMode === 'after' ? 'after' : 'before',
+    communityModeration: readModerationSettings(options.communityModeration),
     communityAutoBanEnabled: options.communityAutoBanEnabled !== false,
     communityViolationThreshold: Number.isInteger(options.communityViolationThreshold) && Number(options.communityViolationThreshold) >= 1 && Number(options.communityViolationThreshold) <= 1000 ? Number(options.communityViolationThreshold) : 3,
     communityFeedMode: options.communityFeedMode === 'latest' ? 'latest' : 'shuffle',
@@ -105,11 +106,12 @@ function publicConfig(options: Body) {
     communityPullToRefresh: options.communityPullToRefresh !== false, uploadLimits,
   }
 }
-export function validateCommunityConfig(input: Body): Body {
+export function validateCommunityConfig(input: Body, previousModeration?: ModerationSettings): Body {
   keys(input, configKeys)
   const next: Body = {}
   for (const [key, value] of Object.entries(input)) {
     if (key === 'communityPublicationMode') next[key] = enumValue(value, ['before', 'after'])
+    else if (key === 'communityModeration') next[key] = validateModerationSettings(value, previousModeration)
     else if (key === 'communityFeedMode') next[key] = enumValue(value, ['shuffle', 'latest'])
     else if (key === 'communityViolationThreshold') next[key] = integer(value, 1, 1000)
     else if (key === 'communityFeedPoolSize') next[key] = integer(value, 20, 1000)
@@ -166,10 +168,11 @@ async function welfareTasks(ctx: RequestContext) {
 async function config(ctx: RequestContext) {
   if (ctx.req.method === 'GET') { const config = publicConfig((await meta(ctx.db)).clientOptions); return { config, version: fingerprint(config) } }
   const { version: _version, ...input } = ctx.body
-  const patch = validateCommunityConfig(input)
+  keys(input, configKeys)
   return transaction(ctx.db, async db => {
     const row = await meta(db, true)
     checkVersion(ctx.body, publicConfig(row.clientOptions))
+    const patch = validateCommunityConfig(input, readModerationSettings(row.clientOptions.communityModeration))
     await db.query('UPDATE meta SET "clientOptions"=COALESCE("clientOptions",\'{}\'::jsonb)||$2::jsonb WHERE id=$1', [row.id, JSON.stringify(patch)])
     await audit(ctx, db, 'updateCommunityConfig', { config: patch })
     const config = publicConfig({ ...row.clientOptions, ...patch })
@@ -441,14 +444,14 @@ async function legacySettings(ctx: RequestContext) {
   const input = ctx.body.settings
   if (!record(input) || !Object.keys(input).length) fail('请检查站点设置。')
   const brandingOnly = Object.keys(input).every(key => ['brand', 'logoUrl'].includes(key))
-  if (!brandingOnly) keys(input, ['brand', 'logoUrl', 'registrationOpen', 'publicationMode', 'autoBan', 'violationThreshold', 'uploadLimits', 'defaultModels', 'ads'])
+  if (!brandingOnly) keys(input, ['brand', 'logoUrl', 'registrationOpen', 'publicationMode', 'autoBan', 'violationThreshold', 'moderation', 'uploadLimits', 'defaultModels', 'ads'])
   return transaction(ctx.db, async db => {
     const row = await meta(db, true)
     const previous = await readSiteSettings(db, ctx.config.url)
     checkVersion(ctx.body, previous, true)
     const settings = brandingOnly
       ? { ...previous, ...validateSiteBranding({ brand: previous.brand, logoUrl: previous.logoUrl, ...input }, ctx.config.url, previous.logoUrl) }
-      : validateSiteSettings(input, ctx.config.url, previous.logoUrl)
+      : validateSiteSettings(input, ctx.config.url, previous.logoUrl, previous.moderation)
     const patch: Body = { communityBrandName: settings.brand, communityLogoUrl: settings.logoUrl }
     if (settings.logoUrl !== previous.logoUrl) {
       const logo = await logoReference(ctx, db, settings.logoUrl)
@@ -457,6 +460,7 @@ async function legacySettings(ctx: RequestContext) {
       patch.communityLogoFileId = logo.fileId
     }
     if (!brandingOnly) {
+      if (settings.moderation !== undefined) patch.communityModeration = settings.moderation
       Object.assign(patch, { communityPublicationMode: settings.publicationMode,
         communityAutoBanEnabled: settings.autoBan, communityViolationThreshold: settings.violationThreshold,
         uploadLimits: { ...(record(row.clientOptions.uploadLimits) ? row.clientOptions.uploadLimits : {}),

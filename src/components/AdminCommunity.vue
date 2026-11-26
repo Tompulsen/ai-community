@@ -9,6 +9,7 @@ const props = defineProps<{ view: 'site' | 'settings' | 'review' | 'tags' | 'ads
 const isConfigView = computed(() => props.view === 'settings' || props.view === 'review')
 interface Config {
   communityPublicationMode: 'before' | 'after'; communityAutoBanEnabled: boolean; communityViolationThreshold: number
+  communityModeration: { enabled: boolean; sensitiveWords: string[]; reviewThreshold: number; rejectThreshold: number }
   communityFeedMode: 'shuffle' | 'latest'; communityFeedPoolSize: number; communityPullToRefresh: boolean
   communityFeedWeights: { interest: number; fresh: number; explore: number }
   uploadLimits: Record<'image' | 'video' | 'audio' | 'document' | 'other', number>
@@ -20,9 +21,10 @@ const loading = ref(true), busy = ref(false), error = ref('')
 const branding = ref<SiteBranding | null>(null), version = ref(''), loaded = ref(false), baseline = ref('')
 const uploading = ref(false), logoFailed = ref(false), reloadPrompt = ref(false)
 const saved = ref(false), failedAdImages = ref<Record<string, string>>({})
+const sensitiveWordsText = ref('')
 let active = true
 let logoUpload: AbortController | undefined
-const snapshot = () => JSON.stringify(props.view === 'site' ? branding.value : isConfigView.value ? config.value : ads.value)
+const snapshot = () => JSON.stringify(props.view === 'site' ? branding.value : isConfigView.value ? [config.value, sensitiveWordsText.value] : ads.value)
 const dirty = computed(() => loaded.value && props.view !== 'tags' && snapshot() !== baseline.value)
 const previewLogo = computed(() => /^(?:https:\/\/|\/(?:assets|files|legacy-files)\/)/i.test(branding.value?.logoUrl || '') ? branding.value!.logoUrl : '')
 const category = ref<Tag['category']>('image'), newName = ref(''), editing = ref(''), editName = ref(''), deleting = ref('')
@@ -35,7 +37,15 @@ const hasUnsavedChanges = computed(() => uploading.value || dirty.value || !!edi
 const validThreshold = computed(() => !!config.value && Number.isInteger(config.value.communityViolationThreshold) && config.value.communityViolationThreshold >= 1 && config.value.communityViolationThreshold <= 1000)
 const validFeedPool = computed(() => !!config.value && Number.isInteger(config.value.communityFeedPoolSize) && config.value.communityFeedPoolSize >= 20 && config.value.communityFeedPoolSize <= 1000)
 const validFeedWeights = computed(() => feedWeightsSchema.safeParse(config.value?.communityFeedWeights).success)
-const validConfig = computed(() => validThreshold.value && validFeedPool.value && validFeedWeights.value)
+const sensitiveWordLines = computed(() => sensitiveWordsText.value.split(/\r?\n/).filter(line => line.trim()))
+const sensitiveWords = computed(() => [...new Set(sensitiveWordLines.value.map(word => word.normalize('NFKC').trim().toLowerCase()))])
+const validSensitiveWords = computed(() => sensitiveWordLines.value.length <= 1000 && sensitiveWordLines.value.every(word => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(word) && Array.from(word.normalize('NFKC').trim().toLowerCase()).length <= 64))
+const validModerationThresholds = computed(() => {
+  const value = config.value?.communityModeration
+  return !!value && Number.isFinite(value.reviewThreshold) && Number.isFinite(value.rejectThreshold) &&
+    value.reviewThreshold > 0 && value.reviewThreshold < value.rejectThreshold && value.rejectThreshold <= 1
+})
+const validConfig = computed(() => validThreshold.value && validFeedPool.value && validFeedWeights.value && validSensitiveWords.value && validModerationThresholds.value)
 defineExpose({ hasUnsavedChanges, busy: computed(() => props.view === 'review' && busy.value) })
 function readVersion(value: { version: string }) {
   if (!value.version) throw new Error('未能读取配置版本，请刷新后重试。')
@@ -53,7 +63,10 @@ async function load() {
     } else if (isConfigView.value) {
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config')
       if (!active) return
-      readVersion(result); config.value = { ...result.config, communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
+      const moderation = result.config.communityModeration
+      readVersion(result); config.value = { ...result.config, communityModeration: { enabled: moderation?.enabled ?? false, sensitiveWords: moderation?.sensitiveWords ?? [],
+        reviewThreshold: moderation?.reviewThreshold ?? 0.65, rejectThreshold: moderation?.rejectThreshold ?? 0.95 }, communityFeedWeights: readFeedWeights(result.config.communityFeedWeights) }
+      sensitiveWordsText.value = config.value.communityModeration.sensitiveWords.join('\n')
     } else if (props.view === 'tags') {
       const result = await api<{ items: Tag[] }>('/api/admin/tags')
       if (!active) return
@@ -81,14 +94,16 @@ async function save() {
       updateSite(result.settings)
       readVersion(result); branding.value = { brand: result.settings.brand, logoUrl: result.settings.logoUrl }
     } else if (isConfigView.value && config.value) {
-      if (!validConfig.value) throw new Error('请检查违规阈值、候选池范围及推荐权重。')
+      if (!validConfig.value) throw new Error('请检查敏感词、模型阈值、违规阈值、候选池范围及推荐权重。')
       const { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights, uploadLimits } = config.value
+      const communityModeration = { ...config.value.communityModeration, sensitiveWords: sensitiveWords.value }
       const patch = props.view === 'review'
-        ? { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights }
-        : { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights, uploadLimits }
+        ? { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityModeration, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights }
+        : { communityPublicationMode, communityAutoBanEnabled, communityViolationThreshold, communityModeration, communityFeedMode, communityFeedPoolSize, communityPullToRefresh, communityFeedWeights, uploadLimits }
       const result = await api<{ config: Config; version: string }>('/api/admin/community/config', { method: 'PATCH', body: { ...patch, version: version.value } })
       if (!active) return
       readVersion(result); config.value = result.config
+      sensitiveWordsText.value = config.value.communityModeration.sensitiveWords.join('\n')
     } else if (props.view === 'ads') {
       const result = await api<{ items: Ad[]; version: string }>('/api/admin/community/ads', { method: 'PATCH', body: { items: ads.value, version: version.value } })
       if (!active) return
@@ -159,11 +174,25 @@ watch(dirty, value => { if (value) saved.value = false })
         <section class="editor-section"><div class="editor-section-title"><h3>发布与审核</h3><p>新作品按所选模式发布，违规内容可在审核列表中下架。</p></div><div class="editor-fields">
           <fieldset v-if="view === 'review'" class="publication-modes" aria-describedby="publication-help"><legend>内容发布方式</legend>
             <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="before" /><span><strong>先审后发</strong><small>新作品进入待审核，通过后才在社区公开。</small></span></label>
-            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="after" /><span><strong>先发后审</strong><small>新作品立即公开，并进入审核队列；违规作品可下架。</small></span></label>
+            <label><input v-model="config.communityPublicationMode" type="radio" name="community-publication-mode" value="after" /><span><strong>先发后审</strong><small>{{ config.communityModeration.enabled ? '自动检查通过后公开，需人工复核的内容继续待审。' : '新作品立即公开，并进入审核队列；违规作品可下架。' }}</small></span></label>
           </fieldset>
           <label v-else class="field"><span>内容发布方式</span><select v-model="config.communityPublicationMode" class="control" aria-describedby="publication-help"><option value="before">先审核，再公开</option><option value="after">先公开，再审核</option></select></label>
-          <p v-if="view === 'settings'" class="form-note">{{ config.communityPublicationMode === 'after' ? '新投稿直接公开，管理员可在审核列表中处理。' : '新投稿先进入审核队列，通过后公开。' }}</p>
+          <p v-if="view === 'settings'" class="form-note">{{ config.communityPublicationMode === 'after' ? config.communityModeration.enabled ? '自动检查通过后公开，需人工复核的内容继续待审。' : '新投稿直接公开，管理员可在审核列表中处理。' : '新投稿先进入审核队列，通过后公开。' }}</p>
           <p id="publication-help" class="form-note">保存后仅影响新投稿。已有待审作品仍需逐件处理。</p>
+        </div></section>
+        <section class="editor-section"><div class="editor-section-title"><h3>自动内容审核</h3><p>在新作品和修改内容公开前检查。</p></div><div class="editor-fields">
+          <label class="switch-row"><span><strong>启用自动内容审核</strong><small>识别色情裸露风险，拦截自定义敏感词。</small></span><input v-model="config.communityModeration.enabled" type="checkbox" role="switch" aria-label="启用自动内容审核" /></label>
+          <div class="fields">
+            <label class="field"><span>疑似转人工阈值</span><input v-model.number="config.communityModeration.reviewThreshold" type="number" min="0" max="1" step="any" inputmode="decimal" required class="control" :aria-invalid="!validModerationThresholds" :aria-describedby="validModerationThresholds ? 'moderation-thresholds-help' : 'moderation-thresholds-help moderation-thresholds-error'" /></label>
+            <label class="field"><span>拒绝发布阈值</span><input v-model.number="config.communityModeration.rejectThreshold" type="number" min="0" max="1" step="any" inputmode="decimal" required class="control" :aria-invalid="!validModerationThresholds" :aria-describedby="validModerationThresholds ? 'moderation-thresholds-help' : 'moderation-thresholds-help moderation-thresholds-error'" /></label>
+          </div>
+          <p id="moderation-thresholds-help" class="form-note">风险分数为 0–1，分数越高风险越高，阈值越低越严格。达到疑似阈值（默认 0.65）转人工，达到拒绝阈值（默认 0.95）阻止发布。低于疑似阈值仍按发布方式处理。</p>
+          <p v-if="!validModerationThresholds" id="moderation-thresholds-error" class="form-error" role="alert">请输入有效数字，满足 0 &lt; 疑似转人工阈值 &lt; 拒绝发布阈值 ≤ 1。</p>
+          <label class="field"><span>敏感词（每行一个）</span><textarea v-model="sensitiveWordsText" class="control" rows="6" maxlength="65000" spellcheck="false" :aria-invalid="!validSensitiveWords" :aria-describedby="validSensitiveWords ? 'moderation-words-help' : 'moderation-words-help moderation-words-error'" placeholder="填写需要拦截的词或短语" /></label>
+          <p id="moderation-words-help" class="form-note">最多 1000 个，每个 1–64 字。按字面匹配，不区分英文字母大小写和全角半角；不支持正则表达式。留空时不启用词库拦截。</p>
+          <p v-if="!validSensitiveWords" id="moderation-words-error" class="form-error" role="alert">请检查敏感词数量和长度，并移除控制字符。</p>
+          <p class="form-note">检查标题、正文、公开提示词、公开生成参数及图片中的文字，成品图与公开参考图一起检测。视频、动图、无法判断或检测服务异常时保留待审核；技能作品仍须管理员审核。</p>
+          <p class="form-note">模型可能误判或漏检。自动拦截不会直接累计违规次数或封禁账号，已公开作品不会因保存设置被追溯处理。</p>
         </div></section>
         <section class="editor-section"><div class="editor-section-title"><h3>账号封禁规则</h3><p>作品与评论的已确认违规合并累计。</p></div><div class="editor-fields">
           <label class="switch-row"><span><strong>违规达到阈值时自动封禁</strong><small>关闭后继续保留违规记录及阈值设置。</small></span><input v-model="config.communityAutoBanEnabled" type="checkbox" role="switch" aria-label="达到阈值自动封禁" /></label>

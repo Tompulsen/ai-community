@@ -1,5 +1,6 @@
 """Community network policy and read-only verification; never authenticate to MySQL."""
 import copy
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -13,10 +14,21 @@ UPSTREAMS = {
 }
 
 
+def moderation_policy():
+    spec = importlib.util.spec_from_file_location('community_moderation_policy', Path(__file__).with_name('moderation.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def community_definition(original):
     result = copy.deepcopy(original)
     web = result['services']['web']
-    assert set(web['networks']) == {'accounts', 'database', 'outbound'}, 'Unexpected web networks'
+    expected_networks = {'accounts', 'database', 'outbound'}
+    if 'moderation' in result['services']:
+        moderation_policy().validate_definition(result)
+        expected_networks.add('moderation')
+    assert set(web['networks']) == expected_networks, 'Unexpected web networks'
     assert result['networks']['accounts']['name'] in ('1panel-network', NETWORK)
     assert result['networks']['database'].get('internal') is True
     assert not web.get('privileged') and not web.get('network_mode') and not web.get('cap_add')
@@ -57,9 +69,13 @@ def validate_network(network):
 
 def validate_runtime(web, mysql, network):
     validate_network(network)
-    assert set(web['NetworkSettings']['Networks']) == {NETWORK, 'ai-community_database', 'ai-community_outbound'}
-    assert not set(web['NetworkSettings']['Networks']) & set(mysql['NetworkSettings']['Networks'])
     env = dict(v.split('=', 1) for v in web['Config']['Env'] if '=' in v)
+    expected_networks = {NETWORK, 'ai-community_database', 'ai-community_outbound'}
+    if env.get('COMMUNITY_MODERATION_URL'):
+        assert env['COMMUNITY_MODERATION_URL'] == moderation_policy().URL
+        expected_networks.add(moderation_policy().NETWORK)
+    assert set(web['NetworkSettings']['Networks']) == expected_networks
+    assert not set(web['NetworkSettings']['Networks']) & set(mysql['NetworkSettings']['Networks'])
     assert env.get('ENABLE_MCP') == 'false', 'MCP must remain explicitly disabled'
     assert 'ALL' in (web['HostConfig'].get('CapDrop') or [])
     assert 'no-new-privileges:true' in (web['HostConfig'].get('SecurityOpt') or [])
@@ -95,6 +111,11 @@ def verify():
     validate_runtime(inventory[WEB], inventory['ZY-mysql'], network)
     compose = json.loads(Path('/opt/ai-community-next/deploy/compose.json').read_bytes())
     assert community_definition(compose) == compose, 'Community Compose policy drift'
+    if 'moderation' in compose['services']:
+        policy = moderation_policy()
+        service = json.loads(execute(['docker', 'inspect', policy.CONTAINER]))[0]
+        private_network = json.loads(execute(['docker', 'network', 'inspect', policy.NETWORK]))[0]
+        policy.validate_runtime(inventory[WEB], service, private_network)
     for name, (service, aliases) in UPSTREAMS.items():
         container = inventory[name]
         assert set(aliases) <= set(container['NetworkSettings']['Networks'][NETWORK]['Aliases'] or [])

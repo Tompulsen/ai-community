@@ -1,0 +1,8 @@
+**
+!services/
+!services/moderation/
+!services/moderation/*.py
+!services/moderation/*.txt
+!services/moderation/*.md
+!services/moderation/fixtures/
+!services/moderation/fixtures/*.png

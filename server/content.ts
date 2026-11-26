@@ -26,6 +26,7 @@ import { skillDetailsSchema, skillFileType, skillFileName, type SkillDetails } f
 import { readWorkSkillPackage, validateWorkSkillModel, type SkillModelCatalogue } from './skill-publication.ts';
 import { skillInstructions, type SkillKind, type SkillReference } from '../shared/community-skills.ts';
 import { feedLimits, feedRequestSchema, readFeedWeights, type FeedRequest } from '../shared/recommendation.ts';
+import { prepareWorkModeration, commitWorkModeration } from './work-moderation.ts';
 
 const kinds = ['image', 'video', 'resource'] as const;
 type WorkKind = typeof kinds[number];
@@ -767,7 +768,9 @@ function samePayload(row: CommunityRow, revision: CommunityRevision): boolean {
   return JSON.stringify(previous) === JSON.stringify(revision);
 }
 
-async function publish(ctx: RequestContext, db: Queryable, row: PublicationRow, revision: CommunityRevision, attachments: AttachmentRow[], notifications: Parameters<typeof notifyUser>[1][] = []): Promise<string> {
+const publicationPermission = Symbol('checked publication');
+async function publish(ctx: RequestContext, db: Queryable, row: PublicationRow, revision: CommunityRevision, attachments: AttachmentRow[], permission: typeof publicationPermission, notifications: Parameters<typeof notifyUser>[1][] = []): Promise<string> {
+  if (permission !== publicationPermission) fail(403, '作品尚未完成审核。');
   const author = (await db.query<IdRow>('SELECT id FROM "user" WHERE id=$1 AND host IS NULL AND NOT "isDeleted" AND NOT "isSuspended" AND "movedToUri" IS NULL', [row.authorId])).rows[0];
   if (!author) fail(409, 'The author is unavailable');
   const publicAttachments = revision.generation?.skill ? attachments.filter(file => file.type.startsWith('image/')) : attachments;
@@ -846,6 +849,9 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
     revision.generation.shareToSource = false;
     requestId = `source-comment-${createHash('sha256').update(`${revision.generation.sourceWorkId}:${body.resultId}`).digest('hex').slice(0, 48)}`;
   }
+  // Completed retries reuse their original decision; new inference must not hold database row locks.
+  const previousRequest = draft ? null : (await ctx.db.query<IdRow>('SELECT * FROM community_submission WHERE "authorId"=$1 AND "idempotencyKey"=$2', [actor.id, requestId])).rows[0];
+  const moderation = draft || previousRequest ? null : await prepareWorkModeration(ctx, actor.id, revision);
   const id = await transaction(ctx.db, async db => {
     const attachments = await validateRevision(ctx, db, actor.id, revision, body, draft);
     if (destination === 'source-comment') {
@@ -859,6 +865,8 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
       return existing.id;
     }
     if (!draft && destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
+    if (!draft && !moderation) fail(409, '原提交记录已变化，请重新提交作品。', 'WORK_MODERATION_CHANGED');
+    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation) : 'allow';
     const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
     const workId = newId(ctx);
     const inserted = await db.query<IdRow>(`INSERT INTO community_submission
@@ -871,8 +879,8 @@ async function createWork(ctx: RequestContext, modelCatalogue?: SkillModelCatalo
       if (!retry || retry.destination !== destination || (destination === 'source-comment' ? retry.generation?.sourceWorkId !== revision.generation?.sourceWorkId : retry.payloadHash !== payloadHash && !samePayload(retry, revision) || (retry.status === 'draft') !== draft)) fail(409, 'Request conflict');
       return retry.id;
     }
-    if (!draft && mode === 'after') {
-      const noteId = await publish(ctx, db, { id: workId, destination, authorId: actor.id }, revision, attachments, notifications);
+    if (!draft && mode === 'after' && automatedDecision === 'allow') {
+      const noteId = await publish(ctx, db, { id: workId, destination, authorId: actor.id }, revision, attachments, publicationPermission, notifications);
       await db.query('UPDATE community_submission SET status=\'published\',"approvedNoteId"=$2 WHERE id=$1', [workId, noteId]);
     }
     return workId;
@@ -892,6 +900,10 @@ async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: 
   const actor = workActor(ctx);
   const body = ctx.body ?? {};
   const version = integer(body.version, 0, 2147483647);
+  const snapshot = await accessibleWork(ctx, workId);
+  if (snapshot.authorId !== actor.id && !actor.isAdmin) fail(403, '只有作者或管理员可以编辑此作品。');
+  const snapshotPublished = ['approved', 'published'].includes(snapshot.status) && snapshot.approvedNoteId;
+  const moderation = snapshot.version !== version || !snapshotPublished && body.status === 'draft' ? null : await prepareWorkModeration(ctx, snapshot.authorId, normalizeRevision(body, snapshot.pendingRevision ?? snapshot));
   await transaction(ctx.db, async db => {
     const row = await accessibleWork(ctx, workId, { lock: true, db });
     if (row.authorId !== actor.id && !actor.isAdmin) fail(403, '只有作者或管理员可以编辑此作品。');
@@ -907,11 +919,13 @@ async function updateWork(ctx: RequestContext, workId: string, modelCatalogue?: 
     if (!draft && revision.generation?.skill?.group && revision.model) await validateWorkSkillModel(ctx, revision.generation.skill.group, revision.model, modelCatalogue, revision.generation.skill.kind);
     const attachments = await validateRevision(ctx, db, row.authorId, revision, body, draft, row.approvedNoteId);
     if (!draft && row.destination === 'community' && !revision.tagIds?.length) fail(400, '请至少选择 1 个作品标签后再发布。', 'WORK_TAGS_REQUIRED');
+    if (!draft && !moderation) fail(409, '作品状态已变化，请重新提交审核。', 'WORK_MODERATION_CHANGED');
+    const automatedDecision = moderation ? await commitWorkModeration(ctx, db, moderation) : 'allow';
     const mode = revision.generation?.skill ? 'before' : (await settings(db)).communityPublicationMode === 'after' ? 'after' : 'before';
-    if (isPublished && (row.pendingRevision || mode !== 'after')) {
+    if (isPublished && (row.pendingRevision || mode !== 'after' || automatedDecision !== 'allow')) {
       await db.query('UPDATE community_submission SET "pendingRevision"=$2,version=version+1,"rejectionReason"=NULL WHERE id=$1', [row.id, revision]);
     } else {
-      const noteId = isPublished ? await publish(ctx, db, row, revision, attachments) : null;
+      const noteId = isPublished ? await publish(ctx, db, row, revision, attachments, publicationPermission) : null;
       await writeRevision(db, row.id, revision, { noteId, status: isPublished ? 'published' : draft ? 'draft' : 'pending' });
     }
     if (actor.isAdmin) await db.query('INSERT INTO moderation_log (id,"userId",type,info) VALUES ($1,$2,$3,$4)',
@@ -942,7 +956,8 @@ async function reviewWork(ctx: RequestContext, workId: string): Promise<true> {
     if (action === 'approve') {
       revision = editing ? { ...row, ...row.pendingRevision } : row;
       const attachments = await validateRevision(ctx, db, row.authorId, revision, { tagIds: revision.tagIds }, false, noteId, true);
-      noteId = await publish(ctx, db, row, revision, attachments, notifications);
+      // An authenticated moderator's explicit approval is the human override for uncertain automated results.
+      noteId = await publish(ctx, db, row, revision, attachments, publicationPermission, notifications);
     } else if (action === 'remove') {
       await removeNote(db, noteId);
       noteId = null;

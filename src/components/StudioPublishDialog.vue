@@ -125,6 +125,7 @@ defineExpose({ open })
           <label class="publish-rights"><input v-model="rights" type="checkbox" :disabled="busy || locked" /><span>我确认拥有作品发布权，并已核实所填写的来源与授权说明。</span></label>
         </template>
         <p v-if="locked && !busy" class="form-note">将使用上次提交的内容重试，避免重复发布。</p>
+        <p v-if="busy" class="form-note" role="status">正在提交并检查内容，请稍候…</p>
         <button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button>
       </template>
       <div v-else class="stack"><p role="status">{{ resultMessage }}</p><RouterLink :to="resultLink" class="button primary btn" @click="dialog?.close()">{{ sourceCommentLink ? '查看源作品评论' : '查看提交' }}</RouterLink></div>

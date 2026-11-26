@@ -6,12 +6,92 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { handleAdmin } from './admin.ts'
 import { httpError } from './auth.ts'
-import { readSiteSettings, validateSiteBranding } from './settings.ts'
+import { readModerationSettings, readSiteSettings, validateModerationSettings, validateSiteBranding } from './settings.ts'
 import { defaultWelfareTasks } from '../shared/welfare-tasks.ts'
 
 const siteUrl = 'https://community.example'
 const welfarePath = '/api/admin/welfare/tasks'
 const modelsPath = '/api/admin/models'
+
+test('automatic moderation settings normalize literal words and preserve them across older settings writes', async () => {
+  const f = fixture(), path = '/api/admin/community/config'
+  const before = await f.request(path)
+  assert.deepEqual(before.config.communityModeration, { enabled: false, sensitiveWords: [], reviewThreshold: 0.65, rejectThreshold: 0.95 })
+  const saved = await f.request(path, 'PATCH', { version: before.version, communityModeration: { enabled: true, sensitiveWords: ['  ＡＢＣ ', 'abc', '测试词', 'a.*b'] } })
+  const expected = { enabled: true, sensitiveWords: ['abc', '测试词', 'a.*b'], reviewThreshold: 0.65, rejectThreshold: 0.95 }
+  assert.deepEqual(saved.config.communityModeration, expected)
+  assert.deepEqual((await readSiteSettings(f.db, siteUrl)).moderation, expected)
+  await f.request(path, 'PATCH', { version: saved.version, communityPublicationMode: 'before' })
+  assert.deepEqual(f.state.row.clientOptions.communityModeration, expected)
+  const legacy = await f.request()
+  delete legacy.settings.moderation
+  await f.request('/api/admin/settings', 'PATCH', legacy)
+  assert.deepEqual(f.state.row.clientOptions.communityModeration, expected)
+  assert(!f.statements.some(item => /^(UPDATE|DELETE|INSERT INTO) (community_submission|"user"|community_violation)/.test(item.sql)))
+})
+
+test('moderation configuration rejects malformed or oversized values before writing', async () => {
+  const invalid = [null, [], {}, { enabled: 1, sensitiveWords: [] }, { enabled: true, sensitiveWords: 'a' },
+    { enabled: true, sensitiveWords: [''] }, { enabled: true, sensitiveWords: ['a\nb'] }, { enabled: true, sensitiveWords: ['a\u200bb'] },
+    { enabled: true, sensitiveWords: ['a'.repeat(65)] }, { enabled: true, sensitiveWords: Array(1001).fill('a') },
+    { enabled: true, sensitiveWords: [{ regex: '.*' }] }, { enabled: true, sensitiveWords: [], endpoint: 'https://example.com' }]
+  for (const communityModeration of invalid) {
+    const f = fixture()
+    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModeration }), { statusCode: 400 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  }
+  assert.equal(validateModerationSettings({ enabled: false, sensitiveWords: ['字'.repeat(64)] }).sensitiveWords[0].length, 64)
+})
+
+test('moderation settings require administrator access and reject stale configuration versions', async () => {
+  const path = '/api/admin/community/config', moderation = { enabled: true, sensitiveWords: ['私有词库'], reviewThreshold: 0.7, rejectThreshold: 0.9 }
+  for (const user of [null, { id: 'member' }, { id: 'moderator', isModerator: true }]) {
+    const f = fixture({ user, clientOptions: { communityModeration: moderation } })
+    for (const method of ['GET', 'PATCH']) await assert.rejects(f.request(path, method, { communityModeration: moderation }), { statusCode: user ? 403 : 401 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+  }
+  const f = fixture(), before = await f.request(path)
+  await f.request(path, 'PATCH', { version: before.version, communityModeration: moderation })
+  await assert.rejects(f.request(path, 'PATCH', { version: before.version, communityModeration: { enabled: false, sensitiveWords: [] } }), { statusCode: 409 })
+  assert.deepEqual(f.state.row.clientOptions.communityModeration, moderation)
+})
+
+test('moderation thresholds default for stored legacy policies without changing switches or words', () => {
+  assert.deepEqual(readModerationSettings({ enabled: true, sensitiveWords: ['保留词'] }),
+    { enabled: true, sensitiveWords: ['保留词'], reviewThreshold: 0.65, rejectThreshold: 0.95 })
+  assert.deepEqual(readModerationSettings({ enabled: false, sensitiveWords: [], reviewThreshold: 0.4 }),
+    { enabled: false, sensitiveWords: [], reviewThreshold: 0.4, rejectThreshold: 0.95 })
+})
+
+test('moderation thresholds require finite numeric values and strictly ordered bounds before writes', async () => {
+  const policy = { enabled: true, sensitiveWords: ['保留词'], reviewThreshold: 0.65, rejectThreshold: 0.95 }
+  for (const changed of [{ reviewThreshold: 0 }, { reviewThreshold: -0.01 }, { reviewThreshold: 0.95 }, { reviewThreshold: 1 },
+    { rejectThreshold: 0.65 }, { rejectThreshold: 0 }, { rejectThreshold: 1.01 }, { reviewThreshold: '0.5' },
+    { rejectThreshold: '0.95' }, { reviewThreshold: null }, { rejectThreshold: false },
+    { reviewThreshold: NaN }, { rejectThreshold: Infinity }, { reviewThreshold: -Infinity }]) {
+    const f = fixture({ clientOptions: { communityModeration: policy } })
+    await assert.rejects(f.request('/api/admin/community/config', 'PATCH', { communityModeration: { ...policy, ...changed } }), { statusCode: 400 })
+    assert(!f.statements.some(item => item.sql.startsWith('UPDATE meta')))
+    assert.deepEqual(f.state.row.clientOptions.communityModeration, policy)
+  }
+  assert.equal(validateModerationSettings({ ...policy, reviewThreshold: 0.001, rejectThreshold: 1 }).rejectThreshold, 1)
+})
+
+test('both settings APIs preserve custom thresholds omitted by older clients', async () => {
+  const f = fixture(), path = '/api/admin/community/config'
+  const before = await f.request(path)
+  const initial = { enabled: true, sensitiveWords: ['保留词'], reviewThreshold: 0.8, rejectThreshold: 1 }
+  const saved = await f.request(path, 'PATCH', { version: before.version, communityModeration: initial })
+  const changed = await f.request(path, 'PATCH', { version: saved.version, communityModeration: { enabled: false, sensitiveWords: ['新的词'], reviewThreshold: 0.96 } })
+  assert.deepEqual(changed.config.communityModeration, { enabled: false, sensitiveWords: ['新的词'], reviewThreshold: 0.96, rejectThreshold: 1 })
+  const oldClient = await f.request(path, 'PATCH', { version: changed.version, communityModeration: { enabled: true, sensitiveWords: ['新的词'] } })
+  assert.deepEqual(oldClient.config.communityModeration, { enabled: true, sensitiveWords: ['新的词'], reviewThreshold: 0.96, rejectThreshold: 1 })
+  const legacy = await f.request()
+  delete legacy.settings.moderation.reviewThreshold; delete legacy.settings.moderation.rejectThreshold
+  legacy.settings.moderation.sensitiveWords = ['旧版页面保存']
+  const legacySaved = await f.request('/api/admin/settings', 'PATCH', legacy)
+  assert.deepEqual(legacySaved.settings.moderation, { enabled: true, sensitiveWords: ['旧版页面保存'], reviewThreshold: 0.96, rejectThreshold: 1 })
+})
 
 test('public welfare catalog defaults to three tasks and only exposes enabled display fields', async () => {
   const f = fixture({ user: null })

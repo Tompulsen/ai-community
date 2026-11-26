@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import http.client
 import ipaddress
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -76,6 +77,18 @@ def definition(original, image):
     result['services']['web'] = service
     result['services'].pop('unified_web', None)
     return result
+
+
+
+def expected_web_networks(current, desired):
+    expected = set(current['NetworkSettings']['Networks'])
+    if 'moderation' in desired['services']:
+        spec = importlib.util.spec_from_file_location('community_moderation', Path(__file__).with_name('moderation.py'))
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        policy.validate_definition(desired)
+        expected.add(policy.NETWORK)
+    return expected
 
 
 def proxy_config(original, port=13000):
@@ -298,6 +311,7 @@ def main(image, request_flags=None, proxy_gateway=None):
     compose_bytes, proxy_bytes = COMPOSE.read_bytes(), VHOST.read_bytes()
     original = json.loads(compose_bytes)
     desired = definition(original, image)
+    expected_networks = expected_web_networks(current, desired)
     expected_env = environment(current)
     previous_image = json.loads(execute(['docker', 'image', 'inspect', current['Image']]))[0]
     defaults = dict(v.split('=', 1) for v in previous_image['Config'].get('Env', []) if '=' in v)
@@ -444,7 +458,7 @@ def main(image, request_flags=None, proxy_gateway=None):
         assert all(actual_env.get(key) != '1' for key in WORKER_FLAGS)
         mount_key = lambda x: sorted((m['Type'], m['Source'], m['Destination'], m['RW']) for m in x['Mounts'])
         assert mount_key(deployed) == mount_key(current)
-        assert sorted(deployed['NetworkSettings']['Networks']) == sorted(current['NetworkSettings']['Networks'])
+        assert set(deployed['NetworkSettings']['Networks']) == expected_networks
         assert deployed['HostConfig']['PortBindings'] == before[WEB]['HostConfig']['PortBindings']
         report['applicationChecks'] = probes(13000)
         candidate_workers = reload_proxy(next_proxy.encode())
@@ -470,7 +484,10 @@ def main(image, request_flags=None, proxy_gateway=None):
             if name in sources:
                 continue
             assert after[name]['Id'] == item['Id'] and after[name]['State']['StartedAt'] == item['State']['StartedAt'], f'Protected service changed: {name}'
-        assert [n for n, x in after.items() if n.startswith('ai-community-') and x['State']['Running']] == [n for n, x in after.items() if n in [WEB, 'ai-community-db-1', 'ai-community-redis-1', 'ai-community-documents-1'] and x['State']['Running']]
+        allowed = {WEB, 'ai-community-db-1', 'ai-community-redis-1', 'ai-community-documents-1'}
+        if 'moderation' in desired['services']:
+            allowed.add('ai-community-moderation-1')
+        assert {n for n, x in after.items() if n.startswith('ai-community-') and x['State']['Running']} <= allowed
         assert all(digest(Path(p, 'default.yml').read_bytes()) == h for p, h in original_configs.items())
         try:
             cleanup_candidate(candidate_workers)

@@ -124,3 +124,10 @@ from basketikun/infinite-canvas, supplied in `infinite-canvas-main.zip`.
 Copyright (c) 2026 basketikun, MIT. The complete license is distributed in
 `public/assets/licenses/infinite-canvas-MIT.txt`; the editor retains visible
 Infinite Canvas attribution. No upstream model service, plugin runtime or CLI is included.
+
+The private CPU moderation service reuses the Falconsai NSFW classifier
+(converted to ONNX by onnx-community), RapidOCR and PaddleOCR models. Exact
+model revisions, hashes, license notices and coverage limits are recorded in
+`services/moderation/NOTICE.md` and `services/moderation/models.py`. Apache 2.0
+terms ship in `services/moderation/APACHE-2.0.txt`; runtime dependencies retain
+their respective installed license files.

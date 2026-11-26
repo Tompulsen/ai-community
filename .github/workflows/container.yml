@@ -71,6 +71,10 @@ jobs:
             context: .
             file: ./deploy/documents/Dockerfile
             image: ghcr.io/tompulsen/ai-community-documents
+          - name: moderation
+            context: .
+            file: ./deploy/moderation/Dockerfile
+            image: ghcr.io/tompulsen/ai-community-moderation
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
