@@ -908,17 +908,19 @@ async function readMedia(ctx: RequestContext, req: AccountRequest, svc: Creation
         catch { throw httpError(502, '原图传输中断，请重试保存图片。', 'ORIGINAL_IMAGE_READ_FAILED') }
         signal.throwIfAborted()
         if (!bytes.length || bytes.length > 32 * MiB) throw httpError(413, '原图为空或超过 32 MB，请手动下载保存。')
+        // The upstream read deadline must not truncate a slow browser's completed image.
+        const outputSignal = AbortSignal.any([req.signal, AbortSignal.timeout(300000)])
         // A sent Fastify reply can still have bytes queued for a slow client.
         const completed = finished(ctx.res, { cleanup: true }).catch(() => { ctx.res.destroy() })
         const abortResponse = () => { ctx.res.destroy() }
-        signal.addEventListener('abort', abortResponse, { once: true })
+        outputSignal.addEventListener('abort', abortResponse, { once: true })
         try {
           ctx.reply.headers({ 'Content-Type': original.headers.get('content-type') || 'application/octet-stream',
             'Content-Length': String(bytes.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(bytes)
         } catch (error) { ctx.res.destroy(); throw error }
         finally {
           await completed
-          signal.removeEventListener('abort', abortResponse)
+          outputSignal.removeEventListener('abort', abortResponse)
         }
         return
       } finally { releaseImageRead() }

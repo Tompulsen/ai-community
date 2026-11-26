@@ -3,7 +3,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, SquarePen, X } from '@lucide/vue'
-import { copyMediaImage, mediaSource, readableMedia, readCreationImage } from '../../native-studio'
+import { copyMediaImage, forgetCreationImage, mediaSource, readableMedia, readCreationImage } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
 import { imageDownload, imageDownloadUrl, originalImageUrl } from '../../image-download'
 import { chooseImageDownloadFormat } from '../../image-download-choice'
@@ -156,13 +156,16 @@ function wheel(event: WheelEvent) {
   zoom(scale.value * Math.exp(Math.max(-4, Math.min(4, -delta * .002))), localPoint({ x: event.clientX, y: event.clientY }))
 }
 function resized() { endPan(); offset.value = contain(offset.value) }
-function loadedImage() {
+function loadedImage(event: Event) {
+  if (event.currentTarget !== picture.value || picture.value?.getAttribute('src') !== displayedImage.value) return
   if (imageSource.value) { clearTimeout(imageTimer); loading.value = false; failed.value = false }
   else previewReady.value = true
   offset.value = contain(offset.value)
 }
-function imageFailed() {
+function imageFailed(event?: Event) {
+  if (event && (event.currentTarget !== picture.value || picture.value?.getAttribute('src') !== displayedImage.value)) return
   if (!imageSource.value) { previewFailed.value = true; previewReady.value = false; return }
+  if (source.value) forgetCreationImage(source.value)
   if (imageSource.value.startsWith('blob:')) URL.revokeObjectURL(imageSource.value)
   imageSource.value = ''; failedMedia()
 }
@@ -192,8 +195,12 @@ async function loadImage() {
     if (controller.signal.aborted || accepted !== imageOperation) return
     imageSource.value = URL.createObjectURL(blob)
     imageTimer = setTimeout(imageFailed, 15000)
-  } catch {
-    if (!controller.signal.aborted && accepted === imageOperation) failedMedia()
+  } catch (cause) {
+    if (controller.signal.aborted || accepted !== imageOperation) return
+    if ((cause as { status?: number }).status === 0) {
+      imageSource.value = source.value
+      imageTimer = setTimeout(imageFailed, 300000)
+    } else failedMedia()
   }
 }
 function blur() { endPan() }

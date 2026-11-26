@@ -108,12 +108,52 @@ it('shared original reads retain their remaining reader and cancel together on a
   expect(networkSignal.aborted).toBe(false)
   finish()
   expect(new Uint8Array(await (await save).arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
-  const later = p.readCreationImage('https://media.example/shared.png')
+  const later = p.readCreationImage('https://media.example/next.png')
   const switched = expect(later).rejects.toMatchObject({ name: 'AbortError' })
   await vi.waitFor(() => expect(p.send).toHaveBeenCalledTimes(2))
   p.session.user = { id: 'other-owner', accountId: '18' } as any
   await switched
   expect(networkSignal.aborted).toBe(true)
+})
+it('reuses completed original bytes across canonical URLs and invalidates decoded failures', async () => {
+  const p = await fixture()
+  vi.stubGlobal('location', new URL('https://community.example/create/image'))
+  p.send.mockImplementation(async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } }))
+  const url = 'https://media.example/shared.png', original = await p.readCreationImage(url)
+  const proxy = p.mediaSource(url)!
+  expect(await p.readCreationImage(new URL(proxy, location.origin).href)).toBe(original)
+  expect(p.send).toHaveBeenCalledTimes(1)
+  p.forgetCreationImage(url)
+  await p.readCreationImage(proxy)
+  expect(p.send).toHaveBeenCalledTimes(2)
+  p.session.user = { id: 'other-owner', accountId: '18' } as any
+  await (await import('vue')).nextTick()
+  await p.readCreationImage(url)
+  expect(p.send).toHaveBeenCalledTimes(3)
+})
+it('bounds the original byte cache by both entry count and total bytes', async () => {
+  const p = await fixture()
+  let size = 1
+  p.send.mockImplementation(async () => new Response(new Uint8Array(size), { headers: { 'Content-Type': 'image/png' } }))
+  for (let index = 0; index < 9; index++) await p.readCreationImage(`https://media.example/${index}.png`)
+  await p.readCreationImage('https://media.example/8.png')
+  expect(p.send).toHaveBeenCalledTimes(9)
+  await p.readCreationImage('https://media.example/0.png')
+  expect(p.send).toHaveBeenCalledTimes(10)
+  size = 17 * 1024 ** 2
+  await p.readCreationImage('https://media.example/large-a.png')
+  await p.readCreationImage('https://media.example/large-b.png')
+  expect(p.send).toHaveBeenCalledTimes(12)
+  await p.readCreationImage('https://media.example/large-b.png')
+  expect(p.send).toHaveBeenCalledTimes(12)
+  await p.readCreationImage('https://media.example/large-a.png')
+  expect(p.send).toHaveBeenCalledTimes(13)
+})
+it.each([401, 403, 404, 413])('retains HTTP %s on original reads without automatic retries', async status => {
+  const p = await fixture()
+  p.send.mockResolvedValue(new Response(null, { status }))
+  await expect(p.readCreationImage('https://media.example/rejected.png')).rejects.toMatchObject({ status })
+  expect(p.send).toHaveBeenCalledTimes(1)
 })
 it('original reads enforce the actual streamed size without retrying oversized data', async () => {
   const p = await fixture()

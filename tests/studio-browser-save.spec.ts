@@ -250,17 +250,21 @@ test('quota failure cannot commit a local pointer and retry can finish the same 
   await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
 })
 
-for (const code of [401, 403, 404, 413]) test(`original HTTP ${code} does not retry or commit a local image`, async ({ page }) => {
+for (const code of [401, 403, 404, 413]) test(`original HTTP ${code} neither bypasses the error nor commits a local image`, async ({ page }) => {
   const { state, image } = await fixture(page)
-  let attempts = 0
+  let attempts = 0, nativeReads = 0
   await page.route('**/api/creation/media?**', route => {
     if (new URL(route.request().url()).searchParams.has('variant')) return route.fulfill({ contentType: 'image/jpeg', body: image })
     if (route.request().resourceType() === 'fetch') attempts++
+    else nativeReads++
     return route.fulfill({ status: code })
   })
   await send(page)
   await expect(page.locator('.browser-save')).toHaveClass(/failed/)
-  expect(attempts).toBe(1)
+  // Display and browser saving can start separately after an immediate rejection.
+  expect(attempts).toBeGreaterThan(0)
+  expect(attempts).toBeLessThanOrEqual(2)
+  expect(nativeReads).toBe(0)
   expect((await storedImages(page)).sizes).toEqual([])
   expect(state.generations).toBe(1)
 })
@@ -348,6 +352,96 @@ test('an inline result remains downloadable when browser storage is full', async
   await confirmImageDownload(page)
   expect(await readFile((await (await download).path())!)).toEqual(image)
   expect((await storedImages(page)).sizes).toEqual([])
+  expect(state.generations).toBe(1)
+})
+
+test('display, preview and download reuse one original when browser storage is full', async ({ page }) => {
+  const { image, state } = await fixture(page)
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      if (mode === 'readwrite' && Array.isArray(names) && names.includes('originals')) throw new DOMException('Full', 'QuotaExceededError')
+      return Reflect.apply(transaction, this, [names, mode, options])
+    }
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('浏览器空间不足')
+  await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 })
+    const height = await page.locator('.creation-image').evaluate(element => element.getBoundingClientRect().height)
+    await page.locator('.creation-image').evaluate(element => { element.style.transform = 'translateX(200vw)' })
+    await expect(page.locator('.creation-image img')).not.toHaveAttribute('src')
+    expect(await page.locator('.creation-image').evaluate(element => element.getBoundingClientRect().height)).toBe(height)
+    await page.locator('.creation-image').evaluate(element => { element.style.transform = '' })
+    await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  }
+  expect(state.originals).toBe(1)
+  state.available = false
+  await page.locator('.creation-image-preview').click()
+  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+  await expect(viewer).toBeVisible()
+  await expect.poll(() => viewer.locator('.lightbox-content img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  const pending = page.waitForEvent('download')
+  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
+  expect(await readFile((await (await pending).path())!)).toEqual(image)
+  expect(state.originals).toBe(1)
+  expect(state.generations).toBe(1)
+  expect((await storedImages(page)).sizes).toEqual([])
+})
+
+test('browser fetch failure still allows native preview and requests the original download', async ({ page }) => {
+  const { state } = await fixture(page)
+  await page.evaluate(() => {
+    const originalFetch = window.fetch
+    window.fetch = async (...args) => {
+      const url = new URL(String(args[0]), location.href)
+      if (url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) throw new TypeError('Failed to fetch')
+      return originalFetch(...args)
+    }
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('原图传输中断')
+  await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  await page.locator('.creation-image-preview').click()
+  const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
+  await expect.poll(() => viewer.locator('.lightbox-content img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  const pending = page.waitForEvent('download')
+  await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
+  await confirmImageDownload(page)
+  // Browser-native downloads bypass Playwright's mocked page routes.
+  const url = new URL((await pending).url())
+  expect(url.origin).toBe(new URL(page.url()).origin)
+  expect(url.pathname).toBe('/api/creation/media')
+  expect(url.searchParams.get('url')).toBe('https://media.example/1-0.jpg')
+  expect(url.searchParams.has('variant')).toBe(false)
+  expect(state.generations).toBe(1)
+  expect((await storedImages(page)).sizes).toEqual([])
+})
+
+test('retry discards an undecodable original and reads a fresh image', async ({ page }) => {
+  const { image, state } = await fixture(page)
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      if (mode === 'readwrite' && Array.isArray(names) && names.includes('originals')) throw new DOMException('Full', 'QuotaExceededError')
+      return Reflect.apply(transaction, this, [names, mode, options])
+    }
+  })
+  let corrupt = true
+  await page.route('**/api/creation/media?**', route => {
+    if (new URL(route.request().url()).searchParams.has('variant')) return route.fulfill({ contentType: 'image/jpeg', body: image })
+    state.originals++
+    return route.fulfill({ contentType: 'image/jpeg', body: corrupt ? Buffer.from('invalid image') : image })
+  })
+  await send(page)
+  await expect(page.locator('.browser-save')).toContainText('浏览器空间不足')
+  await expect(page.getByRole('button', { name: '重新加载图片', exact: true })).toBeVisible()
+  corrupt = false
+  await page.getByRole('button', { name: '重新加载图片', exact: true }).click()
+  await expect.poll(() => page.locator('.creation-image img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0)
+  expect(state.originals).toBe(2)
   expect(state.generations).toBe(1)
 })
 

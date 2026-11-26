@@ -728,13 +728,13 @@ test('original image buffering shares bounded read slots and never forwards over
   assert(result.rawPayload.length < 1000)
 })
 
-for (const ending of ['finish', 'disconnect', 'timeout']) test(`original image response holds its read slot until ${ending}`, { timeout: 5000 }, async t => {
+for (const ending of ['finish', 'slow-finish', 'disconnect', 'timeout']) test(`original image response holds its read slot until ${ending}`, { timeout: 5000 }, async t => {
   const { acquireImageRead, releaseImageRead } = await import('./creation/image-preview.ts')
   const bytes = Buffer.from('complete original image'), writeGate = deferred(), writing = deferred(), ended = deferred()
   const deadline = new AbortController()
-  if (ending === 'timeout') {
+  if (ending === 'timeout' || ending === 'slow-finish') {
     const timeout = AbortSignal.timeout.bind(AbortSignal)
-    t.mock.method(AbortSignal, 'timeout', ms => ms === 65000 ? deadline.signal : timeout(ms))
+    t.mock.method(AbortSignal, 'timeout', ms => ms === (ending === 'timeout' ? 300000 : 65000) ? deadline.signal : timeout(ms))
   }
   const { app } = fixture(t, { publicMedia() { return new Response(bytes, { headers: { 'Content-Type': 'image/png' } }) } })
   let raw, client, probe, acquired = false, reserved = false
@@ -773,13 +773,20 @@ for (const ending of ['finish', 'disconnect', 'timeout']) test(`original image r
     probe = acquireImageRead(probeController.signal).then(() => { acquired = true }, () => {})
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(acquired, false, 'a buffered response must keep its slot while the socket write is pending')
-    if (ending === 'finish') writeGate.resolve()
+    if (ending === 'slow-finish') {
+      deadline.abort(new DOMException('Upstream read deadline', 'TimeoutError'))
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(raw.destroyed, false, 'the completed upstream read must not terminate an ongoing client download')
+      assert.equal(acquired, false, 'a slow download must retain its bounded read slot')
+    }
+    const completes = ending === 'finish' || ending === 'slow-finish'
+    if (completes) writeGate.resolve()
     else if (ending === 'disconnect') client.socket.resetAndDestroy()
     else deadline.abort(new DOMException('Image response deadline', 'TimeoutError'))
-    assert.equal(await ended.promise, ending === 'finish' ? 'finish' : 'close')
+    assert.equal(await ended.promise, completes ? 'finish' : 'close')
     await probe
     assert.equal(acquired, true, 'ending the response must release its slot')
-    if (ending === 'finish') assert.deepEqual(await received, bytes)
+    if (completes) assert.deepEqual(await received, bytes)
   } finally {
     probeController.abort()
     client?.destroy(); raw?.destroy(); writeGate.resolve()
