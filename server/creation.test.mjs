@@ -6,13 +6,14 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { get as httpGet } from 'node:http'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import Fastify from 'fastify'
 import sharp from 'sharp'
-import { handleCreation, processCreationTasks } from './creation.ts'
+import { handleCreation, processCreationTasks, cleanupCreationRequests } from './creation.ts'
+import { creationRetention } from '../shared/studio/creation-limits.ts'
 import { readSkillPackage } from './skill-package.ts'
 import { httpError } from './auth.ts'
 import { NewApiError } from './native-account/config.ts'
@@ -111,7 +112,7 @@ test('durable generation survives Redis loss and never replays dispatched reques
       return Response.json({ status: 'completed', url: 'https://media.example/finished.png' })
     } })
     const response = await submit(f.app, { ...input, requestId: 'pending-job', protocol: 'async' }, { prefer: 'respond-async' })
-    assert.equal(response.statusCode, 202)
+    assert.equal(response.statusCode, 200)
     await drainCreations(f.redis)
     f.values.clear()
     await db.query('UPDATE community_creation_request SET next_poll=$1 WHERE record->\'result\'->>\'upstreamId\'=$2', [Date.now() - 1, 'original-job'])
@@ -172,7 +173,7 @@ test('durable generation survives Redis loss and never replays dispatched reques
     await processCreationTasks(f.redis, f.services, storeDb)
     const recovered = (await f.app.inject(`/api/creation/requests/${requestId}`)).json()
     assert.equal(recovered.status, 'succeeded')
-    assert.equal(recovered.outputs[0].url, `/api/creation/media?requestId=${requestId}&index=0`)
+    assert.equal(recovered.outputs[0].url, 'https://media.example/completed.png')
     assert.equal((await db.query('SELECT state FROM community_creation_request WHERE key=$1', [key])).rows[0].state, 'succeeded')
     assert.equal(queries, 1)
     assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
@@ -320,6 +321,7 @@ function fixture(t, options = {}) {
       return [...due].filter(([, score]) => score >= Number(min) && score <= Number(max)).slice(0, 4).map(([key]) => key)
     },
     async get(key) { return values.get(key) ?? null },
+    async del(key) { return Number(values.delete(key)) },
     async set(key, value, ...flags) {
       if (flags.includes('NX') && values.has(key)) return null
       await options.beforeRedisSet?.(key, value, flags)
@@ -431,42 +433,155 @@ test('current image flow exposes preparation and canonical retries bypass new su
   assert.equal((await submit(f.app, { ...input, group: 'other' })).statusCode, 409)
 })
 
-test('image partial save retries only missing originals and private media remains account scoped', async t => {
+test('image results pass through without a second server download or saved original', async t => {
   const db = await requestDatabase(t), filesRoot = await mkdtemp(path.join(tmpdir(), 'current-image-save-'))
   t.after(() => rm(filesRoot, { recursive: true, force: true }))
   environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'current-image-save-secret-'.repeat(3) })
-  const bytes = await sharp({ create: { width: 13, height: 9, channels: 4, background: '#348aac80' } }).png().toBuffer()
-  let fail = true
-  const downloads = []
   const f = fixture(t, { storeDb: db, filesRoot, groupToken: () => 71,
     fetch: () => Response.json({ data: [{ url: 'https://media.example/one.png' }, { url: 'https://media.example/two.png' }] }),
-    async publicMedia(source) {
-      downloads.push(source)
-      if (fail && source.endsWith('/two.png')) throw new Error('fixture save failure')
-      return new Response(bytes, { headers: { 'Content-Type': 'image/png' } })
-    } })
+    publicMedia() { assert.fail('generation must not download another copy of the original') } })
   const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', n: 2, requestId: 'partial-save', contractVersion: 2, group: 'images' }
   const first = await submit(f.app, input)
-  assert.equal(first.json().status, 'save_failed', first.payload)
-  assert.deepEqual(first.json().outputs, [])
-  fail = false
-  const retries = await Promise.all([1, 2].map(() => f.app.inject({ method: 'POST', url: '/api/creation/requests/partial-save/save', headers: { ...headers, host: new URL(origin).host }, payload: {} })))
-  assert(retries.every(item => [200, 202].includes(item.statusCode)), retries.map(item => item.payload).join('\n'))
-  await drainCreations(f.redis)
+  assert.equal(first.json().status, 'succeeded', first.payload)
+  assert.deepEqual(first.json().outputs, [{ url: 'https://media.example/one.png' }, { url: 'https://media.example/two.png' }])
   const result = (await f.app.inject('/api/creation/requests/partial-save')).json()
   assert.equal(result.status, 'succeeded')
-  assert.equal(downloads.filter(source => source.endsWith('/one.png')).length, 1)
-  assert.equal(downloads.filter(source => source.endsWith('/two.png')).length, 2)
   assert.equal(f.calls.length, 1)
-  const original = await f.app.inject(result.outputs[0].url)
-  assert.equal(original.statusCode, 200, original.payload)
-  assert.deepEqual(original.rawPayload, bytes)
-  const preview = await f.app.inject(result.outputs[0].url + '&variant=preview')
-  assert.equal(preview.statusCode, 200); assert.equal(preview.headers['content-type'], 'image/webp')
-  assert.equal((await f.app.inject({ url: result.outputs[0].url, headers: { 'x-test-account': '18' } })).statusCode, 404)
-  assert.equal((await f.app.inject(result.outputs[0].url + '&index=1')).statusCode, 400)
+  assert.deepEqual(await readdir(filesRoot), [])
+  assert.equal((await f.app.inject({ url: '/api/creation/requests/partial-save', headers: { 'x-test-account': '18' } })).statusCode, 404)
   await submit(f.app, input)
   assert.equal(f.calls.length, 1)
+})
+
+async function passthroughFixture(t, options = {}) {
+  const db = await requestDatabase(t), filesRoot = await mkdtemp(path.join(tmpdir(), 'image-passthrough-'))
+  t.after(() => rm(filesRoot, { recursive: true, force: true }))
+  environment(t, { COMMUNITY_REQUEST_STORE: '1', COMMUNITY_REQUEST_V2: '1', NEW_API_SESSION_SECRET: 'image-passthrough-test-'.repeat(3) })
+  const f = fixture(t, { storeDb: db, filesRoot, groupToken: () => 71,
+    fetch: () => Response.json({ data: [{ url: 'https://media.example/original.png' }] }), ...options })
+  const input = { kind: 'image', model: 'gpt-image-2', prompt: 'Test', requestId: 'passthrough', contractVersion: 2, group: 'images' }
+  return { ...f, db, filesRoot, input, row: async () => (await db.query('SELECT * FROM community_creation_request')).rows[0] }
+}
+
+test('large inline images reach the current response but never enter PostgreSQL, Redis or result files', async t => {
+  const pixels = Buffer.alloc(1024 * 1024 + 20, 7).toString('base64')
+  const f = await passthroughFixture(t, { fetch: () => Response.json({ data: [{ b64_json: pixels }] }) })
+  const response = await submit(f.app, f.input, { prefer: 'respond-async' })
+  assert.equal(response.statusCode, 200, response.payload)
+  assert.equal(response.json().outputs[0].url, `data:image/png;base64,${pixels}`)
+  const row = await f.row()
+  assert.equal(row.record.result.status, 'succeeded'); assert.equal(row.record.inlineImagesOmitted, true)
+  assert.deepEqual(row.record.result.outputs, [])
+  assert(!JSON.stringify(row).includes(pixels)); assert(![...f.values.values()].some(value => String(value).includes(pixels)))
+  assert.deepEqual(await readdir(f.filesRoot), [])
+  const recovered = (await f.app.inject('/api/creation/requests/passthrough')).json()
+  assert.equal(recovered.status, 'succeeded'); assert.deepEqual(recovered.outputs, [])
+  assert.match(recovered.error, /社区不保存原图/)
+  await submit(f.app, f.input)
+  assert.equal(f.calls.length, 1, 'a missing local original must not cause another paid submission')
+})
+
+test('even a storage outage writes only image metadata into the recovery file', async t => {
+  const pixels = Buffer.alloc(1024 * 1024 + 20, 9).toString('base64')
+  const f = await passthroughFixture(t)
+  let failed = false
+  const originalQuery = f.db.query.bind(f.db)
+  f.db.query = (sql, params) => {
+    if (failed && sql.includes('SET record=$4')) throw new Error('fixture database outage')
+    return originalQuery(sql, params)
+  }
+  f.services.fetch = async () => { failed = true; return Response.json({ data: [{ b64_json: pixels }] }) }
+  const response = await submit(f.app, f.input)
+  assert.equal(response.json().outputs[0].url, `data:image/png;base64,${pixels}`)
+  const folder = path.join(f.filesRoot, '.creation-results'), names = await readdir(folder)
+  assert.equal(names.length, 1); assert(names[0].endsWith('.request.json'))
+  const recovery = JSON.parse(await readFile(path.join(folder, names[0]), 'utf8'))
+  assert.equal(recovery.inlineImagesOmitted, true); assert.deepEqual(recovery.result.outputs, [])
+  assert(!JSON.stringify(recovery).includes(pixels))
+})
+
+test('async inline image recovery uses the original gateway task GET and never submits again', async t => {
+  const pixels = 'aGVsbG8='
+  const f = await passthroughFixture(t, { fetch(_url, init) { return Response.json(init.method === 'POST'
+    ? { id: 'gateway-original', status: 'queued' } : { id: 'gateway-original', status: 'completed', data: [{ url: 'https://media.example/first.png' }, { b64_json: pixels }] }) } })
+  const input = { ...f.input, protocol: 'async' }
+  assert.equal((await submit(f.app, input)).json().status, 'pending')
+  const row = await f.row()
+  await f.db.query('UPDATE community_creation_request SET next_poll=0 WHERE key=$1', [row.key])
+  await processCreationTasks(f.redis, f.services, f.db)
+  f.values.clear()
+  const recovered = await f.app.inject('/api/creation/requests/passthrough')
+  assert.deepEqual(recovered.json().outputs, [{ url: 'https://media.example/first.png' }, { b64_json: pixels }], recovered.payload)
+  assert(f.calls.filter(call => call.init.method !== 'POST').every(call => call.path.endsWith('/gateway-original')))
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+  assert.deepEqual((await f.row()).record.result.outputs, [{ url: 'https://media.example/first.png' }])
+  assert.deepEqual(await readdir(f.filesRoot), [])
+  const completed = (await f.row()).record
+  const folder = path.join(f.filesRoot, '.creation-results')
+  await mkdir(folder, { recursive: true })
+  await writeFile(path.join(folder, createHash('sha256').update(row.key).digest('hex') + '.request.json'), JSON.stringify(completed))
+  const outdated = structuredClone(completed)
+  delete outdated.inlineImagesOmitted; outdated.result.status = 'pending'; outdated.result.outputs = []
+  await f.db.query('UPDATE community_creation_request SET record=$1 WHERE key=$2', [JSON.stringify(outdated), row.key])
+  f.values.clear()
+  const firstRecovery = await f.app.inject('/api/creation/requests/passthrough')
+  assert.deepEqual(firstRecovery.json().outputs, [{ url: 'https://media.example/first.png' }, { b64_json: pixels }], firstRecovery.payload)
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
+})
+
+test('request state expires in three days and expired Redis cannot resurrect the deleted record', async t => {
+  const f = await passthroughFixture(t)
+  await submit(f.app, f.input)
+  const row = await f.row(), oldRedis = f.values.get(row.key)
+  assert(row.record.requestExpiresAt >= row.record.timings.acceptedAt + creationRetention.request)
+  const expires = row.record.requestExpiresAt
+  let now = expires - 1
+  t.mock.method(Date, 'now', () => now)
+  assert.equal((await f.app.inject('/api/creation/requests/passthrough')).json().status, 'succeeded')
+  now = expires
+  assert.equal((await f.app.inject('/api/creation/requests/passthrough')).statusCode, 404)
+  await cleanupCreationRequests(f.redis, f.db, f.filesRoot)
+  assert.equal(await f.row(), undefined); assert.equal(f.values.has(row.key), false)
+  f.values.set(row.key, oldRedis)
+  assert.equal((await f.app.inject('/api/creation/requests/passthrough')).statusCode, 404)
+  assert.equal(await f.row(), undefined)
+})
+
+test('legacy private originals remain readable and are removed with their expired task', async t => {
+  const f = await passthroughFixture(t)
+  await submit(f.app, f.input)
+  const row = await f.row(), { saveImageOutputs } = await import('./creation/image-results.ts')
+  const bytes = await sharp({ create: { width: 5, height: 5, channels: 3, background: 'red' } }).png().toBuffer()
+  const outputs = await saveImageOutputs(f.filesRoot, row.key, row.record.result.outputs,
+    async () => new Response(bytes, { headers: { 'Content-Type': 'image/png' } }))
+  row.record.retainImages = true; row.record.result.outputs = outputs
+  await f.db.query('UPDATE community_creation_request SET record=$1 WHERE key=$2', [JSON.stringify(row.record), row.key])
+  const original = await f.app.inject(outputs[0].url)
+  assert.equal(original.statusCode, 200); assert.deepEqual(original.rawPayload, bytes)
+  assert.equal((await f.app.inject({ url: outputs[0].url, headers: { 'x-test-account': '18' } })).statusCode, 404)
+  t.mock.method(Date, 'now', () => row.record.requestExpiresAt)
+  await cleanupCreationRequests(f.redis, f.db, f.filesRoot)
+  const directory = path.join(f.filesRoot, '.creation-images', row.key.split(':')[3], createHash('sha256').update('passthrough').digest('hex'))
+  await assert.rejects(readdir(directory), { code: 'ENOENT' })
+  assert.equal(await f.row(), undefined)
+})
+
+test('cleanup cannot delete a request reclaimed by a running worker', async t => {
+  const f = await passthroughFixture(t)
+  await submit(f.app, f.input)
+  const row = await f.row(), now = row.record.requestExpiresAt
+  let raced = false
+  const racingDb = { async query(sql, params) {
+    if (!raced && sql.includes('UPDATE community_creation_request')) {
+      raced = true
+      await f.db.query(`UPDATE community_creation_request SET version=version+1,next_poll=$1,
+        record=jsonb_set(record,'{result,status}','"pending"') WHERE key=$2`, [now + 120000, row.key])
+    }
+    return f.db.query(sql, params)
+  } }
+  await cleanupCreationRequests(f.redis, racingDb, f.filesRoot, now)
+  assert(raced); assert.equal((await f.row()).record.result.status, 'pending')
+  assert.equal((await f.row()).record.filesCleanedAt, undefined)
 })
 
 test('queued image submission rechecks a fresh request identity without blocking task GETs', async t => {
@@ -1189,7 +1304,7 @@ test('an interrupted text client reads pending until the original request finish
   assert.equal((await f.app.inject('/api/creation/requests/pending-text')).json().outputs[0].text, 'Original answer')
   assert.equal(f.calls.length, 1)
 })
-test('background acceptance failure never crosses the paid boundary and large worker results use file storage', { timeout: 5000 }, async t => {
+test('acceptance failure never crosses the paid boundary and large gateway results stay out of file storage', { timeout: 5000 }, async t => {
   const previous = process.env.NEW_API_SESSION_SECRET
   process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-background-test-'))
@@ -1219,14 +1334,15 @@ test('background acceptance failure never crosses the paid boundary and large wo
   await trackingSaved.promise
   await processCreationTasks(f.redis, f.services)
   const saved = JSON.parse(f.values.get(key))
-  assert.equal(typeof saved.file, 'string')
+  assert.equal(saved.file, undefined)
+  assert.equal(saved.inlineImagesOmitted, true)
   assert(f.values.get(key).length < 10000)
   const result = (await f.app.inject('/api/creation/requests/request-1')).json()
   assert.equal(result.status, 'succeeded')
   assert.equal(result.outputs[0].b64_json, pixels)
   assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 1)
 })
-for (const failures of [1, 3]) test(`background results survive ${failures} storage failures without replaying generation`, async t => {
+for (const failures of [1, 3]) test(`image result metadata survives ${failures} storage failures without replaying generation`, async t => {
   const previous = process.env.NEW_API_SESSION_SECRET
   process.env.NEW_API_SESSION_SECRET = 'fixture-background-secret-'.repeat(3)
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-result-recovery-'))
@@ -1242,7 +1358,7 @@ for (const failures of [1, 3]) test(`background results survive ${failures} stor
     },
     fetch() { return Response.json({ data: [{ url: 'https://media.example/paid-result.png' }] }) },
   })
-  assert.equal((await submit(f.app, imageRequest, { Prefer: 'respond-async' })).statusCode, 202)
+  assert.equal((await submit(f.app, imageRequest, { Prefer: 'respond-async' })).statusCode, 200)
   let result
   for (let i = 0; i < 100; i++) {
     result = (await f.app.inject('/api/creation/requests/request-1')).json()
@@ -1497,7 +1613,7 @@ test('configured image interfaces select the matching stream parser and history 
   }
 })
 
-test('native Gemini automatic image requests prepare private history and recover without another paid submission', async t => {
+test('native Gemini images deliver inline bytes once and retain only metadata for retries', async t => {
   for (const stream of [false, true]) {
     const modelTypes = [{ id: 'native-image', kind: 'image', apiFormat: 'gemini',
       image: { autoResolution: '2k', autoAspectRatio: '16:9' } }]
@@ -1518,7 +1634,11 @@ test('native Gemini automatic image requests prepare private history and recover
     assert.equal(result.status, 'succeeded')
     assert.equal(result.apiFormat, 'gemini')
     assert.equal(result.protocol, 'sync')
-    assert.equal(result.outputs[0].url, 'data:image/png;base64,aW1hZ2U=')
+    const delivered = stream ? response.payload.split('\n\n').filter(line => line.startsWith('data: '))
+      .map(line => JSON.parse(line.slice(6))).findLast(event => event.type === 'result') : response.json()
+    assert.equal(delivered.outputs[0].url, 'data:image/png;base64,aW1hZ2U=')
+    assert.deepEqual(result.outputs, [])
+    assert.match(result.error, /社区不保存原图/)
     assert.equal(reads.length, 1)
     assert.equal(calls[0].path, `/v1beta/models/native-image:${stream ? 'streamGenerateContent' : 'generateContent'}`)
     const body = JSON.parse(calls[0].init.body)

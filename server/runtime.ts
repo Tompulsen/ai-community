@@ -292,7 +292,7 @@ export async function start(): Promise<FastifyInstance> {
   const app = createApplication({ db, redis, config, filesRoot: process.env.FILES_ROOT || '/app/files' })
   const stopWorker = process.env.DISABLE_LOTTERY_WORKER === '1' ? () => {} : startPendingWorker({ db, config, newId })
   const stopMedia = process.env.DISABLE_MEDIA_WORKER === '1' ? async () => {} : startMediaWorker({ db, filesRoot: process.env.FILES_ROOT || '/app/files' })
-  const stopCreation = startCreationWorker(redis, db)
+  const stopCreation = startCreationWorker(redis, db, process.env.FILES_ROOT || '/app/files')
   app.addHook('preClose', async () => { stopAcceptingCreations(redis); stopCreation() })
   app.addHook('onClose', async () => {
     stopWorker()

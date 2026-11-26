@@ -5,6 +5,10 @@ export const textGenerationTimeouts = {
   save: 60_000,
 }
 export const creationStreamProtocol = 'append-v1'
+export const creationRetention = {
+  request: 3 * 86400_000,
+  sweep: 5 * 60_000,
+}
 
 export function creationRetryDelay(value: unknown, minimum: number) {
   if (typeof value !== 'string' || !value.trim()) return minimum

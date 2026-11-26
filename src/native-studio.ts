@@ -61,7 +61,7 @@ export interface CreationTask {
   preview?: string
   poster?: string
   localSave?: { state: 'saving' | 'downloadRequested' | 'failed'; error?: string; requestedAt?: number; completed?: number }
-  browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string }
+  browserSave?: { state: 'saving' | 'saved' | 'failed'; error?: string; completed?: number; total?: number }
   galleryHidden?: boolean
   galleryHiddenIndices?: number[]
   toolCalls?: StudioToolCall[]
@@ -433,9 +433,12 @@ async function loadCreationImage(url: string, signal: AbortSignal): Promise<Blob
       const blob = new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] || '' })
       if (!blob.size || !blob.type.startsWith('image/')) { status = 422; retryable = false; message = '原图数据不完整，请重试保存图片。'; throw new Error(message) }
       return blob
-    } catch {
+    } catch (cause) {
       check()
-      if (!retryable || attempt >= 2 || expired) throw Object.assign(new Error(message), { status })
+      if (controller.signal.reason?.name === 'TimeoutError') {
+        status = 408; message = '原图读取超时，图片生成记录已保留，请重试保存图片。'
+      }
+      if (!retryable || attempt >= 2 || expired) throw Object.assign(new Error(message, { cause }), { status })
     } finally {
       clearTimeout(idle); clearTimeout(total); signal.removeEventListener('abort', abort)
       controller.abort()
@@ -566,7 +569,7 @@ function applyResult(task: CreationTask, value: unknown): boolean {
     return true
   }
   if (['complete', 'completed', 'success', 'succeeded'].includes(status)) {
-    task.phase = 'attention'; task.error = '上游任务已结束，但未返回可读取的结果，记录已保留。'
+    task.phase = 'attention'; task.error = detail || '上游任务已结束，但未返回可读取的结果，记录已保留。'
     return true
   }
   task.phase = task.upstreamId || task.serverTracked ? 'running' : 'attention'
@@ -975,7 +978,7 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   try {
     const response = await fetch('/api/creation/generate', {
       method: 'POST', credentials: 'same-origin', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(input.kind !== 'text' ? { Prefer: 'respond-async' } : { 'X-Creation-Stream': creationStreamProtocol }), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
+      headers: { 'Content-Type': 'application/json', ...(input.kind === 'video' ? { Prefer: 'respond-async' } : input.kind === 'text' ? { 'X-Creation-Stream': creationStreamProtocol } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
         ...(acceptedAccount ? { 'X-New-Api-User': acceptedAccount } : {}),
         ...(contractVersion !== 2 && selectedTokenId ? { 'X-New-Api-Token': String(selectedTokenId) } : {}),
         ...(contractVersion !== 2 && selectedGroup ? { 'X-New-Api-Group': encodeURIComponent(selectedGroup) } : {}) },
@@ -1231,7 +1234,7 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
   const version = epoch, controller = new AbortController(), signal = controller.signal
   const current = () => version === epoch && task.owner === activeOwner() && creation.tasks.includes(task) && !signal.aborted
   const check = () => { if (!current()) throw new DOMException('Stopped', 'AbortError') }
-  task.browserSave = { state: 'saving' }
+  task.browserSave = { state: 'saving', completed: 0, total: task.urls.length }
   const promise = (async () => {
     let acquired = false
     try {
@@ -1249,19 +1252,20 @@ export function cacheCreationImages(value: CreationTask, retry = false): Promise
       })
       else activeImageSaves++
       acquired = true; check()
-      let failure: unknown
+      let failure: unknown, completed = 0
       for (let index = 0; index < task.urls.length; index++) {
         try {
           const source = task.urls[index]!
           if (source.startsWith('studio-asset:')) {
             if (!await readTaskAsset(task.owner, source)) throw new Error('此浏览器中的原图已丢失，请从已下载的文件恢复。')
-            check(); continue
+          } else {
+            const blob = await readCreationImage(source, signal)
+            check()
+            const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal); check()
+            if (!local || ![source, local].includes(task.urls[index]!)) throw new Error('原图记录已变化，请重新打开后保存。')
+            task.urls[index] = local
           }
-          const blob = await readCreationImage(source, signal)
-          check()
-          const local = await saveTaskOriginal(task.owner, task.id, index, source, blob, signal); check()
-          if (!local || ![source, local].includes(task.urls[index]!)) throw new Error('原图记录已变化，请重新打开后保存。')
-          task.urls[index] = local
+          check(); task.browserSave = { state: 'saving', completed: ++completed, total: task.urls.length }
         } catch (cause) { check(); failure ||= cause }
       }
       if (failure) throw failure

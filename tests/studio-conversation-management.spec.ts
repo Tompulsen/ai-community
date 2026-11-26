@@ -53,7 +53,7 @@ async function snapshot(page: Page, key = 'native-chat') {
   return page.evaluate(async key => {
     if (key === 'native-creation-history') {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('community-studio-media', 1)
+        const request = indexedDB.open('community-studio-media')
         request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
       })
       return new Promise<any[]>((resolve, reject) => {
@@ -214,10 +214,12 @@ test('the background task entry opens its own media conversation rather than the
   await page.locator('.studio-sidebar').getByRole('link', { name: '探索社区', exact: true }).click()
   await expect(page).toHaveURL(/\/discover$/)
   const dock = page.getByRole('complementary', { name: '后台生成任务', exact: true })
-  await expect(dock).toHaveCount(0)
+  await expect(dock).toBeVisible()
+  await expect(dock).toContainText('正在生成')
+  await expect(dock).toContainText('图片会话B')
   await setPhase('complete')
   await expect(dock).toContainText('图片会话B')
-  await dock.getByRole('button', { name: '查看任务', exact: true }).click()
+  await dock.getByRole('button', { name: '查看结果', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).toHaveValue('')
   await expect(page.locator('.creation-request')).toHaveCount(1)
   await expect(page.locator('.creation-request')).toContainText('图片会话B')
@@ -274,7 +276,8 @@ test('renaming an image conversation persists while further generations append t
 test('new media conversations reserve a stable ID for the first and subsequent turns', async ({ page }) => {
   await fixture(page)
   const sidebar = page.locator('.studio-sidebar')
-  await expect(sidebar.locator('.studio-sidebar-brand').getByRole('button')).toHaveCount(0)
+  await expect(sidebar.locator('.studio-sidebar-brand').getByRole('button', { name: '折叠侧栏', exact: true })).toBeVisible()
+  await expect(sidebar.getByRole('button', { name: '新对话', exact: true })).toHaveCount(1)
   await sidebar.getByRole('navigation', { name: '工作台导航' }).getByRole('button', { name: '新对话', exact: true }).click()
   const message = page.getByRole('textbox', { name: '提示词', exact: true })
   for (const prompt of ['新的独立创作', '独立创作的第二轮']) {

@@ -61,7 +61,7 @@ async function fixture(page: Page, count = 125, videoOnly = false, failImageOnce
 }
 async function previewMetadata(page: Page) {
   return page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('community-studio-media', 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('community-studio-media'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
     const values = await new Promise<any[]>(resolve => {
       const request = db.transaction('previews').objectStore('previews').getAll()
       request.onsuccess = () => resolve(request.result)

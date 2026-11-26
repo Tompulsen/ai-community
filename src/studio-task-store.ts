@@ -18,7 +18,8 @@ interface TaskRecord {
   value: CreationTask
   mediaIdentity: string
 }
-interface AssetRecord { owner: string; key: string; taskId: string; blob: Blob; identity: string }
+interface AssetRecord { owner: string; key: string; taskId: string; blob?: Blob; identity: string; mime?: string }
+interface PreparedAsset extends AssetRecord { blob: Blob }
 interface PreviewRecord { owner: string; id: string; identity: string; blob: Blob; duration?: number }
 interface TaskMetadata { owner: string; initialized?: boolean; revision?: string; storageRevision?: string }
 export interface TaskSummary { total: number; mediaCount: number; models: string[] }
@@ -40,15 +41,20 @@ function checkOwner(owner: string) {
 function database() {
   if (opening) return opening
   opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(databaseName, 1)
+    const request = indexedDB.open(databaseName, 2)
     request.onupgradeneeded = () => {
       const db = request.result
-      const tasks = db.createObjectStore('tasks', { keyPath: ['owner', 'id'] })
-      tasks.createIndex('ownerCreatedAtId', ['owner', 'createdAt', 'id'])
-      db.createObjectStore('previews', { keyPath: ['owner', 'id'] })
-      const originals = db.createObjectStore('originals', { keyPath: ['owner', 'key'] })
-      originals.createIndex('ownerTask', ['owner', 'taskId'])
-      db.createObjectStore('meta', { keyPath: 'owner' })
+      if (!db.objectStoreNames.contains('tasks')) {
+        const tasks = db.createObjectStore('tasks', { keyPath: ['owner', 'id'] })
+        tasks.createIndex('ownerCreatedAtId', ['owner', 'createdAt', 'id'])
+      }
+      if (!db.objectStoreNames.contains('previews')) db.createObjectStore('previews', { keyPath: ['owner', 'id'] })
+      if (!db.objectStoreNames.contains('originals')) {
+        const originals = db.createObjectStore('originals', { keyPath: ['owner', 'key'] })
+        originals.createIndex('ownerTask', ['owner', 'taskId'])
+      }
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'owner' })
+      db.createObjectStore('contents', { keyPath: ['owner', 'identity'] })
     }
     request.onerror = () => { opening = undefined; reject(request.error) }
     request.onblocked = () => { opening = undefined; reject(new Error('媒体数据库正在更新，请关闭其它旧页面后重试。')) }
@@ -138,8 +144,19 @@ async function identity(blob: Blob) {
   const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
+function assetWriter(transaction: IDBTransaction) {
+  const originals = transaction.objectStore('originals'), contents = transaction.objectStore('contents'), queued = new Set<string>()
+  return ({ blob, ...asset }: PreparedAsset) => {
+    originals.put({ ...asset, mime: blob.type } satisfies AssetRecord)
+    const key = JSON.stringify([asset.owner, asset.identity])
+    if (queued.has(key)) return
+    queued.add(key)
+    const request = contents.getKey([asset.owner, asset.identity])
+    request.onsuccess = () => { if (request.result === undefined) contents.put({ owner: asset.owner, identity: asset.identity, blob }) }
+  }
+}
 async function prepareTask(owner: string, raw: string, db: IDBDatabase, previousRaw?: string, previousIdentity?: string) {
-  const task: CreationTask = JSON.parse(raw), assets: AssetRecord[] = [], sources: string[] = []
+  const task: CreationTask = JSON.parse(raw), assets: PreparedAsset[] = [], sources: string[] = []
   checkTask(task, owner)
   const previous: CreationTask | undefined = previousRaw ? JSON.parse(previousRaw) : undefined
   const unchangedUrls = task.urls.map((url, index) => task.kind === previous?.kind && url === previous.urls[index])
@@ -227,8 +244,8 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
       if (item.record.id !== id) throw new Error('生成记录编号与快照不一致，原记录已保留。')
       prepared.push(item)
     }
-    const transaction = db.transaction(['tasks', 'meta', 'originals', 'previews'], 'readwrite'), done = completed(transaction)
-    const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), previews = transaction.objectStore('previews')
+    const transaction = db.transaction(['tasks', 'meta', 'originals', 'contents', 'previews'], 'readwrite'), done = completed(transaction)
+    const records = transaction.objectStore('tasks'), writeAsset = assetWriter(transaction), previews = transaction.objectStore('previews')
     for (const id of removed) {
       records.delete([owner, id]); clearTaskPreviews(previews, owner, id)
       // Other turns can still reference this task's original image.
@@ -256,7 +273,7 @@ export function saveCapturedTaskSnapshot(owner: string, captured: ReadonlyMap<st
         }
         if (stored && stored.mediaIdentity !== record.mediaIdentity) clearTaskPreviews(previews, owner, record.id)
         records.put(record)
-        for (const asset of assets) originals.put(asset)
+        for (const asset of assets) writeAsset(asset)
       }
     }
     const changedRecords = removed.length > 0 || prepared.length > 0
@@ -311,14 +328,14 @@ export function galleryOutputIndexes(task: CreationTask) {
 }
 export async function getTaskStorageSize(owner: string) {
   return cachedTaskRead(owner, 'storage', async () => {
-    const db = await database(), transaction = db.transaction(['originals', 'previews']), done = completed(transaction)
+    const db = await database(), transaction = db.transaction(['originals', 'contents', 'previews']), done = completed(transaction)
     let bytes = 0
-    for (const name of ['originals', 'previews']) {
+    for (const name of ['originals', 'contents', 'previews']) {
       const request = transaction.objectStore(name).openCursor(IDBKeyRange.bound([owner, ''], [owner, '\uffff']))
       request.onsuccess = () => {
         const cursor = request.result
         if (!cursor) return
-        bytes += (cursor.value as AssetRecord | PreviewRecord).blob.size
+        bytes += (cursor.value as AssetRecord | PreviewRecord).blob?.size || 0
         cursor.continue()
       }
     }
@@ -389,7 +406,11 @@ export async function readTaskAsset(owner: string, url: string, preview = false)
     const thumb = await readTaskPreview(owner, key[1]!, JSON.stringify(['image', url]))
     if (thumb) return thumb.blob
   }
-  return (await read<AssetRecord>(db.transaction('originals').objectStore('originals'), [owner, `${key[1]}:${key[2]}`]))?.blob
+  const transaction = db.transaction(['originals', 'contents']), done = completed(transaction)
+  const asset = await read<AssetRecord>(transaction.objectStore('originals'), [owner, `${key[1]}:${key[2]}`])
+  const blob = asset?.blob || (asset ? (await read<{ blob: Blob }>(transaction.objectStore('contents'), [owner, asset.identity]))?.blob : undefined)
+  await done
+  return blob && asset?.mime && blob.type !== asset.mime ? blob.slice(0, blob.size, asset.mime) : blob
 }
 export async function saveTaskOriginal(owner: string, id: string, index: number, source: string, blob: Blob, signal?: AbortSignal): Promise<string | undefined> {
   checkOwner(owner)
@@ -399,8 +420,9 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
   const pending = (writes.get(owner) || Promise.resolve()).catch(() => {}).then(async () => {
     const hash = await identity(blob), db = await database()
     signal?.throwIfAborted()
-    const transaction = db.transaction(['tasks', 'originals', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
-    const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), previews = transaction.objectStore('previews')
+    const transaction = db.transaction(['tasks', 'originals', 'contents', 'previews', 'meta'], 'readwrite'), done = completed(transaction)
+    const records = transaction.objectStore('tasks'), originals = transaction.objectStore('originals'), writeAsset = assetWriter(transaction), previews = transaction.objectStore('previews')
+    const asset = { owner, key: `${id}:${index}`, taskId: id, blob, identity: hash }
     const request = records.get([owner, id]), local = taskAssetUrl(id, index)
     request.onsuccess = () => {
       if (signal?.aborted) { transaction.abort(); return }
@@ -408,11 +430,14 @@ export async function saveTaskOriginal(owner: string, id: string, index: number,
       if (!record || !task || task.kind !== 'image') return
       if (task.urls[index] === local) {
         const existing = originals.get([owner, `${id}:${index}`])
-        existing.onsuccess = () => { if ((existing.result as AssetRecord | undefined)?.identity === hash) saved = local }
+        existing.onsuccess = () => {
+          if ((existing.result as AssetRecord | undefined)?.identity !== hash) return
+          writeAsset(asset); updateMetadata(transaction, owner, true, { storageOnly: true }); saved = local
+        }
         return
       }
       if (task.urls[index] !== source) return
-      originals.put({ owner, key: `${id}:${index}`, taskId: id, blob, identity: hash } satisfies AssetRecord)
+      writeAsset(asset)
       task.urls[index] = local
       record.mediaIdentity = JSON.stringify([task.kind, task.urls])
       records.put(record); updateMetadata(transaction, owner, true)

@@ -172,7 +172,9 @@ it('a stalled original has finite retries and caller cancellation stops the curr
   p.send.mockImplementation(async (_url, options) => new Response(new ReadableStream({ start(controller) {
     options!.signal!.addEventListener('abort', () => controller.error(options!.signal!.reason), { once: true })
   } }), { headers: { 'Content-Type': 'image/png' } }))
-  const failed = expect(p.readCreationImage('https://media.example/stalled.png')).rejects.toThrow('原图传输中断')
+  const failed = expect(p.readCreationImage('https://media.example/stalled.png')).rejects.toMatchObject({
+    message: expect.stringContaining('原图读取超时'), status: 408, cause: expect.objectContaining({ name: 'TimeoutError' }),
+  })
   await vi.advanceTimersByTimeAsync(190000)
   await failed
   expect(p.send).toHaveBeenCalledTimes(3)
@@ -201,7 +203,7 @@ it('an original cannot extend its overall deadline through progress or retries',
     } }), { headers: { 'Content-Type': 'image/png' } })
   })
   const pending = p.readCreationImage('https://media.example/endless.png').finally(() => { settled = true })
-  const failed = expect(pending).rejects.toThrow('原图传输中断')
+  const failed = expect(pending).rejects.toMatchObject({ status: 408, cause: expect.objectContaining({ name: 'TimeoutError' }) })
   await vi.advanceTimersByTimeAsync(299999)
   expect(settled).toBe(false)
   expect(reads).toBe(2)

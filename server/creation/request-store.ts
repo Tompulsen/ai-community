@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Queryable } from '../types.ts'
+import { creationRetention } from '../../shared/studio/creation-limits.ts'
 
 export const requestStoreEnabled = () => process.env.COMMUNITY_REQUEST_STORE === '1'
 const v2Configured = () => process.env.COMMUNITY_REQUEST_V2 === '1' || !!process.env.COMMUNITY_REQUEST_V2_ACCOUNTS?.trim()
@@ -16,6 +17,14 @@ export interface DurableRequest {
   owner: string
   context: Record<string, unknown>
   record: Record<string, unknown>
+  updated_at: Date | string
+}
+function retainRow(row: DurableRequest | undefined) {
+  if (!row) return row
+  const updated = new Date(row.updated_at).getTime()
+  const timings = row.record.timings as { acceptedAt?: number } | undefined
+  row.record.requestExpiresAt ??= (timings?.acceptedAt ?? updated) + creationRetention.request
+  return row
 }
 export async function checkRequestSchema(db: Queryable) {
   if (!requestStoreEnabled()) {
@@ -28,15 +37,16 @@ export async function checkRequestSchema(db: Queryable) {
     throw new Error('Import legacy request records and verify credential provenance before enabling v2')
 }
 export async function readDurableRequest(db: Queryable, key: string) {
-  return (await db.query<DurableRequest>('SELECT * FROM community_creation_request WHERE key=$1', [key])).rows[0]
+  return retainRow((await db.query<DurableRequest>('SELECT * FROM community_creation_request WHERE key=$1', [key])).rows[0])
 }
 export async function registerDurableRequest(db: Queryable, key: string, fingerprint: string, record: object, contractVersion = 1, legacy = false) {
+  record = { requestExpiresAt: Date.now() + creationRetention.request, ...record }
   const owner = randomUUID()
   const result = await db.query<DurableRequest>(`INSERT INTO community_creation_request
     (key, fingerprint, contract_version, state, owner, record, next_poll)
     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (key) DO NOTHING RETURNING *`,
   [key, fingerprint, contractVersion, legacy ? requestState(record) : 'preparing', owner, JSON.stringify(record), nextPoll(record)])
-  return { inserted: result.rows.length === 1, row: result.rows[0] ?? (await readDurableRequest(db, key))! }
+  return { inserted: result.rows.length === 1, row: retainRow(result.rows[0]) ?? (await readDurableRequest(db, key))! }
 }
 function nextPoll(record: object): number | null {
   const item = record as { result?: { status?: string }; deadline?: number }
@@ -47,6 +57,7 @@ function requestState(record: object) {
   return status === 'pending' ? 'running' : status === 'succeeded' ? 'succeeded' : status === 'failed' ? 'failed' : 'indeterminate'
 }
 export async function dispatchDurableRequest(db: Queryable, row: DurableRequest, context: object, record: object) {
+  record = { requestExpiresAt: row.record.requestExpiresAt, ...record }
   const updated = await db.query<DurableRequest>(`UPDATE community_creation_request SET state='dispatch_intent',
     context=$4, record=$5, next_poll=$6, version=version+1, updated_at=now()
     WHERE key=$1 AND owner=$2 AND version=$3 AND state='preparing' AND next_poll>$7 RETURNING *`,
@@ -55,6 +66,7 @@ export async function dispatchDurableRequest(db: Queryable, row: DurableRequest,
   return updated.rows[0]
 }
 export async function savePreparingRequest(db: Queryable, row: DurableRequest, record: object) {
+  record = { requestExpiresAt: row.record.requestExpiresAt, ...record }
   const updated = await db.query<DurableRequest>(`UPDATE community_creation_request SET record=$4,
     version=version+1, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3
     AND state='preparing' AND next_poll>$5 RETURNING *`,
@@ -63,17 +75,29 @@ export async function savePreparingRequest(db: Queryable, row: DurableRequest, r
   Object.assign(row, updated.rows[0])
 }
 export async function saveDurableRequest(db: Queryable, row: DurableRequest, record: object, next: number | null, beforeDispatch = false) {
+  record = { requestExpiresAt: row.record.requestExpiresAt, ...record }
   const result = await db.query<DurableRequest>(`UPDATE community_creation_request SET record=$4, state=$5,
     next_poll=$6, version=version+1, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3 RETURNING *`,
   [row.key, row.owner, row.version, JSON.stringify(record), beforeDispatch ? 'failed_before_dispatch' : requestState(record), next])
   if (!result.rows[0]) throw new Error('Request record ownership changed')
   Object.assign(row, result.rows[0])
 }
+export async function expiredRequestCandidates(db: Queryable, now: number) {
+  return (await db.query<DurableRequest>(`SELECT * FROM community_creation_request WHERE next_poll IS NULL AND (
+    COALESCE((record->>'requestExpiresAt')::bigint,
+      COALESCE((record#>>'{timings,acceptedAt}')::bigint, EXTRACT(EPOCH FROM updated_at)*1000)+$2) <= $1
+    ) ORDER BY updated_at LIMIT 100`,
+  [now, creationRetention.request])).rows.map(row => retainRow(row)!)
+}
+export async function deleteDurableRequest(db: Queryable, row: DurableRequest) {
+  return (await db.query(`DELETE FROM community_creation_request WHERE key=$1 AND owner=$2 AND version=$3
+    AND next_poll IS NULL RETURNING key`, [row.key, row.owner, row.version])).rows.length === 1
+}
 export async function dueDurableRequests(db: Queryable) {
-  return (await db.query<DurableRequest>(`SELECT * FROM community_creation_request WHERE next_poll<=$1 ORDER BY next_poll LIMIT 4`, [Date.now()])).rows
+  return (await db.query<DurableRequest>(`SELECT * FROM community_creation_request WHERE next_poll<=$1 ORDER BY next_poll LIMIT 4`, [Date.now()])).rows.map(row => retainRow(row)!)
 }
 export async function claimDurablePoll(db: Queryable, row: DurableRequest) {
   return (await db.query<DurableRequest>(`UPDATE community_creation_request SET owner=$4, version=version+1,
-    next_poll=$5, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3 AND next_poll<=$6 RETURNING *`,
-  [row.key, row.owner, row.version, randomUUID(), Date.now() + 120000, Date.now()])).rows[0]
+    next_poll=$5, record=$7, updated_at=now() WHERE key=$1 AND owner=$2 AND version=$3 AND next_poll<=$6 RETURNING *`,
+  [row.key, row.owner, row.version, randomUUID(), Date.now() + 120000, Date.now(), JSON.stringify(retainRow(row)!.record)])).rows[0]
 }

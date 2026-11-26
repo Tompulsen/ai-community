@@ -28,7 +28,8 @@ async function fixture(page: Page) {
 async function send(page: Page) {
   await page.getByRole('textbox', { name: '提示词', exact: true }).fill('完整保存并预览原图')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
-  await expect(page.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'false')
+  await expect(page.locator('.task-status')).toContainText('生成完成')
+  await expect(page.locator('.creation-image-preview')).toBeVisible()
 }
 
 async function slowTransfer(page: Page, image: Buffer, stalled = false) {
@@ -84,6 +85,7 @@ test('opening an image shows a preview and closing it leaves the shared original
   })
   try {
     await send(page)
+    await expect(page.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'true')
     await page.locator('.creation-image-preview').click()
     const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
     await expect(viewer).toBeVisible()
@@ -100,12 +102,18 @@ test('opening an image shows a preview and closing it leaves the shared original
 
 test('stalled originals stop loading and can be retried while the preview stays visible', async ({ page }) => {
   const { state, image } = await fixture(page)
+  let nativeOriginals = 0
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (request.resourceType() === 'image' && url.pathname === '/api/creation/media' && !url.searchParams.has('variant')) nativeOriginals++
+  })
   await slowTransfer(page, image, true)
   await send(page)
   await page.locator('.creation-image-preview').click()
   const viewer = page.getByRole('dialog', { name: '原始媒体预览', exact: true })
   await expect(viewer.getByRole('button', { name: '重新加载', exact: true })).toBeVisible({ timeout: 6000 })
   await expect(viewer.locator('.lightbox-loading')).toHaveCount(0)
+  expect(nativeOriginals).toBe(0)
   await expect.poll(() => viewer.locator('img').evaluateAll(images => images.some(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
   await mkdir('.taste-skill/original-transfer', { recursive: true })
   for (const width of [1440, 390, 320]) {

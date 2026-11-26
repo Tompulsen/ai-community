@@ -77,9 +77,96 @@ test('an aborted original transaction rolls back both bytes and the task pointer
     catch { rejected = true }
     finally { IDBObjectStore.prototype.put = put }
     return { rejected, urls: (await store.getTaskPage('17')).tasks[0].urls,
-      missing: !await store.readTaskAsset('17', store.taskAssetUrl(task.id, 0)) }
+      missing: !await store.readTaskAsset('17', store.taskAssetUrl(task.id, 0)), bytes: await store.getTaskStorageSize('17') }
   })
-  expect(result).toEqual({ rejected: true, urls: ['https://media.example/original.png'], missing: true })
+  expect(result).toEqual({ rejected: true, urls: ['https://media.example/original.png'], missing: true, bytes: 0 })
+})
+
+test('identical original bytes share storage within an account while preserving MIME, references and repair', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id: 'first', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'same', urls: ['https://media.example/first.png'] }
+    const second = { ...task, id: 'second', createdAt: 2, urls: ['https://media.example/second.webp'] }
+    await store.saveTaskSnapshot('17', [task, second])
+    const blob = new Blob(['same bytes'], { type: 'image/png' })
+    const firstUrl = await store.saveTaskOriginal('17', task.id, 0, task.urls[0], blob)
+    const secondUrl = await store.saveTaskOriginal('17', second.id, 0, second.urls[0], blob.slice(0, blob.size, 'image/webp'))
+    const first = await store.readTaskAsset('17', firstUrl), other = await store.readTaskAsset('17', secondUrl)
+    const uniqueBytes = await store.getTaskStorageSize('17')
+    await store.saveTaskSnapshot('18', [{ ...task, owner: '18' }])
+    await store.saveTaskOriginal('18', task.id, 0, task.urls[0], blob)
+    const foreign = await store.readTaskAsset('19', firstUrl)
+    const db = await new Promise<IDBDatabase>(resolve => { const r = indexedDB.open('community-studio-media'); r.onsuccess = () => resolve(r.result) })
+    const contentCount = await new Promise<number>(resolve => { const r = db.transaction('contents').objectStore('contents').count(); r.onsuccess = () => resolve(r.result) })
+    await new Promise<void>(resolve => {
+      const tx = db.transaction('contents', 'readwrite'), request = tx.objectStore('contents').openCursor()
+      request.onsuccess = () => { const cursor = request.result; if (cursor) { if (cursor.value.owner === '17') cursor.delete(); cursor.continue() } }
+      tx.oncomplete = () => resolve()
+    })
+    const missing = !await store.readTaskAsset('17', secondUrl)
+    await store.saveTaskOriginal('17', second.id, 0, secondUrl, blob.slice(0, blob.size, 'image/webp'))
+    await store.deleteTaskRecords('17', [task.id])
+    const repaired = await store.readTaskAsset('17', secondUrl), retained = await store.readTaskAsset('17', firstUrl)
+    db.close()
+    return { urls: [firstUrl, secondUrl], types: [first?.type, other?.type], texts: [await first?.text(), await other?.text()],
+      uniqueBytes, otherBytes: await store.getTaskStorageSize('18'), foreign: !foreign, contentCount, missing, repaired: await repaired?.text(), retained: await retained?.text() }
+  })
+  expect(result).toEqual({ urls: ['studio-asset:first:0', 'studio-asset:second:0'], types: ['image/png', 'image/webp'], texts: ['same bytes', 'same bytes'],
+    uniqueBytes: 10, otherBytes: 10, foreign: true, contentCount: 2, missing: true, repaired: 'same bytes', retained: 'same bytes' })
+})
+
+test('concurrent tabs save identical originals as one content blob', async ({ page, context }) => {
+  await fixture(page)
+  const other = await context.newPage()
+  await fixture(other)
+  const save = (page: Page, id: string) => page.evaluate(async id => {
+    const store = await import('/src/studio-task-store.ts')
+    const task = { id, owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: id, urls: ['https://media.example/shared.png'] }
+    await store.saveTaskSnapshot('17', [task])
+    return store.saveTaskOriginal('17', id, 0, task.urls[0], new Blob(['shared'], { type: 'image/png' }))
+  }, id)
+  expect(await Promise.all([save(page, 'tab-one'), save(other, 'tab-two')])).toEqual(['studio-asset:tab-one:0', 'studio-asset:tab-two:0'])
+  const result = await page.evaluate(async () => {
+    const store = await import('/src/studio-task-store.ts')
+    return { bytes: await store.getTaskStorageSize('17'), total: (await store.getTaskPage('17')).total,
+      originals: await Promise.all(['tab-one', 'tab-two'].map(async id => (await store.readTaskAsset('17', store.taskAssetUrl(id, 0)))?.text())) }
+  })
+  expect(result).toEqual({ bytes: 6, total: 2, originals: ['shared', 'shared'] })
+})
+
+test('v1 upgrade preserves legacy originals, previews and tasks alongside deduplicated new writes', async ({ page }) => {
+  await fixture(page)
+  const result = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('community-studio-media', 1)
+      request.onupgradeneeded = () => {
+        const db = request.result
+        db.createObjectStore('tasks', { keyPath: ['owner', 'id'] }).createIndex('ownerCreatedAtId', ['owner', 'createdAt', 'id'])
+        db.createObjectStore('originals', { keyPath: ['owner', 'key'] }).createIndex('ownerTask', ['owner', 'taskId'])
+        db.createObjectStore('previews', { keyPath: ['owner', 'id'] })
+        db.createObjectStore('meta', { keyPath: 'owner' })
+      }
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+    })
+    const task = { id: 'legacy', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'old', urls: ['studio-asset:legacy:0'] }
+    await new Promise<void>(resolve => {
+      const tx = db.transaction(['tasks', 'originals', 'previews', 'meta'], 'readwrite')
+      tx.objectStore('tasks').put({ owner: '17', id: task.id, createdAt: 1, value: task, mediaIdentity: '' })
+      tx.objectStore('originals').put({ owner: '17', key: 'legacy:0', taskId: task.id, identity: 'legacy-hash', blob: new Blob(['legacy'], { type: 'image/png' }) })
+      tx.objectStore('previews').put({ owner: '17', id: task.id, identity: JSON.stringify(['image', task.urls[0]]), blob: new Blob(['thumb'], { type: 'image/webp' }) })
+      tx.objectStore('meta').put({ owner: '17', initialized: true })
+      tx.oncomplete = () => resolve()
+    })
+    db.close()
+    const store = await import('/src/studio-task-store.ts'), old = await store.readTaskSnapshot('17')
+    const inline = `data:image/png;base64,${btoa('new')}`
+    await store.saveTaskSnapshot('17', [...old, { ...task, id: 'new', createdAt: 2, urls: [inline, inline] }])
+    return { ids: (await store.readTaskSnapshot('17')).map(task => task.id), original: await (await store.readTaskAsset('17', task.urls[0]))?.text(),
+      preview: await (await store.readTaskAsset('17', task.urls[0], true))?.text(), fresh: await (await store.readTaskAsset('17', 'studio-asset:new:1'))?.text(),
+      bytes: await store.getTaskStorageSize('17') }
+  })
+  expect(result).toEqual({ ids: ['new', 'legacy'], original: 'legacy', preview: 'thumb', fresh: 'new', bytes: 14 })
 })
 
 test('loading a foreign-tab task cannot expand an already captured snapshot deletion scope', async ({ page }) => {
@@ -89,7 +176,7 @@ test('loading a foreign-tab task cannot expand an already captured snapshot dele
     const task = { id: 'known', owner: '17', kind: 'image', createdAt: 1, phase: 'complete', model: 'model', prompt: 'known', urls: ['https://media.example/known.png'] }
     await store.saveTaskSnapshot('17', [task])
     const captured = store.captureTaskSnapshot('17', [task])
-    const db = await new Promise<IDBDatabase>(resolve => { const r = indexedDB.open('community-studio-media', 1); r.onsuccess = () => resolve(r.result) })
+    const db = await new Promise<IDBDatabase>(resolve => { const r = indexedDB.open('community-studio-media'); r.onsuccess = () => resolve(r.result) })
     await new Promise<void>(resolve => {
       const tx = db.transaction('tasks', 'readwrite')
       tx.objectStore('tasks').put({ owner: '17', id: 'foreign', createdAt: 2, mediaIdentity: '', value: { ...task, id: 'foreign', createdAt: 2 } })
@@ -188,7 +275,7 @@ test('incremental snapshots preserve another tab additions, clear only known del
       prompt: 'one', urls: [`data:${'image/png'};base64,${btoa('original')}`] }
     await store.saveTaskSnapshot('17', [first])
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const opening = indexedDB.open('community-studio-media', 1)
+      const opening = indexedDB.open('community-studio-media')
       opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error)
     })
     await new Promise<void>((resolve, reject) => {

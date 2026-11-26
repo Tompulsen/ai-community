@@ -78,7 +78,7 @@ function retry() {
 <template>
   <div ref="element" class="creation-image">
     <button v-if="failed" class="image-retry" type="button" :disabled="retrying" aria-label="重新加载图片" @click="retry"><RotateCw :size="18" /><span>{{ retrying ? '正在加载' : '重新加载图片' }}</span></button>
-    <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="loaded && emit('open')">
+    <button v-else type="button" class="creation-image-preview" :aria-label="label" :aria-busy="!loaded" @click="emit('open')">
       <img :key="replacement || fallback" :src="replacement || fallback || undefined" :alt="alt" :width="size?.width" :height="size?.height" :style="size ? { width: `min(${size.width}px, calc(var(--creation-image-height) * ${size.width / size.height}))`, aspectRatio: `${size.width} / ${size.height}` } : undefined" loading="lazy" decoding="async" @load="load" @error="imageFailed" />
     </button>
     <button v-if="editable && loaded && !failed" type="button" class="creation-image-edit" aria-label="打开图片画布" title="画布编辑" @click.stop="emit('edit')"><SquarePen :size="18" /></button>

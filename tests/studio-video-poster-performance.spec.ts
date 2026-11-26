@@ -92,7 +92,7 @@ test('explicit upstream posters use the safe image preview and invalidate a chan
   expect(reads).toHaveLength(0)
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('community-studio-media', 1)
+      const request = indexedDB.open('community-studio-media')
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
     })
     const transaction = db.transaction('tasks', 'readwrite'), records = transaction.objectStore('tasks')

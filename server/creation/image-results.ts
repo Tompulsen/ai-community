@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { link, lstat, mkdir, open, realpath, statfs, unlink } from 'node:fs/promises'
+import { link, lstat, mkdir, open, realpath, rm, statfs, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
 import type { CreationOutput } from '../creation-contract.ts'
@@ -212,5 +212,16 @@ export async function readSavedImage(filesRoot: string, key: string, index: numb
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw failure('图片尚未保存。', 404)
     throw error
+  }
+}
+
+export async function removeSavedImages(filesRoot: string, key: string) {
+  try {
+    const target = await directory(filesRoot, key, false)
+    if (pending.has(target)) throw failure('图片仍在保存中。', 409)
+    // directory validates every path component before removing this request's directory.
+    await rm(target, { recursive: true, force: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
 }

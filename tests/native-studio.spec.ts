@@ -9,7 +9,7 @@ const asset = 'public/assets/brand/octopus-community.jpg'
 async function nativeHistory(page: Page, owner = '17') {
   return page.evaluate(async owner => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('community-studio-media', 1)
+      const request = indexedDB.open('community-studio-media')
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
     })
     return new Promise<any[]>((resolve, reject) => {
@@ -477,10 +477,12 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await prompt.fill('可复用的小猫提示词')
   await page.getByRole('button', { name: '开始生成', exact: true }).click()
   await expect(page.locator('.task-status')).toContainText('生成完成')
-  await expect(page.getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(1)
+  await expect(page.getByRole('group', { name: '提问操作', exact: true }).getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(1)
+  await expect(page.getByRole('group', { name: '生成结果操作', exact: true }).getByRole('button', { name: '复制提示词', exact: true })).toHaveCount(1)
   await expect(page.getByRole('button', { name: '编辑提示词', exact: true })).toHaveCount(0)
   await prompt.fill('临时修改')
-  await page.getByRole('button', { name: '复用参数', exact: true }).click()
+  await page.locator('.creation-response').click({ button: 'right' })
+  await page.getByRole('menuitem', { name: '复用参数', exact: true }).click()
   await expect(prompt).toHaveValue('可复用的小猫提示词')
   await expect(prompt).toBeFocused()
   await page.getByRole('button', { name: '查看大图：预览生成图片 1', exact: true }).click()
@@ -491,7 +493,7 @@ test('completed requests support reuse, preview and a fresh draft without deleti
   await page.getByRole('navigation', { name: '工作台导航' }).getByRole('button', { name: '新对话', exact: true }).click()
   await expect(prompt).toHaveValue('')
   await expect(page.locator('.chat-empty')).toContainText('开始新的对话')
-  await page.locator('.studio-sidebar .studio-record[data-kind="image"]').filter({ hasText: '可复用的小猫提示词' }).click()
+  await page.locator('.studio-sidebar').getByRole('button', { name: '可复用的小猫提示词', exact: true }).click()
   await expect(page.locator('.creation-request')).toContainText('可复用的小猫提示词')
   expect(state.calls.filter(call => call.path === '/api/creation/generate')).toHaveLength(1)
 })

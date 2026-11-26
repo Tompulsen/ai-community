@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Copy, CopyPlus, Download, ImagePlus, Maximize, MessageSquareText, Pencil, RefreshCw, Square, Trash2 } from '@lucide/vue'
-import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, retryCreationSave, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
+import { copyCreationImage, creationRequestTimedOut, downloadCreation, mediaSource, resumeCreation, stopCreation, type CreationDestination, type CreationTask } from '../../native-studio'
 import { chats, togglePinnedMessage, type NativeChat } from '../../native-chat'
 import { branchMessages } from '../../../shared/studio/chat-branches'
 import { confirmStudioDelete } from '../../studio-confirm'
@@ -165,7 +165,7 @@ async function remove() {
       <StudioInsufficientCredits v-if="insufficient" />
       <p v-else-if="task.error && (!working || task.errorStage === '任务查询')" class="task-message" :class="{ muted: task.phase === 'paused' }">{{ task.error }}</p>
       <div v-if="task.phase === 'error'" class="creation-recovery"><button class="button subtle btn" @click="emit('action', 'editTask', task)"><Pencil :size="15" />编辑后重试</button></div>
-      <div v-if="task.kind === 'image' && (task.phase === 'attention' || task.phase === 'paused')" class="creation-recovery"><button class="button subtle btn" @click="perform(() => task.serverTracked && task.resultStatus === 'save_failed' ? retryCreationSave(task) : resumeCreation(task))"><RefreshCw :size="15" />{{ task.serverTracked && task.resultStatus === 'save_failed' ? '重试保存' : '查询原结果' }}</button></div>
+      <div v-if="task.kind === 'image' && task.resultStatus !== 'expired' && (task.phase === 'attention' || task.phase === 'paused')" class="creation-recovery"><button class="button subtle btn" @click="perform(() => resumeCreation(task))"><RefreshCw :size="15" />查询原结果</button></div>
       <img v-if="task.preview && task.phase !== 'complete'" class="stream-preview" :src="mediaSource(task.preview, true)" alt="生成中的预览" />
       <div v-if="task.urls.length" class="creation-media" :class="{ 'video-results': task.kind === 'video' }"><figure v-for="(url, index) in task.urls" :key="url" :style="task.kind === 'video' ? { '--video-ratio': (videoSizes[url]?.width || 640) / (videoSizes[url]?.height || 360) } : undefined">
         <template v-if="task.kind === 'video'">

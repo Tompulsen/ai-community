@@ -51,16 +51,16 @@ async function send(page: Page) {
 async function storedImages(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('community-studio-media', 1)
+      const request = indexedDB.open('community-studio-media')
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
     })
     try {
-      const tx = db.transaction(['tasks', 'originals'])
+      const tx = db.transaction(['tasks', 'originals', 'contents'])
       const getAll = (name: string) => new Promise<any[]>(resolve => {
         const request = tx.objectStore(name).getAll(); request.onsuccess = () => resolve(request.result)
       })
-      const [tasks, originals] = await Promise.all([getAll('tasks'), getAll('originals')])
-      return { urls: tasks.filter(t => t.owner === '17').flatMap(t => t.value.urls), sizes: originals.filter(a => a.owner === '17').map(a => a.blob.size) }
+      const [tasks, originals, contents] = await Promise.all([getAll('tasks'), getAll('originals'), getAll('contents')])
+      return { urls: tasks.filter(t => t.owner === '17').flatMap(t => t.value.urls), sizes: [...originals, ...contents].filter(a => a.owner === '17' && a.blob).map(a => a.blob.size) }
     } finally { db.close() }
   })
 }
@@ -119,7 +119,8 @@ test('generated images save original bytes automatically and survive an expired 
   expect(scriptChecks).toEqual(['blocked', 'blocked'])
   expect(await page.evaluate(() => (window as any).__unexpectedLocalMediaScript)).toBeUndefined()
   await send(page)
-  await expect.poll(async () => (await storedImages(page)).sizes).toEqual([image.length, image.length])
+  await expect(page.getByText('图片已保存到此浏览器', { exact: true })).toBeVisible()
+  expect((await storedImages(page)).sizes).toEqual([image.length])
   expect((await storedImages(page)).urls.every(url => url.startsWith('studio-asset:'))).toBe(true)
   await expect(page.getByText('图片已保存到此浏览器', { exact: true })).toBeVisible()
   expect(state.downloads).toBe(0)
@@ -465,15 +466,41 @@ test('refresh resumes an interrupted original save and preserves the generation'
   expect(state.downloads).toBe(0)
 })
 
-test('one failed output does not prevent the other original from being saved', async ({ page }) => {
+test('multi-image progress keeps generation complete and retries only the missing original', async ({ page }) => {
   const { state, image } = await fixture(page)
   state.count = 2
-  await page.route('**/api/creation/media?**', route => new URL(route.request().url()).searchParams.get('url')?.endsWith('-0.jpg')
-    ? route.fulfill({ status: 502 }) : route.fulfill({ contentType: 'image/jpeg', body: image }))
+  let failing = true, firstReads = 0, release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/creation/media?**', async route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.has('variant')) return route.fulfill({ contentType: 'image/jpeg', body: image })
+    if (url.searchParams.get('url')?.endsWith('-0.jpg')) {
+      firstReads++
+      return route.fulfill({ contentType: 'image/jpeg', body: image })
+    }
+    await gate
+    return failing ? route.fulfill({ status: 502 }) : route.fulfill({ contentType: 'image/jpeg', body: image })
+  })
   await send(page)
+  await expect(page.locator('.browser-save')).toContainText('生成完成，正在保存图片到此浏览器（1/2）')
+  release()
   await expect(page.locator('.browser-save')).toContainText('尚未保存到此浏览器')
   const saved = await storedImages(page)
-  expect(saved.urls[0]).toMatch(/^https:/)
-  expect(saved.urls[1]).toMatch(/^studio-asset:/)
+  expect(saved.urls[0]).toMatch(/^studio-asset:/)
+  expect(saved.urls[1]).toMatch(/^https:/)
   expect(saved.sizes).toEqual([image.length])
+  expect(await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/native-studio\.ts(?:\?|$)/.test(name))!
+    return (await import(/* @vite-ignore */ path)).creation.tasks[0].phase
+  })).toBe('complete')
+  const reads = firstReads
+  failing = false
+  await page.getByRole('button', { name: '重试保存图片', exact: true }).click()
+  await expect(page.locator('.browser-save')).toHaveText('图片已保存到此浏览器')
+  expect(firstReads).toBe(reads)
+  const repaired = await storedImages(page)
+  expect(repaired.urls.every(url => url.startsWith('studio-asset:'))).toBe(true)
+  expect(repaired.sizes).toEqual([image.length])
+  expect(state.generations).toBe(1)
+  expect(state.downloads).toBe(0)
 })

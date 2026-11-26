@@ -29,7 +29,7 @@ test('repeated cursor pages reuse task summaries and cached storage sizes', asyn
     }
     IDBObjectStore.prototype.openCursor = function (...args) {
       const request = Reflect.apply(storeOpen, this, args)
-      if (['originals', 'previews'].includes(this.name)) request.addEventListener('success', () => { if (request.result) visits.assets++ })
+      if (['originals', 'contents', 'previews'].includes(this.name)) request.addEventListener('success', () => { if (request.result) visits.assets++ })
       return request
     }
     try {
@@ -45,9 +45,9 @@ test('repeated cursor pages reuse task summaries and cached storage sizes', asyn
   })
   expect(result.totals).toEqual([360, 360])
   expect(result.lengths).toEqual([60, 60])
-  expect(result.firstBytes).toBe(180)
+  expect(result.firstBytes).toBe(92)
   expect(result.secondBytes).toBe(result.firstBytes)
-  expect(result.visits).toEqual({ tasks: 482, assets: 24 })
+  expect(result.visits).toEqual({ tasks: 482, assets: 25 })
 })
 
 test('page-only reads stay bounded and full cursor traversal preserves filtered outputs and complete model choices', async ({ page }) => {
@@ -69,7 +69,7 @@ test('page-only reads stay bounded and full cursor traversal preserves filtered 
       return request
     }
     IDBObjectStore.prototype.openCursor = function (...args) {
-      if (['originals', 'previews'].includes(this.name)) assetScans++
+      if (['originals', 'contents', 'previews'].includes(this.name)) assetScans++
       return Reflect.apply(storeOpen, this, args)
     }
     let first, second, bounded
@@ -193,7 +193,7 @@ test('older tabs without revision markers cannot leave subsequent summaries cach
     await store.saveTaskSnapshot('17', [task])
     const totals = [(await store.getTaskSummary('17')).total]
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('community-studio-media', 1)
+      const request = indexedDB.open('community-studio-media')
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

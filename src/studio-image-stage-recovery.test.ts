@@ -32,6 +32,14 @@ async function fixture() {
   return { ...studio, api: vi.mocked(api), session, input, send }
 }
 const finalResult = (requestId: string) => ({ status: 'succeeded', requestId, outputs: [{ text: '原结果' }] })
+
+it('keeps image responses open for inline delivery while video submission remains asynchronous', async () => {
+  const p = await fixture()
+  await p.submitCreation(p.input)
+  expect(new Headers(p.send.mock.calls[0]![1]!.headers).has('prefer')).toBe(false)
+  await p.submitCreation({ ...p.input, kind: 'video', model: 'sora-2' })
+  expect(new Headers(p.send.mock.calls[1]![1]!.headers).get('prefer')).toBe('respond-async')
+})
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(finish => { resolve = finish })

@@ -22,7 +22,7 @@ onBeforeUnmount(() => observer?.disconnect())
   <div v-if="task.kind === 'image' && task.phase === 'complete' && task.urls.length" ref="element" class="browser-save" :class="{ failed: task.browserSave?.state === 'failed' }" role="status" aria-live="polite">
     <template v-if="task.browserSave?.state === 'saved'"><span title="保存在当前账号使用的此浏览器中；清除网站数据会删除本地图片。">图片已保存到此浏览器</span></template>
     <template v-else-if="task.browserSave?.state === 'failed'"><span>{{ task.browserSave.error || '图片未能保存到此浏览器。' }}</span><button class="studio-tool" type="button" @click.stop="cacheCreationImages(task, true)">重试保存图片</button></template>
-    <span v-else>正在保存图片到此浏览器…</span>
+    <span v-else>生成完成，正在保存图片到此浏览器<span v-if="task.browserSave?.total">（{{ task.browserSave.completed || 0 }}/{{ task.browserSave.total }}）</span>…</span>
   </div>
 </template>
 
