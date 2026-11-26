@@ -51,6 +51,23 @@ it('checks effective image references, video URL frames, file IDs and explicit G
   await expect(p.submitCreation(p.input)).rejects.toThrow('当前模型不支持参考图片，已选 1 张。')
   expect(p.send).not.toHaveBeenCalled()
 })
+it('source video operations ignore stale image reference options and reject invalid sources before sending', async () => {
+  const p = await fixture()
+  const { videoOptionsSchema } = await import('../shared/studio/options')
+  for (const operation of ['upscale', 'remove-subtitles', 'remove-watermark'] as const) {
+    const model = `source-${operation}`
+    const configured = { id: model, video: { operation } }
+    p.creation.models.push(configured)
+    const input: CreationInput = { kind: 'video', model, prompt: '', size: 'auto', aspect_ratio: '', n: 1, duration: 0, references: [{ name: 'source.mp4', url: '/legacy-files/source1', type: 'video/mp4' }],
+      videoOptions: videoOptionsSchema.parse({ mode: 'first-last-frame', openaiReferenceSource: 'image_url', openaiImageUrl: 'https://media.example/old.png' }) }
+    expect(p.creationReferenceIssue(input, configured)).toBe('')
+    expect(p.creationReferenceIssue({ ...input, references: [...input.references!, ...input.references!] }, configured)).toContain('最多支持 1 个参考视频')
+    for (const references of [[], [{ name: 'source.webm', url: '/legacy-files/source1', type: 'video/webm' }], [{ name: 'source.mp4', url: 'https://media.example/source.mp4', type: 'video/mp4' }]]) {
+      await expect(p.submitCreation({ ...input, references })).rejects.toThrow('视频处理需要上传一个 MP4 源视频。')
+    }
+  }
+  expect(p.send).not.toHaveBeenCalled()
+})
 it('display previews use the image proxy without changing original media, videos or local assets', async () => {
   const p = await fixture()
   vi.stubGlobal('location', new URL('https://community.example/create/image'))
@@ -67,6 +84,7 @@ it('display previews use the image proxy without changing original media, videos
   for (const source of ['data:image/png;base64,AA==', 'blob:https://community.example/asset', '/legacy-files/id', '/assets/image.png', '/api/creation/media?path=videos/job/content'])
     expect(p.mediaSource(source, true)).toBe(source)
   expect(p.mediaSource(remote, true, 'video')).not.toContain('variant=')
+  expect(p.mediaSource('/legacy-files/source1', false, 'video')).toBe('/legacy-files/source1')
   expect(p.mediaSource('/api/creation/media?url=https%3A%2F%2Fmedia.example%2Fmovie.mp4&kind=video', true)).not.toContain('variant=')
   expect(p.input.references![0]!.url).toBe('https://media.example/original.png')
 })

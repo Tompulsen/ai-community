@@ -37,7 +37,7 @@ import { trackCreation, creationsClosing } from './creation/inflight.ts'
 import { textGenerationTimeouts, creationStreamProtocol, creationRetryDelay } from '../shared/studio/creation-limits.ts'
 import { imageResultUrls } from '../shared/studio/image-response.ts'
 import { modelMcpTools } from './studio-tools.ts'
-import { readModelTypes, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat } from '../shared/studio/model-types.ts'
+import { isSourceVideoOperation, readModelTypes, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat } from '../shared/studio/model-types.ts'
 import { usesGeminiImageChat } from '../shared/studio/image-params.ts'
 import { signCommunityRequest } from './native-account/community-wallet.ts'
 import { readAccountModelCatalogue, classifyModel } from './native-account/model-catalogue.ts'
@@ -367,8 +367,8 @@ async function taskResult(ctx: RequestContext, req: AccountRequest, kind: 'image
 
 async function references(ctx: RequestContext, req: AccountRequest, input: CreationInput, svc: CreationServices, videoSetting?: VideoModelSetting,
   limits?: ReturnType<typeof resolveReferenceLimits>, limitImageHistory = false) {
-  if (input.kind === 'video' && videoSetting?.operation === 'upscale') {
-    if (input.referenceUrls?.length !== 1) throw httpError(400, '视频超分需上传一个源视频。')
+  if (input.kind === 'video' && isSourceVideoOperation(videoSetting?.operation)) {
+    if (input.referenceUrls?.length !== 1) throw httpError(400, '视频处理需上传一个源视频。')
     const issue = limits && referenceCountIssue({ images: 0, videos: 1, audios: 0 }, limits)
     if (issue) throw httpError(400, issue)
     const source = new URL(input.referenceUrls[0]!, ctx.config.url)
@@ -650,16 +650,16 @@ async function generate(ctx: RequestContext, req: AccountRequest, svc: CreationS
     input.videoOptions.openaiReferenceSource = 'upload'
   }
   errorStage = '参考素材准备'
-  const videoSetting = input.kind === 'video' ? resolveVideoModelSetting(input.model, setting?.video) : undefined
+  const videoSetting = input.kind === 'video' ? resolveVideoModelSetting(setting?.video) : undefined
   const limits = input.kind === 'text' ? undefined : resolveReferenceLimits(input.kind,
-    input.kind === 'image' ? setting?.image : videoSetting, videoSetting?.operation === 'upscale')
+    input.kind === 'image' ? setting?.image : videoSetting, isSourceVideoOperation(videoSetting?.operation))
   const files = await references(ctx, req, input, svc, videoSetting, limits, setting?.image?.maxReferenceImages !== undefined)
   errorStage = '工具准备'
   const tools = input.kind === 'text' && input.chatOptions?.mcpServers.length ? await modelMcpTools(ctx, req, input.chatOptions.mcpServers) : []
   errorStage = '生成参数组装'
   const payload = buildCreationPayload(input, files, tools.map(({ type, function: definition }) => ({ type, function: definition })), setting?.video)
   if (input.kind === 'video' && files.some(file => file.mediaType === 'video')
-    && resolveVideoModelSetting(input.model, setting?.video)?.operation !== 'upscale') {
+    && !isSourceVideoOperation(resolveVideoModelSetting(setting?.video)?.operation)) {
     const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
     const seconds = Number(sent.seconds)
     if (!Number.isFinite(seconds) || seconds <= 0 || seconds + files.reduce((sum, file) => sum + (file.mediaType === 'video' ? file.durationSeconds! : 0), 0) > 3600)
@@ -1052,8 +1052,8 @@ export async function handleCreation(ctx: RequestContext, overrides: Partial<Cre
         const id = typeof item === 'string' ? item : record(item) && typeof item.id === 'string' ? item.id : ''
         const configured = types.get(id), configuredKind = configured?.kind
         const valid = id.length > 0 && id.length <= 200 && id === id.trim() && !/[\u0000-\u001f\u007f]/u.test(id)
-        const kind = valid ? configuredKind ?? (resolveVideoModelSetting(id) ? 'video' : classifyModel(id)) : null
-        const video = kind === 'video' ? resolveVideoModelSetting(id, configured?.video) : undefined
+        const kind = valid ? configuredKind ?? classifyModel(id) : null
+        const video = kind === 'video' ? resolveVideoModelSetting(configured?.video) : undefined
         const text = (key: string, limit: number) => record(item) && typeof item[key] === 'string' ? item[key].trim().slice(0, limit) : undefined
         return valid && (kind || management) ? [{ id, name: configured?.name || text('name', 200) || id, description: text('description', 1000), provider: text('owned_by', 200), kinds: kind ? [kind] : [], ...(configuredKind ? { configuredKind } : {}),
           ...(catalogue && record(item) ? { groups: item.groups } : {}),

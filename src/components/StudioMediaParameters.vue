@@ -3,7 +3,7 @@
 import { computed } from 'vue'
 import { ChevronDown, Sparkles } from '@lucide/vue'
 import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
-import type { ModelApiFormat, VideoModelSetting } from '../../shared/studio/model-types'
+import { isSourceVideoOperation, type ModelApiFormat, type VideoModelSetting } from '../../shared/studio/model-types'
 import { IMAGE_QUALITIES, IMAGE_RATIOS, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 import StudioChoiceGroup from './StudioChoiceGroup.vue'
@@ -23,6 +23,7 @@ const protocol = defineModel<string>('protocol', { required: true })
 const options = (values: readonly string[]) => values.map(value => ({ value, label: value === 'auto' ? '自动' : value.toUpperCase() }))
 const limits = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
 const upscale = computed(() => props.kind === 'video' && limits.value?.operation === 'upscale')
+const sourceVideoOperation = computed(() => props.kind === 'video' && isSourceVideoOperation(limits.value?.operation))
 const ratioOptions = computed(() => options(props.kind === 'image' ? IMAGE_RATIOS : ['auto', ...(limits.value?.aspectRatios || [])]))
 const resolutions = computed(() => options([...(upscale.value ? [] : ['auto']), ...(limits.value?.resolutions || [])]))
 const exactSizes = computed(() => Object.entries(limits.value?.sizes || {}).flatMap(([resolution, ratios]) =>
@@ -46,11 +47,11 @@ function selectVideoSize(event: Event) {
 </script>
 <template>
   <div class="media-parameters" @invalid.capture="revealInvalid">
-    <section v-if="kind === 'video' && !upscale" class="parameter-section" aria-label="视频生成方式">
+    <section v-if="kind === 'video' && !sourceVideoOperation" class="parameter-section" aria-label="视频生成方式">
       <h3>生成方式</h3>
       <StudioChoiceGroup v-model="video.mode" label="生成方式" :columns="2" :options="[{ value: 'text-to-video', label: '文生视频' }, { value: 'image-to-video', label: '图生视频' }, { value: 'first-last-frame', label: '首尾帧' }, { value: 'reference-to-video', label: '多图参考' }]" />
     </section>
-    <section v-if="!upscale" class="parameter-section" aria-label="画面比例">
+    <section v-if="!sourceVideoOperation" class="parameter-section" aria-label="画面比例">
       <h3>画面比例<span v-if="!ratioOptions.some(option => option.value === ratio)">{{ ratio }} · 自定义</span></h3>
       <StudioChoiceGroup v-model="ratio" label="画面比例" :options="ratioOptions" grid :columns="3">
         <template #visual="{ value }"><span class="ratio-figure"><Sparkles v-if="value === 'auto'" :size="20" /><span v-else class="ratio-shape" :style="ratioShape(value)" /></span></template>
@@ -62,8 +63,8 @@ function selectVideoSize(event: Event) {
       <label class="parameter-inline"><span>图片数量</span><input v-model.number="count" class="control" type="number" min="1" :max="geminiImage ? 1 : 10" :readonly="geminiImage" step="1" required aria-label="图片数量" /></label>
     </template>
     <template v-else>
-      <section class="parameter-section" aria-label="视频分辨率"><h3>分辨率<span v-if="!resolutions.some(option => option.value === video.resolution)">{{ video.resolution }} · 不在可选列表中</span></h3><StudioChoiceGroup v-model="video.resolution" label="视频分辨率" :options="resolutions" :columns="Math.min(4, resolutions.length)" /></section>
-      <section v-if="!upscale" class="parameter-section" aria-label="视频时长">
+      <section v-if="!sourceVideoOperation || upscale" class="parameter-section" aria-label="视频分辨率"><h3>分辨率<span v-if="!resolutions.some(option => option.value === video.resolution)">{{ video.resolution }} · 不在可选列表中</span></h3><StudioChoiceGroup v-model="video.resolution" label="视频分辨率" :options="resolutions" :columns="Math.min(4, resolutions.length)" /></section>
+      <section v-if="!sourceVideoOperation" class="parameter-section" aria-label="视频时长">
         <h3><span>时长</span><output>{{ duration }} 秒</output></h3>
         <template v-if="limits?.durations.length">
           <input class="duration-range" type="range" aria-label="视频时长" :aria-valuetext="`${duration} 秒`" min="0" :max="Math.max(0, limits.durations.length - 1)" step="1" :value="durationIndex" :disabled="limits.durations.length <= 1" @input="duration = limits.durations[Number(($event.target as HTMLInputElement).value)]!" />
@@ -76,7 +77,7 @@ function selectVideoSize(event: Event) {
     </template>
     <details class="parameter-advanced">
       <summary>自定义参数<ChevronDown :size="15" /></summary>
-      <label v-if="!geminiImage && !upscale && (kind !== 'video' || limits?.sendSize !== false)" class="parameter-inline"><span>尺寸</span><select v-if="kind === 'video' && exactSizes.length" :value="size" class="control" aria-label="尺寸" @change="selectVideoSize"><option value="auto">自动</option><option v-if="size !== 'auto' && !exactSizes.some(item => item.value === size)" :value="size">{{ size }}（不在可选列表中）</option><option v-for="value in [...new Set(exactSizes.map(item => item.value))]" :key="value" :value="value">{{ value }}</option></select><input v-else v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required aria-label="尺寸" /></label>
+      <label v-if="!geminiImage && !sourceVideoOperation && (kind !== 'video' || limits?.sendSize !== false)" class="parameter-inline"><span>尺寸</span><select v-if="kind === 'video' && exactSizes.length" :value="size" class="control" aria-label="尺寸" @change="selectVideoSize"><option value="auto">自动</option><option v-if="size !== 'auto' && !exactSizes.some(item => item.value === size)" :value="size">{{ size }}（不在可选列表中）</option><option v-for="value in [...new Set(exactSizes.map(item => item.value))]" :key="value" :value="value">{{ value }}</option></select><input v-else v-model="size" class="control" pattern="auto|[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|[124]K" required aria-label="尺寸" /></label>
       <CreationAdvanced v-model:image="image" v-model:video="video" v-model:protocol="protocol" v-model:api-format="apiFormat" :kind="kind" :model="model" :model-api-format="modelApiFormat" :video-setting="videoSetting" embedded hide-primary />
     </details>
   </div>

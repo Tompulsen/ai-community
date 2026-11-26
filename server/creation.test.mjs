@@ -1461,7 +1461,7 @@ test('automatic text interfaces use the resolved response stream format', async 
 })
 
 test('video preflight rejections return 400 before recording or sending a paid request', async t => {
-  const { app, calls, credentialCalls } = fixture(t)
+  const { app, calls, credentialCalls } = fixture(t, { modelTypes: [{ id: 'sora-2', kind: 'video', video: { durations: [4, 8, 12] } }] })
   for (const withOptions of [false, true]) {
     const requestId = `preflight-known-${withOptions}`
     const response = await submit(app, {
@@ -1553,11 +1553,13 @@ test('administrator video resolution choices still reject unsupported explicit v
   assert.equal(credentialCalls.length, 0)
 })
 
-for (const [label, video] of [
-  ['built-in defaults', undefined],
-  ['partial administrator settings', { resolutions: ['1080p'], autoResolution: '1080p' }],
+for (const [label, video, model = 'DMC 视频超分', operation = 'upscale'] of [
+  ['subtitle removal', { operation: 'remove-subtitles' }, 'AI去字幕', 'remove-subtitles'],
+  ['watermark removal', { operation: 'remove-watermark', maxReferenceVideos: 1 }, 'AI去水印', 'remove-watermark'],
+  ['configured removal alias', { operation: 'remove-watermark' }, 'removal-alias', 'remove-watermark'],
+  ['minimal operation setting', { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p' }],
   ['explicit operation', { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }],
-]) test(`video upscaling with ${label} reads an owned MP4 and reserves its measured duration`, async t => {
+]) test(`source video processing with ${label} reads an owned MP4 and reserves its measured duration`, async t => {
   if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable')
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-upscale-source-'))
   t.after(() => rm(filesRoot, { recursive: true, force: true }))
@@ -1568,12 +1570,12 @@ for (const [label, video] of [
   const bytes = await readFile(sourcePath)
   const source = { id: 'source1', userId: 'local-17', name: 'private.mp4', type: 'video/mp4', size: String(bytes.length),
     accessKey: 'source-video', storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'source-video': 1 } } }
-  const model = 'DMC 视频超分'
   const f = fixture(t, { filesRoot, mediaFiles: [source], modelTypes: video ? [{ id: model, kind: 'video', video }] : [], async fetch(_url, init) {
     const sent = await relayRequestBody(init)
     assert.equal(sent.seconds, '3')
     const metadata = JSON.parse(sent.metadata)
-    assert.equal(metadata.operation, 'upscale')
+    assert.equal(metadata.operation, operation)
+    if (operation !== 'upscale') for (const key of ['resolution', 'frame_rate', 'size', 'aspect_ratio']) assert.equal(Object.hasOwn(sent, key), false)
     const file = sent.input_videos
     assert(file instanceof Blob)
     assert.equal(file.type, 'video/mp4')
@@ -1594,7 +1596,8 @@ for (const [label, video] of [
   assert.equal(f.credentialCalls.length, 1)
 })
 
-test('video upscaling rejects unowned, external, oversized and invalid video sources before gateway credentials', async t => {
+for (const [model, operation] of [['DMC 视频超分', 'upscale'], ['AI去字幕', 'remove-subtitles'], ['AI去水印', 'remove-watermark']])
+test(`${operation} rejects unowned, external, oversized and invalid video sources before gateway credentials`, async t => {
   if (['ffprobe', 'ffmpeg'].some(command => spawnSync(command, ['-version'], { windowsHide: true, stdio: 'ignore' }).status !== 0)) return t.skip('FFmpeg is unavailable')
   const filesRoot = await mkdtemp(path.join(tmpdir(), 'community-upscale-invalid-'))
   t.after(() => rm(filesRoot, { recursive: true, force: true }))
@@ -1606,7 +1609,7 @@ test('video upscaling rejects unowned, external, oversized and invalid video sou
   const audioBytes = await readFile(audioPath)
   const base = { userId: 'local-17', name: 'source.mp4', type: 'video/mp4', size: 11, accessKey: 'invalid-video',
     storedInternal: true, isLink: false, properties: { communityVideoPrivacy: { 'invalid-video': 1 } } }
-  const model = 'DMC 视频超分', video = { operation: 'upscale', resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }
+  const video = { operation, resolutions: ['1080p'], autoResolution: '1080p', sendSize: false }
   const f = fixture(t, { filesRoot, modelTypes: [{ id: model, kind: 'video', video }], mediaFiles: [
     { ...base, id: 'invalid1' }, { ...base, id: 'foreign1', userId: 'someone-else' },
     { ...base, id: 'webm1', type: 'video/webm' }, { ...base, id: 'large1', size: 64 * 1024 * 1024 + 1 },
@@ -1696,14 +1699,15 @@ test('ordinary video generation forwards owned video and audio bytes without cha
     ['duplicate-images', { maxReferenceImages: 1 }, ['/legacy-files/image1', '/legacy-files/image1']],
     ['duplicate-videos', { maxReferenceVideos: 1 }, ['/legacy-files/video1', '/legacy-files/video1']],
     ['duplicate-audios', { maxReferenceAudios: 1 }, ['/legacy-files/audio1', '/legacy-files/audio1']],
-    ['upscale-disabled', { maxReferenceVideos: 0 }, ['/legacy-files/video1'], 'DMC 视频超分'],
+    ['upscale-disabled', { operation: 'upscale', maxReferenceVideos: 0 }, ['/legacy-files/video1'], 'DMC 视频超分'],
+    ['combined-reference-limit', { maxReferenceTotal: 2 }, ['/legacy-files/image1', '/legacy-files/video1', '/legacy-files/audio1']],
   ]) await t.test(name, async t => {
     const f = fixture(t, { filesRoot, mediaFiles, modelTypes: [{ id: model, kind: 'video', video: videoSetting }] })
     const response = await submit(f.app, { kind: 'video', model, prompt: 'Waves', duration: 8, requestId: name, referenceUrls,
       referenceTypes: ['image'], videoOptions: { mode: 'reference-to-video' } }, { cookie: 'fixture-account=17', prefer: 'respond-async' })
     assert.equal(response.statusCode, 400, response.payload)
     assert.equal(response.json().notAccepted, true)
-    assert.match(response.json().error.message, /当前模型(?:不支持|最多支持)/)
+    assert.match(response.json().error.message, /当前模型(?:不支持|最多支持)|参考素材合计不能超过/)
     assert.equal(f.calls.length, 0)
     assert.equal(f.credentialCalls.length, 0)
     assert.equal(f.mediaCalls.filter(call => call.method === 'GET').length, 0)
@@ -2230,30 +2234,31 @@ test('server model types apply to exact IDs across group catalogs without granti
   assert(second.items.every(item => !Object.hasOwn(item, 'video')))
 })
 
-test('model catalogs publish server video defaults and validated overrides without trusting upstream metadata', async t => {
-  for (const { id, video, resolutions } of [
-    { id: 'wan3.0', resolutions: ['720p', '1080p'] },
-    { id: 'wan3.0', video: { autoResolution: '720p', headers: { authorization: 'must-not-forward' } }, resolutions: ['720p', '1080p'] },
-    { id: 'MiniMax H3视频生成', resolutions: ['768p', '1080p'] },
-    { id: 'MiniMax H3视频生成', video: { resolutions: ['540p'], durations: [4, 8, 12] }, resolutions: ['540p'] },
-    { id: 'sd2.0-fast-720p', resolutions: ['720p'] },
-    { id: '火山2.0 Fast官转', resolutions: ['720p', '1080p', '2k'] },
-    { id: '火山2.0 Mini官转', resolutions: ['720p', '1080p', '2k'] },
-    { id: '火山2.5官转', resolutions: ['720p', '1080p', '2k'] },
-    { id: 'DMC 视频超分', resolutions: ['720p', '1080p', '2k', '4k'] },
+test('model catalogs expose only stored video parameters and ignore upstream metadata', async t => {
+  for (const { id, configured, kind, video } of [
+    { id: 'wan3.0', kind: ['text'] },
+    { id: 'sora-2', kind: ['video'] },
+    { id: 'sd2.0-fast-720p', kind: ['text'] },
+    { id: '火山2.5官转', kind: ['text'] },
+    { id: 'DMC 视频超分', kind: ['text'] },
+    { id: 'AI去字幕', kind: ['text'] },
+    { id: 'wan3.0', configured: true, video: { autoResolution: '720p', resolutions: ['720p'] } },
+    { id: 'MiniMax H3视频生成', configured: true, video: { resolutions: ['540p'], durations: [4, 8, 12] } },
   ]) {
     const { app } = fixture(t, {
-      modelTypes: video ? [{ id, kind: 'video', video }] : [],
+      modelTypes: configured ? [{ id, kind: 'video', video }] : [],
       fetch() { return Response.json({ data: [{ id, video: { autoResolution: '4k', secret: 'must-not-forward' } }] }) },
     })
     const response = await app.inject('/api/creation/models')
     assert.equal(response.statusCode, 200)
     assert.equal(response.json().items.length, 1)
     const item = response.json().items[0]
-    assert.deepEqual(item.kinds, ['video'])
-    assert.equal(videoModelSettingSchema.safeParse(item.video).success, true)
-    assert.deepEqual(item.video.resolutions, resolutions)
-    if (id === 'MiniMax H3视频生成') assert.equal(item.video.autoDuration, video ? 4 : 10)
+    assert.deepEqual(item.kinds, configured ? ['video'] : kind, id)
+    if (configured) {
+      assert.equal(videoModelSettingSchema.safeParse(item.video).success, true)
+      assert.deepEqual(item.video.resolutions, video.resolutions)
+      if (video.durations) assert.deepEqual(item.video.durations, video.durations)
+    } else assert.equal(Object.hasOwn(item, 'video'), false)
     assert(!response.payload.includes('must-not-forward'))
   }
 })

@@ -10,7 +10,7 @@ import { imageOutputParams, supportsImageOutputOptions, imageRequestSize, normal
 import { buildVideoRequest, videoParameterFormat } from '../shared/studio/video-api.ts'
 import { validateVideoRequestParameters, videoCapabilities } from '../shared/studio/video-capabilities.ts'
 import { selectedVideoSize } from '../shared/studio/video-size.ts'
-import { modelApiFormats, modelApiFormatSchema, type ModelApiFormat, type ModelTypeSetting, type VideoModelSetting } from '../shared/studio/model-types.ts'
+import { isSourceVideoOperation, modelApiFormats, modelApiFormatSchema, type ModelApiFormat, type ModelTypeSetting, type VideoModelSetting } from '../shared/studio/model-types.ts'
 import { CHAT_API_FORMATS } from '../shared/studio/chat-api-format.ts'
 import { buildChatRequest, extractChatResponse } from '../shared/studio/chat-formats.ts'
 import { generationErrorCode, insufficientCreditsCode, insufficientCreditsMessage, isInsufficientCredits } from '../shared/studio/insufficient-credits.ts'
@@ -258,8 +258,8 @@ export function resolveCreationModelSettings(input: CreationInput, modelSetting?
   } else if (result.kind === 'video') {
     const references = result.referenceUrls?.length ?? 0
     const mode = result.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
-    const video = videoCapabilities(result.model, mode, resolveVideoModelSetting(result.model, setting?.video))
-    if (video?.operation !== 'upscale' && !result.prompt.trim()) invalid('请填写提示词。')
+    const video = videoCapabilities(result.model, mode, resolveVideoModelSetting(setting?.video))
+    if (!isSourceVideoOperation(video?.operation) && !result.prompt.trim()) invalid('请填写提示词。')
     if (result.duration === undefined && video?.autoDuration !== undefined) result.duration = video.autoDuration
     if ((!result.aspect_ratio || result.aspect_ratio === 'auto') && video?.autoAspectRatio) {
       result.aspect_ratio = video.autoAspectRatio
@@ -315,14 +315,14 @@ export function buildCreationPayload(input: CreationInput, preparedReferences: C
   try {
     const references = input.referenceUrls?.length ?? 0
     const mode = input.videoOptions?.mode ?? (references > 1 ? 'reference-to-video' : references ? 'image-to-video' : 'text-to-video')
-    videoSetting = videoCapabilities(input.model, mode, resolveVideoModelSetting(input.model, videoSetting))
+    videoSetting = videoCapabilities(input.model, mode, resolveVideoModelSetting(videoSetting))
     input = {
       ...input,
       ...(input.duration === undefined && videoSetting?.autoDuration !== undefined ? { duration: videoSetting.autoDuration } : {}),
       ...((!input.aspect_ratio || input.aspect_ratio === 'auto') && videoSetting?.autoAspectRatio ? { aspect_ratio: videoSetting.autoAspectRatio } : {}),
     }
-    if (videoSetting?.operation !== 'upscale' && !input.prompt.trim()) invalid('请填写提示词。')
-    const payload = creationPayload(videoSetting?.operation === 'upscale' ? input : automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
+    if (!isSourceVideoOperation(videoSetting?.operation) && !input.prompt.trim()) invalid('请填写提示词。')
+    const payload = creationPayload(isSourceVideoOperation(videoSetting?.operation) ? input : automaticVideoResolution(input, videoSetting), preparedReferences, tools, videoSetting)
     validateVideoRequestParameters(payload.body, mode, videoSetting)
     if (videoSetting?.resolutionValues) {
       const sent = typeof payload.body === 'string' ? JSON.parse(payload.body) : Object.fromEntries(payload.body.entries())
@@ -412,25 +412,27 @@ function creationPayload(input: CreationInput, preparedReferences: CreationRefer
     return { path: input.protocol === 'async' ? 'async-images/v1/edits' : 'v1/images/edits', body }
   }
   if ((input.n ?? 1) !== 1) invalid('视频任务需逐个提交，不能隐式重复付费请求。')
-  if (videoSetting?.operation === 'upscale') {
+  if (isSourceVideoOperation(videoSetting?.operation)) {
     const source = preparedReferences[0]
     if (references.length !== 1 || preparedReferences.length !== 1 || source?.mediaType !== 'video'
       || source.blob.type !== 'video/mp4' || !source.blob.size || source.blob.size > 64 * 1024 * 1024
       || !Number.isFinite(source.durationSeconds) || source.durationSeconds! <= 0 || source.durationSeconds! > 3600)
       invalid('请上传一段有效的 MP4 源视频。')
     const custom = input.videoOptions?.customParameters.trim() ? JSON.parse(input.videoOptions.customParameters) : {}
-    if (!record(custom) || Object.keys(custom).length) invalid('视频超分请通过分辨率控件设置参数，清空自定义参数后重试。')
-    if (Buffer.byteLength(input.prompt, 'utf8') > 24000) invalid('视频超分提示词不能超过 24,000 字节。')
+    if (!record(custom) || Object.keys(custom).length) invalid('视频处理不支持自定义参数，请清空后重试。')
+    if (Buffer.byteLength(input.prompt, 'utf8') > 24000) invalid('视频处理提示词不能超过 24,000 字节。')
     const resolution = input.videoOptions?.resolution && input.videoOptions.resolution !== 'auto'
-      ? input.videoOptions.resolution : videoSetting.autoResolution
-    if (!resolution || resolution === 'auto') invalid('请选择视频超分的输出分辨率。')
+      ? input.videoOptions.resolution : videoSetting?.autoResolution
+    if (videoSetting?.operation === 'upscale' && (!resolution || resolution === 'auto')) invalid('请选择视频超分的输出分辨率。')
     const body = new FormData()
     body.set('model', input.model)
     if (input.prompt.trim()) body.set('prompt', input.prompt)
     body.set('seconds', String(Math.ceil(source.durationSeconds!)))
-    body.set('resolution', resolution)
-    body.set('frame_rate', '0')
-    body.set('metadata', JSON.stringify({ operation: 'upscale' }))
+    if (videoSetting?.operation === 'upscale') {
+      body.set('resolution', resolution!)
+      body.set('frame_rate', '0')
+    }
+    body.set('metadata', JSON.stringify({ operation: videoSetting?.operation }))
     body.set('input_videos', source.blob, source.name ?? 'source.mp4')
     return { path: input.protocol === 'async' ? 'async-videos/v1/tasks' : 'v1/videos', body }
   }

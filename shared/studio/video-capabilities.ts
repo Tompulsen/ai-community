@@ -1,9 +1,9 @@
 import type { VideoDraft, VideoGenMode } from "./types.ts";
 import { selectedVideoSize } from "./video-size.ts";
-import { videoModelSettingSchema, type VideoModelSetting } from "./model-types.ts";
+import { isSourceVideoOperation, videoModelSettingSchema, type VideoModelSetting } from "./model-types.ts";
 
 type VideoCapabilities = VideoModelSetting & { resolutions: string[]; durations: number[] };
-// Model defaults are resolved by the server and returned with the catalogue.
+// Model capabilities come from the saved administrator configuration.
 export function videoCapabilities(
   _model: string,
   mode: VideoGenMode = "text-to-video",
@@ -109,7 +109,7 @@ export function validateVideoRequestParameters(
     if (limits?.sendSize === false && source.size != null) throw new Error("当前模型不支持参数 size，请移除后重试");
     for (const key of limits?.unsupportedParameters ?? []) {
       // Source duration is retained only for the gateway's independently verified reservation.
-      if (limits?.operation === "upscale" && source === sent && key === "seconds") continue;
+      if (isSourceVideoOperation(limits?.operation) && source === sent && key === "seconds") continue;
       if (Object.hasOwn(source, key)) throw new Error(`当前模型不支持参数 ${key}，请移除后重试`);
     }
     for (const key of ["resolution", "resolution_name"]) {
@@ -138,7 +138,7 @@ export function validateVideoRequestParameters(
         throw new Error("视频时长须为 1 至 3600 秒的整数");
       if (
         source[key] != null &&
-        limits?.durations.length &&
+        !isSourceVideoOperation(limits?.operation) && limits?.durations.length &&
         !limits.durations.includes(Number(source[key]))
       )
         throw new Error(

@@ -24,6 +24,7 @@ for (const [kind, field, maximum] of [
   ['video', 'maxReferenceImages', 10],
   ['video', 'maxReferenceVideos', 10],
   ['video', 'maxReferenceAudios', 10],
+  ['video', 'maxReferenceTotal', 10],
 ] as const) {
   test(`${kind}.${field} retains zero and its maximum when model settings round trip`, () => {
     for (const value of [0, maximum]) {
@@ -45,4 +46,13 @@ test('count errors identify the exceeded type and preserve a separate total cap'
   expect(referenceCountIssue({ images: 4, videos: 3, audios: 3 }, resolveReferenceLimits('video'))).toBe('')
   expect(referenceCountIssue({ images: 4, videos: 4, audios: 3 }, resolveReferenceLimits('video')))
     .toBe('参考素材合计不能超过 10 个，已选 11 个。')
+})
+
+test('model-specific combined limits restrict mixed media without raising system caps', () => {
+  const limits = resolveReferenceLimits('video', { maxReferenceImages: 9, maxReferenceVideos: 3, maxReferenceAudios: 1, maxReferenceTotal: 6 })
+  expect(limits).toEqual({ images: 6, videos: 3, audios: 1, total: 6 })
+  expect(referenceCountIssue({ images: 3, videos: 2, audios: 1 }, limits)).toBe('')
+  expect(referenceCountIssue({ images: 4, videos: 2, audios: 1 }, limits)).toBe('参考素材合计不能超过 6 个，已选 7 个。')
+  expect(resolveReferenceLimits('video', { maxReferenceTotal: 0 })).toEqual({ images: 0, videos: 0, audios: 0, total: 0 })
+  expect(resolveReferenceLimits('video', { maxReferenceTotal: 6 }, true)).toEqual({ images: 0, videos: 1, audios: 0, total: 1 })
 })

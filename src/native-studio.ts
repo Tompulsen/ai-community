@@ -8,7 +8,7 @@ import { accountApi, api, errorMessage, notify, session, uploadFile } from './st
 import type { Work } from './data'
 import { getLines, getMessages } from '@fortaine/fetch-event-source/parse'
 import type { ImageOptions, VideoOptions, ChatOptions } from '../shared/studio/options'
-import { modelApiFormatSchema, modelTypesSchema, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat, type ModelTypeSetting } from '../shared/studio/model-types'
+import { isSourceVideoOperation, modelApiFormatSchema, modelTypesSchema, referenceCountIssue, resolveReferenceLimits, type ModelApiFormat, type ModelTypeSetting } from '../shared/studio/model-types'
 import type { ChatResponseUsage, StudioToolCall, ChatGenerationProgress, ChatResponseMetrics } from '../shared/studio/types'
 import { createGenerationProgress } from '../shared/studio/generation-progress'
 import { readRemixParameters } from '../shared/studio/remix-parameters'
@@ -321,7 +321,7 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
       && !direct.searchParams.has('path') && direct.searchParams.get('kind') !== 'video') direct.searchParams.set('variant', 'preview')
     return direct.pathname + direct.search + direct.hash
   }
-  if (!preview && ['/legacy-files/', '/files/'].some(prefix => url.startsWith(prefix))) return originalImageUrl(url)
+  if (!preview && kind === 'image' && ['/legacy-files/', '/files/'].some(prefix => url.startsWith(prefix))) return originalImageUrl(url)
   if (['data:', 'blob:', '/legacy-files/', '/files/', '/assets/'].some(prefix => url.startsWith(prefix))) return url
   return `/api/creation/media?${new URLSearchParams({ url, kind, ...(preview && kind === 'image' ? { variant: 'preview' } : {}) })}`
 }
@@ -801,12 +801,13 @@ export function creationConversationId(task: CreationTask) { return task.convers
 export function creationReferenceIssue(input: Pick<CreationInput, 'kind' | 'model' | 'apiFormat' | 'references' | 'imageContext' | 'videoOptions'>, configuredModel?: CreationModel) {
   if (input.kind === 'text') return ''
   const setting = input.kind === 'image' ? configuredModel?.image : configuredModel?.video
-  const limits = resolveReferenceLimits(input.kind, setting, input.kind === 'video' && configuredModel?.video?.operation === 'upscale')
+  const sourceVideoOperation = input.kind === 'video' && isSourceVideoOperation(configuredModel?.video?.operation)
+  const limits = resolveReferenceLimits(input.kind, setting, sourceVideoOperation)
   const imageFormat = input.apiFormat === 'auto' ? configuredModel?.apiFormat : input.apiFormat
   const imageChat = input.kind === 'image' && usesGeminiImageChat(input.model, imageFormat)
   const compactImageContext = input.kind === 'image' && (input.apiFormat !== 'auto' || configuredModel !== undefined) && !imageChat
   let references: { url: string; type?: string }[] = [...input.references || []]
-  if (input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'image_url') {
+  if (input.kind === 'video' && !sourceVideoOperation && input.videoOptions?.openaiReferenceSource === 'image_url') {
     references = [{ url: input.videoOptions.openaiImageUrl || '' }, ...(input.videoOptions.mode === 'first-last-frame' ? [{ url: input.videoOptions.openaiLastImageUrl || '' }] : [])]
   }
   if (input.kind === 'image' && (compactImageContext || imageChat && configuredModel?.image?.maxReferenceImages !== undefined)) {
@@ -818,7 +819,7 @@ export function creationReferenceIssue(input: Pick<CreationInput, 'kind' | 'mode
   const counts = references.reduce((counts, file) => {
     counts[file.type?.startsWith('video/') ? 'videos' : file.type?.startsWith('audio/') ? 'audios' : 'images']++
     return counts
-  }, { images: input.kind === 'video' && input.videoOptions?.openaiReferenceSource === 'file_id' ? 1 : 0, videos: 0, audios: 0 })
+  }, { images: input.kind === 'video' && !sourceVideoOperation && input.videoOptions?.openaiReferenceSource === 'file_id' ? 1 : 0, videos: 0, audios: 0 })
   return referenceCountIssue(counts, limits)
 }
 export async function submitCreation(input: CreationInput, onUpdate?: (task: CreationTask) => void | Promise<void>, isCurrent: () => boolean = () => true) {
@@ -834,9 +835,9 @@ export async function submitCreation(input: CreationInput, onUpdate?: (task: Cre
   const version = epoch, acceptedOwner = activeOwner(), acceptedAccount = /^[1-9]\d*$/.test(acceptedOwner) ? acceptedOwner : session.user?.accountId
   await initializeCreation()
   if (version !== epoch || acceptedOwner !== activeOwner() || !isCurrent()) throw new Error('操作已停止或账号已切换，未提交生成。')
-  const upscale = input.kind === 'video' && configuredModel?.video?.operation === 'upscale'
-  if (!owner || owner !== activeOwner() || !input.model.trim() || !upscale && !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
-  if (upscale && (input.references?.length !== 1 || !input.references[0]?.type?.startsWith('video/') || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(input.references[0].url))) throw new Error('视频超分需要上传一个源视频。')
+  const sourceVideoOperation = input.kind === 'video' && isSourceVideoOperation(configuredModel?.video?.operation)
+  if (!owner || owner !== activeOwner() || !input.model.trim() || !sourceVideoOperation && !input.prompt.trim()) throw new Error('请选择模型并输入提示词。')
+  if (sourceVideoOperation && (input.references?.length !== 1 || input.references[0]?.type !== 'video/mp4' || !/^\/legacy-files\/[A-Za-z0-9]{1,32}$/.test(input.references[0].url))) throw new Error('视频处理需要上传一个 MP4 源视频。')
   input = JSON.parse(JSON.stringify(input)) as CreationInput
   if (input.apiFormat !== 'auto') normalizeImageRequest(input, input.apiFormat)
   if (input.mediaBranch) {

@@ -30,7 +30,8 @@ async function modelsFixture(page: Page) {
     if (url.searchParams.get('management') !== '1') return route.fulfill({ json: { tokenId: 41, items: [] } })
     reads.push({ path: url.pathname, url: request.url(), headers: request.headers() })
     if (state.failCatalog) return route.fulfill({ status: 503, json: { message: '模型目录拉取失败，请重试。' } })
-    return route.fulfill({ json: { items: state.catalog, groups: state.groups } })
+    return route.fulfill({ json: { items: state.catalog.map(model => ({ ...model,
+      video: state.items.find(item => item.id === model.id)?.video })), groups: state.groups } })
   })
   await page.route('**/api/admin/**', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname
@@ -53,6 +54,32 @@ async function modelsFixture(page: Page) {
   return { state, reads, writes, groupSwitches, account }
 }
 const editor = (page: Page) => page.locator('.model-editor')
+
+test('saved backend parameters persist with a combined reference limit and cleared fields stay empty', async ({ page }) => {
+  const fixture = await modelsFixture(page)
+  fixture.state.items = [{ id: 'custom/video', kind: 'video', video: {
+    resolutions: ['720p', '1080p'], autoResolution: '720p', durations: [5, 10], autoDuration: 10,
+    maxReferenceImages: 9, maxReferenceVideos: 3, maxReferenceAudios: 1, maxReferenceTotal: 10,
+  } }]
+  await page.goto('/admin?tab=models')
+  await configure(page, 'custom/video').click()
+  await expect(page.getByLabel('可选分辨率', { exact: true })).toHaveValue('720p, 1080p')
+  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('5, 10')
+
+  await page.getByLabel('参考素材合计上限', { exact: true }).fill('6')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video?.maxReferenceTotal).toBe(6)
+  await page.reload()
+  await configure(page, 'custom/video').click()
+  await expect(page.getByLabel('参考素材合计上限', { exact: true })).toHaveValue('6')
+  await page.getByLabel('参考素材合计上限', { exact: true }).fill('0')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video?.maxReferenceTotal).toBe(0)
+  await page.getByLabel('参考素材合计上限', { exact: true }).fill('')
+  await save(page).click()
+  await expect.poll(() => item(fixture, 'custom/video')?.video?.maxReferenceTotal).toBeUndefined()
+  await expect(page.getByLabel('参考素材合计上限', { exact: true })).toHaveValue('')
+})
 const configure = (page: Page, id: string) => page.getByRole('button', { name: `配置：${id}`, exact: true })
 const combo = (page: Page, name: string) => page.getByRole('combobox', { name, exact: true })
 const save = (page: Page) => page.getByRole('button', { name: '保存模型配置', exact: true })
@@ -243,10 +270,8 @@ test('model reference count settings preserve zero, validate bounds and restore 
   await expect.poll(() => item(fixture, 'custom/image')?.image).toEqual({ maxReferenceImages: 0 })
 })
 
-test('video parameter definitions persist with modes, validate JSON and reset to backend defaults', async ({ page }, info) => {
+test('video parameter definitions persist with modes, validate JSON and reset without model defaults', async ({ page }, info) => {
   const fixture = await modelsFixture(page)
-  const defaults = { resolutions: ['480p'], durations: [4, 8], autoDuration: 8, aspectRatios: ['16:9'] }
-  fixture.state.catalog.find(model => model.id === 'custom/video')!.video = defaults
   const modes = { 'reference-to-video': { resolutions: ['720p'], durations: [5] } }
   fixture.state.items = [{ id: 'custom/video', kind: 'video', video: { resolutions: ['720p'], durations: [5, 10], autoDuration: 10,
     aspectRatios: ['16:9', '9:16'], modes } }]
@@ -300,12 +325,25 @@ test('video parameter definitions persist with modes, validate JSON and reset to
   await save(page).click()
   await expect.poll(() => item(fixture, 'custom/video')?.video?.operation).toBe('upscale')
   expect(item(fixture, 'custom/video')?.video?.sendSize).toBe(false)
+  for (const operation of ['remove-subtitles', 'remove-watermark'] as const) {
+    await combo(page, '视频处理').selectOption(operation)
+    await save(page).click()
+    await expect.poll(() => item(fixture, 'custom/video')?.video?.operation).toBe(operation)
+    await page.reload()
+    await configure(page, 'custom/video').click()
+    await expect(combo(page, '视频处理')).toHaveValue(operation)
+  }
   await page.getByRole('button', { name: '恢复自动识别', exact: true }).click()
   await page.getByRole('dialog', { name: '恢复自动识别？', exact: true }).getByRole('button', { name: '确认恢复', exact: true }).click()
   await expect.poll(() => fixture.state.items.length).toBe(0)
-  await expect(page.getByLabel('可选分辨率', { exact: true })).toHaveValue('480p')
-  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('4, 8')
+  await expect(page.getByLabel('可选分辨率', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('')
   await expect(page.getByLabel('精确尺寸 JSON', { exact: true })).toHaveValue('')
+  await page.reload()
+  await configure(page, 'custom/video').click()
+  await expect(page.getByLabel('可选分辨率', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('可选时长（秒）', { exact: true })).toHaveValue('')
+  await expect(combo(page, '视频处理')).toHaveValue('generate')
   expect(generations).toBe(0)
 })
 

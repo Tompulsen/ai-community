@@ -408,7 +408,7 @@ test('remix compatible video requests retain exact size and seed metadata', () =
 test('all final video payloads reject invalid durations with an actionable 400', () => {
   for (const protocol of ['openai', 'async']) for (const videoOptions of [undefined, { mode: 'text-to-video', resolution: '720p' }]) {
     const input = validateCreationInput({ kind: 'video', model: 'sora-2', prompt: 'Video', duration: 5, protocol, videoOptions })
-    assert.throws(() => buildCreationPayload(input), {
+    assert.throws(() => buildCreationPayload(input, [], [], { durations: [4, 8, 12] }), {
       statusCode: 400, code: 'INVALID_CREATION_REQUEST', message: '当前模型和生成方式仅支持 4 / 8 / 12 秒，请调整视频时长',
     })
   }
@@ -676,4 +676,40 @@ test('ambiguous saved outcomes remain explicit and do not suggest replaying a pa
   assert.equal(normalizeCreationTask('image', { id: 'job', status: 'completed' }).status, 'indeterminate')
   assert.equal(normalizeCreationTask('video', { id: 'job', status: 'cancelled' }).status, 'failed')
   assert.equal(normalizeCreationTask('image', { status: 'succeeded', data: [{ url: 'javascript:alert(1)' }] }).status, 'indeterminate')
+})
+
+test('source removal models require one measured MP4 and omit generation parameters', () => {
+  for (const [model, operation, setting] of [
+    ['AI去字幕', 'remove-subtitles', { operation: 'remove-subtitles' }], ['AI去水印', 'remove-watermark', { operation: 'remove-watermark' }],
+    ['custom-removal', 'remove-watermark', { operation: 'remove-watermark', durations: [5, 10], autoDuration: 5,
+      modes: { 'text-to-video': { durations: [5] } } }],
+  ]) {
+    const input = validateCreationInput({ kind: 'video', model, prompt: '', duration: 5,
+      aspect_ratio: '16:9', size: '1280x720', referenceUrls: ['/legacy-files/source'], videoOptions: { mode: 'text-to-video', resolution: '1080p' } })
+    const source = { blob: new Blob(['mp4'], { type: 'video/mp4' }), mediaType: 'video', durationSeconds: 8.2 }
+    const payload = buildCreationPayload(input, [source], [], setting)
+    assert.equal(payload.body.get('seconds'), '9')
+    assert.deepEqual(JSON.parse(payload.body.get('metadata')), { operation })
+    assert.equal(payload.body.get('input_videos').size, 3)
+    assert.equal(payload.body.has('prompt'), false)
+    for (const key of ['size', 'resolution', 'frame_rate', 'aspect_ratio', 'duration_seconds', 'input_images', 'input_audios'])
+      assert.equal(payload.body.has(key), false, `${model}: ${key}`)
+    assert.throws(() => buildCreationPayload(input, [], [], setting), /MP4/)
+    assert.throws(() => buildCreationPayload(input, [{ ...source, durationSeconds: 0 }], [], setting), /MP4/)
+    assert.throws(() => buildCreationPayload({ ...input, videoOptions: { ...input.videoOptions, customParameters: '{"seconds":1}' } }, [source], [], setting), /自定义参数/)
+  }
+})
+
+
+test('video model names do not restore cleared backend parameters or select a source operation', () => {
+  for (const model of ['sora-2', '火山2.5官转', 'MiniMax H3视频生成', 'DMC 视频超分', 'AI去字幕', 'AI去水印']) {
+    const input = validateCreationInput({ kind: 'video', model, prompt: 'Test', duration: 7, size: 'auto', aspect_ratio: 'auto',
+      videoOptions: { mode: 'text-to-video', resolution: 'auto' } })
+    const sent = Object.fromEntries(buildCreationPayload(input).body.entries())
+    assert.equal(sent.seconds, '7')
+    for (const key of ['size', 'resolution', 'frame_rate', 'aspect_ratio']) assert.equal(Object.hasOwn(sent, key), false)
+    const metadata = sent.metadata ? JSON.parse(sent.metadata) : {}
+    for (const key of ['operation', 'resolution', 'aspect_ratio']) assert.equal(Object.hasOwn(metadata, key), false)
+    assert.throws(() => resolveCreationModelSettings({ ...input, prompt: '' }), /提示词/)
+  }
 })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ImageOptions, VideoOptions } from '../../shared/studio/options'
-import type { ModelApiFormat, VideoModelSetting } from '../../shared/studio/model-types'
+import { isSourceVideoOperation, type ModelApiFormat, type VideoModelSetting } from '../../shared/studio/model-types'
 import { IMAGE_QUALITIES, IMAGE_RESOLUTIONS, usesGeminiImageChat } from '../../shared/studio/image-params'
 import { videoCapabilities } from '../../shared/studio/video-capabilities'
 const image = defineModel<ImageOptions>('image', { required: true })
@@ -11,6 +11,7 @@ const apiFormat = defineModel<ModelApiFormat>('apiFormat', { required: true })
 const props = defineProps<{ kind: 'image' | 'video' | 'text'; model: string; modelApiFormat?: ModelApiFormat; videoSetting?: VideoModelSetting; embedded?: boolean; hidePrimary?: boolean }>()
 const capabilities = computed(() => videoCapabilities(props.model, video.value.mode, props.videoSetting))
 const upscale = computed(() => props.kind === 'video' && capabilities.value?.operation === 'upscale')
+const sourceVideoOperation = computed(() => props.kind === 'video' && isSourceVideoOperation(capabilities.value?.operation))
 const resolutions = computed(() => capabilities.value?.resolutions || [])
 const geminiImage = computed(() => props.kind === 'image' && usesGeminiImageChat(props.model, apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value))
 const nativeImage = computed(() => props.kind === 'image' && (apiFormat.value === 'auto' ? props.modelApiFormat : apiFormat.value) === 'gemini')
@@ -41,9 +42,9 @@ function compression(event: Event) {
         <p v-if="!nativeImage && image.imageBackground === 'transparent' && image.imageOutputFormat === 'jpeg'" class="muted">透明背景将输出为 PNG。</p>
       </template>
       <template v-if="kind === 'video'">
-        <label v-if="!hidePrimary && !upscale" class="field"><span>生成方式</span><select v-model="video.mode" class="control"><option v-for="(label, value) in modes" :key="value" :value="value">{{ label }}</option></select></label>
-        <label v-if="!hidePrimary" class="field"><span>视频分辨率</span><select v-model="video.resolution" class="control"><option v-if="video.resolution !== 'auto' && !resolutions.includes(video.resolution)" :value="video.resolution">{{ video.resolution }}（不在可选列表中）</option><option v-for="value in resolutions" :key="value" :value="value">{{ value }}</option><option value="auto">自动</option></select></label>
-        <template v-if="!upscale">
+        <label v-if="!hidePrimary && !sourceVideoOperation" class="field"><span>生成方式</span><select v-model="video.mode" class="control"><option v-for="(label, value) in modes" :key="value" :value="value">{{ label }}</option></select></label>
+        <label v-if="!hidePrimary && (!sourceVideoOperation || upscale)" class="field"><span>视频分辨率</span><select v-model="video.resolution" class="control"><option v-if="video.resolution !== 'auto' && !resolutions.includes(video.resolution)" :value="video.resolution">{{ video.resolution }}（不在可选列表中）</option><option v-for="value in resolutions" :key="value" :value="value">{{ value }}</option><option value="auto">自动</option></select></label>
+        <template v-if="!sourceVideoOperation">
         <label class="field"><span>参考图来源</span><select v-model="video.openaiReferenceSource" class="control"><option value="upload">上传图片</option><option value="image_url">图片 URL</option><option value="file_id">文件 ID</option></select></label>
         <template v-if="video.openaiReferenceSource === 'image_url'"><label class="field"><span>首张图片 URL</span><input v-model="video.openaiImageUrl" class="control" type="url" /></label><label v-if="video.mode === 'first-last-frame'" class="field"><span>尾帧图片 URL</span><input v-model="video.openaiLastImageUrl" class="control" type="url" /></label></template>
         <label v-if="video.openaiReferenceSource === 'file_id'" class="field"><span>参考文件 ID</span><input v-model="video.openaiFileId" class="control" /></label>

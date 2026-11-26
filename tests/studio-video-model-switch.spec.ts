@@ -230,10 +230,12 @@ test('official video tiers are selectable while size fields stay disabled by bac
   expect(calls[0]).toMatchObject({ model: '火山2.5官转', size: 'auto', aspect_ratio: '9:16', duration: 10, videoOptions: { resolution: '2k' } })
 })
 
-test('video upscale requires one owned MP4, previews source metadata and submits without a prompt', async ({ page }, info) => {
+for (const operation of ['upscale', 'remove-subtitles', 'remove-watermark'] as const) test(`source video operation ${operation} requires one owned MP4 and submits without a prompt`, async ({ page }, info) => {
   const { models, calls } = await fixture(page)
-  models.unshift({ id: 'DMC-video-upscale', kinds: ['video'], video: { operation: 'upscale', parameterFormat: 'openai', sendSize: false,
-    resolutions: ['720p', '1080p', '2k', '4k'], autoResolution: '1080p' } })
+  const sourceModel = `source-video-${operation}`
+  const action = operation === 'upscale' ? '开始超分' : operation === 'remove-subtitles' ? '开始去字幕' : '开始去水印'
+  models.unshift({ id: sourceModel, kinds: ['video'], video: { operation, parameterFormat: 'openai', sendSize: false,
+    ...(operation === 'upscale' ? { resolutions: ['720p', '1080p', '2k', '4k'], autoResolution: '1080p' } : {}) } })
   const video = await readFile('tests/fixtures/poster-black-intro.mp4')
   let uploads = 0, processingReads = 0
   let ready!: () => void
@@ -252,14 +254,16 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   await page.route('**/legacy-files/ownedupscalevideo', route => route.fulfill({ body: video, contentType: 'video/mp4' }))
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/create/video')
-  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: action, exact: true })).toBeDisabled()
   await expect(page.getByRole('textbox', { name: '提示词', exact: true })).not.toHaveAttribute('required')
   await parameters(page)
   await expect(page.getByRole('radiogroup', { name: '生成方式', exact: true })).toHaveCount(0)
   await expect(page.getByRole('radiogroup', { name: '画面比例', exact: true })).toHaveCount(0)
   await expect(page.getByRole('slider', { name: '视频时长', exact: true })).toHaveCount(0)
-  await expect(resolution(page, '1080P')).toBeChecked()
-  await resolution(page, '2K').check()
+  if (operation === 'upscale') {
+    await expect(resolution(page, '1080P')).toBeChecked()
+    await resolution(page, '2K').check()
+  } else await expect(page.getByRole('radiogroup', { name: '视频分辨率', exact: true })).toHaveCount(0)
   await page.getByText('自定义参数', { exact: true }).click()
   await expect(page.getByLabel('尺寸', { exact: true })).toHaveCount(0)
   await expect(page.getByLabel('参考图来源', { exact: true })).toHaveCount(0)
@@ -273,7 +277,7 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   await picker.setInputFiles({ name: 'source.mp4', mimeType: 'video/mp4', buffer: video })
   await expect.poll(() => uploads).toBe(1)
   await expect.poll(() => processingReads).toBeGreaterThan(0)
-  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: action, exact: true })).toBeDisabled()
   expect(calls).toHaveLength(0)
   ready()
   await page.getByRole('button', { name: '预览源视频', exact: true }).click()
@@ -281,7 +285,7 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   await expect(source).toHaveAttribute('controls', '')
   await expect.poll(() => source.evaluate((element: HTMLVideoElement) => element.duration)).toBe(2.5)
   await page.getByRole('button', { name: '关闭参考素材预览', exact: true }).click()
-  await expect(page.getByRole('button', { name: '开始超分', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: action, exact: true })).toBeEnabled()
   expect(calls).toHaveLength(0)
   await page.getByRole('button', { name: '模型价格', exact: true }).click()
   await expect(page.locator('.billing-cost')).toContainText('本次 3 秒视频')
@@ -289,11 +293,11 @@ test('video upscale requires one owned MP4, previews source metadata and submits
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await page.screenshot({ path: info.outputPath(`video-upscale-${width}.png`) })
+    await page.screenshot({ path: info.outputPath(`video-${operation}-${width}.png`) })
   }
-  await page.getByRole('button', { name: '开始超分', exact: true }).click()
+  await page.getByRole('button', { name: action, exact: true }).click()
   await expect.poll(() => calls.length).toBe(1)
-  expect(calls[0]).toMatchObject({ model: 'DMC-video-upscale', prompt: '', size: 'auto', referenceUrls: ['/legacy-files/ownedupscalevideo'], videoOptions: { resolution: '2k' } })
+  expect(calls[0]).toMatchObject({ model: sourceModel, prompt: '', size: 'auto', referenceUrls: ['/legacy-files/ownedupscalevideo'], videoOptions: { resolution: operation === 'upscale' ? '2k' : 'auto' } })
   await expect(page.locator('.sent-references video')).toHaveCount(1)
   await expect(page.locator('.sent-references img')).toHaveCount(0)
   expect(errors).toEqual([])

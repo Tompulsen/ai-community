@@ -342,7 +342,7 @@ test('model interfaces, automatic parameters and private remarks round-trip thro
       image: { autoResolution: '2k', autoAspectRatio: '16:9' } },
     { id: 'video-model', kind: 'video', apiFormat: 'openai', protocol: 'sync',
       video: { autoResolution: '720p', resolutions: ['720p', '1080p'], autoAspectRatio: '9:16', parameterFormat: 'xai',
-        maxReferenceImages: 0, maxReferenceVideos: 2, maxReferenceAudios: 1 }, remark: 'private video routing note' },
+        maxReferenceImages: 0, maxReferenceVideos: 2, maxReferenceAudios: 1, maxReferenceTotal: 2 }, remark: 'private video routing note' },
   ]
   const saved = await f.request(path, 'PATCH', { items: communityModelTypes, version: before.version })
   assert.deepEqual(saved.items, communityModelTypes)

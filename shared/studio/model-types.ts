@@ -37,10 +37,11 @@ const videoSizeSchema = z.string().regex(/^[1-9]\d{0,4}x[1-9]\d{0,4}$/)
   .refine(value => value.split('x').every(dimension => Number(dimension) <= 65534 && Number(dimension) % 2 === 0),
     { message: '视频精确宽高须为 2 至 65534 的偶数。' })
 export const videoModelSettingSchema = z.object({
+  maxReferenceTotal: z.number().int().min(0).max(10).optional(),
   maxReferenceImages: z.number().int().min(0).max(10).optional(),
   maxReferenceVideos: z.number().int().min(0).max(10).optional(),
   maxReferenceAudios: z.number().int().min(0).max(10).optional(),
-  operation: z.enum(['generate', 'upscale']).optional(),
+  operation: z.enum(['generate', 'upscale', 'remove-subtitles', 'remove-watermark']).optional(),
   sendSize: z.boolean().optional(),
   resolutionValues: z.record(videoResolutionSchema, z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/))
     .refine(values => Object.keys(values).length > 0 && Object.keys(values).length <= 16
@@ -94,11 +95,15 @@ export const videoModelSettingSchema = z.object({
     { message: '不发送像素尺寸时，请清空精确尺寸配置。', path: ['sizes'] })
 export type VideoModelSetting = z.infer<typeof videoModelSettingSchema>
 
+export function isSourceVideoOperation(operation: VideoModelSetting['operation']) {
+  return operation === 'upscale' || operation === 'remove-subtitles' || operation === 'remove-watermark'
+}
+
 export function resolveReferenceLimits(kind: 'image' | 'video', setting?: {
-  maxReferenceImages?: number; maxReferenceVideos?: number; maxReferenceAudios?: number;
+  maxReferenceImages?: number; maxReferenceVideos?: number; maxReferenceAudios?: number; maxReferenceTotal?: number;
 }, upscale = false) {
   const sourceVideo = kind === 'video' && upscale
-  const total = sourceVideo ? 1 : kind === 'video' ? 10 : 16
+  const total = sourceVideo ? Math.min(1, setting?.maxReferenceTotal ?? 1) : kind === 'video' ? Math.min(10, setting?.maxReferenceTotal ?? 10) : 16
   return {
     images: sourceVideo ? 0 : Math.min(total, setting?.maxReferenceImages ?? total),
     videos: kind === 'image' ? 0 : Math.min(total, setting?.maxReferenceVideos ?? total),
