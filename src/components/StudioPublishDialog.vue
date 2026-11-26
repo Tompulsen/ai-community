@@ -10,6 +10,7 @@ import { mediaSource, publishCreation, type PublicationDetails, type CreationDes
 import '../publication-controls.css'
 const dialog = ref<HTMLDialogElement>(), extra = ref<HTMLDetailsElement>(), task = ref<CreationTask>(), destination = ref<CreationDestination>('community')
 const title = ref(''), text = ref(''), content = ref<string>(), error = ref(''), busy = ref(false), result = ref<Work>()
+const resultUnavailable = ref(false)
 const tags = ref<WorkTag[]>([]), tagIds = ref<string[]>([]), tagsLoading = ref(false), tagsError = ref('')
 const tagField = ref<HTMLFieldSetElement>(), tagValidation = ref('')
 const prompt = ref(''), sourceUrl = ref(''), license = ref(''), rights = ref(false), referenceIndices = ref<number[]>([])
@@ -23,7 +24,7 @@ const resultLink = computed(() => sourceCommentLink.value ? `/work/${task.value?
 const resultMessage = computed(() => result.value?.status === 'pending' ? direct.value ? '评论已提交审核。' : '作品已提交审核。' : published.value ? direct.value ? '已发送到源作品评论区。' : '作品已公开。' : result.value?.status === 'rejected' ? '未通过审核或已撤回，请查看提交记录。' : '已保存提交记录。')
 let revision = 0
 onBeforeUnmount(() => revision++)
-watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; error.value = ''; busy.value = false })
+watch(() => session.user?.id, () => { revision++; dialog.value?.close(); task.value = undefined; result.value = undefined; resultUnavailable.value = false; error.value = ''; busy.value = false })
 async function loadTags() {
   const current = revision
   tagsLoading.value = true; tagsError.value = ''
@@ -46,7 +47,7 @@ function revealInvalid(event: Event) {
 async function open(value: CreationTask, target: CreationDestination = 'community', currentText?: string) {
   if (busy.value || value.phase !== 'complete' || value.owner !== session.user?.id) return
   const current = ++revision
-  task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined
+  task.value = value; destination.value = target; content.value = currentText; error.value = ''; result.value = undefined; resultUnavailable.value = false
   const previous = value.publications?.[target]
   title.value = previous?.title || (target === 'source-comment' ? '我的同款作品' : value.prompt.slice(0, 50))
   text.value = previous?.text ?? (value.kind === 'text' ? currentText ?? value.text : target === 'source-comment' ? '我用同款提示词创作了新作品' : '').slice(0, 2500)
@@ -58,12 +59,22 @@ async function open(value: CreationTask, target: CreationDestination = 'communit
   await nextTick(); if (current !== revision) return
   if (extra.value) extra.value.open = false
   dialog.value?.showModal()
-  if (previous?.work) {
-    busy.value = true
-    try { const response = await api<{ work: Work }>(`/api/works/${encodeURIComponent(previous.work.id)}`); if (current === revision) result.value = response.work }
-    catch (cause) { if (current === revision) { result.value = previous.work; error.value = `已提交，暂时无法刷新最新状态：${errorMessage(cause)}` } }
-    finally { if (current === revision) busy.value = false }
-  }
+  if (previous?.work) await refreshResult(previous.work)
+}
+async function refreshResult(previous: Work) {
+  if (busy.value) return
+  const current = revision
+  busy.value = true; error.value = ''
+  try {
+    const response = await api<{ work: Work }>(`/api/works/${encodeURIComponent(previous.id)}`)
+    if (current === revision) { result.value = response.work; resultUnavailable.value = false }
+  } catch (cause) {
+    if (current === revision) {
+      result.value = previous
+      resultUnavailable.value = true
+      error.value = (cause as { status?: number }).status === 404 ? '暂时无法访问这条提交记录，请确认账号后重试。' : '暂时无法确认这条提交记录的状态，请稍后重试。'
+    }
+  } finally { if (current === revision) busy.value = false }
 }
 async function submit() {
   if (!task.value || busy.value || result.value) return
@@ -128,6 +139,7 @@ defineExpose({ open })
         <p v-if="busy" class="form-note" role="status">正在提交并检查内容，请稍候…</p>
         <button class="button primary btn" :disabled="busy || !title.trim()"><Send v-if="direct" :size="16" /><Upload v-else :size="16" />{{ busy ? '正在提交…' : direct ? '提交评论' : '提交作品' }}</button>
       </template>
+      <div v-else-if="resultUnavailable" class="stack"><button type="button" class="button primary btn" :disabled="busy" @click="refreshResult(result)">{{ busy ? '正在检查状态…' : '重新检查状态' }}</button></div>
       <div v-else class="stack"><p role="status">{{ resultMessage }}</p><RouterLink :to="resultLink" class="button primary btn" @click="dialog?.close()">{{ sourceCommentLink ? '查看源作品评论' : '查看提交' }}</RouterLink></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </form>

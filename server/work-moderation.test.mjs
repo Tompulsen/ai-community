@@ -48,6 +48,7 @@ async function fixture(t, options = {}) {
     assert.equal(state.inTransaction, false, 'model inference must not hold database transaction locks');
     assert.equal(String(url), 'http://moderation.internal:8090/check');
     assert.equal(init.headers.Authorization, 'Bearer test-internal-secret');
+    state.sentRejectThreshold = init.headers['X-Moderation-Reject-Threshold'];
     assert.equal(init.redirect, 'error');
     assert.deepEqual(Buffer.from(init.body), imageBytes);
     if (options.fetch) return options.fetch(url, init);
@@ -89,6 +90,34 @@ test('borderline, unavailable, malformed, oversized and unsupported responses al
   });
 });
 
+test('early NSFW results reject at the current threshold without requiring OCR', async t => {
+  for (const rejectThreshold of [0.8, 0.95, 1]) await t.test(String(rejectThreshold), async t => {
+    const f = await fixture(t, { settings: { enabled: true, sensitiveWords: ['blocked'], rejectThreshold },
+      fetch: () => new Response(JSON.stringify({ nsfwScore: rejectThreshold, text: '', modelVersion: 'test-v1', ocrSkipped: true })) });
+    await assert.rejects(handleContent(f.ctx), error => error.statusCode === 422 && error.code === 'WORK_MODERATION_REJECTED');
+    assert(!f.statements.some(({ sql }) => sql.startsWith('INSERT')));
+    assert(!hasPublicWrite(f)); assert(!hasReward(f)); assert.equal(f.state.calls, 1);
+    assert.equal(f.state.sentRejectThreshold, String(rejectThreshold));
+  });
+});
+
+test('skipped OCR below the rejection threshold and malformed skip flags never publish', async t => {
+  for (const sensitiveWords of [[], ['blocked']]) for (const ocrSkipped of [true, 'true', 1, null]) {
+    await t.test(JSON.stringify({ sensitiveWords, ocrSkipped }), async t => {
+      const f = await fixture(t, { settings: { enabled: true, sensitiveWords },
+        fetch: () => new Response(JSON.stringify({ nsfwScore: 0.1, text: '', modelVersion: 'test-v1', ocrSkipped })) });
+      await handleContent(f.ctx);
+      assert.equal(f.result.status, 201); assert(!hasPublicWrite(f)); assert(!hasReward(f));
+      assert.equal(f.statements.find(({ sql }) => sql.startsWith('INSERT INTO community_submission')).parameters[13], 'pending');
+    });
+  }
+});
+
+test('completed OCR with an explicit false flag still permits a clear image', async t => {
+  const f = await fixture(t, { fetch: () => new Response(JSON.stringify({ nsfwScore: 0.1, text: '', modelVersion: 'test-v1', ocrSkipped: false })) });
+  await handleContent(f.ctx); assert.equal(f.result.status, 201); assert(hasPublicWrite(f)); assert(hasReward(f));
+});
+
 test('default and administrator thresholds gate publication at their inclusive boundaries', async t => {
   for (const thresholds of [undefined, { reviewThreshold: 0.3, rejectThreshold: 0.8 }, { reviewThreshold: 0.85, rejectThreshold: 1 }]) {
     const { reviewThreshold, rejectThreshold } = thresholds ?? { reviewThreshold: 0.65, rejectThreshold: 0.95 };
@@ -106,6 +135,7 @@ test('default and administrator thresholds gate publication at their inclusive b
         assert.equal(hasPublicWrite(f), decision === 'allow');
         assert.equal(hasReward(f), decision === 'allow');
         assert.equal(f.state.calls, 1);
+        assert.equal(f.state.sentRejectThreshold, String(rejectThreshold));
       });
     }
   }

@@ -59,7 +59,7 @@ function parameterStrings(value: unknown): string[] {
   if (value && typeof value === 'object') return Object.values(value).flatMap(parameterStrings);
   return [];
 }
-async function inspectImage(bytes: Buffer, remainingMs: number): Promise<{ nsfwScore: number; text: string }> {
+async function inspectImage(bytes: Buffer, remainingMs: number, rejectThreshold: number): Promise<{ nsfwScore: number; text: string; ocrSkipped: boolean }> {
   const endpoint = new URL(process.env.COMMUNITY_MODERATION_URL || 'invalid:');
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !process.env.COMMUNITY_MODERATION_TOKEN)
     throw new Error('Moderation service unavailable');
@@ -68,7 +68,8 @@ async function inspectImage(bytes: Buffer, remainingMs: number): Promise<{ nsfwS
   const timer = setTimeout(() => controller.abort(), Math.min(12000, remainingMs));
   try {
     const response = await fetch(endpoint, { method: 'POST', redirect: 'error', signal: controller.signal,
-      headers: { Authorization: `Bearer ${process.env.COMMUNITY_MODERATION_TOKEN}`, 'Content-Type': 'application/octet-stream' }, body: new Uint8Array(bytes) });
+      headers: { Authorization: `Bearer ${process.env.COMMUNITY_MODERATION_TOKEN}`, 'Content-Type': 'application/octet-stream',
+        'X-Moderation-Reject-Threshold': String(rejectThreshold) }, body: new Uint8Array(bytes) });
     if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('Moderation service unavailable'); }
     const reader = response.body.getReader();
     let size = 0;
@@ -86,9 +87,10 @@ async function inspectImage(bytes: Buffer, remainingMs: number): Promise<{ nsfwS
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Invalid moderation response');
     const value = result as Record<string, unknown>;
     if (typeof value.nsfwScore !== 'number' || !Number.isFinite(value.nsfwScore) || value.nsfwScore < 0 || value.nsfwScore > 1 ||
-      typeof value.text !== 'string' || value.text.length > 20000 || typeof value.modelVersion !== 'string' || !value.modelVersion || value.modelVersion.length > 256)
+      typeof value.text !== 'string' || value.text.length > 20000 || typeof value.modelVersion !== 'string' || !value.modelVersion || value.modelVersion.length > 256 ||
+      ('ocrSkipped' in value && typeof value.ocrSkipped !== 'boolean'))
       throw new Error('Invalid moderation response');
-    return { nsfwScore: value.nsfwScore, text: value.text };
+    return { nsfwScore: value.nsfwScore, text: value.text, ocrSkipped: value.ocrSkipped === true };
   } finally { clearTimeout(timer); }
 }
 
@@ -132,11 +134,12 @@ export async function prepareWorkModeration(ctx: RequestContext, ownerId: string
         } finally { await handle.close(); }
         const remaining = deadline - Date.now();
         if (remaining <= 0) { review = true; continue; }
-        const detected = await inspectImage(bytes, remaining);
-        if (hasSensitiveWord(detected.text, settings.sensitiveWords)) { rejectWords(); return result; }
+        const detected = await inspectImage(bytes, remaining, settings.rejectThreshold);
         if (detected.nsfwScore >= settings.rejectThreshold) {
           result.decision = 'reject'; result.reason = '检测到疑似色情或裸露内容，暂不能发布。请修改后重试，或联系管理员复核。'; return result;
         }
+        if (detected.ocrSkipped) { review = true; continue; }
+        if (hasSensitiveWord(detected.text, settings.sensitiveWords)) { rejectWords(); return result; }
         if (detected.nsfwScore >= settings.reviewThreshold) review = true;
       } catch { review = true; }
     }

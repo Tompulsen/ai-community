@@ -136,6 +136,57 @@ test('confirmed moderation rejection keeps publication fields editable and permi
   expect(state.submissions[1].idempotencyKey).toBe(state.submissions[0].idempotencyKey)
 })
 
+test('a missing cached submission hides its success receipt and retries only the status query', async ({ page }) => {
+  const state = await fixture(page)
+  const form = dialog(page)
+  await choose(page)
+  await form.getByRole('button', { name: '提交作品', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  await form.getByRole('button', { name: '关闭发布作品', exact: true }).click()
+  let status = 404
+  const checks: string[] = []
+  await page.route('**/api/works/published1', route => {
+    checks.push(route.request().method())
+    return status !== 200
+      ? route.fulfill({ status, json: { message: status === 404 ? 'Work not found' : 'Service unavailable' } })
+      : route.fulfill({ json: { work: { id: 'published1', title: '原始小猫提示词', status: 'pending' } } })
+  })
+  await page.reload()
+  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toHaveText('暂时无法访问这条提交记录，请确认账号后重试。')
+  await expect(form.getByText('作品已提交审核。', { exact: true })).toHaveCount(0)
+  await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveCount(0)
+  await expect(form.getByRole('button', { name: '提交作品', exact: true })).toHaveCount(0)
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await page.screenshot({ path: test.info().outputPath(`missing-submission-${width}.png`) })
+  }
+  expect((await new AxeBuilder({ page }).include('.studio-publish-dialog[open]').analyze()).violations).toEqual([])
+  expect(await page.evaluate(async () => {
+    const { readTaskSnapshot } = await import('/src/studio-task-store.ts')
+    return (await readTaskSnapshot('17')).find(task => task.id === 'publication-case').publications.community.work.id
+  })).toBe('published1')
+  status = 503
+  await form.getByRole('button', { name: '关闭发布作品', exact: true }).click()
+  await page.getByRole('button', { name: '发布作品', exact: true }).click()
+  await expect(form.getByRole('alert')).toHaveText('暂时无法确认这条提交记录的状态，请稍后重试。')
+  await expect(form.getByText('作品已提交审核。', { exact: true })).toHaveCount(0)
+  await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveCount(0)
+  await expect(form.getByRole('button', { name: '提交作品', exact: true })).toHaveCount(0)
+  await form.getByRole('button', { name: '重新检查状态', exact: true }).click()
+  await expect(form.getByRole('alert')).toHaveText('暂时无法确认这条提交记录的状态，请稍后重试。')
+  await expect(form.getByText('作品已提交审核。', { exact: true })).toHaveCount(0)
+  await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveCount(0)
+  status = 200
+  await form.getByRole('button', { name: '重新检查状态', exact: true }).click()
+  await expect(form.getByRole('status')).toHaveText('作品已提交审核。')
+  await expect(form.getByRole('link', { name: '查看提交', exact: true })).toHaveAttribute('href', '/work/published1')
+  await expect(form.getByRole('alert')).toHaveCount(0)
+  expect(checks).toEqual(['GET', 'GET', 'GET', 'GET'])
+  expect(state.submissions).toHaveLength(1)
+})
+
 test('old publication retries retain the old payload without requiring new fields', async ({ page }) => {
   const state = await fixture(page, 'image', true)
   await dialog(page).getByRole('button', { name: '提交作品', exact: true }).click()

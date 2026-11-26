@@ -73,6 +73,27 @@ class ImageTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             engine.check(image_bytes())
 
+    def test_reject_threshold_skips_ocr_only_after_a_definitive_score(self):
+        engine = object.__new__(Engine)
+        engine.input_name = "pixel_values"
+        engine.nsfw = type("Session", (), {"run": lambda *_: [np.array([[0, 0]])]})()
+        def broken(_):
+            raise RuntimeError("OCR allocation failed")
+        engine.ocr = broken
+        result = engine.check(image_bytes(), reject_threshold=0.5)
+        self.assertEqual(result, {"nsfwScore": 0.5, "text": "", "modelVersion": MODEL_VERSION, "ocrSkipped": True})
+        for threshold in (None, 0.51, 1.0):
+            with self.assertRaisesRegex(RuntimeError, "OCR allocation failed"):
+                engine.check(image_bytes(), reject_threshold=threshold)
+
+    def test_large_alpha_is_bounded_before_compositing(self):
+        output = io.BytesIO()
+        Image.new("RGBA", (800, 500), (0, 0, 0, 0)).save(output, format="PNG")
+        with patch("service.OCR_MAX_SIDE", 100):
+            decoded = decode_image(output.getvalue())
+        self.assertEqual(decoded.size, (100, 63))
+        self.assertEqual(decoded.getpixel((0, 0)), (255, 255, 255))
+
 
 class InferenceDeadlineTests(unittest.TestCase):
     def test_stuck_inference_exits_for_container_restart(self):
@@ -128,6 +149,33 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(set(result), {"nsfwScore", "text", "modelVersion"})
         self.assertEqual(result["modelVersion"], MODEL_VERSION)
+
+    def test_reject_threshold_is_validated_and_forwarded(self):
+        seen = []
+        def check(data, reject_threshold=None):
+            seen.append(reject_threshold)
+            return {"nsfwScore": 0.99, "text": "", "modelVersion": MODEL_VERSION, "ocrSkipped": True}
+        self.engine.check = check
+        status, result = self.request(headers={"X-Moderation-Reject-Threshold": "0.95"})
+        self.assertEqual(status, 200)
+        self.assertIs(result["ocrSkipped"], True)
+        self.assertEqual(seen, [0.95])
+        for invalid in ("", "0", "-1", "1.01", "NaN", "inf", "1e999", "0.5,0.6", "invalid"):
+            status, result = self.request(headers={"X-Moderation-Reject-Threshold": invalid})
+            self.assertEqual((status, result), (400, {"error": "REJECT_THRESHOLD"}))
+        self.assertEqual(seen, [0.95])
+
+    def test_duplicate_reject_threshold_is_rejected(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        connection.putrequest("POST", "/check")
+        for name, value in [("Authorization", "Bearer " + self.token), ("Content-Type", "application/octet-stream"),
+                            ("Content-Length", "1"), ("X-Moderation-Reject-Threshold", "0.8"), ("X-Moderation-Reject-Threshold", "0.9")]:
+            connection.putheader(name, value)
+        connection.endheaders(b"x")
+        response = connection.getresponse()
+        self.assertEqual(response.status, 400)
+        self.assertEqual(json.loads(response.read()), {"error": "REJECT_THRESHOLD"})
+        connection.close()
 
     def test_size_encoding_and_routes_are_checked_before_inference(self):
         self.assertEqual(self.request(body=b"", headers={"Content-Length": str(MAX_BYTES + 1)})[0], 422)

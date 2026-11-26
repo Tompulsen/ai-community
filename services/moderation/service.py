@@ -6,6 +6,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import socket
@@ -21,6 +22,7 @@ MAX_BYTES = 20 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 MAX_TEXT = 20_000
 OCR_MAX_SIDE = 4096
+OCR_DETECTOR_SIDE = 960
 REQUEST_SECONDS = 30
 INFERENCE_SECONDS = 30
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -46,12 +48,14 @@ def decode_image(data: bytes) -> Image.Image:
                 if source.format not in {"JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"}:
                     raise ReviewRequired("IMAGE_FORMAT")
                 source.load()
-                oriented = ImageOps.exif_transpose(source)
-                if "A" in oriented.getbands() or "transparency" in oriented.info:
-                    rgba = oriented.convert("RGBA")
+                ImageOps.exif_transpose(source, in_place=True)
+                # Bound full-color copies before alpha compositing a large decoded image.
+                source.thumbnail((OCR_MAX_SIDE, OCR_MAX_SIDE), Image.Resampling.LANCZOS)
+                if "A" in source.getbands() or "transparency" in source.info:
+                    rgba = source.convert("RGBA")
                     background = Image.new("RGBA", rgba.size, "white")
                     return Image.alpha_composite(background, rgba).convert("RGB")
-                return oriented.convert("RGB")
+                return source.convert("RGB")
     except ReviewRequired:
         raise
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
@@ -83,6 +87,7 @@ class Engine:
         options.intra_op_num_threads = 2
         options.inter_op_num_threads = 1
         options.log_severity_level = 3
+        options.enable_cpu_mem_arena = False
         self.nsfw = ort.InferenceSession(str(directory / "nsfw.onnx"), sess_options=options, providers=["CPUExecutionProvider"])
         self.input_name = self.nsfw.get_inputs()[0].name
         # The pinned recognizer embeds its dictionary; an absent dictionary must not trigger a download.
@@ -95,7 +100,11 @@ class Engine:
             "Global.model_root_dir": str(directory),
             "EngineConfig.onnxruntime.intra_op_num_threads": 2,
             "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            "EngineConfig.onnxruntime.enable_cpu_mem_arena": False,
             "EngineConfig.onnxruntime.use_cuda": False,
+            # RapidOCR defaults to a minimum side, which leaves large detector inputs unbounded.
+            "Det.limit_type": "max", "Det.limit_side_len": OCR_DETECTOR_SIDE,
+            "Cls.cls_batch_num": 2, "Rec.rec_batch_num": 2,
             **{f"{kind}.model_path": str(directory / f"ocr-{kind.lower()}.onnx") for kind in ("Det", "Cls", "Rec")},
             **{f"{kind}.ocr_version": OCRVersion("PP-OCRv4") for kind in ("Det", "Cls", "Rec")},
             **{f"{kind}.model_type": ModelType("mobile") for kind in ("Det", "Cls", "Rec")},
@@ -106,11 +115,13 @@ class Engine:
         self.ocr._load_cls_model()
         self.ocr._load_rec_model()
 
-    def check(self, data: bytes) -> dict:
+    def check(self, data: bytes, reject_threshold: float | None = None) -> dict:
         image = decode_image(data)
         try:
             score = nsfw_probability(self.nsfw.run(None, {self.input_name: nsfw_input(image)})[0])
-            image.thumbnail((OCR_MAX_SIDE, OCR_MAX_SIDE), Image.Resampling.LANCZOS)
+            # A definitive rejection must not depend on a later OCR allocation or timeout.
+            if reject_threshold is not None and score >= reject_threshold:
+                return {"nsfwScore": score, "text": "", "modelVersion": MODEL_VERSION, "ocrSkipped": True}
             # RapidOCR expects OpenCV BGR arrays when called with an ndarray.
             result = self.ocr(np.asarray(image)[:, :, ::-1].copy())
             if result is None or not hasattr(result, "txts"):
@@ -128,7 +139,7 @@ class Engine:
             image.close()
 
 
-def bounded_inference(engine, data: bytes) -> dict:
+def bounded_inference(engine, data: bytes, reject_threshold: float | None = None) -> dict:
     finished = threading.Event()
     def expire():
         if not finished.is_set():
@@ -139,7 +150,7 @@ def bounded_inference(engine, data: bytes) -> dict:
     watchdog.daemon = True
     watchdog.start()
     try:
-        return engine.check(data)
+        return engine.check(data) if reject_threshold is None else engine.check(data, reject_threshold=reject_threshold)
     finally:
         finished.set()
         watchdog.cancel()
@@ -262,6 +273,18 @@ class Handler(BaseHTTPRequestHandler):
         if not 0 < length <= MAX_BYTES:
             self.respond(422, {"error": "IMAGE_SIZE"})
             return
+        thresholds = self.headers.get_all("X-Moderation-Reject-Threshold", [])
+        reject_threshold = None
+        if thresholds:
+            try:
+                if len(thresholds) != 1:
+                    raise ValueError
+                reject_threshold = float(thresholds[0])
+                if not math.isfinite(reject_threshold) or not 0 < reject_threshold <= 1:
+                    raise ValueError
+            except ValueError:
+                self.respond(400, {"error": "REJECT_THRESHOLD"})
+                return
         if not self.server.inference.acquire(blocking=False):
             self.respond(503, {"error": "BUSY"})
             return
@@ -273,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(400, {"error": "INCOMPLETE_BODY"})
                     return
                 data.extend(chunk)
-            result = bounded_inference(self.server.engine, bytes(data))
+            result = bounded_inference(self.server.engine, bytes(data), reject_threshold)
             self.respond(200, result)
         except ReviewRequired as error:
             self.respond(422, {"error": error.code})
