@@ -120,12 +120,73 @@ for (const format of ['jpeg', 'png', 'webp', 'gif']) test(`explicit ${format} do
   assertJsonError(await f.app.inject({ method: 'GET', url }), 404)
 })
 
+test('original downloads bypass conversion, retain ranges and enforce media authorization', async t => {
+  const f = await fixture(t)
+  const original = await sharp({ create: { width: 183, height: 97, channels: 4, background: '#13579b80' } }).png().toBuffer()
+  await writeFile(path.join(f.filesRoot, 'original-key'), original)
+  Object.assign(f.media, { type: 'image/png', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const url = '/files/thumbnail-key?variant=cover&format=jpeg&download=original'
+  const result = await f.app.inject({ method: 'GET', url })
+  assert.equal(result.statusCode, 200); assert.equal(result.headers['content-type'], 'image/png')
+  assert.deepEqual(result.rawPayload, original)
+  assert.match(result.headers['content-disposition'], /^attachment;.*\.png/)
+  const preview = await f.app.inject({ method: 'GET', url: '/files/thumbnail-key?variant=original' })
+  assert.deepEqual(preview.rawPayload, original)
+  const partial = await f.app.inject({ method: 'GET', url, headers: { range: 'bytes=0-15' } })
+  assert.equal(partial.statusCode, 206); assert.deepEqual(partial.rawPayload, original.subarray(0, 16))
+  await rm(path.join(f.filesRoot, 'original-key'))
+  await writeFile(path.join(f.filesRoot, 'thumbnail-key'), original)
+  assertJsonError(await f.app.inject({ method: 'GET', url }), 404)
+  f.denyMedia()
+  assertJsonError(await f.app.inject({ method: 'GET', url }), 404)
+})
+
+test('PNG and WebP exports retain detailed pixels and partial transparency', async t => {
+  const f = await fixture(t)
+  const pixels = Buffer.alloc(99 * 63 * 4)
+  for (let i = 0; i < pixels.length; i += 4) { pixels[i] = i % 251; pixels[i + 1] = i * 7 % 253; pixels[i + 2] = i * 19 % 255; pixels[i + 3] = i / 4 % 256 }
+  const source = await sharp(pixels, { raw: { width: 99, height: 63, channels: 4 } }).png().toBuffer()
+  for (const format of ['png', 'webp']) {
+    const result = await f.app.inject({ method: 'POST', url: '/api/images/export', headers: jsonHeaders, payload: { format, data: source.toString('base64') } })
+    assert.equal(result.statusCode, 200)
+    assert.deepEqual(await sharp(result.rawPayload).ensureAlpha().raw().toBuffer(), pixels)
+  }
+})
+
+test('PNG and WebP exports preserve color profiles without restoring private EXIF', async t => {
+  const f = await fixture(t)
+  const source = await sharp({ create: { width: 31, height: 27, channels: 3, background: '#ed2345' } })
+    .withIccProfile('p3').withExif({ IFD0: { Artist: 'private artist' } }).png().toBuffer()
+  const profile = (await sharp(source).metadata()).icc
+  assert(profile)
+  for (const format of ['png', 'webp']) {
+    const result = await f.app.inject({ method: 'POST', url: '/api/images/export', headers: jsonHeaders, payload: { format, data: source.toString('base64') } })
+    assert.equal(result.statusCode, 200)
+    const metadata = await sharp(result.rawPayload).metadata()
+    assert.deepEqual(metadata.icc, profile)
+    assert.equal(metadata.exif, undefined)
+  }
+})
+
+test('PNG export retains 16-bit source pixels', async t => {
+  const f = await fixture(t)
+  const source = await sharp(new Uint16Array([1, 512, 4097, 65535, 12345, 23456, 34567, 65534]),
+    { raw: { width: 2, height: 1, channels: 4 } }).toColourspace('rgb16').png().toBuffer()
+  const result = await f.app.inject({ method: 'POST', url: '/api/images/export', headers: jsonHeaders, payload: { format: 'png', data: source.toString('base64') } })
+  assert.equal(result.statusCode, 200)
+  assert.equal((await sharp(result.rawPayload).metadata()).bitsPerSample, 16)
+  const decode = input => sharp(input).toColourspace('rgb16').raw({ depth: 'ushort' }).toBuffer()
+  assert.deepEqual(await decode(result.rawPayload), await decode(source))
+})
+
 test('selected GIF and WebP preserve animation; selected JPG and PNG export only the first frame', async t => {
   const f = await fixture(t)
   const pixels = Buffer.concat([Buffer.alloc(16 * 16 * 3), Buffer.alloc(16 * 16 * 3, 255)])
   const original = await sharp(pixels, { raw: { width: 16, height: 32, channels: 3, pageHeight: 16 } }).webp({ delay: [120, 240], loop: 2 }).toBuffer()
   await writeFile(path.join(f.filesRoot, 'original-key'), original)
   Object.assign(f.media, { type: 'image/webp', properties: { communityImagePrivacy: { 'original-key': 1 } } })
+  const unchanged = await f.app.inject({ method: 'GET', url: '/legacy-files/file1?download=original&format=jpeg' })
+  assert.deepEqual(unchanged.rawPayload, original)
   for (const format of ['gif', 'webp', 'jpeg', 'png']) {
     const result = await f.app.inject({ method: 'GET', url: `/legacy-files/file1?download=${format}` })
     assert.equal(result.statusCode, 200); assert.equal(result.headers['content-type'], `image/${format}`)

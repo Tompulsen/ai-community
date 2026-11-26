@@ -2,10 +2,10 @@
 import { createVNode, render } from 'vue'
 import { session } from './state'
 import ImageDownloadDialog from './components/ImageDownloadDialog.vue'
-import type { ImageDownloadFormat } from '../shared/image-download'
+import type { ImageDownloadChoice } from '../shared/image-download'
 
 let cancelActive: (() => void) | undefined
-export function chooseImageDownloadFormat(signal?: AbortSignal, current: () => boolean = () => true): Promise<ImageDownloadFormat | undefined> {
+export function chooseImageDownloadFormat(signal?: AbortSignal, current: () => boolean = () => true): Promise<ImageDownloadChoice | undefined> {
   cancelActive?.()
   if (signal?.aborted || !current()) return Promise.resolve(undefined)
   const owner = `${session.user?.id}:${session.user?.accountId}`
@@ -13,7 +13,7 @@ export function chooseImageDownloadFormat(signal?: AbortSignal, current: () => b
   return new Promise(resolve => {
     const host = document.createElement('div')
     let settled = false
-    const finish = (format?: ImageDownloadFormat) => {
+    const finish = (format?: ImageDownloadChoice) => {
       if (settled) return
       settled = true
       signal?.removeEventListener('abort', cancel)

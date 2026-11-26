@@ -6,8 +6,8 @@ import { readFile } from 'node:fs/promises'
 import type { Work, WorkComment } from '../src/data'
 import { mockUnifiedAccount } from './helpers/account-fixture'
 
-const portrait = { id: 'portrait', name: 'portrait.png', type: 'image/png', url: '/__detail/portrait.svg' }
-const landscape = { id: 'landscape', name: 'landscape.png', type: 'image/png', url: '/__detail/landscape.svg' }
+const portrait = { id: 'portrait', name: 'portrait.png', type: 'image/png', url: '/assets/__detail/portrait.svg' }
+const landscape = { id: 'landscape', name: 'landscape.png', type: 'image/png', url: '/assets/__detail/landscape.svg' }
 const work: Work = {
   id: 'detailwork', authorId: 'detailauthor', version: 1, fileIds: [portrait.id], files: [portrait],
   kind: 'image', title: 'Editorial portrait · 光影记录', author: '创作者', avatar: '创',
@@ -28,7 +28,7 @@ async function fixture(page: Page, selected: Work = { ...work }, authenticated =
     cover: index % 2 ? landscape.url : portrait.url, coverAspectRatio: index % 2 ? 16 / 9 : 9 / 16,
   }))]
   state.relatedItems = items
-  await page.route('**/__detail/*.svg', route => {
+  await page.route('**/assets/__detail/*.svg', route => {
     const wide = route.request().url().includes('landscape')
     return route.fulfill({ contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="${wide ? 800 : 450}" height="${wide ? 450 : 800}"><rect width="100%" height="100%" fill="#60765d"/><rect x="10%" y="10%" width="80%" height="80%" fill="#ccd6c9"/></svg>` })
   })
@@ -109,7 +109,7 @@ for (const width of [390, 1440]) for (const format of ['gif', 'webp'] as const) 
     const posted = page.locator('#comment-firstcomment')
     const image = posted.locator(':scope > .comment-media img')
     await image.scrollIntoViewIfNeeded()
-    await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+    await expect(image).toHaveAttribute('src', `${file.url}?variant=original`)
     await expect(image).toHaveAttribute('loading', 'lazy')
     await expect(image.locator('..')).toHaveAttribute('href', file.url)
     await image.evaluate((element: HTMLImageElement) => element.decode())
@@ -145,11 +145,11 @@ test('finishing comment processing never switches an animation back to its still
   await page.goto('/work/detailwork')
   const posted = page.locator('#comment-firstcomment'), image = posted.locator('.comment-media img')
   await image.scrollIntoViewIfNeeded()
-  await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+  await expect(image).toHaveAttribute('src', `${file.url}?variant=original`)
   await page.clock.runFor(6000)
   await expect.poll(() => refreshes).toBe(1)
   await expect(posted.getByText('素材处理中', { exact: true })).toHaveCount(0)
-  await expect(image).toHaveAttribute('src', `${file.url}?variant=webpublic`)
+  await expect(image).toHaveAttribute('src', `${file.url}?variant=original`)
   await page.clock.runFor(15000); expect(refreshes).toBe(1)
 })
 
@@ -195,54 +195,56 @@ test('detail and recommendations adapt without cropping, overlap or horizontal o
   expect(errors).toEqual([])
 })
 
-for (const width of [390, 1440]) test(`work images, references and downloads use real JPEG sources at ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) test(`work images, references and downloads retain the original PNG bytes at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   const file = { id: 'jpegwork', name: '作品.webp', type: 'image/webp', url: '/legacy-files/jpegwork', processing: 'ready' as const }
   const reference = { ...file, id: 'jpegref', name: '参考图.webp', url: '/legacy-files/jpegref' }
-  const jpeg = await sharp({ create: { width: 900, height: 600, channels: 3, background: 'white' } }).jpeg().toBuffer()
+  const original = await sharp({ create: { width: 900, height: 600, channels: 4, background: '#12345680' } }).png().toBuffer()
   await fixture(page, { ...work, files: [file], referenceFiles: [reference] })
   await page.route('**/legacy-files/jpeg*', route => {
     const url = new URL(route.request().url())
-    if (url.searchParams.get('format') !== 'jpeg' && url.searchParams.get('download') !== 'jpeg') return route.fulfill({ status: 500 })
-    return route.fulfill({ contentType: 'image/jpeg', body: jpeg, headers: { 'content-disposition': 'inline; filename="photo.jpg"' } })
+    expect(url.searchParams.has('format')).toBe(false)
+    expect(url.searchParams.get('variant') || 'original').toBe('original')
+    return route.fulfill({ contentType: 'image/png', body: original })
   })
   await page.goto('/work/detailwork')
   const img = page.locator('.detail-media img')
-  await expect(img).toHaveAttribute('src', '/legacy-files/jpegwork?variant=webpublic&format=jpeg')
+  await expect(img).toHaveAttribute('src', '/legacy-files/jpegwork?variant=original')
   await img.evaluate((image: HTMLImageElement) => image.decode())
   if (width > 640) {
     await expect(page.getByRole('button', { name: '下载 作品.webp', exact: true })).toBeVisible()
   }
   await img.click()
   const dialog = page.getByRole('dialog', { name: '作品文件预览', exact: true })
-  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegwork?format=jpeg')
+  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegwork?variant=original')
   const pending = page.waitForEvent('download')
   await dialog.getByRole('button', { name: '下载图片', exact: true }).click()
   await confirmImageDownload(page)
   const download = await pending
-  expect(download.suggestedFilename()).toMatch(/\.jpg$/)
-  expect((await sharp(await readFile((await download.path())!)).metadata()).width).toBe(900)
+  expect(download.suggestedFilename()).toMatch(/\.png$/)
+  expect(await readFile((await download.path())!)).toEqual(original)
   await dialog.getByRole('button', { name: '关闭预览', exact: true }).click()
   await page.getByRole('button', { name: '预览 参考图.webp', exact: true }).click()
   if (width > 640) await page.locator('.detail-media img').click()
-  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegref?format=jpeg')
+  await expect(dialog.locator('img')).toHaveAttribute('src', '/legacy-files/jpegref?variant=original')
 })
 
-for (const width of [320, 390, 1440]) test(`four selectable image formats export real full-size files at ${width}px`, async ({ page }) => {
+for (const width of [320, 390, 1440]) test(`original and four selectable image formats export real full-size files at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   const file = { id: 'formatswork', name: '作品.webp', type: 'image/webp', url: '/legacy-files/formatswork', processing: 'ready' as const }
   const original = await sharp({ create: { width: 123, height: 79, channels: 4, background: { r: 30, g: 100, b: 200, alpha: 0 } } }).webp().toBuffer()
   const jpeg = await sharp(original).flatten({ background: '#fff' }).jpeg().toBuffer()
-  const formats = { 'JPG / JPEG': 'jpeg', PNG: 'png', WebP: 'webp', GIF: 'gif' } as const
+  const formats = { '原图': 'original', PNG: 'png', WebP: 'webp', 'JPG / JPEG': 'jpeg', GIF: 'gif' } as const
   const requests: string[] = [], downloads: string[] = [], errors: string[] = []
   page.on('download', item => downloads.push(item.suggestedFilename()))
   page.on('pageerror', error => errors.push(error.message))
   await fixture(page, { ...work, files: [file] }, false)
   await page.route('**/legacy-files/formatswork*', async route => {
-    const url = new URL(route.request().url()), format = url.searchParams.get('download') as 'jpeg' | 'png' | 'webp' | 'gif' | null
-    if (!format) return route.fulfill({ contentType: 'image/jpeg', body: jpeg })
+    const url = new URL(route.request().url()), format = url.searchParams.get('download') as 'original' | 'jpeg' | 'png' | 'webp' | 'gif' | null
+    if (!format) return route.fulfill({ contentType: 'image/webp', body: original })
     expect(url.searchParams.get('variant')).toBe('original'); expect(url.searchParams.has('format')).toBe(false)
     requests.push(format)
+    if (format === 'original') return route.fulfill({ contentType: 'image/webp', body: original })
     const image = sharp(original)
     return route.fulfill({ contentType: `image/${format}`, body: await (format === 'jpeg' ? image.flatten({ background: '#fff' }).jpeg() : image.toFormat(format)).toBuffer() })
   })
@@ -251,8 +253,8 @@ for (const width of [320, 390, 1440]) test(`four selectable image formats export
   else { await page.locator('.detail-media img').click(); await page.getByRole('button', { name: '下载图片', exact: true }).click() }
   const chooser = page.getByRole('dialog', { name: '选择图片下载格式', exact: true })
   const viewer = page.getByRole('dialog', { name: '作品文件预览', exact: true })
-  await expect(chooser.getByRole('radio')).toHaveCount(4)
-  await expect(chooser.getByRole('radio', { name: 'JPG / JPEG', exact: true })).toBeChecked()
+  await expect(chooser.getByRole('radio')).toHaveCount(5)
+  await expect(chooser.getByRole('radio', { name: '原图', exact: true })).toBeChecked()
   const box = (await chooser.boundingBox())!
   expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(width)
   await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' })
@@ -270,15 +272,17 @@ for (const width of [320, 390, 1440]) test(`four selectable image formats export
     const pending = page.waitForEvent('download')
     await confirmImageDownload(page, label)
     const file = await pending
-    expect(file.suggestedFilename()).toMatch(new RegExp(`\\.${format === 'jpeg' ? 'jpg' : format}$`))
+    const exportedFormat = format === 'original' ? 'webp' : format
+    expect(file.suggestedFilename()).toMatch(new RegExp(`\\.${exportedFormat === 'jpeg' ? 'jpg' : exportedFormat}$`))
     const data = await readFile((await file.path())!), metadata = await sharp(data).metadata()
-    expect(metadata).toMatchObject({ format, width: 123, height: 79 })
+    expect(metadata).toMatchObject({ format: exportedFormat, width: 123, height: 79 })
+    if (format === 'original') expect(data).toEqual(original)
     expect((await sharp(data).ensureAlpha().raw().toBuffer())[3]).toBe(format === 'jpeg' ? 255 : 0)
   }
   expect(requests).toEqual(Object.values(formats)); expect(errors).toEqual([])
 })
 
-test('JPEG variant and original failures terminate with a visible retry action', async ({ page }) => {
+test('original image failures terminate with a visible retry action', async ({ page }) => {
   const file = { id: 'jpegfailed', name: '作品.webp', type: 'image/webp', url: '/legacy-files/jpegfailed', processing: 'ready' as const }
   await page.route('**/__jpeg-failure', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><main></main>' }))
   await page.route('**/api/**', route => route.fulfill({ json: {} }))
@@ -292,7 +296,7 @@ test('JPEG variant and original failures terminate with a visible retry action',
   }, file)
   await expect(page.locator('.detail-media')).toContainText('文件预览加载失败')
   await expect(page.locator('.detail-media').getByRole('button', { name: '重新加载', exact: true })).toBeVisible()
-  expect(reads).toBe(2)
+  expect(reads).toBe(1)
 })
 
 const scrollbarTest = test.extend({
@@ -689,7 +693,7 @@ test('mobile work and reference thumbnails open a full-screen viewer with separa
 })
 
 test('mobile non-image files retain a native original-file link', async ({ page }) => {
-  const document = { id: 'guide', name: '使用说明.pdf', type: 'application/pdf', url: '/__detail/guide.pdf' }
+  const document = { id: 'guide', name: '使用说明.pdf', type: 'application/pdf', url: '/assets/__detail/guide.pdf' }
   await fixture(page, { ...work, files: [portrait, document] }, false)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/work/detailwork')
@@ -711,9 +715,9 @@ test('closing a mobile thumbnail preview after switching to desktop restores a s
 })
 
 test('closing a desktop video preview after switching to mobile restores the video thumbnail', async ({ page }) => {
-  const clip = { id: 'clip', name: 'clip.mp4', type: 'video/mp4', url: '/__detail/clip.mp4' }
+  const clip = { id: 'clip', name: 'clip.mp4', type: 'video/mp4', url: '/assets/__detail/clip.mp4' }
   await fixture(page, { ...work, kind: 'video', files: [clip] }, false)
-  await page.route('**/__detail/clip.mp4', route => route.fulfill({ contentType: 'video/mp4', path: 'tests/fixtures/poster-black-intro.mp4' }))
+  await page.route('**/assets/__detail/clip.mp4', route => route.fulfill({ contentType: 'video/mp4', path: 'tests/fixtures/poster-black-intro.mp4' }))
   await page.goto('/work/detailwork')
   await page.getByRole('button', { name: '放大预览', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '作品文件预览', exact: true })).toBeVisible()

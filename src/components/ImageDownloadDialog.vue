@@ -2,14 +2,15 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Download, X } from '@lucide/vue'
 import { session } from '../state'
-import type { ImageDownloadFormat } from '../../shared/image-download'
+import type { ImageDownloadChoice } from '../../shared/image-download'
 
-const emit = defineEmits<{ decision: [format?: ImageDownloadFormat] }>()
-const dialog = ref<HTMLDialogElement>(), selected = ref<ImageDownloadFormat>('jpeg')
+const emit = defineEmits<{ decision: [format?: ImageDownloadChoice] }>()
+const dialog = ref<HTMLDialogElement>(), selected = ref<ImageDownloadChoice>('original')
 const formats = [
-  { value: 'jpeg', label: 'JPG / JPEG', description: '照片与社交分享 · 白色背景' },
+  { value: 'original', label: '原图', description: '推荐 · 保留原文件格式、尺寸与画质' },
   { value: 'png', label: 'PNG', description: '无损静态图片 · 保留透明背景' },
-  { value: 'webp', label: 'WebP', description: '体积更小 · 支持透明与动画' },
+  { value: 'webp', label: 'WebP', description: '无损编码 · 支持透明与动画' },
+  { value: 'jpeg', label: 'JPG / JPEG', description: '有损格式 · 适合分享 · 白色背景' },
   { value: 'gif', label: 'GIF', description: '兼容动图分享 · 最多 256 色' },
 ] as const
 watch(() => `${session.user?.id}:${session.user?.accountId}`, () => emit('decision'))
@@ -21,7 +22,7 @@ onBeforeUnmount(() => dialog.value?.close())
   <dialog ref="dialog" class="image-download-dialog" aria-label="选择图片下载格式" @cancel.prevent="emit('decision')" @close="emit('decision')" @click.self="emit('decision')">
     <header><div><h2>下载图片</h2><p>选择适合你的文件格式</p></div><button type="button" class="icon-button" aria-label="关闭下载格式选择" @click="emit('decision')"><X :size="20" /></button></header>
     <fieldset><legend class="studio-sr-only">图片格式</legend><label v-for="format in formats" :key="format.value" :class="{ selected: selected === format.value }"><input v-model="selected" type="radio" name="image-download-format" :value="format.value" :aria-label="format.label" /><span><strong>{{ format.label }}</strong><small>{{ format.description }}</small></span></label></fieldset>
-    <p class="format-note">动图选择 GIF / WebP 可保留动画；JPG / PNG 仅保存首帧。静态图片不会自动变成动画。</p>
+    <p class="format-note">完整保留图片信息请选择原图，不重新压缩。其他格式另存为副本，受格式色彩与位深限制；GIF 最多 256 色，JPG / PNG 仅保存动图首帧。</p>
     <footer><button type="button" class="button subtle btn" @click="emit('decision')">取消</button><button type="button" class="button btn" @click="emit('decision', selected)"><Download :size="17" aria-hidden="true" />确认下载</button></footer>
   </dialog>
 </template>

@@ -171,12 +171,15 @@ test('download retry reads only unfinished originals and never submits generatio
   let reads = 0
   await page.route('**/api/creation/media**', route => {
     reads++
-    if (new URL(route.request().url()).searchParams.get('url')?.includes('second') && reads < 3) return route.fulfill({ status: 503 })
+    if (new URL(route.request().url()).searchParams.get('url')?.includes('second') && reads < 3) return route.fulfill({ status: 404 })
     return route.fulfill({ contentType: 'image/png', body: originalImage })
   })
-  const requests: string[] = [], downloaded: string[] = []
+  const requests: string[] = [], downloaded: string[] = [], downloadedBytes: Promise<Buffer>[] = []
   page.on('request', request => requests.push(request.url()))
-  page.on('download', download => downloaded.push(download.suggestedFilename()))
+  page.on('download', download => {
+    downloaded.push(download.suggestedFilename())
+    downloadedBytes.push(download.path().then(path => readFile(path!)))
+  })
   const result = await page.evaluate(async () => {
     const studio = window.mediaTest
     const task = { id: 'download-case', owner: '17', kind: 'image', model: 'test', prompt: 'two originals', phase: 'complete', protocol: 'sync', createdAt: Date.now(), urls: ['https://media.example/first.png', 'https://media.example/second.png'], text: '', references: [], request: { size: '1024x1024', aspect_ratio: '1:1', n: 2, duration: 8 } }
@@ -189,6 +192,8 @@ test('download retry reads only unfinished originals and never submits generatio
   expect(result.failed).toMatchObject({ state: 'failed', completed: 1 })
   expect(result.done).toMatchObject({ state: 'downloadRequested', completed: 2 })
   await expect.poll(() => downloaded.length).toBe(2)
+  expect(await Promise.all(downloadedBytes)).toEqual([originalImage, originalImage])
+  expect(downloaded.every(name => name.endsWith('.png'))).toBe(true)
   expect(reads).toBe(3)
   expect(requests.filter(url => url.includes('/generate'))).toHaveLength(0)
   await page.reload()
@@ -344,7 +349,7 @@ test('video workspace reference menu keeps numbered mentions correct after remov
   })
   await page.goto('/create/video')
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveValue('sora-2')
-  await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles([{ name: 'first.jpg', mimeType: 'image/jpeg', buffer: image }, { name: 'second.jpg', mimeType: 'image/jpeg', buffer: image }])
+  await page.locator('.studio-composer input[type=file]').first().setInputFiles([{ name: 'first.jpg', mimeType: 'image/jpeg', buffer: image }, { name: 'second.jpg', mimeType: 'image/jpeg', buffer: image }])
   await expect(page.locator('.reference-list img')).toHaveCount(2)
   const prompt = page.getByRole('textbox', { name: '提示词', exact: true })
   await prompt.fill('从 @')

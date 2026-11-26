@@ -1,15 +1,16 @@
-import type { ImageDownloadFormat } from '../shared/image-download'
+import type { ImageDownloadChoice } from '../shared/image-download'
 
-export function jpegMediaUrl(value: string): string {
+export function originalImageUrl(value: string): string {
   try {
     const url = new URL(value, location.href)
     if (url.origin !== location.origin || !/^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return value
-    url.searchParams.set('format', 'jpeg')
+    url.searchParams.delete('format'); url.searchParams.delete('download')
+    url.searchParams.set('variant', 'original')
     return url.pathname + url.search + url.hash
   } catch { return value }
 }
 
-async function animated(blob: Blob): Promise<boolean> {
+export async function isAnimatedImage(blob: Blob): Promise<boolean> {
   if (blob.type === 'image/gif') return true
   const header = new Uint8Array(await blob.slice(0, 32).arrayBuffer())
   const text = (bytes: Uint8Array) => String.fromCharCode(...bytes)
@@ -33,20 +34,15 @@ async function animated(blob: Blob): Promise<boolean> {
   return false
 }
 
-// Export a sharing copy; callers retain the original Blob in the local media library.
-export async function jpegDownload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
-  signal?.throwIfAborted()
-  if (!/^image\/(png|webp|avif)$/.test(blob.type) || await animated(blob)) return blob
-  return imageDownload(blob, 'jpeg', signal)
-}
-
-export async function imageDownload(blob: Blob, format: ImageDownloadFormat, signal?: AbortSignal): Promise<Blob> {
+export async function imageDownload(blob: Blob, format: ImageDownloadChoice, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted()
   if (!blob.size || !/^image\/(jpeg|png|webp|gif|avif)$/.test(blob.type)) throw new Error('图片格式无效，请重新加载。')
+  if (format === 'original') return blob
   if (blob.size > 32 * 1024 ** 2) throw new Error('图片超过 32 MB，暂时无法转换下载。')
-  const moving = await animated(blob)
+  const moving = await isAnimatedImage(blob)
   if (blob.type === `image/${format}` && !(format === 'png' && moving)) return blob
-  if (format === 'gif' || format === 'webp' && moving) {
+  // Canvas WebP is lossy and premultiplied canvas pixels can change transparency.
+  if (format !== 'jpeg') {
     const data = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(String(reader.result).split(',')[1]!)
@@ -80,7 +76,7 @@ export async function imageDownload(blob: Blob, format: ImageDownloadFormat, sig
     return result
   } finally { bitmap.close() }
 }
-export function imageDownloadUrl(value: string, format: ImageDownloadFormat): string {
+export function imageDownloadUrl(value: string, format: ImageDownloadChoice): string {
   try {
     const url = new URL(value, location.href)
     if (url.origin !== location.origin || !/^\/(?:legacy-files|files)\/[^/]+$/.test(url.pathname)) return value

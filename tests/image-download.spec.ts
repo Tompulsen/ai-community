@@ -6,12 +6,12 @@ for (const format of ['png', 'webp', 'avif'] as const) test(`${format} photo exp
   await page.route('**/__jpeg', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>JPEG export</title>' }))
   await page.goto('/__jpeg')
   const result = await page.evaluate(async ({ bytes, format }) => {
-    const path = '/src/image-download.ts', { jpegDownload } = await import(path)
+    const path = '/src/image-download.ts', { imageDownload } = await import(path)
     const original = new Blob([new Uint8Array(bytes)], { type: `image/${format}` })
-    const exported = await jpegDownload(original)
+    const exported = await imageDownload(original, 'jpeg')
     const controller = new AbortController(); controller.abort()
     let cancelled = false
-    try { await jpegDownload(original, controller.signal) } catch (error) { cancelled = (error as DOMException).name === 'AbortError' }
+    try { await imageDownload(original, 'jpeg', controller.signal) } catch (error) { cancelled = (error as DOMException).name === 'AbortError' }
     return { type: exported.type, bytes: Array.from(new Uint8Array(await exported.arrayBuffer())), original: Array.from(new Uint8Array(await original.arrayBuffer())), cancelled }
   }, { bytes: Array.from(bytes), format })
   expect(result.type).toBe('image/jpeg'); expect(result.cancelled).toBe(true); expect(Buffer.from(result.original)).toEqual(bytes)
@@ -26,9 +26,9 @@ test('animated WebP downloads preserve all frames', async ({ page }) => {
   await page.route('**/__jpeg', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Animation</title>' }))
   await page.goto('/__jpeg')
   expect(await page.evaluate(async bytes => {
-    const path = '/src/image-download.ts', { jpegDownload } = await import(path)
+    const path = '/src/image-download.ts', { imageDownload } = await import(path)
     const blob = new Blob([new Uint8Array(bytes)], { type: 'image/webp' })
-    return await jpegDownload(blob) === blob
+    return await imageDownload(blob, 'original') === blob
   }, Array.from(original))).toBe(true)
 })
 
@@ -37,8 +37,8 @@ for (const format of ['jpeg', 'png', 'webp', 'gif'] as const) test(`local image 
   await page.route('**/__export', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Image export</title>' }))
   await page.route('**/api/images/export', async route => {
     const body = route.request().postDataJSON()
-    expect(body.format).toBe('gif')
-    return route.fulfill({ contentType: 'image/gif', body: await sharp(Buffer.from(body.data, 'base64')).gif().toBuffer() })
+    expect(body.format).toBe(format)
+    return route.fulfill({ contentType: `image/${format}`, body: await sharp(Buffer.from(body.data, 'base64')).toFormat(format).toBuffer() })
   })
   await page.goto('/__export')
   const result = await page.evaluate(async ({ bytes, format }) => {

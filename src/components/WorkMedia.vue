@@ -2,38 +2,27 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Download, FileText, ImageOff, Maximize2 } from '@lucide/vue'
 import type { WorkFile } from '../data'
-import { jpegMediaUrl } from '../image-download'
+import { originalImageUrl } from '../image-download'
 import StudioMediaPreview from './studio-message/StudioMediaPreview.vue'
 
 const props = defineProps<{ files: WorkFile[]; references?: WorkFile[]; title: string; body?: string; resource?: boolean; mobile?: boolean }>()
 const selected = ref(0)
 const viewingReference = ref(false)
 const failed = ref(new Set<string>())
-const originalImages = ref(new Set<string>())
 const preview = ref<InstanceType<typeof StudioMediaPreview>>()
 const activeFiles = computed(() => viewingReference.value ? props.references || [] : props.files)
 const file = computed(() => activeFiles.value[selected.value])
-const downloadSource = computed(() => file.value?.type.startsWith('image/') ? jpegMediaUrl(file.value.url) : file.value?.url)
-const imageSource = computed(() => {
-  const item = file.value
-  if (!item || originalImages.value.has(item.id) || item.processing && item.processing !== 'ready') return downloadSource.value
-  try {
-    const url = new URL(item.url, location.href)
-    if (url.origin !== location.origin || !/^\/legacy-files\/[a-zA-Z0-9]{1,32}$/.test(url.pathname)) return downloadSource.value
-    url.searchParams.set('variant', 'webpublic')
-    return jpegMediaUrl(url.pathname + url.search + url.hash)
-  } catch { return downloadSource.value }
-})
+const downloadSource = computed(() => file.value?.type.startsWith('image/') ? originalImageUrl(file.value.url) : file.value?.url)
+const imageSource = downloadSource
 function imageFailed() {
   const item = file.value
   if (!item) return
-  if (!originalImages.value.has(item.id) && imageSource.value !== downloadSource.value) originalImages.value.add(item.id)
-  else failed.value.add(item.id)
+  failed.value.add(item.id)
 }
 function previewable(item: WorkFile) { return item.type.startsWith('image/') || item.type.startsWith('video/') }
 const previewFiles = computed(() => activeFiles.value.filter(previewable))
-const previewItems = computed(() => previewFiles.value.map(item => ({ src: item.type.startsWith('image/') ? jpegMediaUrl(item.url) : item.url, kind: item.type.startsWith('video/') ? 'video' as const : 'image' as const, alt: item.name })))
-watch(() => props.files, () => { preview.value?.close(); selected.value = 0; viewingReference.value = false; failed.value.clear(); originalImages.value.clear() })
+const previewItems = computed(() => previewFiles.value.map(item => ({ src: item.type.startsWith('image/') ? originalImageUrl(item.url) : item.url, kind: item.type.startsWith('video/') ? 'video' as const : 'image' as const, alt: item.name })))
+watch(() => props.files, () => { preview.value?.close(); selected.value = 0; viewingReference.value = false; failed.value.clear() })
 async function choose(index: number, reference = false) {
   pause(); selected.value = index; viewingReference.value = reference
   if (props.mobile) { await nextTick(); await openPreview() }

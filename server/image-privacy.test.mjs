@@ -60,3 +60,26 @@ test('oversized static images keep their dimensions without exposing EXIF', asyn
     assert.deepEqual(await readdir(root), ['original']);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('privacy sanitization retains 16-bit pixels, color profiles and transparent colors', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'community-lossless-privacy-'));
+  try {
+    const highDepth = await sharp(new Uint16Array([1, 512, 4097, 65535, 12345, 23456, 34567, 65534]),
+      { raw: { width: 2, height: 1, channels: 4 } }).toColourspace('rgb16').withExif({ IFD0: { Artist: 'PRIVATE' } }).png().toBuffer();
+    const color = await sharp(Buffer.from([137, 59, 219, 0, 17, 98, 171, 128]), { raw: { width: 2, height: 1, channels: 4 } })
+      .withIccProfile('p3').withExif({ IFD0: { Artist: 'PRIVATE' } }).png().toBuffer();
+    for (const [name, input] of [['depth', highDepth], ['color', color]]) {
+      const source = join(root, name), before = await sharp(input).metadata();
+      await writeFile(source, input);
+      await privateMetadataFreeImage(source);
+      const output = await readFile(source), after = await sharp(output).metadata();
+      assert.equal(after.exif, undefined);
+      assert.deepEqual(after.icc, before.icc);
+      assert.equal(after.depth, before.depth);
+      const decode = data => name === 'depth' ? sharp(data).toColourspace('rgb16').raw({ depth: 'ushort' }).toBuffer() : sharp(data).raw().toBuffer();
+      assert.deepEqual(await decode(output), await decode(input));
+      if (name === 'depth') { assert.equal(after.format, 'png'); assert.equal(after.bitsPerSample, 16); }
+    }
+    assert.deepEqual((await readdir(root)).sort(), ['color', 'depth']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

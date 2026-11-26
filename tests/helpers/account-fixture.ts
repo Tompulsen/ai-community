@@ -23,6 +23,7 @@ export async function mockUnifiedAccount(page: Page, authenticated = false) {
     const request = route.request(), path = new URL(request.url()).pathname
     if (request.method() === 'GET') reads.push(path)
     else mutations.push({ path, body: request.postDataJSON() || {} })
+    if (path === '/api/lottery/welfare') return route.fulfill({ json: { checkin: { enabled: false }, lottery: { enabled: false } } })
     if (path === '/api/session') return route.fulfill({ json: {
       user: state.authenticated ? state.user : null, csrfToken: 'unified-account-fixture',
       authentication: 'zhangyu', accountUrl,

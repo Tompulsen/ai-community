@@ -3,12 +3,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Download, Flag, Heart, MessageSquare, RefreshCw, Trash2, Video, X } from '@lucide/vue'
 import type { WorkComment, WorkFile } from '../data'
 import { api, errorMessage, notify, queryString, session } from '../state'
+import { originalImageUrl } from '../image-download'
 
 const props = defineProps<{ comment: WorkComment; workId: string; depth?: number; refresh?: number }>()
 const emit = defineEmits<{ reply: [comment: WorkComment]; report: [comment: WorkComment]; deleted: [comment: WorkComment] }>()
 function imageSource(file: WorkFile) {
-  // Display variants preserve animation, including GIFs sanitized to WebP; thumbnails contain only the first frame.
-  return /^\/legacy-files\/[a-zA-Z0-9]{1,32}$/.test(file.url) ? `${file.url}?variant=webpublic` : file.url
+  return originalImageUrl(file.url)
 }
 const expanded = ref(false)
 const replies = ref<WorkComment[]>([])

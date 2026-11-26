@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { confirmStudioDelete } from '../studio-confirm'
 import { chooseImageDownloadFormat } from '../image-download-choice'
-import type { ImageDownloadFormat } from '../../shared/image-download'
+import type { ImageDownloadChoice } from '../../shared/image-download'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { CopyPlus, Download, ImagePlus, Images, LoaderCircle, RefreshCw, Search, SlidersHorizontal, SquareMousePointer, Trash2, Upload, X } from '@lucide/vue'
 import { canonicalCreationTask, copyCreationImage, creation, downloadCreation, hideGalleryOutputs, mediaSettings, mediaSource, prepareCreationHistory, removeCreationTasks, saveCreationLocally, updateMediaSettings, type CreationTask, type CreationDestination, type CreationKind } from '../native-studio'
@@ -196,7 +196,7 @@ async function open(task: CreationTask, index = 0, library = false, editor = fal
   if (owner === session.user?.id && accepted === previewRevision) await previewer.value?.open(indexes.indexOf(index), editor)
 }
 defineExpose({ open, cancelOperation })
-async function downloadPreview(index: number, format?: ImageDownloadFormat, signal?: AbortSignal) { if (preview.value) await downloadCreation(preview.value.task, preview.value.indexes[index]!, signal, undefined, format) }
+async function downloadPreview(index: number, format?: ImageDownloadChoice, signal?: AbortSignal) { if (preview.value) await downloadCreation(preview.value.task, preview.value.indexes[index]!, signal, undefined, format) }
 async function copyPreview(index: number) { if (preview.value) await copyCreationImage(preview.value.task, preview.value.indexes[index]!) }
 function dimensions(task: CreationTask) {
   const size = task.request.size

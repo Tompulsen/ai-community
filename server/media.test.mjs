@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import fsPromises, { mkdtemp, readFile, readdir, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdtemp, readFile, readdir, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -303,10 +303,10 @@ test('MP4 duration metadata stays bounded and optional while thumbnails publish 
     const generated = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=16x16:r=4:d=2.5',
       '-c:v', 'mpeg4', '-f', 'mp4', source], { windowsHide: true, encoding: 'utf8' });
     assert.equal(generated.status, 0, generated.stderr);
-    const actualReadFile = fsPromises.readFile;
+    const actualReadFile = fsPromises.readFile, resolvedSource = await realpath(source);
     let sourceReads = 0;
     const readMock = t.mock.method(fsPromises, 'readFile', async (path, ...options) => {
-      if (path === source) {
+      if (path === source || path === resolvedSource) {
         sourceReads++;
         if (scenario.readError) throw new Error('optional source read failed');
       }

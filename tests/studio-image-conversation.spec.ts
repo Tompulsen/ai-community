@@ -280,7 +280,7 @@ async function send(page: Page, prompt: string, turns: number) {
   if (await page.locator('.creation-response .browser-save').count()) await expect(page.locator('.creation-response .browser-save').last()).toHaveText('图片已保存到此浏览器')
 }
 
-for (const width of [390, 1440]) test(`image results load lightweight previews and retain original editing and downloads at ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) test(`image results display original pixels and retain original editing and downloads at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   const { calls, image } = await fixture(page)
   const { default: sharp } = await import('sharp')
@@ -296,10 +296,10 @@ for (const width of [390, 1440]) test(`image results load lightweight previews a
   await send(page, '轻量图片预览', 1)
   const first = page.locator('.creation-response').first()
   await expect(first.locator('.creation-image-preview')).toHaveAttribute('aria-busy', 'false')
-  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(384)
+  await expect.poll(() => first.locator('.creation-image img').evaluate((element: HTMLImageElement) => element.naturalHeight)).toBe(3840)
   expect(reads.length).toBeGreaterThan(0)
-  expect(reads.some(url => url.searchParams.get('variant') === 'preview')).toBe(true)
-  expect(reads.filter(url => !url.searchParams.has('variant'))).toHaveLength(1)
+  expect(reads.some(url => url.searchParams.get('variant') === 'preview')).toBe(false)
+  expect(reads.some(url => !url.searchParams.has('variant'))).toBe(true)
   await first.getByRole('button', { name: '编辑图片', exact: true }).click()
   await send(page, '保留原图继续编辑', 2)
   expect(calls[1].referenceUrls).toEqual([imageReference(original, 'png')])
@@ -312,8 +312,9 @@ for (const width of [390, 1440]) test(`image results load lightweight previews a
   await viewer.getByRole('button', { name: '下载图片', exact: true }).click()
   await confirmImageDownload(page)
   const download = await pending
-  const metadata = await sharp(await readFile((await download.path())!)).metadata()
-  expect(metadata).toMatchObject({ format: 'jpeg', width: 2160, height: 3840 })
+  const downloaded = await readFile((await download.path())!)
+  expect(downloaded).toEqual(original)
+  expect(await sharp(downloaded).metadata()).toMatchObject({ format: 'png', width: 2160, height: 3840 })
 })
 
 test('editing a result restores its image and prompt without generating until sent', async ({ page }) => {
@@ -796,7 +797,7 @@ test('cancelling material preparation keeps the draft and switching conversation
   expect(state.calls).toHaveLength(0)
 })
 
-test('large local images are compressed before generation without a community upload', async ({ page }) => {
+test('large local images preserve original bytes before generation without a community upload', async ({ page }) => {
   const state = await fixture(page)
   const encoded = await page.evaluate(() => {
     const canvas = document.createElement('canvas'); canvas.width = 900; canvas.height = 700
@@ -810,9 +811,8 @@ test('large local images are compressed before generation without a community up
   await page.locator('.studio-composer').getByLabel('添加参考图', { exact: true }).setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.from(encoded, 'base64') })
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   const prepared = await page.locator('.reference-list img').getAttribute('src')
-  expect(prepared!.length).toBeLessThanOrEqual(512 * 1024)
-  expect(prepared!.length).toBeLessThan(encoded.length)
-  await send(page, '使用压缩参考图', 1)
+  expect(prepared).toBe(`data:image/png;base64,${encoded}`)
+  await send(page, '使用原始参考图', 1)
   expect(state.calls[0].referenceUrls[0]).toBe(prepared)
   expect(state.uploads).toHaveLength(0)
 })

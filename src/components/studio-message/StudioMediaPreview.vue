@@ -5,9 +5,9 @@ import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, ref,
 import { ChevronLeft, ChevronRight, Copy, Download, LoaderCircle, Minus, Plus, RotateCcw, SquarePen, X } from '@lucide/vue'
 import { copyMediaImage, mediaSource, readableMedia, readCreationImage } from '../../native-studio'
 import { errorMessage, notify, session } from '../../state'
-import { imageDownload, imageDownloadUrl, jpegMediaUrl } from '../../image-download'
+import { imageDownload, imageDownloadUrl, originalImageUrl } from '../../image-download'
 import { chooseImageDownloadFormat } from '../../image-download-choice'
-import type { ImageDownloadFormat } from '../../../shared/image-download'
+import type { ImageDownloadChoice } from '../../../shared/image-download'
 import { clampMediaOffset, mediaScale, mediaZoomOffset, MIN_MEDIA_SCALE, MAX_MEDIA_SCALE, type MediaPoint } from '../../media-zoom'
 
 import { studioCanvasKey } from '../../studio-canvas'
@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
   items: { id?: string; src?: string; previewSrc?: string; kind: 'image' | 'video'; alt?: string }[]
   label?: string
   closeLabel?: string
-  onDownload?: (index: number, format?: ImageDownloadFormat, signal?: AbortSignal) => Promise<unknown>
+  onDownload?: (index: number, format?: ImageDownloadChoice, signal?: AbortSignal) => Promise<unknown>
   onCopy?: (index: number) => Promise<unknown>
 }>(), { label: '原始媒体预览', closeLabel: '关闭媒体预览' })
 const emit = defineEmits<{ close: [] }>()
@@ -30,19 +30,19 @@ const loading = ref(true), failed = ref(false), attempt = ref(0), actionError = 
 const imageSource = ref(''), previewReady = ref(false), previewFailed = ref(false)
 const action = ref<'download' | 'copy'>()
 const current = computed(() => props.items[index.value])
-function safeSource(value: string | undefined, kind: 'image' | 'video') {
+function safeSource(value: string | undefined, kind: 'image' | 'video', original = true) {
   if (!value) return
   if (value.startsWith('studio-asset:') || value.startsWith('legacy-gallery:')) return mediaSource(value, false, kind)
   try {
     const url = new URL(value, location.href)
     if (url.protocol === 'blob:') return value
     if (url.protocol === 'data:') return value.startsWith(`data:${kind}/`) ? value : undefined
-    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? (kind === 'image' ? jpegMediaUrl(url.href) : url.href) : mediaSource(url.href, false, kind)
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin === location.origin ? (kind === 'image' && original ? originalImageUrl(url.href) : url.href) : mediaSource(url.href, false, kind)
   } catch { /* Invalid references are never fetched or rendered. */ }
 }
 const source = computed(() => safeSource(current.value?.src, current.value?.kind || 'image'))
 const previewSource = computed(() => {
-  const value = safeSource(current.value?.previewSrc, 'image')
+  const value = safeSource(current.value?.previewSrc, 'image', false)
   return value !== source.value && !previewFailed.value ? value : undefined
 })
 const displayedImage = computed(() => imageSource.value || previewSource.value)
@@ -274,7 +274,7 @@ watch(() => props.items.length, length => { if (!length) close(); else if (index
 watch(() => session.user?.id, () => close())
 watch(canvasScope, () => close())
 onBeforeUnmount(() => { release(); dialog.value?.close() })
-async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number, format?: ImageDownloadFormat) {
+async function defaultDownload(item: NonNullable<typeof current.value>, controller: AbortController, accepted: number, format?: ImageDownloadChoice) {
   if (!item.src) throw new Error('文件正在加载，请稍后重试。')
   const readable = item.src.startsWith('blob:') || item.src.startsWith('data:') ? item.src : await readableMedia(item.src, item.kind)
   if (controller.signal.aborted || accepted !== operation || acceptedOwner !== session.user?.id) return
@@ -298,7 +298,7 @@ async function run(kind: 'download' | 'copy') {
     const format = kind === 'download' && item.kind === 'image'
       ? await chooseImageDownloadFormat(controller.signal, () => accepted === operation && opened.value) : undefined
     if (kind === 'download' && item.kind === 'image' && !format) return
-    if (kind === 'copy') await (props.onCopy ? props.onCopy(selected) : copyMediaImage(item.src!))
+    if (kind === 'copy') await (props.onCopy ? props.onCopy(selected) : copyMediaImage(originalImageUrl(item.src!)))
     else await (props.onDownload ? props.onDownload(selected, format, controller.signal) : defaultDownload(item, controller, accepted, format))
     if (accepted === operation && acceptedOwner === session.user?.id && opened.value) notify(kind === 'copy' ? '图片已复制' : '已发起下载')
   } catch (error) {
@@ -310,7 +310,7 @@ async function run(kind: 'download' | 'copy') {
 <template>
   <Teleport to="body">
     <dialog ref="dialog" class="media-lightbox" :class="{ 'has-sequence': items.length > 1, 'is-editing': editing }" :aria-label="editing ? '图片画布' : label" @cancel.prevent="editing ? backToPreview() : close()" @close="closed" @keydown="keys" @click.self="close">
-      <StudioImageCanvas v-if="opened && editing && current?.src" :key="`${canvasScope}:${current.src}`" :src="current.src" :scope="canvasScope" :attachments="items" @back="backToPreview" @close="close" />
+      <StudioImageCanvas v-if="opened && editing && current?.src" :key="`${canvasScope}:${current.src}`" :src="originalImageUrl(current.src)" :scope="canvasScope" :attachments="items" @back="backToPreview" @close="close" />
       <template v-else-if="opened">
         <div class="lightbox-actions" role="group" aria-label="媒体操作">
           <button v-if="current?.kind === 'image'" class="viewer-button" type="button" aria-label="画布编辑" title="画布编辑" :disabled="!source || !!action" @click="editImage"><SquarePen :size="20" /></button>

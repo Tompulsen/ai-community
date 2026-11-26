@@ -31,10 +31,12 @@ export async function privateMetadataFreeImage(source: string): Promise<Sanitize
       const info = await stat(source);
       const image = sharp(await readFile(source), { animated: true, limitInputPixels: 100_000_000, failOn: 'warning' });
       const details = await image.metadata();
-      // WebP cannot encode a side above 16383 pixels; keep oversized static images as PNG.
-      const png = (details.pages ?? 1) === 1 && Math.max(details.width ?? 0, details.height ?? 0) > 16383;
-      const output = image.rotate().timeout({ seconds: 30 });
-      await (png ? output.png() : output.webp({ lossless: true, effort: 0 })).toFile(temporary);
+      const highDepth = details.depth === 'ushort' || (details.bitsPerSample ?? 8) > 8;
+      // WebP supports only 8-bit channels and sides up to 16383 pixels.
+      const png = (details.pages ?? 1) === 1 && (highDepth || Math.max(details.width ?? 0, details.height ?? 0) > 16383);
+      const output = image.rotate().keepIccProfile().timeout({ seconds: 30 });
+      if (png && highDepth) output.toColourspace('rgb16');
+      await (png ? output.png() : output.webp({ lossless: true, exact: true, effort: 0 })).toFile(temporary);
       await chmod(temporary, info.mode & 0o777);
       const bytes = await readFile(temporary);
       const result = { path: source, type: png ? 'image/png' : 'image/webp', size: bytes.length,

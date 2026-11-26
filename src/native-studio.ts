@@ -16,9 +16,9 @@ import { normalizeImageRequest, usesGeminiImageChat } from '../shared/studio/ima
 import type { ImageConversationContext } from '../shared/studio/image-conversation'
 import { captureTaskSnapshot, deleteTaskRecords, imageBlob, readTaskAsset, readTaskForUpdate, readTaskPreview, readTaskSnapshot, saveCapturedTaskSnapshot, saveTaskOriginal, saveTaskPreview, taskAssetUrl } from './studio-task-store'
 import { imageThumbnail } from './studio-media-previews'
-import { imageDownload, jpegDownload } from './image-download'
+import { imageDownload, originalImageUrl } from './image-download'
 import { chooseImageDownloadFormat } from './image-download-choice'
-import type { ImageDownloadFormat } from '../shared/image-download'
+import type { ImageDownloadChoice } from '../shared/image-download'
 import { creationStreamProtocol, creationRetryDelay, textGenerationTimeouts } from '../shared/studio/creation-limits'
 
 export type CreationKind = 'image' | 'video' | 'text'
@@ -321,6 +321,7 @@ export function mediaSource(url: string, preview = false, kind: CreationKind = '
       && !direct.searchParams.has('path') && direct.searchParams.get('kind') !== 'video') direct.searchParams.set('variant', 'preview')
     return direct.pathname + direct.search + direct.hash
   }
+  if (!preview && ['/legacy-files/', '/files/'].some(prefix => url.startsWith(prefix))) return originalImageUrl(url)
   if (['data:', 'blob:', '/legacy-files/', '/files/', '/assets/'].some(prefix => url.startsWith(prefix))) return url
   return `/api/creation/media?${new URLSearchParams({ url, kind, ...(preview && kind === 'image' ? { variant: 'preview' } : {}) })}`
 }
@@ -1280,12 +1281,11 @@ export function saveCreationLocally(value: CreationTask): Promise<void> {
         })(); check()
         if (!blob.size || !blob.type.startsWith(`${task.kind}/`)) throw new Error('原文件格式无效，请重试保存。')
         urls[index] = await cacheDownloadedImage(task, index, urls[index]!, blob); check()
-        const exported = task.kind === 'image' ? await jpegDownload(blob, controller.signal) : blob; check()
         // Claim the file durably before handing it to the browser, which cannot confirm completion.
         task.localSave = { state: 'saving', completed: index + 1, requestedAt: Date.now() }
         try { await persist(true); check() }
         catch (cause) { task.localSave.completed = completed; throw cause }
-        try { requestDownload(exported, task, index) }
+        try { requestDownload(blob, task, index) }
         catch (cause) { task.localSave.completed = completed; throw cause }
         completed = index + 1
       }
@@ -1312,7 +1312,7 @@ async function autoDownloadCreation(task: CreationTask) {
   }
   catch { /* Save errors stay on the result; generation has already completed. */ }
 }
-export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadFormat) {
+export async function downloadCreation(task: CreationTask, index = 0, signal?: AbortSignal, content?: string, format?: ImageDownloadChoice) {
   if (task.purpose === 'document') throw new Error('请在文本聊天的文档卡片下载 Word / Excel 文件。')
   signal?.throwIfAborted()
   if (task.owner !== activeOwner()) throw new Error('账号已切换，请重新操作。')

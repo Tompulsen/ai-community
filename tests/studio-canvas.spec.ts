@@ -193,7 +193,8 @@ test('text canvas imports a new image draft without charging or overwriting any 
   expect(calls).toHaveLength(0)
   await expect(page.locator('.reference-list img')).toHaveCount(1)
   const saved = await page.evaluate(async () => {
-    const { chats } = await import('/src/native-chat.ts' as string)
+    const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /\/src\/native-chat\.ts(?:\?|$)/.test(name))!
+    const { chats } = await import(path)
     return { old: chats.sessions.find((item: any) => item.id === 'canvas-a'), id: chats.activeId }
   })
   expect(saved.id).not.toBe('canvas-a')

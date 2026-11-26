@@ -1063,7 +1063,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   const format = ctx.url.searchParams.get('format');
   if (format !== null && format !== 'jpeg') fail(400, 'Invalid media format');
   const download = ctx.url.searchParams.get('download');
-  if (download !== null && !isImageDownloadFormat(download)) fail(400, 'Invalid download format');
+  if (download !== null && download !== 'original' && !isImageDownloadFormat(download)) fail(400, 'Invalid download format');
   if (byKey ? !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(value) : !idPattern.test(value)) fail(404, 'File not found');
   const keyWhere = byKey ? '(f."accessKey"=$2 OR f."thumbnailAccessKey"=$2 OR f."webpublicAccessKey"=$2)' : 'f.id=$2';
   const result = await ctx.db.query<MediaRow>(`
@@ -1104,7 +1104,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   [viewer(ctx), value, Boolean(ctx.user?.isAdmin || ctx.user?.isModerator), new URL(ctx.config.url).origin, Boolean(ctx.user?.isAdmin)]);
   const file = result.rows[0];
   if (!file) fail(404, 'File not found');
-  const preferred = download || variant === 'cover' ? 'original' : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
+  const preferred = download || variant === 'cover' || byKey && ctx.url.searchParams.get('variant') === 'original' ? 'original' : byKey ? value === file.thumbnailAccessKey ? 'thumbnail' : value === file.webpublicAccessKey ? 'webpublic' : 'original' : variant;
   const storedFile = async (accessKey: string | null): Promise<{ path: string; metadata: Stats }> => {
     if (typeof accessKey !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/.test(accessKey) || accessKey === '.' || accessKey === '..') fail(404, 'File not found');
     const root = await realpath(ctx.filesRoot);
@@ -1118,7 +1118,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   const loadMedia = async (preferred: string) => {
     let role = preferred === 'thumbnail' && file.thumbnailAccessKey ? 'thumbnail' : preferred === 'webpublic' && file.webpublicAccessKey ? 'webpublic' : 'original';
     let located: { path: string; metadata: Stats } | undefined;
-    const candidates = new Set([role, 'original', ...(variant === 'cover' ? ['webpublic', 'thumbnail'] : [])]);
+    const candidates = new Set([role, 'original', ...(!download && variant === 'cover' ? ['webpublic', 'thumbnail'] : [])]);
     for (const candidate of candidates) {
       const key = candidate === 'thumbnail' ? file.thumbnailAccessKey : candidate === 'webpublic' ? file.webpublicAccessKey : file.accessKey;
       if (!key) continue;
@@ -1162,8 +1162,8 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
   };
   let { path, metadata, type, role, storageKey } = await loadMedia(preferred);
   let exported: Buffer | null = null;
+  if (download && (!type || !imageExtensions[type])) fail(400, '只有图片可以选择下载格式。');
   if (isImageDownloadFormat(download)) {
-    if (!type || !imageExtensions[type]) fail(400, '只有图片可以选择下载格式。');
     exported = await downloadImage(path, metadata, download);
     type = `image/${download}`;
   }
@@ -1175,7 +1175,7 @@ async function media(ctx: RequestContext, value: string, byKey = false): Promise
     else if (staticImage && role !== 'thumbnail' && file.thumbnailAccessKey) ({ path, metadata, type, role, storageKey } = await loadMedia('thumbnail'));
   }
   const renderedCover = !download && variant === 'cover' && Boolean(exported);
-  if (!exported && format === 'jpeg' && type && imageExtensions[type]) {
+  if (!exported && !download && format === 'jpeg' && type && imageExtensions[type]) {
     try { exported = await jpegImage(path, metadata); }
     catch { fail(503, 'JPG 图片暂时无法提供，请稍后重试。'); }
     if (exported) type = 'image/jpeg';

@@ -42,8 +42,10 @@ async function encodeDownload(source: Buffer, format: ImageDownloadFormat): Prom
     const metadata = await image.metadata();
     if ((metadata.pages ?? 1) > 500) throw httpError(413, '动画帧数过多，请使用较小的图片。');
     const oriented = image.rotate().timeout({ seconds: 30 });
+    if (format === 'png' || format === 'webp') oriented.keepIccProfile();
+    if (format === 'png' && (metadata.depth === 'ushort' || (metadata.bitsPerSample ?? 8) > 8)) oriented.toColourspace('rgb16');
     const output = await (format === 'jpeg' ? oriented.flatten({ background: '#ffffff' }).jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
-      : format === 'png' ? oriented.png() : format === 'webp' ? oriented.webp({ quality: 95 }) : oriented.gif()).toBuffer();
+      : format === 'png' ? oriented.png() : format === 'webp' ? oriented.webp({ lossless: true, exact: true }) : oriented.gif()).toBuffer();
     if (output.length > maxBytes) throw httpError(413, '转换后的图片超过 32 MB，请选择其他格式。');
     return output;
   } catch (error) {

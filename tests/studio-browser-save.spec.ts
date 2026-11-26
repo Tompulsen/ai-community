@@ -255,7 +255,7 @@ for (const code of [401, 403, 404, 413]) test(`original HTTP ${code} does not re
   let attempts = 0
   await page.route('**/api/creation/media?**', route => {
     if (new URL(route.request().url()).searchParams.has('variant')) return route.fulfill({ contentType: 'image/jpeg', body: image })
-    attempts++
+    if (route.request().resourceType() === 'fetch') attempts++
     return route.fulfill({ status: code })
   })
   await send(page)
